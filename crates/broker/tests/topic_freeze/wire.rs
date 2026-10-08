@@ -8,23 +8,24 @@
 //! a case compares one whole struct instead of four fields that could each
 //! pass while the outcome is wrong.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use assert2::assert;
 use bytes::Bytes;
 use krabka_broker::{BrokerHandle, codes};
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::PartitionProduceResponse,
-    },
+    owned::produce_response::PartitionProduceResponse,
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
+    records::{RecordBatch, RecordsPayload},
 };
 
-use crate::support;
+use crate::{
+    support,
+    support::{
+        produce::single_partition_produce,
+        records::value_record,
+        topics::{creatable_topic, create_topic_request},
+    },
+};
 
 /// The unfrozen topic that every case produces to beside the frozen one.
 pub(super) const CONTROL: &str = "control";
@@ -33,30 +34,15 @@ pub(super) const CONTROL: &str = "control";
 /// A row refused before any append carries it in `base_offset`.
 const INVALID_OFFSET: i64 = -1;
 
-/// Milliseconds since the Unix epoch, which is what `set_at_ms` carries.
-pub(super) fn now_ms() -> i64 {
-    i64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("a clock after 1970")
-            .as_millis(),
-    )
-    .expect("a timestamp inside i64")
-}
+// Milliseconds since the Unix epoch, which is what `set_at_ms` carries.
+krabka_macros::unix_millis_fixture!(
+    pub(super) now_ms, "a clock after 1970", "a timestamp inside i64"
+);
 
 /// Create a one-partition topic and wait for its partition to exist locally.
 pub(super) async fn create_topic(broker: &BrokerHandle, client: &Client, name: &str) -> WireUuid {
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(name, 1, 1), 5_000))
         .await
         .expect("CreateTopics");
     let created = &resp.topics[0];
@@ -69,6 +55,34 @@ pub(super) async fn create_topic(broker: &BrokerHandle, client: &Client, name: &
     support::topic_id_for(client, name).await
 }
 
+/// Create the target and its live control in the same order as every freeze case.
+pub(super) async fn create_controlled_topic(
+    broker: &BrokerHandle,
+    client: &Client,
+    target: &str,
+) -> (WireUuid, WireUuid) {
+    let frozen = create_topic(broker, client, target).await;
+    let control = create_topic(broker, client, CONTROL).await;
+    (frozen, control)
+}
+
+/// The standard in-process fixture with its target and live control topics ready.
+pub(super) async fn controlled_fixture(target: &str) -> (support::InProcess, WireUuid, WireUuid) {
+    let p = support::start().await;
+    let (frozen, control) = create_controlled_topic(&p.broker, &p.client, target).await;
+    (p, frozen, control)
+}
+
+/// Rejoined partitions need both local writers and local leadership before a write.
+pub(super) async fn wait_controlled_partitions(broker: &BrokerHandle, target: &str) {
+    for topic in [target, CONTROL] {
+        broker.wait_until_partition_present(topic, 0).await;
+        broker
+            .wait_until_local_partition_leader(topic, 0, krabka_broker::NodeId(broker.node_id()))
+            .await;
+    }
+}
+
 /// A single-record batch, in the shape a plain (non-idempotent) producer sends.
 fn one_record(value: &str) -> RecordBatch {
     let mut batch = RecordBatch {
@@ -77,11 +91,9 @@ fn one_record(value: &str) -> RecordBatch {
         producer_id: -1,
         ..RecordBatch::default()
     };
-    batch.records.push(Record {
-        offset_delta: 0,
-        value: Some(Bytes::from(value.to_owned())),
-        ..Default::default()
-    });
+    batch
+        .records
+        .push(value_record(0, Some(Bytes::from(value.to_owned()))));
     batch
 }
 
@@ -92,21 +104,13 @@ pub(super) async fn produce(
     topic_id: WireUuid,
 ) -> PartitionProduceResponse {
     let resp = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(RecordsPayload::V2(vec![one_record("v")])),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            topic,
+            topic_id,
+            0,
+            Some(RecordsPayload::V2(vec![one_record("v")])),
+            (1, 5_000),
+        ))
         .await
         .expect("Produce");
     resp.responses[0].partition_responses[0].clone()
@@ -182,3 +186,21 @@ pub(super) fn refused(
         log_end_offset: Some(log_end_offset),
     }
 }
+
+// Keep expected outcomes and optional scenario labels at the assertion site.
+macro_rules! check_produce {
+    ($broker:expr, $client:expr; $($topic:expr, $topic_id:expr => $expected:expr),+; $context:tt) => {
+        $( $crate::wire::check_produce!($broker, $client, $topic, $topic_id => $expected, $context); )+
+    };
+    ($broker:expr, $client:expr; $($topic:expr, $topic_id:expr => $expected:expr),+ $(,)?) => {
+        $( $crate::wire::check_produce!($broker, $client, $topic, $topic_id => $expected); )+
+    };
+
+    ($broker:expr, $client:expr, $topic:expr, $topic_id:expr => $expected:expr $(, $($context:tt)*)?) => {
+        ::assert2::check!(
+            $crate::wire::produce_outcome($broker, $client, $topic, $topic_id).await == $expected
+            $(, $($context)*)?
+        )
+    };
+}
+pub(super) use check_produce;

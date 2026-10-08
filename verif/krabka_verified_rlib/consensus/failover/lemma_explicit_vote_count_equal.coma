@@ -1,15 +1,15 @@
-(* #"/workspace/crates/verified/src/consensus/failover.rs" 218 0 224 1 *)
+(* #"/workspace/crates/verified/src/consensus/failover.rs" 212 0 218 1 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 217 10 217 15
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 212 11 212 76
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 213 11 214 59
-let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 215 10 216 63
-let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
-let%span sfailover'4 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
-let%span sfailover'5 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 211 10 211 15
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 206 11 206 76
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 207 11 208 59
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 209 10 210 63
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 181 10 181 15
+let%span sfailover'4 = "/workspace/crates/verified/src/consensus/failover.rs" 184 8 190 9
+let%span sfailover'5 = "/workspace/crates/verified/src/consensus/failover.rs" 175 8 175 48
 
 use creusot.int.Int64
 use seq.Seq
@@ -23,10 +23,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 173 0 173 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'5] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 187 0 187 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 182 0 182 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
@@ -56,7 +56,7 @@ constant threshold : int
 
 constant limit : int
 
-function lemma_explicit_vote_count_equal [#"/workspace/crates/verified/src/consensus/failover.rs" 218 0 224 1] (log_end: int) (left: Seq.seq Int64.t) (right: Seq.seq Int64.t) (threshold: int) (limit: int) : ()
+function lemma_explicit_vote_count_equal [#"/workspace/crates/verified/src/consensus/failover.rs" 212 0 218 1] (log_end: int) (left: Seq.seq Int64.t) (right: Seq.seq Int64.t) (threshold: int) (limit: int) : ()
 
 goal vc_lemma_explicit_vote_count_equal: ([%#sfailover'0] 0 <= limit
     /\ limit <= Seq.length left + 1 /\ limit <= Seq.length right + 1)

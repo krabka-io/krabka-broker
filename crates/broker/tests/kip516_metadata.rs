@@ -5,14 +5,15 @@
 //! `KafkaApis.handleTopicMetadataRequest` describes the requested ids when any
 //! row has a non-zero id, and ignores the names.
 use assert2::assert;
+
+use crate::support::{
+    discovery::topic_metadata_request,
+    topics::{creatable_topic, create_topic_request, metadata_topic},
+};
 mod support;
 
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        metadata_response::MetadataResponseTopic,
-    },
+    owned::{metadata_request::MetadataRequest, metadata_response::MetadataResponseTopic},
     primitives::uuid::Uuid as WireUuid,
 };
 
@@ -26,17 +27,12 @@ async fn topic_rows(
 ) -> Vec<MetadataResponseTopic> {
     client
         .send(MetadataRequest {
-            topics: Some(
-                rows.iter()
-                    .map(|(name, topic_id)| MetadataRequestTopic {
-                        name: name.map(Into::into),
-                        topic_id: *topic_id,
-                        ..Default::default()
-                    })
-                    .collect(),
-            ),
             allow_auto_topic_creation: false,
-            ..Default::default()
+            ..topic_metadata_request(Some(
+                rows.iter()
+                    .map(|(name, topic_id)| metadata_topic(name.map(Into::into), *topic_id))
+                    .collect(),
+            ))
         })
         .await
         .expect("metadata")
@@ -65,16 +61,7 @@ async fn metadata_name_and_id_of_different_topics_describes_the_id() {
     let p = support::start().await;
     for n in ["m_a", "m_b"] {
         p.client
-            .send(CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: n.into(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            })
+            .send(create_topic_request(creatable_topic(n, 1, 1), 5_000))
             .await
             .expect("create topic");
     }

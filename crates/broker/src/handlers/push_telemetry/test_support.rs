@@ -5,7 +5,8 @@
 //! being duplicated in each module.
 
 use opentelemetry_proto::tonic::metrics::v1::{
-    Metric, MetricsData, NumberDataPoint, ResourceMetrics, ScopeMetrics, number_data_point,
+    Gauge, Metric, MetricsData, NumberDataPoint, ResourceMetrics, ScopeMetrics, metric,
+    number_data_point,
 };
 
 pub(super) fn number_point(value: number_data_point::Value) -> NumberDataPoint {
@@ -24,5 +25,16 @@ pub(super) fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
             }],
             ..Default::default()
         }],
+    }
+}
+
+/// A one-point gauge for the OTLP input fixtures; expected Prometheus output stays explicit.
+pub(super) fn gauge_metric(name: &str, value: number_data_point::Value) -> Metric {
+    Metric {
+        name: name.into(),
+        data: Some(metric::Data::Gauge(Gauge {
+            data_points: vec![number_point(value)],
+        })),
+        ..Default::default()
     }
 }

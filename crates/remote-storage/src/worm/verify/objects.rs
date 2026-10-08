@@ -236,8 +236,7 @@ mod tests {
     use super::*;
     use crate::worm::verify::{
         VerifyRequest,
-        test_support::{Archive, PREFIX, VersionedStore, put_entry, put_raw},
-        verify_archive,
+        test_support::{Archive, PREFIX, VersionedStore, first_break_reason, put_entry, put_raw},
     };
 
     /// Overwriting a body on a versioned bucket does not remove the bytes the
@@ -263,15 +262,10 @@ mod tests {
             depth: VerifyDepth::Deep,
             ..VerifyRequest::default()
         };
-        let report = verify_archive(&archive.store, &request, &archive.trusted())
-            .await
-            .unwrap();
+        let report = archive.verify_with(&request).await;
 
         check!(!report.ok(), "an overwritten body is a break");
-        let reason = report
-            .first_break()
-            .map(|found| found.reason.clone())
-            .unwrap_or_default();
+        let reason = first_break_reason(&report);
         check!(reason.contains("hashes to"), "reason was: {reason}");
         check!(
             reason.contains("still matches") && reason.contains("recoverable"),
@@ -298,15 +292,10 @@ mod tests {
             depth: VerifyDepth::Deep,
             ..VerifyRequest::default()
         };
-        let report = verify_archive(&archive.store, &request, &archive.trusted())
-            .await
-            .unwrap();
+        let report = archive.verify_with(&request).await;
 
         check!(!report.ok());
-        let reason = report
-            .first_break()
-            .map(|found| found.reason.clone())
-            .unwrap_or_default();
+        let reason = first_break_reason(&report);
         check!(reason.contains("hashes to"), "reason was: {reason}");
         check!(
             !reason.contains("pinned version"),

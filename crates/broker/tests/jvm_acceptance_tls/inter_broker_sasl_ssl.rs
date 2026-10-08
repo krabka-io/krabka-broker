@@ -7,13 +7,11 @@
 //! longest case in the suite and the only one that asserts rf=2, so it stands
 //! apart from the `SASL_PLAINTEXT` variant it otherwise resembles.
 
-use assert2::assert;
 use krabka_security::ListenerProtocol;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mounts,
-    nc_check_connectivity, prepare_jks_truststore,
-    start_two_sasl_ssl_brokers_with_controller_protocol,
+    ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, nc_check_connectivity,
+    prepare_jks_truststore, start_two_sasl_ssl_brokers_with_controller_protocol,
 };
 
 /// Two-broker `SASL_SSL` cluster with `controller_listener_protocol =
@@ -33,10 +31,6 @@ use crate::jvm_acceptance::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_inter_broker_sasl_ssl_raft_replication() {
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
-    const ALICE: &str = "alice";
-    const ALICE_PASS: &str = "alice-secret";
     const TOPIC: &str = "krabka-sasl-ssl-raft-rf2";
 
     let (broker0, broker1, _dir0, _dir1) = start_two_sasl_ssl_brokers_with_controller_protocol(
@@ -58,42 +52,14 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
 
     // Step A: provision alice's SCRAM-SHA-512 credential via admin/PLAIN
     // over the SASL_SSL data-plane listener. Use cp-kafka:7.5.0 (KIP-554).
-    let (admin_props, alice_props) = crate::jvm_acceptance::provision_ssl_scram_sha512(
-        ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, &ts_mount,
-    );
-    let alice_props_mount = alice_props.mount_str();
-
-    // Create topic rf=2 across both brokers. Run as `admin` (super-user)
-    //  for the CreateTopics Cluster-Create authorize check, then
-    //  grant alice Read/Write on the topic; the implications
-    //  auto-grant Describe via Read and Write.
-    crate::jvm_acceptance::create_console_topic(
-        KAFKA_IMAGE_TXN,
-        &[&admin_props.mount_str(), &ts_mount],
+    let (_admin_props, alice_props) = crate::jvm_acceptance::provision_ssl_topic(
+        (ADMIN, ADMIN_PASS),
+        (ALICE, ALICE_PASS),
+        &ts_mount,
         TOPIC,
-        1,
         2,
     );
-    for op in ["Read", "Write"] {
-        docker_run_kafka_tool_with_image_and_mounts(
-            KAFKA_IMAGE_TXN,
-            &[&admin_props.mount_str(), &ts_mount],
-            &[
-                "kafka-acls",
-                "--add",
-                "--allow-principal",
-                &format!("User:{ALICE}"),
-                "--operation",
-                op,
-                "--topic",
-                TOPIC,
-                "--bootstrap-server",
-                broker0_advertised(),
-                "--command-config",
-                "/client.properties",
-            ],
-        );
-    }
+    let alice_props_mount = alice_props.mount_str();
 
     // Wait for the topic to materialize on both brokers' metadata images.
     broker0.wait_until_partition_present(TOPIC, 0).await;
@@ -101,10 +67,7 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
 
     // Produce 50 records via `kafka-console-producer` as alice over SASL_SSL.
 
-    let payload: String = (0..50)
-        .map(|i| format!("rec-{i}\n"))
-        .collect::<Vec<_>>()
-        .concat();
+    let payload = crate::jvm_acceptance::numbered_payload("rec", 50);
     let producer_out = crate::jvm_acceptance::produce_console(
         KAFKA_IMAGE_TXN,
         &[&alice_props_mount, &ts_mount],
@@ -112,12 +75,7 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
         false,
         payload.as_bytes(),
     );
-    assert!(
-        producer_out.status.success(),
-        "producer failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&producer_out.stdout),
-        String::from_utf8_lossy(&producer_out.stderr)
-    );
+    crate::jvm_acceptance::assert_console_produced(&producer_out);
 
     // Assert BOTH brokers reach offset 50 on partition 0 — proves rf=2
     // follower replication completed over the SASL_SSL inter-broker

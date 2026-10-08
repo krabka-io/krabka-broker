@@ -30,6 +30,7 @@
 // same arrangement as `tests/support/mod.rs`.
 #![allow(dead_code)]
 
+pub(crate) mod break_glass;
 mod broker;
 mod delegation_tokens;
 mod docker;
@@ -50,8 +51,9 @@ mod wait;
 #[allow(unused_imports)]
 pub(crate) use self::{
     broker::{
-        start_host_broker, start_host_broker_in, start_host_broker_jbod, start_host_broker_with,
-        start_legacy_host_broker,
+        host_broker_config, start_console_broker, start_console_group, start_host_broker,
+        start_host_broker_in, start_host_broker_jbod, start_host_broker_with,
+        start_legacy_console_broker, start_legacy_host_broker,
     },
     delegation_tokens::{
         extract_jvm_kv, start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens,
@@ -59,14 +61,19 @@ pub(crate) use self::{
     docker::{
         ClientPropsFile, KAFKA_IMAGE, KAFKA_IMAGE_ELR, KAFKA_IMAGE_LEGACY, KAFKA_IMAGE_TIERED,
         KAFKA_IMAGE_TXN, STREAMS_APP_JAVA, TRANSACTIONAL_PRODUCER_JAVA, TempFileMount,
-        add_console_acl, authenticated_console_round_trip, consume_console, create_console_topic,
-        docker_run_kafka_tool, docker_run_kafka_tool_allowing_failure,
-        docker_run_kafka_tool_allowing_failure_with_image, docker_run_kafka_tool_with_image,
-        docker_run_kafka_tool_with_image_and_mount, docker_run_kafka_tool_with_image_and_mounts,
-        docker_run_kafka_tool_with_mount, nc_check_connectivity, numbered_payload, produce_console,
-        provision_console_scram, provision_ssl_scram_sha512, tool_output,
-        verify_console_reassignment, write_client_props, write_plain_props, write_ssl_sasl_props,
-        write_temp_file,
+        add_console_acl, alter_console_topic_config, assert_console_produced,
+        assert_console_values, authenticated_console_round_trip, console_round_trip_with_props,
+        consume_committed_at, consume_console, consume_console_group, consume_console_partition,
+        create_console_topic, create_console_topic_at, create_plain_console_topic_at,
+        denied_console_consumer, describe_console_entity, describe_console_group,
+        describe_console_topic_configs, docker_run_kafka_tool,
+        docker_run_kafka_tool_allowing_failure, docker_run_kafka_tool_allowing_failure_with_image,
+        docker_run_kafka_tool_with_image, docker_run_kafka_tool_with_image_and_mount,
+        docker_run_kafka_tool_with_image_and_mounts, docker_run_kafka_tool_with_mount,
+        nc_check_connectivity, numbered_payload, plain_client_properties, produce_console,
+        produce_console_checked, provision_console_scram, provision_plain_scram,
+        provision_ssl_scram_sha512, provision_ssl_topic, tool_output, verify_console_reassignment,
+        write_client_props, write_plain_props, write_ssl_sasl_props, write_temp_file,
     },
     minio::{
         MINIO_ACCESS_KEY, MINIO_BUCKET, MINIO_CLIENT_IMAGE, MINIO_IMAGE, MINIO_SECRET_KEY,
@@ -79,12 +86,13 @@ pub(crate) use self::{
         controller_addr_2, host_port, minio_port, ports, rlmm_broker0_advertised,
     },
     sasl::{
-        oauthbearer_jaas, plain_jaas, scram_jaas, start_dual_mech_broker,
-        start_dual_mech_broker_with_reauth, start_oauthbearer_broker, start_plain_acl_topic,
-        start_sasl_plaintext_broker, start_sasl_plaintext_broker_with_super_user,
+        ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, oauthbearer_jaas, plain_jaas, scram_jaas,
+        start_dual_mech_broker, start_dual_mech_broker_with_reauth, start_oauthbearer_broker,
+        start_plain_acl_topic, start_plain_acl_topic_with_ops, start_sasl_plaintext_broker,
+        start_sasl_plaintext_broker_with_super_user,
     },
     three_broker_cluster::{
-        start_three_broker_sasl_plaintext_jvm_cluster,
+        SaslCluster, start_registered_sasl_cluster, start_three_broker_sasl_plaintext_jvm_cluster,
         start_three_broker_sasl_plaintext_jvm_cluster_with_users,
     },
     tiered::start_host_broker_with_minio_tier,
@@ -97,7 +105,7 @@ pub(crate) use self::{
         start_two_sasl_brokers, start_two_sasl_ssl_brokers_with_controller_protocol,
     },
     wait::{
-        wait_jvm_isr_contains, wait_jvm_partition_any_leader, wait_jvm_partition_leader,
-        wait_three_brokers_registered,
+        wait_jvm_isr_contains, wait_jvm_log_config, wait_jvm_partition_any_leader,
+        wait_jvm_partition_leader, wait_three_brokers_registered,
     },
 };

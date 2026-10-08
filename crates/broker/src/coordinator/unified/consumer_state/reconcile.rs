@@ -502,34 +502,42 @@ mod tests {
             changed: false,
             after,
         };
+        let revoking_input = || held(5, U, &[0, 1], &[2]);
+        let expanded_input = || held(5, S, &[0, 1, 2], &[]);
+        let single_partition_input = || held(5, S, &[0], &[]);
+        let unreleased_input = || held(6, R, &[0], &[]);
+        let current_input = || held(6, S, &[0, 1], &[]);
+        let revoking_expected = || held(5, U, &[0, 1], &[2]);
+        let settled_expected = || held(6, S, &[0, 1], &[]);
+        let withheld_expected = || held(6, R, &[0], &[]);
         let rows = [
             // A member that must revoke stays where it is until it reports an
             // owned set without the pending partitions.
             row(
                 "an absent owned set keeps a member that must revoke",
-                held(5, U, &[0, 1], &[2]),
+                revoking_input(),
                 (&[], &[]),
                 &[0, 1],
                 None,
-                held(5, U, &[0, 1], &[2]),
+                revoking_expected(),
             ),
             row(
                 "an owned set with the pending partition keeps the member",
-                held(5, U, &[0, 1], &[2]),
+                revoking_input(),
                 (&[], &[]),
                 &[0, 1],
                 Some(&[0, 1, 2]),
-                held(5, U, &[0, 1], &[2]),
+                revoking_expected(),
             ),
             Row {
                 changed: true,
                 ..row(
                     "an owned set without the pending partition moves the member on",
-                    held(5, U, &[0, 1], &[2]),
+                    revoking_input(),
                     (&[], &[]),
                     &[0, 1],
                     Some(&[0, 1]),
-                    held(6, S, &[0, 1], &[]),
+                    settled_expected(),
                 )
             },
             // A stable member behind the target epoch learns what to revoke.
@@ -537,83 +545,83 @@ mod tests {
                 changed: true,
                 ..row(
                     "a shrunk target is a revocation, in the member's epoch",
-                    held(5, S, &[0, 1, 2], &[]),
+                    expanded_input(),
                     (&[], &[]),
                     &[0, 1],
                     None,
-                    held(5, U, &[0, 1], &[2]),
+                    revoking_expected(),
                 )
             },
             Row {
                 changed: true,
                 ..row(
                     "a member that already dropped the partition moves on",
-                    held(5, S, &[0, 1, 2], &[]),
+                    expanded_input(),
                     (&[], &[]),
                     &[0, 1],
                     Some(&[0, 1]),
-                    held(6, S, &[0, 1], &[]),
+                    settled_expected(),
                 )
             },
             Row {
                 changed: true,
                 ..row(
                     "a free target partition is granted at the target epoch",
-                    held(5, S, &[0], &[]),
+                    single_partition_input(),
                     (&[], &[]),
                     &[0, 1],
                     None,
-                    held(6, S, &[0, 1], &[]),
+                    settled_expected(),
                 )
             },
             Row {
                 changed: true,
                 ..row(
                     "a partition another member holds is withheld",
-                    held(5, S, &[0], &[]),
+                    single_partition_input(),
                     (&[1], &[]),
                     &[0, 1],
                     None,
-                    held(6, R, &[0], &[]),
+                    withheld_expected(),
                 )
             },
             Row {
                 changed: true,
                 ..row(
                     "a partition another member must still revoke is withheld",
-                    held(5, S, &[0], &[]),
+                    single_partition_input(),
                     (&[], &[1]),
                     &[0, 1],
                     None,
-                    held(6, R, &[0], &[]),
+                    withheld_expected(),
                 )
             },
             Row {
                 changed: true,
                 ..row(
                     "an unreleased partition is granted once it is free",
-                    held(6, R, &[0], &[]),
+                    unreleased_input(),
                     (&[], &[]),
                     &[0, 1],
                     None,
-                    held(6, S, &[0, 1], &[]),
+                    settled_expected(),
                 )
             },
             row(
                 "an unreleased partition stays withheld while it is held",
-                held(6, R, &[0], &[]),
+                unreleased_input(),
                 (&[1], &[]),
                 &[0, 1],
                 None,
-                held(6, R, &[0], &[]),
+                withheld_expected(),
             ),
             row(
                 "a stable member at the target epoch has nothing to do",
-                held(6, S, &[0, 1], &[]),
+                current_input(),
                 (&[], &[]),
                 &[0, 1],
                 None,
-                held(6, S, &[0, 1], &[]),
+                settled_expected(),
             ),
             Row {
                 changed: true,
@@ -634,7 +642,7 @@ mod tests {
                     (&[], &[]),
                     &[0, 1],
                     Some(&[0]),
-                    held(6, S, &[0, 1], &[]),
+                    settled_expected(),
                 )
             },
             // A subscription change at the target epoch only filters the
@@ -779,16 +787,24 @@ mod tests {
             after,
         };
         let owning_everything = topic_parts(&[(T, &[0, 1]), (U, &[0])]);
+        let revoking_5_4_input = || {
+            shape(
+                (5, 4),
+                UnrevokedPartitions,
+                &[(T, &[0]), (U, &[0])],
+                &[(T, &[1])],
+            )
+        };
+        let stable_6_5_input = || shape((6, 5), Stable, &[(T, &[0, 1]), (U, &[0, 1])], &[]);
+        let stable_5_4_input = || shape((5, 4), Stable, &[(T, &[0])], &[]);
+        let stable_6_5_expected = || shape((6, 5), Stable, &[(T, &[0])], &[]);
+        let stable_5_4_input_two_topics = || shape((5, 4), Stable, &[], &[]);
+        let withheld_6_6_expected = || shape((6, 6), UnreleasedPartitions, &[(T, &[0])], &[]);
         vec![
             row(
                 "an unrevoked member that owns its pending set drops a topic it left",
                 &["t"],
-                shape(
-                    (5, 4),
-                    UnrevokedPartitions,
-                    &[(T, &[0]), (U, &[0])],
-                    &[(T, &[1])],
-                ),
+                revoking_5_4_input(),
                 topic_parts(&[(T, &[0]), (U, &[0])]),
                 Some(owning_everything.clone()),
                 true,
@@ -802,12 +818,7 @@ mod tests {
             row(
                 "an unrevoked member that owns its pending set keeps it without a change",
                 &["t"],
-                shape(
-                    (5, 4),
-                    UnrevokedPartitions,
-                    &[(T, &[0]), (U, &[0])],
-                    &[(T, &[1])],
-                ),
+                revoking_5_4_input(),
                 topic_parts(&[(T, &[0]), (U, &[0])]),
                 Some(owning_everything.clone()),
                 false,
@@ -821,7 +832,7 @@ mod tests {
             row(
                 "a stable member at the target epoch revokes a topic it left and still owns",
                 &["t"],
-                shape((6, 5), Stable, &[(T, &[0, 1]), (U, &[0, 1])], &[]),
+                stable_6_5_input(),
                 topic_parts(&[(T, &[0, 1]), (U, &[0, 1])]),
                 None,
                 true,
@@ -835,7 +846,7 @@ mod tests {
             row(
                 "a stable member at the target epoch drops a topic it left and released",
                 &["t"],
-                shape((6, 5), Stable, &[(T, &[0, 1]), (U, &[0, 1])], &[]),
+                stable_6_5_input(),
                 topic_parts(&[(T, &[0, 1]), (U, &[0, 1])]),
                 Some(topic_parts(&[(T, &[0, 1])])),
                 true,
@@ -853,11 +864,11 @@ mod tests {
             row(
                 "the target of a topic the member left grants nothing",
                 &["t"],
-                shape((5, 4), Stable, &[(T, &[0])], &[]),
+                stable_5_4_input(),
                 topic_parts(&[(T, &[0]), (U, &[0, 1])]),
                 None,
                 false,
-                shape((6, 5), Stable, &[(T, &[0])], &[]),
+                stable_6_5_expected(),
             ),
             row(
                 "a partition of a topic the member left is revoked though the target holds it",
@@ -871,18 +882,18 @@ mod tests {
             row(
                 "a topic that does not exist is not subscribed",
                 &["t", "w"],
-                shape((5, 4), Stable, &[(T, &[0])], &[]),
+                stable_5_4_input(),
                 topic_parts(&[(T, &[0]), (W, &[0])]),
                 None,
                 false,
-                shape((6, 5), Stable, &[(T, &[0])], &[]),
+                stable_6_5_expected(),
             ),
             SubscriptionRow {
                 regex: Some(("u.*", Some(&["u"]))),
                 ..row(
                     "the topics of a resolved regex are subscribed",
                     &[],
-                    shape((5, 4), Stable, &[], &[]),
+                    stable_5_4_input_two_topics(),
                     topic_parts(&[(U, &[0])]),
                     None,
                     false,
@@ -894,7 +905,7 @@ mod tests {
                 ..row(
                     "a regex the group has not resolved subscribes to nothing",
                     &[],
-                    shape((5, 4), Stable, &[], &[]),
+                    stable_5_4_input_two_topics(),
                     topic_parts(&[(U, &[0])]),
                     None,
                     false,
@@ -912,7 +923,7 @@ mod tests {
                     topic_parts(&[(T, &[0, 1])]),
                     None,
                     false,
-                    shape((6, 6), UnreleasedPartitions, &[(T, &[0])], &[]),
+                    withheld_6_6_expected(),
                 )
             },
             SubscriptionRow {
@@ -924,7 +935,7 @@ mod tests {
                     topic_parts(&[(T, &[0, 1])]),
                     None,
                     false,
-                    shape((6, 6), UnreleasedPartitions, &[(T, &[0])], &[]),
+                    withheld_6_6_expected(),
                 )
             },
         ]

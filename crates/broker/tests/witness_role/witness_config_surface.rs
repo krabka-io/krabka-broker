@@ -9,17 +9,17 @@
 use assert2::check;
 use krabka_broker::codes;
 use krabka_protocol::owned::{
-    describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+    describe_configs_request::DescribeConfigsRequest,
     describe_configs_response::DescribeConfigsResourceResult,
-    incremental_alter_configs_request::{
-        AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-    },
 };
 
 use crate::{
     BROKER_WITNESS, CONFIG_OP_SET, CONFIG_SOURCE_DYNAMIC_BROKER,
     CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, RESOURCE_TYPE_BROKER, SITE_A,
     STRETCH_PREFERRED_LEADER_SITE, WITNESS_ID, cluster_lock,
+    support::configs::{
+        describe_resource, incremental_config, incremental_request, incremental_resource,
+    },
     witness_cluster::{client_at, shutdown, start_stretch_cluster},
 };
 
@@ -45,12 +45,11 @@ async fn witness_role_is_a_read_only_broker_config() {
     let witness = client_at(&cluster[2].1.listen_addr.to_string()).await;
     let described = witness
         .send(DescribeConfigsRequest {
-            resources: vec![DescribeConfigsResource {
-                resource_type: RESOURCE_TYPE_BROKER,
-                resource_name: WITNESS_ID.to_string(),
-                configuration_keys: None,
-                ..Default::default()
-            }],
+            resources: vec![describe_resource(
+                RESOURCE_TYPE_BROKER,
+                WITNESS_ID.to_string(),
+                None,
+            )],
             include_synonyms: false,
             include_documentation: false,
             ..Default::default()
@@ -100,21 +99,18 @@ async fn witness_role_is_a_read_only_broker_config() {
     );
 
     let altered = witness
-        .send(IncrementalAlterConfigsRequest {
-            resources: vec![AlterConfigsResource {
-                resource_type: RESOURCE_TYPE_BROKER,
-                resource_name: WITNESS_ID.to_string(),
-                configs: vec![AlterableConfig {
-                    name: BROKER_WITNESS.into(),
-                    config_operation: CONFIG_OP_SET,
-                    value: Some("false".into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            validate_only: false,
-            ..Default::default()
-        })
+        .send(incremental_request(
+            vec![incremental_resource(
+                RESOURCE_TYPE_BROKER,
+                WITNESS_ID.to_string(),
+                vec![incremental_config(
+                    BROKER_WITNESS,
+                    Some("false".into()),
+                    CONFIG_OP_SET,
+                )],
+            )],
+            false,
+        ))
         .await
         .expect("IncrementalAlterConfigs round-trip");
     check!(

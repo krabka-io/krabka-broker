@@ -14,26 +14,28 @@ use krabka_protocol::{
             AlterClientQuotasRequest, EntityData, EntryData, OpData as QuotaOp,
         },
         alter_configs_request::{AlterConfigsRequest, AlterConfigsResource, AlterableConfig},
-        alter_user_scram_credentials_request::{
-            AlterUserScramCredentialsRequest, ScramCredentialUpsertion,
-        },
+        alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
         create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        delete_records_request::{
-            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
-        },
         delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
         incremental_alter_configs_request::{
             AlterConfigsResource as IncrementalResource, AlterableConfig as IncrementalConfig,
             IncrementalAlterConfigsRequest,
         },
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        metadata_request::MetadataRequest,
     },
-    records::{Record, RecordBatch},
+    records::RecordBatch,
 };
 
-use crate::support;
+use crate::{
+    support,
+    support::{
+        offsets::{delete_records_partition, delete_records_request, delete_records_topic},
+        produce::single_partition_produce,
+        records::{batch_from_records, value_record},
+        sasl::scram_upsertion,
+        topics::{creatable_topic, create_topic_request},
+    },
+};
 
 /// The KIP-133 `resource_type` discriminant for a topic.
 const RESOURCE_TYPE_TOPIC: i8 = 2;
@@ -51,30 +53,20 @@ async fn produce_one(
 ) {
     let batch = RecordBatch {
         last_offset_delta: 0,
-        records: vec![Record {
-            offset_delta: 0,
-            value: Some(bytes::Bytes::from_static(b"audited-record")),
-            ..Default::default()
-        }],
-        ..RecordBatch::default()
+        ..batch_from_records(vec![value_record(
+            0,
+            Some(bytes::Bytes::from_static(b"audited-record")),
+        )])
     };
     let resp = p
         .client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            topic,
+            topic_id,
+            0,
+            Some(batch.into()),
+            (1, 5_000),
+        ))
         .await
         .expect("Produce");
     assert2::check!(resp.responses[0].partition_responses[0].error_code == 0);
@@ -88,13 +80,7 @@ async fn produce_one(
 async fn trim_twice(p: &support::InProcess, topic: &str) {
     let topic_id = p
         .client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(topic.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(crate::support::discovery::named_topic_metadata(topic))
         .await
         .expect("Metadata")
         .topics
@@ -106,19 +92,13 @@ async fn trim_twice(p: &support::InProcess, topic: &str) {
         produce_one(p, topic, topic_id).await;
     }
 
-    let request = DeleteRecordsRequest {
-        topics: vec![DeleteRecordsTopic {
-            name: topic.into(),
-            partitions: vec![DeleteRecordsPartition {
-                partition_index: 0,
-                offset: 2,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    let request = delete_records_request(
+        vec![delete_records_topic(
+            topic,
+            vec![delete_records_partition(0, 2)],
+        )],
+        5_000,
+    );
     for what in ["DeleteRecords", "DeleteRecords (retry)"] {
         let resp = p.client.send(request.clone()).await.expect(what);
         assert2::check!(resp.topics[0].partitions[0].error_code == 0, "{what}");
@@ -142,13 +122,7 @@ async fn audit_topic_exists_after_startup() {
     // returns it with `error_code == 0` and at least one partition.
     let resp = p
         .client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(AUDIT_TOPIC.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(crate::support::discovery::named_topic_metadata(AUDIT_TOPIC))
         .await
         .expect("MetadataRequest failed");
 
@@ -216,16 +190,7 @@ async fn every_admin_mutation_is_audited() {
 
     let created = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(topic, 1, 1), 5_000))
         .await
         .expect("CreateTopics");
     assert2::check!(created.topics[0].error_code == 0);
@@ -339,14 +304,15 @@ async fn every_admin_mutation_is_audited() {
     let scram = p
         .client
         .send(AlterUserScramCredentialsRequest {
-            upsertions: vec![ScramCredentialUpsertion {
-                name: user.into(),
-                mechanism: SCRAM_SHA_256,
-                iterations: 4_096,
-                salt: bytes::Bytes::from_static(b"audited-salt"),
-                salted_password: bytes::Bytes::from_static(b"audited-salted-password-32-byte"),
-                ..Default::default()
-            }],
+            upsertions: vec![scram_upsertion(
+                user,
+                SCRAM_SHA_256,
+                4_096,
+                (
+                    bytes::Bytes::from_static(b"audited-salt"),
+                    bytes::Bytes::from_static(b"audited-salted-password-32-byte"),
+                ),
+            )],
             ..Default::default()
         })
         .await

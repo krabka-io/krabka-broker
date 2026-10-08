@@ -43,8 +43,7 @@ fn engine(metadata_log: MetadataLogConfig) -> (Engine, tempfile::TempDir) {
 }
 
 fn commit_topic(engine: &mut Engine, name: &str, id: u128) {
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&topic_record_named(name, id), reply);
+    let mut rx = super::test_support::submit_on_engine(engine, &topic_record_named(name, id));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))), "commit {name}");
 }
 

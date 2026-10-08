@@ -290,8 +290,6 @@ fn gssapi_config(
 mod tests {
     use assert2::assert;
 
-    use crate::file_config::FileConfig;
-
     #[test]
     fn apply_to_absent_controller_server_name_leaves_default() {
         let src = r#"
@@ -301,9 +299,7 @@ cert_path = "/c"
 key_path = "/k"
 client_auth = "Required"
 "#;
-        let file: FileConfig = toml::from_str(src).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured(src, "parse").unwrap();
         assert!(cfg.controller_server_name.is_none());
         assert!(cfg.tls_config.expect("tls").trust_roots_path.is_none());
     }

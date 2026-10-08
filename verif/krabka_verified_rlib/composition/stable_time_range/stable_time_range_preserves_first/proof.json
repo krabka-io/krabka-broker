@@ -4,38 +4,38 @@
     "Coma": {
       "vc_branch_Result_tup2_i64_FetchVisibility_unit": {
         "prover": "alt-ergo",
-        "time": 0.011
+        "time": 0.018
       },
       "vc_branch_Result_tup4_i64_i64_i64_Option_usize_unit": {
         "prover": "alt-ergo",
-        "time": 0.01
+        "time": 0.021
       },
       "vc_committed_fetch_excludes_unstable": {
         "prover": "alt-ergo",
-        "time": 0.009
+        "time": 0.02
       },
       "vc_constructed_time_range_preserves_first": {
         "prover": "alt-ergo",
-        "time": 0.009
+        "time": 0.018
       },
-      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_elim_Break'0": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_elim_Continue'0": { "prover": "alt-ergo", "time": 0.012 },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.009 },
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_elim_Break'0": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.022 },
+      "vc_elim_Continue'0": { "prover": "alt-ergo", "time": 0.016 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.019 },
       "vc_from_residual_Result_tup3_i64_i64_Option_usize_unit": {
         "prover": "alt-ergo",
-        "time": 0.007
+        "time": 0.021
       },
-      "vc_from_unit": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_from_unit": { "prover": "alt-ergo", "time": 0.018 },
       "vc_ok_or_tup2_i64_FetchVisibility": {
         "prover": "alt-ergo",
-        "time": 0.009
+        "time": 0.018
       },
       "vc_stable_time_range_preserves_first": {
         "prover": "z3",
-        "time": 0.021
+        "time": 0.023
       }
     }
   }

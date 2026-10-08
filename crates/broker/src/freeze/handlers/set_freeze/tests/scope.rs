@@ -12,9 +12,8 @@ use krabka_protocol::{
 use tempfile::TempDir;
 
 use super::{
-    super::checks::{FreezeEnv, check_limit, check_scope, live_entry, prepare, record_of},
-    ALICE, ALICE_KEY, ALICE_NAME, PROPOSAL, config_with_alice, context, freeze_request, image,
-    peer, principal,
+    super::checks::{check_limit, check_scope, live_entry, prepare, record_of},
+    ALICE, ALICE_KEY, PROPOSAL, config_with_alice, freeze_request, image,
 };
 use crate::{
     codes,
@@ -104,15 +103,7 @@ fn a_freeze_that_replaces_a_live_entry_does_not_meet_the_ceiling() {
         },
         ..config
     };
-    let image = image(&[("orders", PatternType::Literal)]);
-    let principal = principal(ALICE_NAME);
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let env = FreezeEnv {
-        config: &config,
-        image: &image,
-        ctx: &ctx,
-    };
+    freeze_fixture!(image, principal, peer, ctx; &[("orders", PatternType::Literal)] ; env, config);
 
     for (label, scope, expected) in [
         ("the same scope replaces its entry", "orders", None),
@@ -230,15 +221,7 @@ fn an_unsigned_record_takes_the_brokers_clock() {
 fn a_pattern_type_byte_that_names_no_scope_kind_is_an_invalid_request() {
     let dir = TempDir::new().expect("tempdir");
     let (config, _) = config_with_alice(&dir);
-    let image = image(&[]);
-    let principal = principal(ALICE_NAME);
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let env = FreezeEnv {
-        config: &config,
-        image: &image,
-        ctx: &ctx,
-    };
+    freeze_fixture!(image, principal, peer, ctx; &[] ; env, config);
 
     for (label, byte, expected) in [
         ("literal", PATTERN_TYPE_LITERAL, None),

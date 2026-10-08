@@ -1,15 +1,10 @@
-use creusot_std::prelude::*;
-
-use crate::{
-    quota::quota_refill,
-    throttle::{AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume},
-};
+use super::*;
 
 /// Splitting an elapsed interval cannot create or lose a consume budget,
 /// including fractional credit, debt repayment, and burst saturation.
 /// The host must claim each interval once and retain the returned fraction;
 /// the rate and burst stay fixed, with no charge or consume between refills.
-#[requires(initial.0@ <= burst@ && (initial.0@ == 0 || initial.1@ == 0))]
+#[requires(crate::quota::balance_within_burst(initial.0@, initial.1@, burst@))]
 #[requires(initial.2@ < 1_000_000_000)]
 #[requires(elapsed.0@ + elapsed.1@ <= u64::MAX@)]
 #[ensures(result.0@ <= requested@ && result.1@ <= burst@)]

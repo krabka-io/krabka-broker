@@ -20,13 +20,10 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
+    authorizer::AuthorizationResult,
     broker::BrokerHandle,
     codes,
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context,
-        start_broker_no_audit_with,
-    },
+    test_support::{decode_response, encode_request, peer, principal, start_broker_no_audit_with},
 };
 
 /// The share group that the principal may read.
@@ -39,22 +36,16 @@ const LOCK_TIMEOUT_MS: i32 = 30_000;
 #[derive(Debug)]
 struct ReadOneGroup;
 
-impl Authorizer for ReadOneGroup {
-    fn authorize(
-        &self,
-        _source: &dyn AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        if request.resource_type == ResourceType::Group
-            && request.operation == AclOperation::Read
-            && request.resource_name != READABLE
-        {
-            AuthorizationResult::Deny
-        } else {
-            AuthorizationResult::Allow
-        }
+test_authorizer!(ReadOneGroup, (self, _source, request), {
+    if request.resource_type == ResourceType::Group
+        && request.operation == AclOperation::Read
+        && request.resource_name != READABLE
+    {
+        AuthorizationResult::Deny
+    } else {
+        AuthorizationResult::Allow
     }
-}
+});
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
     start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(ReadOneGroup)).await
@@ -151,9 +142,11 @@ fn acknowledge_response(error_code: i16) -> ShareAcknowledgeResponse {
 async fn group_and_member_ids_are_checked_in_kafka_order() {
     let (broker, _dir) = start().await;
     let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("share-consumer"),
+        client_id = "share-client"
+    );
     let fetch_version = share_fetch_response::MAX_VERSION;
     let acknowledge_version = share_acknowledge_response::MAX_VERSION;
 
@@ -212,9 +205,11 @@ async fn group_and_member_ids_are_checked_in_kafka_order() {
 async fn a_member_the_group_does_not_know_still_fetches() {
     let (broker, _dir) = start().await;
     let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("share-consumer"),
+        client_id = "share-client"
+    );
     let version = share_fetch_response::MAX_VERSION;
     let _actor = shared.group_coordinator.get_or_create_share(READABLE);
 

@@ -12,45 +12,45 @@
           {
             "tactic": "split_vc",
             "children": [
-              { "prover": "alt-ergo", "time": 0.024 },
               { "prover": "alt-ergo", "time": 0.023 },
-              { "prover": "alt-ergo", "time": 0.022 },
-              { "prover": "alt-ergo", "time": 0.048 },
-              { "prover": "alt-ergo", "time": 0.233 },
-              { "prover": "alt-ergo", "time": 0.034 },
+              { "prover": "alt-ergo", "time": 0.023 },
+              { "prover": "alt-ergo", "time": 0.075 },
+              { "prover": "alt-ergo", "time": 0.162 },
+              { "prover": "alt-ergo", "time": 0.058 },
+              { "prover": "alt-ergo", "time": 0.027 },
+              { "prover": "alt-ergo", "time": 0.017 },
+              { "prover": "alt-ergo", "time": 0.036 },
+              { "prover": "z3", "time": 0.08 },
+              { "prover": "alt-ergo", "time": 0.027 },
+              { "prover": "z3", "time": 0.029 },
               { "prover": "alt-ergo", "time": 0.035 },
-              { "prover": "alt-ergo", "time": 0.032 },
-              { "prover": "z3", "time": 0.065 },
-              { "prover": "alt-ergo", "time": 0.03 },
-              { "prover": "z3", "time": 0.03 },
-              { "prover": "alt-ergo", "time": 0.048 },
-              { "prover": "z3", "time": 0.027 },
-              { "prover": "z3", "time": 0.025 },
-              { "prover": "alt-ergo", "time": 0.025 },
-              { "prover": "alt-ergo", "time": 0.034 },
-              { "prover": "alt-ergo", "time": 0.07 },
-              { "prover": "cvc5", "time": 0.139 },
-              { "prover": "cvc5", "time": 0.078 }
+              { "prover": "z3", "time": 0.015 },
+              { "prover": "z3", "time": 0.026 },
+              { "prover": "alt-ergo", "time": 0.064 },
+              { "prover": "alt-ergo", "time": 0.026 },
+              { "prover": "alt-ergo", "time": 0.053 },
+              { "prover": "z3", "time": 0.063 },
+              { "prover": "z3", "time": 0.104 }
             ]
           }
         ]
       },
-      "vc_decrement_sequence": { "prover": "alt-ergo", "time": 0.024 },
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.021 },
-      "vc_frontier_reaches": { "prover": "alt-ergo", "time": 0.025 },
-      "vc_index_Vec_usize_Global": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_decrement_sequence": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_frontier_reaches": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_index_Vec_usize_Global": { "prover": "alt-ergo", "time": 0.014 },
       "vc_len_ProducerSnapshotEntryFacts": {
         "prover": "alt-ergo",
-        "time": 0.01
+        "time": 0.023
       },
-      "vc_len_usize": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_new_tup3_usize_i64_bool": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_len_usize": { "prover": "alt-ergo", "time": 0.018 },
+      "vc_new_tup3_usize_i64_bool": { "prover": "alt-ergo", "time": 0.019 },
       "vc_produce_durability_frontier": {
         "prover": "alt-ergo",
-        "time": 0.025
+        "time": 0.014
       },
-      "vc_push_tup3_usize_i64_bool": { "prover": "alt-ergo", "time": 0.012 },
-      "vc_unwrap_i64": { "prover": "alt-ergo", "time": 0.026 }
+      "vc_push_tup3_usize_i64_bool": { "prover": "alt-ergo", "time": 0.018 },
+      "vc_unwrap_i64": { "prover": "alt-ergo", "time": 0.018 }
     }
   }
 }

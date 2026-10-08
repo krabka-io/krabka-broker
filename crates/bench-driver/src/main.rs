@@ -180,10 +180,7 @@ fn parse_client_request_timeout(input: &str) -> Result<Time, String> {
     }
 }
 
-fn parse_client_dispatch_queue_capacity(value: &str) -> Result<usize, String> {
-    let value = value.parse::<usize>().map_err(|error| error.to_string())?;
-    ConnectionDispatchQueueCapacity::new(value).map(ConnectionDispatchQueueCapacity::get)
-}
+krabka_macros::dispatch_capacity_parser!(parse_client_dispatch_queue_capacity);
 
 fn parse_client_frame_max(value: &str) -> Result<ByteSize, String> {
     let value = parse::positive_byte_size(value).map_err(|error| error.to_string())?;
@@ -752,6 +749,8 @@ mod tests {
         "",
     ];
 
+    krabka_macros::flag_metadata_fixture!(flag_metadata);
+
     /// One line per flag of [`Cli`]: its long name, its environment variable,
     /// its default values, its action, and which of [`PROBES`] its value
     /// parser accepts (`+`) or refuses (`-`).
@@ -766,16 +765,7 @@ mod tests {
                     .is_some_and(|long| long != "help" && long != "version")
             })
             .map(|arg| {
-                let long = arg.get_long().unwrap_or_default();
-                let env = arg
-                    .get_env()
-                    .map(|env| env.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let defaults = arg
-                    .get_default_values()
-                    .iter()
-                    .map(|value| value.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>();
+                let (long, env, defaults) = flag_metadata(arg);
                 let action = arg.get_action();
                 let accepted = PROBES
                     .iter()

@@ -193,7 +193,7 @@ async fn transfer(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::MetadataRecord;
     use krabka_protocol::owned::api_versions_request;
     use krabka_raft::kraft::transport::wire::decode_fetch_snapshot;
     use uuid::Uuid;
@@ -305,12 +305,9 @@ mod tests {
 
     fn snapshot_of(cluster_id: Uuid, topic: &str) -> bytes::Bytes {
         let mut image = MetadataImage::new(cluster_id);
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: topic.to_string(),
-            topic_id: Uuid::new_v4(),
-            partitions: 1,
-            replication_factor: 1,
-        }));
+        image.apply(&MetadataRecord::V1Topic(
+            crate::test_support::single_partition_topic(topic, Uuid::new_v4()),
+        ));
         krabka_raft::serialize_metadata_snapshot(&image, 0).expect("serialize snapshot")
     }
 

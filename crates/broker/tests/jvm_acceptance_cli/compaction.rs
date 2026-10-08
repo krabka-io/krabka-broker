@@ -9,8 +9,7 @@ use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig};
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE, broker0_advertised, broker0_listen, controller_addr_0, docker_run_kafka_tool,
-    nc_check_connectivity,
+    KAFKA_IMAGE, broker0_advertised, broker0_listen, docker_run_kafka_tool, nc_check_connectivity,
 };
 
 /// `kafka-console-consumer` sees a compacted topic with only
@@ -50,9 +49,6 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
 
     crate::support::init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
         // The topic below overrides no segment size, so it inherits this one.
         // See `SEGMENT_SIZE`.
@@ -62,14 +58,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         },
         // 3s cleaner tick so we don't have to wait the full 30s default.
         cleaner_interval_override: Some(krabka_units::secs(3)),
-        ..crate::support::jvm_broker_config(
-            1,
-            listen_addr,
-            controller_addr,
-            broker0_advertised(),
-            dir.path().to_path_buf(),
-            &[(1, controller_addr)],
-        )
+        ..crate::jvm_acceptance::host_broker_config(dir.path(), "static addr")
     };
     let broker = Broker::start(config).await.expect("start broker");
     eprintln!(
@@ -114,22 +103,21 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     //     default and is in place the moment the partition exists, so the
     //     assertion after the loop is a check on the harness rather than on
     //     propagation.
-    let cfg_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let cfg = loop {
-        if let Some(cfg) = broker.partition_log_config_for_test(TOPIC, 0)
-            && cfg.cleanup_policy == krabka_log::CleanupPolicy::Compact
-            && cfg.min_cleanable_dirty_ratio == krabka_units::fraction(0.0)
-        {
-            break cfg;
-        }
-        assert!(
-            std::time::Instant::now() <= cfg_deadline,
-            "cleanup.policy/min.cleanable.dirty.ratio never propagated within 10s"
-        );
-        // intentional: bounded poll of the local reconciled LogConfig override;
-        // `partition_log_config_for_test` is not surfaced by any awaiter/metric.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    };
+    let cfg = crate::jvm_acceptance::wait_jvm_log_config(
+        &broker,
+        TOPIC,
+        |cfg| {
+            cfg.cleanup_policy == krabka_log::CleanupPolicy::Compact
+                && cfg.min_cleanable_dirty_ratio == krabka_units::fraction(0.0)
+        },
+        |within| {
+            assert!(
+                within,
+                "cleanup.policy/min.cleanable.dirty.ratio never propagated within 10s"
+            );
+        },
+    )
+    .await;
     assert!(
         cfg.segment_size == SEGMENT_SIZE,
         "the partition must inherit the broker's {SEGMENT_SIZE:?} segment size; saw {:?}",

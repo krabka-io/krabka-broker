@@ -6,10 +6,7 @@
 //! `HashMap`s, which have no stable ordering, so equality and hashing go
 //! through one sorted projection and stateright sees a canonical fingerprint.
 
-use std::{
-    hash::{Hash, Hasher},
-    time::Instant,
-};
+use std::time::Instant;
 
 use crate::coordinator::unified::classic_state::{ClassicGroup, GroupState};
 
@@ -76,17 +73,7 @@ impl GrpState {
     }
 }
 
-impl PartialEq for GrpState {
-    fn eq(&self, other: &Self) -> bool {
-        self.proj() == other.proj()
-    }
-}
-impl Eq for GrpState {}
-impl Hash for GrpState {
-    fn hash<H: Hasher>(&self, h: &mut H) {
-        self.proj().hash(h);
-    }
-}
+krabka_macros::projection_identity!(GrpState, proj);
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(super) enum Act {

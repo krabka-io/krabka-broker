@@ -14,7 +14,7 @@ use krabka_units::Time;
 
 use super::{
     response::{fail_authenticate_with, sasl_ok},
-    state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
+    state::{ConnectionAuth, SaslExchange, session_expiry},
 };
 use crate::codes::ILLEGAL_SASL_STATE;
 
@@ -39,81 +39,73 @@ pub fn handle_authenticate_plain<S: BuildHasher>(
     plain_credentials: &HashMap<String, String, S>,
     max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
-    match auth {
+    if !matches!(
+        auth,
         ConnectionAuth::Negotiating {
             exchange: SaslExchange::Plain,
             ..
-        } => authenticate_plain(req, auth, plain_credentials, max_reauth),
-        ConnectionAuth::Reauthenticating {
+        } | ConnectionAuth::Reauthenticating {
             exchange: SaslExchange::Plain,
             ..
-        } => {
-            let previous = begin_reauth(auth).expect("matched Reauthenticating above");
-            let resp = authenticate_plain(req, auth, plain_credentials, max_reauth);
-            finish_reauth(auth, previous, resp)
         }
-        // Neither mid-handshake nor mid-re-auth: Kafka answers a
-        // `SaslAuthenticate` outside a SASL exchange with ILLEGAL_SASL_STATE,
-        // and the dispatcher closes the connection.
-        _ => SaslAuthenticateResponse {
+    ) {
+        return SaslAuthenticateResponse {
             error_code: ILLEGAL_SASL_STATE,
             error_message: Some("not in PLAIN negotiation".to_string()),
             auth_bytes: bytes::Bytes::new(),
             session_lifetime_ms: 0,
             ..Default::default()
-        },
+        };
     }
-}
-
-fn authenticate_plain<S: BuildHasher>(
-    req: &SaslAuthenticateRequest,
-    auth: &mut ConnectionAuth,
-    plain_credentials: &HashMap<String, String, S>,
-    max_reauth: Option<Time>,
-) -> SaslAuthenticateResponse {
-    let parts: Vec<&[u8]> = req.auth_bytes.split(|&b| b == 0).collect();
-    if parts.len() != 3 {
-        // `PlainSaslServer.extractTokens` stops splitting at four tokens.
-        return fail_authenticate_with(format!(
-            "Invalid SASL/PLAIN response: expected 3 tokens, got {}",
-            parts.len().min(4)
-        ));
-    }
-    let (authzid, username, password) = (parts[0], parts[1], parts[2]);
-    if username.is_empty() {
-        return fail_authenticate_with("Authentication failed: username not specified".to_owned());
-    }
-    if password.is_empty() {
-        return fail_authenticate_with("Authentication failed: password not specified".to_owned());
-    }
-    // A username that is not UTF-8 names no configured user.
-    let verified = std::str::from_utf8(username)
-        .ok()
-        .and_then(|user| krabka_security::verify_plain(plain_credentials, user, password).ok());
-    let Some(p) = verified else {
-        return fail_authenticate_with(
-            "Authentication failed: Invalid username or password".to_owned(),
-        );
-    };
-    // RFC 4616 lets the client ask to act as another identity; Kafka refuses
-    // any authorization id that is not the authenticated username.
-    if !authzid.is_empty() && authzid != username {
-        return fail_authenticate_with(
-            "Authentication failed: Client requested an authorization id that is different \
+    super::state::authenticate_with_reauth(auth, |auth| {
+        let parts: Vec<&[u8]> = req.auth_bytes.split(|&b| b == 0).collect();
+        if parts.len() != 3 {
+            // `PlainSaslServer.extractTokens` stops splitting at four tokens.
+            return fail_authenticate_with(format!(
+                "Invalid SASL/PLAIN response: expected 3 tokens, got {}",
+                parts.len().min(4)
+            ));
+        }
+        let (authzid, username, password) = (parts[0], parts[1], parts[2]);
+        if username.is_empty() {
+            return fail_authenticate_with(
+                "Authentication failed: username not specified".to_owned(),
+            );
+        }
+        if password.is_empty() {
+            return fail_authenticate_with(
+                "Authentication failed: password not specified".to_owned(),
+            );
+        }
+        // A username that is not UTF-8 names no configured user.
+        let verified = std::str::from_utf8(username)
+            .ok()
+            .and_then(|user| krabka_security::verify_plain(plain_credentials, user, password).ok());
+        let Some(p) = verified else {
+            return fail_authenticate_with(
+                "Authentication failed: Invalid username or password".to_owned(),
+            );
+        };
+        // RFC 4616 lets the client ask to act as another identity; Kafka refuses
+        // any authorization id that is not the authenticated username.
+        if !authzid.is_empty() && authzid != username {
+            return fail_authenticate_with(
+                "Authentication failed: Client requested an authorization id that is different \
              from username"
-                .to_owned(),
-        );
-    }
-    let (expires_at_ms, session_lifetime_ms) =
-        session_expiry(crate::time_util::now_ms(), None, max_reauth);
-    *auth = ConnectionAuth::Authenticated {
-        principal: p,
-        mechanism: SaslMechanism::Plain,
-        expires_at_ms,
-        // PLAIN never auths via a delegation token.
-        authenticated_via_token: false,
-    };
-    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
+                    .to_owned(),
+            );
+        }
+        let (expires_at_ms, session_lifetime_ms) =
+            session_expiry(crate::time_util::now_ms(), None, max_reauth);
+        *auth = ConnectionAuth::Authenticated {
+            principal: p,
+            mechanism: SaslMechanism::Plain,
+            expires_at_ms,
+            // PLAIN never auths via a delegation token.
+            authenticated_via_token: false,
+        };
+        sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
+    })
 }
 
 #[cfg(test)]
@@ -134,15 +126,19 @@ mod tests {
         creds
     }
 
-    /// `\0<authzid>\0<authcid>\0<password>`, the RFC 4616 payload.
-    fn payload(user: &str, password: &str) -> SaslAuthenticateRequest {
-        let mut bytes = vec![0_u8];
-        bytes.extend_from_slice(user.as_bytes());
-        bytes.push(0);
-        bytes.extend_from_slice(password.as_bytes());
-        SaslAuthenticateRequest {
-            auth_bytes: bytes::Bytes::from(bytes),
-            ..Default::default()
+    use crate::network::auth::test_support::plain_request as payload;
+
+    fn assert_restored_session(auth: ConnectionAuth) {
+        match auth {
+            ConnectionAuth::Authenticated {
+                principal,
+                expires_at_ms,
+                ..
+            } => {
+                check!(principal.name == "alice");
+                check!(expires_at_ms == Some(9_000));
+            }
+            other => panic!("expected the previous session restored, got {other:?}"),
         }
     }
 
@@ -404,17 +400,7 @@ mod tests {
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }
         );
-        match switched {
-            ConnectionAuth::Authenticated {
-                principal,
-                expires_at_ms,
-                ..
-            } => {
-                check!(principal.name == "alice");
-                check!(expires_at_ms == Some(9_000));
-            }
-            other => panic!("expected the previous session restored, got {other:?}"),
-        }
+        assert_restored_session(switched);
     }
 
     /// A PLAIN re-authentication whose credential is wrong keeps the peer on
@@ -438,16 +424,6 @@ mod tests {
             &resp,
             Some("Authentication failed: Invalid username or password"),
         );
-        match auth {
-            ConnectionAuth::Authenticated {
-                principal,
-                expires_at_ms,
-                ..
-            } => {
-                check!(principal.name == "alice");
-                check!(expires_at_ms == Some(9_000));
-            }
-            other => panic!("expected the previous session restored, got {other:?}"),
-        }
+        assert_restored_session(auth);
     }
 }

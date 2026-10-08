@@ -75,19 +75,18 @@ use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig};
-use krabka_client_consumer::{AutoOffsetReset, Consumer, ConsumerError};
+use krabka_client_consumer::{AutoOffsetReset, ConsumerError};
 use krabka_client_core::Client;
 use krabka_metadata::{MetadataRecord, PartitionRecord};
-use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::records::RecordBatch;
 use support::topic_id_for;
-use tempfile::TempDir;
+
+use crate::support::{
+    client::connect_client,
+    produce::single_partition_produce,
+    records::value_record,
+    topics::{creatable_topic, create_topic_request},
+};
 
 /// Produces each value as its OWN single-record batch, one batch per offset,
 /// and retries the `UNKNOWN_TOPIC_OR_PARTITION` (3) metadata-apply race.
@@ -102,29 +101,19 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
             last_offset_delta: 0,
             ..RecordBatch::default()
         };
-        batch.records.push(Record {
-            offset_delta: 0,
-            value: Some(Bytes::from((*v).to_string())),
-            ..Default::default()
-        });
+        batch
+            .records
+            .push(value_record(0, Some(Bytes::from((*v).to_string()))));
         let mut produced = false;
         for attempt in 1..=5 {
             let resp = client
-                .send(ProduceRequest {
-                    acks: 1,
-                    timeout_ms: 5_000,
-                    topic_data: vec![TopicProduceData {
-                        name: topic.into(),
-                        topic_id,
-                        partition_data: vec![PartitionProduceData {
-                            index: 0,
-                            records: Some(batch.clone().into()),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                })
+                .send(single_partition_produce(
+                    topic,
+                    topic_id,
+                    0,
+                    Some(batch.clone().into()),
+                    (1, 5_000),
+                ))
                 .await
                 .expect("produce");
             let err = resp.responses[0].partition_responses[0].error_code;
@@ -149,16 +138,7 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
 
 async fn create_topic(client: &Client, name: &str) {
     let cr = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(name, 1, 1), 5_000))
         .await
         .expect("CreateTopics");
     assert!(cr.topics[0].error_code == 0, "create_topic failed: {cr:?}");
@@ -181,19 +161,11 @@ async fn create_topic(client: &Client, name: &str) {
 /// therefore discriminating.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_proactively_validates_and_surfaces_truncation() {
-    let dir = TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let (_dir, broker) = crate::support::standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
     let topic = "proactive-trunc";
 
-    let producer = Client::builder()
-        .bootstrap(&bootstrap)
-        .client_id("p")
-        .build()
-        .await
-        .unwrap();
+    let producer = connect_client(&bootstrap, Some("p")).await;
     create_topic(&producer, topic).await;
     // 4 records at the natural leader epoch 0 → offsets 0..=3, LEO 4,
     // epoch checkpoint `0 -> 0`.
@@ -218,18 +190,14 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
     // `offset_epoch = 0`. This commit MUST happen before the divergence is
     // induced, while the records still exist.
     {
-        let mut seed = Consumer::builder()
-            .bootstrap(&bootstrap)
-            .client_id("seed")
-            .group_id("proactive-grp")
-            .session_timeout(krabka_units::secs(30))
-            .max_poll_interval(krabka_units::secs(2))
-            .heartbeat_interval(krabka_units::secs(1))
-            .auto_offset_reset(AutoOffsetReset::Earliest)
-            .subscribe([topic.to_string()])
-            .build()
-            .await
-            .unwrap();
+        let mut seed = crate::support::consumer_groups::routing_consumer(
+            &bootstrap,
+            "seed",
+            "proactive-grp",
+            topic,
+            AutoOffsetReset::Earliest,
+        )
+        .await;
         let mut epochs: Vec<i32> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(15);
         while Instant::now() < deadline && epochs.len() < 4 {
@@ -292,18 +260,14 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
     // `None` and no truncation it would simply park at the log-end and deliver
     // nothing — so any surfaced `LogTruncation` is the proactive validation
     // result, not a fetch-driven reset.
-    let mut consumer = Consumer::builder()
-        .bootstrap(&bootstrap)
-        .client_id("c")
-        .group_id("proactive-grp")
-        .session_timeout(krabka_units::secs(30))
-        .max_poll_interval(krabka_units::secs(2))
-        .heartbeat_interval(krabka_units::secs(1))
-        .auto_offset_reset(AutoOffsetReset::None)
-        .subscribe([topic.to_string()])
-        .build()
-        .await
-        .unwrap();
+    let mut consumer = crate::support::consumer_groups::routing_consumer(
+        &bootstrap,
+        "c",
+        "proactive-grp",
+        topic,
+        AutoOffsetReset::None,
+    )
+    .await;
 
     // Wait for the coordinator to publish the assignment. This consumer uses the
     // classic JoinGroup/SyncGroup protocol. We first gate on the broker having

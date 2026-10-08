@@ -42,15 +42,17 @@ use krabka_broker::codes;
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        delete_records_request::{
-            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
-        },
         delete_records_response::DeleteRecordsPartitionResult,
-        produce_response::{LeaderIdAndEpoch, PartitionProduceResponse},
+        produce_response::PartitionProduceResponse,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
+    records::RecordBatch,
+};
+
+use crate::support::{
+    offsets::{delete_records_partition, delete_records_request, delete_records_topic},
+    records::{batch_from_records, value_record},
+    topics::{creatable_topic, create_topic_request},
 };
 
 mod support;
@@ -135,19 +137,7 @@ async fn an_idempotent_retry_reports_the_trimmed_log_start_offset() {
 }
 
 /// The partition row an accepted produce answers with.
-fn accepted(base_offset: i64, log_start_offset: i64) -> PartitionProduceResponse {
-    PartitionProduceResponse {
-        index: 0,
-        error_code: codes::NONE,
-        base_offset,
-        log_append_time_ms: -1,
-        log_start_offset,
-        record_errors: vec![],
-        error_message: None,
-        current_leader: LeaderIdAndEpoch::default(),
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    }
-}
+use crate::support::produce::expected_partition_success as accepted;
 
 /// Create a one-partition topic and wait for its partition to exist locally.
 async fn create_topic(
@@ -156,16 +146,10 @@ async fn create_topic(
     name: &str,
 ) -> WireUuid {
     let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic(name.to_owned(), 1, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
@@ -195,12 +179,7 @@ async fn produce_as(
         producer_id,
         producer_epoch: 0,
         base_sequence,
-        records: vec![Record {
-            offset_delta: 0,
-            value: Some(Bytes::from_static(b"frame")),
-            ..Default::default()
-        }],
-        ..RecordBatch::default()
+        ..batch_from_records(vec![value_record(0, Some(Bytes::from_static(b"frame")))])
     };
     crate::support::client::produce_batch(client, topic, topic_id, batch, 1, 5_000).await
 }
@@ -208,19 +187,13 @@ async fn produce_as(
 /// Trim partition 0 of `topic` to `offset` and hand back the whole row.
 async fn trim(client: &Client, topic: &str, offset: i64) -> DeleteRecordsPartitionResult {
     let response = client
-        .send(DeleteRecordsRequest {
-            topics: vec![DeleteRecordsTopic {
-                name: topic.to_owned(),
-                partitions: vec![DeleteRecordsPartition {
-                    partition_index: 0,
-                    offset,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(delete_records_request(
+            vec![delete_records_topic(
+                topic.to_owned(),
+                vec![delete_records_partition(0, offset)],
+            )],
+            5_000,
+        ))
         .await
         .expect("DeleteRecords");
     response.topics[0].partitions[0].clone()

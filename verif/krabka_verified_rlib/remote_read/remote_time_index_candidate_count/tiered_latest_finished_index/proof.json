@@ -5,7 +5,7 @@
       "vc_select_finished_index": { "prover": "alt-ergo", "time": 0.013 },
       "vc_tiered_latest_finished_index": {
         "prover": "alt-ergo",
-        "time": 0.01
+        "time": 0.008
       }
     }
   }

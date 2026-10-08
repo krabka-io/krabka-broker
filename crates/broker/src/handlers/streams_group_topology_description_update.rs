@@ -36,7 +36,6 @@ use crate::{
         GroupType,
         streams::actor::{DescriptionPush, PushAnswer, StreamsGroupActorMessage},
     },
-    error::BrokerError,
     handlers::{ErrorResponse as _, RequestContext, group_read_denied},
     task_util::{AskError, ask},
 };
@@ -46,17 +45,16 @@ use crate::{
 const NO_PLUGIN_MESSAGE: &str =
     "The broker has no streams group topology description plugin configured.";
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: StreamsGroupTopologyDescriptionUpdateRequest,
-    _version: i16,
-    ctx: &RequestContext<'_>,
-) -> Result<StreamsGroupTopologyDescriptionUpdateResponse, BrokerError> {
-    let (error_code, error_message) = answer(broker, req, ctx).await;
-    Ok(StreamsGroupTopologyDescriptionUpdateResponse::error(
-        error_code,
-        error_message,
-    ))
+context_handler! {
+    StreamsGroupTopologyDescriptionUpdateRequest => StreamsGroupTopologyDescriptionUpdateResponse,
+    (broker, req, _version, ctx),
+    {
+        let (error_code, error_message) = answer(broker, req, ctx).await;
+        Ok(StreamsGroupTopologyDescriptionUpdateResponse::error(
+            error_code,
+            error_message,
+        ))
+    }
 }
 
 /// The error code and message that trunk answers `req` with.

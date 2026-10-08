@@ -141,8 +141,7 @@ impl Model for ShareModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
+    krabka_macros::model_transition! { last, action, state; {
         match action {
             ShareAction::Produce => {
                 if state.hwm >= self.max_offset {
@@ -264,7 +263,7 @@ impl Model for ShareModel {
         }
         assert_transition(&last.sm, &state.sm, action);
         Some(state)
-    }
+    }}
 
     fn properties(&self) -> Vec<Property<Self>> {
         let mut properties = vec![

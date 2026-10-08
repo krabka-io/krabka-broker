@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_schema_failure_decision": { "prover": "alt-ergo", "time": 0.008 }
+      "vc_schema_failure_decision": { "prover": "alt-ergo", "time": 0.011 }
     }
   }
 }

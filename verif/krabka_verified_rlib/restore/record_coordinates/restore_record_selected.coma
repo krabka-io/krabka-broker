@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 31 0 37 9 *)
+(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 29 0 35 9 *)
 
-let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 40 16 40 20
-let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 43 16 43 20
-let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 44 11 47 37
-let%span srecord_coordinates'2 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 38 4 47 37
-let%span srecord_coordinates'3 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 25 10 29 1
-let%span srecord_coordinates'4 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 15 8 18 40
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 38 16 38 20
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 41 16 41 20
+let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 42 11 45 37
+let%span srecord_coordinates'2 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 36 4 45 37
+let%span srecord_coordinates'3 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 23 10 27 1
+let%span srecord_coordinates'4 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 12 8 15 40
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -25,7 +25,7 @@ type t_RestoreContentExclusions = { key: bool; header: bool }
 
 type t_RestoreExclusions = { producer: bool; offset: bool; content: t_RestoreContentExclusions }
 
-predicate restore_excluded [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 13 0 13 62] (exclusions: t_RestoreExclusions) =
+predicate restore_excluded [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 10 0 10 62] (exclusions: t_RestoreExclusions) =
   [%#srecord_coordinates'4] exclusions.producer
   \/ exclusions.offset \/ exclusions.content.key \/ exclusions.content.header
 
@@ -33,7 +33,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_record_selected [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 31 0 37 9]
+let restore_record_selected [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 29 0 35 9]
   (offset'0: Int64.t) (offset_bound: t_Option_i64) (timestamp: Int64.t) (timestamp_bound: t_Option_i64)
   (exclusions: t_RestoreExclusions) (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {offset_bound = None} (! bb3) | br1 (x0: Int64.t) -> {offset_bound = Some x0} (! bb4) ]

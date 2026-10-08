@@ -102,60 +102,13 @@ fn fixture_with_second_base(
     (capture, topic_id)
 }
 
-fn args(
+fn capture_args(
     archive: &std::path::Path,
     target: &std::path::Path,
     capture: &std::path::Path,
+    extra: &[String],
 ) -> krabka_restore::RestoreArgs {
-    Cli::parse_from([
-        "restore",
-        "--archive-local",
-        &archive.display().to_string(),
-        "--log-dir",
-        &target.display().to_string(),
-        "--node-id",
-        "1",
-        "--standalone",
-        "--controller-listener",
-        "127.0.0.1:19093",
-        "--diskless-wal-capture",
-        &capture.display().to_string(),
-    ])
-    .args
-}
-
-fn bounded_args(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture: &std::path::Path,
-) -> krabka_restore::RestoreArgs {
-    Cli::parse_from([
-        "restore",
-        "--archive-local",
-        &archive.display().to_string(),
-        "--log-dir",
-        &target.display().to_string(),
-        "--node-id",
-        "1",
-        "--standalone",
-        "--controller-listener",
-        "127.0.0.1:19093",
-        "--diskless-wal-capture",
-        &capture.display().to_string(),
-        "--to-offset",
-        "orders:0=0",
-    ])
-    .args
-}
-
-fn trusted_args(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture: &std::path::Path,
-    public_key: &std::path::Path,
-    head: &str,
-) -> krabka_restore::RestoreArgs {
-    Cli::parse_from(vec![
+    let mut argv = vec![
         "restore".to_owned(),
         "--archive-local".to_owned(),
         archive.display().to_string(),
@@ -168,23 +121,74 @@ fn trusted_args(
         "127.0.0.1:19093".to_owned(),
         "--diskless-wal-capture".to_owned(),
         capture.display().to_string(),
-        "--worm-key-id".to_owned(),
-        "capture-key".to_owned(),
-        "--worm-public-key".to_owned(),
-        public_key.display().to_string(),
-        "--worm-expect-head".to_owned(),
-        format!("{CAPTURE_HEAD_NAME}={head}"),
-    ])
-    .args
+    ];
+    argv.extend_from_slice(extra);
+    Cli::parse_from(argv).args
+}
+
+fn args(
+    archive: &std::path::Path,
+    target: &std::path::Path,
+    capture: &std::path::Path,
+) -> krabka_restore::RestoreArgs {
+    capture_args(archive, target, capture, &[])
+}
+
+fn bounded_args(
+    archive: &std::path::Path,
+    target: &std::path::Path,
+    capture: &std::path::Path,
+) -> krabka_restore::RestoreArgs {
+    capture_args(
+        archive,
+        target,
+        capture,
+        &["--to-offset".into(), "orders:0=0".into()],
+    )
+}
+
+fn trusted_args(
+    archive: &std::path::Path,
+    target: &std::path::Path,
+    capture: &std::path::Path,
+    public_key: &std::path::Path,
+    head: &str,
+) -> krabka_restore::RestoreArgs {
+    capture_args(
+        archive,
+        target,
+        capture,
+        &[
+            "--worm-key-id".to_owned(),
+            "capture-key".to_owned(),
+            "--worm-public-key".to_owned(),
+            public_key.display().to_string(),
+            "--worm-expect-head".to_owned(),
+            format!("{CAPTURE_HEAD_NAME}={head}"),
+        ],
+    )
+}
+
+fn write_capture(path: &std::path::Path, capture: &DisklessWalCapture) {
+    std::fs::write(path, serde_json::to_vec(capture).unwrap()).unwrap();
+}
+
+/// Open the two test directories, build the selected WAL and publish its capture.
+fn restore_fixture(
+    object: bool,
+    corrupt: bool,
+) -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
+    let archive = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let capture_path = archive.path().join("capture.json");
+    let (capture, _) = fixture(archive.path(), object, corrupt);
+    write_capture(&capture_path, &capture);
+    (archive, target, capture_path)
 }
 
 #[tokio::test]
 async fn referenced_wal_restores_at_original_offsets_and_orphans_are_ignored() {
-    let archive = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
-    let capture_path = archive.path().join("capture.json");
-    let (capture, _) = fixture(archive.path(), true, false);
-    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    let (archive, target, capture_path) = restore_fixture(true, false);
     std::fs::write(archive.path().join("orphan.ckwl"), b"uncommitted garbage").unwrap();
     let report = restore(&args(archive.path(), target.path(), &capture_path))
         .await
@@ -197,11 +201,7 @@ async fn referenced_wal_restores_at_original_offsets_and_orphans_are_ignored() {
 
 #[tokio::test]
 async fn diskless_restore_rejects_an_offset_bound_below_the_delete_floor() {
-    let archive = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
-    let capture_path = archive.path().join("capture.json");
-    let (capture, _) = fixture(archive.path(), true, false);
-    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    let (archive, target, capture_path) = restore_fixture(true, false);
 
     let error = restore(&bounded_args(archive.path(), target.path(), &capture_path))
         .await
@@ -211,11 +211,7 @@ async fn diskless_restore_rejects_an_offset_bound_below_the_delete_floor() {
 
 #[tokio::test]
 async fn diskless_capture_that_selects_nothing_is_an_empty_archive() {
-    let archive = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
-    let capture_path = archive.path().join("capture.json");
-    let (capture, _) = fixture(archive.path(), false, false);
-    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    let (archive, target, capture_path) = restore_fixture(false, false);
     let mut args = args(archive.path(), target.path(), &capture_path);
     args.topic = vec!["payments".to_owned()];
 
@@ -236,7 +232,7 @@ async fn diskless_restore_accepts_complete_batch_subranges_of_a_footer_run() {
     range.first_offset = 1;
     range.byte_start += u64::try_from(first_len).unwrap();
     range.byte_len -= u32::try_from(first_len).unwrap();
-    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    write_capture(&capture_path, &capture);
 
     let report = restore(&args(archive.path(), target.path(), &capture_path))
         .await
@@ -255,7 +251,7 @@ async fn diskless_restore_accepts_ranges_wholly_below_the_delete_floor() {
     let (mut capture, _) = fixture(archive.path(), true, false);
     capture.partitions[0].delete_floor = 2;
     capture.partitions[0].recovery_cutoff = 2;
-    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    write_capture(&capture_path, &capture);
 
     let report = restore(&args(archive.path(), target.path(), &capture_path))
         .await
@@ -282,7 +278,7 @@ async fn diskless_restore_rejects_one_topic_name_with_multiple_ids() {
     conflicting.topic_id = Uuid::from_u128(45);
     conflicting.partition = 1;
     capture.partitions.push(conflicting);
-    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    write_capture(&capture_path, &capture);
 
     let error = restore(&args(archive.path(), target.path(), &capture_path))
         .await
@@ -293,11 +289,7 @@ async fn diskless_restore_rejects_one_topic_name_with_multiple_ids() {
 #[tokio::test]
 async fn missing_or_corrupt_required_wal_fails_closed() {
     for (object, corrupt) in [(false, false), (true, true)] {
-        let archive = tempfile::tempdir().unwrap();
-        let target = tempfile::tempdir().unwrap();
-        let capture_path = archive.path().join("capture.json");
-        let (capture, _) = fixture(archive.path(), object, corrupt);
-        std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+        let (archive, target, capture_path) = restore_fixture(object, corrupt);
         let error = restore(&args(archive.path(), target.path(), &capture_path))
             .await
             .unwrap_err();
@@ -344,7 +336,7 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
         )
         .unwrap()
         .to_string();
-    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    write_capture(&capture_path, &capture);
 
     let target = tempfile::tempdir().unwrap();
     let mut trusted = trusted_args(
@@ -432,7 +424,7 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
         let target = tempfile::tempdir().unwrap();
         let changed_path = archive.path().join(format!("{name}.json"));
         let key_path = archive.path().join(format!("{name}.pub"));
-        std::fs::write(&changed_path, serde_json::to_vec(&changed).unwrap()).unwrap();
+        write_capture(&changed_path, &changed);
         std::fs::write(&key_path, key_bytes).unwrap();
         let error = restore(&trusted_args(
             archive.path(),
@@ -471,7 +463,7 @@ async fn dry_run_rejects_a_capture_that_selects_only_part_of_a_footer_run() {
     capture.partitions[0].ranges[0].entry.last_offset = 0;
     capture.partitions[0].ranges[0].entry.byte_len /= 2;
     capture.partitions[0].recovery_cutoff = 1;
-    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    write_capture(&capture_path, &capture);
     let mut args = args(archive.path(), target.path(), &capture_path);
     args.dry_run = true;
     let error = restore(&args).await.unwrap_err();
@@ -487,7 +479,7 @@ async fn dry_run_rejects_an_internal_batch_offset_gap() {
     let target = tempfile::tempdir().unwrap();
     let capture_path = archive.path().join("capture.json");
     let (capture, _) = fixture_with_second_base(archive.path(), true, false, 2);
-    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    write_capture(&capture_path, &capture);
     let mut args = args(archive.path(), target.path(), &capture_path);
     args.dry_run = true;
     let error = restore(&args).await.unwrap_err();

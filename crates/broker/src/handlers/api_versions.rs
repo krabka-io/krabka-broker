@@ -82,21 +82,7 @@ fn charge_request_quota(
     context: &crate::handlers::RequestContext<'_>,
     handler_start: std::time::Instant,
 ) -> i32 {
-    let elapsed_micros = u64::try_from(
-        handler_start
-            .elapsed()
-            .as_micros()
-            .min(u128::from(u64::MAX)),
-    )
-    .expect("elapsed microseconds clamped to u64");
-    let request_delay = crate::quota::consume_request_quota(
-        image,
-        &broker.quota_buckets,
-        &context.principal.name,
-        context.client_id,
-        elapsed_micros,
-        broker.config.quota_throttle_max,
-    );
+    let request_delay = context.charge_request_quota(broker, image, handler_start);
     let delay = broker.metrics.record_applied_throttle(
         krabka_protocol::api_key::ApiKey::ApiVersions as i16,
         &[(crate::metrics::QuotaType::Request, request_delay).into()],
@@ -126,8 +112,7 @@ pub(crate) fn handle<'a>(
     let expected_cluster_id = image.cluster_id();
     let expected_node_id = i32::try_from(broker.config.node_id.0).ok();
     Box::pin(async move {
-        let mut cur: &[u8] = req_bytes;
-        let req = ApiVersionsRequest::decode(&mut cur, version)?;
+        let req = crate::handlers::decode_request::<ApiVersionsRequest>(req_bytes, version)?;
 
         // Kafka's `SaslServerAuthenticator` answers an `ApiVersions` that
         // arrives before authentication finishes. It checks only

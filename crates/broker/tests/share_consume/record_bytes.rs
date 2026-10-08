@@ -10,7 +10,7 @@ use krabka_client_core::Client;
 
 use crate::{
     ACCEPT, NONE, REJECT, RELEASE,
-    harness::{bootstrap_share_state, broker_test_permit, join, produce_n, wait_for_share_init},
+    harness::{bootstrap_share_state, produce_n},
     share_rpc::{acquired_count, fetch_until_acquired, share_ack, share_fetch},
 };
 
@@ -26,8 +26,8 @@ use crate::{
 /// The read must fall back to the request-level `max_bytes`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acquire_past_leading_batch_returns_bytes() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
 
     // Acquire 0..2 and Reject them → archived, SPSO advances to 3.
@@ -41,17 +41,10 @@ async fn acquire_past_leading_batch_returns_bytes() {
     produce_n(&client, "t", tid, 0, 1).await;
 
     // Acquire offset 3 — the payload must carry the record bytes.
-    let mut row3 = share_fetch(&client, "g1", &member, tid, 0, 2, 0).await;
-    for epoch in 3..18 {
-        if acquired_count(&row3) > 0 {
-            break;
-        }
-        // intentional: bounded RPC poll — acquiring the freshly produced offset
-        // 3 requires re-fetching; no image/metric signals when it becomes
-        // acquirable.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        row3 = share_fetch(&client, "g1", &member, tid, 0, epoch, 0).await;
-    }
+    let row3 = share_fetch(&client, "g1", &member, tid, 0, 2, 0).await;
+    let row3 =
+        crate::support::share::refetch_while_empty(&client, ("g1", &member, tid, 0), row3, 3..18)
+            .await;
     assert!(
         acquired_count(&row3) == 1,
         "offset 3 must be acquired, got {:?}",
@@ -67,12 +60,7 @@ async fn acquire_past_leading_batch_returns_bytes() {
         .as_ref()
         .and_then(|r| r.as_v2())
         .expect("acquired offset 3 must carry decodable v2 record bytes");
-    let values: Vec<String> = batches
-        .iter()
-        .flat_map(|b| b.records.iter())
-        .filter_map(|r| r.value.as_ref())
-        .map(|v| String::from_utf8_lossy(v).into_owned())
-        .collect();
+    let values: Vec<String> = crate::support::share::record_values(batches);
     assert!(
         values == vec!["v0"],
         "offset 3's record bytes must be returned, got {values:?}"
@@ -113,15 +101,15 @@ async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i
 /// v0, v2), never the gap offset 1's value v1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fragmented_window_records_match_acquired_offsets() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     bootstrap_share_state(&broker, &client, "g1").await;
     // Three separate single-record batches: offset 0=v0, 1=v1, 2=v2.
     produce_one(&client, "t", tid, 0, "v0").await;
     produce_one(&client, "t", tid, 0, "v1").await;
     produce_one(&client, "t", tid, 0, "v2").await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (member, _member_epoch) =
+        crate::support::share::join_consume_member(&broker, &client, tid).await;
 
     // Acquire 0..2 (epoch 0 opens; stored epoch is now 1).
     let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
@@ -181,12 +169,7 @@ async fn fragmented_window_records_match_acquired_offsets() {
          {acquired_offsets:?} (gap offset 1 must be excluded)"
     );
     // Belt-and-suspenders: the gap offset's value (v1) must never appear.
-    let values: Vec<String> = batches
-        .iter()
-        .flat_map(|b| b.records.iter())
-        .filter_map(|r| r.value.as_ref())
-        .map(|v| String::from_utf8_lossy(v).into_owned())
-        .collect();
+    let values: Vec<String> = crate::support::share::record_values(batches);
     assert!(
         !values.contains(&"v1".to_string()),
         "the gap offset's value v1 must be excluded, got {values:?}"

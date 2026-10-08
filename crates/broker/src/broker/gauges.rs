@@ -285,12 +285,7 @@ mod tests {
         let node_id = krabka_metadata::NodeId(1);
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         image.apply(&krabka_metadata::MetadataRecord::V1Topic(
-            krabka_metadata::TopicRecord {
-                name: "gauge-topic".into(),
-                topic_id: uuid::Uuid::nil(),
-                partitions: 1,
-                replication_factor: 1,
-            },
+            crate::test_support::single_partition_topic("gauge-topic", uuid::Uuid::nil()),
         ));
         image.apply(&krabka_metadata::MetadataRecord::V1Partition(
             krabka_metadata::PartitionRecord {

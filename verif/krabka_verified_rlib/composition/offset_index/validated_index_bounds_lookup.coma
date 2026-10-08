@@ -1,26 +1,26 @@
-(* #"/workspace/crates/verified/src/composition/offset_index.rs" 39 0 44 35 *)
+(* #"/workspace/crates/verified/src/composition/offset_index.rs" 37 0 42 35 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span soffset_index = "/workspace/crates/verified/src/composition/offset_index.rs" 45 16 45 22
-let%span soffset_index'0 = "/workspace/crates/verified/src/composition/offset_index.rs" 52 14 52 33
-let%span soffset_index'1 = "/workspace/crates/verified/src/composition/offset_index.rs" 53 14 53 27
-let%span soffset_index'2 = "/workspace/crates/verified/src/composition/offset_index.rs" 50 16 51 78
-let%span soffset_index'3 = "/workspace/crates/verified/src/composition/offset_index.rs" 49 16 49 114
-let%span soffset_index'4 = "/workspace/crates/verified/src/composition/offset_index.rs" 48 16 48 79
-let%span soffset_index'5 = "/workspace/crates/verified/src/composition/offset_index.rs" 47 16 47 36
-let%span soffset_index'6 = "/workspace/crates/verified/src/composition/offset_index.rs" 54 35 54 45
-let%span soffset_index'7 = "/workspace/crates/verified/src/composition/offset_index.rs" 54 13 54 21
-let%span soffset_index'8 = "/workspace/crates/verified/src/composition/offset_index.rs" 54 23 54 31
-let%span soffset_index'9 = "/workspace/crates/verified/src/composition/offset_index.rs" 55 12 55 99
-let%span soffset_index'10 = "/workspace/crates/verified/src/composition/offset_index.rs" 60 13 60 14
-let%span soffset_index'11 = "/workspace/crates/verified/src/composition/offset_index.rs" 60 8 60 14
-let%span soffset_index'12 = "/workspace/crates/verified/src/composition/offset_index.rs" 62 16 62 52
-let%span soffset_index'13 = "/workspace/crates/verified/src/composition/offset_index.rs" 63 18 63 68
-let%span soffset_index'14 = "/workspace/crates/verified/src/composition/offset_index.rs" 23 10 38 1
-let%span soffset_index'15 = "/workspace/crates/verified/src/composition/offset_index.rs" 13 8 16 79
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span soffset_index = "/workspace/crates/verified/src/composition/offset_index.rs" 43 16 43 22
+let%span soffset_index'0 = "/workspace/crates/verified/src/composition/offset_index.rs" 50 14 50 33
+let%span soffset_index'1 = "/workspace/crates/verified/src/composition/offset_index.rs" 51 14 51 27
+let%span soffset_index'2 = "/workspace/crates/verified/src/composition/offset_index.rs" 48 16 49 78
+let%span soffset_index'3 = "/workspace/crates/verified/src/composition/offset_index.rs" 47 16 47 114
+let%span soffset_index'4 = "/workspace/crates/verified/src/composition/offset_index.rs" 46 16 46 79
+let%span soffset_index'5 = "/workspace/crates/verified/src/composition/offset_index.rs" 45 16 45 36
+let%span soffset_index'6 = "/workspace/crates/verified/src/composition/offset_index.rs" 52 35 52 45
+let%span soffset_index'7 = "/workspace/crates/verified/src/composition/offset_index.rs" 52 13 52 21
+let%span soffset_index'8 = "/workspace/crates/verified/src/composition/offset_index.rs" 52 23 52 31
+let%span soffset_index'9 = "/workspace/crates/verified/src/composition/offset_index.rs" 53 12 53 99
+let%span soffset_index'10 = "/workspace/crates/verified/src/composition/offset_index.rs" 58 13 58 14
+let%span soffset_index'11 = "/workspace/crates/verified/src/composition/offset_index.rs" 58 8 58 14
+let%span soffset_index'12 = "/workspace/crates/verified/src/composition/offset_index.rs" 60 16 60 52
+let%span soffset_index'13 = "/workspace/crates/verified/src/composition/offset_index.rs" 61 18 61 68
+let%span soffset_index'14 = "/workspace/crates/verified/src/composition/offset_index.rs" 21 10 36 1
+let%span soffset_index'15 = "/workspace/crates/verified/src/composition/offset_index.rs" 10 8 13 79
 let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 38 10 44 6
 let%span slog_index = "/workspace/crates/verified/src/log_index.rs" 13 19 14 52
 let%span slog_index'0 = "/workspace/crates/verified/src/log_index.rs" 15 18 18 92
@@ -123,7 +123,7 @@ let offset_index_position_at_or_after (entries: Slice64.slice tup2_u32_u32) (tar
         -> UInt32.t'int (Seq.get (Slice64.view entries) i).f0 < UInt32.t'int target) -> result = None'0)}
     (! return {result}) ]
 
-predicate offset_archive_valid [#"/workspace/crates/verified/src/composition/offset_index.rs" 11 0 11 96] (entries: Seq.seq tup2_u32_u32) (max_relative: int) (log_bytes: int) =
+predicate offset_archive_valid [#"/workspace/crates/verified/src/composition/offset_index.rs" 8 0 8 96] (entries: Seq.seq tup2_u32_u32) (max_relative: int) (log_bytes: int) =
   [%#soffset_index'15] (forall i: int. 0 <= i /\ i < Seq.length entries
       -> UInt32.t'int (Seq.get entries i).f0 <= max_relative /\ UInt32.t'int (Seq.get entries i).f1 < log_bytes)
   /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length entries
@@ -134,7 +134,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let validated_index_bounds_lookup [#"/workspace/crates/verified/src/composition/offset_index.rs" 39 0 44 35]
+let validated_index_bounds_lookup [#"/workspace/crates/verified/src/composition/offset_index.rs" 37 0 42 35]
   (entries: Slice64.slice tup2_u32_u32) (target: UInt32.t) (max_relative: Int64.t) (log_bytes: UInt64.t)
   (return (x: t_Result_tup2_u32_Option_u32_unit)) = (! bb0
   [ bb0 = s0 [ s0 = [ &i <- [%#soffset_index] (0: UInt64.t) ] s1 | s1 = [ &previous <- None ] s2 | s2 = bb1 ]

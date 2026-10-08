@@ -69,16 +69,10 @@ const WITHDRAW_REASON: &str = "raised against the wrong scope";
 /// asserts that this byte reaches the log as `thaw_topic_freeze`.
 const ACTION_THAW_TOPIC_FREEZE: i8 = 1;
 
-/// Milliseconds since the Unix epoch, as the operator's own machine reads them.
-pub(super) fn now_ms() -> i64 {
-    i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the Unix epoch")
-            .as_millis(),
-    )
-    .expect("epoch milliseconds fit in an i64")
-}
+// Milliseconds since the Unix epoch, as the operator's own machine reads them.
+krabka_macros::unix_millis_fixture!(
+    pub(super) now_ms, "the clock is after the Unix epoch", "epoch milliseconds fit in an i64"
+);
 
 /// One `SetTopicFreeze` request as the operator's own machine builds it: the
 /// signature is made here, from the private key that never reaches a broker.
@@ -188,6 +182,23 @@ pub(super) struct Cluster {
     _dir: tempfile::TempDir,
 }
 
+impl Cluster {
+    pub(super) async fn workflow_clients(
+        &self,
+    ) -> (
+        krabka_client_core::Client,
+        krabka_client_core::Client,
+        krabka_client_core::Client,
+        String,
+    ) {
+        let alice = support::sasl_client(&self.bootstrap, "alice", "alice-pw").await;
+        let bob = support::sasl_client(&self.bootstrap, "bob", "bob-pw").await;
+        let carol = support::sasl_client(&self.bootstrap, "carol", "carol-pw").await;
+        let cluster_id = cluster_id_of(&alice).await;
+        (alice, bob, carol, cluster_id)
+    }
+}
+
 pub(super) async fn boot_workflow_cluster() -> Cluster {
     let dir = tempfile::tempdir().expect("tempdir");
     // The keys live beside the log directory rather than inside it, so no
@@ -245,10 +256,7 @@ pub(super) struct ThawWorkflow {
 /// `consumed` phase without a Kafka transition behind it.
 pub(super) async fn run_thaw_workflow() -> ThawWorkflow {
     let cluster = boot_workflow_cluster().await;
-    let alice = support::sasl_client(&cluster.bootstrap, "alice", "alice-pw").await;
-    let bob = support::sasl_client(&cluster.bootstrap, "bob", "bob-pw").await;
-    let carol = support::sasl_client(&cluster.bootstrap, "carol", "carol-pw").await;
-    let cluster_id = cluster_id_of(&alice).await;
+    let (alice, bob, carol, cluster_id) = cluster.workflow_clients().await;
 
     let freeze_set_at_ms = now_ms();
     let frozen = send_signed_freeze(

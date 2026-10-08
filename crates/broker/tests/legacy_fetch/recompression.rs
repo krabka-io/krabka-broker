@@ -12,7 +12,6 @@ use krabka_compression::CompressionType;
 use krabka_protocol::{
     Decode,
     kafka_3_6_2::owned::fetch_response::FetchResponse as LegacyFetchResponse,
-    owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
     records::{Attributes, Record, RecordBatch},
 };
 use krabka_records_legacy::decode_message_set;
@@ -20,6 +19,7 @@ use krabka_records_legacy::decode_message_set;
 use crate::{
     harness::{fetch_legacy_raw, produce_batch},
     support,
+    support::topics::{creatable_topic, create_topic_request},
 };
 
 #[tokio::test]
@@ -29,16 +29,10 @@ async fn fetch_v3_recompresses_zstd_as_snappy() {
     // 1. Create topic.
     let cr = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "legacy_fetch_zstd".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("legacy_fetch_zstd", 1, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(
@@ -77,20 +71,11 @@ async fn fetch_v3_recompresses_zstd_as_snappy() {
         LegacyFetchResponse::decode(&mut cur, 3).expect("decode LegacyFetchResponse v3");
 
     let part = &fetch_resp.responses[0].partitions[0];
-    assert!(
-        part.error_code == 0,
-        "fetch partition error: {}",
-        part.error_code
+    let legacy_bytes = crate::harness::legacy_bytes(
+        part.error_code,
+        part.records.as_ref(),
+        "expected Legacy MessageSet in Fetch v3 response, got non-Legacy payload",
     );
-
-    // 5. Get the raw legacy bytes.
-    let records_payload = part.records.as_ref().expect("records field should be Some");
-    let legacy_bytes = match records_payload {
-        krabka_protocol::records::RecordsPayload::Legacy(b) => b.clone(),
-        _ => {
-            panic!("expected Legacy MessageSet in Fetch v3 response, got non-Legacy payload")
-        }
-    };
 
     // 6. The outer wrapper message's attributes byte should carry snappy (2).
     // MessageSet format: offset(8) + message_size(4) + crc(4) + magic(1) + attributes(1)

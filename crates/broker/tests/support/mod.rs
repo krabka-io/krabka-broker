@@ -40,23 +40,44 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 
+use crate::support::{discovery::topic_metadata_request, topics::metadata_topic};
+
 pub mod acl;
+pub mod admin;
 mod audit;
 pub mod classic;
 pub mod client;
 mod cluster;
 mod cluster_boot;
+pub mod configs;
+pub mod consumer_groups;
 mod containers;
 mod coordinator;
+pub mod discovery;
+pub mod diskless;
 pub mod durability;
+pub mod fetch;
+pub mod listeners;
+pub mod offsets;
 mod operator_keys;
+pub mod partitions;
+pub mod poll;
 mod ports;
+pub mod produce;
+pub mod producer;
+pub mod quorum;
+pub mod records;
 pub mod sasl;
 pub mod share;
 mod single_broker;
 pub mod storage;
 pub mod streams;
+pub mod tiered;
 pub mod tls;
+pub mod topics;
+pub mod transaction_wire;
+pub mod transactions;
+pub mod wire;
 // A cut-and-heal TCP relay for partition tests. Declared here so every suite
 // that pulls in `support` can reach it as `support::relay`.
 pub mod relay;
@@ -65,19 +86,37 @@ pub mod relay;
 // this one re-export, so every binary compiles the whole surface and uses only
 // part of it. That is why this statement carries the `unused_imports` allow:
 // the same reason the module carries `allow(dead_code)`.
+/// Set an exact container-fixture permission mode with the caller's diagnostic.
+///
+/// # Panics
+/// Panics if the permissions cannot be set.
+#[cfg(unix)]
+pub fn chmod_for_container(path: &std::path::Path, mode: u32, context: &str) {
+    containers::chmod_for_container(path, mode, context);
+}
+
 #[allow(unused_imports)]
 pub use self::{
     audit::{audit_record_seqs, consume_audit_records},
-    cluster::start_n_node_with,
+    cluster::{
+        await_broker_start, controller_voters, fixed_internal_isr_cluster, listener_pairs,
+        node_config, start_n_node_client, start_n_node_with,
+    },
     cluster_boot::{
-        broker_config, start_n_node, start_n_node_with_retry, start_reusing_addrs,
-        wait_for_all_brokers_registered,
+        RoleTopology, broker_config, registered_cluster, shutdown_cluster, start_first_held,
+        start_held_node, start_n_node, start_n_node_with_retry, start_reusing_addrs,
+        two_controller_followers, wait_for_all_brokers_registered,
     },
     containers::{
-        JvmListeners, bridge_gateway, docker, docker_output, fixture_cache_dir, free_port,
-        init_jvm_tracing, jvm_broker_config, jvm_client_addr, jvm_docker_command, jvm_docker_run,
-        jvm_finalized_level, jvm_listeners, jvm_single_broker_config, jvm_stdin_output,
-        manifest_dir, start_jvm_cluster, start_jvm_single, unique_container_name,
+        JvmListeners, bridge_gateway, combined_output, docker, docker_exec, docker_logs,
+        docker_output, docker_run_blocking, docker_tool_command, fixture_cache_dir,
+        format_jvm_voter, free_port, init_jvm_tracing, jvm_acks_all_producer, jvm_admin_args,
+        jvm_admin_config, jvm_bootstrap_servers, jvm_broker_config, jvm_client_addr,
+        jvm_client_ports, jvm_docker_command, jvm_docker_run, jvm_finalized_level, jvm_listeners,
+        jvm_output_lines, jvm_parse_offset, jvm_single_broker_config, jvm_spawn_piped,
+        jvm_static_voter_config, jvm_stdin_output, jvm_tool_output, kafka_single_node_env_args,
+        manifest_dir, print_log_tail, remove_container, remove_container_with_volumes,
+        save_jvm_logs, start_jvm_bound, start_jvm_cluster, start_jvm_single, unique_container_name,
     },
     coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION, find_coordinator},
     operator_keys::{
@@ -87,7 +126,8 @@ pub use self::{
     ports::{bind_and_drop_ports, bind_and_hold_ports},
     sasl::{sasl_plaintext_config, sasl_plaintext_with_users, start_broker},
     single_broker::{
-        InProcess, start, start_configured, start_legacy, start_with_audit_key,
+        InProcess, boot_single, standalone_broker, start, start_configured,
+        start_group_coordinator, start_legacy, start_ready_group, start_with_audit_key,
         start_with_bound_listeners, start_with_deny_all_authz, start_with_dir,
     },
 };
@@ -96,10 +136,15 @@ pub use self::{
 /// integration tests. It is safe to call this many times, because `try_init`
 /// is a no-op after the first success.
 pub fn init_tracing() {
+    init_tracing_with("warn");
+}
+
+/// Initialize the same subscriber with the caller's original fallback filter.
+pub fn init_tracing_with(default_filter: &str) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
         )
         .with_test_writer()
         .try_init();
@@ -118,7 +163,7 @@ pub fn init_tracing() {
 /// clippy's `await_holding_lock`.
 pub fn cluster_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    lazy_mutex(&LOCK)
 }
 
 /// A `CreateTopics` row that pins partition `p` to the brokers `replicas[p]`,
@@ -202,16 +247,11 @@ pub async fn topic_id_for(
     client: &krabka_client_core::Client,
     name: &str,
 ) -> krabka_protocol::primitives::uuid::Uuid {
-    use krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic};
-
     let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(topic_metadata_request(Some(vec![metadata_topic(
+            Some(name.into()),
+            krabka_protocol::primitives::uuid::Uuid::default(),
+        )])))
         .await
         .expect("Metadata for topic_id");
     resp.topics
@@ -219,4 +259,8 @@ pub async fn topic_id_for(
         .find(|t| t.name.as_deref() == Some(name))
         .map(|t| t.topic_id)
         .unwrap_or_default()
+}
+
+pub fn lazy_mutex(lock: &std::sync::OnceLock<tokio::sync::Mutex<()>>) -> &tokio::sync::Mutex<()> {
+    lock.get_or_init(|| tokio::sync::Mutex::new(()))
 }

@@ -35,10 +35,7 @@
 
 mod support;
 
-use std::{
-    process::Command,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole};
@@ -66,10 +63,10 @@ struct Ports {
 fn ports() -> &'static Ports {
     static PORTS: std::sync::OnceLock<Ports> = std::sync::OnceLock::new();
     PORTS.get_or_init(|| {
-        let client: [u16; 3] = std::array::from_fn(|_| support::free_port());
+        let (_, client_listen, client_advertised) = support::jvm_client_ports::<3>();
         Ports {
-            client_listen: client.map(|port| format!("0.0.0.0:{port}")),
-            client_advertised: client.map(|port| format!("host.docker.internal:{port}")),
+            client_listen,
+            client_advertised,
             controller: std::array::from_fn(|_| format!("0.0.0.0:{}", support::free_port())),
         }
     })
@@ -178,17 +175,7 @@ async fn start_role_separated() -> RoleSeparated {
 /// Widening the budget is what makes a real routing failure legible; it is not
 /// a retry, and a request that is actually refused still fails at once.
 fn command_config() -> &'static std::path::Path {
-    static CONFIG: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    let dir = CONFIG.get_or_init(|| {
-        let dir = tempfile::tempdir().expect("tempdir for command config");
-        std::fs::write(
-            dir.path().join("admin.properties"),
-            "request.timeout.ms=120000\ndefault.api.timeout.ms=240000\n",
-        )
-        .expect("write command config");
-        dir
-    });
-    dir.path()
+    support::jvm_admin_config()
 }
 
 /// Run one bundled Kafka CLI tool against `bootstrap` in a throwaway
@@ -203,32 +190,10 @@ fn command_config() -> &'static std::path::Path {
 /// with forwarding.
 async fn kafka_tool(tool: &str, bootstrap: &str, args: &[&str]) -> std::process::Output {
     let mount = format!("{}:/krabka-config", command_config().display());
-    let mut full: Vec<String> = [
-        "run",
-        "--rm",
-        "--add-host=host.docker.internal:host-gateway",
-        "-v",
-        &mount,
-        KAFKA_IMAGE,
-        tool,
-        "--bootstrap-server",
-        bootstrap,
-        "--command-config",
-        "/krabka-config/admin.properties",
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
+    let mut full = support::jvm_admin_args(KAFKA_IMAGE, &mount, tool, bootstrap);
     full.extend(args.iter().map(|arg| (*arg).to_owned()));
     let tool = tool.to_owned();
-    let out = tokio::task::spawn_blocking(move || {
-        Command::new("docker")
-            .args(&full)
-            .output()
-            .unwrap_or_else(|error| panic!("spawn docker run: {error}"))
-    })
-    .await
-    .expect("docker run task");
+    let out = support::docker_run_blocking(full, "spawn docker run").await;
     eprintln!(
         "KRABKA[role-separated] {tool} {args:?} status={}\nstdout:\n{}\nstderr:\n{}",
         out.status,
@@ -247,23 +212,12 @@ async fn kafka_features(bootstrap: &str, args: &[&str]) -> std::process::Output 
 }
 
 fn combined(output: &std::process::Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
+    support::combined_output(output)
 }
 
 /// `FinalizedVersionLevel` for `feature` in `kafka-features describe` output.
 fn finalized_level(describe_stdout: &str, feature: &str) -> Option<i64> {
-    for line in describe_stdout.lines() {
-        if line.contains(&format!("Feature: {feature}")) {
-            let index = line.find("FinalizedVersionLevel:")?;
-            let rest = &line[index + "FinalizedVersionLevel:".len()..];
-            return rest.split_whitespace().next()?.parse().ok();
-        }
-    }
-    None
+    support::jvm_finalized_level(describe_stdout, feature)
 }
 
 /// Both admin write tools an operator drives by hand, aimed at a broker-only

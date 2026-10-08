@@ -16,7 +16,7 @@ use crate::file_config::FileConfig;
 
 #[test]
 fn runtime_file_config_applies_representative_values() {
-    let file: FileConfig = toml::from_str(
+    let cfg = crate::file_config::test_support::configured(
         r#"
 [runtime]
 cleaner_interval = "7s"
@@ -40,11 +40,9 @@ share_group_backlog_poll_interval = "250ms"
 streams_group_enable = false
 streams_group_max_size = 19
 "#,
+        "parse runtime config",
     )
-    .expect("parse runtime config");
-    let mut cfg = crate::config::BrokerConfig::default();
-
-    file.apply_to(&mut cfg).expect("apply runtime config");
+    .expect("apply runtime config");
 
     assert!(
         (
@@ -86,7 +84,7 @@ streams_group_max_size = 19
 /// as `30`, changes a Kafka wire field by three orders of magnitude.
 #[test]
 fn runtime_millisecond_and_byte_keys_round_trip_through_quantities() {
-    let file: FileConfig = toml::from_str(
+    let cfg = crate::file_config::test_support::configured(
         r#"
 [runtime]
 heartbeat_interval = "3s"
@@ -103,11 +101,9 @@ replication_fetch_max_wait = "500ms"
 replication_fetch_max = "1MiB"
 replication_fetch_min = "1B"
 "#,
+        "parse runtime config",
     )
-    .expect("parse runtime config");
-    let mut cfg = crate::config::BrokerConfig::default();
-
-    file.apply_to(&mut cfg).expect("apply runtime config");
+    .expect("apply runtime config");
 
     // Landed as dimensioned quantities, spelled in their natural units.
     assert!(cfg.heartbeat_interval == secs(3));
@@ -216,12 +212,11 @@ fn runtime_file_config_rejects_relational_conflicts() {
 /// accepts zero for it, where the other coordinator timings stay positive.
 #[test]
 fn runtime_file_config_accepts_a_zero_classic_group_initial_rebalance_delay() {
-    let file: FileConfig =
-        toml::from_str("[runtime]\nclassic_group_initial_rebalance_delay = \"0ms\"\n")
-            .expect("parse runtime config");
-    let mut cfg = crate::config::BrokerConfig::default();
-
-    file.apply_to(&mut cfg).expect("apply runtime config");
+    let cfg = crate::file_config::test_support::configured(
+        "[runtime]\nclassic_group_initial_rebalance_delay = \"0ms\"\n",
+        "parse runtime config",
+    )
+    .expect("apply runtime config");
 
     assert!(cfg.classic_group_initial_rebalance_delay == millis(0));
     assert!(cfg.validate().is_ok());
@@ -323,7 +318,7 @@ fn the_runtime_table_records_the_kafka_keys_it_named() {
 /// `STATIC_BROKER_CONFIG`.
 #[test]
 fn the_metadata_log_keys_set_the_whole_metadata_log_config() {
-    let file: FileConfig = toml::from_str(
+    let cfg = crate::file_config::test_support::configured(
         r#"
 [runtime]
 metadata_log_segment_bytes = "16MiB"
@@ -332,11 +327,9 @@ metadata_max_retention_bytes = "0B"
 metadata_max_retention = "2d"
 metadata_max_idle_interval = "0ms"
 "#,
+        "parse runtime config",
     )
-    .expect("parse runtime config");
-    let mut cfg = crate::config::BrokerConfig::default();
-
-    file.apply_to(&mut cfg).expect("apply runtime config");
+    .expect("apply runtime config");
 
     assert!(
         (

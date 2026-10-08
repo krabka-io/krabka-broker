@@ -57,6 +57,7 @@ use super::{
     version::TxnVersion,
 };
 use crate::{
+    coordinator::unified::actor::reconciliation_model_support::pinned_model_runner,
     handlers::fetch::{FetchWatermarks, compute_visibility_window},
     model_check::run_bfs,
 };
@@ -342,8 +343,7 @@ impl Model for EosModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, a: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
+    krabka_macros::model_transition! { last, a, s; {
         match a {
             Act::Begin(p) => {
                 let pr = &mut s.prod[usize::from(p)];
@@ -418,7 +418,7 @@ impl Model for EosModel {
             s.violations.lso_regressed = true;
         }
         Some(s)
-    }
+    }}
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
@@ -510,19 +510,18 @@ impl Model for EosModel {
     }
 }
 
-fn run(model: EosModel, label: &str, pinned_unique_states: usize) {
-    let checker = run_bfs(model, label, MAX_DEPTH, TARGET_STATE_COUNT);
-    assert2::assert!(
-        checker.unique_state_count() < MAX_UNIQUE_STATES,
-        "[{label}] unique bound exceeded ({})",
-        checker.unique_state_count()
-    );
-    checker.assert_properties();
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
+pinned_model_runner! {
+    @checked
+    fn run(EosModel);
+    run_bfs, crate::model_check::assert_pinned_count;
+    MAX_DEPTH, TARGET_STATE_COUNT; properties_first;
+    |checker, label| {
+        assert2::assert!(
+            checker.unique_state_count() < MAX_UNIQUE_STATES,
+            "[{label}] unique bound exceeded ({})",
+            checker.unique_state_count()
+        );
+    }
 }
 
 #[test]

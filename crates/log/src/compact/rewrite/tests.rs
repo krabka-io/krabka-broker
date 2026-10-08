@@ -9,35 +9,36 @@ use krabka_protocol::records::{Attributes, Record, TimestampType};
 use krabka_units::prelude::millis;
 
 use super::*;
-use crate::compact::{
-    build_offset_map,
-    test_support::{
-        RETENTION, control_batch, make_record, round_over, write_sealed_batches,
-        write_sealed_segment,
-    },
+use crate::compact::test_support::{
+    RETENTION, control_batch, make_record, rewrite_all, rewrite_with_map, superseded_records,
+    transactional_record, write_sealed_batches, write_sealed_segment,
 };
 
 /// A far-future `now` so nothing in the simple tests ages out, plus an
 /// empty active-producer set and no surviving transactions.
 const NEVER_AGE_NOW_MS: i64 = 0;
 
+fn keyed_value_batch(base_offset: i64, key: &[u8], value: &[u8]) -> RecordBatch {
+    RecordBatch {
+        base_offset,
+        last_offset_delta: 0,
+        producer_id: -1,
+        records: vec![make_record(0, Some(key), Some(value))],
+        ..RecordBatch::default()
+    }
+}
+
 fn rewrite_simple(dir: &Path, segment_refs: &[&Segment]) -> RewriteOutput {
-    let map = build_offset_map(segment_refs, vec![], None).unwrap();
-    let mut txn = CleanedTransactionMetadata::default();
-    let active = HashMap::new();
-    rewrite_segments(
-        &crate::io::FileIo,
+    rewrite_all(
         dir,
         segment_refs,
-        &map,
-        &mut txn,
+        &mut CleanedTransactionMetadata::default(),
         RewriteRetention {
             now_ms: NEVER_AGE_NOW_MS,
             delete_retention: RETENTION,
         },
-        round_over(segment_refs, &active),
+        &HashMap::new(),
     )
-    .unwrap()
 }
 
 pub(super) fn decode_all(bytes: &[u8]) -> Vec<RecordBatch> {
@@ -52,33 +53,35 @@ pub(super) fn decode_all(bytes: &[u8]) -> Vec<RecordBatch> {
     out
 }
 
+/// Decode the written bytes before checking both independent output frontiers.
+fn read_rewrite(out: &RewriteOutput, expected: (i64, i64)) -> Vec<RecordBatch> {
+    let batches = decode_all(&fs::read(&out.log_swap).unwrap());
+    assert2::assert!(out.new_base_offset == Offset(expected.0));
+    assert2::assert!(out.new_last_offset == Offset(expected.1));
+    batches
+}
+
+/// Independent expected records for the two supersession cases.
+fn surviving_key_records() -> Vec<Record> {
+    vec![
+        make_record(1, Some(b"k2"), Some(b"v2")),
+        make_record(2, Some(b"k1"), Some(b"v3")),
+    ]
+}
+
 #[test]
 fn rewrite_drops_superseded_records() {
     let dir = tempfile::tempdir().unwrap();
-    let first_segment = write_sealed_segment(
-        dir.path(),
-        0,
-        vec![
-            make_record(0, Some(b"k1"), Some(b"v1")),
-            make_record(1, Some(b"k2"), Some(b"v2")),
-            make_record(2, Some(b"k1"), Some(b"v3")),
-        ],
-    );
+    let first_segment = write_sealed_segment(dir.path(), 0, superseded_records());
     let segment_refs = vec![&first_segment];
     let out = rewrite_simple(dir.path(), &segment_refs);
-    let bytes = fs::read(&out.log_swap).unwrap();
-    let batches = decode_all(&bytes);
-    assert2::assert!(out.new_base_offset == Offset(0));
-    assert2::assert!(out.new_last_offset == Offset(2));
+    let batches = read_rewrite(&out, (0, 2));
     assert2::assert!(
         batches
             == vec![RecordBatch {
                 base_offset: 0,
                 last_offset_delta: 2,
-                records: vec![
-                    make_record(1, Some(b"k2"), Some(b"v2")),
-                    make_record(2, Some(b"k1"), Some(b"v3")),
-                ],
+                records: surviving_key_records(),
                 ..RecordBatch::default()
             }]
     );
@@ -120,33 +123,21 @@ fn rewrite_keeps_tombstone_as_latest() {
 #[test]
 fn rewrite_preserves_absolute_offsets() {
     let dir = tempfile::tempdir().unwrap();
-    let first_segment = write_sealed_segment(
-        dir.path(),
-        100,
-        vec![
-            make_record(0, Some(b"k1"), Some(b"v1")), // abs 100
-            make_record(1, Some(b"k2"), Some(b"v2")), // abs 101
-            make_record(2, Some(b"k1"), Some(b"v3")), // abs 102 — kept
-            make_record(3, None, Some(b"unkeyed")),   // abs 103 — dropped
-        ],
-    );
+    // Absolute offsets 100..=102 retain k2 and the newest k1; 103 is unkeyed.
+    let mut records = superseded_records();
+    records.push(make_record(3, None, Some(b"unkeyed"))); // abs 103 — dropped
+    let first_segment = write_sealed_segment(dir.path(), 100, records);
     let segment_refs = vec![&first_segment];
     let out = rewrite_simple(dir.path(), &segment_refs);
-    let bytes = std::fs::read(&out.log_swap).unwrap();
-    let batches = decode_all(&bytes);
     // The batch keeps its original last offset, 103, although the record at
     // 103 is gone: Kafka's `overrideLastOffset(originalBatch.lastOffset())`.
-    assert2::assert!(out.new_base_offset == Offset(100));
-    assert2::assert!(out.new_last_offset == Offset(103));
+    let batches = read_rewrite(&out, (100, 103));
     assert2::assert!(
         batches
             == vec![RecordBatch {
                 base_offset: 100,
                 last_offset_delta: 3,
-                records: vec![
-                    make_record(1, Some(b"k2"), Some(b"v2")),
-                    make_record(2, Some(b"k1"), Some(b"v3")),
-                ],
+                records: surviving_key_records(),
                 ..RecordBatch::default()
             }]
     );
@@ -221,33 +212,9 @@ fn rewrite_both_commit_markers_survive_when_data_survives() {
     let dir = tempfile::tempdir().unwrap();
     // pid 1000: data batch at offset 0 (key k1), commit marker at offset 1.
     // pid 2000: data batch at offset 2 (key k2), commit marker at offset 3.
-    let data1 = RecordBatch {
-        base_offset: 0,
-        last_offset_delta: 0,
-        producer_id: 1000,
-        attributes: krabka_protocol::records::Attributes::default().with_transactional(true),
-        records: vec![Record {
-            offset_delta: 0,
-            key: Some(Bytes::copy_from_slice(b"k1")),
-            value: Some(Bytes::copy_from_slice(b"v1")),
-            ..Default::default()
-        }],
-        ..RecordBatch::default()
-    };
+    let data1 = transactional_record(0, 1000, b"k1", b"v1");
     let marker1 = control_batch(1, 1000, 1 /* COMMIT */);
-    let data2 = RecordBatch {
-        base_offset: 2,
-        last_offset_delta: 0,
-        producer_id: 2000,
-        attributes: krabka_protocol::records::Attributes::default().with_transactional(true),
-        records: vec![Record {
-            offset_delta: 0,
-            key: Some(Bytes::copy_from_slice(b"k2")),
-            value: Some(Bytes::copy_from_slice(b"v2")),
-            ..Default::default()
-        }],
-        ..RecordBatch::default()
-    };
+    let data2 = transactional_record(2, 2000, b"k2", b"v2");
     let marker2 = control_batch(3, 2000, 1 /* COMMIT */);
     let expected = vec![
         data1.clone(),
@@ -259,10 +226,7 @@ fn rewrite_both_commit_markers_survive_when_data_survives() {
     let segment_refs = vec![&seg];
     let out = rewrite_simple(dir.path(), &segment_refs);
 
-    let bytes = fs::read(&out.log_swap).unwrap();
-    let batches = decode_all(&bytes);
-    assert2::assert!(out.new_base_offset == Offset(0));
-    assert2::assert!(out.new_last_offset == Offset(3));
+    let batches = read_rewrite(&out, (0, 3));
     assert2::assert!(batches == expected);
 }
 
@@ -277,30 +241,22 @@ fn rewrite_tombstone_gets_horizon_stamp() {
         vec![make_record(0, Some(b"k1"), None)], // tombstone, newest for k1
     );
     let segment_refs = vec![&first_segment];
-    let map = build_offset_map(&segment_refs, vec![], None).unwrap();
-    let mut txn = CleanedTransactionMetadata::default();
     let now = 5_000i64;
     let ret = 50i64;
     let retention = Time::from_millis(ret);
-    let out = rewrite_segments(
-        &crate::io::FileIo,
+    let out = rewrite_all(
         dir.path(),
         &segment_refs,
-        &map,
-        &mut txn,
+        &mut CleanedTransactionMetadata::default(),
         RewriteRetention {
             now_ms: now,
             delete_retention: retention,
         },
-        round_over(&segment_refs, &HashMap::new()),
-    )
-    .unwrap();
-    let bytes = fs::read(&out.log_swap).unwrap();
-    let batches = decode_all(&bytes);
+        &HashMap::new(),
+    );
     let mut record = make_record(0, Some(b"k1"), None);
     record.timestamp_delta = -(now + ret);
-    assert2::assert!(out.new_base_offset == Offset(0));
-    assert2::assert!(out.new_last_offset == Offset(0));
+    let batches = read_rewrite(&out, (0, 0));
     assert2::assert!(
         batches
             == vec![RecordBatch {
@@ -334,26 +290,18 @@ fn rewrite_marker_dropped_when_data_gone_and_horizon_elapsed() {
     };
     let seg = write_sealed_batches(dir.path(), &[marker, data]);
     let segment_refs = vec![&seg];
-    let map = build_offset_map(&segment_refs, vec![], None).unwrap();
-    let mut txn = CleanedTransactionMetadata::default();
     // now=200 >= horizon 100 → marker deleted.
-    let out = rewrite_segments(
-        &crate::io::FileIo,
+    let out = rewrite_all(
         dir.path(),
         &segment_refs,
-        &map,
-        &mut txn,
+        &mut CleanedTransactionMetadata::default(),
         RewriteRetention {
             now_ms: 200,
             delete_retention: millis(50),
         },
-        round_over(&segment_refs, &HashMap::new()),
-    )
-    .unwrap();
-    let bytes = fs::read(&out.log_swap).unwrap();
-    let batches = decode_all(&bytes);
-    assert2::assert!(out.new_base_offset == Offset(0));
-    assert2::assert!(out.new_last_offset == Offset(1));
+        &HashMap::new(),
+    );
+    let batches = read_rewrite(&out, (0, 1));
     assert2::assert!(
         batches
             == vec![RecordBatch {
@@ -383,17 +331,9 @@ fn rewrite_retain_empty_for_active_producer() {
         records: vec![make_record(0, Some(b"k1"), Some(b"v1"))],
         ..RecordBatch::default()
     };
-    let data2 = RecordBatch {
-        base_offset: 1,
-        last_offset_delta: 0,
-        producer_id: -1,
-        records: vec![make_record(0, Some(b"k1"), Some(b"v2"))], // newest for k1
-        ..RecordBatch::default()
-    };
+    let data2 = keyed_value_batch(1, b"k1", b"v2");
     let seg = write_sealed_batches(dir.path(), &[data1, data2]);
     let segment_refs = vec![&seg];
-    let map = build_offset_map(&segment_refs, vec![], None).unwrap();
-    let mut txn = CleanedTransactionMetadata::default();
     let mut active = HashMap::new();
     // pid 1000 is active, and its last data batch ends at offset 0.
     active.insert(
@@ -403,23 +343,17 @@ fn rewrite_retain_empty_for_active_producer() {
             producer_epoch: 7,
         },
     );
-    let out = rewrite_segments(
-        &crate::io::FileIo,
+    let out = rewrite_all(
         dir.path(),
         &segment_refs,
-        &map,
-        &mut txn,
+        &mut CleanedTransactionMetadata::default(),
         RewriteRetention {
             now_ms: 0,
             delete_retention: RETENTION,
         },
-        round_over(&segment_refs, &active),
-    )
-    .unwrap();
-    let bytes = fs::read(&out.log_swap).unwrap();
-    let batches = decode_all(&bytes);
-    assert2::assert!(out.new_base_offset == Offset(0));
-    assert2::assert!(out.new_last_offset == Offset(1));
+        &active,
+    );
+    let batches = read_rewrite(&out, (0, 1));
     assert2::assert!(
         batches
             == vec![
@@ -432,13 +366,7 @@ fn rewrite_retain_empty_for_active_producer() {
                     base_timestamp: -1,
                     ..RecordBatch::default()
                 },
-                RecordBatch {
-                    base_offset: 1,
-                    last_offset_delta: 0,
-                    producer_id: -1,
-                    records: vec![make_record(0, Some(b"k1"), Some(b"v2"))],
-                    ..RecordBatch::default()
-                },
+                keyed_value_batch(1, b"k1", b"v2"),
             ]
     );
 }
@@ -453,13 +381,7 @@ fn rewrite_retain_empty_for_active_producer() {
 fn rewrite_retain_empty_extends_last_offset() {
     let dir = tempfile::tempdir().unwrap();
     // Batch 0 (base 0): one surviving keyed record (abs offset 0).
-    let data0 = RecordBatch {
-        base_offset: 0,
-        last_offset_delta: 0,
-        producer_id: -1,
-        records: vec![make_record(0, Some(b"k1"), Some(b"v1"))],
-        ..RecordBatch::default()
-    };
+    let data0 = keyed_value_batch(0, b"k1", b"v1");
     // Batch 1 (base 100, last_offset_delta 5): only NULL-key records, all
     // dropped, so the batch is emptied. As the output-last batch it is
     // re-emitted as a bare header spanning abs offsets 100..=105.
@@ -478,20 +400,11 @@ fn rewrite_retain_empty_extends_last_offset() {
     let out = rewrite_simple(dir.path(), &segment_refs);
 
     // The emptied batch is re-emitted as a bare header at base_offset 100.
-    let bytes = fs::read(&out.log_swap).unwrap();
-    let batches = decode_all(&bytes);
-    assert2::assert!(out.new_base_offset == Offset(0));
-    assert2::assert!(out.new_last_offset == Offset(105));
+    let batches = read_rewrite(&out, (0, 105));
     assert2::assert!(
         batches
             == vec![
-                RecordBatch {
-                    base_offset: 0,
-                    last_offset_delta: 0,
-                    producer_id: -1,
-                    records: vec![make_record(0, Some(b"k1"), Some(b"v1"))],
-                    ..RecordBatch::default()
-                },
+                keyed_value_batch(0, b"k1", b"v1"),
                 RecordBatch {
                     base_offset: 100,
                     last_offset_delta: 5,
@@ -581,25 +494,21 @@ fn retain_empty_follows_kafkas_cleaner_rules() {
         let dir = tempfile::tempdir().unwrap();
         let seg = write_sealed_batches(dir.path(), &batches);
         let segment_refs = vec![&seg];
-        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
         let active: HashMap<_, _> = active
             .into_iter()
             .map(|last| (ProducerId(1000), last))
             .collect();
 
-        let out = rewrite_segments(
-            &crate::io::FileIo,
+        let out = rewrite_all(
             dir.path(),
             &segment_refs,
-            &map,
             &mut CleanedTransactionMetadata::default(),
             RewriteRetention {
                 now_ms: 200,
                 delete_retention: millis(50),
             },
-            round_over(&segment_refs, &active),
-        )
-        .unwrap();
+            &active,
+        );
 
         let survivors: Vec<i64> = decode_all(&fs::read(&out.log_swap).unwrap())
             .iter()
@@ -678,7 +587,7 @@ fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
     let dir = tempfile::tempdir().unwrap();
     let first = write_sealed_batches(dir.path(), &[one_record_batch(0, (-1, -1), None)]);
     let second = write_sealed_batches(dir.path(), &[one_record_batch(1, (-1, -1), None)]);
-    let map = build_offset_map(&[&first, &second], vec![], None).unwrap();
+    let map = crate::compact::build_offset_map(&[&first, &second], vec![], None).unwrap();
     let active = HashMap::new();
     let round = CleaningRound {
         active_producers: &active,
@@ -686,10 +595,8 @@ fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
         max_decompressed_record: None,
     };
     let mut txn = CleanedTransactionMetadata::default();
-
     let outputs = [&first, &second].map(|segment| {
-        let out = rewrite_segments(
-            &crate::io::FileIo,
+        let out = rewrite_with_map(
             dir.path(),
             &[segment],
             &map,
@@ -699,8 +606,7 @@ fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
                 delete_retention: RETENTION,
             },
             round,
-        )
-        .unwrap();
+        );
         decode_all(&fs::read(&out.log_swap).unwrap())
     });
 

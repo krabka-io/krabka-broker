@@ -7,13 +7,11 @@
 
 use std::{fs, path::PathBuf};
 
-use tracing::instrument;
-
 use crate::{
     error::RemoteStorageError,
-    metadata::{CustomMetadata, RemoteLogSegmentMetadata},
+    metadata::RemoteLogSegmentMetadata,
     storage_manager::{
-        ArtifactBody, IndexType, LogSegmentData, RemoteStorageManager, segment_suffixes,
+        ArtifactBody, IndexType, RemoteStorageManager, remote_operation, segment_suffixes,
     },
 };
 
@@ -69,132 +67,81 @@ impl LocalTieredStorage {
 }
 
 impl RemoteStorageManager for LocalTieredStorage {
-    #[instrument(
-        skip_all,
-        fields(
-            topic_id = %metadata.remote_log_segment_id().topic_id_partition.topic_id,
-            partition = metadata.remote_log_segment_id().topic_id_partition.partition,
-            segment = %metadata.remote_log_segment_id().id,
-            start_offset = metadata.start_offset(),
-            end_offset = metadata.end_offset(),
-        ),
-        err
-    )]
-    fn copy_log_segment_data(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        data: &LogSegmentData,
-    ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
-        let dir = self.partition_dir(metadata);
-        fs::create_dir_all(&dir)?;
+    remote_operation! {
+        copy(self, metadata, data) {
+            let dir = self.partition_dir(metadata);
+            fs::create_dir_all(&dir)?;
 
-        for (suffix, body) in data.artifacts() {
-            let path = self.segment_path(metadata, suffix);
-            match body {
-                ArtifactBody::File(source) => {
-                    fs::copy(source, path)?;
+            for (suffix, body) in data.artifacts() {
+                let path = self.segment_path(metadata, suffix);
+                match body {
+                    ArtifactBody::File(source) => {
+                        fs::copy(source, path)?;
+                    }
+                    ArtifactBody::Memory(bytes) => fs::write(path, bytes)?,
                 }
-                ArtifactBody::Memory(bytes) => fs::write(path, bytes)?,
             }
+            // A local store needs no opaque key echoed back.
+            Ok(None)
         }
-        // A local store needs no opaque key echoed back.
-        Ok(None)
     }
 
-    #[instrument(
-        level = "debug",
-        skip_all,
-        fields(
-            topic_id = %metadata.remote_log_segment_id().topic_id_partition.topic_id,
-            partition = metadata.remote_log_segment_id().topic_id_partition.partition,
-            segment = %metadata.remote_log_segment_id().id,
-            start_position,
-            end_position = ?end_position,
-        ),
-        err
-    )]
-    fn fetch_log_segment(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        start_position: u32,
-        end_position: Option<u32>,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        let path = self.log_path(metadata);
-        if !path.exists() {
-            return Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ));
-        }
-        let bytes = fs::read(&path)?;
-        let len = bytes.len();
-        let start = usize::try_from(start_position).expect("u32 fits usize");
-        if start > len {
-            return Err(RemoteStorageError::InvalidArgument(format!(
-                "start_position {start} exceeds segment length {len}"
-            )));
-        }
-        let end_exclusive = match end_position {
-            Some(end) => {
-                let end = usize::try_from(end).expect("u32 fits usize");
-                if end < start {
-                    return Err(RemoteStorageError::InvalidArgument(format!(
-                        "end_position {end} < start_position {start}"
-                    )));
+    remote_operation! {
+        fetch(self, metadata, start_position, end_position) {
+            let path = self.log_path(metadata);
+            if !path.exists() {
+                return Err(RemoteStorageError::SegmentNotFound(
+                    metadata.remote_log_segment_id().clone(),
+                ));
+            }
+            let bytes = fs::read(&path)?;
+            let len = bytes.len();
+            let start = usize::try_from(start_position).expect("u32 fits usize");
+            if start > len {
+                return Err(RemoteStorageError::InvalidArgument(format!(
+                    "start_position {start} exceeds segment length {len}"
+                )));
+            }
+            let end_exclusive = match end_position {
+                Some(end) => {
+                    let end = usize::try_from(end).expect("u32 fits usize");
+                    if end < start {
+                        return Err(RemoteStorageError::InvalidArgument(format!(
+                            "end_position {end} < start_position {start}"
+                        )));
+                    }
+                    // `end` is inclusive; clamp to the segment length.
+                    end.saturating_add(1).min(len)
                 }
-                // `end` is inclusive; clamp to the segment length.
-                end.saturating_add(1).min(len)
-            }
-            None => len,
-        };
-        Ok(bytes[start..end_exclusive].to_vec())
+                None => len,
+            };
+            Ok(bytes[start..end_exclusive].to_vec())
+        }
     }
 
-    #[instrument(
-        level = "debug",
-        skip_all,
-        fields(
-            topic_id = %metadata.remote_log_segment_id().topic_id_partition.topic_id,
-            partition = metadata.remote_log_segment_id().topic_id_partition.partition,
-            segment = %metadata.remote_log_segment_id().id,
-            index_type = ?index_type,
-        ),
-        err
-    )]
-    fn fetch_index(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        index_type: IndexType,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        let path = self.index_path(metadata, index_type);
-        if !path.exists() {
-            return Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ));
+    remote_operation! {
+        index(self, metadata, index_type) {
+            let path = self.index_path(metadata, index_type);
+            if !path.exists() {
+                return Err(RemoteStorageError::SegmentNotFound(
+                    metadata.remote_log_segment_id().clone(),
+                ));
+            }
+            Ok(fs::read(&path)?)
         }
-        Ok(fs::read(&path)?)
     }
 
-    #[instrument(
-        skip_all,
-        fields(
-            topic_id = %metadata.remote_log_segment_id().topic_id_partition.topic_id,
-            partition = metadata.remote_log_segment_id().topic_id_partition.partition,
-            segment = %metadata.remote_log_segment_id().id,
-        ),
-        err
-    )]
-    fn delete_log_segment_data(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-    ) -> Result<(), RemoteStorageError> {
-        for path in segment_suffixes().map(|suffix| self.segment_path(metadata, suffix)) {
-            match fs::remove_file(path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(RemoteStorageError::Io(error)),
+    remote_operation! {
+        delete(self, metadata) {
+            for path in segment_suffixes().map(|suffix| self.segment_path(metadata, suffix)) {
+                match fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(RemoteStorageError::Io(error)),
+                }
             }
+            Ok(())
         }
-        Ok(())
     }
 }
 
@@ -205,12 +152,34 @@ mod tests {
     use super::*;
     use crate::test_support::{sample_data, sample_metadata as metadata};
 
+    type LocalFixture = (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        LocalTieredStorage,
+        RemoteLogSegmentMetadata,
+    );
+
+    fn local_store() -> LocalFixture {
+        let remote = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let store = LocalTieredStorage::new(remote.path());
+        (remote, source, store, metadata(10))
+    }
+
+    fn copied_store(with_transaction_index: bool) -> LocalFixture {
+        let (remote, source, store, metadata) = local_store();
+        store
+            .copy_log_segment_data(
+                &metadata,
+                &sample_data(source.path(), with_transaction_index),
+            )
+            .unwrap();
+        (remote, source, store, metadata)
+    }
+
     #[test]
     fn copy_then_fetch_full_segment() {
-        let remote = tempfile::tempdir().unwrap();
-        let src = tempfile::tempdir().unwrap();
-        let rsm = LocalTieredStorage::new(remote.path());
-        let md = metadata(10);
+        let (_remote, src, rsm, md) = local_store();
         assert!(
             rsm.copy_log_segment_data(&md, &sample_data(src.path(), true))
                 .unwrap()
@@ -222,12 +191,7 @@ mod tests {
 
     #[test]
     fn fetch_partial_byte_ranges() {
-        let remote = tempfile::tempdir().unwrap();
-        let src = tempfile::tempdir().unwrap();
-        let rsm = LocalTieredStorage::new(remote.path());
-        let md = metadata(10);
-        rsm.copy_log_segment_data(&md, &sample_data(src.path(), false))
-            .unwrap();
+        let (_remote, _src, rsm, md) = copied_store(false);
         for (start, end, want) in [
             // Inclusive [2, 5] -> "2345".
             (2, Some(5), b"2345".as_ref()),
@@ -247,12 +211,7 @@ mod tests {
 
     #[test]
     fn fetch_single_byte_range_start_equals_end() {
-        let remote = tempfile::tempdir().unwrap();
-        let src = tempfile::tempdir().unwrap();
-        let rsm = LocalTieredStorage::new(remote.path());
-        let md = metadata(10);
-        rsm.copy_log_segment_data(&md, &sample_data(src.path(), false))
-            .unwrap();
+        let (_remote, _src, rsm, md) = copied_store(false);
         // Inclusive [3, 3] is a valid single-byte range -> "3". (The guard is
         // `end < start`, not `<=`/`==`, so an equal start/end must succeed.)
         assert!(rsm.fetch_log_segment(&md, 3, Some(3)).unwrap() == b"3");
@@ -260,34 +219,13 @@ mod tests {
 
     #[test]
     fn fetch_each_index_type() {
-        let remote = tempfile::tempdir().unwrap();
-        let src = tempfile::tempdir().unwrap();
-        let rsm = LocalTieredStorage::new(remote.path());
-        let md = metadata(10);
-        rsm.copy_log_segment_data(&md, &sample_data(src.path(), true))
-            .unwrap();
-        for (index_type, want) in [
-            (IndexType::Offset, b"OFFSET-IDX".as_ref()),
-            (IndexType::Timestamp, b"TIME-IDX".as_ref()),
-            (IndexType::ProducerSnapshot, b"SNAP".as_ref()),
-            (IndexType::LeaderEpoch, b"EPOCH-BYTES".as_ref()),
-            (IndexType::Transaction, b"TXN-IDX".as_ref()),
-        ] {
-            check!(
-                rsm.fetch_index(&md, index_type).unwrap() == want,
-                "{index_type:?}"
-            );
-        }
+        let (_remote, _src, rsm, md) = copied_store(true);
+        crate::test_support::check_sample_indexes(&rsm, &md);
     }
 
     #[test]
     fn copied_files_use_kafka_local_tiered_storage_layout() {
-        let remote = tempfile::tempdir().unwrap();
-        let src = tempfile::tempdir().unwrap();
-        let rsm = LocalTieredStorage::new(remote.path());
-        let md = metadata(10);
-        rsm.copy_log_segment_data(&md, &sample_data(src.path(), true))
-            .unwrap();
+        let (remote, _src, _rsm, _md) = copied_store(true);
 
         let partition = remote.path().join("orders-0-AAAAAAAAAAAAAAAAAAAAAQ");
         for suffix in [
@@ -311,12 +249,7 @@ mod tests {
 
     #[test]
     fn missing_optional_txn_index_is_not_found() {
-        let remote = tempfile::tempdir().unwrap();
-        let src = tempfile::tempdir().unwrap();
-        let rsm = LocalTieredStorage::new(remote.path());
-        let md = metadata(10);
-        rsm.copy_log_segment_data(&md, &sample_data(src.path(), false))
-            .unwrap();
+        let (_remote, _src, rsm, md) = copied_store(false);
         let err = rsm.fetch_index(&md, IndexType::Transaction).unwrap_err();
         assert!(matches!(err, RemoteStorageError::SegmentNotFound(_)));
     }
@@ -332,12 +265,7 @@ mod tests {
 
     #[test]
     fn delete_is_idempotent_and_removes_data() {
-        let remote = tempfile::tempdir().unwrap();
-        let src = tempfile::tempdir().unwrap();
-        let rsm = LocalTieredStorage::new(remote.path());
-        let md = metadata(10);
-        rsm.copy_log_segment_data(&md, &sample_data(src.path(), true))
-            .unwrap();
+        let (_remote, _src, rsm, md) = copied_store(true);
         rsm.delete_log_segment_data(&md).unwrap();
         // Second delete is a no-op.
         rsm.delete_log_segment_data(&md).unwrap();

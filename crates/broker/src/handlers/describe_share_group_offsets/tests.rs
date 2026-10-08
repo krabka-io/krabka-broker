@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use assert2::assert;
 use krabka_protocol::{
-    UnknownTaggedFields,
     owned::{
         describe_share_group_offsets_request::{
             DescribeShareGroupOffsetsRequestGroup, DescribeShareGroupOffsetsRequestTopic,
@@ -74,96 +73,76 @@ async fn handle_error_scenarios_preserve_expected_rows() {
             Arc::new(crate::authorizer::AllowAllAuthorizer),
             false,
             vec![("g1", vec![("t1", vec![0])]), ("g2", vec![("t2", vec![1])])],
-            DescribeShareGroupOffsetsResponse {
-                throttle_time_ms: 0,
+            unthrottled_wire!(DescribeShareGroupOffsetsResponse {
                 groups: vec![
-                    DescribeShareGroupOffsetsResponseGroup {
+                    tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
                         group_id: "g1".into(),
                         topics: Vec::new(),
                         error_code: codes::UNSUPPORTED_VERSION,
                         error_message: None,
-                        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                    },
-                    DescribeShareGroupOffsetsResponseGroup {
+                    }),
+                    tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
                         group_id: "g2".into(),
                         topics: Vec::new(),
                         error_code: codes::UNSUPPORTED_VERSION,
                         error_message: None,
-                        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                    },
+                    }),
                 ],
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            },
+            }),
         ),
         (
             "denied group preserves group id and error code",
             Arc::new(crate::test_support::ControllerPeerAllowed(DenyAll)),
             true,
             vec![("g1", vec![("missing", vec![0])])],
-            DescribeShareGroupOffsetsResponse {
-                throttle_time_ms: 0,
-                groups: vec![DescribeShareGroupOffsetsResponseGroup {
+            unthrottled_wire!(DescribeShareGroupOffsetsResponse {
+                groups: vec![tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
                     group_id: "g1".into(),
                     topics: Vec::new(),
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
                     error_message: None,
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            },
+                })],
+            }),
         ),
         (
             "an unknown topic has no data and no error",
             Arc::new(crate::authorizer::AllowAllAuthorizer),
             true,
             vec![("g1", vec![("missing-topic", vec![3, 5])])],
-            DescribeShareGroupOffsetsResponse {
-                throttle_time_ms: 0,
-                groups: vec![DescribeShareGroupOffsetsResponseGroup {
+            unthrottled_wire!(DescribeShareGroupOffsetsResponse {
+                groups: vec![tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
                     group_id: "g1".into(),
-                    topics: vec![DescribeShareGroupOffsetsResponseTopic {
+                    topics: vec![tagged_wire!(DescribeShareGroupOffsetsResponseTopic {
                         topic_name: "missing-topic".into(),
                         topic_id: Uuid::default(),
                         partitions: vec![
-                            DescribeShareGroupOffsetsResponsePartition {
+                            tagged_wire!(DescribeShareGroupOffsetsResponsePartition {
                                 partition_index: 3,
                                 start_offset: -1,
                                 leader_epoch: 0,
                                 lag: -1,
                                 error_code: codes::NONE,
                                 error_message: None,
-                                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                            },
-                            DescribeShareGroupOffsetsResponsePartition {
+                            }),
+                            tagged_wire!(DescribeShareGroupOffsetsResponsePartition {
                                 partition_index: 5,
                                 start_offset: -1,
                                 leader_epoch: 0,
                                 lag: -1,
                                 error_code: codes::NONE,
                                 error_message: None,
-                                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                            },
+                            }),
                         ],
-                        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                    }],
+                    })],
                     error_code: codes::NONE,
                     error_message: None,
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            },
+                })],
+            }),
         ),
     ];
-    for (case, authorizer, share_enabled, groups, expected) in cases {
-        let (broker_handle, _dir) =
-            crate::test_support::start_share_broker(authorizer, share_enabled).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
-        let resp = handle(&broker, request(&groups), version, &ctx)
-            .await
-            .expect("handle");
-
-        assert!(resp == expected, "case: {case}");
-        broker_handle.shutdown().await;
-    }
+    share_refusal_cases!(
+        (case, authorizer, share_enabled, [groups], expected) in cases;
+        (broker_handle, _dir, broker, ctx, resp);
+        handle(request(&groups), version)
+    );
 }

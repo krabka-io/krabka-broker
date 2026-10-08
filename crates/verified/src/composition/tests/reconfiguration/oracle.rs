@@ -4,6 +4,31 @@ use assert2::assert;
 
 use super::*;
 
+pub(super) fn grant_sets(
+    old: &[u64],
+    next: &[u64],
+    node: u64,
+    votes: &[(bool, bool)],
+) -> (BTreeSet<u64>, BTreeSet<u64>) {
+    let next_ids: BTreeSet<_> = next.iter().copied().collect();
+    let old_grants = old
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| votes[*i].0)
+        .map(|(_, id)| *id)
+        .collect();
+    let mut new_grants = old
+        .iter()
+        .enumerate()
+        .filter(|(i, id)| votes[*i].1 && next_ids.contains(*id))
+        .map(|(_, id)| *id)
+        .collect::<BTreeSet<_>>();
+    if !old.contains(&node) && next_ids.contains(&node) && votes[old.len()].1 {
+        new_grants.insert(node);
+    }
+    (old_grants, new_grants)
+}
+
 pub(super) fn expected_membership(
     old: &[u64],
     leader: ReconfigurationLeadership,
@@ -86,22 +111,7 @@ pub(super) fn check_overlap(
             == membership
     );
     let expected = membership.map(|(plan, next)| {
-        let next_ids: BTreeSet<_> = next.iter().copied().collect();
-        let old_grants: BTreeSet<_> = old
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| votes[*i].0)
-            .map(|(_, id)| *id)
-            .collect();
-        let mut new_grants: BTreeSet<_> = old
-            .iter()
-            .enumerate()
-            .filter(|(i, id)| votes[*i].1 && next_ids.contains(*id))
-            .map(|(_, id)| *id)
-            .collect();
-        if !old.contains(&node) && next_ids.contains(&node) && votes[old.len()].1 {
-            new_grants.insert(node);
-        }
+        let (old_grants, new_grants) = grant_sets(old, &next, node, votes);
         let common = old
             .iter()
             .copied()

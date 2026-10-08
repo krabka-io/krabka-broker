@@ -19,28 +19,31 @@ use krabka_units::prelude::{Time, millis};
 
 use crate::sim_net::SimNet;
 
+pub(crate) fn three_voter_network() -> (SimNet, [NodeId; 3]) {
+    (SimNet::new(), [NodeId(1), NodeId(2), NodeId(3)])
+}
+
+pub(crate) async fn shutdown_nodes(net: &SimNet, ids: &[NodeId]) {
+    for &id in ids {
+        if let Some(controller) = net.get(id) {
+            controller.shutdown().await;
+        }
+    }
+}
+
 /// Per-node election timeouts, staggered so one node reliably wins the first
 /// round rather than splitting the vote.
 pub(crate) const STAGGERED_TIMEOUTS: [Time; 3] = [millis(150), millis(300), millis(450)];
 
-pub(crate) fn voter_set(ids: &[NodeId]) -> krabka_metadata::voters::VoterSet {
-    krabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
-        krabka_metadata::voters::Voter {
-            id,
-            directory_id: uuid::Uuid::nil(),
-            endpoints: Vec::new(),
-            kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
-        }
-    }))
-}
+krabka_macros::topic_record_fixture!(single_partition_topic);
+
+krabka_macros::empty_endpoint_voters!(voter_set);
 
 pub(crate) fn topic_record(name: &str, id: u128) -> krabka_metadata::MetadataRecord {
-    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-        name: name.to_string(),
-        topic_id: uuid::Uuid::from_u128(id),
-        partitions: 1,
-        replication_factor: 1,
-    })
+    krabka_metadata::MetadataRecord::V1Topic(single_partition_topic(
+        name,
+        uuid::Uuid::from_u128(id),
+    ))
 }
 
 /// Builds a single engine over a fresh tempdir log, and does not register it.
@@ -52,6 +55,22 @@ pub(crate) fn build_engine(
     net: &SimNet,
 ) -> (KraftController, tempfile::TempDir) {
     build_engine_with_snapshot_interval(me, ids, cluster_id, election_timeout, net, 0)
+}
+
+/// Start and register every node while retaining its backing directory.
+pub(crate) fn start_engines(
+    net: &SimNet,
+    ids: &[NodeId],
+    cluster_id: uuid::Uuid,
+    timeouts: &[Time],
+) -> Vec<tempfile::TempDir> {
+    let mut dirs = Vec::new();
+    for (i, &id) in ids.iter().enumerate() {
+        let (ctrl, dir) = build_engine(id, ids, cluster_id, timeouts[i], net);
+        net.register(id, ctrl);
+        dirs.push(dir);
+    }
+    dirs
 }
 
 /// The metadata log configuration of a simulated engine: Kafka's segment

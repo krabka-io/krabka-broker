@@ -520,30 +520,52 @@ mod tests {
         maplit::hashmap! {entry.producer_id => entry}
     }
 
-    fn assert_rejected(entry: ProducerSnapshotEntry) {
+    fn snapshot_file(
+        entries: &HashMap<ProducerId, ProducerSnapshotEntry>,
+        offset: i64,
+    ) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let entries = maplit::hashmap! {entry.producer_id => entry};
-        let path = write(&FileIo, dir.path(), Offset(102), &entries).unwrap();
+        let path = write(&FileIo, dir.path(), Offset(offset), entries).unwrap();
+        (dir, path)
+    }
+
+    fn sample_file() -> (tempfile::TempDir, PathBuf) {
+        snapshot_file(&sample(), 102)
+    }
+
+    fn sample_files(offsets: impl IntoIterator<Item = i64>) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for offset in offsets {
+            write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
+        }
+        dir
+    }
+
+    fn assert_corrupt(path: &Path, offset: i64) {
         assert2::assert!(matches!(
-            read(&path, Offset(102)),
+            read(path, Offset(offset)),
             Err(LogError::Corrupt(_))
         ));
     }
 
+    fn assert_rejected(entry: ProducerSnapshotEntry) {
+        let entries = maplit::hashmap! {entry.producer_id => entry};
+        let (_dir, path) = snapshot_file(&entries, 102);
+        assert_corrupt(&path, 102);
+    }
+
     #[test]
     fn kafka_v1_snapshot_round_trips() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
+        let (_dir, path) = sample_file();
         assert2::assert!(read(&path, Offset(102)).unwrap() == sample());
     }
 
     #[test]
     fn zero_producer_id_snapshot_round_trips() {
-        let dir = tempfile::tempdir().unwrap();
         let mut entry = sample_entry();
         entry.producer_id = ProducerId(0);
         let entries = maplit::hashmap! {entry.producer_id => entry};
-        let path = write(&FileIo, dir.path(), Offset(102), &entries).unwrap();
+        let (_dir, path) = snapshot_file(&entries, 102);
         assert2::assert!(read(&path, Offset(102)).unwrap() == entries);
     }
 
@@ -582,8 +604,7 @@ mod tests {
 
     #[test]
     fn empty_snapshot_has_exact_header_length_and_round_trips() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write(&FileIo, dir.path(), Offset(0), &HashMap::new()).unwrap();
+        let (_dir, path) = snapshot_file(&HashMap::new(), 0);
         assert2::assert!(fs::metadata(&path).unwrap().len() == 10);
         assert2::assert!(read(&path, Offset(0)).unwrap().is_empty());
     }
@@ -598,44 +619,33 @@ mod tests {
                 bytes[..2].copy_from_slice(&VERSION.to_be_bytes());
             }
             fs::write(&path, bytes).unwrap();
-            assert2::assert!(matches!(read(&path, Offset(0)), Err(LogError::Corrupt(_))));
+            assert_corrupt(&path, 0);
         }
     }
 
     #[test]
     fn crc_covers_entry_count_and_entries() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
+        let (_dir, path) = sample_file();
         let mut bytes = fs::read(&path).unwrap();
         bytes[9] ^= 1;
         fs::write(&path, bytes).unwrap();
-        assert2::assert!(matches!(
-            read(&path, Offset(102)),
-            Err(LogError::Corrupt(_))
-        ));
+        assert_corrupt(&path, 102);
     }
 
     #[test]
     fn rejects_unknown_version_and_truncated_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
+        let (dir, path) = sample_file();
         let mut unknown = fs::read(&path).unwrap();
         unknown[1] = 2;
         fs::write(&path, unknown).unwrap();
-        assert2::assert!(matches!(
-            read(&path, Offset(102)),
-            Err(LogError::Corrupt(_))
-        ));
+        assert_corrupt(&path, 102);
 
         fs::remove_file(&path).unwrap();
         let path = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
         let mut truncated = fs::read(&path).unwrap();
         truncated.pop();
         fs::write(&path, truncated).unwrap();
-        assert2::assert!(matches!(
-            read(&path, Offset(102)),
-            Err(LogError::Corrupt(_))
-        ));
+        assert_corrupt(&path, 102);
     }
 
     fn range(log_start: i64, log_end: i64) -> ProducerReloadRange {
@@ -674,10 +684,7 @@ mod tests {
             // Every snapshot is at or below the log start.
             (104, 110, None, vec![]),
         ] {
-            let dir = tempfile::tempdir().unwrap();
-            for offset in on_disk {
-                write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
-            }
+            let dir = sample_files(on_disk);
 
             let reloaded = reload(dir.path(), range(log_start, log_end)).unwrap();
 
@@ -692,10 +699,7 @@ mod tests {
     #[test]
     fn corrupt_latest_snapshot_is_removed_and_previous_snapshot_is_loaded() {
         for corrupt_count in 0..=4 {
-            let dir = tempfile::tempdir().unwrap();
-            for offset in 102..=105 {
-                write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
-            }
+            let dir = sample_files(102..=105);
             for offset in (106 - corrupt_count)..=105 {
                 fs::write(path(dir.path(), Offset(offset)), b"broken").unwrap();
             }
@@ -716,14 +720,11 @@ mod tests {
 
     #[test]
     fn future_entry_state_is_removed_and_previous_snapshot_is_loaded() {
-        let dir = tempfile::tempdir().unwrap();
-        let previous = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
+        let (dir, previous) = sample_file();
         let future_state = write(&FileIo, dir.path(), Offset(103), &sample()).unwrap();
         let mut bytes = fs::read(&future_state).unwrap();
         bytes[24..32].copy_from_slice(&103_i64.to_be_bytes());
-        let crc = crc32c::crc32c(&bytes[HEADER_LEN..]);
-        bytes[2..6].copy_from_slice(&crc.to_be_bytes());
-        fs::write(&future_state, bytes).unwrap();
+        fs::write(&future_state, with_crc(bytes)).unwrap();
 
         let (offset, entries) = reload(dir.path(), range(0, 103)).unwrap().unwrap();
         assert2::assert!(offset == Offset(102));
@@ -816,15 +817,12 @@ mod tests {
 
     #[test]
     fn duplicate_producer_ids_are_rejected() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
+        let (_dir, path) = sample_file();
         let mut bytes = fs::read(&path).unwrap();
         let duplicate = bytes[HEADER_LEN + 4..].to_vec();
         bytes.extend_from_slice(&duplicate);
         bytes[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&2_i32.to_be_bytes());
-        let crc = crc32c::crc32c(&bytes[HEADER_LEN..]);
-        bytes[2..6].copy_from_slice(&crc.to_be_bytes());
-        fs::write(&path, bytes).unwrap();
+        fs::write(&path, with_crc(bytes)).unwrap();
 
         assert2::assert!(matches!(
             read(&path, Offset(102)),
@@ -893,8 +891,7 @@ mod tests {
     #[test]
     fn existing_snapshot_does_not_prepare_state_but_still_syncs_the_directory() {
         use std::sync::atomic::Ordering::SeqCst;
-        let dir = tempfile::tempdir().unwrap();
-        let destination = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
+        let (dir, destination) = sample_file();
         let io = DirectoryDebt::default();
         let result = write_if_missing(&io, dir.path(), Offset(102), || {
             panic!("an existing snapshot must not encode or sort producer state")
@@ -907,8 +904,7 @@ mod tests {
 
     #[test]
     fn snapshot_read_io_failure_is_not_treated_as_corruption() {
-        let dir = tempfile::tempdir().unwrap();
-        let previous = write(&FileIo, dir.path(), Offset(102), &sample()).unwrap();
+        let (dir, previous) = sample_file();
         let unreadable = path(dir.path(), Offset(103));
         fs::create_dir(&unreadable).unwrap();
         let corrupt = write(&FileIo, dir.path(), Offset(104), &sample()).unwrap();
@@ -924,10 +920,7 @@ mod tests {
 
     #[test]
     fn retain_reload_range_keeps_the_log_end_and_drops_the_log_start() {
-        let dir = tempfile::tempdir().unwrap();
-        for offset in [1, 2, 3] {
-            write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
-        }
+        let dir = sample_files([1, 2, 3]);
 
         let retained = retain_reload_range(dir.path(), range(1, 2)).unwrap();
 
@@ -945,10 +938,7 @@ mod tests {
             (vec![4, 9, 11], vec![0, 4, 8], vec![4, 11]),
             (vec![3, 7], vec![], vec![7]),
         ] {
-            let dir = tempfile::tempdir().unwrap();
-            for offset in &on_disk {
-                write(&FileIo, dir.path(), Offset(*offset), &sample()).unwrap();
-            }
+            let dir = sample_files(on_disk.iter().copied());
 
             remove_strays(dir.path(), &bases).unwrap();
 
@@ -958,10 +948,7 @@ mod tests {
 
     #[test]
     fn remove_at_deletes_one_snapshot_and_tolerates_a_missing_one() {
-        let dir = tempfile::tempdir().unwrap();
-        for offset in [1, 2] {
-            write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
-        }
+        let dir = sample_files([1, 2]);
 
         remove_at(dir.path(), Offset(1)).unwrap();
         remove_at(dir.path(), Offset(5)).unwrap();
@@ -971,10 +958,7 @@ mod tests {
 
     #[test]
     fn remove_all_removes_every_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        for offset in [1, 2] {
-            write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
-        }
+        let dir = sample_files([1, 2]);
 
         remove_all(dir.path()).unwrap();
         assert2::assert!(list(dir.path()).unwrap().is_empty());
@@ -982,43 +966,48 @@ mod tests {
 
     #[test]
     fn rejects_each_invalid_entry_field_independently() {
-        let mut entry = sample_entry();
-        entry.producer_id = ProducerId(-2);
-        assert_rejected(entry);
-
-        let mut entry = sample_entry();
-        entry.producer_id = ProducerId(-1);
-        assert_rejected(entry);
-
-        let mut entry = sample_entry();
-        entry.producer_epoch = -1;
-        assert_rejected(entry);
-
-        let mut entry = sample_entry();
-        entry.offset_delta = -1;
-        assert_rejected(entry);
-
-        let mut entry = sample_entry();
-        entry.current_txn_first_offset = Some(Offset(-2));
-        assert_rejected(entry);
-
-        let mut entry = sample_entry();
-        entry.last_offset = Offset(-1);
-        entry.last_sequence = 0;
-        entry.offset_delta = 0;
-        assert_rejected(entry);
-
-        let mut entry = sample_entry();
-        entry.last_offset = Offset(0);
-        entry.last_sequence = -1;
-        entry.offset_delta = 0;
-        assert_rejected(entry);
-
-        let mut entry = sample_entry();
-        entry.last_offset = Offset(0);
-        entry.last_sequence = 0;
-        entry.offset_delta = 1;
-        assert_rejected(entry);
+        for entry in [
+            ProducerSnapshotEntry {
+                producer_id: ProducerId(-2),
+                ..sample_entry()
+            },
+            ProducerSnapshotEntry {
+                producer_id: ProducerId(-1),
+                ..sample_entry()
+            },
+            ProducerSnapshotEntry {
+                producer_epoch: -1,
+                ..sample_entry()
+            },
+            ProducerSnapshotEntry {
+                offset_delta: -1,
+                ..sample_entry()
+            },
+            ProducerSnapshotEntry {
+                current_txn_first_offset: Some(Offset(-2)),
+                ..sample_entry()
+            },
+            ProducerSnapshotEntry {
+                last_offset: Offset(-1),
+                last_sequence: 0,
+                offset_delta: 0,
+                ..sample_entry()
+            },
+            ProducerSnapshotEntry {
+                last_offset: Offset(0),
+                last_sequence: -1,
+                offset_delta: 0,
+                ..sample_entry()
+            },
+            ProducerSnapshotEntry {
+                last_offset: Offset(0),
+                last_sequence: 0,
+                offset_delta: 1,
+                ..sample_entry()
+            },
+        ] {
+            assert_rejected(entry);
+        }
     }
 
     #[test]

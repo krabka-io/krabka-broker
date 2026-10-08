@@ -9,27 +9,28 @@
 //! and a non-transactional batch from a producer with an open transaction
 //! (`ProducerAppendInfo.appendDataBatch`).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use assert2::assert;
-use bytes::BufMut;
 use krabka_client_core::Client;
 use krabka_protocol::{
-    Encode, ProtocolError, ProtocolRequest,
     owned::{
-        add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
-        common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-        end_txn_request::EndTxnRequest,
-        find_coordinator_request::FindCoordinatorRequest,
-        init_producer_id_request::InitProducerIdRequest,
-        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-        produce_request::{self, PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::{PartitionProduceResponse, ProduceResponse},
+        list_offsets_request::ListOffsetsRequest, produce_request::ProduceRequest,
+        produce_response::PartitionProduceResponse,
     },
-    records::{Attributes, Record, RecordBatch},
+    records::{Attributes, RecordBatch},
 };
 
-use crate::txnver_harness::{admin_client, boot_single, create_topic};
+use crate::{
+    support::{
+        discovery::coordinator_lookup_request,
+        offsets::{list_offset_partition, single_partition_list_offsets},
+        produce::single_partition_produce,
+        records::{batch_from_records, value_record},
+        transactions::end_transaction_request,
+    },
+    txnver_harness::{admin_client, boot_single, create_topic},
+};
 
 const NOT_COORDINATOR: i16 = 16;
 const COORDINATOR_NOT_AVAILABLE: i16 = 15;
@@ -38,29 +39,6 @@ const INVALID_PRODUCER_EPOCH: i16 = 47;
 const INVALID_TXN_STATE: i16 = 48;
 const TRANSACTION_ABORTABLE: i16 = 120;
 const TRANSACTIONAL_ID_AUTHORIZATION_FAILED: i16 = 53;
-
-/// A `Produce` request sent at exactly version `V`.
-#[derive(Clone, Debug)]
-struct ProduceAt<const V: i16>(ProduceRequest);
-
-impl<const V: i16> Encode for ProduceAt<V> {
-    fn encode<B: BufMut>(&self, buf: &mut B, version: i16) -> Result<(), ProtocolError> {
-        self.0.encode(buf, version)
-    }
-
-    fn encoded_len(&self, version: i16) -> usize {
-        self.0.encoded_len(version)
-    }
-}
-
-impl<const V: i16> ProtocolRequest for ProduceAt<V> {
-    const API_KEY: i16 = produce_request::API_KEY;
-    const MIN_VERSION: i16 = V;
-    const MAX_VERSION: i16 = V;
-    const LATEST_STABLE_VERSION: i16 = V;
-    const FLEXIBLE_MIN: i16 = produce_request::FLEXIBLE_MIN;
-    type Response = ProduceResponse;
-}
 
 /// One transactional producer.
 #[derive(Clone, Copy, Debug)]
@@ -116,12 +94,7 @@ fn batch(producer: Producer, epoch: i16, base_sequence: i32, transactional: bool
         base_sequence,
         last_offset_delta: 0,
         max_timestamp: 1,
-        records: vec![Record {
-            offset_delta: 0,
-            value: Some(bytes::Bytes::from_static(b"v")),
-            ..Record::default()
-        }],
-        ..RecordBatch::default()
+        ..batch_from_records(vec![value_record(0, Some(bytes::Bytes::from_static(b"v")))])
     }
 }
 
@@ -134,23 +107,30 @@ async fn produce_at(
 ) -> PartitionProduceResponse {
     let request = ProduceRequest {
         transactional_id: transactional_id.map(str::to_owned),
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.into(),
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(batch.into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
+        ..single_partition_produce(
+            topic,
+            krabka_protocol::primitives::uuid::Uuid::default(),
+            0,
+            Some(batch.into()),
+            (-1, 5_000),
+        )
     };
     let response = match version {
-        10 => client.send(ProduceAt::<10>(request)).await,
-        11 => client.send(ProduceAt::<11>(request)).await,
-        _ => client.send(ProduceAt::<12>(request)).await,
+        10 => {
+            client
+                .send(crate::support::wire::At::<_, 10>(request))
+                .await
+        }
+        11 => {
+            client
+                .send(crate::support::wire::At::<_, 11>(request))
+                .await
+        }
+        _ => {
+            client
+                .send(crate::support::wire::At::<_, 12>(request))
+                .await
+        }
     }
     .expect("Produce");
     response.responses[0].partition_responses[0].clone()
@@ -160,16 +140,7 @@ async fn log_end(client: &Client, topic: &str) -> i64 {
     let response = client
         .send(ListOffsetsRequest {
             replica_id: -1,
-            topics: vec![ListOffsetsTopic {
-                name: topic.into(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: 0,
-                    timestamp: -1,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+            ..single_partition_list_offsets(topic, list_offset_partition(0, -1))
         })
         .await
         .expect("ListOffsets");
@@ -177,53 +148,45 @@ async fn log_end(client: &Client, topic: &str) -> i64 {
 }
 
 /// Send a coordinator request until the coordinator has loaded its state.
-async fn until_ready<F, Fut, T>(mut send: F, code: impl Fn(&T) -> i16) -> T
+async fn until_ready<F, Fut, T>(send: F, code: impl Fn(&T) -> i16) -> T
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = T>,
 {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let answer = send().await;
-        let loading = matches!(
-            code(&answer),
-            COORDINATOR_NOT_AVAILABLE | NOT_COORDINATOR | CONCURRENT_TRANSACTIONS
-        );
-        if !loading || Instant::now() >= deadline {
-            return answer;
-        }
-        // intentional: coordinator load has no awaiter reachable from this
-        // client; the coordinator answer is the signal.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    crate::support::transaction_wire::retry_coordinator(
+        send,
+        code,
+        |code| {
+            matches!(
+                code,
+                COORDINATOR_NOT_AVAILABLE | NOT_COORDINATOR | CONCURRENT_TRANSACTIONS
+            )
+        },
+        Duration::from_secs(10),
+    )
+    .await
 }
 
 async fn init(client: &Client, transactional_id: &'static str) -> Producer {
     let _ = client
-        .send(FindCoordinatorRequest {
-            key: transactional_id.into(),
-            key_type: 1,
-            coordinator_keys: vec![transactional_id.into()],
-            ..Default::default()
-        })
+        .send(coordinator_lookup_request(
+            transactional_id,
+            1,
+            vec![transactional_id.into()],
+        ))
         .await;
-    let response = until_ready(
-        || async {
-            client
-                .send(InitProducerIdRequest {
-                    transactional_id: Some(transactional_id.into()),
-                    transaction_timeout_ms: 60_000,
-                    producer_id: -1,
-                    producer_epoch: -1,
-                    ..Default::default()
-                })
-                .await
-                .expect("InitProducerId")
+    let response = crate::support::transaction_wire::initialize_transactional(
+        client,
+        transactional_id,
+        |code| {
+            matches!(
+                code,
+                COORDINATOR_NOT_AVAILABLE | NOT_COORDINATOR | CONCURRENT_TRANSACTIONS
+            )
         },
-        |response| response.error_code,
+        Duration::from_secs(10),
     )
     .await;
-    assert!(response.error_code == 0, "InitProducerId: {response:?}");
     Producer {
         transactional_id,
         id: response.producer_id,
@@ -232,37 +195,19 @@ async fn init(client: &Client, transactional_id: &'static str) -> Producer {
 }
 
 async fn add_partition(client: &Client, producer: Producer, topic: &str) {
-    let added = AddPartitionsToTxnTopic {
-        name: topic.into(),
-        partitions: vec![0],
-        ..Default::default()
-    };
+    let added = crate::support::transaction_wire::transaction_topic(topic, vec![0]);
     let code = until_ready(
         || async {
             let response = client
-                .send(AddPartitionsToTxnRequest {
-                    v3_and_below_transactional_id: producer.transactional_id.into(),
-                    v3_and_below_producer_id: producer.id,
-                    v3_and_below_producer_epoch: producer.epoch,
-                    v3_and_below_topics: vec![added.clone()],
-                    transactions: vec![AddPartitionsToTxnTransaction {
-                        transactional_id: producer.transactional_id.into(),
-                        producer_id: producer.id,
-                        producer_epoch: producer.epoch,
-                        topics: vec![added.clone()],
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                })
+                .send(crate::support::transaction_wire::partitions_request(
+                    producer.transactional_id,
+                    (producer.id, producer.epoch),
+                    false,
+                    vec![added.clone()],
+                ))
                 .await
                 .expect("AddPartitionsToTxn");
-            response
-                .results_by_transaction
-                .first()
-                .and_then(|transaction| transaction.topic_results.first())
-                .or(response.results_by_topic_v3_and_below.first())
-                .and_then(|topic| topic.results_by_partition.first())
-                .map_or(response.error_code, |row| row.partition_error_code)
+            crate::support::transaction_wire::partition_error(&response, true)
         },
         |code| *code,
     )
@@ -294,13 +239,11 @@ async fn set_up(client: &Client, case: &Case) -> Producer {
     }
     if matches!(case.setup, Setup::Committed) {
         let end = client
-            .send(EndTxnRequest {
-                transactional_id: case.name.into(),
-                producer_id: producer.id,
-                producer_epoch: producer.epoch,
-                committed: true,
-                ..Default::default()
-            })
+            .send(end_transaction_request(
+                case.name,
+                (producer.id, producer.epoch),
+                true,
+            ))
             .await
             .expect("EndTxn");
         assert!(end.error_code == 0, "{}: EndTxn {end:?}", case.name);

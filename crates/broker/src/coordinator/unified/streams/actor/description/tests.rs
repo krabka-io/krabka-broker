@@ -12,45 +12,30 @@ use krabka_protocol::owned::{
     },
     streams_group_heartbeat_request::{Subtopology as WireSubtopology, Topology},
 };
-use tokio::sync::oneshot;
 
 use super::*;
 use crate::coordinator::unified::{
     StreamsGroupSeed,
-    actor::MetadataProvider,
-    config::NextGenConfig,
     offsets_log::fake::InMemoryOffsetsLog,
-    reconciler::ReconcileInput,
-    share::config::ShareGroupConfig,
     streams::{
-        actor::{StreamsDescribeView, StreamsGroupActorHandle, StreamsGroupActorMessage},
+        actor::{
+            StreamsGroupActorHandle, StreamsGroupActorMessage,
+            test_support::{coordinator_with_log, describe, heartbeat_result_at, undelayed},
+        },
         description::{Node, NodeKind, Subtopology, TopologyDescriptionPlugin},
         persistence::DescriptionEpochs,
         topology::to_stored_topology,
     },
 };
 
-#[derive(Debug)]
-struct EmptyMetadata;
-impl MetadataProvider for EmptyMetadata {
-    fn snapshot(&self) -> ReconcileInput {
-        ReconcileInput::default()
-    }
-}
-
 fn coordinator(plugin: TopologyDescriptionPlugin) -> Arc<GroupCoordinator> {
-    Arc::new(GroupCoordinator::new(
-        NextGenConfig::default(),
-        ShareGroupConfig::default(),
-        Arc::new(EmptyMetadata),
-        Arc::new(InMemoryOffsetsLog::default()),
+    coordinator_with_log(
         StreamsGroupConfig {
-            initial_rebalance_delay: std::time::Duration::ZERO,
-            assignment_interval: std::time::Duration::ZERO,
             topology_description_plugin: plugin,
-            ..StreamsGroupConfig::default()
+            ..undelayed()
         },
-    ))
+        Arc::new(InMemoryOffsetsLog::default()),
+    )
 }
 
 /// A join of `member_id` with the one-subtopology topology at epoch 0.
@@ -87,44 +72,20 @@ async fn heartbeat(
     request: StreamsGroupHeartbeatRequest,
     version: i16,
 ) -> StreamsGroupHeartbeatResponse {
-    let (reply, answer) = oneshot::channel();
-    handle
-        .tx
-        .send(StreamsGroupActorMessage::Heartbeat {
-            request: Box::new(request),
-            version,
-            client_id: "client".into(),
-            client_host: "/127.0.0.1".into(),
-            reply,
-        })
-        .await
-        .expect("the actor runs");
-    let response = answer.await.expect("a heartbeat answer").response;
+    let response = heartbeat_result_at(handle, request, version).await.response;
     assert!(response.error_code == codes::NONE, "{response:?}");
     response
 }
 
 async fn push(handle: &StreamsGroupActorHandle, push: DescriptionPush) -> PushAnswer {
-    let (reply, answer) = oneshot::channel();
-    handle
-        .tx
-        .send(StreamsGroupActorMessage::PushDescription {
+    crate::task_util::ask(&handle.tx, |reply| {
+        StreamsGroupActorMessage::PushDescription {
             push: Box::new(push),
             reply,
-        })
-        .await
-        .expect("the actor runs");
-    answer.await.expect("a push answer")
-}
-
-async fn describe(handle: &StreamsGroupActorHandle) -> StreamsDescribeView {
-    let (reply, answer) = oneshot::channel();
-    handle
-        .tx
-        .send(StreamsGroupActorMessage::Describe { reply })
-        .await
-        .expect("the actor runs");
-    answer.await.expect("a describe answer")
+        }
+    })
+    .await
+    .expect("a push answer")
 }
 
 /// The source node a Streams client describes for the topology of [`join`].

@@ -44,9 +44,7 @@ proptest! {
         width in 0u32..101, floor in 0i64..201, hw in 0i64..201, delivery in 0i64..201,
         inherited_lso in any::<i64>(), a in any::<i64>(), b in any::<i64>(), step in 1usize..8,
     ) {
-        let offsets: Vec<_> = records.keys().copied().collect();
-        let times: Vec<_> = records.values().copied().collect();
-        let rows: Vec<_> = (0..offsets.len()).step_by(step).map(|i| (i, i)).collect();
+        let (offsets, times, rows) = timestamp_records(&records, step, 0);
         let w = FetchWatermarks { log_start: floor, log_end: base + 100, hw, lso: inherited_lso, deliverable: delivery };
         let window = (&offsets[..], &times[..], &rows[..]);
         check(window, &starts, (base, base + i64::from(width)), w, (a.min(b), a.max(b)));
@@ -63,9 +61,7 @@ proptest! {
         floor in any::<u32>(), hw in any::<i64>(), delivery in any::<i64>(), inherited_lso in any::<i64>(),
         a in any::<i64>(), b in any::<i64>(),
     ) {
-        let offsets: Vec<_> = records.keys().copied().collect();
-        let times: Vec<_> = records.values().copied().collect();
-        let rows: Vec<_> = (0..offsets.len()).map(|i| (i, i)).collect();
+        let (offsets, times, rows) = timestamp_records(&records, 1, 0);
         let w = FetchWatermarks { log_start: i64::from(floor), log_end: end, hw, lso: inherited_lso, deliverable: delivery };
         check((&offsets, &times, &rows), &starts, (0, i64::from(u32::MAX)), w, (a.min(b), a.max(b)));
     }

@@ -6,27 +6,20 @@
 //! freeze holds back.
 
 use assert2::check;
-use krabka_metadata::{PatternType, TopicFreezeRecord};
+use fixtures::{local_backends, sweep_counts};
+use krabka_metadata::PatternType;
 
 use super::*;
-use crate::remote_log_manager::test_support::{local_backends, sweep_counts, sweep_once};
+use crate::remote_log_manager::test_support as fixtures;
 
 /// The `orders` topic, plus the one live freeze entry `freeze` names.
 /// `None` is the unfrozen control every freeze case runs against.
 fn image_with_orders_freeze(freeze: Option<(&str, PatternType)>) -> MetadataImage {
     let mut image = image_with_orders_topic();
     if let Some((scope, pattern_type)) = freeze {
-        image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
-            scope: scope.to_owned(),
-            pattern_type,
-            frozen: true,
-            reason: "DR cutover".to_owned(),
-            set_by: "User:alice".to_owned(),
-            set_at_ms: 1_770_000_000_000,
-            proposal_id: Uuid::nil(),
-            key_id: String::new(),
-            signature: Vec::new(),
-        }));
+        image.apply(&MetadataRecord::V1TopicFreeze(
+            crate::test_support::topic_freeze_record(scope, pattern_type, true, "DR cutover"),
+        ));
     }
     image
 }
@@ -76,8 +69,7 @@ struct TickOutcome {
 /// Drive exactly one sweep over one locally-led, tiered `orders`
 /// partition against `image`, and report what it did.
 async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
-    let log_dir = tempfile::tempdir().unwrap();
-    let remote_dir = tempfile::tempdir().unwrap();
+    let (log_dir, remote_dir) = fixtures::temporary_dirs();
     let partitions = PartitionRegistry::new();
     let partition = rolled_tiered_partition_with_config(log_dir.path(), config);
     let sealed_before = partition
@@ -91,12 +83,7 @@ async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
     let controller = fixed_source(image);
     let (rsm, rlmm) = local_backends(remote_dir.path());
 
-    sweep_once(
-        &partitions,
-        &controller,
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-    )
-    .await;
+    fixtures::sweep_mutable(&partitions, &controller, &rsm, &rlmm).await;
 
     let (remote_finished, local_sealed_after) = sweep_counts(&partition, &rlmm);
     TickOutcome {

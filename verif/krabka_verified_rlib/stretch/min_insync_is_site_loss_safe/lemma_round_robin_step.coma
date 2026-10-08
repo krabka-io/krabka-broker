@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 64 0 64 61 *)
+(* #"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 15 8 15 55 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 61 11 61 61
-let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 62 10 63 89
-let%span smin_insync_is_site_loss_safe'1 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 46 11 46 81
-let%span smin_insync_is_site_loss_safe'2 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 47 10 47 64
-let%span smin_insync_is_site_loss_safe'3 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 51 4 51 95
+let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 13 19 13 66
+let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 75 10 76 89
+let%span smin_insync_is_site_loss_safe'1 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 62 11 62 81
+let%span smin_insync_is_site_loss_safe'2 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 63 10 63 64
+let%span smin_insync_is_site_loss_safe'3 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 67 4 67 95
 
 use int.ComputerDivision
 use int.Int
@@ -15,7 +15,7 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-function lemma_div_exact [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 48 0 48 67] (divisor: int) (quotient: int) (remainder: int) : ()
+function lemma_div_exact [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 64 0 64 67] (divisor: int) (quotient: int) (remainder: int) : ()
  = [%#smin_insync_is_site_loss_safe'3] ()
 
 axiom lemma_div_exact_spec:
@@ -37,7 +37,7 @@ constant sites : int
 
 constant site : int
 
-function lemma_round_robin_step [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 64 0 64 61] (rf: int) (sites: int) (site: int) : ()
+function lemma_round_robin_step [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 15 8 15 55] (rf: int) (sites: int) (site: int) : ()
 
 goal vc_lemma_round_robin_step: ([%#smin_insync_is_site_loss_safe] ge_log_Int rf 1
     /\ ge_log_Int sites 1 /\ 0 <= site /\ site < sites)

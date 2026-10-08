@@ -166,16 +166,13 @@ mod tests {
         handle
             .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
                 krabka_metadata::PartitionRecord {
-                    topic: topic.to_string(),
-                    partition: 0,
-                    leader: krabka_audit::NodeId(leader),
-                    replicas: vec![krabka_audit::NodeId(leader)],
-                    isr: vec![krabka_audit::NodeId(leader)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: Vec::new(),
-                    removing_replicas: Vec::new(),
                     directories: vec![uuid::Uuid::nil()],
-                    partition_epoch: 0,
+                    ..crate::handlers::test_support::replicated_partition(
+                        topic,
+                        0,
+                        krabka_audit::NodeId(leader),
+                        &[krabka_audit::NodeId(leader)],
+                    )
                 },
             ))
             .await
@@ -231,9 +228,7 @@ mod tests {
         const IMMEDIATE: &str = "list-offsets-delivery-immediate";
         const SCHEDULED: &str = "list-offsets-delivery-scheduled";
 
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         let logs = tempfile::tempdir().expect("log root");
         register_delivery_partition(
             &broker_handle,
@@ -292,9 +287,7 @@ mod tests {
         // matching what `ListOffsets` now also requires of the image.
         const OTHER_BROKER: u64 = 7;
 
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         assert!(broker.config.node_id.get() != OTHER_BROKER);
         let logs = tempfile::tempdir().expect("log root");
         let timeline = qubit_clock::ManualMonotonicClock::new_shared();

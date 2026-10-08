@@ -7,6 +7,8 @@
 //! requires the all-directories-offline shutdown. Freeing both filesystems and
 //! restarting must rebuild the replicas and preserve every acknowledged record.
 
+mod support;
+
 use std::{
     collections::BTreeSet,
     process::Command,
@@ -16,16 +18,17 @@ use std::{
 use assert2::assert;
 use bytes::Bytes;
 use krabka_client_core::Client;
-use krabka_client_producer::{Acks, Producer, ProducerRecord};
+use krabka_client_producer::{Producer, ProducerRecord};
 use krabka_protocol::owned::{
     assign_replicas_to_dirs_request::{
         AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
     },
-    create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
+    create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
     describe_log_dirs_request::DescribeLogDirsRequest,
-    fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-    metadata_request::{MetadataRequest, MetadataRequestTopic},
+    fetch_request::FetchRequest,
 };
+
+use crate::support::fetch::{fetch_partition, single_partition_fetch};
 
 const BROKER_IMAGE: &str = "docker.io/krabka-io/krabka-broker:dev";
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
@@ -323,9 +326,7 @@ impl BrokerProcess {
 
 impl Drop for BrokerProcess {
     fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "--force", "--volumes", &self.name])
-            .output();
+        crate::support::remove_container_with_volumes(&self.name);
     }
 }
 
@@ -400,17 +401,16 @@ async fn create_topic(bootstrap: &str) {
         if let Ok(client) = Client::builder().bootstrap(bootstrap).build().await {
             match client
                 .send(CreateTopicsRequest {
-                    topics: vec![CreatableTopic {
-                        name: TOPIC.into(),
-                        num_partitions: PARTITIONS,
-                        replication_factor: 3,
-                        configs: vec![CreatableTopicConfig {
+                    topics: vec![crate::support::topics::creatable_topic_with_configs(
+                        TOPIC.into(),
+                        PARTITIONS,
+                        3,
+                        vec![CreatableTopicConfig {
                             name: "min.insync.replicas".into(),
                             value: Some("2".into()),
                             ..Default::default()
                         }],
-                        ..Default::default()
-                    }],
+                    )],
                     timeout_ms: 10_000,
                     ..Default::default()
                 })
@@ -429,11 +429,8 @@ async fn create_topic(bootstrap: &str) {
 async fn describe(
     bootstrap: &str,
 ) -> krabka_protocol::owned::describe_log_dirs_response::DescribeLogDirsResponse {
-    Client::builder()
-        .bootstrap(bootstrap)
-        .build()
+    crate::support::client::connect_with_context(bootstrap, None, "describe client")
         .await
-        .expect("describe client")
         .send(DescribeLogDirsRequest {
             topics: None,
             ..Default::default()
@@ -479,20 +476,15 @@ fn directory_id(fs: &TinyFs) -> uuid::Uuid {
 }
 
 async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
-    let metadata = Client::builder()
-        .bootstrap(cluster.bootstrap())
-        .build()
-        .await
-        .expect("assignment metadata client")
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(TOPIC.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("assignment Metadata");
+    let metadata = crate::support::client::connect_with_context(
+        cluster.bootstrap(),
+        None,
+        "assignment metadata client",
+    )
+    .await
+    .send(crate::support::discovery::named_topic_metadata(TOPIC))
+    .await
+    .expect("assignment Metadata");
     let controller = usize::try_from(metadata.controller_id - 1).expect("positive controller id");
     let topic_id = metadata.topics[0].topic_id;
     let directory = |id: uuid::Uuid, partitions: &[i32]| DirectoryData {
@@ -510,25 +502,26 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
         }],
         ..Default::default()
     };
-    let response = Client::builder()
-        .bootstrap(cluster.brokers[controller].bootstrap())
-        .build()
-        .await
-        .expect("assignment controller client")
-        .send(AssignReplicasToDirsRequest {
-            broker_id: 1,
-            // -1 means "not provided" (KIP-903) and matches any
-            // registration; the controller still checks that broker 1 is
-            // registered at all (#636).
-            broker_epoch: -1,
-            directories: vec![
-                directory(directory_id(&cluster.primary), primary),
-                directory(directory_id(&cluster.extra), extra),
-            ],
-            ..Default::default()
-        })
-        .await
-        .expect("AssignReplicasToDirs");
+    let response = crate::support::client::connect_with_context(
+        cluster.brokers[controller].bootstrap(),
+        None,
+        "assignment controller client",
+    )
+    .await
+    .send(AssignReplicasToDirsRequest {
+        broker_id: 1,
+        // -1 means "not provided" (KIP-903) and matches any
+        // registration; the controller still checks that broker 1 is
+        // registered at all (#636).
+        broker_epoch: -1,
+        directories: vec![
+            directory(directory_id(&cluster.primary), primary),
+            directory(directory_id(&cluster.extra), extra),
+        ],
+        ..Default::default()
+    })
+    .await
+    .expect("AssignReplicasToDirs");
     assert!(
         response.error_code == 0
             && response.directories.iter().all(|directory| {
@@ -544,18 +537,9 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
 }
 
 async fn leaders(bootstrap: &str) -> Vec<i32> {
-    let response = Client::builder()
-        .bootstrap(bootstrap)
-        .build()
+    let response = crate::support::client::connect_with_context(bootstrap, None, "metadata client")
         .await
-        .expect("metadata client")
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(TOPIC.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(crate::support::discovery::named_topic_metadata(TOPIC))
         .await
         .expect("Metadata");
     let mut leaders = vec![-1; usize::try_from(PARTITIONS).unwrap()];
@@ -568,20 +552,12 @@ async fn leaders(bootstrap: &str) -> Vec<i32> {
 async fn wait_isr(bootstrap: &str, partition: i32, expected: usize) {
     let deadline = Instant::now() + READY;
     loop {
-        let response = Client::builder()
-            .bootstrap(bootstrap)
-            .build()
-            .await
-            .expect("ISR metadata client")
-            .send(MetadataRequest {
-                topics: Some(vec![MetadataRequestTopic {
-                    name: Some(TOPIC.into()),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            })
-            .await
-            .expect("ISR Metadata");
+        let response =
+            crate::support::client::connect_with_context(bootstrap, None, "ISR metadata client")
+                .await
+                .send(crate::support::discovery::named_topic_metadata(TOPIC))
+                .await
+                .expect("ISR Metadata");
         if response.topics[0]
             .partitions
             .iter()
@@ -599,26 +575,17 @@ async fn wait_isr(bootstrap: &str, partition: i32, expected: usize) {
 }
 
 fn record(partition: i32, key: String, bytes: usize) -> ProducerRecord {
-    ProducerRecord {
-        topic: TOPIC.into(),
-        partition: Some(partition),
-        key: Some(key.into()),
-        value: Some(Bytes::from(vec![b'x'; bytes])),
-        ..Default::default()
-    }
+    crate::support::producer::producer_record(
+        TOPIC,
+        Some(partition),
+        Some(key.into()),
+        Some(Bytes::from(vec![b'x'; bytes])),
+    )
 }
 
 async fn producer(bootstrap: &str) -> Producer {
-    Producer::builder()
-        .bootstrap(bootstrap)
-        .acks(Acks::All)
-        .enable_idempotence(false)
-        .retries(0)
-        .linger(Duration::ZERO)
-        .batch_size(512 * 1024)
-        .build()
+    crate::support::producer::no_retry_acks_all_producer(bootstrap, Some(512 * 1024), "producer")
         .await
-        .expect("producer")
 }
 
 async fn wait_metric(url: &str, expected: f64, broker: &BrokerProcess) {
@@ -654,20 +621,15 @@ async fn wait_exited(broker: &BrokerProcess) {
 }
 
 async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<String> {
-    let metadata = Client::builder()
-        .bootstrap(cluster.bootstrap())
-        .build()
-        .await
-        .expect("read metadata client")
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(TOPIC.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("read Metadata");
+    let metadata = crate::support::client::connect_with_context(
+        cluster.bootstrap(),
+        None,
+        "read metadata client",
+    )
+    .await
+    .send(crate::support::discovery::named_topic_metadata(TOPIC))
+    .await
+    .expect("read Metadata");
     let topic = &metadata.topics[0];
     let leader = topic
         .partitions
@@ -675,32 +637,24 @@ async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<Stri
         .find(|candidate| candidate.partition_index == partition)
         .expect("read partition metadata")
         .leader_id;
-    let client = Client::builder()
-        .bootstrap(cluster.brokers[usize::try_from(leader - 1).unwrap()].bootstrap())
-        .build()
-        .await
-        .expect("fetch client");
+    let client = crate::support::client::connect_with_context(
+        cluster.brokers[usize::try_from(leader - 1).unwrap()].bootstrap(),
+        None,
+        "fetch client",
+    )
+    .await;
     let mut offset = 0;
     let mut keys = BTreeSet::new();
     loop {
         let response = client
             .send(FetchRequest {
                 replica_id: -1,
-                max_wait_ms: 0,
-                min_bytes: 1,
-                max_bytes: 1 << 24,
-                topics: vec![FetchTopic {
-                    topic: TOPIC.into(),
-                    topic_id: topic.topic_id,
-                    partitions: vec![FetchPartition {
-                        partition,
-                        fetch_offset: offset,
-                        partition_max_bytes: 1 << 24,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
+                ..single_partition_fetch(
+                    TOPIC,
+                    topic.topic_id,
+                    fetch_partition(partition, offset, 1 << 24),
+                    (0, 1, 1 << 24),
+                )
             })
             .await
             .expect("Fetch");
@@ -780,16 +734,7 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
 
     let fill = producer(&bootstrap).await;
     let mut acked = BTreeSet::new();
-    for sequence in 0..128 {
-        let key = format!("fill-{sequence}");
-        match fill.send(record(doomed, key.clone(), 256 * 1024)).await {
-            Ok(_) => {
-                acked.insert(key);
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            _ => break,
-        }
-    }
+    fill_partition(&fill, doomed, "fill", 128, &mut acked).await;
     wait_metric(&node1.metrics_url(), 1.0, node1).await;
 
     let failed = describe(&node1.bootstrap()).await;
@@ -824,19 +769,7 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
     acked.insert(healthy_key);
 
     let primary_fill = producer(&bootstrap).await;
-    for sequence in 0..256 {
-        let key = format!("primary-fill-{sequence}");
-        match primary_fill
-            .send(record(healthy, key.clone(), 256 * 1024))
-            .await
-        {
-            Ok(_) => {
-                acked.insert(key);
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            _ => break,
-        }
-    }
+    fill_partition(&primary_fill, healthy, "primary-fill", 256, &mut acked).await;
     wait_exited(node1).await;
     let deadline = Instant::now() + READY;
     loop {
@@ -889,4 +822,26 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
     wait_isr(&bootstrap, doomed, 3).await;
     wait_isr(&bootstrap, healthy, 3).await;
     wait_keys(&cluster, &[doomed, healthy], &acked).await;
+}
+
+async fn fill_partition(
+    producer: &Producer,
+    partition: i32,
+    prefix: &str,
+    attempts: usize,
+    acked: &mut BTreeSet<String>,
+) {
+    for sequence in 0..attempts {
+        let key = format!("{prefix}-{sequence}");
+        match producer
+            .send(record(partition, key.clone(), 256 * 1024))
+            .await
+        {
+            Ok(_) => {
+                acked.insert(key);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            _ => break,
+        }
+    }
 }

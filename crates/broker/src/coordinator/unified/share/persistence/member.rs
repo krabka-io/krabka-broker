@@ -14,18 +14,8 @@
 //! Every string is compact, the array is compact, and the message ends with its
 //! tagged-field count.
 
-use bytes::{BufMut, Bytes, BytesMut};
-
-use crate::{
-    coordinator::unified::persistence::{
-        flex::{
-            get_compact_nullable_string, get_compact_string, get_string_array,
-            put_compact_nullable_string, put_compact_string, put_empty_tagged_fields,
-            put_string_array, skip_tagged_fields,
-        },
-        get_i16,
-    },
-    error::BrokerError,
+use crate::coordinator::unified::persistence::flex::{
+    get_member_client, get_string_array, put_member_client, put_string_array, value_codec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,27 +26,15 @@ pub struct ShareGroupMemberMetadataValue {
     pub subscribed_topic_names: Vec<String>,
 }
 
-impl ShareGroupMemberMetadataValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        put_compact_nullable_string(&mut buf, self.rack_id.as_deref());
-        put_compact_string(&mut buf, &self.client_id);
-        put_compact_string(&mut buf, &self.client_host);
-        put_string_array(&mut buf, &self.subscribed_topic_names);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
+value_codec! {
+    ShareGroupMemberMetadataValue,
+    encode(&self) -> buf {
+        put_member_client(buf, self.rack_id.as_deref(), &self.client_id, &self.client_host);
+        put_string_array(buf, &self.subscribed_topic_names);
     }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let rack_id = get_compact_nullable_string(&mut buf)?;
-        let client_id = get_compact_string(&mut buf)?;
-        let client_host = get_compact_string(&mut buf)?;
-        let subscribed_topic_names = get_string_array(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
+    decode(buf) {
+        let (rack_id, client_id, client_host) = get_member_client(buf)?;
+        let subscribed_topic_names = get_string_array(buf)?;
         Ok(Self {
             rack_id,
             client_id,
@@ -71,8 +49,10 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::share::persistence::{
-        KEY_SHARE_MEMBER_METADATA, ShareGroupKey, encode_share_key, parse_share_key,
+    use crate::coordinator::unified::{
+        share::persistence::{
+            KEY_SHARE_MEMBER_METADATA, ShareGroupKey, encode_share_key, parse_share_key,
+        },
         test_support::peek_version,
     };
 

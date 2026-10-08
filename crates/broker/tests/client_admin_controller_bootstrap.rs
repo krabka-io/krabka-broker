@@ -1,26 +1,13 @@
-use std::collections::BTreeMap;
+mod support;
 
 use assert2::check;
-use krabka_broker::{Broker, BrokerConfig, NodeId};
-use krabka_client_admin::{
-    AdminClient, AdminError, ConfigResource, CreateTopicSpec, DescribeConfigsOptions,
-};
+use krabka_client_admin::{AdminClient, AdminError, ConfigResource, DescribeConfigsOptions};
+
+krabka_macros::bound_start_fixture!(config, bound_config, ::krabka_broker);
+krabka_macros::bound_start_fixture!(start, start_bound, ::krabka_broker, unwrap, bound_config);
 
 async fn start_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().unwrap();
-    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let data_addr = data_listener.local_addr().unwrap();
-    let controller_addr = controller_listener.local_addr().unwrap();
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listen_addr = data_addr;
-    config.advertised_listener = data_addr.to_string();
-    config.controller_listen_addr = controller_addr;
-    config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
-    let broker =
-        Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
-            .await
-            .unwrap();
+    let (broker, _controller_addr, dir) = start_bound(|_| {}).await;
     (broker, dir)
 }
 
@@ -33,13 +20,7 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
         .unwrap();
     let created = broker_admin
         .create_topics(
-            &[CreateTopicSpec {
-                name: "controller-admin".into(),
-                partitions: 1,
-                replicas: 1,
-                configs: BTreeMap::new(),
-                replica_assignments: BTreeMap::new(),
-            }],
+            &[crate::support::admin::topic_spec("controller-admin", 1, 1)],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
@@ -81,13 +62,11 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
     // Kafka's own request schema.
     let through_controller = controller_admin
         .create_topics(
-            &[CreateTopicSpec {
-                name: "created-through-controller".into(),
-                partitions: 1,
-                replicas: 1,
-                configs: BTreeMap::new(),
-                replica_assignments: BTreeMap::new(),
-            }],
+            &[crate::support::admin::topic_spec(
+                "created-through-controller",
+                1,
+                1,
+            )],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await

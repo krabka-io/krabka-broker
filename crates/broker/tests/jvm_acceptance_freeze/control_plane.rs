@@ -11,10 +11,7 @@
 use assert2::{assert, check};
 use krabka_client_admin::{AdminClient, CreateTopicSpec};
 use krabka_client_core::{Client, security::ClientSecurity};
-use krabka_protocol::krabka::{
-    break_glass::{ApproveBreakGlassRequest, ProposeBreakGlassRequest},
-    freeze::SetTopicFreezeRequest,
-};
+use krabka_protocol::krabka::freeze::SetTopicFreezeRequest;
 
 use crate::{
     support,
@@ -23,12 +20,7 @@ use crate::{
 
 /// A plaintext host-side client for the krabka-private APIs.
 pub(super) async fn plain_client(bootstrap: &str) -> Client {
-    Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("kfc9-jvm-acceptance")
-        .build()
-        .await
-        .expect("client build")
+    support::client::connect_owned(bootstrap, "kfc9-jvm-acceptance", "client build").await
 }
 
 /// Create every topic a case needs, and fail the case when one does not open.
@@ -103,22 +95,16 @@ struct Approvals {
 /// name a partition, and an unclean election is one of those, so this also
 /// checks that widening on the way through.
 pub(super) async fn approved_unclean_election(bootstrap: &str, target: &str) {
-    let proposer = support::sasl_client(bootstrap, PROPOSER.0, PROPOSER.1).await;
-    let opened = proposer
-        .send(ProposeBreakGlassRequest {
-            action: WIRE_UNCLEAN_ELECT_LEADERS,
-            target: target.to_owned(),
-            reason: "the whole ISR is gone and the site has to come back".to_owned(),
-            ttl_ms: 0,
-            ..ProposeBreakGlassRequest::default()
-        })
-        .await
-        .expect("ProposeBreakGlass");
-    let code = opened.error_code;
-    let message = opened.error_message;
-    assert!(code == 0, "propose: code={code} message={message:?}");
+    let proposal_id = crate::jvm_acceptance::break_glass::propose(
+        bootstrap,
+        PROPOSER,
+        WIRE_UNCLEAN_ELECT_LEADERS,
+        target,
+        "the whole ISR is gone and the site has to come back",
+    )
+    .await;
 
-    let first = approve(bootstrap, APPROVER_ONE, opened.proposal_id).await;
+    let first = approve(bootstrap, APPROVER_ONE, proposal_id).await;
     check!(
         first.held == 1,
         "one approval is one distinct principal, not {first:?}"
@@ -128,7 +114,7 @@ pub(super) async fn approved_unclean_election(bootstrap: &str, target: &str) {
         "one person must not be enough: {first:?}"
     );
 
-    let second = approve(bootstrap, APPROVER_TWO, opened.proposal_id).await;
+    let second = approve(bootstrap, APPROVER_TWO, proposal_id).await;
     check!(
         second.held == second.required,
         "two distinct principals must satisfy the rule: {second:?}"
@@ -141,24 +127,15 @@ async fn approve(
     operator: (&str, &str),
     proposal_id: krabka_protocol::primitives::uuid::Uuid,
 ) -> Approvals {
-    let client = support::sasl_client(bootstrap, operator.0, operator.1).await;
-    let response = client
-        .send(ApproveBreakGlassRequest {
-            proposal_id,
-            withdraw: false,
-            ..ApproveBreakGlassRequest::default()
-        })
-        .await
-        .expect("ApproveBreakGlass");
-    let code = response.error_code;
-    let message = response.error_message;
-    let who = operator.0;
-    assert!(
-        code == 0,
-        "approve as {who}: code={code} message={message:?}"
-    );
-    Approvals {
-        held: response.approvals_held,
-        required: response.approvals_required,
-    }
+    let (held, required) =
+        crate::jvm_acceptance::break_glass::approve(bootstrap, operator, proposal_id).await;
+    Approvals { held, required }
+}
+
+/// Plaintext fixture with all topics installed before the first control-plane mutation.
+pub(super) async fn plain_topic_fixture(names: &[&str]) -> (crate::host_broker::JvmBroker, Client) {
+    let broker = crate::host_broker::start_jvm_broker(|_| {}).await;
+    let client = plain_client(&broker.host).await;
+    create_topics(&broker.host, None, names).await;
+    (broker, client)
 }

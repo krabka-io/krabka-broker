@@ -76,14 +76,5 @@ pub async fn drive_elect_leaders_sasl_plain(
     .await
     .expect("ElectLeaders round-trip");
 
-    resp.replica_election_results
-        .into_iter()
-        .find(|r| r.topic == topic)
-        .map(|r| {
-            r.partition_result
-                .into_iter()
-                .map(|p| (p.partition_id, p.error_code))
-                .collect()
-        })
-        .unwrap_or_default()
+    crate::support::admin::election_partition_errors(resp, topic)
 }

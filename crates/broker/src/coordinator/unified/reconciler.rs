@@ -208,38 +208,13 @@ pub fn membership_topic_ids(group: &GroupState, input: &ReconcileInput) -> HashS
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
     use assert2::{assert, check};
 
     use super::{super::assignor::UniformAssignor, *};
-    use crate::coordinator::unified::{
-        consumer_state::{MemberState, ResolvedRegularExpression},
-        persistence_next_gen::MemberAssignmentState,
-    };
+    use crate::coordinator::unified::consumer_state::{MemberState, ResolvedRegularExpression};
 
     fn fresh_member(id: &str, topic: &str) -> MemberState {
-        let mut sub = HashSet::new();
-        sub.insert(topic.into());
-        MemberState {
-            member_id: id.into(),
-            instance_id: None,
-            rack_id: None,
-            client_id: "c".into(),
-            client_host: "/127.0.0.1".into(),
-            subscribed_topic_names: sub,
-            subscribed_topic_regex: None,
-            server_assignor: None,
-            rebalance_timeout: Duration::from_mins(1),
-            member_epoch: 0,
-            previous_member_epoch: 0,
-            assignment_state: MemberAssignmentState::Stable,
-            assigned_partitions: HashMap::new(),
-            partitions_pending_revocation: HashMap::new(),
-            assignment_epochs: HashMap::new(),
-            last_seen: Instant::now(),
-            classic: None,
-        }
+        crate::coordinator::unified::consumer_state::test_support::subscribed_member(id, &[topic])
     }
 
     fn input(topic_name: &str, partitions: i32) -> (ReconcileInput, Uuid) {

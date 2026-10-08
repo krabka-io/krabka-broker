@@ -14,13 +14,14 @@ use assert2::assert;
 use krabka_broker::{BootstrapMode, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::offset_commit_request::{
-        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-    },
+    owned::offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
     primitives::uuid::Uuid as WireUuid,
 };
 
-use crate::ERR_NONE;
+use crate::{
+    ERR_NONE,
+    support::offsets::{offset_commit_partition, offset_commit_topic},
+};
 
 pub(crate) async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     crate::support::streams::boot(true).await
@@ -60,18 +61,14 @@ pub(crate) async fn commit_offset_as_member(
             group_id: group_id.into(),
             generation_id_or_member_epoch: member_epoch,
             member_id: member_id.into(),
-            topics: vec![OffsetCommitRequestTopic {
-                name: topic.into(),
+            topics: vec![offset_commit_topic(
+                topic,
                 topic_id,
-                partitions: vec![OffsetCommitRequestPartition {
-                    partition_index: partition,
-                    committed_offset: offset,
+                vec![OffsetCommitRequestPartition {
                     committed_leader_epoch: 0,
-                    committed_metadata: Some(String::new()),
-                    ..Default::default()
+                    ..offset_commit_partition(partition, offset, Some(String::new()))
                 }],
-                ..Default::default()
-            }],
+            )],
             ..Default::default()
         })
         .await

@@ -27,8 +27,6 @@
 //! `KafkaRaftClient.hasValidClusterId` returns true for a null cluster id. The
 //! add and remove paths already read it that way.
 
-use std::ops::ControlFlow;
-
 use krabka_metadata::{Voter, VoterEndpoint};
 use krabka_protocol::owned::{
     update_raft_voter_request::UpdateRaftVoterRequest,
@@ -40,28 +38,21 @@ use crate::{
     codes,
     handlers::{
         ErrorCodeResponse as _, cluster_action_denied,
-        raft_voter::{Admitted, Refusals, prelude},
+        raft_voter::{Admitted, Refusals},
     },
 };
 
 crate::handlers::raft_voter::handler!(broker, version, req_bytes, ctx, {
-    let Admitted { req, image, quorum } = match prelude::<UpdateRaftVoterRequest, _>(
-        broker,
-        version,
-        req_bytes,
-        ctx,
+    let Admitted { req, image, quorum } = crate::handlers::raft_voter::admit!(
+        UpdateRaftVoterRequest,
+        (broker, version, req_bytes, ctx),
         82,
         cluster_action_denied,
         Refusals {
             denied: UpdateRaftVoterResponse::error(codes::CLUSTER_AUTHORIZATION_FAILED),
             not_leader: UpdateRaftVoterResponse::error(voter_requests::NOT_LEADER_OR_FOLLOWER),
-        },
-    )
-    .await?
-    {
-        ControlFlow::Break(answer) => return Ok(answer),
-        ControlFlow::Continue(admitted) => admitted,
-    };
+        }
+    );
     let error_code = if let Some(code) =
         voter_requests::update_voter_refusal(&req, &image.cluster_id().to_string(), &quorum)
     {
@@ -179,26 +170,22 @@ mod tests {
     #[tokio::test]
     async fn handle_denies_cluster_alter_without_calling_reconfig() {
         let version = 0;
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
-        let resp = answer(&broker, version, &request(2), &ctx).await;
-
-        assert!(resp.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
-        broker_handle.shutdown().await;
+        crate::handlers::raft_voter::check_denied_reconfiguration!(
+            (broker_handle, _dir, broker, ctx, resp),
+            version
+        );
     }
 
     #[tokio::test]
     async fn handle_rejects_negative_voter_id_before_reconfig() {
         let version = 0;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "admin")
+        );
         let mut request = request(-7);
-        request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
-        request.current_leader_epoch =
-            i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
+        stamp_voter_request!(request, broker, leader_epoch);
         let resp = answer(&broker, version, &request, &ctx).await;
 
         assert!(resp.error_code == codes::INVALID_REQUEST);
@@ -211,10 +198,11 @@ mod tests {
     #[tokio::test]
     async fn handle_reports_the_kafka_code_for_each_rejected_field() {
         let version = 0;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "admin")
+        );
         let cluster_id = broker.controller.current_image().cluster_id().to_string();
         let epoch = i32::try_from(broker.controller.quorum_state().current_term)
             .expect("the test quorum's term fits an i32");
@@ -289,10 +277,11 @@ mod tests {
     #[tokio::test]
     async fn handle_accepts_a_request_that_names_no_cluster() {
         let version = 0;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "admin")
+        );
         let mut named = request(2);
         // Kafka's `UpdateVoterHandler` checks the voter's kraft.version range
         // against the cluster's before it looks the voter up, so the range
@@ -338,19 +327,13 @@ mod tests {
         #[derive(Debug)]
         struct GrantOnly(AclOperation);
 
-        impl crate::authorizer::Authorizer for GrantOnly {
-            fn authorize(
-                &self,
-                _source: &dyn krabka_authz::AclSource,
-                req: &crate::authorizer::AuthorizationRequest<'_>,
-            ) -> crate::authorizer::AuthorizationResult {
-                if req.operation == self.0 {
-                    crate::authorizer::AuthorizationResult::Allow
-                } else {
-                    crate::authorizer::AuthorizationResult::Deny
-                }
+        test_authorizer!(GrantOnly, (self, _source, req), {
+            if req.operation == self.0 {
+                crate::authorizer::AuthorizationResult::Allow
+            } else {
+                crate::authorizer::AuthorizationResult::Deny
             }
-        }
+        });
 
         enum Api {
             Update,
@@ -373,8 +356,10 @@ mod tests {
         ];
 
         for (api_name, api, grant, want_cluster_authorization_failed) in cases {
-            let (broker_handle, _dir) = start_broker(Arc::new(GrantOnly(grant))).await;
-            let broker = broker_handle.broker_arc_for_test();
+            broker_fixture!(
+                (broker_handle, _dir, broker),
+                start_broker(Arc::new(GrantOnly(grant)))
+            );
             test_ctx!(ctx, "alice");
 
             let error_code = match api {
@@ -438,17 +423,16 @@ mod tests {
     #[tokio::test]
     async fn handle_reports_reconfig_error_from_controller() {
         let version = 0;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "admin")
+        );
         let mut request = request(2);
         // The range covers the cluster's kraft.version, so Kafka's handler
         // reaches the voter lookup.
         request.k_raft_version_feature.min_supported_version = 0;
-        request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
-        request.current_leader_epoch =
-            i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
+        stamp_voter_request!(request, broker, leader_epoch);
         let resp = answer(&broker, version, &request, &ctx).await;
 
         assert!(resp.error_code == codes::VOTER_NOT_FOUND);

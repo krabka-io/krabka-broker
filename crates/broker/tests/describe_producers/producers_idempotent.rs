@@ -3,14 +3,11 @@
 //! produce, and one row per producer when several share a partition.
 
 use assert2::{assert, check};
-use krabka_protocol::owned::{
-    describe_producers_request::{DescribeProducersRequest, TopicRequest},
-    produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-};
 
 use crate::{
     producers_harness::{batch, create_topic, init_producer, topic_id_for},
     support,
+    support::produce::single_partition_produce,
 };
 
 #[tokio::test]
@@ -20,14 +17,10 @@ async fn empty_partition_returns_no_active_producers() {
 
     let resp = p
         .client
-        .send(DescribeProducersRequest {
-            topics: vec![TopicRequest {
-                name: "fresh".into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(crate::support::admin::describe_producers_request(
+            "fresh".into(),
+            vec![0],
+        ))
         .await
         .expect("DescribeProducers");
 
@@ -60,35 +53,23 @@ async fn after_idempotent_produce_describe_returns_the_producer() {
 
     let pr = p
         .client
-        .send(ProduceRequest {
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "t".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch(pid, epoch, 0, &["a", "b", "c"]).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "t",
+            topic_id,
+            0,
+            Some(batch(pid, epoch, 0, &["a", "b", "c"]).into()),
+            (-1, 5_000),
+        ))
         .await
         .expect("Produce");
     assert!(pr.responses[0].partition_responses[0].error_code == 0);
 
     let resp = p
         .client
-        .send(DescribeProducersRequest {
-            topics: vec![TopicRequest {
-                name: "t".into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(crate::support::admin::describe_producers_request(
+            "t".into(),
+            vec![0],
+        ))
         .await
         .expect("DescribeProducers");
 
@@ -129,21 +110,13 @@ async fn multiple_producers_on_same_partition_all_surfaced() {
     for (pid, epoch) in [(pid_a, epoch_a), (pid_b, epoch_b)] {
         let pr = p
             .client
-            .send(ProduceRequest {
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: "shared".into(),
-                    topic_id,
-                    partition_data: vec![PartitionProduceData {
-                        index: 0,
-                        records: Some(batch(pid, epoch, 0, &["x"]).into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(single_partition_produce(
+                "shared",
+                topic_id,
+                0,
+                Some(batch(pid, epoch, 0, &["x"]).into()),
+                (-1, 5_000),
+            ))
             .await
             .expect("Produce");
         assert!(pr.responses[0].partition_responses[0].error_code == 0);
@@ -151,14 +124,10 @@ async fn multiple_producers_on_same_partition_all_surfaced() {
 
     let resp = p
         .client
-        .send(DescribeProducersRequest {
-            topics: vec![TopicRequest {
-                name: "shared".into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(crate::support::admin::describe_producers_request(
+            "shared".into(),
+            vec![0],
+        ))
         .await
         .expect("DescribeProducers");
 

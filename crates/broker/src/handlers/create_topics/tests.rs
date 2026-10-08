@@ -21,6 +21,14 @@ use crate::{
     test_support::{DenyAll, peer, principal},
 };
 
+/// Live broker and request identity for the wire-driven creation cases.
+macro_rules! creation_fixture {
+    (($handle:ident, $directory:ident, $broker:ident), ($principal:ident, $peer:ident), $authorizer:ident, $user:expr) => {
+        broker_fixture!(($handle, $directory, $broker), $authorizer);
+        request_identity!(($principal, $peer), principal($user));
+    };
+}
+
 const VERSION: i16 = 7;
 
 /// `ConfigSource.DYNAMIC_TOPIC_CONFIG`, the source a value the create request
@@ -74,7 +82,7 @@ fn expected_configs(overrides: &[(&str, &str)]) -> Vec<CreatableTopicConfigs> {
             };
             let (value, config_source) =
                 stored.map_or(unset, |value| (Some(value), DYNAMIC_TOPIC_CONFIG));
-            CreatableTopicConfigs {
+            tagged_wire!(CreatableTopicConfigs {
                 name: row.name.to_owned(),
                 value: (!row.is_sensitive())
                     .then_some(value)
@@ -83,12 +91,47 @@ fn expected_configs(overrides: &[(&str, &str)]) -> Vec<CreatableTopicConfigs> {
                 read_only: row.read_only,
                 config_source,
                 is_sensitive: row.is_sensitive(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
+            })
         })
         .collect();
     configs.sort_by(|left, right| left.name.cmp(&right.name));
     configs
+}
+
+/// Independent expected response fields, including the config-disclosure outcome.
+fn expected_topic(
+    name: &str,
+    topic_id: ProtoUuid,
+    outcome: (i16, Option<String>),
+    dimensions: (i32, i16),
+    configs: Vec<CreatableTopicConfigs>,
+    topic_config_error_code: i16,
+) -> CreatableTopicResult {
+    tagged_wire!(CreatableTopicResult {
+        name: name.into(),
+        topic_id,
+        error_code: outcome.0,
+        error_message: outcome.1,
+        num_partitions: dimensions.0,
+        replication_factor: dimensions.1,
+        configs: Some(configs),
+        topic_config_error_code,
+    })
+}
+
+fn expected_empty_topic(
+    name: &str,
+    error_code: i16,
+    error_message: Option<String>,
+) -> CreatableTopicResult {
+    expected_topic(
+        name,
+        ProtoUuid([0; 16]),
+        (error_code, error_message),
+        (-1, -1),
+        Vec::new(),
+        0,
+    )
 }
 
 fn topic(name: &str, partitions: i32, rf: i16) -> CreatableTopic {
@@ -157,44 +200,38 @@ async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
 /// per-topic `Create` fallback, so the request still ends every row in
 /// `TOPIC_AUTHORIZATION_FAILED` -- but never `CLUSTER_AUTHORIZATION_FAILED`,
 /// which Kafka's `ControllerApis.createTopics` never answers for a topic row.
+macro_rules! invalid_config_answer {
+    (($response:ident, $message:ident), $broker:ident, $request:ident) => {
+        let $response = drive(&$broker, &$request, &principal("admin"), &peer()).await;
+        assert!($response.topics[0].error_code == codes::INVALID_CONFIG);
+        let $message = $response.topics[0]
+            .error_message
+            .as_deref()
+            .unwrap_or_default();
+    };
+}
+
 #[tokio::test]
 async fn handle_falls_back_to_topic_authorization_failed_for_each_topic() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("alice");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), deny_all, "alice");
     let req = request(vec![topic("orders", 1, 1), topic("payments", 1, 1)]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = CreateTopicsResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(CreateTopicsResponse {
         topics: vec![
-            CreatableTopicResult {
-                name: "orders".into(),
-                topic_id: ProtoUuid([0; 16]),
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                error_message: Some("Authorization failed.".into()),
-                num_partitions: -1,
-                replication_factor: -1,
-                configs: Some(Vec::new()),
-                topic_config_error_code: 0,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            CreatableTopicResult {
-                name: "payments".into(),
-                topic_id: ProtoUuid([0; 16]),
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                error_message: Some("Authorization failed.".into()),
-                num_partitions: -1,
-                replication_factor: -1,
-                configs: Some(Vec::new()),
-                topic_config_error_code: 0,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
+            expected_empty_topic(
+                "orders",
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                Some("Authorization failed.".into())
+            ),
+            expected_empty_topic(
+                "payments",
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                Some("Authorization failed.".into())
+            ),
         ],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    });
     assert!(resp == expected);
     assert!(
         broker_handle
@@ -207,49 +244,25 @@ async fn handle_falls_back_to_topic_authorization_failed_for_each_topic() {
 
 #[tokio::test]
 async fn handle_reports_invalid_partition_count_and_replication_factor() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let req = request(vec![topic("bad-count", 0, 1), topic("bad-rf", 1, 2)]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = CreateTopicsResponse {
-        throttle_time_ms: 0,
-        topics: vec![
-            CreatableTopicResult {
-                name: "bad-count".into(),
-                topic_id: ProtoUuid([0; 16]),
-                error_code: codes::INVALID_PARTITIONS,
-                error_message: Some(
+    let expected =
+        unthrottled_wire!(CreateTopicsResponse {
+            topics: vec![
+            expected_empty_topic("bad-count", codes::INVALID_PARTITIONS, Some(
                     "Number of partitions was set to an invalid non-positive value.".into(),
-                ),
-                num_partitions: -1,
-                replication_factor: -1,
-                configs: Some(Vec::new()),
-                topic_config_error_code: 0,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            CreatableTopicResult {
-                name: "bad-rf".into(),
-                topic_id: ProtoUuid([0; 16]),
-                error_code: codes::INVALID_REPLICATION_FACTOR,
-                error_message: Some(
+                )),
+            expected_empty_topic("bad-rf", codes::INVALID_REPLICATION_FACTOR, Some(
                     "Unable to replicate the partition 2 time(s): The target replication factor \
                      of 2 cannot be reached because only 1 broker(s) are registered or some \
                      brokers have all their log directories cordoned."
                         .into(),
-                ),
-                num_partitions: -1,
-                replication_factor: -1,
-                configs: Some(Vec::new()),
-                topic_config_error_code: 0,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
+                )),
         ],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+        });
     assert!(resp == expected);
     for name in ["bad-count", "bad-rf"] {
         let image = broker_handle.controller_image_for_test();
@@ -337,27 +350,22 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
 
         let image = broker_handle.controller_image_for_test();
         let created_ok = error_code == codes::NONE;
-        let expected = CreateTopicsResponse {
-            throttle_time_ms: 0,
-            topics: vec![CreatableTopicResult {
-                name: name.clone(),
-                topic_id: image.topic(&name).map_or(ProtoUuid([0; 16]), |topic| {
+        let expected = unthrottled_wire!(CreateTopicsResponse {
+            topics: vec![expected_topic(
+                &name,
+                image.topic(&name).map_or(ProtoUuid([0; 16]), |topic| {
                     ProtoUuid(topic.topic_id.into_bytes())
                 }),
-                error_code,
-                error_message: error_message.map(str::to_owned),
-                num_partitions: created,
-                replication_factor: created_rf,
-                configs: Some(if created_ok {
+                (error_code, error_message.map(str::to_owned)),
+                (created, created_rf),
+                if created_ok {
                     expected_configs(&[])
                 } else {
                     Vec::new()
-                }),
-                topic_config_error_code: 0,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+                },
+                0
+            )],
+        });
         check!(resp == expected, "requested ({partitions}, {rf})");
 
         let committed = image
@@ -376,33 +384,26 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
 
 #[tokio::test]
 async fn handle_success_persists_topic_config_and_success_fields() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let req = request(vec![topic_with_config("configured")]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
     assert!(resp.topics.len() == 1);
     assert!(resp.topics[0].topic_id != ProtoUuid([0; 16]));
-    let expected = CreateTopicsResponse {
-        throttle_time_ms: 0,
-        topics: vec![CreatableTopicResult {
-            name: "configured".into(),
-            // Randomly generated per create; copied from the actual
-            // response (the != nil assert above pins non-default).
-            topic_id: resp.topics[0].topic_id,
-            error_code: codes::NONE,
-            error_message: None,
-            num_partitions: 2,
-            replication_factor: 1,
-            configs: Some(expected_configs(&[("retention.ms", "60000")])),
-            topic_config_error_code: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = unthrottled_wire!(CreateTopicsResponse {
+        topics: vec![
+            // Randomly generated per create; the non-nil assertion above pins it.
+            expected_topic(
+                "configured",
+                resp.topics[0].topic_id,
+                (codes::NONE, None),
+                (2, 1),
+                expected_configs(&[("retention.ms", "60000")]),
+                0
+            )
+        ],
+    });
     assert!(resp == expected);
 
     let image = broker_handle.controller_image_for_test();
@@ -419,10 +420,7 @@ async fn handle_success_persists_topic_config_and_success_fields() {
 /// stored as the client sent it, which is what `DescribeConfigs` echoes back.
 #[tokio::test]
 async fn handle_creates_a_topic_whose_cleanup_policy_names_both_halves() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let req = request(vec![topic_with_configs(
         "windowed-changelog",
         &[
@@ -451,10 +449,7 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
     /// see in the rejection.
     type RejectedConfig<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
 
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
 
     let cases: [RejectedConfig<'_>; 10] = [
         (
@@ -554,10 +549,7 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
 
 #[tokio::test]
 async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let req = request(vec![topic_with_configs(
         "retries",
         &[
@@ -570,25 +562,20 @@ async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
     let resp = drive(&broker, &req, &p, &peer).await;
 
     assert!(resp.topics.len() == 1);
-    let expected = CreateTopicsResponse {
-        throttle_time_ms: 0,
-        topics: vec![CreatableTopicResult {
-            name: "retries".into(),
-            topic_id: resp.topics[0].topic_id,
-            error_code: codes::NONE,
-            error_message: None,
-            num_partitions: 1,
-            replication_factor: 1,
-            configs: Some(expected_configs(&[
+    let expected = unthrottled_wire!(CreateTopicsResponse {
+        topics: vec![expected_topic(
+            "retries",
+            resp.topics[0].topic_id,
+            (codes::NONE, None),
+            (1, 1),
+            expected_configs(&[
                 ("delivery.mode", "scheduled"),
                 ("delivery.max.delay.ms", "-1"),
                 ("delivery.schedule.monotonic", "true"),
-            ])),
-            topic_config_error_code: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+            ]),
+            0
+        )],
+    });
     assert!(resp == expected);
 
     let image = broker_handle.controller_image_for_test();
@@ -618,8 +605,7 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    request_identity!((p, peer), principal("admin"));
     let req = request(vec![topic_with_configs(
         "events",
         &[("krabka.diskless", "true")],
@@ -627,21 +613,16 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = CreateTopicsResponse {
-        throttle_time_ms: 0,
-        topics: vec![CreatableTopicResult {
-            name: "events".into(),
-            topic_id: resp.topics[0].topic_id,
-            error_code: codes::NONE,
-            error_message: None,
-            num_partitions: 1,
-            replication_factor: 1,
-            configs: Some(expected_configs(&[("krabka.diskless", "true")])),
-            topic_config_error_code: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = unthrottled_wire!(CreateTopicsResponse {
+        topics: vec![expected_topic(
+            "events",
+            resp.topics[0].topic_id,
+            (codes::NONE, None),
+            (1, 1),
+            expected_configs(&[("krabka.diskless", "true")]),
+            0
+        )],
+    });
     assert!(resp == expected);
 
     // The override reaches the metadata log unchanged, ...
@@ -663,23 +644,16 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
 #[tokio::test]
 async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
     let object_store = tempfile::TempDir::new().expect("object store dir");
-    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
-        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
-            dir: object_store.path().to_path_buf(),
-        });
-    })
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        local_object_store(object_store)
+    );
     let req = request(vec![topic_with_configs(
         "unplaceable-diskless",
         &[("krabka.diskless", "true")],
     )]);
 
-    let resp = drive(&broker, &req, &principal("admin"), &peer()).await;
-
-    assert!(resp.topics[0].error_code == codes::INVALID_CONFIG);
-    let message = resp.topics[0].error_message.as_deref().unwrap_or_default();
+    invalid_config_answer!((resp, message), broker, req);
     for needle in [
         "partition 0",
         "leader 1",
@@ -704,14 +678,10 @@ async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
 #[tokio::test]
 async fn diskless_wal_validation_names_the_active_leader_of_a_manual_assignment() {
     let object_store = tempfile::TempDir::new().expect("object store dir");
-    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
-        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
-            dir: object_store.path().to_path_buf(),
-        });
-    })
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        local_object_store(object_store)
+    );
     for node_id in [2, 3] {
         crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
     }
@@ -735,10 +705,7 @@ async fn diskless_wal_validation_names_the_active_leader_of_a_manual_assignment(
         ..Default::default()
     }]);
 
-    let resp = drive(&broker, &req, &principal("admin"), &peer()).await;
-
-    assert!(resp.topics[0].error_code == codes::INVALID_CONFIG);
-    let message = resp.topics[0].error_message.as_deref().unwrap_or_default();
+    invalid_config_answer!((resp, message), broker, req);
     check!(message.contains("partition 0 leader 3 "), "{message}");
     broker_handle.shutdown().await;
 }
@@ -766,10 +733,7 @@ fn diskless_wal_validation_uses_the_local_registration_fallback() {
 
 #[tokio::test]
 async fn a_created_topic_with_the_key_off_stays_on_the_local_log_path() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let req = request(vec![topic_with_configs(
         "plain",
         &[("krabka.diskless", "false")],
@@ -788,10 +752,7 @@ async fn a_created_topic_with_the_key_off_stays_on_the_local_log_path() {
 
 #[tokio::test]
 async fn duplicate_topic_reports_error_without_success_fields() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let req = request(vec![topic("dupe", 1, 1)]);
     let first = drive(&broker, &req, &p, &peer).await;
     assert!(first.topics[0].error_code == codes::NONE);
@@ -799,22 +760,13 @@ async fn duplicate_topic_reports_error_without_success_fields() {
     let second = drive(&broker, &req, &p, &peer).await;
 
     assert!(second.topics.len() == 1);
-    let expected = CreateTopicsResponse {
-        throttle_time_ms: 0,
-        topics: vec![CreatableTopicResult {
-            name: "dupe".into(),
-            // Kafka's existence check answers before a topic id is minted.
-            topic_id: ProtoUuid([0; 16]),
-            error_code: codes::TOPIC_ALREADY_EXISTS,
-            error_message: Some("Topic 'dupe' already exists.".into()),
-            num_partitions: -1,
-            replication_factor: -1,
-            configs: Some(Vec::new()),
-            topic_config_error_code: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = unthrottled_wire!(CreateTopicsResponse {
+        topics: vec![expected_empty_topic(
+            "dupe",
+            codes::TOPIC_ALREADY_EXISTS,
+            Some("Topic 'dupe' already exists.".into())
+        )],
+    });
     assert!(second == expected);
     broker_handle.shutdown().await;
 }
@@ -824,10 +776,7 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
     /// One dry run: the topic name, and the row it has to answer with.
     type DryRun<'a> = (&'a str, CreatableTopicResult);
 
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let committed = drive(&broker, &request(vec![topic("existing", 1, 1)]), &p, &peer).await;
     assert!(committed.topics[0].error_code == codes::NONE);
 
@@ -880,13 +829,15 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
         // with. The dry run committed nothing, so that is the empty override map resolved
         // against the image.
         let configs = if expected_row.error_code == codes::NONE {
-            Some(effective_topic_configs(
-                &broker_handle.controller_image_for_test(),
-                broker.config.node_id,
-                name,
-                &std::collections::BTreeMap::new(),
-                crate::api_catalog::UnstableApiVersions::Disabled,
-                &std::collections::BTreeMap::new(),
+            Some(creatable_topic_configs(
+                crate::handlers::describe_configs::effective_topic_configs(
+                    &broker_handle.controller_image_for_test(),
+                    broker.config.node_id,
+                    name,
+                    &std::collections::BTreeMap::new(),
+                    crate::api_catalog::UnstableApiVersions::Disabled,
+                    &std::collections::BTreeMap::new(),
+                ),
             ))
         } else {
             expected_row.configs.clone()
@@ -919,30 +870,26 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     seed_controller_quota(&broker_handle, 2.0).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    request_identity!((p, peer), principal("admin"));
     let req = request(vec![topic("throttled", 5, 1)]);
 
     let charged_no_earlier_than = std::time::Instant::now();
     let resp = drive(&broker, &req, &p, &peer).await;
 
     assert!(resp.topics.len() == 1);
-    let expected = CreateTopicsResponse {
-        throttle_time_ms: 0,
-        topics: vec![CreatableTopicResult {
-            name: "throttled".into(),
-            // Randomly generated per create; copied from the actual response.
-            topic_id: resp.topics[0].topic_id,
-            error_code: codes::NONE,
-            error_message: None,
-            num_partitions: 5,
-            replication_factor: 1,
-            configs: Some(expected_configs(&[])),
-            topic_config_error_code: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = unthrottled_wire!(CreateTopicsResponse {
+        topics: vec![
+            // Randomly generated per create; the non-nil assertion above pins it.
+            expected_topic(
+                "throttled",
+                resp.topics[0].topic_id,
+                (codes::NONE, None),
+                (5, 1),
+                expected_configs(&[]),
+                0
+            )
+        ],
+    });
     assert!(resp == expected);
 
     let rejected = drive(&broker, &request(vec![topic("rejected", 1, 1)]), &p, &peer).await;
@@ -978,29 +925,20 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
 #[derive(Debug)]
 struct DenyDescribeConfigs;
 
-impl crate::authorizer::Authorizer for DenyDescribeConfigs {
-    fn authorize(
-        &self,
-        _source: &dyn krabka_authz::AclSource,
-        req: &crate::authorizer::AuthorizationRequest<'_>,
-    ) -> crate::authorizer::AuthorizationResult {
-        if req.operation == krabka_metadata::AclOperation::DescribeConfigs {
-            crate::authorizer::AuthorizationResult::Deny
-        } else {
-            crate::authorizer::AuthorizationResult::Allow
-        }
+test_authorizer!(DenyDescribeConfigs, (self, _source, req), {
+    if req.operation == krabka_metadata::AclOperation::DescribeConfigs {
+        crate::authorizer::AuthorizationResult::Deny
+    } else {
+        crate::authorizer::AuthorizationResult::Allow
     }
-}
+});
 
 /// KIP-525: the two layers a created topic's configs list distinguishes. The
 /// whole-list expectations elsewhere in this file are built from the registry,
 /// so this case names the two rows the layering turns on and their values.
 #[tokio::test]
 async fn created_topic_configs_separate_a_request_value_from_an_inherited_default() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let req = request(vec![topic_with_config("effective")]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
@@ -1014,24 +952,22 @@ async fn created_topic_configs_separate_a_request_value_from_an_inherited_defaul
             .unwrap_or_else(|| panic!("{name} in the configs list"))
     };
     // The value this very request carried, at DYNAMIC_TOPIC_CONFIG (1).
-    let expected_retention = CreatableTopicConfigs {
+    let expected_retention = tagged_wire!(CreatableTopicConfigs {
         name: "retention.ms".into(),
         value: Some("60000".into()),
         read_only: false,
         config_source: DYNAMIC_TOPIC_CONFIG,
         is_sensitive: false,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    });
     check!(entry("retention.ms") == expected_retention);
     // A key the request never mentioned, at DEFAULT_CONFIG (5).
-    let expected_cleanup = CreatableTopicConfigs {
+    let expected_cleanup = tagged_wire!(CreatableTopicConfigs {
         name: "cleanup.policy".into(),
         value: Some("delete".into()),
         read_only: false,
         config_source: DEFAULT_CONFIG,
         is_sensitive: false,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    });
     check!(entry("cleanup.policy") == expected_cleanup);
     check!(resp.topics[0].topic_config_error_code == 0);
     broker_handle.shutdown().await;
@@ -1044,10 +980,7 @@ async fn created_topic_configs_separate_a_request_value_from_an_inherited_defaul
 /// Streams' `InternalTopicManager` -- must see no difference.
 #[tokio::test]
 async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let req = request(vec![topic_with_config("mirrored")]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
@@ -1083,29 +1016,25 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
 /// `AdminClient` fails every accessor on the row once the code is set.
 #[tokio::test]
 async fn create_without_describe_configs_withholds_the_configs_but_creates_the_topic() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyDescribeConfigs)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(Arc::new(DenyDescribeConfigs))
+    );
+    request_identity!((p, peer), principal("admin"));
     let req = request(vec![topic_with_config("undescribable")]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = CreateTopicsResponse {
-        throttle_time_ms: 0,
-        topics: vec![CreatableTopicResult {
-            name: "undescribable".into(),
-            topic_id: resp.topics[0].topic_id,
-            error_code: codes::NONE,
-            error_message: None,
-            num_partitions: -1,
-            replication_factor: -1,
-            configs: Some(Vec::new()),
-            topic_config_error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = unthrottled_wire!(CreateTopicsResponse {
+        topics: vec![expected_topic(
+            "undescribable",
+            resp.topics[0].topic_id,
+            (codes::NONE, None),
+            (-1, -1),
+            Vec::new(),
+            codes::TOPIC_AUTHORIZATION_FAILED
+        )],
+    });
     assert!(resp == expected);
     // The create itself went through: only the disclosure was withheld.
     let image = broker_handle.controller_image_for_test();
@@ -1120,8 +1049,10 @@ async fn create_without_describe_configs_withholds_the_configs_but_creates_the_t
 async fn v4_response_encodes_without_the_kip_525_fields() {
     const V4: i16 = 4;
 
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyDescribeConfigs)).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(Arc::new(DenyDescribeConfigs))
+    );
     let req = request(vec![topic_with_config("legacy")]);
     test_ctx!(ctx, "admin");
 
@@ -1133,22 +1064,9 @@ async fn v4_response_encodes_without_the_kip_525_fields() {
         &ctx,
     )
     .await;
-    let expected = CreateTopicsResponse {
-        throttle_time_ms: 0,
-        topics: vec![CreatableTopicResult {
-            name: "legacy".into(),
-            // v4 carries no topic id, no configs and no config error code.
-            topic_id: ProtoUuid([0; 16]),
-            error_code: codes::NONE,
-            error_message: None,
-            num_partitions: -1,
-            replication_factor: -1,
-            configs: Some(Vec::new()),
-            topic_config_error_code: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = unthrottled_wire!(CreateTopicsResponse {
+        topics: vec![expected_empty_topic("legacy", codes::NONE, None)],
+    });
     assert!(resp == expected);
     assert!(
         broker_handle
@@ -1191,8 +1109,7 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    request_identity!((p, peer), principal("admin"));
     let existing = drive(&broker, &request(vec![topic("a_b", 1, 1)]), &p, &peer).await;
     assert!(existing.topics[0].error_code == codes::NONE);
 
@@ -1262,21 +1179,13 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
 
             let resp = drive(&broker, &req, &p, &peer).await;
 
-            let expected = CreateTopicsResponse {
-                throttle_time_ms: 0,
-                topics: vec![CreatableTopicResult {
-                    name: name.clone(),
-                    topic_id: ProtoUuid([0; 16]),
-                    error_code: *error_code,
-                    error_message: error_message.clone(),
-                    num_partitions: -1,
-                    replication_factor: -1,
-                    configs: Some(Vec::new()),
-                    topic_config_error_code: 0,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            };
+            let expected = unthrottled_wire!(CreateTopicsResponse {
+                topics: vec![expected_empty_topic(
+                    name,
+                    *error_code,
+                    error_message.clone()
+                )],
+            });
             check!(resp == expected, "{name:?} validate_only={validate_only}");
             check!(
                 broker_handle
@@ -1311,14 +1220,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
     /// One row: the fenced brokers, the witness brokers, the replica list of
     /// each partition, and the expected error code, error message and
     /// `(leader, isr)` per partition.
-    type Row = (
-        &'static [u64],
-        &'static [u64],
-        &'static [&'static [i32]],
-        i16,
-        Option<&'static str>,
-        Vec<(krabka_raft::NodeId, Vec<krabka_raft::NodeId>)>,
-    );
+    use crate::handlers::test_support::ManualAssignmentRow as Row;
     let n = krabka_raft::NodeId;
     let rows: [Row; 7] = [
         (
@@ -1389,9 +1291,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
     ];
 
     for (fenced, witnesses, lists, error_code, error_message, partitions) in rows {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         for node_id in [2, 3, 4] {
             crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
         }
@@ -1429,21 +1329,13 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         )
         .await;
 
-        let expected = CreateTopicsResponse {
-            throttle_time_ms: 0,
-            topics: vec![CreatableTopicResult {
-                name: "manual".into(),
-                topic_id: ProtoUuid([0; 16]),
+        let expected = unthrottled_wire!(CreateTopicsResponse {
+            topics: vec![expected_empty_topic(
+                "manual",
                 error_code,
-                error_message: error_message.map(str::to_owned),
-                num_partitions: -1,
-                replication_factor: -1,
-                configs: Some(Vec::new()),
-                topic_config_error_code: 0,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+                error_message.map(str::to_owned)
+            )],
+        });
         check!(resp == expected, "fenced {fenced:?}, assignment {lists:?}");
 
         let image = broker_handle.controller_image_for_test();
@@ -1527,9 +1419,7 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
     ];
 
     for (fenced, shutting_down, rf, outcome) in rows {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         for node_id in [2, 3] {
             crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
         }
@@ -1539,8 +1429,7 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
         for &node_id in shutting_down {
             crate::test_support::begin_controlled_shutdown(&broker_handle, node_id).await;
         }
-        let p = principal("admin");
-        let peer = peer();
+        request_identity!((p, peer), principal("admin"));
 
         let resp = drive(&broker, &request(vec![topic("auto", 4, rf)]), &p, &peer).await;
 
@@ -1551,17 +1440,11 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
         let label = format!("fenced {fenced:?}, shutting down {shutting_down:?}, rf {rf}");
         match outcome {
             Err(message) => {
-                let expected = CreatableTopicResult {
-                    name: "auto".into(),
-                    topic_id: ProtoUuid([0; 16]),
-                    error_code: codes::INVALID_REPLICATION_FACTOR,
-                    error_message: Some(message.into()),
-                    num_partitions: -1,
-                    replication_factor: -1,
-                    configs: Some(Vec::new()),
-                    topic_config_error_code: 0,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                };
+                let expected = expected_empty_topic(
+                    "auto",
+                    codes::INVALID_REPLICATION_FACTOR,
+                    Some(message.into()),
+                );
                 check!(resp.topics == vec![expected], "{label}");
                 check!(committed.is_empty(), "{label}");
             }
@@ -1573,15 +1456,8 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
                     let mut held = replicas.iter().map(|node| node.0).collect::<Vec<_>>();
                     held.sort_unstable();
                     // A fenced replica comes after every unfenced one.
-                    let fenced_flags = replicas
-                        .iter()
-                        .map(|node| fenced.contains(&node.0))
-                        .collect::<Vec<_>>();
-                    let isr = replicas
-                        .iter()
-                        .copied()
-                        .filter(|node| !fenced.contains(&node.0))
-                        .collect::<Vec<_>>();
+                    let (fenced_flags, isr) =
+                        crate::handlers::test_support::replica_availability(replicas, fenced);
                     check!(held == brokers, "{label}, partition {index}");
                     check!(fenced_flags.is_sorted(), "{label}, partition {index}");
                     check!(
@@ -1614,10 +1490,7 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
 /// checks and mints the same ids without committing.
 #[tokio::test]
 async fn topic_ids_never_start_with_a_dash() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let mut req = request(
         (0..2500)
             .map(|n| topic(&format!("topic-{n}"), 1, 1))
@@ -1715,27 +1588,10 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
     ];
 
     for (label, case) in cases {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
-                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-            )))
-            .await;
-        let broker = broker_handle.broker_arc_for_test();
-        if !case.acls.is_empty() {
-            broker
-                .controller
-                .submit_change(
-                    case.acls
-                        .into_iter()
-                        .map(MetadataRecord::V1AccessControlEntry)
-                        .collect(),
-                )
-                .await
-                .expect("seed acls");
-        }
+        broker_fixture!((broker_handle, _dir, broker), controller_peer_acls);
+        crate::handlers::acl_test_support::seed_case_acls!(broker, case.acls);
 
-        let p = principal("alice");
-        let peer = peer();
+        request_identity!((p, peer), principal("alice"));
         let req = request(vec![
             topic("a", 1, 1),
             topic("app-x", 1, 1),
@@ -1755,55 +1611,34 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
         };
         let row = |name: &str| -> CreatableTopicResult {
             if case.created.contains(&name) {
-                CreatableTopicResult {
-                    name: name.into(),
-                    topic_id: id_of(name),
-                    error_code: codes::NONE,
-                    error_message: None,
-                    num_partitions: -1,
-                    replication_factor: -1,
-                    configs: Some(Vec::new()),
-                    topic_config_error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }
+                expected_topic(
+                    name,
+                    id_of(name),
+                    (codes::NONE, None),
+                    (-1, -1),
+                    Vec::new(),
+                    codes::TOPIC_AUTHORIZATION_FAILED,
+                )
             } else {
-                CreatableTopicResult {
-                    name: name.into(),
-                    topic_id: ProtoUuid([0; 16]),
-                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    error_message: Some("Authorization failed.".into()),
-                    num_partitions: -1,
-                    replication_factor: -1,
-                    configs: Some(Vec::new()),
-                    topic_config_error_code: 0,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }
+                expected_empty_topic(
+                    name,
+                    codes::TOPIC_AUTHORIZATION_FAILED,
+                    Some("Authorization failed.".into()),
+                )
             }
         };
-        let duplicate_row = |name: &str| CreatableTopicResult {
-            name: name.into(),
-            topic_id: ProtoUuid([0; 16]),
-            error_code: codes::INVALID_REQUEST,
-            error_message: Some("Duplicate topic name.".into()),
-            num_partitions: -1,
-            replication_factor: -1,
-            configs: Some(Vec::new()),
-            topic_config_error_code: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
+        let duplicate_row = |name: &str| {
+            expected_empty_topic(
+                name,
+                codes::INVALID_REQUEST,
+                Some("Duplicate topic name.".into()),
+            )
         };
-        let protected_row = CreatableTopicResult {
-            name: "__cluster_metadata".into(),
-            topic_id: ProtoUuid([0; 16]),
-            error_code: codes::INVALID_REQUEST,
-            error_message: Some(
-                "Creation of internal topic __cluster_metadata is prohibited.".into(),
-            ),
-            num_partitions: -1,
-            replication_factor: -1,
-            configs: Some(Vec::new()),
-            topic_config_error_code: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        let protected_row = expected_empty_topic(
+            "__cluster_metadata",
+            codes::INVALID_REQUEST,
+            Some("Creation of internal topic __cluster_metadata is prohibited.".into()),
+        );
 
         // Kafka answers the controller's rows first, then one row per
         // duplicated name ("b" appears twice but gets exactly one row), then
@@ -1818,11 +1653,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
             .chain(denied.into_iter().map(row))
             .chain([protected_row])
             .collect();
-        let expected = CreateTopicsResponse {
-            throttle_time_ms: 0,
-            topics,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        let expected = unthrottled_wire!(CreateTopicsResponse { topics });
         check!(resp == expected, "case: {label}");
 
         let image = broker_handle.controller_image_for_test();
@@ -1899,12 +1730,7 @@ async fn cluster_create_and_describe_configs_probes_leave_no_denial_behind() {
     ];
 
     for (label, acls, error_code, (cluster_create, describe_configs, topic_create)) in cases {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
-                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-            )))
-            .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), controller_peer_acls);
         if !acls.is_empty() {
             broker
                 .controller
@@ -2121,11 +1947,7 @@ async fn rows_follow_kafkas_check_order_and_messages() {
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
     for case in cases {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
+        creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
         let seeded = drive(&broker, &request(vec![topic("t", 1, 1)]), &p, &peer).await;
         assert!(seeded.topics[0].error_code == codes::NONE);
 
@@ -2163,11 +1985,7 @@ async fn rows_follow_kafkas_check_order_and_messages() {
         actual.push((case.label, resp, exist));
         expected.push((
             case.label,
-            CreateTopicsResponse {
-                throttle_time_ms: 0,
-                topics,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
+            unthrottled_wire!(CreateTopicsResponse { topics }),
             case.exist.iter().map(|name| (*name).to_owned()).collect(),
         ));
         broker_handle.shutdown().await;
@@ -2185,8 +2003,7 @@ async fn a_config_value_over_short_max_value_answers_invalid_config() {
     let key = crate::throttle::LEADER_THROTTLED_REPLICAS_KEY;
     let fits = vec!["0:1"; 8_000].join(",");
     let too_long = vec!["0:1"; 8_200].join(",");
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
 
     let resp = drive(
         &broker,

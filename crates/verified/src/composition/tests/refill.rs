@@ -3,16 +3,13 @@ use super::*;
 proptest! {
     #[test]
     fn partitioned_refill_matches_a_rational_elapsed_time_ledger(
-        raw_available in any::<u64>(), debt in prop_oneof![0_u64..100_000_000, any::<u64>()],
-        burst in prop_oneof![0_u64..100_000_000, any::<u64>()],
-        owes in any::<bool>(), fraction in 0_u64..1_000_000_000,
+        (initial, burst) in token_balance_cases(),
         first in prop_oneof![0_u64..1_000_000_000, any::<u64>()],
         raw_second in prop_oneof![0_u64..1_000_000_000, any::<u64>()],
         rate in prop_oneof![0_u64..1_000_000_000, any::<u64>()], request in any::<u64>(),
     ) {
         let second = raw_second.min(u64::MAX - first);
-        let initial = if owes { (0, debt, fraction) } else { (raw_available.min(burst), 0, fraction) };
-        let numerator = u128::from(first + second) * u128::from(rate) + u128::from(fraction);
+        let numerator = u128::from(first + second) * u128::from(rate) + u128::from(initial.2);
         let balance = i128::from(initial.0) - i128::from(initial.1)
             + i128::try_from(numerator / 1_000_000_000).unwrap();
         let budget = u64::try_from(balance.max(0).min(i128::from(burst))).unwrap();

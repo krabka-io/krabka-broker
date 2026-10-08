@@ -13,11 +13,10 @@ use std::sync::{
 use krabka_units::prelude::{ByteSize, Time, hours, mebibytes, millis};
 use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
 
-use super::AuditWriterParams;
+use super::{AuditLog, AuditReceiver, AuditWriter, AuditWriterParams};
 use crate::{
     event::{AuditEvent, LifecycleKind},
     ocsf::ProductInfo,
-    signing::FileEd25519Signer,
     sink::{AuditRecord, AuditSink, MemorySink},
     spool::Spool,
     stats::AuditStats,
@@ -46,15 +45,47 @@ pub fn header(rec: &AuditRecord, key: &str) -> Option<String> {
         .map(|(_, v)| String::from_utf8_lossy(v).into_owned())
 }
 
-pub fn test_signer() -> (std::sync::Arc<FileEd25519Signer>, Vec<u8>) {
-    use ring::signature::{Ed25519KeyPair, KeyPair};
-    let rng = ring::rand::SystemRandom::new();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
-    let kp = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
-    let pubkey = kp.public_key().as_ref().to_vec();
-    let s = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "k1".into()).unwrap();
-    (std::sync::Arc::new(s), pubkey)
+pub fn spawn_writer(
+    receiver: AuditReceiver,
+    params: AuditWriterParams,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(AuditWriter::new(receiver, params).run())
 }
+
+/// Close the only event sender, then wait for the writer's final drain.
+pub async fn finish_writer(log: Arc<AuditLog>, handle: tokio::task::JoinHandle<()>) {
+    drop(log);
+    handle.await.unwrap();
+}
+
+pub fn failed_sink_stats() -> (Arc<FailableSink>, Arc<AuditStats>) {
+    let sink = Arc::new(FailableSink::default());
+    sink.set_fail(true);
+    (sink, Arc::new(AuditStats::new()))
+}
+
+pub fn healthy_sink_stats() -> (Arc<FailableSink>, Arc<AuditStats>) {
+    (
+        Arc::new(FailableSink::default()),
+        Arc::new(AuditStats::new()),
+    )
+}
+
+pub fn roomy_spool() -> (tempfile::TempDir, Spool) {
+    let directory = tempfile::tempdir().unwrap();
+    let spool = Spool::open(directory.path(), ROOMY_CAP).unwrap();
+    (directory, spool)
+}
+
+pub fn record_sequences(records: &[AuditRecord]) -> Vec<String> {
+    records
+        .iter()
+        .filter(|record| record.class != crate::AuditEventClass::Checkpoint)
+        .map(|record| header(record, "seq").unwrap())
+        .collect()
+}
+
+pub(crate) use crate::test_support::shared_signer as test_signer;
 
 #[derive(Debug, krabka_macros::FieldDefaults)]
 pub struct FailableSink {
@@ -155,6 +186,21 @@ pub fn params(sink: Arc<dyn AuditSink>, spool: Spool, stats: Arc<AuditStats>) ->
         replay_every: REPLAY_EVERY,
         timer: dormant_timer(),
     }
+}
+
+/// Keep time-based work dormant while a test controls count-based checkpoints.
+pub fn quiet_params(
+    sink: Arc<dyn AuditSink>,
+    spool: Spool,
+    stats: Arc<AuditStats>,
+    signer: Option<Arc<crate::FileEd25519Signer>>,
+    checkpoint_every_n: u64,
+) -> AuditWriterParams {
+    let mut params = params(sink, spool, stats);
+    params.signer = signer;
+    params.checkpoint_every_n = checkpoint_every_n;
+    params.replay_every = DORMANT;
+    params
 }
 
 /// A timer whose clock nothing holds and therefore nothing advances.

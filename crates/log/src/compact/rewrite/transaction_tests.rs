@@ -5,37 +5,23 @@
 use std::{collections::HashMap, fs};
 
 use krabka_ids::{Offset, ProducerId};
-use krabka_protocol::records::{Attributes, RecordBatch};
+use krabka_protocol::records::RecordBatch;
 use krabka_units::prelude::millis;
 
 use super::{
     CleanedTransactionMetadata, ProducerLastRecord, RewriteOutput, RewriteRetention, Segment,
-    rewrite_segments, tests::decode_all,
+    tests::decode_all,
 };
 use crate::{
     compact::{
         build_offset_map,
-        test_support::{RETENTION, control_batch, make_record, round_over, write_sealed_batches},
+        test_support::{
+            RETENTION, control_batch, make_record, rewrite_all, rewrite_with_map, round_over,
+            transactional_record, write_sealed_batches,
+        },
     },
     txn_index::{AbortedTxn, TxnIndex},
 };
-
-/// A transactional data batch of one keyed record.
-fn transactional_record(
-    base_offset: i64,
-    producer_id: i64,
-    key: &[u8],
-    value: &[u8],
-) -> RecordBatch {
-    RecordBatch {
-        base_offset,
-        last_offset_delta: 0,
-        producer_id,
-        attributes: Attributes::default().with_transactional(true),
-        records: vec![make_record(0, Some(key), Some(value))],
-        ..RecordBatch::default()
-    }
-}
 
 fn aborted_entry(producer_id: i64, start: i64, marker: i64) -> AbortedTxn {
     AbortedTxn {
@@ -53,20 +39,16 @@ fn rewrite_at(
     now_ms: i64,
     active: &HashMap<ProducerId, ProducerLastRecord>,
 ) -> RewriteOutput {
-    let map = build_offset_map(segment_refs, vec![], None).unwrap();
-    rewrite_segments(
-        &crate::io::FileIo,
+    rewrite_all(
         dir,
         segment_refs,
-        &map,
         txn,
         RewriteRetention {
             now_ms,
             delete_retention: millis(50),
         },
-        round_over(segment_refs, active),
+        active,
     )
-    .unwrap()
 }
 
 /// Kafka's `Cleaner` drops every record of an aborted transaction and keeps
@@ -100,8 +82,7 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
 
     let mut txn = CleanedTransactionMetadata::default();
     txn.add_aborted_transactions([entry]);
-    let out = rewrite_segments(
-        &crate::io::FileIo,
+    let out = rewrite_with_map(
         dir.path(),
         &segment_refs,
         &map,
@@ -111,8 +92,7 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
             delete_retention: RETENTION,
         },
         round_over(&segment_refs, &HashMap::new()),
-    )
-    .unwrap();
+    );
 
     let batches = decode_all(&fs::read(&out.log_swap).unwrap());
     assert2::assert!(batches == vec![committed, commit_marker, abort_marker]);

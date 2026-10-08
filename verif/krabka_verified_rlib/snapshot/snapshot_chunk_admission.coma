@@ -1,19 +1,20 @@
-(* #"/workspace/crates/verified/src/snapshot.rs" 109 0 117 26 *)
+(* #"/workspace/crates/verified/src/snapshot.rs" 83 0 91 26 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 76 8 82 9
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 76 8 82 9
+let%span sord'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
 let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
 let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 184 18 184 77
-let%span ssnapshot = "/workspace/crates/verified/src/snapshot.rs" 119 22 119 23
-let%span ssnapshot'0 = "/workspace/crates/verified/src/snapshot.rs" 120 23 120 24
-let%span ssnapshot'1 = "/workspace/crates/verified/src/snapshot.rs" 121 22 121 23
-let%span ssnapshot'2 = "/workspace/crates/verified/src/snapshot.rs" 122 27 122 28
-let%span ssnapshot'3 = "/workspace/crates/verified/src/snapshot.rs" 133 30 133 61
-let%span ssnapshot'4 = "/workspace/crates/verified/src/snapshot.rs" 136 10 136 43
-let%span ssnapshot'5 = "/workspace/crates/verified/src/snapshot.rs" 69 10 107 1
+let%span ssnapshot = "/workspace/crates/verified/src/snapshot.rs" 93 22 93 23
+let%span ssnapshot'0 = "/workspace/crates/verified/src/snapshot.rs" 94 23 94 24
+let%span ssnapshot'1 = "/workspace/crates/verified/src/snapshot.rs" 95 22 95 23
+let%span ssnapshot'2 = "/workspace/crates/verified/src/snapshot.rs" 96 27 96 28
+let%span ssnapshot'3 = "/workspace/crates/verified/src/snapshot.rs" 107 30 107 61
+let%span ssnapshot'4 = "/workspace/crates/verified/src/snapshot.rs" 110 10 110 43
+let%span ssnapshot'5 = "/workspace/crates/verified/src/snapshot.rs" 63 10 81 1
+let%span ssnapshot'6 = "/workspace/crates/verified/src/snapshot.rs" 128 16 130 79
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -50,7 +51,7 @@ let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
 
 type t_Ordering = Less | Equal | Greater
 
-function cmp_log_Int (self: int) (other: int) : t_Ordering = [%#sord'1] if self = other then
+function cmp_log_Int (self: int) (other: int) : t_Ordering = [%#sord'0] if self = other then
     Equal
   else
     if self < other then Less else Greater
@@ -65,15 +66,28 @@ let cmp_i64 (self_: Int64.t) (rhs: Int64.t) (return (x: t_Ordering)) = any
     = cmp_log_Int (deep_model_i64 self_) (deep_model_i64 rhs)}
     (! return {result}) ]
 
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'1] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
+
+predicate snapshot_chunk_shape_valid [#"/workspace/crates/verified/src/snapshot.rs" 119 0 127 9] (identity_matches: bool) (fixed_size: t_Option_i64) (received: int) (declared_size: int) (position: int) (chunk_len: int) (max_size: int) =
+  [%#ssnapshot'6] identity_matches
+  /\ ge_log_Int received 0
+  /\ ge_log_Int chunk_len 0
+  /\ ge_log_Int max_size 0
+  /\ ge_log_Int declared_size 0
+  /\ declared_size <= max_size
+  /\ position = received
+  /\ match fixed_size with
+    | Some size -> Int64.to_int size = declared_size
+    | None -> true
+    end
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let snapshot_chunk_admission [#"/workspace/crates/verified/src/snapshot.rs" 109 0 117 26] (identity_matches: bool)
+let snapshot_chunk_admission [#"/workspace/crates/verified/src/snapshot.rs" 83 0 91 26] (identity_matches: bool)
   (fixed_size: t_Option_i64) (received: Int64.t) (declared_size: Int64.t) (position: Int64.t) (chunk_len: Int64.t)
   (max_size: Int64.t) (return (x: t_SnapshotChunkDecision)) = (! bb0
   [ bb0 = any [ br0 -> {identity_matches = false} (! bb13) | br1 -> {identity_matches} (! bb1) ]
@@ -147,30 +161,10 @@ let snapshot_chunk_admission [#"/workspace/crates/verified/src/snapshot.rs" 109 
           | None -> false
           end
       \/ gt_log_Int (Int64.to_int received + Int64.to_int chunk_len) (Int64.to_int declared_size)
-      | Continue next_position -> identity_matches
-      /\ ge_log_Int (Int64.to_int received) 0
-      /\ ge_log_Int (Int64.to_int chunk_len) 0
-      /\ ge_log_Int (Int64.to_int max_size) 0
-      /\ ge_log_Int (Int64.to_int declared_size) 0
-      /\ Int64.to_int declared_size <= Int64.to_int max_size
-      /\ Int64.to_int position = Int64.to_int received
-      /\ match fixed_size with
-          | Some size -> Int64.to_int size = Int64.to_int declared_size
-          | None -> true
-          end
+      | Continue next_position -> snapshot_chunk_shape_valid identity_matches fixed_size (Int64.to_int received) (Int64.to_int declared_size) (Int64.to_int position) (Int64.to_int chunk_len) (Int64.to_int max_size)
       /\ Int64.to_int next_position = Int64.to_int received + Int64.to_int chunk_len
       /\ Int64.to_int next_position < Int64.to_int declared_size
-      | Complete -> identity_matches
-      /\ ge_log_Int (Int64.to_int received) 0
-      /\ ge_log_Int (Int64.to_int chunk_len) 0
-      /\ ge_log_Int (Int64.to_int max_size) 0
-      /\ ge_log_Int (Int64.to_int declared_size) 0
-      /\ Int64.to_int declared_size <= Int64.to_int max_size
-      /\ Int64.to_int position = Int64.to_int received
-      /\ match fixed_size with
-          | Some size -> Int64.to_int size = Int64.to_int declared_size
-          | None -> true
-          end
+      | Complete -> snapshot_chunk_shape_valid identity_matches fixed_size (Int64.to_int received) (Int64.to_int declared_size) (Int64.to_int position) (Int64.to_int chunk_len) (Int64.to_int max_size)
       /\ Int64.to_int received + Int64.to_int chunk_len = Int64.to_int declared_size
       end}
     (! return {result}) ]

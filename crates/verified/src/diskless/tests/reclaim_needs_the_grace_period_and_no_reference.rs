@@ -163,6 +163,9 @@ fn retention_prefix_applies_each_kafka_predicate_and_keeps_the_newest_range() {
 
 #[test]
 fn retention_prefix_boundaries_follow_kafkas_strict_and_inclusive_comparisons() {
+    const THREE_TIMESTAMPS: &[i64] = &[10, 20, 30];
+    const THREE_BYTE_LENS: &[u64] = &[100, 100, 100];
+    const THREE_LAST_OFFSETS: &[i64] = &[4, 9, 14];
     // `(what, max timestamps, byte lens, last offsets, policy, expired)`.
     for (what, max_timestamps, byte_lens, last_offsets, policy, expired) in [
         (
@@ -192,25 +195,25 @@ fn retention_prefix_boundaries_follow_kafkas_strict_and_inclusive_comparisons() 
         ),
         (
             "a horizon below i64::MIN expires nothing",
-            &[10, 20, 30][..],
-            &[100, 100, 100][..],
-            &[4, 9, 14][..],
+            THREE_TIMESTAMPS,
+            THREE_BYTE_LENS,
+            THREE_LAST_OFFSETS,
             policy(Some(1), None, 0, i64::MIN),
             0,
         ),
         (
             "a horizon above i64::MAX expires nothing",
-            &[10, 20, 30][..],
-            &[100, 100, 100][..],
-            &[4, 9, 14][..],
+            THREE_TIMESTAMPS,
+            THREE_BYTE_LENS,
+            THREE_LAST_OFFSETS,
             policy(Some(-1), None, 0, i64::MAX),
             0,
         ),
         (
             "u64::MAX ranges do not overflow the size sum",
-            &[10, 20, 30][..],
+            THREE_TIMESTAMPS,
             &[u64::MAX, u64::MAX, u64::MAX][..],
-            &[4, 9, 14][..],
+            THREE_LAST_OFFSETS,
             policy(None, Some(u64::MAX), 0, 1_000),
             2,
         ),

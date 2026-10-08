@@ -102,19 +102,26 @@ mod tests {
 
     use super::*;
 
+    /// The channel and authenticated caller used by both admin audit paths.
+    macro_rules! audit_fixture {
+        (($log:ident, $rx:ident), ($principal:ident, $peer:ident, $ctx:ident)) => {
+            let ($log, mut $rx) = krabka_audit::AuditLog::new(8);
+            let $principal = crate::test_support::sasl_principal("admin");
+            let $peer: SocketAddr = "192.0.2.10:9092".parse().unwrap();
+            let $ctx = RequestContext::new(
+                &$principal,
+                &$peer,
+                "admin-client",
+                "connection-a",
+                false,
+                "PLAINTEXT",
+            );
+        };
+    }
+
     #[test]
     fn audit_admin_emits_admin_operation_event() {
-        let (log, mut rx) = krabka_audit::AuditLog::new(8);
-        let principal = crate::test_support::sasl_principal("admin");
-        let peer: SocketAddr = "192.0.2.10:9092".parse().unwrap();
-        let ctx = RequestContext::new(
-            &principal,
-            &peer,
-            "admin-client",
-            "connection-a",
-            false,
-            "PLAINTEXT",
-        );
+        audit_fixture!((log, rx), (principal, peer, ctx));
 
         audit_admin(
             log.as_ref(),
@@ -166,17 +173,7 @@ mod tests {
 
     #[test]
     fn audit_admin_success_skips_an_empty_resource_list() {
-        let (log, mut rx) = krabka_audit::AuditLog::new(8);
-        let principal = crate::test_support::sasl_principal("admin");
-        let peer: SocketAddr = "192.0.2.10:9092".parse().unwrap();
-        let ctx = RequestContext::new(
-            &principal,
-            &peer,
-            "admin-client",
-            "connection-a",
-            false,
-            "PLAINTEXT",
-        );
+        audit_fixture!((log, rx), (principal, peer, ctx));
 
         audit_admin_success(log.as_ref(), &ctx, "AlterConfigs", Vec::new());
         assert!(rx.try_recv().is_err(), "no resource changed, no record");

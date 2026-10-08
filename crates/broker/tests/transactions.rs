@@ -31,8 +31,3 @@ mod txn_sasl;
 mod txn_uncommitted_writes;
 
 mod support;
-#[path = "transactions/txn_fixture.rs"]
-mod txn_fixture;
-
-#[path = "transactions/txn_consumer_fixture.rs"]
-mod txn_consumer_fixture;

@@ -36,9 +36,7 @@ impl GroupCoordinator {
     /// any earlier `NextGen` lock that the group carried while it was a
     /// consumer group.
     pub fn mark_classic_after_downgrade(&self, group_id: &str) {
-        self.seeds.remove(group_id);
-        self.seeds_cache.remove(group_id);
-        self.group_types.insert(group_id.into(), GroupType::Classic);
+        self.mark_after_consumer_transition(group_id, GroupType::Classic);
     }
 
     /// After an in-place classic→streams upgrade from KIP-1071, drop the
@@ -49,9 +47,13 @@ impl GroupCoordinator {
     /// but this method FORCES the type to `Streams`. It overrides any earlier
     /// `Classic` lock that the group carried while it was a classic group.
     pub fn mark_streams_after_upgrade(&self, group_id: &str) {
+        self.mark_after_consumer_transition(group_id, GroupType::Streams);
+    }
+
+    fn mark_after_consumer_transition(&self, group_id: &str, kind: GroupType) {
         self.seeds.remove(group_id);
         self.seeds_cache.remove(group_id);
-        self.group_types.insert(group_id.into(), GroupType::Streams);
+        self.group_types.insert(group_id.into(), kind);
     }
 
     /// After an in-place streams→classic downgrade from KIP-1071, drop the

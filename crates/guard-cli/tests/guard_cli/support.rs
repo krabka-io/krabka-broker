@@ -116,6 +116,28 @@ pub(super) fn signed_as<'a>(key: &'a Key, principal: &'a str) -> [&'a str; 6] {
     ]
 }
 
+/// Place the signed topic freeze used by the thaw and registry cases.
+pub(super) async fn set_signed_freeze(bootstrap: &str, signing: &[&str]) -> i32 {
+    let mut set = vec!["freeze", "set", "--topic", TOPIC, "--reason", "DR cutover"];
+    set.extend_from_slice(signing);
+    cli(bootstrap, &set).await
+}
+
+/// Read and verify the registry against one local trust file.
+pub(super) async fn verify_registry(bootstrap: &str, trust_file: &str) -> i32 {
+    cli(
+        bootstrap,
+        &[
+            "freeze",
+            "list",
+            "--verify-signatures",
+            "--operator-keys",
+            trust_file,
+        ],
+    )
+    .await
+}
+
 /// The id of the one proposal the cluster holds.
 ///
 /// The tool prints the id on stdout, which an in-process case cannot read, so
@@ -134,4 +156,13 @@ pub(super) async fn only_proposal(bootstrap: &str) -> uuid::Uuid {
         .expect("describe break-glass");
     let stored = response.proposals.first().expect("the cluster holds one");
     uuid::Uuid::from_bytes(stored.proposal_id.0)
+}
+
+pub(super) async fn frozen_cluster_with_stranger()
+-> (BrokerHandle, tempfile::TempDir, String, Key, Key) {
+    let (broker, dir, bootstrap, key) = cluster().await;
+    let stranger = mint_key(dir.path(), "mallory-yubi", "User:mallory");
+    let signing = signed_as(&key, PRINCIPAL);
+    assert2::assert!(set_signed_freeze(&bootstrap, &signing).await == 0);
+    (broker, dir, bootstrap, key, stranger)
 }

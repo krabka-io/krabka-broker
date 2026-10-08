@@ -4,18 +4,13 @@
 //! as the single `RecordBatch` that `OffsetsLog::append` takes, and applies the
 //! same delta to the coordinator's respawn cache once the append succeeds.
 
-use krabka_protocol::records::RecordBatch;
-
-use crate::{
-    coordinator::unified::{
-        GroupCoordinator, OffsetRecordBatchBuilder,
-        persistence_next_gen::{
-            CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
-            RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
-            encode_key,
-        },
+use crate::coordinator::unified::{
+    GroupCoordinator,
+    persistence_next_gen::{
+        CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
+        RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
+        encode_key,
     },
-    error::BrokerError,
 };
 
 #[derive(Debug, Default)]
@@ -56,106 +51,71 @@ impl PendingRecords {
             && self.classic_group_metadata.is_none()
     }
 
-    /// Encodes the delta as the one batch that `OffsetsLog::append` takes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BrokerError::Protocol`] when a string of a record key or of the
-    /// classic group value is longer than 32767 bytes, which a non-flexible
-    /// field cannot carry.
-    pub fn to_batch(&self, group_id: &str, now_ms: i64) -> Result<RecordBatch, BrokerError> {
-        let mut batch = OffsetRecordBatchBuilder::default();
-
-        if let Some(v) = self.group_metadata {
-            batch.push(
-                encode_key(&NextGenKey::GroupMetadata {
-                    group_id: group_id.into(),
-                })?,
-                Some(v.encode()),
-            );
-        }
-        for (regex, v) in &self.resolved_regexes {
-            batch.push(
-                encode_key(&NextGenKey::RegularExpression {
-                    group_id: group_id.into(),
-                    regex: regex.clone(),
-                })?,
-                v.as_ref().map(RegularExpressionValue::encode),
-            );
-        }
-        for (member_id, v) in &self.member_metadata {
-            batch.push(
-                encode_key(&NextGenKey::MemberMetadata {
-                    group_id: group_id.into(),
-                    member_id: member_id.clone(),
-                })?,
-                v.as_ref().map(MemberMetadataValue::encode),
-            );
-        }
-        if let Some(v) = self.target_metadata {
-            batch.push(
-                encode_key(&NextGenKey::TargetAssignmentMetadata {
-                    group_id: group_id.into(),
-                })?,
-                Some(v.encode()),
-            );
-        }
-        for (member_id, v) in &self.target_per_member {
-            batch.push(
-                encode_key(&NextGenKey::TargetAssignmentMember {
-                    group_id: group_id.into(),
-                    member_id: member_id.clone(),
-                })?,
-                v.as_ref().map(TargetAssignmentMemberValue::encode),
-            );
-        }
-        for (member_id, v) in &self.current_per_member {
-            batch.push(
-                encode_key(&NextGenKey::CurrentMemberAssignment {
-                    group_id: group_id.into(),
-                    member_id: member_id.clone(),
-                })?,
-                v.as_ref().map(CurrentMemberAssignmentValue::encode),
-            );
-        }
-        if self.classic_group_metadata_tombstone {
-            batch.push(
-                crate::coordinator::unified::persistence::encode_key(
-                    &crate::coordinator::unified::persistence::Key::GroupMetadata {
-                        group_id: group_id.into(),
+    crate::coordinator::unified::persistence::encode_membership_records! {
+        @method
+        /// Encodes the delta as the one batch that `OffsetsLog::append` takes.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`crate::error::BrokerError::Protocol`] when a string of a record key or of the
+        /// classic group value is longer than 32767 bytes, which a non-flexible
+        /// field cannot carry.
+        fn to_batch(&self);
+        batch, self, group_id, now_ms, borrowed;
+            (typed, encode_key, NextGenKey);
+            before_members {
+                batch.extend_values(
+                    self.resolved_regexes
+                        .iter()
+                        .map(|(id, value)| (id, value.as_ref())),
+                    |regex| {
+                        encode_key(&NextGenKey::RegularExpression {
+                            group_id: group_id.into(),
+                            regex: regex.clone(),
+                        })
                     },
-                )?,
-                None,
-            );
-        }
-        if self.next_gen_group_metadata_tombstone {
-            batch.push(
-                encode_key(&NextGenKey::GroupMetadata {
-                    group_id: group_id.into(),
-                })?,
-                None,
-            );
-        }
-        if self.next_gen_target_metadata_tombstone {
-            batch.push(
-                encode_key(&NextGenKey::TargetAssignmentMetadata {
-                    group_id: group_id.into(),
-                })?,
-                None,
-            );
-        }
-        if let Some(v) = &self.classic_group_metadata {
-            batch.push(
-                crate::coordinator::unified::persistence::encode_key(
-                    &crate::coordinator::unified::persistence::Key::GroupMetadata {
-                        group_id: group_id.into(),
-                    },
-                )?,
-                Some(v.encode_value()?),
-            );
-        }
-
-        Ok(batch.finish(now_ms))
+                    RegularExpressionValue::encode,
+                )?;
+            }
+            before_target {}
+            after_members {
+                if self.classic_group_metadata_tombstone {
+                    batch.push(
+                        crate::coordinator::unified::persistence::encode_key(
+                            &crate::coordinator::unified::persistence::Key::GroupMetadata {
+                                group_id: group_id.into(),
+                            },
+                        )?,
+                        None,
+                    );
+                }
+                if self.next_gen_group_metadata_tombstone {
+                    batch.push(
+                        encode_key(&NextGenKey::GroupMetadata {
+                            group_id: group_id.into(),
+                        })?,
+                        None,
+                    );
+                }
+                if self.next_gen_target_metadata_tombstone {
+                    batch.push(
+                        encode_key(&NextGenKey::TargetAssignmentMetadata {
+                            group_id: group_id.into(),
+                        })?,
+                        None,
+                    );
+                }
+                if let Some(v) = &self.classic_group_metadata {
+                    batch.push(
+                        crate::coordinator::unified::persistence::encode_key(
+                            &crate::coordinator::unified::persistence::Key::GroupMetadata {
+                                group_id: group_id.into(),
+                            },
+                        )?,
+                        Some(v.encode_value()?),
+                    );
+                }
+            }
     }
 
     /// Apply exactly this durable next-gen record delta to the respawn cache.
@@ -211,16 +171,18 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use assert2::assert;
-    use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
 
     use super::*;
-    use crate::coordinator::unified::{
-        actor::{
-            member_state::build_member, persistence::snapshot_pending_after_change,
-            test_support::make_coordinator,
+    use crate::{
+        coordinator::unified::{
+            actor::{
+                persistence::snapshot_pending_after_change,
+                test_support::{make_coordinator, subscribed_member},
+            },
+            consumer_state::GroupState,
+            persistence_next_gen::MemberAssignmentState,
         },
-        consumer_state::GroupState,
-        persistence_next_gen::MemberAssignmentState,
+        error::BrokerError,
     };
 
     #[test]
@@ -386,13 +348,9 @@ mod tests {
         state.group_epoch = 7;
         state.target.epoch = 6;
 
-        let mut m = build_member(
+        let mut m = subscribed_member(
             "m1",
-            &ConsumerGroupHeartbeatRequest {
-                subscribed_topic_names: Some(vec!["t".into()]),
-                rebalance_timeout_ms: 60_000,
-                ..Default::default()
-            },
+            &["t"],
             crate::coordinator::unified::ClientIdentity {
                 id: "client-a",
                 host: "h",

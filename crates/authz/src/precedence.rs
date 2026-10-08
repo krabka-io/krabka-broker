@@ -67,13 +67,11 @@ fn oracle_decision(
 }
 
 fn oracle_resource_match(e: &AclEntry, rt: ResourceType, name: &str) -> bool {
-    if e.resource_type != rt {
-        return false;
-    }
-    match e.pattern_type {
-        PatternType::Literal => e.resource_name == name || e.resource_name == "*",
-        PatternType::Prefixed => name.starts_with(e.resource_name.as_str()),
-    }
+    let literal =
+        e.pattern_type == PatternType::Literal && [name, "*"].contains(&e.resource_name.as_str());
+    let prefixed =
+        e.pattern_type == PatternType::Prefixed && name.starts_with(e.resource_name.as_str());
+    e.resource_type == rt && (literal || prefixed)
 }
 
 fn oracle_principal_match(e: &AclEntry, name: &str) -> bool {

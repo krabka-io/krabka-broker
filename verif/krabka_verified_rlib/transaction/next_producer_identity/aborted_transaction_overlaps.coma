@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 85 0 90 9 *)
+(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 82 0 87 9 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 91 4 94 36
-let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 80 10 83 35
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 88 4 91 36
+let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 77 10 80 35
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -16,7 +16,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let aborted_transaction_overlaps [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 85 0 90 9]
+let aborted_transaction_overlaps [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 82 0 87 9]
   (entry_start: Int64.t) (entry_last: Int64.t) (query_start: Int64.t) (query_end: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_10 <- Int64.le entry_start entry_last ] s1

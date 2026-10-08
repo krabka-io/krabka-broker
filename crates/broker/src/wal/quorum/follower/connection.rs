@@ -12,13 +12,13 @@ use crate::replicator::connection::{LeaderDial, connect_leader_with_backoff};
 pub(super) async fn connect_with_backoff(config: &Config) -> Result<Connection, String> {
     connect_leader_with_backoff(&LeaderDial {
         label: "diskless WAL follower",
-        client: &config.inter_broker_client,
+        client: &config.connection.inter_broker_client,
         host: &config.leader_host,
         port: config.leader_port,
-        protocol: config.inter_broker_listener_protocol,
-        server_name: &config.inter_broker_server_name,
+        protocol: config.connection.inter_broker_listener_protocol,
+        server_name: &config.connection.inter_broker_server_name,
         client_id: &config.client_id,
-        replication: &config.replication,
+        replication: &config.connection.replication,
         shutdown: &config.shutdown,
     })
     .await

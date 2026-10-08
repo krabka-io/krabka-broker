@@ -1,0 +1,257 @@
+//! Independent wire and file-region fixtures shared by network tests and benchmarks.
+
+use moxy::{ast::ParseError, token::TokenStream};
+
+pub(crate) fn request_frame(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        pub(crate) fn {{ name }}(api_key: i16, api_version: i16, correlation_id: i32, client_id: Option<&[u8]>, tagged: Option<&[u8]>, body: &[u8]) -> ::bytes::BytesMut {
+            use ::bytes::BufMut as _;
+            let mut buf = ::bytes::BytesMut::new();
+            buf.put_i16(api_key); buf.put_i16(api_version); buf.put_i32(correlation_id);
+            match client_id {
+                Some(id) => { buf.put_i16(i16::try_from(id.len()).expect("client id length")); buf.put_slice(id); }
+                None => buf.put_i16(-1),
+            }
+            if let Some(tagged) = tagged { buf.put_slice(tagged); }
+            buf.put_slice(body);
+            buf
+        }
+    })
+}
+
+pub(crate) fn patterned_bytes(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        fn {{ name }}(len: usize) -> ::bytes::Bytes {
+            ::bytes::Bytes::from((0..len).map(|b| u8::try_from(b % 251).expect("b % 251 fits in a byte")).collect::<Vec<u8>>())
+        }
+    })
+}
+
+pub(crate) fn frame_prefix(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        fn {{ name }}(header_len: usize, correlation_id: i32, header_v1: bool, body_len: usize, capacity: usize, context: &str) -> ::bytes::BytesMut {
+            use ::bytes::BufMut as _;
+            let mut prefix = ::bytes::BytesMut::with_capacity(capacity);
+            prefix.put_u32(u32::try_from(header_len + body_len).expect(context));
+            prefix.put_i32(correlation_id);
+            if header_v1 { prefix.put_u8(0); }
+            prefix
+        }
+    })
+}
+
+pub(crate) fn file_region(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        fn {{ name }}(region: &::krabka_protocol::records::FileRegion) -> Vec<u8> {
+            use ::std::os::unix::fs::FileExt as _;
+            let mut buf = vec![0u8; region.len];
+            let mut filled = 0;
+            let mut off = region.offset;
+            while filled < buf.len() {
+                let n = region.file.read_at(&mut buf[filled..], off).unwrap();
+                ::assert2::assert!(n > 0);
+                filled += n; off += n as u64;
+            }
+            buf
+        }
+    })
+}
+
+/// The keyed fixture's ordinary non-transactional headers and exact offset arithmetic.
+pub(crate) fn keyed_record_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        pub(crate) fn {{ name }}(n: i32, value_size: usize) -> ::krabka_protocol::records::RecordBatch {
+            let mut batch = ::krabka_protocol::records::RecordBatch { last_offset_delta: n - 1, ..Default::default() };
+            for offset_delta in 0..n {
+                batch.records.push(::krabka_protocol::records::Record {
+                    offset_delta,
+                    key: Some(::bytes::Bytes::from(format!("k{offset_delta}"))),
+                    value: Some(::bytes::Bytes::from(vec![b'x'; value_size])),
+                    ..Default::default()
+                });
+            }
+            batch
+        }
+    })
+}
+
+/// Export the original paths and snapshot policy before constructing the caller's epoch bytes.
+pub(crate) fn export_segment_data(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        pub(crate) fn {{ name }}(
+            export: &::krabka_log::SegmentExport,
+            include_snapshot: bool,
+            epoch_bytes: impl FnOnce() -> ::bytes::Bytes,
+        ) -> ::krabka_remote_storage::LogSegmentData {
+            ::krabka_remote_storage::LogSegmentData {
+                log_segment: export.log_path.clone(),
+                offset_index: export.offset_index_path.clone(),
+                time_index: export.time_index_path.clone(),
+                transaction_index: export.transaction_index_path.clone(),
+                producer_snapshot_index: include_snapshot.then(|| export.producer_snapshot_path.clone()),
+                leader_epoch_index: epoch_bytes(),
+            }
+        }
+    })
+}
+
+/// Apply the shared file-region platform condition without rebuilding the caller's tokens.
+pub(crate) fn sendfile_platform(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let mut output: proc_macro::TokenStream = crate::sendfile_match::platform_cfg().into();
+    output.extend(input);
+    output
+}
+
+/// The test authorizer's common method header, followed by its original compiler body group.
+pub(crate) fn test_authorizer(
+    input: proc_macro::TokenStream,
+) -> Result<proc_macro::TokenStream, ParseError> {
+    use proc_macro::{Delimiter, Group, TokenTree};
+
+    let tokens: Vec<_> = input.into_iter().collect();
+    let [
+        TokenTree::Ident(name),
+        TokenTree::Punct(comma),
+        TokenTree::Ident(request),
+        TokenTree::Punct(semi),
+        TokenTree::Group(body),
+    ] = tokens.as_slice()
+    else {
+        return Err(ParseError::new(
+            moxy::token::Span::call_site(),
+            "expected authorizer type, request; { authorization body }",
+        ));
+    };
+    if comma.as_char() != ',' || semi.as_char() != ';' || body.delimiter() != Delimiter::Brace {
+        return Err(ParseError::new(
+            body.span().into(),
+            "expected authorizer bindings and a brace-delimited authorization body",
+        ));
+    }
+    let name: moxy::token::Ident = name.clone().into();
+    let request: moxy::token::Ident = request.clone().into();
+    let mut method: proc_macro::TokenStream = moxy::template! {
+        fn authorize(
+            &self,
+            _source: &dyn crate::authorizer::AclSource,
+            {{ request }}: &crate::authorizer::AuthorizationRequest<'_>,
+        ) -> crate::authorizer::AuthorizationResult
+    }
+    .into();
+    method.extend([TokenTree::Group(body.clone())]);
+    let mut implementation: proc_macro::TokenStream = moxy::template! {
+        impl crate::authorizer::Authorizer for {{ name }}
+    }
+    .into();
+    implementation.extend([TokenTree::Group(Group::new(Delimiter::Brace, method))]);
+    Ok(implementation)
+}
+
+/// A checkpoint-only fault with the caller's original unit type, visibility and error kind.
+pub(crate) fn epoch_checkpoint_failure(input: TokenStream) -> Result<TokenStream, ParseError> {
+    use moxy::{ast::Visibility, token::TokenTree};
+
+    let tokens = input.into_inner();
+    let [
+        visibility @ ..,
+        TokenTree::Ident(name),
+        comma,
+        TokenTree::Ident(kind),
+    ] = tokens.as_slice()
+    else {
+        return Err(ParseError::new(
+            moxy::token::Span::call_site(),
+            "expected unit type and error-kind variant",
+        ));
+    };
+    if !comma.is_punct_comma() {
+        return Err(ParseError::new(
+            moxy::token::Span::call_site(),
+            "expected type, error-kind variant",
+        ));
+    }
+    let visibility: TokenStream = visibility.into();
+    let visibility = moxy::parse!({ visibility } as Visibility)?;
+    Ok(moxy::template! {
+        #[derive(Debug)]
+        {{ visibility }} struct {{ name }};
+        impl ::krabka_log::LogIo for {{ name }} {
+            fn write_at(
+                &self,
+                target: ::krabka_log::IoTarget,
+                file: &::std::fs::File,
+                buf: &[u8],
+            ) -> ::std::io::Result<usize> {
+                use ::std::io::Write as _;
+                if target == ::krabka_log::IoTarget::LeaderEpochCheckpoint {
+                    return Err(::std::io::ErrorKind::{{ kind }}.into());
+                }
+                (&*file).write(buf)
+            }
+        }
+    })
+}
+
+/// Supply the two partition-spawn wrappers' common parameters while retaining their native bodies.
+pub(crate) fn partition_spawn_parameters(
+    meta: TokenStream,
+    item: proc_macro::TokenStream,
+) -> Result<proc_macro::TokenStream, ParseError> {
+    use proc_macro::{Delimiter, Group, TokenTree};
+
+    let target = match meta.into_inner().as_slice() {
+        [] => TokenStream::new(),
+        [moxy::token::TokenTree::Ident(name)] if name == "target" => {
+            moxy::template! { replication_target: crate::partition::ReplicationTarget, }
+        }
+        _ => {
+            return Err(ParseError::new(
+                moxy::token::Span::call_site(),
+                "expected no arguments or target",
+            ));
+        }
+    };
+    let mut tokens: Vec<_> = item.into_iter().collect();
+    let Some(function) = tokens
+        .iter()
+        .position(|token| matches!(token, TokenTree::Ident(name) if name.to_string() == "fn"))
+    else {
+        return Err(ParseError::new(
+            moxy::token::Span::call_site(),
+            "expected a partition-spawn function",
+        ));
+    };
+    let Some(TokenTree::Group(arguments)) = tokens.get_mut(function + 2) else {
+        return Err(ParseError::new(
+            moxy::token::Span::call_site(),
+            "expected function parameters",
+        ));
+    };
+    if arguments.delimiter() != Delimiter::Parenthesis || !arguments.stream().is_empty() {
+        return Err(ParseError::new(
+            arguments.span().into(),
+            "partition_spawn_parameters needs an empty parameter list",
+        ));
+    }
+    let parameters: proc_macro::TokenStream = moxy::template! {
+        topic: String,
+        {{ target }}
+        partition_id: PartitionIndex,
+        log_dir: std::path::PathBuf,
+        log: krabka_log::Log,
+        log_dir_status: crate::log_dir_status::LogDirRegistry,
+        producer_state: Arc<crate::producer_state::ProducerState>,
+        diskless: bool,
+    }
+    .into();
+    let mut replacement = Group::new(Delimiter::Parenthesis, parameters);
+    replacement.set_span(arguments.span());
+    *arguments = replacement;
+    Ok(tokens.into_iter().collect())
+}

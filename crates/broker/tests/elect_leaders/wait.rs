@@ -13,65 +13,10 @@ pub async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition
     handle.wait_until_partition_present(topic, partition).await;
 }
 
-/// Waits until `handle` reports `leader` as the leader for `(topic, partition)`.
-pub async fn wait_partition_leader(
-    handle: &BrokerHandle,
-    topic: &str,
-    partition: i32,
-    leader: u64,
-) {
-    handle
-        .wait_for_image(|img| img.partition(topic, partition).map(|p| p.leader.0) == Some(leader))
-        .await;
-}
-
-/// Waits until the ISR for `(topic, partition)` contains `node`.
-pub async fn wait_isr_contains(handle: &BrokerHandle, topic: &str, partition: i32, node: u64) {
-    handle
-        .wait_for_image(|img| {
-            img.partition(topic, partition)
-                .is_some_and(|p| p.isr.contains(&krabka_broker::NodeId(node)))
-        })
-        .await;
-}
-
-/// Waits until the ISR for `(topic, partition)` is exactly `expected`.
-pub async fn wait_partition_isr_only(
-    handle: &BrokerHandle,
-    topic: &str,
-    partition: i32,
-    expected: &[u64],
-) {
-    let expected_set: std::collections::HashSet<u64> = expected.iter().copied().collect();
-    handle
-        .wait_for_image(|img| {
-            img.partition(topic, partition).is_some_and(|p| {
-                let actual_set: std::collections::HashSet<u64> =
-                    p.isr.iter().map(|n| n.0).collect();
-                actual_set == expected_set
-            })
-        })
-        .await;
-}
-
-/// Polls until the ISR of the partition contains `member`.
-///
-/// [`wait_partition_isr_only`] asserts an exact set. This function asserts
-/// membership only. It thus accepts a live caught-up replica that the broker
-/// admits or re-admits next to `member`.
-pub async fn wait_partition_isr_contains(
-    handle: &BrokerHandle,
-    topic: &str,
-    partition: i32,
-    member: u64,
-) {
-    handle
-        .wait_for_image(|img| {
-            img.partition(topic, partition)
-                .is_some_and(|p| p.isr.contains(&krabka_broker::NodeId(member)))
-        })
-        .await;
-}
+pub use crate::support::partitions::{
+    wait_partition_isr_contains as wait_isr_contains, wait_partition_isr_contains,
+    wait_partition_isr_only, wait_partition_leader,
+};
 
 /// Polls until the metadata image of the handle shows the partition record.
 ///

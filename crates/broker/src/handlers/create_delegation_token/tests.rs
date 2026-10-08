@@ -80,9 +80,7 @@ fn refusal(
 /// refusal mints a token, and each names the owner and the requester.
 #[tokio::test]
 async fn refusals_follow_kafka_order_and_name_both_principals() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     let self_mint = CreateDelegationTokenRequest {
         max_lifetime_ms: -1,
         ..Default::default()
@@ -476,9 +474,7 @@ async fn create_tokens_acl_admits_minting_for_that_owner_only() {
 /// instead of refusing a lifetime that runs past it.
 #[tokio::test]
 async fn lifetime_past_i64_max_saturates() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     let req = CreateDelegationTokenRequest {
         max_lifetime_ms: -1,
         ..Default::default()
@@ -509,9 +505,7 @@ async fn lifetime_past_i64_max_saturates() {
 /// 1; a host that still passes one mints nothing.
 #[tokio::test]
 async fn non_positive_configured_periods_mint_nothing() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     let req = CreateDelegationTokenRequest {
         max_lifetime_ms: -1,
         ..Default::default()
@@ -542,30 +536,17 @@ async fn non_positive_configured_periods_mint_nothing() {
 
 #[test]
 fn token_gate_uses_delegation_token_level() {
-    use krabka_metadata::{
-        FeatureLevelRecord, MetadataImage, MetadataRecord,
-        metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
-    };
-
-    let gate = |level: Option<i16>| {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        if let Some(level) = level {
-            image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crate::features::METADATA_VERSION.to_string(),
-                level,
-            }));
-        }
-        crate::features::require_feature(
-            &image,
-            crate::features::METADATA_VERSION,
-            DELEGATION_TOKEN_MIN_LEVEL,
-        )
-        .is_err()
-    };
+    use krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL;
 
     // (finalized metadata.version level; None = fresh image) → gated?
     let cases = [(None, false), (Some(13), true), (Some(14), false)];
     for (level, want_gated) in cases {
-        assert!(gate(level) == want_gated, "level {level:?}");
+        assert!(
+            crate::handlers::test_support::metadata_version_gated(
+                level,
+                DELEGATION_TOKEN_MIN_LEVEL
+            ) == want_gated,
+            "level {level:?}"
+        );
     }
 }

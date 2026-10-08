@@ -9,9 +9,9 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    nc_check_connectivity, scram_jaas, start_dual_mech_broker, start_dual_mech_broker_with_reauth,
-    write_client_props,
+    ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, broker0_advertised,
+    docker_run_kafka_tool_with_image_and_mount, nc_check_connectivity, scram_jaas,
+    start_dual_mech_broker, start_dual_mech_broker_with_reauth, write_client_props,
 };
 
 /// End-to-end `SASL_PLAINTEXT` + SCRAM-SHA-512 drive of the JVM tools
@@ -62,33 +62,17 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
 #[ignore = "requires Docker"]
 async fn jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window() {
     const TOPIC: &str = "krabka-sasl-scram-reauth-itest";
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
-    const ALICE: &str = "alice";
-    const ALICE_PASS: &str = "alice-secret";
 
     let (broker, _dir) =
         start_dual_mech_broker_with_reauth(ADMIN, ADMIN_PASS, Some(krabka_units::secs(2))).await;
     nc_check_connectivity();
 
     let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
-    docker_run_kafka_tool_with_image_and_mount(
-        KAFKA_IMAGE_TXN,
+    crate::jvm_acceptance::provision_plain_scram(
         &admin_props.mount_str(),
-        &[
-            "kafka-configs",
-            "--alter",
-            "--entity-type",
-            "users",
-            "--entity-name",
-            ALICE,
-            "--add-config",
-            &format!("SCRAM-SHA-512=[password={ALICE_PASS}]"),
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
+        ALICE,
+        ALICE_PASS,
+        "SCRAM-SHA-512",
     );
     crate::jvm_acceptance::create_console_topic(
         KAFKA_IMAGE_TXN,
@@ -158,32 +142,15 @@ async fn jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window() {
 }
 
 async fn scram_round_trip(topic: &str, mechanism: &str) {
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
-    const ALICE: &str = "alice";
-    const ALICE_PASS: &str = "alice-secret";
-
     let (broker, _dir) = start_dual_mech_broker(ADMIN, ADMIN_PASS).await;
     nc_check_connectivity();
 
     let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
-    docker_run_kafka_tool_with_image_and_mount(
-        KAFKA_IMAGE_TXN,
+    crate::jvm_acceptance::provision_plain_scram(
         &admin_props.mount_str(),
-        &[
-            "kafka-configs",
-            "--alter",
-            "--entity-type",
-            "users",
-            "--entity-name",
-            ALICE,
-            "--add-config",
-            &format!("{mechanism}=[password={ALICE_PASS}]"),
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
+        ALICE,
+        ALICE_PASS,
+        mechanism,
     );
 
     let alice_props = write_client_props(&format!(

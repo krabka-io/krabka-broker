@@ -6,13 +6,12 @@
 //! case is the disaster-recovery order in which an operator freezes a
 //! namespace before a restore writes into it.
 
-use assert2::check;
 use krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED};
 
 use crate::{
     control_plane::freeze_scope,
     support,
-    wire::{CONTROL, accepted, create_topic, produce_outcome, refused},
+    wire::{CONTROL, accepted, create_topic, refused},
 };
 
 /// A literal freeze stops writes to the topic it names, and to nothing else.
@@ -24,20 +23,15 @@ use crate::{
 /// nothing proves that `POLICY_VIOLATION` ever reaches a producer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_literal_freeze_refuses_produce_and_the_control_topic_still_accepts() {
-    let p = support::start().await;
-    let frozen = create_topic(&p.broker, &p.client, "orders").await;
-    let control = create_topic(&p.broker, &p.client, CONTROL).await;
+    let (p, frozen, control) = crate::wire::controlled_fixture("orders").await;
 
-    check!(produce_outcome(&p.broker, &p.client, "orders", frozen).await == accepted(1));
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&p.broker, &p.client, "orders", frozen => accepted(1));
+    crate::wire::check_produce!(&p.broker, &p.client, CONTROL, control => accepted(1));
 
     freeze_scope(&p.client, PATTERN_TYPE_LITERAL, "orders", "DR cutover").await;
 
-    check!(
-        produce_outcome(&p.broker, &p.client, "orders", frozen).await
-            == refused("literal", "orders", "DR cutover", 1)
-    );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(2));
+    crate::wire::check_produce!(&p.broker, &p.client, "orders", frozen => refused("literal", "orders", "DR cutover", 1));
+    crate::wire::check_produce!(&p.broker, &p.client, CONTROL, control => accepted(2));
 
     p.broker.shutdown().await;
 }
@@ -57,18 +51,13 @@ async fn a_prefix_freeze_refuses_produce_to_every_topic_it_covers() {
     let neighbour = create_topic(&p.broker, &p.client, "tenant-b.orders").await;
     let control = create_topic(&p.broker, &p.client, CONTROL).await;
 
-    check!(produce_outcome(&p.broker, &p.client, "tenant-a.orders", covered).await == accepted(1));
+    crate::wire::check_produce!(&p.broker, &p.client, "tenant-a.orders", covered => accepted(1));
 
     freeze_scope(&p.client, PATTERN_TYPE_PREFIXED, "tenant-a.", "offboarding").await;
 
-    check!(
-        produce_outcome(&p.broker, &p.client, "tenant-a.orders", covered).await
-            == refused("prefixed", "tenant-a.", "offboarding", 1)
-    );
-    check!(
-        produce_outcome(&p.broker, &p.client, "tenant-b.orders", neighbour).await == accepted(1)
-    );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&p.broker, &p.client, "tenant-a.orders", covered => refused("prefixed", "tenant-a.", "offboarding", 1));
+    crate::wire::check_produce!(&p.broker, &p.client, "tenant-b.orders", neighbour => accepted(1));
+    crate::wire::check_produce!(&p.broker, &p.client, CONTROL, control => accepted(1));
 
     p.broker.shutdown().await;
 }
@@ -89,11 +78,8 @@ async fn a_topic_created_after_a_covering_prefix_freeze_is_frozen_on_arrival() {
     freeze_scope(&p.client, PATTERN_TYPE_PREFIXED, "tenant-a.", "pre-restore").await;
 
     let late = create_topic(&p.broker, &p.client, "tenant-a.late").await;
-    check!(
-        produce_outcome(&p.broker, &p.client, "tenant-a.late", late).await
-            == refused("prefixed", "tenant-a.", "pre-restore", 0)
-    );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&p.broker, &p.client, "tenant-a.late", late => refused("prefixed", "tenant-a.", "pre-restore", 0));
+    crate::wire::check_produce!(&p.broker, &p.client, CONTROL, control => accepted(1));
 
     p.broker.shutdown().await;
 }

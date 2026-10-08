@@ -5,9 +5,7 @@
 //! returns the computed subscription, which holds the metrics, the interval,
 //! and the id. See `client_metrics::manager`.
 
-use bytes::Bytes;
 use krabka_protocol::{
-    Decode,
     owned::{
         get_telemetry_subscriptions_request::GetTelemetrySubscriptionsRequest,
         get_telemetry_subscriptions_response::GetTelemetrySubscriptionsResponse,
@@ -17,56 +15,42 @@ use krabka_protocol::{
 use uuid::Uuid;
 
 use crate::{
-    broker::Broker,
-    client_metrics::manager::{ACCEPTED_COMPRESSION_TYPES, ClientAttributes, SubscriptionDecision},
-    error::BrokerError,
+    client_metrics::manager::{ACCEPTED_COMPRESSION_TYPES, SubscriptionDecision},
     handlers::context::TelemetryContext,
 };
 
-pub(crate) fn handle(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-    ctx: &TelemetryContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = GetTelemetrySubscriptionsRequest::decode(&mut cur, version)?;
+wire_handler! {
+    (broker, version, _correlation_id, req_bytes, ctx: TelemetryContext<'_>), {
+        let req =
+            crate::handlers::decode_request::<GetTelemetrySubscriptionsRequest>(req_bytes, version)?;
 
-    let attrs = ClientAttributes {
-        connection_id: ctx.connection_id.to_string(),
-        client_instance_id: Uuid::from_bytes(req.client_instance_id.0),
-        client_id: ctx.client_id.to_string(),
-        software_name: ctx.software_name.to_string(),
-        software_version: ctx.software_version.to_string(),
-        source_address: ctx.source_address(),
-        source_port: ctx.peer.port(),
-    };
+        let attrs = ctx.client_attributes(Uuid::from_bytes(req.client_instance_id.0));
 
-    let image = broker.controller.current_image();
-    let resp = match broker
-        .client_metrics
-        .manager
-        .get_subscription(&image, &attrs)
-    {
-        SubscriptionDecision::Assign(assignment) => GetTelemetrySubscriptionsResponse {
-            client_instance_id: WireUuid(assignment.client_instance_id.into_bytes()),
-            subscription_id: assignment.subscription_id,
-            accepted_compression_types: ACCEPTED_COMPRESSION_TYPES.to_vec(),
-            push_interval_ms: assignment.push_interval_ms,
-            telemetry_max_bytes: broker.client_metrics.manager.telemetry_max_bytes(),
-            delta_temporality: true,
-            requested_metrics: assignment.metrics,
-            ..Default::default()
-        },
-        // Kafka answers a rejected request with `throttle_time_ms` 0; only the
-        // request quota raises it.
-        SubscriptionDecision::Reject { error_code } => GetTelemetrySubscriptionsResponse {
-            error_code,
-            ..Default::default()
-        },
-    };
-    crate::handlers::encode_response(&resp, version)
+        let image = broker.controller.current_image();
+        let resp = match broker
+            .client_metrics
+            .manager
+            .get_subscription(&image, &attrs)
+        {
+            SubscriptionDecision::Assign(assignment) => GetTelemetrySubscriptionsResponse {
+                client_instance_id: WireUuid(assignment.client_instance_id.into_bytes()),
+                subscription_id: assignment.subscription_id,
+                accepted_compression_types: ACCEPTED_COMPRESSION_TYPES.to_vec(),
+                push_interval_ms: assignment.push_interval_ms,
+                telemetry_max_bytes: broker.client_metrics.manager.telemetry_max_bytes(),
+                delta_temporality: true,
+                requested_metrics: assignment.metrics,
+                ..Default::default()
+            },
+            // Kafka answers a rejected request with `throttle_time_ms` 0; only the
+            // request quota raises it.
+            SubscriptionDecision::Reject { error_code } => GetTelemetrySubscriptionsResponse {
+                error_code,
+                ..Default::default()
+            },
+        };
+        crate::handlers::encode_response(&resp, version)
+    }
 }
 
 #[cfg(test)]
@@ -95,8 +79,10 @@ mod tests {
     /// gets `THROTTLING_QUOTA_EXCEEDED` with `throttle_time_ms` 0 (#672).
     #[tokio::test]
     async fn get_answers_with_the_instance_id_and_throttles_without_delay() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_cfg| {}).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            crate::test_support::start_broker_with(|_cfg| {})
+        );
         let peer = peer();
         let ctx = TelemetryContext {
             connection_id: "connection-a",

@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use crate::{SslPrincipalMapper, config::ListenerSpec, file_config::FileConfigError};
 
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
+#[krabka_macros::config_table(open)]
 pub struct FileTlsConfig {
     /// PEM file holding this listener's server certificate chain.
     pub cert_path: std::path::PathBuf,
@@ -66,7 +66,7 @@ pub enum FileClientAuthMode {
     Required,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
+#[krabka_macros::config_table(open)]
 pub struct FileListenerSaslConfig {
     /// SASL mechanisms this listener accepts, Kafka's
     /// `sasl.enabled.mechanisms`. Each entry is a wire name such as `PLAIN`,
@@ -266,9 +266,8 @@ advertised = "localhost:9094"
 protocol = "Ssl"
 tls_config = { cert_path = "/tls/c", key_path = "/tls/k", client_auth = "Required", principal_mapping_rules = ["RULE:^CN=(.*?),.*$/$1/", "DEFAULT"] }
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).expect("apply listener");
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml)
+            .expect("apply listener");
         let listener = cfg
             .listeners
             .iter()
@@ -302,9 +301,7 @@ advertised = "localhost:9094"
 protocol = "Ssl"
 tls_config = { cert_path = "/tls/c", key_path = "/tls/k", principal_mapping_rules = ["NOT_A_RULE:::"] }
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        let err = file.apply_to(&mut cfg).unwrap_err();
+        let err = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap_err();
         assert!(matches!(
             err,
             crate::file_config::FileConfigError::InvalidConfig(_)

@@ -8,33 +8,16 @@ use std::{io::Write as _, process::Stdio, time::Duration};
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, nc_check_connectivity, plain_jaas,
-    start_three_broker_sasl_plaintext_jvm_cluster, wait_three_brokers_registered, write_temp_file,
-};
+use crate::jvm_acceptance::{KAFKA_IMAGE_TXN, broker0_advertised};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 #[allow(clippy::too_many_lines)] // Keeps the external CLI lifecycle in one end-to-end test.
 async fn jvm_kafka_reassign_partitions_end_to_end() {
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
     const TOPIC: &str = "krabka-reassign-itest";
 
-    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, d1, d2, d3) =
-        start_three_broker_sasl_plaintext_jvm_cluster(ADMIN, ADMIN_PASS).await;
-    nc_check_connectivity();
-
-    wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
-
-    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
-    let admin_mount = admin_props.mount_str();
-
-    // Create rf=2 topic.
-    crate::jvm_acceptance::create_console_topic(KAFKA_IMAGE_TXN, &[&admin_mount], TOPIC, 1, 2);
-
-    // Wait for broker 1 to see the partition in the committed metadata image.
-    h1.wait_until_partition_present(TOPIC, 0).await;
+    let (cluster, _admin_props, admin_mount) =
+        Box::pin(crate::cluster::reassignment_cluster(TOPIC)).await;
 
     let mut producer = crate::support::jvm_docker_command(
         KAFKA_IMAGE_TXN,
@@ -62,70 +45,16 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     drop(producer.stdin.take());
     assert!(producer.wait().expect("producer exit").success());
 
-    // Determine initial replicas and pick the third broker as the new target.
-    // Broker node IDs are i32 on the wire but stored as u64 in PartitionRecord.
-    let pr = h1
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition record");
-    let initial = pr.replicas.clone();
-    // node IDs are 1-3; find the one not in the initial replica set.
-    let new_node: u64 = (1u64..=3)
-        .find(|n| !initial.contains(&krabka_metadata::NodeId(*n)))
-        .expect("free broker");
-    let staying = pr.leader.0;
-    eprintln!("KRABKA[test] initial replicas={initial:?} staying={staying} new_node={new_node}");
+    let (initial, new_node, staying) = crate::cluster::assignment(&cluster.h1, TOPIC, true);
+    let (_json_file, json_mount) =
+        crate::cluster::execute_plan(&admin_mount, TOPIC, staying, new_node, false);
 
-    // Write reassignment JSON: move partition 0 to [staying, new_node].
-    let json = format!(
-        r#"{{"version":1,"partitions":[{{"topic":"{TOPIC}","partition":0,"replicas":[{staying},{new_node}]}}]}}"#,
-    );
-    let json_file = write_temp_file("reassignment.json", &json);
-    let json_mount = format!("{}:/reassignment.json", json_file.host_path());
-
-    // Execute reassignment.
-    let out = crate::support::jvm_docker_command(
-        KAFKA_IMAGE_TXN,
-        &[&admin_mount, &json_mount],
-        &[
-            "kafka-reassign-partitions",
-            "--execute",
-            "--reassignment-json-file",
-            "/reassignment.json",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
-        false,
-    )
-    .output()
-    .expect("spawn kafka-reassign-partitions --execute");
-    eprintln!(
-        "KRABKA[test] --execute status={} stdout={} stderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-    assert!(
-        out.status.success(),
-        "kafka-reassign-partitions --execute failed: stderr={}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let pr_after = h1
+    let pr_after = cluster
+        .h1
         .partition_record_for_test(TOPIC, 0)
         .expect("partition record after alter");
-    let removing_replica = pr_after
-        .removing_replicas
-        .first()
-        .copied()
-        .unwrap_or_else(|| {
-            initial
-                .last()
-                .copied()
-                .unwrap_or(krabka_metadata::NodeId(0))
-        });
-    let handles = [&h1, &h2, &h3];
+    let removing_replica = crate::cluster::removed_replica(&pr_after, &initial);
+    let handles = [&cluster.h1, &cluster.h2, &cluster.h3];
     let leader_leo = handles[usize::try_from(staying - 1).unwrap()]
         .local_log_end_offset(TOPIC, 0)
         .expect("leader log");
@@ -147,7 +76,8 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     // the committed metadata image.
     let completed = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            if h1
+            if cluster
+                .h1
                 .partition_record_for_test(TOPIC, 0)
                 .is_some_and(|pr| pr.adding_replicas.is_empty() && pr.removing_replicas.is_empty())
             {
@@ -160,19 +90,11 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     assert!(
         completed.is_ok(),
         "reassignment did not complete: {:?}",
-        h1.partition_record_for_test(TOPIC, 0)
+        cluster.h1.partition_record_for_test(TOPIC, 0)
     );
     // After completion the replica set must match [staying, new_node].
-    let pr = h1
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition record after reassignment");
-    let got: std::collections::HashSet<u64> = pr.replicas.iter().map(|n| n.0).collect();
-    let want: std::collections::HashSet<u64> = maplit::hashset! {staying, new_node};
-    assert!(
-        got == want,
-        "reassignment completed but replicas mismatch: got={got:?} want={want:?}"
-    );
-    let dirs = [d1.path(), d2.path(), d3.path()];
+    crate::cluster::assert_reassigned(&cluster.h1, TOPIC, staying, new_node);
+    let dirs = [cluster.d1.path(), cluster.d2.path(), cluster.d3.path()];
     let removed_dir =
         dirs[usize::try_from(removing_replica.0 - 1).unwrap()].join(format!("{TOPIC}-0"));
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -195,9 +117,9 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         String::from_utf8_lossy(&verify_out.stdout)
     );
 
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    cluster.h1.shutdown().await;
+    cluster.h2.shutdown().await;
+    cluster.h3.shutdown().await;
 }
 
 // ── `--generate` and `--additional` ─────────────────────────────────────────
@@ -211,8 +133,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
 use std::collections::BTreeSet;
 
 use crate::{
-    jvm_acceptance::start_host_broker,
-    oracle::{Oracle, Side, ToolFile},
+    oracle::{Side, ToolFile},
     tool_output::{
         Assignment, TopicPartition, parse_generate, reassignment_json, topics_to_move_json,
     },
@@ -298,17 +219,8 @@ async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
     const TOPIC: &str = "krabka-generate-itest";
     const PARTITIONS: i32 = 3;
 
-    let oracle = tokio::task::spawn_blocking(|| Oracle::start("reassign-generate"))
-        .await
-        .expect("oracle boot");
-    let oracle_side = Side::Oracle(&oracle);
-
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-    let advertised = broker0_advertised().to_owned();
-    let krabka_side = Side::Krabka {
-        bootstrap: &advertised,
-    };
+    let comparison = crate::oracle::OracleComparison::start("reassign-generate").await;
+    let [oracle_side, krabka_side] = comparison.sides();
 
     let document = topics_to_move_json(&[TOPIC]);
     for side in [&oracle_side, &krabka_side] {
@@ -366,7 +278,7 @@ async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
         );
     }
 
-    broker.shutdown().await;
+    comparison.broker.shutdown().await;
 }
 
 /// A second `--execute --additional` leaves the first reassignment running.
@@ -385,71 +297,34 @@ async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn reassign_partitions_additional_keeps_the_reassignment_already_running() {
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
     const TOPIC: &str = "krabka-additional-itest";
 
-    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
-        start_three_broker_sasl_plaintext_jvm_cluster(ADMIN, ADMIN_PASS).await;
-    nc_check_connectivity();
-    wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
-
-    let props = format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    );
-    let advertised = broker0_advertised().to_owned();
+    let (brokers, props, advertised) = Box::pin(crate::cluster::admin_text_cluster()).await;
     let side = Side::Krabka {
         bootstrap: &advertised,
     };
 
-    side.run_with_files(
-        "kafka-topics",
-        &[
-            "--bootstrap-server",
-            side.bootstrap(),
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            // Both partitions on broker 1, the bootstrap broker: an automatic
-            // placement starts at a random broker, and the test stops a
-            // non-bootstrap broker that must host neither partition. The tool
-            // asks the broker of every replica it lists for its log dir, and
-            // Metadata omits a fenced broker as Kafka's getAliveBrokerNodes
-            // does, so a partition on the stopped broker would time the tool out.
-            "--replica-assignment",
-            "1,1",
-            "--command-config",
-            CLIENT_PROPS,
-        ],
+    side.create_assigned_topic(
+        TOPIC,
+        "1,1",
+        CLIENT_PROPS,
         &[ToolFile::new(CLIENT_PROPS, &props)],
-        None,
-    )
-    .expect_success();
+    );
     for partition in 0..2 {
-        h1.wait_until_partition_present(TOPIC, partition).await;
+        brokers
+            .h1
+            .wait_until_partition_present(TOPIC, partition)
+            .await;
     }
 
     // Stop a registered, non-bootstrap target so the first move cannot race
     // replica catch-up and complete before the second command runs.
-    let first = h1
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition record");
-    let controller_leader = h1.wait_until_controller_leader().await.0;
-    let offline_node = (2_u64..=3)
-        .find(|node| {
-            *node != controller_leader && !first.replicas.iter().any(|replica| replica.0 == *node)
-        })
-        .expect("a non-bootstrap target broker");
-    let mut handles = [Some(h1), Some(h2), Some(h3)];
-    handles[usize::try_from(offline_node - 1).unwrap()]
-        .take()
-        .expect("offline target handle")
-        .shutdown()
-        .await;
+    let (offline_node, handles, first) = crate::cluster::offline_for_partition(
+        [brokers.h1, brokers.h2, brokers.h3],
+        TOPIC,
+        "partition record",
+    )
+    .await;
     let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
 
     let staying = i32::try_from(first.replicas[0].0).expect("a node id fits");

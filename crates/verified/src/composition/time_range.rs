@@ -17,21 +17,21 @@ type TimeRangeWitness = (i64, i64, i64, Option<usize>);
 /// Faithful decoding/enumeration, physical reads and coherent floors are external.
 #[requires(sparse_timestamp_window_valid(window.0@, window.1@, window.2@))]
 #[requires(bounds.0@ >= 0 && bounds.2@ >= 0 && targets.0@ <= targets.1@)]
-#[requires(forall<i: Int> 0 <= i && i < window.0@.len() ==> bounds.0@ + window.0@[i]@ <= i64::MAX@)]
+#[requires(super::time_index::absolute_record_prefix_bounded(window.0@, window.0@.len(), bounds.0@, i64::MAX@))]
 #[ensures(match result {
     Err(()) => !time_segment_valid(bounds.0@, bounds.1@)
         || exists<i: Int> 0 <= i && i < window.0@.len() && bounds.0@ + window.0@[i]@ > bounds.1@,
     Ok((lower_cursor, upper_cursor, scan, selected)) => time_segment_valid(bounds.0@, bounds.1@)
-        && (forall<i: Int> 0 <= i && i < window.0@.len() ==> bounds.0@ + window.0@[i]@ <= bounds.1@)
+        && (super::time_index::absolute_record_prefix_bounded(window.0@, window.0@.len(), bounds.0@, bounds.1@))
         && bounds.0@ <= scan@ && scan@ <= lower_cursor@ && lower_cursor@ <= upper_cursor@ && upper_cursor@ <= bounds.1@
         && (forall<i: Int> 0 <= i && i < window.0@.len() && bounds.0@ + window.0@[i]@ < scan@ ==> window.1@[i]@ < targets.0@)
         && match selected {
             None => forall<i: Int> 0 <= i && i < window.0@.len()
-                ==> bounds.0@ + window.0@[i]@ < bounds.2@ || window.1@[i]@ < targets.0@ || window.1@[i]@ > targets.1@,
+                ==> bounds.0@ + window.0@[i]@ < bounds.2@ || super::timestamp::outside_timestamp_interval(window.1@[i]@, targets),
             Some(index) => index@ < window.0@.len() && bounds.0@ + window.0@[index@]@ >= bounds.2@
                 && bounds.0@ + window.0@[index@]@ >= scan@ && targets.0@ <= window.1@[index@]@ && window.1@[index@]@ <= targets.1@
                 && forall<i: Int> 0 <= i && i < index@
-                    ==> bounds.0@ + window.0@[i]@ < bounds.2@ || window.1@[i]@ < targets.0@ || window.1@[i]@ > targets.1@,
+                    ==> bounds.0@ + window.0@[i]@ < bounds.2@ || super::timestamp::outside_timestamp_interval(window.1@[i]@, targets),
         },
 })]
 pub(super) fn constructed_time_range_preserves_first(
@@ -48,7 +48,7 @@ pub(super) fn constructed_time_range_preserves_first(
         validated_time_cursors_are_monotone(&entries, base, end, lower, upper)?;
     let mut i = 0usize;
     #[invariant(i@ <= offsets@.len())]
-    #[invariant(forall<j: Int> 0 <= j && j < i@ ==> base@ + offsets@[j]@ <= end@)]
+    #[invariant(super::time_index::absolute_record_prefix_bounded(offsets@, i@, base@, end@))]
     #[variant(offsets@.len() - i@)]
     while i < offsets.len() {
         if base + i64::from(offsets[i]) > end {

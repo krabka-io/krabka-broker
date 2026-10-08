@@ -7,13 +7,15 @@
 //! it carries the cluster setup that the single-broker fixture cannot give it.
 
 use assert2::assert;
-use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    create_topics_request::CreateTopicsRequest,
-    produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-};
 
-use crate::{cluster_lock, epoch_harness::record, support};
+use crate::{
+    cluster_lock,
+    epoch_harness::record,
+    support,
+    support::{
+        client::connect_client, produce::single_partition_produce, topics::create_topic_request,
+    },
+};
 
 /// KIP-320 follower side, end to end. A follower whose local log has a
 /// divergent suffix beyond the leader's epoch boundary must truncate that
@@ -41,23 +43,17 @@ use crate::{cluster_lock, epoch_harness::record, support};
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn follower_truncates_in_band_on_diverging_epoch() {
     let _g = cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let cluster = crate::support::registered_cluster(3).await;
 
     // cluster[0] is node 1, and the topic pins it as the leader of partition 0
     // (the same placement the replication tests use).
     let leader_addr = cluster[0].1.listen_addr.to_string();
-    let admin = Client::builder()
-        .bootstrap(leader_addr.clone())
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(leader_addr.clone(), None).await;
     let resp = admin
-        .send(CreateTopicsRequest {
-            topics: vec![support::topic_on("divtrunc", &[&[1, 2, 3]])],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            support::topic_on("divtrunc", &[&[1, 2, 3]]),
+            5_000,
+        ))
         .await
         .unwrap();
     assert!(resp.topics[0].error_code == 0);
@@ -71,28 +67,16 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
     // Produce k = 8 records to the leader at epoch 0 (acks=-1 so it lands
     // on the followers too). One record per batch keeps offsets dense.
     let k: i64 = 8;
-    let producer = Client::builder()
-        .bootstrap(leader_addr)
-        .build()
-        .await
-        .unwrap();
+    let producer = connect_client(leader_addr, None).await;
     for i in 0..k {
         let prod = producer
-            .send(ProduceRequest {
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: "divtrunc".into(),
-                    topic_id,
-                    partition_data: vec![PartitionProduceData {
-                        index: 0,
-                        records: Some(record(&format!("v{i}")).into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(single_partition_produce(
+                "divtrunc",
+                topic_id,
+                0,
+                Some(record(&format!("v{i}")).into()),
+                (-1, 5_000),
+            ))
             .await
             .unwrap();
         assert!(prod.responses[0].partition_responses[0].error_code == 0);
@@ -156,7 +140,5 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
             == cluster[0].0.local_log_end_offset("divtrunc", 0)
     );
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

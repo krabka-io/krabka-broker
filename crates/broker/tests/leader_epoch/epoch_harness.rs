@@ -7,42 +7,21 @@
 //! being repeated beside each of them.
 
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    records::{Record, RecordBatch},
-};
-use tempfile::TempDir;
+use krabka_broker::BrokerHandle;
+use krabka_protocol::records::RecordBatch;
 
-pub(crate) async fn boot_single() -> (BrokerHandle, String, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let bootstrap = broker.listen_addr().to_string();
-    (broker, bootstrap, dir)
-}
-
+pub use crate::support::boot_single;
 pub(crate) use crate::support::topic_id_for;
+use crate::support::{
+    client::connect_client,
+    records::value_record,
+    topics::{creatable_topic, create_topic_request},
+};
 
 pub(crate) async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str) {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.to_string(), None).await;
     let _ = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(name, 1, 1), 5_000))
         .await
         .expect("CreateTopics");
     broker.wait_until_partition_present(name, 0).await;
@@ -66,11 +45,8 @@ pub(crate) async fn set_leader_epoch(broker: &BrokerHandle, name: &str, epoch: i
 
 pub(crate) fn record(value: &str) -> RecordBatch {
     let mut b = RecordBatch::default();
-    b.records.push(Record {
-        offset_delta: 0,
-        value: Some(Bytes::from(value.to_string())),
-        ..Default::default()
-    });
+    b.records
+        .push(value_record(0, Some(Bytes::from(value.to_string()))));
     b.last_offset_delta = 0;
     b
 }

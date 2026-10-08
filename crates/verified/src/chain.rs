@@ -2,18 +2,27 @@
 
 use creusot_std::prelude::*;
 
-/// Result of checking one chain link against the running position.
-#[cfg_attr(creusot, derive(DeepModel))]
-#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-pub enum ChainStep {
-    /// The record did not carry the next expected sequence number.
-    SequenceMismatch,
-    /// The record did not link to the running chain head.
-    HeadMismatch,
-    /// The record is valid, but no later `u64` sequence number exists.
-    Exhausted,
-    /// The record is valid and the chain continues at this sequence number.
-    Continue(u64),
+model_types! {
+    @derives (derive(DeepModel))
+        (derive(Debug, Clone, Copy, PartialEq, Eq));
+    /// Result of checking one chain link against the running position.
+    pub enum ChainStep {
+        /// The record did not carry the next expected sequence number.
+        SequenceMismatch,
+        /// The record did not link to the running chain head.
+        HeadMismatch,
+        /// The record is valid, but no later `u64` sequence number exists.
+        Exhausted,
+        /// The record is valid and the chain continues at this sequence number.
+        Continue(u64),
+    }
+}
+
+open_logic! {
+fn chain_rank_precedes(left: (i64, u64, bool), right: (i64, u64, bool), allow_ties: bool) -> bool {
+    pearlite! { left.0@ < right.0@ || (left.0@ == right.0@ &&
+    if allow_ties { left.1@ <= right.1@ } else { left.1@ < right.1@ }) }
+}
 }
 
 /// Selects the eligible chain receipt with the greatest `(offset, sequence)`
@@ -27,13 +36,9 @@ pub enum ChainStep {
     Some(index) => index@ < candidates@.len()
         && candidates@[index@].2
         && (forall<i: Int> 0 <= i && i < candidates@.len() && candidates@[i].2 ==>
-            candidates@[i].0@ < candidates@[index@].0@
-            || (candidates@[i].0@ == candidates@[index@].0@
-                && candidates@[i].1@ <= candidates@[index@].1@))
+            chain_rank_precedes(candidates@[i], candidates@[index@], true))
         && (forall<i: Int> 0 <= i && i < index@ && candidates@[i].2 ==>
-            candidates@[i].0@ < candidates@[index@].0@
-            || (candidates@[i].0@ == candidates@[index@].0@
-                && candidates@[i].1@ < candidates@[index@].1@)),
+            chain_rank_precedes(candidates@[i], candidates@[index@], false)),
 })]
 #[must_use]
 pub fn select_chain_tip(candidates: &[(i64, u64, bool)]) -> Option<usize> {
@@ -45,13 +50,9 @@ pub fn select_chain_tip(candidates: &[(i64, u64, bool)]) -> Option<usize> {
         Some(index) => index@ < i@
             && candidates@[index@].2
             && (forall<j: Int> 0 <= j && j < i@ && candidates@[j].2 ==>
-                candidates@[j].0@ < candidates@[index@].0@
-                || (candidates@[j].0@ == candidates@[index@].0@
-                    && candidates@[j].1@ <= candidates@[index@].1@))
+                chain_rank_precedes(candidates@[j], candidates@[index@], true))
             && (forall<j: Int> 0 <= j && j < index@ && candidates@[j].2 ==>
-                candidates@[j].0@ < candidates@[index@].0@
-                || (candidates@[j].0@ == candidates@[index@].0@
-                    && candidates@[j].1@ < candidates@[index@].1@)),
+                chain_rank_precedes(candidates@[j], candidates@[index@], false)),
     })]
     #[variant(candidates@.len() - i@)]
     while i < candidates.len() {

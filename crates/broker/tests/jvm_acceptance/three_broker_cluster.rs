@@ -6,6 +6,31 @@
 
 use krabka_broker::{Broker, BrokerConfig};
 
+pub(crate) type SaslCluster = (
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    BrokerConfig,
+    BrokerConfig,
+    BrokerConfig,
+    tempfile::TempDir,
+    tempfile::TempDir,
+    tempfile::TempDir,
+);
+
+/// Boot and probe all voters before administering a registered SASL cluster.
+pub(crate) async fn start_registered_sasl_cluster(
+    admin: &str,
+    password: &str,
+    users: &[(&str, &str)],
+) -> SaslCluster {
+    let cluster =
+        start_three_broker_sasl_plaintext_jvm_cluster_with_users(admin, password, users).await;
+    super::docker::nc_check_connectivity();
+    super::wait::wait_three_brokers_registered(&cluster.0, &cluster.1, &cluster.2, 3).await;
+    cluster
+}
+
 /// Third broker for the 3-broker `SASL_PLAINTEXT` JVM cluster.
 /// Broker 2 (`node_id`=2) lives on `broker1_listen()` / `broker1_advertised()`.
 /// Spawn three in-process brokers that share one inter-broker SASL credential.
@@ -20,17 +45,7 @@ use krabka_broker::{Broker, BrokerConfig};
 pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
     admin: &str,
     admin_pass: &str,
-) -> (
-    krabka_broker::BrokerHandle,
-    krabka_broker::BrokerHandle,
-    krabka_broker::BrokerHandle,
-    BrokerConfig,
-    BrokerConfig,
-    BrokerConfig,
-    tempfile::TempDir,
-    tempfile::TempDir,
-    tempfile::TempDir,
-) {
+) -> SaslCluster {
     start_three_broker_sasl_plaintext_jvm_cluster_with_users(admin, admin_pass, &[]).await
 }
 
@@ -42,17 +57,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
     admin: &str,
     admin_pass: &str,
     extra_users: &[(&str, &str)],
-) -> (
-    krabka_broker::BrokerHandle,
-    krabka_broker::BrokerHandle,
-    krabka_broker::BrokerHandle,
-    BrokerConfig,
-    BrokerConfig,
-    BrokerConfig,
-    tempfile::TempDir,
-    tempfile::TempDir,
-    tempfile::TempDir,
-) {
+) -> SaslCluster {
     start_three_broker_sasl_plaintext_jvm_cluster_configured(admin, admin_pass, extra_users, |_| {})
         .await
 }
@@ -96,13 +101,12 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
             &voters,
         );
         config.listeners = vec![ListenerSpec {
-            name: "SASL_PLAINTEXT".into(),
-            bind_addr: config.listen_addr,
             advertised: listener.advertised.clone(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+            ..crate::support::listeners::listener(
+                "SASL_PLAINTEXT",
+                config.listen_addr,
+                ListenerProtocol::SaslPlaintext,
+            )
         }];
         config.inter_broker_listener_name = "SASL_PLAINTEXT".into();
         config.controller_listener_protocol = ListenerProtocol::SaslPlaintext;
@@ -148,17 +152,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_configured(
     admin_pass: &str,
     extra_users: &[(&str, &str)],
     adjust: impl Fn(&mut BrokerConfig),
-) -> (
-    krabka_broker::BrokerHandle,
-    krabka_broker::BrokerHandle,
-    krabka_broker::BrokerHandle,
-    BrokerConfig,
-    BrokerConfig,
-    BrokerConfig,
-    tempfile::TempDir,
-    tempfile::TempDir,
-    tempfile::TempDir,
-) {
+) -> SaslCluster {
     let ([h0, h1, h2], [cfg0, cfg1, cfg2], [dir0, dir1, dir2]) = start_sasl_cluster(
         super::ports::cluster_listeners(),
         admin,

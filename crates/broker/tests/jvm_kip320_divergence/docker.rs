@@ -6,7 +6,7 @@
 //! `kafka-console-producer` fed over stdin. Every scenario needs them, so they
 //! live apart from any one scenario.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use base64::Engine as _;
 use uuid::Uuid;
@@ -83,46 +83,13 @@ pub fn docker_bridge_gateway() -> String {
 /// default bridge with `host.docker.internal` wired to the host gateway.
 /// Mirrors `jvm_acceptance.rs::docker_run_kafka_tool_with_image`.
 pub fn docker_run_kafka_tool_with_image(image: &str, args: &[&str]) -> std::process::Output {
-    let out = Command::new("docker")
-        .arg("run")
-        .arg("--rm")
-        .arg("--add-host=host.docker.internal:host-gateway")
-        .arg(image)
-        .args(args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .expect("spawn docker run");
-    eprintln!(
-        "KRABKA[kip320] docker_run image={image} {args:?} status={} stderr_len={}",
-        out.status,
-        out.stderr.len(),
-    );
-    out
+    crate::support::jvm_tool_output(image, args, "kip320")
 }
 
 /// Produce `lines` to `topic` partition 0 with the JVM `kafka-console-producer`
 /// at `acks=all`, one record per line. Panics on producer failure.
 pub fn produce_lines_via_jvm(bootstrap: &str, topic: &str, lines: &[String]) {
-    let mut child = crate::support::jvm_docker_command(
-        KAFKA_IMAGE,
-        &[],
-        &[
-            "kafka-console-producer",
-            "--bootstrap-server",
-            bootstrap,
-            "--topic",
-            topic,
-            "--producer-property",
-            "acks=all",
-        ],
-        true,
-    )
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .expect("spawn JVM producer");
+    let mut child = crate::support::jvm_acks_all_producer(KAFKA_IMAGE, bootstrap, topic);
     {
         use std::io::Write as _;
         let stdin = child.stdin.as_mut().expect("stdin");
@@ -137,5 +104,16 @@ pub fn produce_lines_via_jvm(bootstrap: &str, topic: &str, lines: &[String]) {
         "JVM producer failed: stdout={} stderr={}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// Seed a committed prefix before the scenario waits for its external follower.
+pub fn produce_committed_prefix(bootstrap: &str, topic: &str, prefix: &str, count: usize) {
+    produce_lines_via_jvm(
+        bootstrap,
+        topic,
+        &(0..count)
+            .map(|i| format!("{prefix}-{i}"))
+            .collect::<Vec<_>>(),
     );
 }

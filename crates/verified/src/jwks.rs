@@ -1,32 +1,28 @@
 //! JWKS cache freshness and on-demand refresh decisions.
 
 mod publication;
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::ensures;
 #[cfg(creusot)]
 use creusot_std::prelude::{DeepModel, logic};
 pub use publication::jwks_publication_generations;
 
-/// Whether a validator may use one observed JWKS cache generation.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum JwksCacheDecision {
-    Reject,
-    Admit,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Whether a validator may use one observed JWKS cache generation.
+    pub enum JwksCacheDecision {
+        Reject,
+        Admit,
+    }
 
-/// Values read around one key validation.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct JwksCacheFacts {
-    pub generation_before: u64,
-    pub generation_after: u64,
-    pub last_successful_fetch_ms: i64,
-    pub now_ms: i64,
-    pub expiry_enabled: bool,
-    pub expiry_ms: i64,
+    /// Values read around one key validation.
+    pub struct JwksCacheFacts {
+        pub generation_before: u64,
+        pub generation_after: u64,
+        pub last_successful_fetch_ms: i64,
+        pub now_ms: i64,
+        pub expiry_enabled: bool,
+        pub expiry_ms: i64,
+    }
 }
 
 /// Admit only a stable, fully published cache generation that is not stale.
@@ -63,12 +59,13 @@ pub fn jwks_cache_admission(facts: JwksCacheFacts) -> JwksCacheDecision {
     }
 }
 
-/// Whether an on-demand signal may start a fetch.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum JwksOnDemandDecision {
-    RateLimited,
-    Refresh { next_refresh_ms: i64 },
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Whether an on-demand signal may start a fetch.
+    pub enum JwksOnDemandDecision {
+        RateLimited,
+        Refresh { next_refresh_ms: i64 },
+    }
 }
 
 /// Whether an on-demand refresh may start at `now_ms`: the clock and pause are

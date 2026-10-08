@@ -614,6 +614,24 @@ wire_codes! {
     FREEZE_LIMIT_EXCEEDED = 1012;
 }
 
+/// Kafka's `CoordinatorOperationExceptionHelper.handleOperationException`:
+/// a verification that could not reach the coordinator is a retriable load
+/// (`NETWORK_EXCEPTION` becomes `COORDINATOR_LOAD_IN_PROGRESS`, which asks
+/// the client to retry without a coordinator lookup), an unavailable topic
+/// or replica set is `COORDINATOR_NOT_AVAILABLE`, and a lost leadership is
+/// `NOT_COORDINATOR`.
+#[must_use]
+pub(crate) fn coordinator_operation_code(code: i16) -> i16 {
+    match code {
+        NETWORK_EXCEPTION => COORDINATOR_LOAD_IN_PROGRESS,
+        UNKNOWN_TOPIC_OR_PARTITION | NOT_ENOUGH_REPLICAS | REQUEST_TIMED_OUT => {
+            COORDINATOR_NOT_AVAILABLE
+        }
+        NOT_LEADER_OR_FOLLOWER | KAFKA_STORAGE_ERROR => NOT_COORDINATOR,
+        other => other,
+    }
+}
+
 /// Maps an internal [`crate::error::BrokerError`] to a wire-level code. Most
 /// internal errors map to `UNKNOWN_SERVER_ERROR`. Specific variants map to
 /// more meaningful codes.

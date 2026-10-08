@@ -6,7 +6,6 @@
 //! `INVALID_REQUEST`. A request leader epoch above the stored one is persisted
 //! before the answer, so the older share-partition leader is fenced.
 
-use futures_util::future::join_all;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::{
     read_share_group_state_request::ReadShareGroupStateRequest,
@@ -15,35 +14,15 @@ use krabka_protocol::owned::{
     },
 };
 
-use crate::{broker::Broker, error::BrokerError, share_coordinator::coordinator::ShareCoordinator};
+use crate::share_coordinator::coordinator::ShareCoordinator;
 
-/// Checks `ClusterAction` on the cluster, then serves the request.
-///
-/// Kafka's `KafkaApis` answers a denied principal with
-/// `ReadShareGroupStateResponse.toGlobalErrorResponse`: `CLUSTER_AUTHORIZATION_FAILED` on
-/// every requested partition, and the share coordinator does not run.
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: ReadShareGroupStateRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<ReadShareGroupStateResponse, BrokerError> {
-    Ok(if super::cluster_action_denied(broker, ctx) {
-        super::cluster_authorization_failed!(
-            req,
-            ReadShareGroupStateResponse,
-            ReadStateResult,
-            PartitionResult
-        )
-    } else {
-        read_state(
-            &broker.share_coordinator,
-            &broker.controller.current_image(),
-            req,
-        )
-        .await
-    })
-}
+super::share_state_handler!(
+    ReadShareGroupStateRequest,
+    ReadShareGroupStateResponse,
+    ReadStateResult,
+    PartitionResult,
+    read_state
+);
 
 /// Serves every partition of `req`, as Kafka's
 /// `ShareCoordinatorService.readState` does.
@@ -55,59 +34,31 @@ async fn read_state(
     image: &MetadataImage,
     req: ReadShareGroupStateRequest,
 ) -> ReadShareGroupStateResponse {
-    if req.topics.is_empty()
-        || req.topics.iter().any(|topic| topic.partitions.is_empty())
-        || req.group_id.is_empty()
-    {
+    if super::empty_partition_data!(req) || req.group_id.is_empty() {
         return ReadShareGroupStateResponse::default();
     }
-    let group_id = req.group_id.as_str();
-
-    // Kafka's `ShareCoordinatorService` schedules one operation for each
-    // partition and answers when every one of them completes. Each operation
-    // waits until its records commit, so the partitions run together.
-    let results: Vec<ReadStateResult> = join_all(req.topics.into_iter().map(|topic| async move {
-        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-        let partitions = join_all(topic.partitions.into_iter().map(|pd| async move {
-            match coordinator
-                .read(image, group_id, topic_id, pd.partition, pd.leader_epoch)
-                .await
-            {
-                Ok(st) => PartitionResult {
-                    partition: pd.partition,
-                    state_epoch: st.state_epoch,
-                    start_offset: st.start_offset.0,
-                    state_batches: st
-                        .state_batches
-                        .iter()
-                        .map(|b| StateBatch {
-                            first_offset: b.first_offset.0,
-                            last_offset: b.last_offset.0,
-                            delivery_state: b.delivery_state,
-                            delivery_count: b.delivery_count,
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                },
-                // Kafka's `toErrorResponseData`: the code and the message,
-                // and the default for every other field.
-                Err(error) => PartitionResult {
-                    partition: pd.partition,
-                    error_code: error.code(),
-                    error_message: Some(error.row_message("read")),
-                    ..Default::default()
-                },
-            }
-        }))
-        .await;
-        ReadStateResult {
-            topic_id: topic.topic_id,
-            partitions,
-            ..Default::default()
+    let results = super::state_results!(req, ReadStateResult, |group_id, topic_id, pd| {
+        match coordinator
+            .read(image, group_id, topic_id, pd.partition, pd.leader_epoch)
+            .await
+        {
+            Ok(st) => PartitionResult {
+                partition: pd.partition,
+                state_epoch: st.state_epoch,
+                start_offset: st.start_offset.0,
+                state_batches: st.state_batches.iter().map(StateBatch::from).collect(),
+                ..Default::default()
+            },
+            // Kafka's `toErrorResponseData`: the code and the message,
+            // and the default for every other field.
+            Err(error) => PartitionResult {
+                partition: pd.partition,
+                error_code: error.code(),
+                error_message: Some(error.row_message("read")),
+                ..Default::default()
+            },
         }
-    }))
-    .await;
+    });
 
     ReadShareGroupStateResponse {
         results,
@@ -117,8 +68,6 @@ async fn read_state(
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_log::Offset;
     use krabka_protocol::{
         UnknownTaggedFields,
         owned::read_share_group_state_request::{PartitionData, ReadStateData},
@@ -126,52 +75,27 @@ mod tests {
     };
 
     use super::*;
-    use crate::{
-        codes,
-        share_coordinator::coordinator::test_support::{image_with_topic, share_write},
-    };
+    use crate::codes;
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([33; 16]);
     const WIRE_TOPIC: ProtoUuid = ProtoUuid([33; 16]);
 
-    fn request(group_id: &str, partitions: &[(i32, i32)]) -> ReadShareGroupStateRequest {
-        ReadShareGroupStateRequest {
-            group_id: group_id.into(),
-            topics: vec![ReadStateData {
-                topic_id: WIRE_TOPIC,
-                partitions: partitions
-                    .iter()
-                    .map(|&(partition, leader_epoch)| PartitionData {
-                        partition,
-                        leader_epoch,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }],
-            ..Default::default()
+    super::super::test_support::request_fixture! {
+        ReadShareGroupStateRequest, ReadStateData, PartitionData;
+        fn request(group_id: &str, [], partitions: &[(i32, i32)]);
+        topic WIRE_TOPIC; |(partition, leader_epoch)| {
+            PartitionData { partition, leader_epoch, ..Default::default() }
         }
     }
 
-    fn response(partitions: Vec<PartitionResult>) -> ReadShareGroupStateResponse {
-        ReadShareGroupStateResponse {
-            results: vec![ReadStateResult {
-                topic_id: WIRE_TOPIC,
-                partitions,
-                unknown_tagged_fields: UnknownTaggedFields(vec![]),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields(vec![]),
-        }
-    }
+    super::super::test_support::response_fixture!(
+        ReadShareGroupStateResponse,
+        ReadStateResult,
+        PartitionResult,
+        WIRE_TOPIC
+    );
 
-    fn error_row(partition: i32, error_code: i16, message: &str) -> PartitionResult {
-        PartitionResult {
-            partition,
-            error_code,
-            error_message: Some(message.to_owned()),
-            ..Default::default()
-        }
-    }
+    super::super::test_support::error_row_fixture!(PartitionResult);
 
     /// The whole `ReadShareGroupStateResponse` for each request shape, over
     /// one stored key: partition 4 at state epoch 17, start offset 101, one
@@ -232,51 +156,11 @@ mod tests {
             (true, request("share-group", &[]), empty.clone()),
             (
                 true,
-                ReadShareGroupStateRequest {
-                    group_id: "share-group".into(),
-                    ..Default::default()
-                },
+                super::super::test_support::no_topics!(ReadShareGroupStateRequest, "share-group"),
                 empty,
             ),
         ];
 
-        for (index, (led, req, expected)) in rows.into_iter().enumerate() {
-            let dir = tempfile::TempDir::new().expect("tempdir");
-            let coordinator = super::super::test_support::coordinator(dir.path());
-            let image = image_with_topic(TOPIC, 8);
-            coordinator.lead_all_partitions_for_test().await;
-            coordinator
-                .initialize(&image, "share-group", TOPIC, 4, 17, Offset(90))
-                .await
-                .expect("initialize state");
-            coordinator
-                .read(&image, "share-group", TOPIC, 4, 3)
-                .await
-                .expect("raise the stored leader epoch");
-            coordinator
-                .write(
-                    &image,
-                    "share-group",
-                    TOPIC,
-                    4,
-                    share_write(
-                        (17, 3),
-                        (101, 9),
-                        vec![super::super::test_support::batch(101, 105)],
-                    ),
-                )
-                .await
-                .expect("write state");
-            if !led {
-                coordinator
-                    .refresh_leader_partitions(&krabka_metadata::MetadataImage::default())
-                    .await
-                    .finished()
-                    .await;
-            }
-
-            let resp = read_state(&coordinator, &image, req).await;
-            check!(resp == expected, "row {index}");
-        }
+        super::super::test_support::stored_response_rows!(rows, TOPIC, (8, 4), read_state);
     }
 }

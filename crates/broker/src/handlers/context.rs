@@ -129,6 +129,42 @@ impl<'a> RequestContext<'a> {
         self
     }
 
+    /// Opens this caller's controller-mutation quota with the API version's strictness.
+    pub(crate) fn controller_mutation_quota(
+        &self,
+        broker: &crate::broker::Broker,
+        image: &krabka_metadata::MetadataImage,
+        strict: bool,
+    ) -> crate::quota::ControllerMutationQuota {
+        crate::quota::ControllerMutationQuota::new(&crate::quota::QuotaRequest {
+            image,
+            buckets: &broker.quota_buckets,
+            principal: self.principal.name.as_str(),
+            client_id: self.client_id,
+            window: broker.config.controller_mutation_quota_window,
+            strict,
+        })
+    }
+
+    /// Charges the request's elapsed handler time against its request quota.
+    pub(crate) fn charge_request_quota(
+        &self,
+        broker: &crate::broker::Broker,
+        image: &krabka_metadata::MetadataImage,
+        start: std::time::Instant,
+    ) -> crate::quota::QuotaDelay {
+        let elapsed_micros = u64::try_from(start.elapsed().as_micros().min(u128::from(u64::MAX)))
+            .expect("elapsed microseconds clamped to u64");
+        crate::quota::consume_request_quota(
+            image,
+            &broker.quota_buckets,
+            &self.principal.name,
+            self.client_id,
+            elapsed_micros,
+            broker.config.quota_throttle_max,
+        )
+    }
+
     /// Records the KIP-219 window this request must be throttled for. The
     /// response still goes out immediately; the connection loop applies the
     /// window afterwards by muting the connection.
@@ -202,6 +238,22 @@ impl<'a> TelemetryContext<'a> {
         }
     }
 
+    /// The subscription identity and source fields shared by both telemetry APIs.
+    pub(crate) fn client_attributes(
+        &self,
+        instance: uuid::Uuid,
+    ) -> crate::client_metrics::manager::ClientAttributes {
+        crate::client_metrics::manager::ClientAttributes {
+            connection_id: self.connection_id.to_string(),
+            client_instance_id: instance,
+            client_id: self.client_id.to_string(),
+            software_name: self.software_name.to_string(),
+            software_version: self.software_version.to_string(),
+            source_address: self.source_address(),
+            source_port: self.peer.port(),
+        }
+    }
+
     /// The `client_source_address` a subscription matches against: Kafka's
     /// `ClientMetricsInstanceMetadata` reads `InetAddress.getHostAddress()` of
     /// the peer. That is the uncompressed hex groups of an IPv6 peer, with a
@@ -224,18 +276,9 @@ impl<'a> TelemetryContext<'a> {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
-    use crate::test_support::peer;
-
-    fn principal() -> Principal {
-        Principal {
-            name: "alice".to_string(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: vec!["operators".to_string()],
-        }
-    }
+    use crate::{handlers::test_support::operators_principal as principal, test_support::peer};
 
     #[test]
     fn request_context_new_preserves_connection_fields() {

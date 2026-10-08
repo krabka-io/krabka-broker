@@ -14,25 +14,25 @@
 //! producer on each follower. A new leader then had no batch that held the
 //! sequence of the producer.
 
-use std::{
-    net::SocketAddr,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::net::SocketAddr;
 
 use assert2::assert;
 use bytes::Bytes;
 use krabka_broker::{BrokerHandle, codes};
-use krabka_client_core::{Client, Connection, ConnectionOptions};
+use krabka_client_core::{Connection, ConnectionOptions};
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
+    owned::create_topics_request::CreatableTopicConfig,
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use crate::support;
+use crate::{
+    support,
+    support::{
+        produce::single_partition_produce, records::batch_from_records,
+        topics::create_topic_request,
+    },
+};
 
 const TOPIC: &str = "compaction-replicas";
 
@@ -44,34 +44,11 @@ const SEGMENT_BYTES: u32 = 100;
 /// The idempotent producer: `(id, epoch)`.
 const IDEMPOTENT: (i64, i16) = (9_201, 0);
 
-/// One batch of a local log after compaction. The compared fields are the
-/// ones that carry the state of a producer, and the records.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Kept {
-    base_offset: i64,
-    last_offset: i64,
-    producer_id: i64,
-    producer_epoch: i16,
-    base_sequence: i32,
-    records: Vec<(Option<Bytes>, Option<Bytes>)>,
-}
+// One batch of a local log after compaction. The compared fields are the
+// ones that carry the state of a producer, and the records.
+krabka_macros::compacted_batch!(Kept, plain);
 
 impl Kept {
-    fn of(batch: &RecordBatch) -> Self {
-        Self {
-            base_offset: batch.base_offset,
-            last_offset: batch.base_offset + i64::from(batch.last_offset_delta),
-            producer_id: batch.producer_id,
-            producer_epoch: batch.producer_epoch,
-            base_sequence: batch.base_sequence,
-            records: batch
-                .records
-                .iter()
-                .map(|record| (record.key.clone(), record.value.clone()))
-                .collect(),
-        }
-    }
-
     /// The one-record batch of a client with no idempotence at `offset`.
     fn plain(offset: i64, (key, value): (&'static str, &'static str)) -> Self {
         Self {
@@ -88,12 +65,7 @@ impl Kept {
     }
 }
 
-fn now_ms() -> i64 {
-    let since_epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock after the epoch");
-    i64::try_from(since_epoch.as_millis()).expect("milliseconds fit an i64")
-}
+use crate::support::records::now_ms;
 
 /// One connection to the broker that binds `address`, so that a request
 /// reaches that broker and no other.
@@ -123,12 +95,11 @@ fn record(
         producer_id,
         producer_epoch,
         base_sequence,
-        records: vec![Record {
+        ..batch_from_records(vec![Record {
             key: Some(Bytes::from_static(key.as_bytes())),
             value: Some(Bytes::from_static(value.as_bytes())),
             ..Record::default()
-        }],
-        ..RecordBatch::default()
+        }])
     }
 }
 
@@ -136,21 +107,13 @@ fn record(
 /// the partition row.
 async fn produce(leader: &Connection, topic_id: WireUuid, batch: RecordBatch) -> i16 {
     let response = leader
-        .send(ProduceRequest {
-            acks: -1,
-            timeout_ms: 30_000,
-            topic_data: vec![TopicProduceData {
-                name: TOPIC.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(RecordsPayload::V2(vec![batch])),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            TOPIC,
+            topic_id,
+            0,
+            Some(RecordsPayload::V2(vec![batch])),
+            (-1, 30_000),
+        ))
         .await
         .expect("Produce");
     response.responses[0].partition_responses[0].error_code
@@ -180,14 +143,14 @@ async fn wait_for_the_topic_config(broker: &BrokerHandle) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
     let _g = crate::cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let cluster = crate::support::registered_cluster(3).await;
 
-    let admin = Client::builder()
-        .bootstrap(cluster[0].1.listen_addr.to_string())
-        .build()
-        .await
-        .expect("admin client");
+    let admin = crate::support::client::connect_with_context(
+        cluster[0].1.listen_addr.to_string(),
+        None,
+        "admin client",
+    )
+    .await;
     // One batch for each segment, so that every batch except the last is in a
     // sealed segment that a pass rewrites.
     let mut topic = support::topic_on(TOPIC, &[&[1, 2, 3]]);
@@ -203,11 +166,7 @@ async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
     })
     .collect();
     let created = admin
-        .send(CreateTopicsRequest {
-            topics: vec![topic],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(topic, 5_000))
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == codes::NONE);
@@ -268,7 +227,5 @@ async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
     ];
     assert!(kept == vec![expected; 3]);
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

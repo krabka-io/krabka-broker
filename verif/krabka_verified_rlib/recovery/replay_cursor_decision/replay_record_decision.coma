@@ -1,14 +1,14 @@
-(* #"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 46 0 53 25 *)
+(* #"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 44 0 51 25 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sreplay_cursor_decision = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 54 22 54 23
-let%span sreplay_cursor_decision'0 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 57 16 57 39
-let%span sreplay_cursor_decision'1 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 58 20 58 28
-let%span sreplay_cursor_decision'2 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 58 20 58 36
-let%span sreplay_cursor_decision'3 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 61 17 61 35
-let%span sreplay_cursor_decision'4 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 38 10 44 1
-let%span sreplay_cursor_decision'5 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 25 8 28 49
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sreplay_cursor_decision = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 52 22 52 23
+let%span sreplay_cursor_decision'0 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 55 16 55 39
+let%span sreplay_cursor_decision'1 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 56 20 56 28
+let%span sreplay_cursor_decision'2 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 56 20 56 36
+let%span sreplay_cursor_decision'3 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 59 17 59 35
+let%span sreplay_cursor_decision'4 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 36 10 42 1
+let%span sreplay_cursor_decision'5 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 22 8 25 49
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -28,7 +28,7 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate replay_record_admitted [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 16 0 23 9] (batch_base: Int64.t) (record_delta: Int32.t) (from: Int64.t) (end': Int64.t) (control_batch: bool) (replay_control: bool) =
+predicate replay_record_admitted [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 13 0 20 9] (batch_base: Int64.t) (record_delta: Int32.t) (from: Int64.t) (end': Int64.t) (control_batch: bool) (replay_control: bool) =
   [%#sreplay_cursor_decision'5] ge_log_Int (Int32.to_int record_delta) 0
   /\ control_batch = replay_control
   /\ Int64.to_int from <= Int64.to_int batch_base + Int32.to_int record_delta
@@ -38,7 +38,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let replay_record_decision [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 46 0 53 25]
+let replay_record_decision [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 44 0 51 25]
   (batch_base: Int64.t) (record_delta: Int32.t) (from: Int64.t) (end': Int64.t) (control_batch: bool)
   (replay_control: bool) (return (x: t_ReplayRecordDecision)) = (! bb0
   [ bb0 = s0

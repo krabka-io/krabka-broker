@@ -1,29 +1,25 @@
 //! Restore-side validation of archived sparse indexes and state sidecars.
 
 #[cfg(creusot)]
-use std::clone::Clone;
-
-#[cfg(creusot)]
 use creusot_std::prelude::{DeepModel, Int, invariant};
 
-/// One decoded aborted-transaction index entry (`AbortedTxn`).
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct RestoreAbortedTxn {
-    pub producer_id: i64,
-    /// The transaction's first offset. It may precede the segment base when
-    /// the transaction began before a segment roll.
-    pub start_offset: i64,
-    /// The abort marker's offset.
-    pub last_offset: i64,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// One decoded aborted-transaction index entry (`AbortedTxn`).
+    pub struct RestoreAbortedTxn {
+        pub producer_id: i64,
+        /// The transaction's first offset. It may precede the segment base when
+        /// the transaction began before a segment roll.
+        pub start_offset: i64,
+        /// The abort marker's offset.
+        pub last_offset: i64,
+    }
 
-/// The inclusive offset extent of the segment that owns an index.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct RestoreSegmentExtent {
-    pub base_offset: i64,
-    pub last_offset: i64,
+    /// The inclusive offset extent of the segment that owns an index.
+    pub struct RestoreSegmentExtent {
+        pub base_offset: i64,
+        pub last_offset: i64,
+    }
 }
 
 mod restore_producer_ids_strict;

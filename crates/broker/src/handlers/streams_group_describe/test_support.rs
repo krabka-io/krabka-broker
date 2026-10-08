@@ -7,20 +7,16 @@
 //! finalizing `streams.version`, and driving one describe round trip over the
 //! wire encoding -- live here for the same reason.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc};
 
-use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::{
-        common::streams_group_describe_response::{
-            key_value::KeyValue, task_ids::TaskIds, topic_info::TopicInfo,
-        },
-        streams_group_describe_request::StreamsGroupDescribeRequest,
-        streams_group_describe_response::{
-            self as response_mod, DescribedGroup, StreamsGroupDescribeResponse, Subtopology,
-            Topology,
-        },
+use krabka_metadata::MetadataRecord;
+use krabka_protocol::owned::{
+    common::streams_group_describe_response::{
+        key_value::KeyValue, task_ids::TaskIds, topic_info::TopicInfo,
+    },
+    streams_group_describe_request::StreamsGroupDescribeRequest,
+    streams_group_describe_response::{
+        self as response_mod, DescribedGroup, StreamsGroupDescribeResponse, Subtopology, Topology,
     },
 };
 use krabka_security::Principal;
@@ -124,33 +120,7 @@ pub(super) async fn unfinalize_streams_version(broker: &Broker) {
 /// Writes a `streams.version` `FeatureLevelRecord` at `level` and waits until
 /// the broker's image shows it. Level 0 removes the feature, as it does in
 /// Kafka.
-async fn set_streams_version(broker: &Broker, level: i16) {
-    broker
-        .controller
-        .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crate::features::STREAMS_VERSION.into(),
-            level,
-        })])
-        .await
-        .expect("submit streams.version");
-
-    let want = (level != 0).then_some(level);
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if broker
-                .controller
-                .current_image()
-                .finalized_feature(crate::features::STREAMS_VERSION)
-                == want
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("streams.version visible");
-}
+use crate::handlers::test_support::set_streams_version;
 
 pub(super) async fn describe(broker: &Broker, group_ids: &[&str]) -> StreamsGroupDescribeResponse {
     let principal = crate::test_support::principal("admin");
@@ -185,9 +155,12 @@ pub(super) async fn describe_at(
     include_topology_description: bool,
     group_ids: &[&str],
 ) -> StreamsGroupDescribeResponse {
-    let principal = crate::test_support::principal("admin");
-    let peer = crate::test_support::peer();
-    let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+    request_identity!(
+        (principal, peer, ctx),
+        crate::test_support::principal("admin"),
+        client_id = "admin-client",
+        address = crate::test_support::peer()
+    );
     let req = StreamsGroupDescribeRequest {
         include_topology_description,
         ..request(group_ids)
@@ -259,26 +232,24 @@ pub(super) fn describe_member() -> StreamsDescribeMember {
 }
 
 pub(super) fn expected_task_ids(subtopology_id: &str, partitions: Vec<i32>) -> TaskIds {
-    TaskIds {
+    tagged_wire!(TaskIds {
         subtopology_id: subtopology_id.into(),
         partitions,
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    })
 }
 
 fn expected_key_value(key: &str, value: &str) -> KeyValue {
-    KeyValue {
+    tagged_wire!(KeyValue {
         key: key.into(),
         value: value.into(),
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    })
 }
 
 /// A fully-pinned error row as the handler renders it. Only `group_id`,
 /// `error_code` and, for `GROUP_ID_NOT_FOUND`, Kafka's message are set, and
 /// every other field holds its wire default.
 pub(super) fn error_group(group_id: &str, error_code: i16) -> DescribedGroup {
-    DescribedGroup {
+    tagged_wire!(DescribedGroup {
         error_code,
         error_message: (error_code == crate::codes::GROUP_ID_NOT_FOUND)
             .then(|| format!("Streams group {group_id} not found.")),
@@ -293,14 +264,13 @@ pub(super) fn error_group(group_id: &str, error_code: i16) -> DescribedGroup {
         topology_description: None,
         topology_description_status: 0,
         assignor_name: None,
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    })
 }
 
 /// Creates a topic with `partitions` partitions on the one-broker test
 /// cluster.
 pub(super) async fn create_topic(broker: &Broker, name: &str, partitions: i32) {
-    use krabka_metadata::{LeaderEpoch, PartitionRecord, TopicRecord};
+    use krabka_metadata::TopicRecord;
 
     let node_id = krabka_audit::NodeId(broker.config.node_id.0);
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
@@ -310,18 +280,9 @@ pub(super) async fn create_topic(broker: &Broker, name: &str, partitions: i32) {
         replication_factor: 1,
     })];
     records.extend((0..partitions).map(|partition| {
-        MetadataRecord::V1Partition(PartitionRecord {
-            topic: name.into(),
-            partition,
-            leader: node_id,
-            replicas: vec![node_id],
-            isr: vec![node_id],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        })
+        MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
+            name, partition, node_id,
+        ))
     }));
     broker
         .controller
@@ -338,9 +299,12 @@ pub(super) async fn heartbeat(
 ) -> krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse {
     use krabka_protocol::owned::streams_group_heartbeat_response::MAX_VERSION;
 
-    let principal = crate::test_support::principal("admin");
-    let peer = crate::test_support::peer();
-    let ctx = crate::test_support::request_context(&principal, &peer, "streams-client");
+    request_identity!(
+        (principal, peer, ctx),
+        crate::test_support::principal("admin"),
+        client_id = "streams-client",
+        address = crate::test_support::peer()
+    );
     crate::handlers::streams_group_heartbeat::handle(broker, req.clone(), MAX_VERSION, &ctx)
         .await
         .expect("handle heartbeat")
@@ -351,28 +315,24 @@ pub(super) async fn heartbeat(
 ///
 /// [`render_topology`]: super::render::render_topology
 pub(super) fn expected_rendered_topology() -> Topology {
-    Topology {
+    tagged_wire!(Topology {
         epoch: 9,
-        subtopologies: Some(vec![Subtopology {
+        subtopologies: Some(vec![tagged_wire!(Subtopology {
             subtopology_id: "sub-a".into(),
             source_topics: vec!["input-a".into(), "input-b".into()],
             repartition_sink_topics: vec!["sink-a".into()],
-            state_changelog_topics: vec![TopicInfo {
+            state_changelog_topics: vec![tagged_wire!(TopicInfo {
                 name: "store-a-changelog".into(),
                 partitions: 3,
                 replication_factor: 2,
                 topic_configs: vec![expected_key_value("cleanup.policy", "compact")],
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            }],
-            repartition_source_topics: vec![TopicInfo {
+            })],
+            repartition_source_topics: vec![tagged_wire!(TopicInfo {
                 name: "source-repartition".into(),
                 partitions: 4,
                 replication_factor: 1,
                 topic_configs: vec![expected_key_value("retention.ms", "1000")],
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }]),
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+            })],
+        })]),
+    })
 }

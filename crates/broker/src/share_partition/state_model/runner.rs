@@ -3,11 +3,13 @@
 //! The bounds sit next to the assertions that prove a run was exhaustive,
 //! because a truncated search proves nothing and the two must move together.
 
-use assert2::assert;
 use stateright::Checker;
 
 use super::config::ShareModel;
-use crate::model_check::run_bfs;
+use crate::{
+    coordinator::unified::actor::reconciliation_model_support::pinned_model_runner,
+    model_check::run_bfs,
+};
 
 /// Hard backstop on generated states. It bounds host memory even if
 /// `within_boundary` is looser than intended. Set it well above each config's
@@ -32,14 +34,14 @@ pub(super) const PINNED_UNIQUE_STATES_DEFERRAL: usize = 1_118;
 pub(super) const PINNED_UNIQUE_STATES_DEFERRAL_WIDE: usize = 5_012;
 pub(super) const PINNED_UNIQUE_STATES_LOG_START_ADVANCE: usize = 6_477;
 
-/// Run one bounded config to completion. Assert that the run was exhaustive,
-/// that is, that no cap truncated it, and that all properties hold.
-pub(super) fn run(model: ShareModel, label: &str, pinned_unique_states: usize) {
-    let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
-    checker.assert_properties();
+pinned_model_runner! {
+    @checked
+    /// Run one bounded config to completion. Assert that the run was exhaustive,
+    /// that is, that no cap truncated it, and that all properties hold.
+    pub(super) fn run(ShareModel);
+    run_bfs, crate::model_check::assert_pinned_count;
+    MAX_DEPTH, MAX_STATES; properties_last;
+    |checker, label| {
+
+    }
 }

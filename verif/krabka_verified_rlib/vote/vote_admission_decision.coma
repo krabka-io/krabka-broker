@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/vote.rs" 159 0 162 26 *)
+(* #"/workspace/crates/verified/src/vote.rs" 152 0 155 26 *)
 
-let%span svote = "/workspace/crates/verified/src/vote.rs" 144 10 145 74
-let%span svote'0 = "/workspace/crates/verified/src/vote.rs" 146 10 151 1
-let%span svote'1 = "/workspace/crates/verified/src/vote.rs" 152 10 157 1
+let%span svote = "/workspace/crates/verified/src/vote.rs" 137 10 138 74
+let%span svote'0 = "/workspace/crates/verified/src/vote.rs" 139 10 144 1
+let%span svote'1 = "/workspace/crates/verified/src/vote.rs" 145 10 150 1
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -17,7 +17,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let vote_admission_decision [#"/workspace/crates/verified/src/vote.rs" 159 0 162 26] (target: t_VoteTarget)
+let vote_admission_decision [#"/workspace/crates/verified/src/vote.rs" 152 0 155 26] (target: t_VoteTarget)
   (membership: t_VoteMembership) (return (x: t_VoteAdmissionDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_21 <- target.voter_id <> target.local_id ] s1

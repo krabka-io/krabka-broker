@@ -82,14 +82,9 @@ impl ClusterGrants for AllowAllGrants {
     }
 }
 
+#[krabka_macros::transport_errors]
 #[derive(Debug, Error)]
 pub enum RaftHandshakeError {
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("tls: {0}")]
-    Tls(String),
-    #[error("sasl: {0}")]
-    Sasl(String),
     #[error("protocol: {0}")]
     Protocol(String),
 }

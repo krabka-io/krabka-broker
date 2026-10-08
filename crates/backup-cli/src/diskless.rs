@@ -115,7 +115,7 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use krabka_remote_storage::diskless::{
-        CapturedWalRange, DisklessPartitionCapture, WalFlushRecord, WalIndexEntry, WalIndexKey,
+        CapturedWalRange, DisklessPartitionCapture, WalFlushRecord, WalIndexEntry,
     };
     use krabka_remote_storage_topic::{
         InProcessMetadataEventLog, MetadataEventRecord, RangeVisitor,
@@ -216,19 +216,14 @@ mod tests {
         object_key: &str,
         entry: WalIndexEntry,
     ) {
-        let key = WalIndexKey::from(&entry).to_bytes();
-        let value = WalFlushRecord {
-            object_key: object_key.into(),
-            format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![entry],
-        }
-        .to_bytes()
-        .unwrap();
+        let (key, value) = WalFlushRecord::keyed_entry(object_key, entry).unwrap();
         log.publish_keyed(0, key, Some(value)).await.unwrap();
     }
 
-    fn orders() -> HashMap<Uuid, (String, i32)> {
-        HashMap::from([(TOPIC_ID, ("orders".to_owned(), 1))])
+    krabka_macros::wal_capture_topic_fixture!(orders, TOPIC_ID, "orders", 1);
+
+    fn visited_offsets(log: &ScriptedLog) -> Vec<(i32, i64)> {
+        log.visited.lock().unwrap().clone()
     }
 
     #[tokio::test]
@@ -268,7 +263,7 @@ mod tests {
                     authentication: None,
                 }
         );
-        assert!(*log.visited.lock().unwrap() == vec![(0, 0), (0, 1)]);
+        assert!(visited_offsets(&log) == vec![(0, 0), (0, 1)]);
     }
 
     #[tokio::test]
@@ -291,7 +286,7 @@ mod tests {
             .unwrap_err();
 
         check!(error == "diskless WAL index partition 0 offset 1: invalid diskless WAL index key");
-        check!(*log.visited.lock().unwrap() == vec![(0, 0), (0, 1)]);
+        check!(visited_offsets(&log) == vec![(0, 0), (0, 1)]);
     }
 
     #[tokio::test]

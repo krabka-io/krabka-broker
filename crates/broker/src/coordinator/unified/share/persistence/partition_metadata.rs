@@ -33,16 +33,11 @@
 //! `DeletingTopics`, so it writes that array empty, and a record from another
 //! writer that carries it still decodes.
 
-use bytes::{BufMut, Bytes, BytesMut};
-
 use crate::{
-    coordinator::unified::persistence::{
-        flex::{
-            get_compact_array, get_compact_string, get_i32_array, get_uuid, put_compact_array,
-            put_compact_string, put_empty_tagged_fields, put_i32_array, put_uuid,
-            skip_tagged_fields,
-        },
-        get_i16,
+    coordinator::unified::persistence::flex::{
+        get_compact_array, get_compact_string, get_i32_array, get_uuid, put_compact_array,
+        put_compact_string, put_empty_tagged_fields, put_i32_array, put_uuid, skip_tagged_fields,
+        value_codec,
     },
     error::BrokerError,
 };
@@ -80,35 +75,27 @@ pub struct ShareGroupStatePartitionMetadataValue {
     pub deleting: Vec<DeletingTopic>,
 }
 
-impl ShareGroupStatePartitionMetadataValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
+value_codec! {
+    ShareGroupStatePartitionMetadataValue,
+    encode(&self) -> buf {
         for topics in [&self.initializing, &self.initialized] {
-            put_compact_array(&mut buf, topics.iter(), |buf, topic| {
+            put_compact_array(buf, topics.iter(), |buf, topic| {
                 put_uuid(buf, *topic.topic_id.as_bytes());
                 put_compact_string(buf, &topic.topic_name);
                 put_i32_array(buf, &topic.partitions);
                 put_empty_tagged_fields(buf);
             });
         }
-        put_compact_array(&mut buf, self.deleting.iter(), |buf, topic| {
+        put_compact_array(buf, self.deleting.iter(), |buf, topic| {
             put_uuid(buf, *topic.topic_id.as_bytes());
             put_compact_string(buf, &topic.topic_name);
             put_empty_tagged_fields(buf);
         });
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
     }
-
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let initializing = get_topic_partitions_infos(&mut buf)?;
-        let initialized = get_topic_partitions_infos(&mut buf)?;
-        let deleting = get_compact_array(&mut buf, |buf| {
+    decode(buf) {
+        let initializing = get_topic_partitions_infos(buf)?;
+        let initialized = get_topic_partitions_infos(buf)?;
+        let deleting = get_compact_array(buf, |buf| {
             let topic_id = uuid::Uuid::from_bytes(get_uuid(buf)?);
             let topic_name = get_compact_string(buf)?;
             skip_tagged_fields(buf)?;
@@ -117,7 +104,6 @@ impl ShareGroupStatePartitionMetadataValue {
                 topic_name,
             })
         })?;
-        skip_tagged_fields(&mut buf)?;
         Ok(Self {
             initializing,
             initialized,
@@ -146,9 +132,12 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::share::persistence::{
-        KEY_SHARE_GROUP_STATE_PARTITION_METADATA, ShareGroupKey, encode_share_key, parse_share_key,
-        test_support::peek_version,
+    use crate::coordinator::unified::{
+        share::persistence::{
+            KEY_SHARE_GROUP_STATE_PARTITION_METADATA, ShareGroupKey, encode_share_key,
+            parse_share_key,
+        },
+        test_support::{peek_version, wire_bytes},
     };
 
     fn initialized(id: u8, name: &str, partitions: Vec<i32>) -> TopicPartitionsInfo {
@@ -173,21 +162,23 @@ mod tests {
             initialized: vec![initialized(1, "orders", vec![0])],
             deleting: vec![deleting(9, "carts")],
         };
-        let mut want: Vec<u8> = vec![0x00, 0x00];
-        want.push(0x01); // empty InitializingTopics
-        want.push(0x02); // one InitializedTopics entry
-        want.extend_from_slice(&[1u8; 16]);
-        want.push(0x07); // TopicName "orders"
-        want.extend_from_slice(b"orders");
-        want.push(0x02); // one partition
-        want.extend_from_slice(&0i32.to_be_bytes());
-        want.push(0x00); // TopicPartitionsInfo tagged fields
-        want.push(0x02); // one DeletingTopics entry
-        want.extend_from_slice(&[9u8; 16]);
-        want.push(0x06); // TopicName "carts"
-        want.extend_from_slice(b"carts");
-        want.push(0x00); // TopicInfo tagged fields
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "0000",
+            "01", // empty InitializingTopics
+            "02", // one InitializedTopics entry
+            "01010101010101010101010101010101",
+            "07", // TopicName "orders"
+            "6f7264657273",
+            "02", // one partition
+            "00000000",
+            "00", // TopicPartitionsInfo tagged fields
+            "02", // one DeletingTopics entry
+            "09090909090909090909090909090909",
+            "06", // TopicName "carts"
+            "6361727473",
+            "00", // TopicInfo tagged fields
+            "00", // message tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 

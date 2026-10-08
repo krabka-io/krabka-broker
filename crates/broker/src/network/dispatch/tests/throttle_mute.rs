@@ -17,13 +17,8 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity};
 use krabka_protocol::{
     Decode, Encode as _,
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        fetch_response::FetchResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::ProduceResponse,
-    },
+    owned::{fetch_response::FetchResponse, produce_response::ProduceResponse},
+    primitives::uuid::Uuid,
     records::{Record, RecordBatch},
 };
 use krabka_units::{Time, convert::TimeExt as _, millis};
@@ -31,7 +26,7 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use super::request_frame;
-use crate::{broker::Broker, network::codec::KafkaCodec};
+use crate::network::codec::KafkaCodec;
 
 /// `Produce` wire `api_key`.
 const PRODUCE_KEY: i16 = 0;
@@ -71,10 +66,7 @@ async fn broker_with_anonymous_quotas(
     throttle_max: Time,
     quotas: &[(&str, f64)],
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-    cfg.quota_throttle_max = throttle_max;
-    let handle = Broker::start(cfg).await.expect("start broker");
+    let (handle, dir) = broker_with_throttle(throttle_max).await;
     seed_anonymous_quotas(&handle, quotas).await;
     (handle, dir)
 }
@@ -135,26 +127,14 @@ async fn connect_to_serve_loop(
 }
 
 async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
-    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
-    let body = encoded(
-        &CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        },
-        7,
-    );
+    let body = encoded(&configured_topic_request(topic, &[], 1, 1, 5_000), 7);
     send_request(framed, 19, 7, 1, &body).await;
-    let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-        .await
-        .expect("the response must beat the client timeout")
-        .expect("a response frame")
-        .expect("response decode");
+    let response = response_frame(
+        framed,
+        CLIENT_TIMEOUT,
+        "the response must beat the client timeout",
+    )
+    .await;
     check!(response_correlation_id(&response) == 1);
 }
 
@@ -183,6 +163,8 @@ fn response_correlation_id(frame: &BytesMut) -> i32 {
     i32::from_be_bytes(frame[..4].try_into().expect("response correlation id"))
 }
 
+krabka_macros::single_partition_produce_fixture!(single_partition_produce);
+
 /// Builds a `Produce` request body for `topic` carrying `count` records of
 /// `record_bytes` each.
 fn produce_body(topic: &str, acks: i16, record_bytes: usize, count: usize) -> BytesMut {
@@ -194,27 +176,20 @@ fn produce_body(topic: &str, acks: i16, record_bytes: usize, count: usize) -> By
             ..Default::default()
         })
         .collect();
-    let request = ProduceRequest {
-        acks,
-        timeout_ms: 30_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(
-                    RecordBatch {
-                        last_offset_delta: i32::try_from(count - 1).expect("record count"),
-                        records,
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
+    let request = single_partition_produce(
+        topic,
+        Uuid::default(),
+        0,
+        Some(
+            RecordBatch {
+                last_offset_delta: i32::try_from(count - 1).expect("record count"),
+                records,
                 ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+            }
+            .into(),
+        ),
+        (acks, 30_000),
+    );
     let mut body = BytesMut::new();
     request
         .encode(&mut body, PRODUCE_VERSION)
@@ -224,23 +199,7 @@ fn produce_body(topic: &str, acks: i16, record_bytes: usize, count: usize) -> By
 
 /// Builds a consumer `Fetch` request body for partition 0 of `topic`.
 fn fetch_body(topic: &str) -> BytesMut {
-    let request = FetchRequest {
-        replica_id: -1,
-        max_wait_ms: 0,
-        min_bytes: 1,
-        max_bytes: 1 << 20,
-        topics: vec![FetchTopic {
-            topic: topic.to_string(),
-            partitions: vec![FetchPartition {
-                partition: 0,
-                fetch_offset: 0,
-                partition_max_bytes: 1 << 20,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let request = consumer_fetch_request(topic);
     let mut body = BytesMut::new();
     request
         .encode(&mut body, FETCH_VERSION)
@@ -270,11 +229,12 @@ async fn read_after_mute(
             .is_err(),
         "a muted connection must serve no further request inside the throttle window"
     );
-    let frame = tokio::time::timeout(MUTE_LIFT_TIMEOUT, framed.next())
-        .await
-        .expect("the mute must lift once the window closes")
-        .expect("a response frame")
-        .expect("response decode");
+    let frame = response_frame(
+        framed,
+        MUTE_LIFT_TIMEOUT,
+        "the mute must lift once the window closes",
+    )
+    .await;
     (frame, muted_at.elapsed())
 }
 
@@ -291,35 +251,23 @@ async fn read_after_mute(
 #[tokio::test]
 async fn throttled_connection_answers_first_and_mutes_afterwards() {
     let mute_window = millis(1000);
-    let (handle, _dir) =
-        broker_with_anonymous_quotas(mute_window, &[("request_percentage", 0.0001)]).await;
-    let (server, mut framed) = connect_to_serve_loop(&handle).await;
+    let (handle, _dir, server, mut framed) = request_quota_connection(mute_window).await;
 
     // The first request trips the quota. Its response must still arrive well
     // inside a client timeout that the throttle window would blow through.
     let sent_at = Instant::now();
     send_api_versions(&mut framed, 1).await;
-    let first = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-        .await
-        .expect("throttled response must beat the client timeout, not wait out the window")
-        .expect("a response frame")
-        .expect("response decode");
-    let answered_at = Instant::now();
-    check!(response_correlation_id(&first) == 1);
-    check!(sent_at.elapsed() < mute_window.to_std());
+    let (_first, answered_at) = response_before_mute(
+        &mut framed,
+        sent_at,
+        mute_window,
+        "throttled response must beat the client timeout, not wait out the window",
+    )
+    .await;
 
     // The connection is now muted: the second request sits unread until the
     // window closes, and is then served.
-    send_api_versions(&mut framed, 2).await;
-    let (second, muted_for) = read_after_mute(&mut framed, answered_at).await;
-    check!(response_correlation_id(&second) == 2);
-    // The mute began when the first response was written, marginally before it
-    // was read back here, so the lower bound carries a little slack.
-    check!(muted_for >= mute_window.to_std().saturating_sub(SLACK));
-
-    drop(framed);
-    server.await.expect("serve loop joins on client EOF");
-    handle.shutdown().await;
+    finish_muted_connection(framed, server, handle, answered_at, mute_window).await;
 }
 
 /// KIP-219 on the `Fetch` path, which writes its response as a plan of raw
@@ -332,9 +280,7 @@ async fn throttled_connection_answers_first_and_mutes_afterwards() {
 #[tokio::test]
 async fn a_throttled_fetch_writes_its_plan_before_the_mute() {
     let mute_window = millis(1000);
-    let (handle, _dir) =
-        broker_with_anonymous_quotas(mute_window, &[("request_percentage", 0.0001)]).await;
-    let (server, mut framed) = connect_to_serve_loop(&handle).await;
+    let (handle, _dir, server, mut framed) = request_quota_connection(mute_window).await;
 
     let sent_at = Instant::now();
     send_request(
@@ -345,29 +291,20 @@ async fn a_throttled_fetch_writes_its_plan_before_the_mute() {
         &fetch_body("no-such-topic"),
     )
     .await;
-    let first = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-        .await
-        .expect("the fetch plan must beat the client timeout, not wait out the window")
-        .expect("a response frame")
-        .expect("response decode");
-    let answered_at = Instant::now();
-    check!(response_correlation_id(&first) == 1);
-    check!(sent_at.elapsed() < mute_window.to_std());
+    let (first, answered_at) = response_before_mute(
+        &mut framed,
+        sent_at,
+        mute_window,
+        "the fetch plan must beat the client timeout, not wait out the window",
+    )
+    .await;
 
     // The window the connection is about to be muted for is the one the
     // response reports.
     let fetch: FetchResponse = decode_response_body(&first, FETCH_VERSION);
-    let reported = millis(u32::try_from(fetch.throttle_time_ms).expect("a window"));
-    check!(reported == mute_window);
+    assert_reported_window(fetch.throttle_time_ms, mute_window);
 
-    send_api_versions(&mut framed, 2).await;
-    let (second, muted_for) = read_after_mute(&mut framed, answered_at).await;
-    check!(response_correlation_id(&second) == 2);
-    check!(muted_for >= mute_window.to_std().saturating_sub(SLACK));
-
-    drop(framed);
-    server.await.expect("serve loop joins on client EOF");
-    handle.shutdown().await;
+    finish_muted_connection(framed, server, handle, answered_at, mute_window).await;
 }
 
 /// An `acks=0` produce writes no response frame, and still carries a mute
@@ -417,8 +354,7 @@ async fn acks_zero_produce_writes_no_response_and_still_mutes() {
     );
     check!(muted_for >= mute_window.to_std().saturating_sub(SLACK));
 
-    drop(framed);
-    server.await.expect("serve loop joins on client EOF");
+    close_serve_loop(framed, server).await;
     handle.shutdown().await;
 }
 
@@ -453,30 +389,26 @@ async fn a_request_tripping_two_quotas_is_muted_once_for_the_longest_window() {
         &produce_body("no-such-topic", 1, 1024, 8),
     )
     .await;
-    let first = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-        .await
-        .expect("throttled produce must beat the client timeout, not wait out the window")
-        .expect("a response frame")
-        .expect("response decode");
+    let first = response_frame(
+        &mut framed,
+        CLIENT_TIMEOUT,
+        "throttled produce must beat the client timeout, not wait out the window",
+    )
+    .await;
     let answered_at = Instant::now();
     check!(response_correlation_id(&first) == 1);
 
     // One window on the wire, not two summed.
     let produce: ProduceResponse = decode_response_body(&first, PRODUCE_VERSION);
-    let reported = millis(u32::try_from(produce.throttle_time_ms).expect("a window"));
-    check!(reported == mute_window);
+    assert_reported_window(produce.throttle_time_ms, mute_window);
 
-    send_api_versions(&mut framed, 2).await;
-    let (second, muted_for) = read_after_mute(&mut framed, answered_at).await;
-    check!(response_correlation_id(&second) == 2);
-    check!(muted_for >= mute_window.to_std().saturating_sub(SLACK));
+    let muted_for = next_response_after_mute(&mut framed, answered_at, mute_window).await;
     check!(
         muted_for < ONE_WINDOW_CEILING,
         "two quotas must mute for one window, not for their sum"
     );
 
-    drop(framed);
-    server.await.expect("serve loop joins on client EOF");
+    close_serve_loop(framed, server).await;
     handle.shutdown().await;
 }
 
@@ -494,11 +426,12 @@ async fn produce_charges_the_whole_request_frame_once() {
     let body = produce_body("frame-charge", 1, 256, 8);
     let frame_len = request_frame(PRODUCE_KEY, PRODUCE_VERSION, 1, None, Some(0), &body).len();
     send_request(&mut framed, PRODUCE_KEY, PRODUCE_VERSION, 1, &body).await;
-    let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-        .await
-        .expect("the response must beat the client timeout")
-        .expect("a response frame")
-        .expect("response decode");
+    let response = response_frame(
+        &mut framed,
+        CLIENT_TIMEOUT,
+        "the response must beat the client timeout",
+    )
+    .await;
     let produce: ProduceResponse = decode_response_body(&response, PRODUCE_VERSION);
 
     let expected = i32::try_from(frame_len).expect("frame length") - 1000;
@@ -508,8 +441,7 @@ async fn produce_charges_the_whole_request_frame_once() {
         produce.throttle_time_ms
     );
 
-    drop(framed);
-    server.await.expect("serve loop joins on client EOF");
+    close_serve_loop(framed, server).await;
     handle.shutdown().await;
 }
 
@@ -561,10 +493,7 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
 
     let mute_window = millis(1000);
     let window_ms = i32::try_from(mute_window.millis_i64()).expect("a window");
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-    cfg.quota_throttle_max = mute_window;
-    let handle = Broker::start(cfg).await.expect("start broker");
+    let (handle, _dir) = broker_with_throttle(mute_window).await;
     // The `FindCoordinator` case must find `__consumer_offsets`. A lookup
     // that creates it runs the creation on this runtime, and that work would
     // delay the read the mute window is measured from.
@@ -676,11 +605,12 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
         )
         .freeze();
         framed.send(frame).await.expect("send request");
-        let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-            .await
-            .expect("the response must beat the client timeout")
-            .expect("a response frame")
-            .expect("response decode");
+        let response = response_frame(
+            &mut framed,
+            CLIENT_TIMEOUT,
+            "the response must beat the client timeout",
+        )
+        .await;
         let answered_at = Instant::now();
         check!(response_correlation_id(&response) == 1, "{}", case.name);
         let header_len = if case.flexible { 5 } else { 4 };
@@ -710,8 +640,7 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
             );
         }
 
-        drop(framed);
-        server.await.expect("serve loop joins on client EOF");
+        close_serve_loop(framed, server).await;
     }
     handle.shutdown().await;
 }
@@ -729,10 +658,7 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
 #[tokio::test]
 async fn acks_zero_produce_is_exempt_from_the_request_quota() {
     let mute_window = millis(1000);
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-    cfg.quota_throttle_max = mute_window;
-    let handle = Broker::start(cfg).await.expect("start broker");
+    let (handle, _dir) = broker_with_throttle(mute_window).await;
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
     create_topic(&mut framed, "acks-zero-exempt").await;
@@ -751,15 +677,15 @@ async fn acks_zero_produce_is_exempt_from_the_request_quota() {
     .await;
     send_api_versions(&mut framed, 3).await;
 
-    let next = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-        .await
-        .expect("an acks=0 produce must not mute the connection")
-        .expect("a response frame")
-        .expect("response decode");
+    let next = response_frame(
+        &mut framed,
+        CLIENT_TIMEOUT,
+        "an acks=0 produce must not mute the connection",
+    )
+    .await;
     check!(response_correlation_id(&next) == 3);
 
-    drop(framed);
-    server.await.expect("serve loop joins on client EOF");
+    close_serve_loop(framed, server).await;
     handle.shutdown().await;
 }
 
@@ -781,24 +707,16 @@ async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation(
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
     let body = encoded(
-        &CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "one-observation".to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        },
+        &configured_topic_request("one-observation", &[], 1, 1, 5_000),
         VERSION,
     );
     send_request(&mut framed, 19, VERSION, 1, &body).await;
-    let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-        .await
-        .expect("the response must beat the client timeout")
-        .expect("a response frame")
-        .expect("response decode");
+    let response = response_frame(
+        &mut framed,
+        CLIENT_TIMEOUT,
+        "the response must beat the client timeout",
+    )
+    .await;
     check!(response_correlation_id(&response) == 1);
 
     let rendered = {
@@ -815,7 +733,92 @@ async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation(
         "{rendered}"
     );
 
+    close_serve_loop(framed, server).await;
+    handle.shutdown().await;
+}
+
+krabka_macros::consumer_fetch_fixture!(consumer_fetch_request);
+krabka_macros::create_topic_fixture!(configured_topic_request);
+
+async fn broker_with_throttle(
+    throttle_max: Time,
+) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+    crate::test_support::start_broker_with(|cfg| cfg.quota_throttle_max = throttle_max).await
+}
+
+async fn response_frame(
+    framed: &mut Framed<TcpStream, KafkaCodec>,
+    timeout: Duration,
+    context: &str,
+) -> BytesMut {
+    tokio::time::timeout(timeout, framed.next())
+        .await
+        .expect(context)
+        .expect("a response frame")
+        .expect("response decode")
+}
+
+async fn close_serve_loop(
+    framed: Framed<TcpStream, KafkaCodec>,
+    server: tokio::task::JoinHandle<()>,
+) {
     drop(framed);
     server.await.expect("serve loop joins on client EOF");
+}
+
+async fn finish_muted_connection(
+    mut framed: Framed<TcpStream, KafkaCodec>,
+    server: tokio::task::JoinHandle<()>,
+    handle: crate::BrokerHandle,
+    answered_at: Instant,
+    window: Time,
+) {
+    let _muted_for = next_response_after_mute(&mut framed, answered_at, window).await;
+    close_serve_loop(framed, server).await;
     handle.shutdown().await;
+}
+
+async fn request_quota_connection(
+    window: Time,
+) -> (
+    crate::BrokerHandle,
+    tempfile::TempDir,
+    tokio::task::JoinHandle<()>,
+    Framed<TcpStream, KafkaCodec>,
+) {
+    let (handle, dir) =
+        broker_with_anonymous_quotas(window, &[("request_percentage", 0.0001)]).await;
+    let (server, framed) = connect_to_serve_loop(&handle).await;
+    (handle, dir, server, framed)
+}
+
+async fn response_before_mute(
+    framed: &mut Framed<TcpStream, KafkaCodec>,
+    sent_at: Instant,
+    window: Time,
+    context: &str,
+) -> (BytesMut, Instant) {
+    let first = response_frame(framed, CLIENT_TIMEOUT, context).await;
+    let answered_at = Instant::now();
+    check!(response_correlation_id(&first) == 1);
+    check!(sent_at.elapsed() < window.to_std());
+    (first, answered_at)
+}
+
+async fn next_response_after_mute(
+    framed: &mut Framed<TcpStream, KafkaCodec>,
+    answered_at: Instant,
+    window: Time,
+) -> Duration {
+    send_api_versions(framed, 2).await;
+    let (second, muted_for) = read_after_mute(framed, answered_at).await;
+    check!(response_correlation_id(&second) == 2);
+    // The mute began when the first response was written, marginally before the client's read.
+    check!(muted_for >= window.to_std().saturating_sub(SLACK));
+    muted_for
+}
+
+fn assert_reported_window(throttle_time_ms: i32, expected: Time) {
+    let reported = millis(u32::try_from(throttle_time_ms).expect("a window"));
+    check!(reported == expected);
 }

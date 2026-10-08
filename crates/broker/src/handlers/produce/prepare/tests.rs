@@ -3,14 +3,14 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use bytes::BytesMut;
 use krabka_compression::CompressionType;
-use krabka_ids::Offset;
 use krabka_protocol::records::Record;
 use krabka_units::{bytes, fraction};
 
 use super::*;
 use crate::handlers::produce::test_support::encode_batch;
+
+krabka_macros::legacy_policy_fixture!(legacy_policy_wire, ::krabka_records_legacy);
 
 /// The topic name these cases record under, as the shared handle the metric
 /// label sets clone.
@@ -77,20 +77,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
         .is_ok()
     );
 
-    let records = vec![krabka_records_legacy::ParsedRecord {
-        offset: Offset(0),
-        timestamp: Some(1),
-        key: None,
-        value: Some(Bytes::from(vec![b'x'; 4096])),
-    }];
-    let mut legacy = BytesMut::new();
-    krabka_records_legacy::encode_compressed_message_set(
-        &records,
-        krabka_records_legacy::Magic::V1,
-        CompressionType::Lz4,
-        &mut legacy,
-    )
-    .unwrap();
+    let legacy = legacy_policy_wire();
     let error = decode_owned_batch(
         RecordsPayload::Legacy(legacy.freeze()),
         &topic(),

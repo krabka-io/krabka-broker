@@ -1,6 +1,6 @@
 //! Static broker config for the KIP-848 next-gen consumer group protocol.
 
-use std::{borrow::Cow, collections::BTreeMap, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, str::FromStr, sync::Arc, time::Duration};
 
 use qubit_clock::Timer;
 
@@ -184,6 +184,125 @@ pub(crate) fn group_millis(
     Some(clamp_to_range(value, min, max))
 }
 
+/// Applies the three timing overrides shared by consumer and share groups.
+macro_rules! timing_overrides {
+    ($config:expr, $overrides:expr, $session:expr, $heartbeat:expr, $assignment:expr) => {{
+        let config = $config;
+        let overrides = $overrides;
+        let session = $crate::coordinator::unified::config::group_millis(
+            overrides,
+            $session,
+            config.min_session_timeout,
+            config.max_session_timeout,
+        );
+        let heartbeat = $crate::coordinator::unified::config::group_millis(
+            overrides,
+            $heartbeat,
+            config.min_heartbeat_interval,
+            config.max_heartbeat_interval,
+        );
+        let assignment = $crate::coordinator::unified::config::group_millis(
+            overrides,
+            $assignment,
+            $crate::coordinator::unified::config::MIN_ASSIGNMENT_INTERVAL,
+            $crate::coordinator::unified::config::MAX_ASSIGNMENT_INTERVAL,
+        );
+        if session.is_none() && heartbeat.is_none() && assignment.is_none() {
+            std::borrow::Cow::Borrowed(config)
+        } else {
+            let mut config = config.clone();
+            config.session_timeout = session.unwrap_or(config.session_timeout);
+            config.heartbeat_interval = heartbeat.unwrap_or(config.heartbeat_interval);
+            config.assignment_interval = assignment.unwrap_or(config.assignment_interval);
+            std::borrow::Cow::Owned(config)
+        }
+    }};
+}
+
+pub(crate) use timing_overrides;
+
+/// Resolve a protocol's group overrides from one current image, or borrow broker defaults.
+macro_rules! effective_group_config {
+    ($(#[$doc:meta])* fn $name:ident($config_type:ty);) => {
+        $(#[$doc])*
+        fn $name<'a>(
+            config: &'a $config_type,
+            coordinator: &$crate::coordinator::unified::GroupCoordinator,
+            group_id: &str,
+        ) -> ::std::borrow::Cow<'a, $config_type> {
+            match coordinator.metadata_source() {
+                Some(source) => config.for_group(source.current_image().group_config(group_id)),
+                None => ::std::borrow::Cow::Borrowed(config),
+            }
+        }
+    };
+}
+pub(crate) use effective_group_config;
+
+/// Declare the common session and heartbeat settings while keeping each protocol's fields in order.
+macro_rules! membership_config_type {
+    ($(#[$($meta:tt)*])* pub struct $name:ident;
+        prefix { $($prefix:tt)* }
+        $(#[$($session_doc:tt)*])* session_timeout;
+        $(#[$($heartbeat_doc:tt)*])* heartbeat_interval;
+        before_bounds { $($before:tt)* }
+        bounds {
+            $(#[$($min_session_doc:tt)*])* min_session_timeout;
+            $(#[$($max_session_doc:tt)*])* max_session_timeout;
+            $(#[$($min_heartbeat_doc:tt)*])* min_heartbeat_interval;
+            $(#[$($max_heartbeat_doc:tt)*])* max_heartbeat_interval;
+        }
+        suffix { $($suffix:tt)* }) => {
+        $(#[$($meta)*])*
+        pub struct $name {
+            $($prefix)*
+            $(#[$($session_doc)*])*
+            #[default(std::time::Duration::from_secs(45))]
+            pub session_timeout: std::time::Duration,
+            $(#[$($heartbeat_doc)*])*
+            #[default(std::time::Duration::from_secs(5))]
+            pub heartbeat_interval: std::time::Duration,
+            $($before)*
+            $(#[$($min_session_doc)*])*
+            #[default(std::time::Duration::from_secs(45))]
+            pub min_session_timeout: std::time::Duration,
+            $(#[$($max_session_doc)*])*
+            #[default(std::time::Duration::from_mins(1))]
+            pub max_session_timeout: std::time::Duration,
+            $(#[$($min_heartbeat_doc)*])*
+            #[default(std::time::Duration::from_secs(5))]
+            pub min_heartbeat_interval: std::time::Duration,
+            $(#[$($max_heartbeat_doc)*])*
+            #[default(std::time::Duration::from_secs(15))]
+            pub max_heartbeat_interval: std::time::Duration,
+            $($suffix)*
+        }
+    };
+}
+pub(crate) use membership_config_type;
+
+/// Membership configs share the per-group timing lookup and test assignment cadence.
+macro_rules! membership_config_methods {
+    ($(#[$doc:meta])* $session:ident, $heartbeat:ident, $assignment:ident) => {
+        /// The defaults with no assignment interval, for the tests that expect
+        /// each membership change to be assigned at once.
+        #[cfg(test)]
+        pub(crate) fn assigning_at_once() -> Self {
+            Self { assignment_interval: std::time::Duration::ZERO, ..Self::default() }
+        }
+
+        $(#[$doc])*
+        #[must_use]
+        pub(crate) fn for_group(
+            &self,
+            overrides: Option<&std::collections::BTreeMap<String, String>>,
+        ) -> std::borrow::Cow<'_, Self> {
+            $crate::coordinator::unified::config::timing_overrides!(self, overrides, $session, $heartbeat, $assignment)
+        }
+    };
+}
+pub(crate) use membership_config_methods;
+
 /// Lower bound on the negotiated session timeout: 45 s, matching Kafka's
 /// `group.consumer.min.session.timeout.ms`.
 pub const DEFAULT_MIN_SESSION_TIMEOUT: Duration = Duration::from_secs(45);
@@ -283,16 +402,7 @@ impl NextGenConfig {
         self.find_assignor(name).is_some()
     }
 
-    /// The defaults with no assignment interval, for the tests that expect
-    /// each membership change to be assigned at once.
-    #[cfg(test)]
-    pub(crate) fn assigning_at_once() -> Self {
-        Self {
-            assignment_interval: Duration::ZERO,
-            ..Self::default()
-        }
-    }
-
+    membership_config_methods! {
     /// The settings a consumer group runs with: each `consumer.*` override in
     /// the group's stored config over the broker value, clamped to the
     /// broker's `group.consumer.min.*` and `group.consumer.max.*` bounds.
@@ -303,34 +413,7 @@ impl NextGenConfig {
     /// over `GroupCoordinatorConfig`, with the stored config evaluated against
     /// the bounds (`GroupConfig.evaluate`). A group with no override borrows
     /// the broker value.
-    #[must_use]
-    pub(crate) fn for_group(&self, overrides: Option<&BTreeMap<String, String>>) -> Cow<'_, Self> {
-        let session = group_millis(
-            overrides,
-            KEY_CONSUMER_SESSION_TIMEOUT_MS,
-            self.min_session_timeout,
-            self.max_session_timeout,
-        );
-        let heartbeat = group_millis(
-            overrides,
-            KEY_CONSUMER_HEARTBEAT_INTERVAL_MS,
-            self.min_heartbeat_interval,
-            self.max_heartbeat_interval,
-        );
-        let assignment = group_millis(
-            overrides,
-            KEY_CONSUMER_ASSIGNMENT_INTERVAL_MS,
-            MIN_ASSIGNMENT_INTERVAL,
-            MAX_ASSIGNMENT_INTERVAL,
-        );
-        if session.is_none() && heartbeat.is_none() && assignment.is_none() {
-            return Cow::Borrowed(self);
-        }
-        let mut config = self.clone();
-        config.session_timeout = session.unwrap_or(config.session_timeout);
-        config.heartbeat_interval = heartbeat.unwrap_or(config.heartbeat_interval);
-        config.assignment_interval = assignment.unwrap_or(config.assignment_interval);
-        Cow::Owned(config)
+        KEY_CONSUMER_SESSION_TIMEOUT_MS, KEY_CONSUMER_HEARTBEAT_INTERVAL_MS, KEY_CONSUMER_ASSIGNMENT_INTERVAL_MS
     }
 }
 
@@ -343,7 +426,7 @@ const KEY_CONSUMER_ASSIGNMENT_INTERVAL_MS: &str = "consumer.assignment.interval.
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{borrow::Cow, collections::HashMap};
 
     use assert2::assert;
 

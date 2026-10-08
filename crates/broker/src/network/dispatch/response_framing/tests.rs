@@ -81,15 +81,9 @@ const CASES: [Case; 5] = [
     },
 ];
 
-/// A response body of `len` bytes, in a non-uniform pattern so nothing
-/// downstream can shortcut it and a truncation cannot land on a repeat.
-fn body(len: usize) -> Bytes {
-    Bytes::from(
-        (0..len)
-            .map(|b| u8::try_from(b % 251).expect("b % 251 fits in a byte"))
-            .collect::<Vec<u8>>(),
-    )
-}
+// A response body of `len` bytes, in a non-uniform pattern so nothing
+// downstream can shortcut it and a truncation cannot land on a repeat.
+krabka_macros::patterned_bytes_fixture!(body);
 
 /// The response header Kafka puts in front of a body, restated here rather
 /// than read back out of the broker: the correlation id, followed by an empty
@@ -126,18 +120,22 @@ async fn wire_bytes(response: Bytes, codec: KafkaCodec) -> Vec<u8> {
     wire
 }
 
+krabka_macros::frame_prefix_fixture!(wire_frame_prefix);
+
 /// The chained-`Buf` prototype's wire image, assembled out of the two header
 /// helpers the way `benches/perf_deferrals.rs` assembles it: the codec's
 /// 4-byte frame length and the response header in one leading segment, then
 /// the handler's body.
 fn chained_prototype_wire(api_key: ApiKeyCode, body_flexible: bool, body: &Bytes) -> Vec<u8> {
     let header_len = response_header_len(api_key, body_flexible);
-    let mut wire = BytesMut::with_capacity(4 + header_len + body.len());
-    wire.put_u32(u32::try_from(header_len + body.len()).expect("a test body fits in a frame"));
-    wire.put_i32(CORRELATION_ID);
-    if response_header_v1(api_key, body_flexible) {
-        wire.put_u8(0); // empty tagged fields
-    }
+    let mut wire = wire_frame_prefix(
+        header_len,
+        CORRELATION_ID,
+        response_header_v1(api_key, body_flexible),
+        body.len(),
+        4 + header_len + body.len(),
+        "a test body fits in a frame",
+    );
     wire.put_slice(body);
     wire.to_vec()
 }
@@ -162,8 +160,7 @@ fn the_seam_encodes_the_response_header_the_dispatch_loop_encodes() {
             case.name
         );
 
-        let framed = encode_response(case.api_key, CORRELATION_ID, case.body_flexible, &payload)
-            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let framed = encode_case(&case, &payload);
 
         let mut expected = BytesMut::from(&header[..]);
         expected.put_slice(&payload);
@@ -188,9 +185,7 @@ fn the_seam_encodes_the_response_header_the_dispatch_loop_encodes() {
 #[tokio::test]
 async fn the_seam_codec_writes_the_frame_the_connection_loop_writes() {
     for case in CASES {
-        let payload = body(case.body_len);
-        let framed = encode_response(case.api_key, CORRELATION_ID, case.body_flexible, &payload)
-            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let (_payload, framed) = encoded_case(&case);
 
         let mut expected = BytesMut::new();
         expected.put_u32(u32::try_from(framed.len()).expect("a test frame fits in a u32"));
@@ -214,9 +209,7 @@ async fn the_seam_codec_writes_the_frame_the_connection_loop_writes() {
 #[tokio::test]
 async fn the_chained_prototype_the_bench_prices_is_wire_identical() {
     for case in CASES {
-        let payload = body(case.body_len);
-        let framed = encode_response(case.api_key, CORRELATION_ID, case.body_flexible, &payload)
-            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let (payload, framed) = encoded_case(&case);
 
         let copy_path = wire_bytes(framed, codec(MAX_FRAME_BYTES)).await;
         let prototype = chained_prototype_wire(case.api_key, case.body_flexible, &payload);
@@ -245,4 +238,15 @@ fn the_seam_codec_frames_a_response_over_the_request_limit() {
             .unwrap_or_else(|error| panic!("{which}: {error}"));
         assert!(wire == expected, "{which}");
     }
+}
+
+fn encode_case(case: &Case, payload: &Bytes) -> Bytes {
+    encode_response(case.api_key, CORRELATION_ID, case.body_flexible, payload)
+        .unwrap_or_else(|error| panic!("{}: {error}", case.name))
+}
+
+fn encoded_case(case: &Case) -> (Bytes, Bytes) {
+    let payload = body(case.body_len);
+    let framed = encode_case(case, &payload);
+    (payload, framed)
 }

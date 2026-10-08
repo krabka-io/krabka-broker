@@ -15,19 +15,22 @@ use assert2::{assert, check};
 use krabka_broker::{Broker, BrokerConfig, codes};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+    describe_configs_request::DescribeConfigsRequest,
     describe_configs_response::DescribeConfigsResourceResult,
     list_groups_request::ListGroupsRequest,
-    offset_commit_request::{
-        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-    },
-    offset_delete_request::{
-        OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
-    },
+    offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
 };
 use krabka_units::{millis, minutes};
 use support::topic_id_for;
+
+use crate::support::{
+    client::connect_owned,
+    configs::describe_resource,
+    offsets::{
+        offset_commit_topic, offset_delete_partition, offset_delete_request, offset_delete_topic,
+    },
+    topics::{creatable_topic, create_topic_request},
+};
 
 /// `ConfigResource.Type.BROKER`.
 const RESOURCE_TYPE_BROKER: i8 = 4;
@@ -52,12 +55,12 @@ const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.inter
 
 async fn client_for(broker: &krabka_broker::BrokerHandle) -> Arc<Client> {
     Arc::new(
-        Client::builder()
-            .bootstrap(broker.listen_addr().to_string().as_str())
-            .client_id("retention-test")
-            .build()
-            .await
-            .expect("client"),
+        connect_owned(
+            broker.listen_addr().to_string().as_str(),
+            "retention-test",
+            "client",
+        )
+        .await,
     )
 }
 
@@ -65,20 +68,16 @@ async fn client_for(broker: &krabka_broker::BrokerHandle) -> Arc<Client> {
 /// Kafka's own defaults.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_configs_reports_the_retention_knobs() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let (_dir, broker) = crate::support::standalone_broker().await;
     let client = client_for(&broker).await;
 
     let described = client
         .send(DescribeConfigsRequest {
-            resources: vec![DescribeConfigsResource {
-                resource_type: RESOURCE_TYPE_BROKER,
-                resource_name: "1".to_string(),
-                configuration_keys: None,
-                ..Default::default()
-            }],
+            resources: vec![describe_resource(
+                RESOURCE_TYPE_BROKER,
+                "1".to_string(),
+                None,
+            )],
             include_synonyms: false,
             include_documentation: false,
             ..Default::default()
@@ -134,15 +133,14 @@ async fn describe_configs_reports_a_named_knob_as_static() {
 
     let described = client
         .send(DescribeConfigsRequest {
-            resources: vec![DescribeConfigsResource {
-                resource_type: RESOURCE_TYPE_BROKER,
-                resource_name: "1".to_string(),
-                configuration_keys: Some(vec![
+            resources: vec![describe_resource(
+                RESOURCE_TYPE_BROKER,
+                "1".to_string(),
+                Some(vec![
                     OFFSETS_RETENTION_MINUTES.to_string(),
                     OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_string(),
                 ]),
-                ..Default::default()
-            }],
+            )],
             include_synonyms: false,
             include_documentation: false,
             ..Default::default()
@@ -205,16 +203,10 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
     // `OffsetDelete` resolves each partition against the metadata image, so
     // the topic has to exist for the delete to reach the log.
     let created = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.to_string(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 10_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic(TOPIC.to_string(), 1, 1),
+            10_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == codes::NONE);
@@ -229,17 +221,16 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
             group_id: GROUP.to_string(),
             generation_id_or_member_epoch: -1,
             member_id: String::new(),
-            topics: vec![OffsetCommitRequestTopic {
-                name: TOPIC.to_string(),
+            topics: vec![offset_commit_topic(
+                TOPIC.to_string(),
                 topic_id,
-                partitions: vec![OffsetCommitRequestPartition {
+                vec![OffsetCommitRequestPartition {
                     partition_index: 0,
                     committed_offset: 5,
                     committed_leader_epoch: -1,
                     ..Default::default()
                 }],
-                ..Default::default()
-            }],
+            )],
             ..Default::default()
         })
         .await
@@ -261,18 +252,13 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
     // --delete-offsets` does. What is left is a memberless group holding
     // nothing.
     let deleted = client
-        .send(OffsetDeleteRequest {
-            group_id: GROUP.to_string(),
-            topics: vec![OffsetDeleteRequestTopic {
-                name: TOPIC.to_string(),
-                partitions: vec![OffsetDeleteRequestPartition {
-                    partition_index: 0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(offset_delete_request(
+            GROUP.to_string(),
+            vec![offset_delete_topic(
+                TOPIC.to_string(),
+                vec![offset_delete_partition(0)],
+            )],
+        ))
         .await
         .expect("OffsetDelete");
     assert!(deleted.error_code == codes::NONE);

@@ -236,74 +236,14 @@ mod tests {
 
     #[test]
     fn event_class_maps_each_variant() {
-        let authn = AuditEvent::Authentication {
-            outcome: AuditOutcome::Failure,
-            mechanism: "SASL/PLAIN".into(),
-            principal: AuditPrincipal {
-                name: "alice".into(),
-                auth_method: "SaslPlain".into(),
-            },
-            source: AuditEndpoint {
-                ip: "10.0.0.1".into(),
-                port: 51120,
-            },
-            reason: Some("authentication failed".into()),
-            time_ms: 1_700_000_000_000,
-        };
-        let denied = AuditEvent::AuthorizationDenied {
-            principal: AuditPrincipal {
-                name: "bob".into(),
-                auth_method: "MTls".into(),
-            },
-            source: AuditEndpoint {
-                ip: "10.0.0.2".into(),
-                port: 4444,
-            },
-            resource_type: "Topic".into(),
-            resource_name: "secrets".into(),
-            operation: "Write".into(),
-            time_ms: 1,
-        };
-        let admin = AuditEvent::AdminOperation {
-            outcome: AuditOutcome::Success,
-            principal: AuditPrincipal {
-                name: "admin".into(),
-                auth_method: "MTls".into(),
-            },
-            source: AuditEndpoint {
-                ip: "10.0.0.3".into(),
-                port: 9092,
-            },
-            operation: "CreateTopics".into(),
-            resources: vec![AuditResource {
-                resource_type: "Topic".into(),
-                name: "orders".into(),
-            }],
-            time_ms: 2,
-        };
-        let privileged = AuditEvent::PrivilegedAction {
-            outcome: AuditOutcome::Success,
-            phase: PrivilegedPhase::Applied,
-            action: "topic_freeze".into(),
-            target: "orders".into(),
-            proposal_id: String::new(),
-            principal: AuditPrincipal {
-                name: "User:alice".into(),
-                auth_method: "MTls".into(),
-            },
-            counterparties: vec![],
-            approver_set_fingerprint: String::new(),
-            key_id: "op-1".into(),
-            signature: vec![0xde, 0xad],
-            signature_verified: true,
-            signed_at_ms: 3,
-            source: AuditEndpoint {
-                ip: "10.0.0.4".into(),
-                port: 9092,
-            },
-            reason: "incident 42".into(),
-            time_ms: 4,
-        };
+        let authn = crate::test_support::authentication(
+            51120,
+            Some("authentication failed"),
+            1_700_000_000_000,
+        );
+        let denied = crate::test_support::denied(1);
+        let admin = crate::test_support::admin(2);
+        let privileged = crate::test_support::privileged_freeze(vec![0xde, 0xad], 3, 4);
         let life = AuditEvent::Lifecycle {
             kind: LifecycleKind::BrokerStarted,
             node_id: 1,

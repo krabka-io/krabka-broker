@@ -23,10 +23,8 @@ use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        api_versions_request::ApiVersionsRequest,
-        api_versions_response::ApiVersionsResponse,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        metadata_response::MetadataResponse,
+        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+        metadata_request::MetadataRequest, metadata_response::MetadataResponse,
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
         sasl_handshake_request::SaslHandshakeRequest,
@@ -39,16 +37,20 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::harness::{admin_plain_password, round_trip, wrong_scram_password};
+use crate::{
+    harness::{admin_plain_password, round_trip, wrong_scram_password},
+    support::{
+        discovery::{api_versions_request_for, topic_metadata_request},
+        topics::metadata_topic,
+    },
+};
 
 /// `REBOOTSTRAP_REQUIRED`, KIP-1242.
 const REBOOTSTRAP_REQUIRED: i16 = 129;
 
 /// A `SASL_PLAINTEXT` broker serving PLAIN for `admin`.
 async fn start_broker(customize: impl FnOnce(&mut BrokerConfig)) -> BrokerHandle {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    let (log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("admin".to_string(), admin_plain_password());
     customize(&mut cfg);
@@ -126,11 +128,7 @@ async fn api_versions(
 }
 
 fn named_client(name: &str) -> ApiVersionsRequest {
-    ApiVersionsRequest {
-        client_software_name: name.into(),
-        client_software_version: "1.0".into(),
-        ..Default::default()
-    }
+    api_versions_request_for(name, "1.0")
 }
 
 /// PLAIN login as `admin` on `stream`, after whichever requests already ran.
@@ -164,14 +162,7 @@ async fn plain_login(stream: &mut TcpStream, password: &str) -> Result<(), io::E
 }
 
 async fn scrape_metrics(addr: SocketAddr) -> String {
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let request = format!(
-        "GET /metrics HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n"
-    );
-    stream.write_all(request.as_bytes()).await.unwrap();
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).await.unwrap();
-    String::from_utf8(buf).unwrap()
+    crate::support::client::http_get(addr, "/metrics", false).await
 }
 
 /// A size prefix over `sasl.server.max.receive.size` fails the authentication
@@ -214,16 +205,17 @@ async fn the_larger_request_limit_returns_once_the_peer_authenticated() {
 
     // A 2 KiB Metadata request, as a list of topic names.
     let topics = (0..64)
-        .map(|index| MetadataRequestTopic {
-            name: Some(format!("a-topic-name-of-thirty-two-bytes-{index:02}")),
-            ..Default::default()
+        .map(|index| {
+            metadata_topic(
+                Some(format!("a-topic-name-of-thirty-two-bytes-{index:02}")),
+                krabka_protocol::primitives::uuid::Uuid::default(),
+            )
         })
         .collect::<Vec<_>>();
     let metadata = encode(
         &MetadataRequest {
-            topics: Some(topics),
             allow_auto_topic_creation: false,
-            ..Default::default()
+            ..topic_metadata_request(Some(topics))
         },
         12,
     );
@@ -357,11 +349,9 @@ async fn a_pre_auth_api_versions_carries_no_rebootstrap_check() {
     })
     .await;
     let stale = ApiVersionsRequest {
-        client_software_name: "krabka-test".into(),
-        client_software_version: "1.0".into(),
         cluster_id: Some("some-other-cluster".into()),
         node_id: 41,
-        ..Default::default()
+        ..api_versions_request_for("krabka-test", "1.0")
     };
 
     let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();

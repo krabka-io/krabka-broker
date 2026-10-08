@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/vote.rs" 92 0 97 21 *)
+(* #"/workspace/crates/verified/src/vote.rs" 88 0 93 21 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span svote = "/workspace/crates/verified/src/vote.rs" 98 18 98 19
-let%span svote'0 = "/workspace/crates/verified/src/vote.rs" 98 38 98 39
-let%span svote'1 = "/workspace/crates/verified/src/vote.rs" 98 61 98 62
-let%span svote'2 = "/workspace/crates/verified/src/vote.rs" 98 79 98 80
-let%span svote'3 = "/workspace/crates/verified/src/vote.rs" 89 10 90 83
-let%span svote'4 = "/workspace/crates/verified/src/vote.rs" 82 8 82 89
+let%span svote = "/workspace/crates/verified/src/vote.rs" 94 18 94 19
+let%span svote'0 = "/workspace/crates/verified/src/vote.rs" 94 38 94 39
+let%span svote'1 = "/workspace/crates/verified/src/vote.rs" 94 61 94 62
+let%span svote'2 = "/workspace/crates/verified/src/vote.rs" 94 79 94 80
+let%span svote'3 = "/workspace/crates/verified/src/vote.rs" 85 10 86 83
+let%span svote'4 = "/workspace/crates/verified/src/vote.rs" 78 8 78 89
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -18,7 +18,7 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate vote_fields_nonnegative [#"/workspace/crates/verified/src/vote.rs" 75 0 80 9] (voter_id: Int32.t) (candidate_id: Int32.t) (candidate_epoch: Int32.t) (last_epoch: Int32.t) =
+predicate vote_fields_nonnegative [#"/workspace/crates/verified/src/vote.rs" 71 0 76 9] (voter_id: Int32.t) (candidate_id: Int32.t) (candidate_epoch: Int32.t) (last_epoch: Int32.t) =
   [%#svote'4] ge_log_Int (Int32.to_int voter_id) 0
   /\ ge_log_Int (Int32.to_int candidate_id) 0
   /\ ge_log_Int (Int32.to_int candidate_epoch) 0 /\ ge_log_Int (Int32.to_int last_epoch) 0
@@ -27,7 +27,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let vote_wire_decision [#"/workspace/crates/verified/src/vote.rs" 92 0 97 21] (voter_id: Int32.t)
+let vote_wire_decision [#"/workspace/crates/verified/src/vote.rs" 88 0 93 21] (voter_id: Int32.t)
   (candidate_id: Int32.t) (candidate_epoch: Int32.t) (last_epoch: Int32.t) (return (x: t_VoteWireDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_10 <- Int32.lt voter_id ([%#svote] (0: Int32.t)) ] s1

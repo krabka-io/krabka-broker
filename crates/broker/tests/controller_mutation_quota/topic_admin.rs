@@ -12,14 +12,15 @@ use bytes::BytesMut;
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-        delete_topics_request::DeleteTopicsRequest,
+        create_topics_response::CreateTopicsResponse, delete_topics_request::DeleteTopicsRequest,
         delete_topics_response::DeleteTopicsResponse,
     },
 };
 
-use crate::{CLIENT_ID, kafka_wire};
+use crate::{
+    CLIENT_ID, kafka_wire,
+    support::topics::{creatable_topic, create_topic_request},
+};
 
 /// Drive `CreateTopics` (`api_key=19`) over a SASL/PLAIN connection.
 /// Returns `(throttle_time_ms, per-topic error_code)` from the first result.
@@ -32,16 +33,7 @@ pub(crate) async fn drive_create_topics_sasl(
 ) -> (i32, i16) {
     const VERSION: i16 = 7; // MAX_VERSION; flexible (>= 5)
 
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.to_string(),
-            num_partitions: partitions,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 30_000,
-        ..Default::default()
-    };
+    let req = create_topic_request(creatable_topic(topic.to_string(), partitions, 1), 30_000);
 
     let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await

@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use assert2::assert;
 use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
-use krabka_client_producer::Producer;
 
 use crate::txn_harness::{boot_single, create_topic, rec, send_ok};
 
@@ -30,11 +29,7 @@ async fn send_offsets_to_transaction_atomic_with_records() {
 
     // Pre-seed the input topic with 5 records via a non-transactional producer.
     {
-        let nt = Producer::builder()
-            .bootstrap(bootstrap.clone())
-            .build()
-            .await
-            .unwrap();
+        let nt = crate::support::producer::default_producer(bootstrap.clone()).await;
         for v in ["i0", "i1", "i2", "i3", "i4"] {
             send_ok(&nt, rec("input", v)).await;
         }
@@ -53,13 +48,8 @@ async fn send_offsets_to_transaction_atomic_with_records() {
             .await
             .unwrap();
 
-        let producer = Producer::builder()
-            .bootstrap(bootstrap.clone())
-            .transactional_id("cpp-tid")
-            .build()
-            .await
-            .unwrap();
-        producer.init_transactions().await.unwrap();
+        let producer =
+            crate::support::producer::transactional_producer(bootstrap.clone(), "cpp-tid").await;
         let txn = producer.begin_transaction().await.unwrap();
 
         // Read all 5 records from input.

@@ -70,10 +70,7 @@ impl Engine {
     /// # Errors
     /// Returns the [`RaftError`] of the checkpoint write or of the cleaning.
     pub fn write_snapshot_and_clean(&mut self) -> Result<(), RaftError> {
-        let last_contained_ts = self.last_contained_ts(self.log.hwm());
-        let bytes = crate::snapshot::SnapshotWriter::serialize(&self.image, last_contained_ts)?;
-        let end_offset = self.write_snapshot_checkpoint(&bytes)?;
-        self.last_snapshot_timestamp_ms = last_contained_ts;
+        let end_offset = self.write_current_snapshot()?;
         self.last_snapshot_end_offset = end_offset;
         self.last_snapshot_at_ms = self.now().0;
         self.bytes_since_snapshot = 0;
@@ -99,11 +96,18 @@ impl Engine {
             .unwrap_or(self.last_snapshot_timestamp_ms)
     }
 
-    pub fn write_snapshot_and_prune(&mut self) -> Result<(), RaftError> {
+    /// Write the committed image and remember the timestamp it names before
+    /// either retention cleaning or pruning changes the readable log prefix.
+    fn write_current_snapshot(&mut self) -> Result<Offset, RaftError> {
         let last_contained_ts = self.last_contained_ts(self.log.hwm());
         let bytes = crate::snapshot::SnapshotWriter::serialize(&self.image, last_contained_ts)?;
         let end_offset = self.write_snapshot_checkpoint(&bytes)?;
         self.last_snapshot_timestamp_ms = last_contained_ts;
+        Ok(end_offset)
+    }
+
+    pub fn write_snapshot_and_prune(&mut self) -> Result<(), RaftError> {
+        let end_offset = self.write_current_snapshot()?;
         self.prune_to_snapshot(end_offset)?;
         Ok(())
     }

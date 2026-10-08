@@ -58,6 +58,33 @@ fn anonymous_principal() -> krabka_security::Principal {
     crate::test_support::principal("ANONYMOUS")
 }
 
+/// The anonymous handshake fixture, retaining resource and identity bindings.
+macro_rules! anonymous_handshake_fixture {
+    (($handle:ident, $dir:ident, $broker:ident, $principal:ident, $peer:ident, $context:ident) $(, $ready:ident)?) => {
+        broker_fixture!(
+            ($handle, $dir, $broker),
+            crate::test_support::start_broker_with(|_| {})
+        );
+        request_identity!(
+            ($principal, $peer, $context),
+            anonymous_principal(),
+            client_id = "krabka-test",
+            address = crate::test_support::peer()
+        );
+        $(broker_fixture!(@$ready $broker);)?
+    };
+}
+
+macro_rules! api_version_wire {
+    (($request:ident, $bytes:ident, $response:ident), $broker:ident, $context:ident) => {
+        let $request = request("krabka-test", "1.0.0");
+        let $bytes = handle(&$broker, API_VERSIONS_V3, &$request, &$context)
+            .await
+            .expect("ApiVersions handler");
+        let $response = decode_response(API_VERSIONS_V3, &$bytes);
+    };
+}
+
 /// The advertised rows whose ranges are a deliberate choice, pinned whole.
 ///
 /// - Produce: min 0, as Kafka 4.x still advertises it
@@ -272,11 +299,7 @@ fn api_versions_advertises_kip853_rpcs_and_describe_quorum_v2() {
 
 #[tokio::test]
 async fn handle_rejects_each_invalid_v3_client_info_field() {
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = anonymous_principal();
-    let peer = crate::test_support::peer();
-    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
+    anonymous_handshake_fixture!((broker_handle, _dir, broker, principal, peer, context));
 
     for (name, version) in [("", "1.0.0"), ("krabka-test", "")] {
         let req = request(name, version);
@@ -293,11 +316,7 @@ async fn handle_rejects_each_invalid_v3_client_info_field() {
 
 #[tokio::test]
 async fn handle_accepts_legacy_request_without_client_info() {
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = anonymous_principal();
-    let peer = crate::test_support::peer();
-    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
+    anonymous_handshake_fixture!((broker_handle, _dir, broker, principal, peer, context));
     let req = ApiVersionsRequest::default();
     let mut req_bytes = BytesMut::with_capacity(req.encoded_len(0));
     req.encode(&mut req_bytes, 0)
@@ -316,12 +335,10 @@ async fn handle_accepts_legacy_request_without_client_info() {
 
 #[tokio::test]
 async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = anonymous_principal();
-    let peer = crate::test_support::peer();
-    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    anonymous_handshake_fixture!(
+        (broker_handle, _dir, broker, principal, peer, context),
+        controller_leader
+    );
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -352,11 +369,7 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     let metadata_offset = broker.controller.current_metadata_offset();
     assert!(metadata_offset >= before_topics + 10);
 
-    let req = request("krabka-test", "1.0.0");
-    let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
-        .await
-        .expect("ApiVersions handler");
-    let resp = decode_response(API_VERSIONS_V3, &bytes);
+    api_version_wire!((req, bytes, resp), broker, context);
 
     check!(resp.error_code == codes::NONE, "{resp:?}");
     // `request_context` arrives on `PLAINTEXT`, and a test broker leaves
@@ -405,12 +418,16 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
 
 #[tokio::test]
 async fn handle_applies_kip1242_routing_checks() {
-    let (broker_handle, _dir) =
-        crate::test_support::start_broker_with(|cfg| cfg.broker_id = 42).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = anonymous_principal();
-    let peer = crate::test_support::peer();
-    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        crate::test_support::start_broker_with(|cfg| cfg.broker_id = 42)
+    );
+    request_identity!(
+        (principal, peer, context),
+        anonymous_principal(),
+        client_id = "krabka-test",
+        address = crate::test_support::peer()
+    );
     let raw_cluster_id = broker.controller.current_image().cluster_id();
     // A real KIP-1242 client learned this cluster id from a `Metadata` or
     // `DescribeCluster` response, which reports Kafka's base64 `Uuid` form
@@ -467,12 +484,10 @@ async fn handle_applies_kip1242_routing_checks() {
 async fn handle_reports_and_records_a_request_quota_throttle() {
     use krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity};
 
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = anonymous_principal();
-    let peer = crate::test_support::peer();
-    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    anonymous_handshake_fixture!(
+        (broker_handle, _dir, broker, principal, peer, context),
+        controller_leader
+    );
 
     broker
         .controller
@@ -497,11 +512,7 @@ async fn handle_reports_and_records_a_request_quota_throttle() {
         })
         .await;
 
-    let req = request("krabka-test", "1.0.0");
-    let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
-        .await
-        .expect("ApiVersions handler");
-    let resp = decode_response(API_VERSIONS_V3, &bytes);
+    api_version_wire!((req, bytes, resp), broker, context);
 
     check!(resp.error_code == codes::NONE, "{resp:?}");
     check!(resp.throttle_time_ms > 0, "{resp:?}");

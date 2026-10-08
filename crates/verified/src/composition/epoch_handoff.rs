@@ -12,11 +12,8 @@ type EpochHandoff = (
     ProducerDecision,
 );
 
+open_logic! {
 /// Ordered same-producer rows and an admitted handoff at the current epoch.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn handoff_input_valid(
     end: Int,
     hwm: Int,
@@ -31,6 +28,7 @@ pub fn handoff_input_valid(
             && (forall<i: Int> 0 <= i && i < rows.len() ==> crate::producer_snapshot::snapshot_entry_valid_model(end, rows[i]) && rows[i].last_offset@ >= 0 && rows[i].producer_id == first.producer_id && rows[i].producer_epoch@ == epoch)
             && (forall<i: Int, j: Int> 0 <= i && i < j && j < rows.len() ==> rows[i].last_offset@ < rows[j].last_offset@)
     }
+}
 }
 
 /// A verified same-PID completion advances the epoch. Once data at that epoch

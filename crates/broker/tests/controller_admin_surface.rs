@@ -37,13 +37,12 @@ use krabka_protocol::{
             AlterPartitionResponse, PartitionData as AlterPartitionResultPartition,
             TopicData as AlterPartitionResultTopic,
         },
-        alter_user_scram_credentials_request::{
-            AlterUserScramCredentialsRequest, ScramCredentialUpsertion,
-        },
+        alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
         alter_user_scram_credentials_response::{
             AlterUserScramCredentialsResponse, AlterUserScramCredentialsResult,
         },
         api_versions_request::ApiVersionsRequest,
+        api_versions_response::ApiVersionsResponse,
         assign_replicas_to_dirs_request::{
             AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
         },
@@ -60,7 +59,6 @@ use krabka_protocol::{
         create_delegation_token_response::CreateDelegationTokenResponse,
         create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
         create_partitions_response::{CreatePartitionsResponse, CreatePartitionsTopicResult},
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
         delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
         delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
@@ -79,9 +77,16 @@ use krabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
         unregister_controller_request::UnregisterControllerRequest,
         unregister_controller_response::UnregisterControllerResponse,
-        update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+        update_features_request::UpdateFeaturesRequest,
     },
     primitives::uuid::Uuid as WireUuid,
+};
+
+use crate::support::{
+    configs::feature_update,
+    discovery::api_versions_request_for,
+    sasl::scram_upsertion,
+    topics::{creatable_topic, create_topic_request},
 };
 
 /// Kafka's `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, which
@@ -132,6 +137,24 @@ async fn start_trunk_broker() -> (BrokerHandle, tempfile::TempDir) {
     start_node(&[NodeRole::Controller, NodeRole::Broker], enable_trunk).await
 }
 
+async fn start_surface(trunk: bool) -> (BrokerHandle, tempfile::TempDir) {
+    if trunk {
+        start_trunk_broker().await
+    } else {
+        start_broker().await
+    }
+}
+
+async fn advertised_controller_versions(broker: &BrokerHandle) -> ApiVersionsResponse {
+    let connection = dial_controller(broker).await;
+    let response = connection
+        .send(api_versions_request())
+        .await
+        .expect("ApiVersions over the controller listener");
+    connection.close();
+    response
+}
+
 fn enable_trunk(config: &mut BrokerConfig) {
     config.features.unstable_api_versions =
         krabka_broker::api_catalog::UnstableApiVersions::Enabled;
@@ -154,11 +177,7 @@ async fn start_node(
 /// An `ApiVersions` request that passes Kafka's `ApiVersionsRequest.isValid`:
 /// from v3 the KIP-511 client software name and version must be set.
 fn api_versions_request() -> ApiVersionsRequest {
-    ApiVersionsRequest {
-        client_software_name: "krabka-test".into(),
-        client_software_version: "1.0".into(),
-        ..Default::default()
-    }
+    api_versions_request_for("krabka-test", "1.0")
 }
 
 /// Dial the controller listener. `Connection::connect` runs the `ApiVersions`
@@ -238,18 +257,8 @@ fn expected_admin_versions(trunk: bool) -> std::collections::BTreeMap<i16, (i16,
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_api_versions_advertises_the_kafka_controller_admin_surface() {
     for trunk in [false, true] {
-        let (broker, _dir) = if trunk {
-            start_trunk_broker().await
-        } else {
-            start_broker().await
-        };
-        let connection = dial_controller(&broker).await;
-
-        let response = connection
-            .send(api_versions_request())
-            .await
-            .expect("ApiVersions over the controller listener");
-        connection.close();
+        let (broker, _dir) = start_surface(trunk).await;
+        let response = advertised_controller_versions(&broker).await;
 
         let expected = expected_admin_versions(true);
         let advertised: std::collections::BTreeMap<i16, (i16, i16)> = response
@@ -284,18 +293,8 @@ async fn controller_api_versions_advertises_the_kafka_controller_admin_surface()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_listener_advertises_no_key_kafka_does_not() {
     for trunk in [false, true] {
-        let (broker, _dir) = if trunk {
-            start_trunk_broker().await
-        } else {
-            start_broker().await
-        };
-        let connection = dial_controller(&broker).await;
-
-        let response = connection
-            .send(api_versions_request())
-            .await
-            .expect("ApiVersions over the controller listener");
-        connection.close();
+        let (broker, _dir) = start_surface(trunk).await;
+        let response = advertised_controller_versions(&broker).await;
 
         let advertised: std::collections::BTreeSet<i16> =
             response.api_keys.iter().map(|api| api.api_key).collect();
@@ -323,16 +322,10 @@ async fn controller_listener_serves_the_topic_lifecycle() {
     let connection = dial_controller(&broker).await;
 
     let created = connection
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "controller-lifecycle".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("controller-lifecycle", 1, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics over the controller listener");
 
@@ -507,14 +500,15 @@ async fn controller_listener_serves_the_scram_write_path() {
 
     let altered = connection
         .send(AlterUserScramCredentialsRequest {
-            upsertions: vec![ScramCredentialUpsertion {
-                name: "alice".into(),
-                mechanism: SCRAM_SHA_256,
-                iterations: 8_192,
-                salt: Bytes::from_static(b"salt-bytes"),
-                salted_password: Bytes::from_static(b"salted-password-bytes"),
-                ..Default::default()
-            }],
+            upsertions: vec![scram_upsertion(
+                "alice",
+                SCRAM_SHA_256,
+                8_192,
+                (
+                    Bytes::from_static(b"salt-bytes"),
+                    Bytes::from_static(b"salted-password-bytes"),
+                ),
+            )],
             ..Default::default()
         })
         .await
@@ -585,16 +579,10 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
         .broker_epoch;
 
     let created = connection
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "controller-dirs".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("controller-dirs", 1, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics over the controller listener");
     assert!(let [created_topic] = &created.topics[..]);
@@ -675,13 +663,11 @@ async fn controller_listener_serves_unregister_controller() {
     let connection = dial_controller(&broker).await;
     let upgraded = connection
         .send(UpdateFeaturesRequest {
-            feature_updates: vec![FeatureUpdateKey {
-                feature: "metadata.version".into(),
-                max_version_level:
-                    krabka_metadata::metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
-                upgrade_type: 1,
-                ..Default::default()
-            }],
+            feature_updates: vec![feature_update(
+                "metadata.version",
+                krabka_metadata::metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
+                1,
+            )],
             ..Default::default()
         })
         .await
@@ -742,16 +728,10 @@ async fn controller_only_node_places_no_replica_on_itself() {
     let connection = dial_controller(&broker).await;
 
     let created = connection
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "controller-only-placement".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("controller-only-placement", 1, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics over a controller-only listener");
     connection.close();

@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 106 0 106 92 *)
+(* #"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 98 0 98 92 *)
 
-let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 107 4 107 55
-let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 104 10 104 81
-let%span ssnapshot_transaction_valid'1 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 15 16 15 55
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 99 4 99 55
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 96 10 96 81
+let%span ssnapshot_transaction_valid'1 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 12 16 12 55
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -10,14 +10,14 @@ use int.Int
 
 type t_ProducerReloadRange = { log_start: Int64.t; local_start: Int64.t; log_end: Int64.t }
 
-predicate kafka_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 14 0 14 76] (offset: int) (log_start'0: int) (log_end'0: int) =
+predicate kafka_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 11 0 11 76] (offset: int) (log_start'0: int) (log_end'0: int) =
   [%#ssnapshot_transaction_valid'1] log_start'0 < offset /\ offset <= log_end'0
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let producer_snapshot_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 106 0 106 92]
+let producer_snapshot_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 98 0 98 92]
   (offset: Int64.t) (range: t_ProducerReloadRange) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_7 <- Int64.lt range.log_start offset ] s1

@@ -8,10 +8,7 @@ use super::{
     truncation_frontier,
 };
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub(super) fn restored_abort_index_valid(
     entries: Seq<RestoreAbortedTxn>,
     owner: RestoreSegmentExtent,
@@ -22,13 +19,45 @@ pub(super) fn restored_abort_index_valid(
         && owner.base_offset@ <= entries[i].last_offset@ && entries[i].last_offset@ <= owner.last_offset@
         && (i > 0 ==> entries[i - 1].last_offset@ < entries[i].last_offset@) }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
-pub(super) fn abort_intersects_fetch(entry: RestoreAbortedTxn, from: Int, end: Int) -> bool {
+open_logic! {
+pub fn abort_intersects_fetch(entry: RestoreAbortedTxn, from: Int, end: Int) -> bool {
     pearlite! { from < end && entry.start_offset@ < end && entry.last_offset@ >= from }
+}
+}
+
+open_logic! {
+/// Every required source interval has its producer/start pair in the wire rows.
+pub(super) fn wire_aborts_cover_source(
+    source: Seq<RestoreAbortedTxn>,
+    rows: Seq<(i64, i64)>,
+    from: Int,
+    end: Int,
+) -> bool {
+    pearlite! {
+        forall<i: Int> 0 <= i && i < source.len()
+            && abort_intersects_fetch(source[i], from, end)
+            ==> exists<j: Int> 0 <= j && j < rows.len()
+                && rows[j] == (source[i].producer_id, source[i].start_offset)
+    }
+}
+}
+
+open_logic! {
+/// A returned producer/start pair comes from an interval intersecting Fetch.
+pub(super) fn wire_abort_from_source(
+    source: Seq<RestoreAbortedTxn>,
+    row: (i64, i64),
+    from: Int,
+    end: Int,
+) -> bool {
+    pearlite! {
+        exists<j: Int> 0 <= j && j < source.len()
+            && row == (source[j].producer_id, source[j].start_offset)
+            && abort_intersects_fetch(source[j], from, end)
+    }
+}
 }
 
 /// Admit the complete index and return every selected original row index.
@@ -39,10 +68,9 @@ pub(super) fn abort_intersects_fetch(entry: RestoreAbortedTxn, from: Int, end: I
     Some(selected) => restored_abort_index_valid(entries@, segment)
         && selected@.len() <= entries@.len()
         && (forall<i: Int> 0 <= i && i < selected@.len() ==> selected@[i]@ < entries@.len())
-        && (forall<i: Int, j: Int> 0 <= i && i < j && j < selected@.len()
-            ==> selected@[i]@ < selected@[j]@)
+        && (crate::sequence::strictly_increasing(selected@))
         && (forall<i: Int> 0 <= i && i < entries@.len()
-            ==> (exists<j: Int> 0 <= j && j < selected@.len() && selected@[j]@ == i)
+            ==> (crate::sequence::contains_source_index(selected@, i))
                 == abort_intersects_fetch(entries@[i], fetch_start@,
                     w.hw@.min(w.lso@).min(w.deliverable@).min(cut@)))
         && (forall<i: Int> 0 <= i && i < selected@.len() ==>
@@ -69,7 +97,7 @@ pub(super) fn restored_aborts_remain_bounded_when_fetch_shrinks(
     #[invariant(restored_abort_index_valid(entries@.subsequence(0, i@), segment))]
     #[invariant(selection_ordered(selected@, i@))]
     #[invariant(forall<j: Int> 0 <= j && j < i@
-        ==> (exists<k: Int> 0 <= k && k < selected@.len() && selected@[k]@ == j)
+        ==> (crate::sequence::contains_source_index(selected@, j))
             == abort_intersects_fetch(entries@[j], fetch_start@, narrowed@))]
     #[variant(entries@.len() - i@)]
     while i < entries.len() {

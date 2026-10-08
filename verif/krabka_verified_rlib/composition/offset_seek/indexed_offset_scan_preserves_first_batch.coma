@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/composition/offset_seek.rs" 47 0 53 50 *)
+(* #"/workspace/crates/verified/src/composition/offset_seek.rs" 45 0 51 50 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
@@ -9,67 +9,68 @@ let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 715 18 718 9
 let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 732 25 732 33
 let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 728 18 731 9
-let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 8 10 13 1
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 26 10 26 61
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 15 8 20 9
 let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
 let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
 let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
 let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span soffset_index = "/workspace/crates/verified/src/composition/offset_index.rs" 23 10 38 1
-let%span soffset_index'0 = "/workspace/crates/verified/src/composition/offset_index.rs" 13 8 16 79
-let%span soffset_seek = "/workspace/crates/verified/src/composition/offset_seek.rs" 54 27 54 95
-let%span soffset_seek'0 = "/workspace/crates/verified/src/composition/offset_seek.rs" 54 27 54 96
-let%span soffset_seek'1 = "/workspace/crates/verified/src/composition/offset_seek.rs" 55 25 55 96
-let%span soffset_seek'2 = "/workspace/crates/verified/src/composition/offset_seek.rs" 55 25 55 97
-let%span soffset_seek'3 = "/workspace/crates/verified/src/composition/offset_seek.rs" 56 11 56 24
-let%span soffset_seek'4 = "/workspace/crates/verified/src/composition/offset_seek.rs" 56 26 56 36
-let%span soffset_seek'5 = "/workspace/crates/verified/src/composition/offset_seek.rs" 61 15 61 16
-let%span soffset_seek'6 = "/workspace/crates/verified/src/composition/offset_seek.rs" 61 7 61 17
-let%span soffset_seek'7 = "/workspace/crates/verified/src/composition/offset_seek.rs" 61 7 61 19
-let%span soffset_seek'8 = "/workspace/crates/verified/src/composition/offset_seek.rs" 61 23 61 24
-let%span soffset_seek'9 = "/workspace/crates/verified/src/composition/offset_seek.rs" 64 16 64 22
-let%span soffset_seek'10 = "/workspace/crates/verified/src/composition/offset_seek.rs" 68 14 68 30
-let%span soffset_seek'11 = "/workspace/crates/verified/src/composition/offset_seek.rs" 69 14 69 24
-let%span soffset_seek'12 = "/workspace/crates/verified/src/composition/offset_seek.rs" 66 16 67 82
-let%span soffset_seek'13 = "/workspace/crates/verified/src/composition/offset_seek.rs" 65 16 65 33
-let%span soffset_seek'14 = "/workspace/crates/verified/src/composition/offset_seek.rs" 70 20 70 26
-let%span soffset_seek'15 = "/workspace/crates/verified/src/composition/offset_seek.rs" 73 18 73 37
-let%span soffset_seek'16 = "/workspace/crates/verified/src/composition/offset_seek.rs" 74 18 74 31
-let%span soffset_seek'17 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 20 72 80
-let%span soffset_seek'18 = "/workspace/crates/verified/src/composition/offset_seek.rs" 71 20 71 40
-let%span soffset_seek'19 = "/workspace/crates/verified/src/composition/offset_seek.rs" 74 36 74 43
-let%span soffset_seek'20 = "/workspace/crates/verified/src/composition/offset_seek.rs" 74 36 74 45
-let%span soffset_seek'21 = "/workspace/crates/verified/src/composition/offset_seek.rs" 74 49 74 59
-let%span soffset_seek'22 = "/workspace/crates/verified/src/composition/offset_seek.rs" 74 49 74 61
-let%span soffset_seek'23 = "/workspace/crates/verified/src/composition/offset_seek.rs" 74 65 74 72
-let%span soffset_seek'24 = "/workspace/crates/verified/src/composition/offset_seek.rs" 74 65 74 74
-let%span soffset_seek'25 = "/workspace/crates/verified/src/composition/offset_seek.rs" 74 78 74 88
-let%span soffset_seek'26 = "/workspace/crates/verified/src/composition/offset_seek.rs" 74 78 74 90
-let%span soffset_seek'27 = "/workspace/crates/verified/src/composition/offset_seek.rs" 75 17 75 18
-let%span soffset_seek'28 = "/workspace/crates/verified/src/composition/offset_seek.rs" 75 12 75 18
-let%span soffset_seek'29 = "/workspace/crates/verified/src/composition/offset_seek.rs" 77 16 77 29
-let%span soffset_seek'30 = "/workspace/crates/verified/src/composition/offset_seek.rs" 80 13 80 14
-let%span soffset_seek'31 = "/workspace/crates/verified/src/composition/offset_seek.rs" 80 8 80 14
-let%span soffset_seek'32 = "/workspace/crates/verified/src/composition/offset_seek.rs" 82 18 83 36
-let%span soffset_seek'33 = "/workspace/crates/verified/src/composition/offset_seek.rs" 84 29 84 39
-let%span soffset_seek'34 = "/workspace/crates/verified/src/composition/offset_seek.rs" 85 8 85 9
-let%span soffset_seek'35 = "/workspace/crates/verified/src/composition/offset_seek.rs" 88 14 88 33
-let%span soffset_seek'36 = "/workspace/crates/verified/src/composition/offset_seek.rs" 89 14 89 27
-let%span soffset_seek'37 = "/workspace/crates/verified/src/composition/offset_seek.rs" 87 16 87 123
-let%span soffset_seek'38 = "/workspace/crates/verified/src/composition/offset_seek.rs" 86 16 86 57
-let%span soffset_seek'39 = "/workspace/crates/verified/src/composition/offset_seek.rs" 90 21 90 31
-let%span soffset_seek'40 = "/workspace/crates/verified/src/composition/offset_seek.rs" 90 21 90 33
-let%span soffset_seek'41 = "/workspace/crates/verified/src/composition/offset_seek.rs" 91 22 91 32
-let%span soffset_seek'42 = "/workspace/crates/verified/src/composition/offset_seek.rs" 91 22 91 34
-let%span soffset_seek'43 = "/workspace/crates/verified/src/composition/offset_seek.rs" 91 12 91 35
-let%span soffset_seek'44 = "/workspace/crates/verified/src/composition/offset_seek.rs" 93 12 93 14
-let%span soffset_seek'45 = "/workspace/crates/verified/src/composition/offset_seek.rs" 90 8 94 10
-let%span soffset_seek'46 = "/workspace/crates/verified/src/composition/offset_seek.rs" 95 13 95 14
-let%span soffset_seek'47 = "/workspace/crates/verified/src/composition/offset_seek.rs" 95 8 95 14
-let%span soffset_seek'48 = "/workspace/crates/verified/src/composition/offset_seek.rs" 97 41 97 46
-let%span soffset_seek'49 = "/workspace/crates/verified/src/composition/offset_seek.rs" 97 48 97 65
-let%span soffset_seek'50 = "/workspace/crates/verified/src/composition/offset_seek.rs" 97 19 97 66
-let%span soffset_seek'51 = "/workspace/crates/verified/src/composition/offset_seek.rs" 33 10 46 1
-let%span soffset_seek'52 = "/workspace/crates/verified/src/composition/offset_seek.rs" 18 8 23 93
+let%span soffset_index = "/workspace/crates/verified/src/composition/offset_index.rs" 21 10 36 1
+let%span soffset_index'0 = "/workspace/crates/verified/src/composition/offset_index.rs" 10 8 13 79
+let%span soffset_seek = "/workspace/crates/verified/src/composition/offset_seek.rs" 52 27 52 95
+let%span soffset_seek'0 = "/workspace/crates/verified/src/composition/offset_seek.rs" 52 27 52 96
+let%span soffset_seek'1 = "/workspace/crates/verified/src/composition/offset_seek.rs" 53 25 53 96
+let%span soffset_seek'2 = "/workspace/crates/verified/src/composition/offset_seek.rs" 53 25 53 97
+let%span soffset_seek'3 = "/workspace/crates/verified/src/composition/offset_seek.rs" 54 11 54 24
+let%span soffset_seek'4 = "/workspace/crates/verified/src/composition/offset_seek.rs" 54 26 54 36
+let%span soffset_seek'5 = "/workspace/crates/verified/src/composition/offset_seek.rs" 59 15 59 16
+let%span soffset_seek'6 = "/workspace/crates/verified/src/composition/offset_seek.rs" 59 7 59 17
+let%span soffset_seek'7 = "/workspace/crates/verified/src/composition/offset_seek.rs" 59 7 59 19
+let%span soffset_seek'8 = "/workspace/crates/verified/src/composition/offset_seek.rs" 59 23 59 24
+let%span soffset_seek'9 = "/workspace/crates/verified/src/composition/offset_seek.rs" 62 16 62 22
+let%span soffset_seek'10 = "/workspace/crates/verified/src/composition/offset_seek.rs" 66 14 66 30
+let%span soffset_seek'11 = "/workspace/crates/verified/src/composition/offset_seek.rs" 67 14 67 24
+let%span soffset_seek'12 = "/workspace/crates/verified/src/composition/offset_seek.rs" 64 16 65 82
+let%span soffset_seek'13 = "/workspace/crates/verified/src/composition/offset_seek.rs" 63 16 63 33
+let%span soffset_seek'14 = "/workspace/crates/verified/src/composition/offset_seek.rs" 68 20 68 26
+let%span soffset_seek'15 = "/workspace/crates/verified/src/composition/offset_seek.rs" 71 18 71 37
+let%span soffset_seek'16 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 18 72 31
+let%span soffset_seek'17 = "/workspace/crates/verified/src/composition/offset_seek.rs" 70 20 70 80
+let%span soffset_seek'18 = "/workspace/crates/verified/src/composition/offset_seek.rs" 69 20 69 40
+let%span soffset_seek'19 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 36 72 43
+let%span soffset_seek'20 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 36 72 45
+let%span soffset_seek'21 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 49 72 59
+let%span soffset_seek'22 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 49 72 61
+let%span soffset_seek'23 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 65 72 72
+let%span soffset_seek'24 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 65 72 74
+let%span soffset_seek'25 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 78 72 88
+let%span soffset_seek'26 = "/workspace/crates/verified/src/composition/offset_seek.rs" 72 78 72 90
+let%span soffset_seek'27 = "/workspace/crates/verified/src/composition/offset_seek.rs" 73 17 73 18
+let%span soffset_seek'28 = "/workspace/crates/verified/src/composition/offset_seek.rs" 73 12 73 18
+let%span soffset_seek'29 = "/workspace/crates/verified/src/composition/offset_seek.rs" 75 16 75 29
+let%span soffset_seek'30 = "/workspace/crates/verified/src/composition/offset_seek.rs" 78 13 78 14
+let%span soffset_seek'31 = "/workspace/crates/verified/src/composition/offset_seek.rs" 78 8 78 14
+let%span soffset_seek'32 = "/workspace/crates/verified/src/composition/offset_seek.rs" 80 18 81 36
+let%span soffset_seek'33 = "/workspace/crates/verified/src/composition/offset_seek.rs" 82 29 82 39
+let%span soffset_seek'34 = "/workspace/crates/verified/src/composition/offset_seek.rs" 83 8 83 9
+let%span soffset_seek'35 = "/workspace/crates/verified/src/composition/offset_seek.rs" 86 14 86 33
+let%span soffset_seek'36 = "/workspace/crates/verified/src/composition/offset_seek.rs" 87 14 87 27
+let%span soffset_seek'37 = "/workspace/crates/verified/src/composition/offset_seek.rs" 85 16 85 123
+let%span soffset_seek'38 = "/workspace/crates/verified/src/composition/offset_seek.rs" 84 16 84 57
+let%span soffset_seek'39 = "/workspace/crates/verified/src/composition/offset_seek.rs" 88 21 88 31
+let%span soffset_seek'40 = "/workspace/crates/verified/src/composition/offset_seek.rs" 88 21 88 33
+let%span soffset_seek'41 = "/workspace/crates/verified/src/composition/offset_seek.rs" 89 22 89 32
+let%span soffset_seek'42 = "/workspace/crates/verified/src/composition/offset_seek.rs" 89 22 89 34
+let%span soffset_seek'43 = "/workspace/crates/verified/src/composition/offset_seek.rs" 89 12 89 35
+let%span soffset_seek'44 = "/workspace/crates/verified/src/composition/offset_seek.rs" 91 12 91 14
+let%span soffset_seek'45 = "/workspace/crates/verified/src/composition/offset_seek.rs" 88 8 92 10
+let%span soffset_seek'46 = "/workspace/crates/verified/src/composition/offset_seek.rs" 93 13 93 14
+let%span soffset_seek'47 = "/workspace/crates/verified/src/composition/offset_seek.rs" 93 8 93 14
+let%span soffset_seek'48 = "/workspace/crates/verified/src/composition/offset_seek.rs" 95 41 95 46
+let%span soffset_seek'49 = "/workspace/crates/verified/src/composition/offset_seek.rs" 95 48 95 65
+let%span soffset_seek'50 = "/workspace/crates/verified/src/composition/offset_seek.rs" 95 19 95 66
+let%span soffset_seek'51 = "/workspace/crates/verified/src/composition/offset_seek.rs" 31 10 44 1
+let%span soffset_seek'52 = "/workspace/crates/verified/src/composition/offset_seek.rs" 15 8 20 93
 
 use creusot.slice.Slice64
 use creusot.int.UInt32
@@ -88,7 +89,7 @@ type tup2_u32_Option_u32 = { f0'0: UInt32.t; f1'0: t_Option_u32 }
 
 type t_Result_tup2_u32_Option_u32_unit = Ok tup2_u32_Option_u32 | Err ()
 
-predicate offset_archive_valid [#"/workspace/crates/verified/src/composition/offset_index.rs" 11 0 11 96] (entries: Seq.seq tup2_u32_u32) (max_relative: int) (log_bytes: int) =
+predicate offset_archive_valid [#"/workspace/crates/verified/src/composition/offset_index.rs" 8 0 8 96] (entries: Seq.seq tup2_u32_u32) (max_relative: int) (log_bytes: int) =
   [%#soffset_index'0] (forall i: int. 0 <= i /\ i < Seq.length entries
       -> UInt32.t'int (Seq.get entries i).f0 <= max_relative /\ UInt32.t'int (Seq.get entries i).f1 < log_bytes)
   /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length entries
@@ -260,19 +261,20 @@ let deref_Vec_i64_Global (self_: t_Vec_i64_Global) (return (x: Slice64.slice Int
     = view_Vec_i64_Global self_}
     (! return {result}) ]
 
+predicate first_timestamp_match [#"/workspace/crates/verified/src/timestamp.rs" 9 0 13 9] (timestamps: Seq.seq Int64.t) (target: int) (matched: t_Option_usize) =
+  [%#stimestamp'0] match matched with
+    | Some'0 index -> UInt64.t'int index < Seq.length timestamps
+    /\ ge_log_Int (Int64.to_int (Seq.get timestamps (UInt64.t'int index))) target
+    /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index -> Int64.to_int (Seq.get timestamps i) < target)
+    | None'0 -> forall i: int. 0 <= i /\ i < Seq.length timestamps -> Int64.to_int (Seq.get timestamps i) < target
+    end
+
 let first_timestamp_index (timestamps: Slice64.slice Int64.t) (target: Int64.t) (return (x: t_Option_usize)) = any
   [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:first_timestamp_index ensures] [%#stimestamp] match result with
-      | Some'0 index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
-      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
-      | None'0 -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target
-      end}
+  {[@stop_split] [@expl:first_timestamp_index ensures] [%#stimestamp] first_timestamp_match (Slice64.view timestamps) (Int64.to_int target) result}
     (! return {result}) ]
 
-predicate offset_seek_input_valid [#"/workspace/crates/verified/src/composition/offset_seek.rs" 11 0 16 9] (rows: Seq.seq tup2_u32_u32) (batches: Seq.seq tup2_u32_u32) (max_relative: int) (log_bytes: int) =
+predicate offset_seek_input_valid [#"/workspace/crates/verified/src/composition/offset_seek.rs" 8 0 13 9] (rows: Seq.seq tup2_u32_u32) (batches: Seq.seq tup2_u32_u32) (max_relative: int) (log_bytes: int) =
   [%#soffset_seek'52] offset_archive_valid rows max_relative log_bytes
   /\ offset_archive_valid batches max_relative log_bytes
   /\ (if Seq.length batches = 0 then
@@ -287,7 +289,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let indexed_offset_scan_preserves_first_batch [#"/workspace/crates/verified/src/composition/offset_seek.rs" 47 0 53 50]
+let indexed_offset_scan_preserves_first_batch [#"/workspace/crates/verified/src/composition/offset_seek.rs" 45 0 51 50]
   (rows: Slice64.slice tup2_u32_u32) (batches: Slice64.slice tup2_u32_u32) (target: UInt32.t) (max_relative: Int64.t)
   (log_bytes: UInt64.t) (return (x: t_Result_tup3_u32_Option_u32_Option_usize_unit)) = (! bb0
   [ bb0 = s0

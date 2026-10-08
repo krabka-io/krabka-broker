@@ -4,7 +4,7 @@
     "Coma": {
       "vc_diskless_object_reclaimable": {
         "prover": "alt-ergo",
-        "time": 0.005
+        "time": 0.009
       }
     }
   }

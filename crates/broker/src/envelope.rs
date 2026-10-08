@@ -870,6 +870,8 @@ mod tests {
         check!(!is_forwardable(0));
     }
 
+    krabka_macros::request_frame_fixture!(wire_request_frame);
+
     fn request_frame(
         api_key: i16,
         api_version: i16,
@@ -878,22 +880,15 @@ mod tests {
         flexible: bool,
         body: &[u8],
     ) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(api_key);
-        buf.put_i16(api_version);
-        buf.put_i32(correlation_id);
-        match client_id {
-            Some(id) => {
-                buf.put_i16(i16::try_from(id.len()).expect("client id length"));
-                buf.put_slice(id.as_bytes());
-            }
-            None => buf.put_i16(-1),
-        }
-        if flexible {
-            buf.put_u8(0);
-        }
-        buf.put_slice(body);
-        buf.freeze()
+        wire_request_frame(
+            api_key,
+            api_version,
+            correlation_id,
+            client_id.map(str::as_bytes),
+            flexible.then_some(&[0][..]),
+            body,
+        )
+        .freeze()
     }
 
     /// The embedded header is split off whole, and the body that remains is

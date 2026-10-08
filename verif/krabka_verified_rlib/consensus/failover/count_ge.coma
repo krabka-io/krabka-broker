@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/consensus/failover.rs" 204 0 204 78 *)
+(* #"/workspace/crates/verified/src/consensus/failover.rs" 197 0 197 78 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 203 10 203 17
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
-let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 196 10 196 17
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 181 10 181 15
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 184 8 190 9
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 175 8 175 48
 
 use creusot.int.Int64
 use seq.Seq
@@ -19,10 +19,10 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate ge_log_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 173 0 173 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'2] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 187 0 187 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 182 0 182 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
@@ -45,6 +45,6 @@ constant v : int
 
 constant leader_counts : bool
 
-function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 204 0 204 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
+function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 197 0 197 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
 
 goal vc_count_ge: true

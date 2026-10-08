@@ -3,12 +3,12 @@
 //! `ClassicGroup.validateOffsetCommit` and `ConsumerGroup.validateOffsetCommit`,
 //! and how it refuses a partition whose metadata is too large.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use assert2::assert;
 use krabka_metadata::ResourceType;
 use krabka_protocol::owned::{
-    create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
+    create_topics_request::{self},
     offset_commit_request::{
         OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     },
@@ -19,13 +19,13 @@ use krabka_protocol::owned::{
 
 use super::WireUuid;
 use crate::{
-    authorizer::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer},
+    authorizer::{AllowAllAuthorizer, AuthorizationResult},
     broker::{Broker, BrokerHandle},
     codes,
     coordinator::unified::{
         GroupSeed,
         actor::{GroupActorMessage, GroupKindTag},
-        classic_state::{ClassicGroup, GroupState, Member},
+        classic_state::{ClassicGroup, GroupState},
         group::{CoordinatorGroup, GroupKind},
         persistence_next_gen::{
             AssignedTopicPartitions, ClassicMemberMetadata, CurrentMemberAssignmentValue,
@@ -33,7 +33,7 @@ use crate::{
             TargetAssignmentMemberValue,
         },
     },
-    test_support::{dispatch_context, encode_request, peer, principal, request_context},
+    test_support::{dispatch_context, encode_request, peer, principal},
 };
 
 const TOPIC: &str = "group-validation";
@@ -71,19 +71,18 @@ async fn create_topic(broker: &Broker) {
 }
 
 async fn create_topic_with_partitions(broker: &Broker, num_partitions: i32) {
-    let admin = principal("admin");
-    let address = peer();
-    let ctx = request_context(&admin, &address, "group-validation-admin");
-    let request = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: TOPIC.to_string(),
-            num_partitions,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    request_identity!(
+        (admin, address, ctx),
+        principal("admin"),
+        client_id = "group-validation-admin"
+    );
+    let request = crate::handlers::test_support::configured_topic_request(
+        TOPIC,
+        &[],
+        num_partitions,
+        1,
+        5_000,
+    );
     dispatch_context(
         broker,
         create_topics_request::API_KEY,
@@ -100,14 +99,9 @@ fn seed(broker: &Broker, group_id: &str, group: Group) {
         Group::ClassicWithMember => {
             let mut state = ClassicGroup::new(group_id);
             state.protocol_type = Some("consumer".into());
-            state.add_member(Member::new(
-                MEMBER,
-                "client",
-                "127.0.0.1",
-                Duration::from_secs(30),
-                Duration::from_mins(1),
-                vec![("range".into(), bytes::Bytes::new())],
-            ));
+            state.add_member(
+                crate::coordinator::unified::actor::test_support::classic_member(MEMBER),
+            );
             state.state = GroupState::Stable;
             state.generation_id = GENERATION;
             let seeded = CoordinatorGroup::seeded(
@@ -148,9 +142,11 @@ async fn drive(broker: &BrokerHandle, row: usize, case: Case) -> (OffsetCommitRe
         }],
         ..Default::default()
     };
-    let user = principal("consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "consumer-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("consumer"),
+        client_id = "consumer-client"
+    );
     let response = crate::test_support::dispatch_wire(
         &shared,
         krabka_protocol::owned::offset_commit_request::API_KEY,
@@ -262,19 +258,13 @@ struct DenyOneTopic;
 
 const DENIED_TOPIC: &str = "denied-topic";
 
-impl Authorizer for DenyOneTopic {
-    fn authorize(
-        &self,
-        _source: &dyn krabka_authz::AclSource,
-        req: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        if req.resource_type == ResourceType::Topic && req.resource_name == DENIED_TOPIC {
-            AuthorizationResult::Deny
-        } else {
-            AuthorizationResult::Allow
-        }
+test_authorizer!(DenyOneTopic, (self, _source, req), {
+    if req.resource_type == ResourceType::Topic && req.resource_name == DENIED_TOPIC {
+        AuthorizationResult::Deny
+    } else {
+        AuthorizationResult::Allow
     }
-}
+});
 
 /// Kafka checks topic `Read` in `KafkaApis` before it calls the coordinator,
 /// so the coordinator's error goes on the allowed topics only, and a request
@@ -324,9 +314,11 @@ async fn topic_read_is_checked_before_the_group() {
             vec![answer(DENIED_TOPIC, codes::TOPIC_AUTHORIZATION_FAILED)],
         ),
     ];
-    let user = principal("consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "consumer-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("consumer"),
+        client_id = "consumer-client"
+    );
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for (group_id, topics, answers) in cases {
@@ -388,9 +380,11 @@ async fn oversized_metadata_is_refused_through_the_handler() {
         }],
         ..Default::default()
     };
-    let user = principal("consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "consumer-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("consumer"),
+        client_id = "consumer-client"
+    );
     let response: OffsetCommitResponse = crate::test_support::dispatch_wire(
         &shared,
         krabka_protocol::owned::offset_commit_request::API_KEY,
@@ -588,9 +582,11 @@ async fn consumer_group_commit_follows_kip_1251() {
             .topic_id
             .into_bytes(),
     );
-    let user = principal("consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "consumer-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("consumer"),
+        client_id = "consumer-client"
+    );
 
     let mut actual = Vec::new();
     let mut expected = Vec::new();

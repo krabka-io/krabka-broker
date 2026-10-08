@@ -79,18 +79,13 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
     // Build a config for broker `i` (1-indexed broker_id/node_id).
     let broker_configs: Vec<BrokerConfig> = (0..3)
         .map(|i| {
-            let mut cfg = BrokerConfig::for_tests(log_dirs[i].path().to_path_buf());
+            let mut cfg = crate::support::node_config(i, log_dirs[i].path());
             cfg.log_config.segment_size = segment_sizes[i];
-            cfg.broker_id = i32::try_from(i + 1).unwrap();
-            cfg.node_id = krabka_broker::NodeId(u64::try_from(i + 1).unwrap());
             cfg.directory_id = uuid::Uuid::from_u128(u128::try_from(i + 1).unwrap());
             cfg.listen_addr = client_addrs[i];
             cfg.advertised_listener = format!("127.0.0.1:{}", client_addrs[i].port());
             cfg.controller_listen_addr = controller_addrs[i];
-            cfg.controller_quorum_voters = voters
-                .iter()
-                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-                .collect();
+            cfg.controller_quorum_voters = crate::support::controller_voters(&voters);
             cfg.bootstrap_mode = BootstrapMode::Bootstrap;
             cfg.auto_join = false;
             cfg.bootstrap_servers = vec![];

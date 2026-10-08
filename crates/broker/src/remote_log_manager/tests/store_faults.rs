@@ -23,36 +23,26 @@
 use std::sync::Arc;
 
 use assert2::{assert, check};
-use krabka_ids::{LeaderEpoch, PartitionIndex};
+/// The `orders` topic with `partitions` partitions, so a sweep can walk more
+/// than one of them.
+use fixtures::orders_image as image_with_orders_partitions;
+use krabka_ids::PartitionIndex;
 use krabka_object_store::fault::{FaultInjectingStore, FaultKind, FaultPolicy, OpFault, StoreOp};
 use krabka_remote_storage::{
-    InmemoryRemoteLogMetadataManager, RemoteLogMetadataManager, RemoteLogSegmentState,
-    RemoteStorageManager, S3RemoteStorage, TopicIdPartition,
+    RemoteLogMetadataManager, RemoteLogSegmentState, RemoteStorageManager, S3RemoteStorage,
 };
 
 use super::*;
 use crate::{
     metrics::{BrokerMetrics, TopicLabel},
     remote_log_manager::{
-        LocalRetentionBounds, RemoteTier, copy_eligible, local_retention_pass,
+        RemoteTier, test_support as fixtures,
         test_support::{
-            TEST_COPY_TIMEOUT, partition_snapshot, rolled_tiered_partition_with_config,
+            TEST_COPY_TIMEOUT, copy_exports, partition_snapshot,
+            rolled_tiered_partition_with_config,
         },
     },
 };
-
-/// The `orders` topic with `partitions` partitions, so a sweep can walk more
-/// than one of them.
-fn image_with_orders_partitions(partitions: i32) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::from_u128(9));
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: "orders".into(),
-        topic_id: tp().topic_id,
-        partitions,
-        replication_factor: 1,
-    }));
-    image
-}
 
 /// How long a stalled store holds a call. Long enough that a copy under the
 /// deadline below can only end at that deadline, short enough that the
@@ -121,15 +111,22 @@ fn faulty_tier<'a>(
     index_cache: &'a Arc<krabka_remote_storage::RemoteIndexCache>,
     copy_timeout: Time,
 ) -> RemoteTier<'a> {
-    RemoteTier {
-        archive: ArchiveMode::Mutable,
+    fixtures::tier_with_resources(
         rsm,
         rlmm,
-        metrics,
-        index_cache,
-        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+        (metrics, index_cache),
+        ArchiveMode::Mutable,
         copy_timeout,
-    }
+    )
+}
+
+/// Keep both the partition and object-store guards through the fault assertions.
+macro_rules! faulty_copy_fixture {
+    ($local:ident, $partition:ident, $exports:ident, $config:ident, $store:ident, $rsm:ident, $make:expr) => {
+        let $local = tempfile::tempdir().unwrap();
+        let ($partition, $exports, $config) = tiered_partition($local.path());
+        let ($store, $rsm) = store_backend($make);
+    };
 }
 
 /// The control. The same fixture over a store with no faults copies every
@@ -140,15 +137,10 @@ async fn a_healthy_store_finishes_every_copy() {
     let log_dir = tempfile::tempdir().unwrap();
     let (_partition, exports, _config) = tiered_partition(log_dir.path());
     let rsm = backend(faulty_store(FaultPolicy::none()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let metrics = BrokerMetrics::new();
-    let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+    fixtures::owned_tier_resources!(rlmm, metrics, index_cache);
 
-    let copied = copy_eligible(
+    let copied = copy_exports(
         &faulty_tier(&rsm, &rlmm, &metrics, &index_cache, TEST_COPY_TIMEOUT),
-        &tp(),
-        1,
-        LeaderEpoch(0),
         exports.clone(),
     )
     .await;
@@ -175,16 +167,19 @@ async fn a_healthy_store_finishes_every_copy() {
 /// `KrabkaRemoteCopyLagGrowing` read.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_throttling_store_finishes_nothing_and_moves_the_error_and_lag_series() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let (_partition, exports, _config) = tiered_partition(log_dir.path());
-    let store = throttling_store();
-    let rsm = backend(Arc::clone(&store));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let metrics = BrokerMetrics::new();
-    let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+    faulty_copy_fixture!(
+        log_dir,
+        _partition,
+        exports,
+        _config,
+        store,
+        rsm,
+        throttling_store
+    );
+    fixtures::owned_tier_resources!(rlmm, metrics, index_cache);
     let tier = faulty_tier(&rsm, &rlmm, &metrics, &index_cache, TEST_COPY_TIMEOUT);
 
-    let copied = copy_eligible(&tier, &tp(), 1, LeaderEpoch(0), exports.clone()).await;
+    let copied = copy_exports(&tier, exports.clone()).await;
 
     check!(copied == 0);
     check!(
@@ -209,7 +204,7 @@ async fn a_throttling_store_finishes_nothing_and_moves_the_error_and_lag_series(
         metrics.remote_copy_lag_segments.get_or_create(&label).get()
             == i64::try_from(exports.len()).unwrap()
     );
-    copy_eligible(&tier, &tp(), 1, LeaderEpoch(0), exports.clone()).await;
+    copy_exports(&tier, exports.clone()).await;
     check!(
         metrics.remote_copy_lag_segments.get_or_create(&label).get()
             == i64::try_from(exports.len()).unwrap()
@@ -221,20 +216,20 @@ async fn a_throttling_store_finishes_nothing_and_moves_the_error_and_lag_series(
 /// counted as a failure like any other.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stalled_copy_is_abandoned_at_its_deadline() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let (_partition, exports, _config) = tiered_partition(log_dir.path());
-    let store = stalling_store();
-    let rsm = backend(Arc::clone(&store));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let metrics = BrokerMetrics::new();
-    let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+    faulty_copy_fixture!(
+        log_dir,
+        _partition,
+        exports,
+        _config,
+        _store,
+        rsm,
+        stalling_store
+    );
+    fixtures::owned_tier_resources!(rlmm, metrics, index_cache);
 
     let started = std::time::Instant::now();
-    let copied = copy_eligible(
+    let copied = copy_exports(
         &faulty_tier(&rsm, &rlmm, &metrics, &index_cache, SHORT_COPY_DEADLINE),
-        &tp(),
-        1,
-        LeaderEpoch(0),
         vec![exports[0].clone()],
     )
     .await;
@@ -255,9 +250,7 @@ async fn a_stalled_copy_is_abandoned_at_its_deadline() {
     // Abandoned, not rolled back: the upload the deadline walked away from is
     // still running against this segment id, so the metadata stays in
     // `CopySegmentStarted` and the next tick re-copies under a fresh id.
-    let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
-    check!(listed.len() == 1);
-    check!(listed[0].state() == RemoteLogSegmentState::CopySegmentStarted);
+    fixtures::check_one_segment_state(&rlmm, RemoteLogSegmentState::CopySegmentStarted);
 }
 
 /// A partition whose copy stalls must not stop the sweep from reaching the
@@ -275,11 +268,8 @@ async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
     second.current_leader.store(1, Ordering::Relaxed);
     partitions.insert("orders".into(), PartitionIndex(1), second);
 
-    let store = stalling_store();
-    let rsm = backend(Arc::clone(&store));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let metrics = BrokerMetrics::new();
-    let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+    let (store, rsm) = store_backend(stalling_store);
+    fixtures::owned_tier_resources!(rlmm, metrics, index_cache);
     let controller: Arc<dyn crate::metadata_source::MetadataSource> =
         Arc::new(fixed_source(image_with_orders_partitions(2)));
 
@@ -307,9 +297,7 @@ async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
         store.attempts(StoreOp::Put)
     );
     for index in [0, 1] {
-        let listed = rlmm
-            .list_remote_log_segments(&TopicIdPartition::new(tp().topic_id, "orders", index))
-            .unwrap();
+        let listed = fixtures::partition_segments(&rlmm, index);
         check!(
             listed
                 .iter()
@@ -336,16 +324,10 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
         let log_dir = tempfile::tempdir().unwrap();
         let (partition, exports, config) = tiered_partition(log_dir.path());
         let rsm = backend(store());
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let metrics = BrokerMetrics::new();
-        let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+        fixtures::owned_tier_resources!(rlmm, metrics, index_cache);
 
-        let copied = copy_eligible(
+        let copied = copy_exports(
             &faulty_tier(&rsm, &rlmm, &metrics, &index_cache, copy_timeout),
-            &tp(),
-            1,
-            LeaderEpoch(0),
             exports.clone(),
         )
         .await;
@@ -353,18 +335,17 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
 
         // Far past every segment's `local.retention.ms`, so nothing but the
         // missing remote copy can be holding these bytes on disk.
-        let removed = local_retention_pass(
-            &tp(),
+        let removed = fixtures::local_retention_at(
             &partition,
             &exports,
             &config,
             &rlmm,
-            LocalRetentionBounds {
-                now_ms: now_ms() + 1_000_000,
-                high_watermark: partition.high_watermark().await,
-            },
-            crate::api_catalog::UnstableApiVersions::Disabled,
-        );
+            (
+                crate::api_catalog::UnstableApiVersions::Disabled,
+                now_ms() + 1_000_000,
+            ),
+        )
+        .await;
 
         check!(removed == 0, "{case}");
         let log = partition.log.lock().expect("partition log mutex poisoned");
@@ -374,4 +355,12 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
         );
         check!(log.tierable_segments().len() == exports.len(), "{case}");
     }
+}
+
+fn store_backend(
+    make_store: fn() -> Arc<FaultInjectingStore>,
+) -> (Arc<FaultInjectingStore>, Arc<dyn RemoteStorageManager>) {
+    let store = make_store();
+    let rsm = backend(Arc::clone(&store));
+    (store, rsm)
 }

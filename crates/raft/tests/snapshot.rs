@@ -22,6 +22,8 @@ use krabka_units::prelude::{Time, millis};
 use tempfile::TempDir;
 use uuid::Uuid;
 
+krabka_macros::topic_record_fixture!(single_partition_topic);
+
 /// Single-voter elections are instant, and a short timeout keeps each boot well
 /// inside the 30-second leader deadline.
 const FAST_ELECTION_TIMEOUT: Time = millis(200);
@@ -120,12 +122,7 @@ async fn snapshot_then_restart_recovers_image() {
         // it as the leading KIP-853 VotersRecord alongside kraft.version 0.
         controller
             .submit_change(vec![
-                MetadataRecord::V1Topic(TopicRecord {
-                    name: "t".into(),
-                    topic_id: Uuid::new_v4(),
-                    partitions: 1,
-                    replication_factor: 1,
-                }),
+                MetadataRecord::V1Topic(single_partition_topic("t", Uuid::new_v4())),
                 // KIP-584 finalized feature: must survive snapshot + restart.
                 // A dropped feature level reverts metadata.version to UNKNOWN.
                 MetadataRecord::V1FeatureLevel(FeatureLevelRecord {

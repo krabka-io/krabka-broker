@@ -2,7 +2,10 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_clone_ScramAlterationFacts": { "prover": "alt-ergo", "time": 0.01 }
+      "vc_clone_ScramAlterationFacts": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      }
     }
   }
 }

@@ -13,47 +13,65 @@
 //!   * Stable sort order on fetch-all (alphabetical)
 
 use assert2::{assert, check};
+
+use crate::support::{
+    acl::TOPIC_FULL_MASK,
+    topics::{creatable_topic, create_topic_request},
+};
 mod support;
 
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
     describe_topic_partitions_request::{
         Cursor as RequestCursor, DescribeTopicPartitionsRequest, TopicRequest,
     },
     update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
 };
 
+fn describe_topics_request(
+    names: &[&str],
+    limit: i32,
+    cursor: Option<RequestCursor>,
+) -> DescribeTopicPartitionsRequest {
+    DescribeTopicPartitionsRequest {
+        topics: names
+            .iter()
+            .map(|name| TopicRequest {
+                name: (*name).into(),
+                ..Default::default()
+            })
+            .collect(),
+        response_partition_limit: limit,
+        cursor,
+        ..Default::default()
+    }
+}
+
+async fn described_topic(
+    name: &str,
+    partitions: i32,
+) -> (
+    support::InProcess,
+    krabka_protocol::owned::describe_topic_partitions_response::DescribeTopicPartitionsResponse,
+) {
+    let p = support::start().await;
+    create_topic(&p, name, partitions).await;
+    let response = p
+        .client
+        .send(describe_topics_request(&[name], 2000, None))
+        .await
+        .expect("DescribeTopicPartitions");
+    (p, response)
+}
+
 // Bit positions (subset; cross-check'd with the KIP-430 unit tests).
-const BIT_READ: i32 = 1 << 3;
-const BIT_WRITE: i32 = 1 << 4;
-const BIT_CREATE: i32 = 1 << 5;
-const BIT_DELETE: i32 = 1 << 6;
-const BIT_ALTER: i32 = 1 << 7;
-const BIT_DESCRIBE: i32 = 1 << 8;
-const BIT_DESCRIBE_CONFIGS: i32 = 1 << 10;
-const BIT_ALTER_CONFIGS: i32 = 1 << 11;
-const TOPIC_FULL_MASK: i32 = BIT_READ
-    | BIT_WRITE
-    | BIT_CREATE
-    | BIT_DELETE
-    | BIT_ALTER
-    | BIT_DESCRIBE
-    | BIT_DESCRIBE_CONFIGS
-    | BIT_ALTER_CONFIGS;
 
 async fn create_topic(p: &support::InProcess, name: &str, partitions: i32) {
     let resp = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic(name, partitions, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0, "{name} create: {resp:?}");
@@ -67,21 +85,7 @@ async fn named_request_returns_listed_topics_with_partitions() {
 
     let resp = p
         .client
-        .send(DescribeTopicPartitionsRequest {
-            topics: vec![
-                TopicRequest {
-                    name: "alpha".into(),
-                    ..Default::default()
-                },
-                TopicRequest {
-                    name: "beta".into(),
-                    ..Default::default()
-                },
-            ],
-            response_partition_limit: 2000,
-            cursor: None,
-            ..Default::default()
-        })
+        .send(describe_topics_request(&["alpha", "beta"], 2000, None))
         .await
         .expect("DescribeTopicPartitions");
 
@@ -119,12 +123,7 @@ async fn fetch_all_returns_topics_in_alphabetical_order() {
 
     let resp = p
         .client
-        .send(DescribeTopicPartitionsRequest {
-            topics: Vec::new(), // empty → fetch-all
-            response_partition_limit: 2000,
-            cursor: None,
-            ..Default::default()
-        })
+        .send(describe_topics_request(&[], 2000, None)) // empty → fetch-all
         .await
         .expect("DescribeTopicPartitions");
 
@@ -151,21 +150,11 @@ async fn unknown_topic_in_named_request_returns_error_row() {
 
     let resp = p
         .client
-        .send(DescribeTopicPartitionsRequest {
-            topics: vec![
-                TopicRequest {
-                    name: "ghost".into(),
-                    ..Default::default()
-                },
-                TopicRequest {
-                    name: "real-topic".into(),
-                    ..Default::default()
-                },
-            ],
-            response_partition_limit: 2000,
-            cursor: None,
-            ..Default::default()
-        })
+        .send(describe_topics_request(
+            &["ghost", "real-topic"],
+            2000,
+            None,
+        ))
         .await
         .expect("DescribeTopicPartitions");
     assert!(resp.topics.len() == 2);
@@ -189,22 +178,7 @@ async fn unknown_topic_in_named_request_returns_error_row() {
 /// regress.
 #[tokio::test]
 async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {
-    let p = support::start().await;
-    create_topic(&p, "t", 1).await;
-
-    let resp = p
-        .client
-        .send(DescribeTopicPartitionsRequest {
-            topics: vec![TopicRequest {
-                name: "t".into(),
-                ..Default::default()
-            }],
-            response_partition_limit: 2000,
-            cursor: None,
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeTopicPartitions");
+    let (p, resp) = described_topic("t", 1).await;
 
     assert!(resp.topics.len() == 1);
     assert!(resp.topics[0].partitions.len() == 1);
@@ -226,15 +200,7 @@ async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {
 /// The `DescribeTopicPartitions` request the ELR-downgrade case sends twice,
 /// once on either side of the downgrade.
 fn describe_request() -> DescribeTopicPartitionsRequest {
-    DescribeTopicPartitionsRequest {
-        topics: vec![TopicRequest {
-            name: "t".into(),
-            ..Default::default()
-        }],
-        response_partition_limit: 2000,
-        cursor: None,
-        ..Default::default()
-    }
+    describe_topics_request(&["t"], 2000, None)
 }
 
 /// KIP-966: a downgrade of `eligible.leader.replicas.version` to 0 clears the
@@ -352,22 +318,7 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
 
 #[tokio::test]
 async fn topic_authorized_operations_populated_for_super_user() {
-    let p = support::start().await;
-    create_topic(&p, "t", 1).await;
-
-    let resp = p
-        .client
-        .send(DescribeTopicPartitionsRequest {
-            topics: vec![TopicRequest {
-                name: "t".into(),
-                ..Default::default()
-            }],
-            response_partition_limit: 2000,
-            cursor: None,
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeTopicPartitions");
+    let (p, resp) = described_topic("t", 1).await;
 
     assert!(resp.topics.len() == 1);
     let row = &resp.topics[0];
@@ -392,15 +343,7 @@ async fn pagination_caps_response_at_partition_limit_and_returns_next_cursor() {
     // at "big" / partition 3.
     let resp = p
         .client
-        .send(DescribeTopicPartitionsRequest {
-            topics: vec![TopicRequest {
-                name: "big".into(),
-                ..Default::default()
-            }],
-            response_partition_limit: 3,
-            cursor: None,
-            ..Default::default()
-        })
+        .send(describe_topics_request(&["big"], 3, None))
         .await
         .expect("DescribeTopicPartitions");
 
@@ -414,19 +357,15 @@ async fn pagination_caps_response_at_partition_limit_and_returns_next_cursor() {
     // Resume from the cursor — should return partitions 3 and 4 only.
     let resp2 = p
         .client
-        .send(DescribeTopicPartitionsRequest {
-            topics: vec![TopicRequest {
-                name: "big".into(),
-                ..Default::default()
-            }],
-            response_partition_limit: 2000,
-            cursor: Some(RequestCursor {
+        .send(describe_topics_request(
+            &["big"],
+            2000,
+            Some(RequestCursor {
                 topic_name: cursor.topic_name.clone(),
                 partition_index: cursor.partition_index,
                 ..Default::default()
             }),
-            ..Default::default()
-        })
+        ))
         .await
         .expect("DescribeTopicPartitions (resume)");
     assert!(resp2.topics.len() == 1);

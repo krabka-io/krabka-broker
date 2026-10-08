@@ -14,7 +14,6 @@ use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
         share_fetch_request::{
@@ -31,10 +30,7 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context,
-        start_broker_no_audit_with,
-    },
+    test_support::{decode_response, encode_request, peer, principal, start_broker_no_audit_with},
 };
 
 /// The number of batches that each topic holds.
@@ -67,32 +63,13 @@ async fn create_topic_with_partitions(
     name: &str,
     partitions: i32,
 ) -> WireUuid {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("share-fetch-byte-limit-test")
-        .build()
-        .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_string(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    for index in 0..partitions {
-        broker.wait_until_partition_present(name, index).await;
-    }
-    let image = broker.controller_image_for_test();
-    let topic = image.topic(name).expect("created topic in the image");
-    WireUuid(topic.topic_id.into_bytes())
+    crate::handlers::test_support::create_topic(
+        broker,
+        "share-fetch-byte-limit-test",
+        name,
+        partitions,
+    )
+    .await
 }
 
 /// Appends [`BATCHES`] batches of the same size, each in its own produce.
@@ -105,9 +82,11 @@ async fn produce_batches(broker: &BrokerHandle, topic: &str) {
 /// Appends one batch of [`RECORDS_PER_BATCH`] records to `partition`.
 async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
     let shared = broker.broker_arc_for_test();
-    let user = principal("producer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "producer-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("producer"),
+        client_id = "producer-client"
+    );
     let request = ProduceRequest {
         acks: -1,
         timeout_ms: 5_000,
@@ -207,22 +186,12 @@ async fn send_share_fetch(
     broker: &BrokerHandle,
     request: &ShareFetchRequest,
 ) -> ShareFetchResponse {
-    let version = krabka_protocol::owned::share_fetch_request::MAX_VERSION;
-    let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let request_bytes = encode_request(request, version);
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
-        version,
-        &request_bytes,
-        &ctx,
+    crate::handlers::test_support::share_fetch_wire(
+        broker,
+        krabka_protocol::owned::share_fetch_request::MAX_VERSION,
+        request,
     )
     .await
-    .expect("handle share fetch");
-    decode_response(&response, version)
 }
 
 /// The one partition row of `response`. An incremental response leaves out a
@@ -238,10 +207,7 @@ fn partition(response: &ShareFetchResponse) -> PartitionData {
 
 /// The `(first, last)` offsets of every acquired row.
 fn acquired(row: &PartitionData) -> Vec<(i64, i64)> {
-    row.acquired_records
-        .iter()
-        .map(|range| (range.first_offset, range.last_offset))
-        .collect()
+    crate::handlers::test_support::acquired_share_records(row)
 }
 
 /// The offsets of every record that the row carries.

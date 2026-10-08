@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/transaction.rs" 71 27 71 32 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 20 19 20 36 *)
 
 (* <transaction::TransactionReaperCompletionDecision as std::clone::Clone> *)
 
@@ -15,7 +15,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TransactionReaperCompletionDecision [#"/workspace/crates/verified/src/transaction.rs" 71 27 71 32]
+let clone_TransactionReaperCompletionDecision [#"/workspace/crates/verified/src/transaction.rs" 20 19 20 36]
   (self: t_TransactionReaperCompletionDecision) (return (x: t_TransactionReaperCompletionDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TransactionReaperCompletionDecision = Any.any_l ()

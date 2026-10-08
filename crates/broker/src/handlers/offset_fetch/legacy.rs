@@ -7,9 +7,6 @@
 //! and above `groups[]` shape lives in `groups` and shares nothing but the
 //! group gate and the offset read.
 
-use std::collections::BTreeMap;
-
-use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
     offset_fetch_response::{
@@ -17,11 +14,16 @@ use krabka_protocol::owned::{
     },
 };
 
-use super::{authz::group_authorized, committed::fetch_offsets, unstable};
+use super::{
+    authz::{group_error, topic_decisions, visible_topics},
+    committed::{
+        committed_topics, fetch_offsets, missing_legacy_row as missing_offset_row,
+        stable_legacy_row,
+    },
+    unstable,
+};
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
-    broker::Broker,
-    codes,
+    authorizer::AuthorizationResult, broker::Broker, codes,
     coordinator::unified::group::GroupOffsets,
 };
 
@@ -40,21 +42,7 @@ pub(super) async fn handle_legacy(
     req: &OffsetFetchRequest,
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> OffsetFetchResponse {
-    // ── ACL preamble ────────────────────────────────────────────
-    // Step 1: `Describe` on `Group(group_id)`. On Deny → whole-response
-    // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
-    {
-        if !group_authorized(broker, ctx, &req.group_id) {
-            return OffsetFetchResponse {
-                topics: Vec::new(),
-                error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                throttle_time_ms: 0,
-                ..Default::default()
-            };
-        }
-    }
-
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+    if let Some(error_code) = group_error(broker, ctx, &req.group_id) {
         return OffsetFetchResponse {
             topics: Vec::new(),
             error_code,
@@ -113,12 +101,10 @@ fn legacy_named_topics(
 ) -> Vec<OffsetFetchResponseTopic> {
     let topic_decisions = {
         let image = broker.controller.current_image();
-        authorize_topics(
-            broker.config.authorizer.as_ref(),
-            &*image,
-            ctx.principal,
-            ctx.peer,
-            AclOperation::Describe,
+        topic_decisions(
+            broker,
+            &image,
+            ctx,
             req_topics.iter().map(|t| t.name.as_str()),
         )
     };
@@ -168,25 +154,11 @@ fn legacy_fetch_all(
     offsets: &GroupOffsets,
     require_stable: bool,
 ) -> Vec<OffsetFetchResponseTopic> {
-    let mut by_topic: BTreeMap<&str, Vec<OffsetFetchResponsePartition>> = BTreeMap::new();
-    for (topic, partition) in offsets.committed.keys() {
-        by_topic
-            .entry(topic.as_str())
-            .or_default()
-            .push(committed_row(topic, *partition, offsets, require_stable));
-    }
+    let by_topic = committed_topics(offsets, |topic, partition| {
+        committed_row(topic, partition, offsets, require_stable)
+    });
     let image = broker.controller.current_image();
-    let decisions = authorize_topics(
-        broker.config.authorizer.as_ref(),
-        &*image,
-        context.principal,
-        context.peer,
-        AclOperation::Describe,
-        by_topic.keys().copied(),
-    );
-    by_topic
-        .into_iter()
-        .filter(|(name, _)| decisions.get(name).copied() == Some(AuthorizationResult::Allow))
+    visible_topics(broker, &image, context, by_topic)
         .map(|(name, mut partitions)| {
             partitions.sort_by_key(|p| p.partition_index);
             OffsetFetchResponseTopic {
@@ -211,27 +183,6 @@ fn committed_row(
     }
     offsets.committed.get(&key).map_or_else(
         || missing_offset_row(partition_index, codes::NONE),
-        |entry| OffsetFetchResponsePartition {
-            partition_index,
-            committed_offset: entry.offset.0,
-            committed_leader_epoch: entry.leader_epoch,
-            metadata: Some(entry.metadata.clone()),
-            error_code: codes::NONE,
-            ..Default::default()
-        },
+        |entry| stable_legacy_row(partition_index, entry),
     )
-}
-
-/// A partition row that carries no committed offset: offset -1, leader epoch
-/// -1, and the empty metadata string, which is the schema default of
-/// `Metadata` that Kafka writes on this row, not null.
-fn missing_offset_row(partition_index: i32, error_code: i16) -> OffsetFetchResponsePartition {
-    OffsetFetchResponsePartition {
-        partition_index,
-        committed_offset: -1,
-        committed_leader_epoch: -1,
-        metadata: Some(String::new()),
-        error_code,
-        ..Default::default()
-    }
 }

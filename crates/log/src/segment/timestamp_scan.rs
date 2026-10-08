@@ -84,13 +84,7 @@ impl Segment {
         limit: Option<ByteSize>,
         minimum: Offset,
     ) -> Result<Option<(Offset, i64)>, LogError> {
-        let floor_rel = self.time_index.scan_start(target_ts);
-        let Some(scan_from) = self
-            .base_offset
-            .0
-            .checked_add(i64::from(floor_rel))
-            .map(Offset)
-        else {
+        let Some(scan_from) = self.timestamp_scan_floor(target_ts) else {
             return Ok(None);
         };
         self.scan_from_floor_windowed_from(
@@ -142,13 +136,7 @@ impl Segment {
             }
             return Ok(found);
         }
-        let floor_rel = self.time_index.scan_start(self.max_timestamp);
-        let Some(scan_from) = self
-            .base_offset
-            .0
-            .checked_add(i64::from(floor_rel))
-            .map(Offset)
-        else {
+        let Some(scan_from) = self.timestamp_scan_floor(self.max_timestamp) else {
             return Ok(None);
         };
         // Equality against `max_timestamp` is safe because Kafka's batch
@@ -156,6 +144,13 @@ impl Segment {
         // among the batch's records), so some record's timestamp equals
         // the segment max exactly.
         self.scan_from_floor_windowed(scan_from, scan_window, self.max_timestamp, limit)
+    }
+
+    fn timestamp_scan_floor(&self, target: i64) -> Option<Offset> {
+        self.base_offset
+            .0
+            .checked_add(i64::from(self.time_index.scan_start(target)))
+            .map(Offset)
     }
 
     /// Recover the maximum timestamp for a sealed segment opened through the
@@ -382,7 +377,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::segment::test_support::{DENSE_INDEX, sample_batch};
+    use crate::segment::test_support::{DENSE_INDEX, sample_batch, seeded_segment};
 
     #[test]
     fn first_record_timestamp_survives_appends_and_reloads_after_truncation() {
@@ -390,8 +385,7 @@ mod tests {
 
         for codec in [CompressionType::None, CompressionType::Lz4] {
             for timestamp_type in [TimestampType::CreateTime, TimestampType::LogAppendTime] {
-                let dir = tempdir().unwrap();
-                let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+                let (dir, mut seg) = crate::segment::test_support::test_segment();
                 assert2::assert!(seg.first_record_timestamp().is_none());
                 let mut batch = sample_batch(0, 2, 0);
                 batch.records[0].timestamp_delta = -5;
@@ -500,14 +494,12 @@ mod tests {
 
     #[test]
     fn malformed_or_stale_time_index_floor_fails_closed() {
-        let dir = tempdir().unwrap();
-        let mut stale = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (_dir, mut stale) = crate::segment::test_support::test_segment();
         stale.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
         stale.time_index.append(200, u32::MAX).unwrap();
         assert2::assert!(stale.offset_for_timestamp(200).is_none());
 
-        let dir2 = tempdir().unwrap();
-        let mut overflowing = Segment::create(dir2.path(), Offset(i64::MAX)).unwrap();
+        let (_dir2, mut overflowing) = crate::segment::test_support::segment_at(i64::MAX);
         overflowing.last_offset = Offset(i64::MAX);
         overflowing.time_index.append(0, 1).unwrap();
         assert2::assert!(overflowing.offset_for_timestamp(0).is_none());
@@ -516,8 +508,7 @@ mod tests {
     #[test]
     fn truncated_log_failure_exhausts_the_retry_window() {
         let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-        seg.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
+        let seg = seeded_segment(dir.path(), 0, &[(0, 1, 100)]);
         seg.log_file.set_len(1).unwrap();
 
         assert2::assert!(
@@ -529,11 +520,9 @@ mod tests {
 
     #[test]
     fn offset_for_timestamp_finds_first_ge() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
         // Two batches: offsets 0..=2 ts 100..=102, offsets 3..=4 ts 200..=201.
-        seg.append(&sample_batch(0, 3, 100), DENSE_INDEX).unwrap();
-        seg.append(&sample_batch(3, 2, 200), DENSE_INDEX).unwrap();
+        let dir = tempdir().unwrap();
+        let seg = seeded_segment(dir.path(), 0, &[(0, 3, 100), (3, 2, 200)]);
         // sample_batch sets per-record timestamp_delta = i, base_timestamp = ts_base.
         // Batch 1 records: (off0,ts100),(off1,ts101),(off2,ts102).
         // Batch 2 records: (off3,ts200),(off4,ts201).
@@ -551,8 +540,7 @@ mod tests {
 
     #[test]
     fn scan_from_floor_finds_match_beyond_first_window() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (dir, mut seg) = crate::segment::test_support::test_segment();
         // Many single-record batches with increasing timestamps. With a
         // tiny scan window each batch lands in its own window, so a match
         // at the tail forces the windowed loop to advance many times.
@@ -599,8 +587,7 @@ mod tests {
         // A full-size window keeps the match in the first read so the
         // cursor-advance path isn't involved.
         const WINDOW: ByteSize = kibibytes(64);
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (dir, mut seg) = crate::segment::test_support::test_segment();
         // A leading single-record batch at offset 0, then a 3-record batch
         // based at offset 1 (abs offsets 1,2,3; timestamps 200,201,202). The
         // match is the *third* record, whose absolute offset is
@@ -618,17 +605,14 @@ mod tests {
 
     #[test]
     fn offset_of_max_timestamp_earliest_on_tie() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
         // Batch records ts: 100,101,102 (max in batch = 102 at offset 2).
-        seg.append(&sample_batch(0, 3, 100), DENSE_INDEX).unwrap();
         // Second batch: offsets 3,4 ts 200,201 — segment max becomes 201 @4.
-        seg.append(&sample_batch(3, 2, 200), DENSE_INDEX).unwrap();
+        let dir = tempdir().unwrap();
+        let seg = seeded_segment(dir.path(), 0, &[(0, 3, 100), (3, 2, 200)]);
         assert2::assert!(seg.offset_of_max_timestamp() == Some((Offset(4), 201)));
 
         // Empty segment → None.
-        let dir2 = tempdir().unwrap();
-        let empty = Segment::create(dir2.path(), Offset(0)).unwrap();
+        let (dir2, empty) = crate::segment::test_support::test_segment();
         assert2::assert!(empty.offset_of_max_timestamp() == None);
         drop(dir);
         drop(dir2);
@@ -636,8 +620,7 @@ mod tests {
 
     #[test]
     fn offset_of_max_timestamp_tie_picks_earliest() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (dir, mut seg) = crate::segment::test_support::test_segment();
         // All three records share timestamp 500; earliest offset is 0.
         let mut b = RecordBatch {
             base_offset: 0,
@@ -669,7 +652,6 @@ mod record_limit_tests {
     use krabka_compression::CompressionType;
     use krabka_protocol::records::{Attributes, Record, RecordBatch};
     use krabka_units::prelude::{ByteSize, bytes, kibibytes};
-    use tempfile::tempdir;
 
     use super::*;
     use crate::segment::test_support::DENSE_INDEX;
@@ -706,8 +688,7 @@ mod record_limit_tests {
     }
 
     fn segment(batches: &[RecordBatch]) -> (tempfile::TempDir, Segment) {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (dir, mut seg) = crate::segment::test_support::test_segment();
         for batch in batches {
             seg.append(batch, DENSE_INDEX).unwrap();
         }

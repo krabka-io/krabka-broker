@@ -2,11 +2,11 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_checked_add": { "prover": "alt-ergo", "time": 0.024 },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.022 },
+      "vc_checked_add": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.014 },
       "vc_scheduled_delivery_visible": {
         "prover": "alt-ergo",
-        "time": 0.032
+        "time": 0.014
       }
     }
   }

@@ -13,7 +13,7 @@
 //! the mailbox loop, and the shared services and constants — while each RPC
 //! path lives in its own submodule.
 
-use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use tokio::{
     sync::{mpsc, oneshot},
@@ -44,7 +44,7 @@ mod waiters;
 #[cfg(test)]
 mod group_config_tests;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -279,6 +279,13 @@ async fn run_actor(
         while rx.recv().await.is_some() {}
         return group;
     };
+    let services = ActorServices {
+        config: &config,
+        metadata: &*metadata,
+        offsets_log: &*offsets_log,
+        coordinator: &coordinator,
+    };
+
     loop {
         let deadline = classic_deadline(&group);
         let rebalance_deadline = group
@@ -289,12 +296,7 @@ async fn run_actor(
                 None => false,
                 Some(msg) => {
                     let effective = effective_config(&config, &coordinator, &group.group_id);
-                    let services = ActorServices {
-                        config: &effective,
-                        metadata: &*metadata,
-                        offsets_log: &*offsets_log,
-                        coordinator: &coordinator,
-                    };
+                    let services = ActorServices { config: &effective, ..services };
                     handle_actor_message(&mut group, &mut parked, services, msg).await
                 }
             },
@@ -305,12 +307,7 @@ async fn run_actor(
                 // has to stamp `observe_membership` and break cleanly.
                 if time_util::fired(outcome, TICK_TASK) {
                     let effective = effective_config(&config, &coordinator, &group.group_id);
-                    let services = ActorServices {
-                        config: &effective,
-                        metadata: &*metadata,
-                        offsets_log: &*offsets_log,
-                        coordinator: &coordinator,
-                    };
+                    let services = ActorServices { config: &effective, ..services };
                     let keep_running =
                         handle_actor_tick(&mut group, &mut parked, services).await;
                     match time_util::arm(&*config.timer, config.session_expiry_tick, TICK_TASK) {
@@ -329,23 +326,13 @@ async fn run_actor(
                 // now instead of at the next session tick, so the partitions it
                 // did not revoke reach their new owner on time.
                 let effective = effective_config(&config, &coordinator, &group.group_id);
-                let services = ActorServices {
-                    config: &effective,
-                    metadata: &*metadata,
-                    offsets_log: &*offsets_log,
-                    coordinator: &coordinator,
-                };
+                let services = ActorServices { config: &effective, ..services };
                 handle_actor_tick(&mut group, &mut parked, services).await
             }
             () = crate::time_util::sleep_until_opt(classic_sync_deadline(&group)) => {
                 // Kafka's pending-sync timer: a member never sent SyncGroup.
                 let effective = effective_config(&config, &coordinator, &group.group_id);
-                let services = ActorServices {
-                    config: &effective,
-                    metadata: &*metadata,
-                    offsets_log: &*offsets_log,
-                    coordinator: &coordinator,
-                };
+                let services = ActorServices { config: &effective, ..services };
                 handle_classic_sync_expiry(&mut group, &mut parked, services).await
             }
             () = crate::time_util::sleep_until_opt(deadline) => {
@@ -389,22 +376,15 @@ async fn run_actor(
     group
 }
 
-/// The settings `group_id` runs with: the `consumer.*` overrides of its group
-/// config in the current metadata image over the broker's `config`.
-///
-/// A classic group and a classic member ignore them: Kafka's classic groups
-/// read only the broker-wide `group.min.session.timeout.ms` and
-/// `group.max.session.timeout.ms`, and a coordinator with no metadata source
-/// runs every group with the broker values.
-fn effective_config<'a>(
-    config: &'a NextGenConfig,
-    coordinator: &GroupCoordinator,
-    group_id: &str,
-) -> Cow<'a, NextGenConfig> {
-    match coordinator.metadata_source() {
-        Some(source) => config.for_group(source.current_image().group_config(group_id)),
-        None => Cow::Borrowed(config),
-    }
+crate::coordinator::unified::config::effective_group_config! {
+    /// The settings `group_id` runs with: the `consumer.*` overrides of its group
+    /// config in the current metadata image over the broker's `config`.
+    ///
+    /// A classic group and a classic member ignore them: Kafka's classic groups
+    /// read only the broker-wide `group.min.session.timeout.ms` and
+    /// `group.max.session.timeout.ms`, and a coordinator with no metadata source
+    /// runs every group with the broker values.
+    fn effective_config(NextGenConfig);
 }
 
 /// The classic rebalance-completion deadline, if a rebalance is open.
@@ -418,6 +398,13 @@ fn classic_sync_deadline(group: &CoordinatorGroup) -> Option<Instant> {
     group.as_classic().and_then(|s| s.sync_deadline)
 }
 
+// `reconciler_model` drives the real heartbeat step, so these are re-exported
+// for it alone.
+#[cfg(test)]
+pub(crate) use self::{
+    heartbeat::{HeartbeatStep, step_heartbeat},
+    regex_resolution::RegexResolution,
+};
 /// The wall-clock reading this actor subtree stamps records and deadlines
 /// with, in milliseconds since the Unix epoch. It reads `std::time`, not
 /// chrono, which the name predates.
@@ -432,26 +419,13 @@ fn classic_sync_deadline(group: &CoordinatorGroup) -> Option<Instant> {
 /// That arm needs a system clock set roughly 292 million years ahead to reach,
 /// and the two answers fail in opposite directions: `0` dates a group to the
 /// epoch, so its offsets expire at once, while `i64::MAX` dates it to now, so
-/// they never expire. The share-group actor keeps its own copy of this same
-/// function, with the same divergence.
-fn chrono_now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0))
-}
-
-// `reconciler_model` drives the real heartbeat step, so these are re-exported
-// for it alone.
-#[cfg(test)]
-pub(crate) use self::{
-    heartbeat::{HeartbeatStep, step_heartbeat},
-    regex_resolution::RegexResolution,
-};
+/// they never expire. The share-group actor and transaction handlers share this
+/// same overflow-to-zero reading.
+use crate::txn::util::now_millis as chrono_now_ms;
 
 #[cfg(test)]
 #[path = "reconciliation_model_support.rs"]
-mod reconciliation_model_support;
+pub(crate) mod reconciliation_model_support;
 
 #[cfg(test)]
 #[path = "reconciler_model.rs"]

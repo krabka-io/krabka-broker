@@ -67,14 +67,7 @@ pub(super) fn deadline_millis(extent: Time) -> u64 {
     u64::try_from(extent.millis_i64()).unwrap_or(0)
 }
 
-pub(super) fn make_voter_set(ids: &[NodeId]) -> krabka_voters::VoterSet {
-    krabka_voters::VoterSet::from_voters(ids.iter().map(|&id| krabka_voters::Voter {
-        id,
-        directory_id: uuid::Uuid::nil(),
-        endpoints: Vec::new(),
-        kraft_version: krabka_voters::KRaftVersionRange::default(),
-    }))
-}
+pub(super) use crate::simulation_support::voter_set as make_voter_set;
 
 #[cfg(test)]
 mod tests {

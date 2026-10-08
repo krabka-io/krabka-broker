@@ -1,25 +1,27 @@
 (* #"/workspace/crates/verified/src/composition/wal_recovery.rs" 35 0 41 25 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 63 18 63 43
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 177 63
-let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 178 10 179 97
-let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 180 83
-let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 181 10 183 58
-let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 184 74
-let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 185 10 189 1
-let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 36
-let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 191 10 191 59
-let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 127 16 127 42
-let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 142 8 148 9
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 63 18 63 43
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 169 10 169 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 170 10 171 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 172 10 172 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 173 10 175 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 176 10 176 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 181 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 182 10 182 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 183 10 183 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 120 16 120 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 133 8 139 9
+let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 14 16 14 72
+let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
 let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 101 10 101 40
 let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 30
 let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 29
 let%span sfuture_log_swap_admission'2 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 110 10 110 53
-let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 150 10 152 98
+let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 149 10 151 98
 let%span swal_recovery = "/workspace/crates/verified/src/composition/wal_recovery.rs" 46 19 46 25
 let%span swal_recovery'0 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 49 16 49 22
 let%span swal_recovery'1 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 60 14 60 30
@@ -51,19 +53,19 @@ let%span swal_recovery'26 = "/workspace/crates/verified/src/composition/wal_reco
 let%span swal_recovery'27 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 87 33 87 38
 let%span swal_recovery'28 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 87 40 87 44
 let%span swal_recovery'29 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 87 16 87 55
-let%span swal_recovery'30 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 14 11 14 66
-let%span swal_recovery'31 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 15 11 15 83
-let%span swal_recovery'32 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 16 11 16 94
-let%span swal_recovery'33 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 17 11 17 37
-let%span swal_recovery'34 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 18 11 19 36
-let%span swal_recovery'35 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 20 10 24 1
-let%span swal_recovery'36 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 25 10 34 1
+let%span swal_recovery'30 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 16 11 16 78
+let%span swal_recovery'31 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 17 11 17 37
+let%span swal_recovery'32 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 18 11 19 36
+let%span swal_recovery'33 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 20 10 24 1
+let%span swal_recovery'34 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 25 10 34 1
+let%span scontrol_truncation = "/workspace/crates/verified/src/composition/control_truncation.rs" 12 8 14 55
 
 use creusot.int.Int64
 use creusot.int.UInt64
 use seq.Seq
 use creusot.slice.Slice64
 use creusot.prelude.Any
+use map.Map
 use int.MinMax
 use int.Int
 
@@ -137,10 +139,10 @@ type t_FetchVisibility = {
   response_hw: Int64.t;
   response_lso: Int64.t }
 
-function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 126 0 126 40] (a: int) (b: int) : int =
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 119 0 119 40] (a: int) (b: int) : int =
   [%#sfetch'7] if a <= b then a else b
 
-function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 140 0 140 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 131 0 131 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
  = [%#sfetch'8] if is_follower then
     Int64.to_int w.log_end
   else
@@ -182,6 +184,22 @@ let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWater
     = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
     (! return {result}) ]
 
+type tup2_i64_i64 = { f0'0: Int64.t; f1'0: Int64.t }
+
+predicate pairwise_i64 [#"/workspace/crates/verified/src/sequence.rs" 20 0 20 95] (values: Seq.seq Int64.t) (relation: Map.map tup2_i64_i64 bool) =
+  [%#ssequence'0] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length values
+    -> Map.get relation { f0'0 = Seq.get values i; f1'0 = Seq.get values j }
+
+predicate strictly_increasing_i64 [#"/workspace/crates/verified/src/sequence.rs" 13 0 13 73] (values: Seq.seq Int64.t) =
+  [%#ssequence] pairwise_i64 values (fun (__0: tup2_i64_i64) -> let {f0'0 = left; f1'0 = right} = __0 in Int64.to_int left
+  < Int64.to_int right)
+
+predicate physical_batch_sequence_valid [#"/workspace/crates/verified/src/composition/control_truncation.rs" 10 0 10 84] (ends: Seq.seq Int64.t) (start: int) (floor: int) =
+  [%#scontrol_truncation] 0 <= start
+  /\ start <= floor
+  /\ (forall i: int. 0 <= i /\ i < Seq.length ends -> start < Int64.to_int (Seq.get ends i))
+  /\ strictly_increasing_i64 ends
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
@@ -189,19 +207,10 @@ meta "select_lsinst" "all"
 let checkpoint_truncation_bounds_fetch [#"/workspace/crates/verified/src/composition/wal_recovery.rs" 35 0 41 25]
   (ends: Slice64.slice Int64.t) (physical_start: Int64.t) (w: t_FetchWatermarks) (start: Int64.t) (cut: Int64.t)
   (return (x: t_Option_tup2_usize_i64)) =
-{[@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires] ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #0] [%#swal_recovery'30] 0
-      <= Int64.to_int physical_start
-    /\ Int64.to_int physical_start <= Int64.to_int w.log_start)
-  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #1] [%#swal_recovery'31] forall i: int. 0 <= i
-        /\ i < Seq.length (Slice64.view ends)
-      -> Int64.to_int physical_start < Int64.to_int (Seq.get (Slice64.view ends) i))
-  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #2] [%#swal_recovery'32] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view ends)
-      -> Int64.to_int (Seq.get (Slice64.view ends) i) < Int64.to_int (Seq.get (Slice64.view ends) j))
-  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #3] [%#swal_recovery'33] Int64.to_int w.log_start
+{[@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires] ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #0] [%#swal_recovery'30] physical_batch_sequence_valid (Slice64.view ends) (Int64.to_int physical_start) (Int64.to_int w.log_start))
+  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #1] [%#swal_recovery'31] Int64.to_int w.log_start
     <= Int64.to_int w.log_end)
-  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #4] [%#swal_recovery'34] Int64.to_int w.log_end
+  /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch requires #2] [%#swal_recovery'32] Int64.to_int w.log_end
   = (if Seq.length (Slice64.view ends) = 0 then
     Int64.to_int physical_start
   else
@@ -210,13 +219,13 @@ let checkpoint_truncation_bounds_fetch [#"/workspace/crates/verified/src/composi
   (! bb0
   [ bb0 = s0
     [ s0 = [ &recovered_end <- w.log_end ] s1
-    | s1 = [ &_36 <- Int64.gt w.log_start start ] s2
-    | s2 = any [ br0 -> {_36 = false} (! bb2) | br1 -> {_36} (! bb6) ] ]
+    | s1 = [ &_32 <- Int64.gt w.log_start start ] s2
+    | s2 = any [ br0 -> {_32 = false} (! bb2) | br1 -> {_32} (! bb6) ] ]
   | bb2 = s0
-    [ s0 = [ &_39 <- Int64.gt start cut ] s1 | s1 = any [ br0 -> {_39 = false} (! bb4) | br1 -> {_39} (! bb6) ] ]
+    [ s0 = [ &_35 <- Int64.gt start cut ] s1 | s1 = any [ br0 -> {_35 = false} (! bb4) | br1 -> {_35} (! bb6) ] ]
   | bb4 = s0
-    [ s0 = [ &_42 <- Int64.gt cut recovered_end ] s1
-    | s1 = any [ br0 -> {_42 = false} (! bb7) | br1 -> {_42} (! bb6) ] ]
+    [ s0 = [ &_38 <- Int64.gt cut recovered_end ] s1
+    | s1 = any [ br0 -> {_38 = false} (! bb7) | br1 -> {_38} (! bb6) ] ]
   | bb6 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
   | bb7 = s0
     [ s0 = [ &kept <- [%#swal_recovery] (0: UInt64.t) ] s1
@@ -257,38 +266,38 @@ let checkpoint_truncation_bounds_fetch [#"/workspace/crates/verified/src/composi
             end
         /\ Int64.to_int cut <= Int64.to_int (Seq.get (Slice64.view ends) j))}
       (! [ &variant_old_bb8 <- [%#swal_recovery'1] Seq.length (Slice64.view ends) - UInt64.t'int i ] s0)
-      [ s0 = len_i64 [%#swal_recovery'2] {ends} (fun (_x: UInt64.t) -> [ &_89 <- _x ] s1)
-      | s1 = [ &_87 <- UInt64.lt i _89 ] s2
-      | s2 = any [ br0 -> {_87 = false} (! bb26) | br1 -> {_87} (! bb11) ] ]
+      [ s0 = len_i64 [%#swal_recovery'2] {ends} (fun (_x: UInt64.t) -> [ &_85 <- _x ] s1)
+      | s1 = [ &_83 <- UInt64.lt i _85 ] s2
+      | s2 = any [ br0 -> {_83 = false} (! bb26) | br1 -> {_83} (! bb11) ] ]
       [ bb11 = s0
-        [ s0 = [ &_93 <- i ] s1
-        | s1 = [ &_94 <- Slice64.length ends ] s2
-        | s2 = [ &_95 <- UInt64.lt _93 _94 ] s3
-        | s3 = {[@expl:index in bounds] [%#swal_recovery'10] _95} s4
-        | s4 = Slice64.get [%#swal_recovery'10] <Int64.t> {ends} {_93} (fun (r: Int64.t) -> [ &_92 <- r ] s5)
-        | s5 = Int64.sub [%#swal_recovery'12] {_92} {[%#swal_recovery'11] (1: Int64.t)}
+        [ s0 = [ &_89 <- i ] s1
+        | s1 = [ &_90 <- Slice64.length ends ] s2
+        | s2 = [ &_91 <- UInt64.lt _89 _90 ] s3
+        | s3 = {[@expl:index in bounds] [%#swal_recovery'10] _91} s4
+        | s4 = Slice64.get [%#swal_recovery'10] <Int64.t> {ends} {_89} (fun (r: Int64.t) -> [ &_88 <- r ] s5)
+        | s5 = Int64.sub [%#swal_recovery'12] {_88} {[%#swal_recovery'11] (1: Int64.t)}
             (fun (_x: Int64.t) -> [ &last <- _x ] s6)
-        | s6 = is_none_i64 [%#swal_recovery'13] {observed_last} (fun (_x: bool) -> [ &_97 <- _x ] s7)
-        | s7 = any [ br0 -> {_97 = false} (! bb20) | br1 -> {_97} (! bb14) ] ]
+        | s6 = is_none_i64 [%#swal_recovery'13] {observed_last} (fun (_x: bool) -> [ &_93 <- _x ] s7)
+        | s7 = any [ br0 -> {_93 = false} (! bb20) | br1 -> {_93} (! bb14) ] ]
       | bb14 = s0
-        [ s0 = [ &_102 <- i ] s1
-        | s1 = [ &_103 <- Slice64.length ends ] s2
-        | s2 = [ &_104 <- UInt64.lt _102 _103 ] s3
-        | s3 = {[@expl:index in bounds] [%#swal_recovery'14] _104} s4
-        | s4 = Slice64.get [%#swal_recovery'14] <Int64.t> {ends} {_102} (fun (r: Int64.t) -> [ &_101 <- r ] s5)
-        | s5 = [ &_99 <- Int64.le cut _101 ] s6
-        | s6 = any [ br0 -> {_99 = false} (! bb20) | br1 -> {_99} (! bb16) ] ]
-      | bb16 = s0 [ s0 = [ &_105 <- Some'0 last ] s1 | s1 = [ &observed_last <- _105 ] s2 | s2 = bb20 ]
+        [ s0 = [ &_98 <- i ] s1
+        | s1 = [ &_99 <- Slice64.length ends ] s2
+        | s2 = [ &_100 <- UInt64.lt _98 _99 ] s3
+        | s3 = {[@expl:index in bounds] [%#swal_recovery'14] _100} s4
+        | s4 = Slice64.get [%#swal_recovery'14] <Int64.t> {ends} {_98} (fun (r: Int64.t) -> [ &_97 <- r ] s5)
+        | s5 = [ &_95 <- Int64.le cut _97 ] s6
+        | s6 = any [ br0 -> {_95 = false} (! bb20) | br1 -> {_95} (! bb16) ] ]
+      | bb16 = s0 [ s0 = [ &_101 <- Some'0 last ] s1 | s1 = [ &observed_last <- _101 ] s2 | s2 = bb20 ]
       | bb20 = s0
-        [ s0 = truncation_batch_retained [%#swal_recovery'15] {last} {cut} (fun (_x: bool) -> [ &_108 <- _x ] s1)
-        | s1 = any [ br0 -> {_108 = false} (! bb25) | br1 -> {_108} (! bb22) ] ]
+        [ s0 = truncation_batch_retained [%#swal_recovery'15] {last} {cut} (fun (_x: bool) -> [ &_104 <- _x ] s1)
+        | s1 = any [ br0 -> {_104 = false} (! bb25) | br1 -> {_104} (! bb22) ] ]
       | bb22 = s0
-        [ s0 = [ &_112 <- i ] s1
-        | s1 = [ &_113 <- Slice64.length ends ] s2
-        | s2 = [ &_114 <- UInt64.lt _112 _113 ] s3
-        | s3 = {[@expl:index in bounds] [%#swal_recovery'16] _114} s4
-        | s4 = Slice64.get [%#swal_recovery'16] <Int64.t> {ends} {_112} (fun (r: Int64.t) -> [ &_111 <- r ] s5)
-        | s5 = [ &actual_end <- _111 ] s6
+        [ s0 = [ &_108 <- i ] s1
+        | s1 = [ &_109 <- Slice64.length ends ] s2
+        | s2 = [ &_110 <- UInt64.lt _108 _109 ] s3
+        | s3 = {[@expl:index in bounds] [%#swal_recovery'16] _110} s4
+        | s4 = Slice64.get [%#swal_recovery'16] <Int64.t> {ends} {_108} (fun (r: Int64.t) -> [ &_107 <- r ] s5)
+        | s5 = [ &actual_end <- _107 ] s6
         | s6 = UInt64.add [%#swal_recovery'18] {kept} {[%#swal_recovery'17] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &kept <- _x ] s7)
         | s7 = bb25 ]
@@ -298,22 +307,22 @@ let checkpoint_truncation_bounds_fetch [#"/workspace/crates/verified/src/composi
         | s1 = bb8 ] ] ]
   | bb26 = s0
     [ s0 = wal_checkpoint_range_valid [%#swal_recovery'21] {w.log_start} {recovered_end} {start} {cut} {observed_last}
-        (fun (_x: bool) -> [ &_117 <- _x ] s1)
-    | s1 = any [ br0 -> {_117 = false} (! bb29) | br1 -> {_117} (! bb28) ] ]
+        (fun (_x: bool) -> [ &_113 <- _x ] s1)
+    | s1 = any [ br0 -> {_113 = false} (! bb29) | br1 -> {_113} (! bb28) ] ]
   | bb28 = s0
-    [ s0 = [ &_125 <- start = cut ] s1 | s1 = any [ br0 -> {_125 = false} (! bb32) | br1 -> {_125} (! bb30) ] ]
+    [ s0 = [ &_121 <- start = cut ] s1 | s1 = any [ br0 -> {_121 = false} (! bb32) | br1 -> {_121} (! bb30) ] ]
   | bb30 = s0 [ s0 = [ &kept <- [%#swal_recovery'22] (0: UInt64.t) ] s1 | s1 = [ &actual_end <- start ] s2 | s2 = bb32 ]
   | bb32 = s0
     [ s0 = {[@expl:assertion] [%#swal_recovery'23] actual_end = cut} s1
-    | s1 = truncation_frontier [%#swal_recovery'24] {w.hw} {actual_end} (fun (_x: Int64.t) -> [ &_136 <- _x ] s2)
-    | s2 = truncation_frontier [%#swal_recovery'25] {w.lso} {actual_end} (fun (_x: Int64.t) -> [ &_139 <- _x ] s3)
+    | s1 = truncation_frontier [%#swal_recovery'24] {w.hw} {actual_end} (fun (_x: Int64.t) -> [ &_132 <- _x ] s2)
+    | s2 = truncation_frontier [%#swal_recovery'25] {w.lso} {actual_end} (fun (_x: Int64.t) -> [ &_135 <- _x ] s3)
     | s3 = truncation_frontier [%#swal_recovery'26] {w.deliverable} {actual_end}
-        (fun (_x: Int64.t) -> [ &_142 <- _x ] s4)
-    | s4 = [ &w'0 <- { log_start = start; hw = _136; lso = _139; log_end = actual_end; deliverable = _142 } ] s5
+        (fun (_x: Int64.t) -> [ &_138 <- _x ] s4)
+    | s4 = [ &w'0 <- { log_start = start; hw = _132; lso = _135; log_end = actual_end; deliverable = _138 } ] s5
     | s5 = fetch_visibility [%#swal_recovery'29] {[%#swal_recovery'27] false} {[%#swal_recovery'28] true} {w'0} {start}
-        (fun (_x: t_FetchVisibility) -> [ &_148 <- _x ] s6)
-    | s6 = [ &_145 <- { f0 = kept; f1 = _148.limit_offset } ] s7
-    | s7 = [ &_ret <- Some _145 ] s8
+        (fun (_x: t_FetchVisibility) -> [ &_144 <- _x ] s6)
+    | s6 = [ &_141 <- { f0 = kept; f1 = _144.limit_offset } ] s7
+    | s7 = [ &_ret <- Some _141 ] s8
     | s8 = return {_ret} ]
   | bb29 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_Option_tup2_usize_i64 = Any.any_l ()
@@ -323,46 +332,44 @@ let checkpoint_truncation_bounds_fetch [#"/workspace/crates/verified/src/composi
   | & start: Int64.t = start
   | & cut: Int64.t = cut
   | & recovered_end: Int64.t = Any.any_l ()
-  | & _36: bool = Any.any_l ()
-  | & _39: bool = Any.any_l ()
-  | & _42: bool = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _38: bool = Any.any_l ()
   | & kept: UInt64.t = Any.any_l ()
   | & actual_end: Int64.t = Any.any_l ()
   | & observed_last: t_Option_i64 = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _87: bool = Any.any_l ()
-  | & _89: UInt64.t = Any.any_l ()
+  | & _83: bool = Any.any_l ()
+  | & _85: UInt64.t = Any.any_l ()
   | & last: Int64.t = Any.any_l ()
-  | & _92: Int64.t = Any.any_l ()
-  | & _93: UInt64.t = Any.any_l ()
-  | & _94: UInt64.t = Any.any_l ()
+  | & _88: Int64.t = Any.any_l ()
+  | & _89: UInt64.t = Any.any_l ()
+  | & _90: UInt64.t = Any.any_l ()
+  | & _91: bool = Any.any_l ()
+  | & _93: bool = Any.any_l ()
   | & _95: bool = Any.any_l ()
-  | & _97: bool = Any.any_l ()
-  | & _99: bool = Any.any_l ()
-  | & _101: Int64.t = Any.any_l ()
-  | & _102: UInt64.t = Any.any_l ()
-  | & _103: UInt64.t = Any.any_l ()
+  | & _97: Int64.t = Any.any_l ()
+  | & _98: UInt64.t = Any.any_l ()
+  | & _99: UInt64.t = Any.any_l ()
+  | & _100: bool = Any.any_l ()
+  | & _101: t_Option_i64 = Any.any_l ()
   | & _104: bool = Any.any_l ()
-  | & _105: t_Option_i64 = Any.any_l ()
-  | & _108: bool = Any.any_l ()
-  | & _111: Int64.t = Any.any_l ()
-  | & _112: UInt64.t = Any.any_l ()
-  | & _113: UInt64.t = Any.any_l ()
-  | & _114: bool = Any.any_l ()
-  | & _117: bool = Any.any_l ()
-  | & _125: bool = Any.any_l ()
+  | & _107: Int64.t = Any.any_l ()
+  | & _108: UInt64.t = Any.any_l ()
+  | & _109: UInt64.t = Any.any_l ()
+  | & _110: bool = Any.any_l ()
+  | & _113: bool = Any.any_l ()
+  | & _121: bool = Any.any_l ()
   | & w'0: t_FetchWatermarks = Any.any_l ()
-  | & _136: Int64.t = Any.any_l ()
-  | & _139: Int64.t = Any.any_l ()
-  | & _142: Int64.t = Any.any_l ()
-  | & _145: tup2_usize_i64 = Any.any_l ()
-  | & _148: t_FetchVisibility = Any.any_l ()
+  | & _132: Int64.t = Any.any_l ()
+  | & _135: Int64.t = Any.any_l ()
+  | & _138: Int64.t = Any.any_l ()
+  | & _141: tup2_usize_i64 = Any.any_l ()
+  | & _144: t_FetchVisibility = Any.any_l ()
   | & variant_old_bb8: int = Any.any_l () ])
   [ return (result: t_Option_tup2_usize_i64) ->
-  {[@stop_split] [@expl:checkpoint_truncation_bounds_fetch ensures] ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch ensures #0] [%#swal_recovery'35] match result with
-          | None -> false
-          | Some _ -> true
-          end
+  {[@stop_split] [@expl:checkpoint_truncation_bounds_fetch ensures] ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch ensures #0] [%#swal_recovery'33] (result
+        <> None)
       = (Int64.to_int w.log_start <= Int64.to_int start
       /\ Int64.to_int start <= Int64.to_int cut
       /\ Int64.to_int cut
@@ -373,7 +380,7 @@ let checkpoint_truncation_bounds_fetch [#"/workspace/crates/verified/src/composi
         )
       /\ (start = cut
       \/ (exists i: int. 0 <= i /\ i < Seq.length (Slice64.view ends) /\ Seq.get (Slice64.view ends) i = cut))))
-    /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch ensures #1] [%#swal_recovery'36] match result with
+    /\ ([@stop_split] [@expl:checkpoint_truncation_bounds_fetch ensures #1] [%#swal_recovery'34] match result with
       | None -> true
       | Some {f0 = kept; f1 = limit} -> UInt64.t'int kept <= Seq.length (Slice64.view ends)
       /\ (start = cut -> UInt64.t'int kept = 0)

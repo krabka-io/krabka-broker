@@ -6,8 +6,6 @@
 //! `ShareGroupHeartbeat` and `ShareGroupDescribe` over the wire. Those steps
 //! live here so each scenario module holds only its own assertions.
 
-use std::sync::Arc;
-
 use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
@@ -45,13 +43,7 @@ pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) 
     (broker, bootstrap, dir)
 }
 
-pub async fn connect(bootstrap: &str) -> Arc<Client> {
-    crate::support::client::connect(bootstrap, "c1").await
-}
-
-pub async fn create_topic(client: &Client, topic: &str, partitions: i32) {
-    crate::support::client::create_topic(client, topic, partitions).await;
-}
+pub use crate::support::client::{connect_c1 as connect, create_topic};
 
 pub fn heartbeat(group: &str, member_id: &str, epoch: i32) -> ShareGroupHeartbeatRequest {
     ShareGroupHeartbeatRequest {
@@ -85,11 +77,4 @@ pub async fn describe(
 }
 
 /// Resolves the id of a created topic from this broker's metadata image.
-pub fn topic_id(broker: &krabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
-    let image = broker.controller_image_for_test();
-    image
-        .topic(topic)
-        .map(|t| *t.topic_id.as_bytes())
-        .map(uuid::Uuid::from_bytes)
-        .expect("topic present in image")
-}
+pub use crate::support::share::topic_id;

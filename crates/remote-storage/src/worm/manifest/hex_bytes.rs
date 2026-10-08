@@ -12,11 +12,28 @@ use sha2::{Digest, Sha256};
 ///
 /// Serialises as a lowercase hex string.
 #[derive(
-    Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug, derive_more::Display,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    derive_more::Debug,
+    derive_more::Display,
+    Serialize,
+    Deserialize,
 )]
 #[display("{}", hex::encode(_0))]
 #[debug("Sha256Digest({})", hex::encode(_0))]
-pub struct Sha256Digest(pub [u8; 32]);
+#[serde(transparent)]
+pub struct Sha256Digest(
+    #[serde(
+        serialize_with = "serialize_hex",
+        deserialize_with = "deserialize_hex32"
+    )]
+    pub [u8; 32],
+);
 
 impl Sha256Digest {
     /// Digest of `bytes`.
@@ -30,10 +47,24 @@ impl Sha256Digest {
 ///
 /// Used for the public key and the signature, neither of which has a fixed
 /// length the type system can pin.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug, derive_more::Display)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    derive_more::Debug,
+    derive_more::Display,
+    Serialize,
+    Deserialize,
+)]
 #[display("{}", hex::encode(_0))]
 #[debug("HexBytes({})", hex::encode(_0))]
-pub struct HexBytes(pub Vec<u8>);
+#[serde(transparent)]
+pub struct HexBytes(
+    #[serde(serialize_with = "serialize_hex", deserialize_with = "deserialize_hex")] pub Vec<u8>,
+);
 
 pub(super) fn serialize_hex<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -51,41 +82,12 @@ where
         .map_err(|_| de::Error::custom(format!("expected 64 hex characters, got `{text}`")))
 }
 
-impl Serialize for Sha256Digest {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serialize_hex(&self.0, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Sha256Digest {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserialize_hex32(deserializer).map(Self)
-    }
-}
-
-impl Serialize for HexBytes {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serialize_hex(&self.0, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for HexBytes {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let text = String::deserialize(deserializer)?;
-        hex::decode(&text).map(Self).map_err(de::Error::custom)
-    }
+fn deserialize_hex<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let text = String::deserialize(deserializer)?;
+    hex::decode(&text).map_err(de::Error::custom)
 }
 
 #[cfg(test)]

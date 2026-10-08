@@ -30,7 +30,7 @@ mod ssl_principal_mapper;
 mod state;
 mod subject_dn;
 #[cfg(test)]
-mod test_support;
+pub(super) mod test_support;
 
 #[cfg(not(target_family = "wasm"))]
 pub use self::kerberos_name::{KerberosNameError, KerberosRule};

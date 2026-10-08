@@ -6,34 +6,23 @@
 //! end-to-end.
 
 use assert2::{assert, check};
+
+use crate::support::{
+    fetch::{fetch_request_for, fetch_topic_row},
+    produce::single_partition_produce,
+};
 mod support;
 
 use krabka_protocol::{
-    owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic, ForgottenTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
+    owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic, ForgottenTopic},
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
 };
 use support::topic_id_for;
 
 const FETCH_SESSION_ID_NOT_FOUND: i16 = 70;
 const INVALID_FETCH_SESSION_EPOCH: i16 = 71;
 
-fn one_record_batch(n: i32) -> RecordBatch {
-    let mut b = RecordBatch {
-        last_offset_delta: (n - 1).max(0),
-        ..RecordBatch::default()
-    };
-    for i in 0..n {
-        b.records.push(Record {
-            offset_delta: i,
-            ..Default::default()
-        });
-    }
-    b
-}
+use crate::support::records::empty_record_batch as one_record_batch;
 
 async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
     crate::support::client::create_topic(&p.client, name, num_partitions).await;
@@ -41,21 +30,13 @@ async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
 
 async fn produce(p: &support::InProcess, topic: &str, partition: i32, records: i32) {
     let topic_id = topic_id_for(&p.client, topic).await;
-    let req = ProduceRequest {
-        acks: 1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.into(),
-            topic_id,
-            partition_data: vec![PartitionProduceData {
-                index: partition,
-                records: Some(one_record_batch(records).into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = single_partition_produce(
+        topic,
+        topic_id,
+        partition,
+        Some(one_record_batch(records).into()),
+        (1, 5_000),
+    );
     let resp = p.client.send(req).await.expect("Produce");
     assert!(
         resp.responses[0].partition_responses[0].error_code == 0,
@@ -73,24 +54,14 @@ fn fetch_partition(partition: i32, offset: i64) -> FetchPartition {
 }
 
 fn fetch_topic(name: &str, topic_id: WireUuid, partitions: Vec<FetchPartition>) -> FetchTopic {
-    FetchTopic {
-        topic: name.into(),
-        topic_id,
-        partitions,
-        ..Default::default()
-    }
+    fetch_topic_row(name, topic_id, partitions)
 }
 
 /// A new session opens, the immediate incremental is empty, and one produced
 /// batch appears on the next incremental as the only partition.
 #[tokio::test]
 async fn new_session_then_incremental_filters_unchanged_partitions() {
-    let p = support::start().await;
-    create_topic(&p, "t", 3).await;
-    let tid = topic_id_for(&p.client, "t").await;
-
-    // (1) New session — session_id=0, session_epoch=0.
-    let r1 = open_session(&p.client, tid, 3, 100).await;
+    let (p, _tid, r1) = topic_session(3, 100).await;
     check!(r1.error_code == 0, "no top-level error");
     check!(r1.session_id > 0, "broker allocated a session id");
     assert!(r1.responses.len() == 1, "new session emits full response");
@@ -100,15 +71,11 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
     // (2) Immediate incremental: nothing changed → empty response.
     let r2 = p
         .client
-        .send(FetchRequest {
-            max_wait_ms: 0,
-            min_bytes: 0,
-            session_id: sid,
-            session_epoch: 1,
-            topics: vec![],
-            forgotten_topics_data: vec![],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (sid, 1),
+            vec![],
+            fetch_request_for(vec![], (0, 0, FetchRequest::default().max_bytes)),
+        ))
         .await
         .expect("Fetch incremental empty");
     check!(r2.error_code == 0);
@@ -123,15 +90,11 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
     produce(&p, "t", 0, 5).await;
     let r3 = p
         .client
-        .send(FetchRequest {
-            max_wait_ms: 200,
-            min_bytes: 1,
-            session_id: sid,
-            session_epoch: 2,
-            topics: vec![],
-            forgotten_topics_data: vec![],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (sid, 2),
+            vec![],
+            fetch_request_for(vec![], (200, 1, FetchRequest::default().max_bytes)),
+        ))
         .await
         .expect("Fetch incremental after produce");
     check!(r3.error_code == 0);
@@ -154,32 +117,23 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
 /// they never reappear on later fetches, even after a produce.
 #[tokio::test]
 async fn forgotten_topics_drop_partitions_from_subscription() {
-    let p = support::start().await;
-    create_topic(&p, "t", 3).await;
-    let tid = topic_id_for(&p.client, "t").await;
-
-    // Open a session covering t-0..t-2.
-    let r1 = open_session(&p.client, tid, 3, 100).await;
+    let (p, tid, r1) = topic_session(3, 100).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
     // Forget t-1.
     let r2 = p
         .client
-        .send(FetchRequest {
-            max_wait_ms: 0,
-            min_bytes: 0,
-            session_id: sid,
-            session_epoch: 1,
-            topics: vec![],
-            forgotten_topics_data: vec![ForgottenTopic {
+        .send(crate::support::fetch::session_fetch_request(
+            (sid, 1),
+            vec![ForgottenTopic {
                 topic: "t".into(),
                 topic_id: tid,
                 partitions: vec![1],
                 ..Default::default()
             }],
-            ..Default::default()
-        })
+            fetch_request_for(vec![], (0, 0, FetchRequest::default().max_bytes)),
+        ))
         .await
         .expect("forget t-1");
     assert!(r2.error_code == 0);
@@ -192,15 +146,11 @@ async fn forgotten_topics_drop_partitions_from_subscription() {
 
     let r3 = p
         .client
-        .send(FetchRequest {
-            max_wait_ms: 200,
-            min_bytes: 1,
-            session_id: sid,
-            session_epoch: 2,
-            topics: vec![],
-            forgotten_topics_data: vec![],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (sid, 2),
+            vec![],
+            fetch_request_for(vec![], (200, 1, FetchRequest::default().max_bytes)),
+        ))
         .await
         .expect("after produce");
     assert!(r3.error_code == 0);
@@ -225,14 +175,11 @@ async fn unknown_session_id_returns_not_found() {
     let p = support::start().await;
     let r = p
         .client
-        .send(FetchRequest {
-            max_wait_ms: 0,
-            min_bytes: 0,
-            session_id: 999_999,
-            session_epoch: 1,
-            topics: vec![],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (999_999, 1),
+            vec![],
+            fetch_request_for(vec![], (0, 0, FetchRequest::default().max_bytes)),
+        ))
         .await
         .expect("Fetch unknown sid");
     check!(r.error_code == FETCH_SESSION_ID_NOT_FOUND);
@@ -244,23 +191,18 @@ async fn unknown_session_id_returns_not_found() {
 /// A stale epoch on a valid session gives `INVALID_FETCH_SESSION_EPOCH`.
 #[tokio::test]
 async fn stale_session_epoch_returns_invalid_epoch() {
-    let p = support::start().await;
-    create_topic(&p, "t", 1).await;
-    let tid = topic_id_for(&p.client, "t").await;
-
-    let r1 = open_session(&p.client, tid, 1, 0).await;
+    let (p, _tid, r1) = topic_session(1, 0).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
     // Broker expects epoch=1; send 99.
     let r2 = p
         .client
-        .send(FetchRequest {
-            session_id: sid,
-            session_epoch: 99,
-            topics: vec![],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (sid, 99),
+            vec![],
+            fetch_request_for(vec![], crate::support::fetch::default_fetch_limits()),
+        ))
         .await
         .expect("stale epoch");
     check!(r2.error_code == INVALID_FETCH_SESSION_EPOCH);
@@ -273,11 +215,7 @@ async fn stale_session_epoch_returns_invalid_epoch() {
 /// entry. A later request with the same id is `NOT_FOUND`.
 #[tokio::test]
 async fn close_session_drops_cache_entry() {
-    let p = support::start().await;
-    create_topic(&p, "t", 1).await;
-    let tid = topic_id_for(&p.client, "t").await;
-
-    let r1 = open_session(&p.client, tid, 1, 0).await;
+    let (p, tid, r1) = topic_session(1, 0).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
@@ -285,12 +223,14 @@ async fn close_session_drops_cache_entry() {
     // sessionless-style (session_id=0 in response) and removes the entry.
     let r2 = p
         .client
-        .send(FetchRequest {
-            session_id: sid,
-            session_epoch: -1,
-            topics: vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (sid, -1),
+            vec![],
+            fetch_request_for(
+                vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
+                crate::support::fetch::default_fetch_limits(),
+            ),
+        ))
         .await
         .expect("close");
     assert!(r2.error_code == 0);
@@ -299,12 +239,11 @@ async fn close_session_drops_cache_entry() {
     // Re-using sid afterwards is NOT_FOUND.
     let r3 = p
         .client
-        .send(FetchRequest {
-            session_id: sid,
-            session_epoch: 1,
-            topics: vec![],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (sid, 1),
+            vec![],
+            fetch_request_for(vec![], crate::support::fetch::default_fetch_limits()),
+        ))
         .await
         .expect("after close");
     assert!(r3.error_code == FETCH_SESSION_ID_NOT_FOUND);
@@ -319,12 +258,11 @@ async fn sessionless_zero_id_with_stray_epoch_is_session_id_not_found() {
     let p = support::start().await;
     let r = p
         .client
-        .send(FetchRequest {
-            session_id: 0,
-            session_epoch: 7,
-            topics: vec![],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (0, 7),
+            vec![],
+            fetch_request_for(vec![], crate::support::fetch::default_fetch_limits()),
+        ))
         .await
         .expect("stray");
     assert!(r.error_code == FETCH_SESSION_ID_NOT_FOUND);
@@ -343,14 +281,14 @@ async fn sessionless_full_fetch_round_trip() {
 
     let r = p
         .client
-        .send(FetchRequest {
-            max_wait_ms: 100,
-            min_bytes: 1,
-            session_id: 0,
-            session_epoch: -1,
-            topics: vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (0, -1),
+            vec![],
+            fetch_request_for(
+                vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
+                (100, 1, FetchRequest::default().max_bytes),
+            ),
+        ))
         .await
         .expect("sessionless");
     check!(r.error_code == 0);
@@ -373,18 +311,34 @@ async fn open_session(
     max_wait_ms: i32,
 ) -> krabka_protocol::owned::fetch_response::FetchResponse {
     client
-        .send(FetchRequest {
-            max_wait_ms,
-            min_bytes: 0,
-            session_id: 0,
-            session_epoch: 0,
-            topics: vec![fetch_topic(
-                "t",
-                tid,
-                (0..partitions).map(|p| fetch_partition(p, 0)).collect(),
-            )],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::session_fetch_request(
+            (0, 0),
+            vec![],
+            fetch_request_for(
+                vec![fetch_topic(
+                    "t",
+                    tid,
+                    (0..partitions).map(|p| fetch_partition(p, 0)).collect(),
+                )],
+                (max_wait_ms, 0, FetchRequest::default().max_bytes),
+            ),
+        ))
         .await
         .expect("new session")
+}
+
+/// Creates t and opens a full fetch session with the caller's wait and partition count.
+async fn topic_session(
+    partitions: i32,
+    max_wait_ms: i32,
+) -> (
+    support::InProcess,
+    WireUuid,
+    krabka_protocol::owned::fetch_response::FetchResponse,
+) {
+    let p = support::start().await;
+    create_topic(&p, "t", partitions).await;
+    let tid = topic_id_for(&p.client, "t").await;
+    let response = open_session(&p.client, tid, partitions, max_wait_ms).await;
+    (p, tid, response)
 }

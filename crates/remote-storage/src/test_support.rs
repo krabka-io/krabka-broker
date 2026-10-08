@@ -10,7 +10,7 @@ use crate::{
     metadata::{
         RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
     },
-    storage_manager::LogSegmentData,
+    storage_manager::{IndexType, LogSegmentData, RemoteStorageManager},
 };
 
 pub fn sample_metadata(id: u128) -> RemoteLogSegmentMetadata {
@@ -47,5 +47,24 @@ pub fn sample_data(src: &Path, with_txn: bool) -> LogSegmentData {
         transaction_index: with_txn.then(|| write_file(src, "00.txnindex", b"TXN-IDX")),
         producer_snapshot_index: Some(write_file(src, "00.snapshot", b"SNAP")),
         leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
+    }
+}
+
+/// The independent literal contents every sample index is expected to preserve.
+pub fn check_sample_indexes(
+    store: &impl RemoteStorageManager,
+    metadata: &RemoteLogSegmentMetadata,
+) {
+    for (index_type, expected) in [
+        (IndexType::Offset, b"OFFSET-IDX".as_ref()),
+        (IndexType::Timestamp, b"TIME-IDX".as_ref()),
+        (IndexType::ProducerSnapshot, b"SNAP".as_ref()),
+        (IndexType::LeaderEpoch, b"EPOCH-BYTES".as_ref()),
+        (IndexType::Transaction, b"TXN-IDX".as_ref()),
+    ] {
+        assert2::check!(
+            store.fetch_index(metadata, index_type).unwrap() == expected,
+            "{index_type:?}"
+        );
     }
 }

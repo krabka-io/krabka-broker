@@ -11,14 +11,13 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_protocol::{
     owned::{
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{PartitionProduceResponse, ProduceResponse, TopicProduceResponse},
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
+    records::RecordsPayload,
 };
 
 use super::{FIRST_TOPIC_ID_VERSION, handle};
@@ -27,7 +26,7 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        DenyAll, decode_response, encode_request, peer, principal, request_context,
+        DenyAll, decode_response, encode_request, peer, principal,
         start_broker_with_authorizer_no_audit,
     },
 };
@@ -38,29 +37,9 @@ const UNKNOWN_ID: WireUuid = WireUuid([0x0b; 16]);
 /// A name that no topic in these tests has.
 const UNKNOWN_NAME: &str = "no-such-topic";
 
-/// The topic reference that one request row carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TopicRef {
-    /// The name of a topic that exists, with the zero id (v12 and earlier).
-    KnownName,
-    /// A name that no topic has, with the zero id (v12 and earlier).
-    UnknownName,
-    /// The id of a topic that exists, with an empty name (v13 and later).
-    KnownId,
-    /// A non-zero id that no topic has, with an empty name (v13 and later).
-    UnknownId,
-    /// The zero id, with an empty name (v13 and later).
-    ZeroId,
-}
-
-/// One row of a table: the request version, the topic reference, and the
-/// error code that Kafka puts on the partition row.
-#[derive(Debug, Clone, Copy)]
-struct Case {
-    version: i16,
-    topic: TopicRef,
-    error_code: i16,
-}
+use crate::handlers::test_support::{
+    TopicRef, TopicResolutionCase as Case, unauthorized_topic_cases,
+};
 
 /// The actual or the expected outcome of one [`Case`].
 type Outcome = (i16, TopicRef, ProduceResponse);
@@ -68,13 +47,7 @@ type Outcome = (i16, TopicRef, ProduceResponse);
 /// One v2 batch with one record. A leader of a fresh topic appends it at
 /// offset 0.
 fn one_record_batch() -> RecordsPayload {
-    RecordsPayload::V2(vec![RecordBatch {
-        records: vec![Record {
-            value: Some(Bytes::from_static(b"v")),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }])
+    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch(1, 0)])
 }
 
 /// The partition row that Kafka's `PartitionResponse(error)` constructor
@@ -125,13 +98,10 @@ async fn drive(broker: &BrokerHandle, known: Option<&str>, case: Case) -> (Outco
         let topic = image.topic(name).expect("known topic in the image");
         WireUuid(topic.topic_id.into_bytes())
     });
-    let (name, topic_id) = match case.topic {
-        TopicRef::KnownName => (known.unwrap_or_default(), WireUuid::ZERO),
-        TopicRef::UnknownName => (UNKNOWN_NAME, WireUuid::ZERO),
-        TopicRef::KnownId => ("", known_id),
-        TopicRef::UnknownId => ("", UNKNOWN_ID),
-        TopicRef::ZeroId => ("", WireUuid::ZERO),
-    };
+    let (name, topic_id) = case.topic.wire_reference(
+        (known.unwrap_or_default(), known_id),
+        (UNKNOWN_NAME, UNKNOWN_ID),
+    );
     let request = ProduceRequest {
         transactional_id: None,
         acks: 1,
@@ -150,9 +120,11 @@ async fn drive(broker: &BrokerHandle, known: Option<&str>, case: Case) -> (Outco
     };
 
     let shared = broker.broker_arc_for_test();
-    let user = principal("producer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "producer-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("producer"),
+        client_id = "producer-client"
+    );
     let request_bytes = encode_request(&request, case.version);
     let response_bytes = handle(
         &shared,
@@ -193,41 +165,13 @@ async fn drive(broker: &BrokerHandle, known: Option<&str>, case: Case) -> (Outco
 #[tokio::test]
 async fn topic_row_error_follows_version_and_topic_reference() {
     let cases = [
-        Case {
-            version: 3,
-            topic: TopicRef::KnownName,
-            error_code: codes::NONE,
-        },
-        Case {
-            version: 3,
-            topic: TopicRef::UnknownName,
-            error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-        },
-        Case {
-            version: 12,
-            topic: TopicRef::KnownName,
-            error_code: codes::NONE,
-        },
-        Case {
-            version: 12,
-            topic: TopicRef::UnknownName,
-            error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-        },
-        Case {
-            version: 13,
-            topic: TopicRef::KnownId,
-            error_code: codes::NONE,
-        },
-        Case {
-            version: 13,
-            topic: TopicRef::UnknownId,
-            error_code: codes::UNKNOWN_TOPIC_ID,
-        },
-        Case {
-            version: 13,
-            topic: TopicRef::ZeroId,
-            error_code: codes::UNKNOWN_TOPIC_ID,
-        },
+        Case::new(3, TopicRef::KnownName, codes::NONE),
+        Case::new(3, TopicRef::UnknownName, codes::UNKNOWN_TOPIC_OR_PARTITION),
+        Case::new(12, TopicRef::KnownName, codes::NONE),
+        Case::new(12, TopicRef::UnknownName, codes::UNKNOWN_TOPIC_OR_PARTITION),
+        Case::new(13, TopicRef::KnownId, codes::NONE),
+        Case::new(13, TopicRef::UnknownId, codes::UNKNOWN_TOPIC_ID),
+        Case::new(13, TopicRef::ZeroId, codes::UNKNOWN_TOPIC_ID),
     ];
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
 
@@ -250,28 +194,11 @@ async fn topic_row_error_follows_version_and_topic_reference() {
 /// and 29 for a name that does not resolve.
 #[tokio::test]
 async fn unresolved_id_answers_before_topic_authorization() {
-    let cases = [
-        Case {
-            version: 12,
-            topic: TopicRef::UnknownName,
-            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-        },
-        Case {
-            version: 13,
-            topic: TopicRef::UnknownId,
-            error_code: codes::UNKNOWN_TOPIC_ID,
-        },
-        Case {
-            version: 13,
-            topic: TopicRef::ZeroId,
-            error_code: codes::UNKNOWN_TOPIC_ID,
-        },
-    ];
-    let (broker, _dir) = start(Arc::new(DenyAll)).await;
-
-    crate::handlers::test_support::check_cases(cases, async |case| {
-        drive(&broker, None, case).await
-    })
+    let cases = unauthorized_topic_cases(12, 13);
+    crate::handlers::test_support::check_denied_topic_cases(
+        cases,
+        start(Arc::new(DenyAll)),
+        async |broker, case| drive(broker, None, case).await,
+    )
     .await;
-    broker.shutdown().await;
 }

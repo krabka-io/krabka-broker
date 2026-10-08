@@ -6,18 +6,15 @@
 //! the same cluster the audit cases use.
 
 use assert2::check;
-use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
-};
+use krabka_protocol::owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest};
 
 use crate::{
     freeze_workflow::{
         FREEZE_REASON, FROZEN_TARGET, PROPOSE_REASON, SignedFreeze, THAW_REASON,
-        boot_workflow_cluster, cluster_id_of, now_ms, propose_thaw, send_signed_freeze,
-        settle_proposal,
+        boot_workflow_cluster, now_ms, propose_thaw, send_signed_freeze, settle_proposal,
     },
     support,
+    support::topics::{creatable_topic, create_topic_request},
 };
 
 /// Verifies that the KFC-9 metric families move on a real request.
@@ -56,10 +53,7 @@ async fn the_kfc9_gauges_and_counters_move_on_real_requests() {
     }
 
     let cluster = boot_workflow_cluster().await;
-    let alice = support::sasl_client(&cluster.bootstrap, "alice", "alice-pw").await;
-    let bob = support::sasl_client(&cluster.bootstrap, "bob", "bob-pw").await;
-    let carol = support::sasl_client(&cluster.bootstrap, "carol", "carol-pw").await;
-    let cluster_id = cluster_id_of(&alice).await;
+    let (alice, bob, carol, cluster_id) = cluster.workflow_clients().await;
     check!(cluster.broker.metrics().topic_freezes_active.get() == 0);
 
     let set_at_ms = now_ms();
@@ -121,16 +115,7 @@ async fn the_kfc9_gauges_and_counters_move_on_real_requests() {
 
     // A gated Kafka transition with no approval behind it.
     let created = alice
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "doomed".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic("doomed", 1, 1), 5_000))
         .await
         .expect("CreateTopics");
     check!(created.topics[0].error_code == 0);

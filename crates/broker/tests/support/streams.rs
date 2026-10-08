@@ -2,7 +2,6 @@
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
     common::streams_group_heartbeat_request::{
@@ -10,17 +9,14 @@ use krabka_protocol::owned::{
     },
     streams_group_heartbeat_request::{StreamsGroupHeartbeatRequest, Subtopology, Topology},
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
-    update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+    update_features_request::UpdateFeaturesRequest,
 };
+
+use crate::support::configs::feature_update;
 pub async fn finalize_streams_version(client: &Client) {
     let resp = client
         .send(UpdateFeaturesRequest {
-            feature_updates: vec![FeatureUpdateKey {
-                feature: "streams.version".into(),
-                max_version_level: 1,
-                upgrade_type: 1,
-                ..Default::default()
-            }],
+            feature_updates: vec![feature_update("streams.version", 1, 1)],
             ..Default::default()
         })
         .await
@@ -116,15 +112,7 @@ pub async fn streams_join_and_converge(
         // task-assignment convergence is streams-coordinator-local state, not in
         // the metadata image and exposed by no metric — no awaiter can observe it.
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let active = resp.active_tasks.clone().map(|v| {
-            v.into_iter()
-                .map(|t| ReqTaskIds {
-                    subtopology_id: t.subtopology_id,
-                    partitions: t.partitions,
-                    ..Default::default()
-                })
-                .collect()
-        });
+        let active = request_active_tasks(&resp);
         resp = client
             .send(follow_up(group, &member_id, resp.member_epoch, active))
             .await
@@ -136,10 +124,7 @@ pub async fn streams_join_and_converge(
 pub async fn boot(
     wait_electable: bool,
 ) -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let (dir, broker) = crate::support::standalone_broker().await;
     // A streams or classic group needs `__consumer_offsets`. No broker creates
     // it at startup, so create it as a client's first lookup does.
     broker.wait_until_group_coordinator_ready().await;
@@ -148,4 +133,29 @@ pub async fn boot(
     }
     let bootstrap = broker.listen_addr().to_string();
     (broker, bootstrap, dir)
+}
+
+/// Converge a member while preserving the upgrade suites' return-on-error policy.
+pub async fn join_until_assigned(
+    client: &Client,
+    group: &str,
+    topology: Topology,
+    want_active: usize,
+    tries: usize,
+) -> (String, StreamsGroupHeartbeatResponse) {
+    streams_join_and_converge(client, group, topology, want_active, tries, false).await
+}
+
+/// Echo assigned active tasks into a request, preserving absent tasks and row order.
+pub fn request_active_tasks(response: &StreamsGroupHeartbeatResponse) -> Option<Vec<ReqTaskIds>> {
+    response.active_tasks.clone().map(|tasks| {
+        tasks
+            .into_iter()
+            .map(|task| ReqTaskIds {
+                subtopology_id: task.subtopology_id,
+                partitions: task.partitions,
+                ..Default::default()
+            })
+            .collect()
+    })
 }

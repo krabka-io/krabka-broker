@@ -10,7 +10,7 @@ use krabka_metadata::{
 use super::{ElrPublisher, leaderless_partition_elr, next_partition_elr};
 use crate::{
     config_keys::{MIN_INSYNC_REPLICAS, RETENTION_MS},
-    elr::state::{PartitionElr, TopicElr},
+    elr::state::TopicElr,
 };
 
 const TOPIC: &str = "orders";
@@ -34,6 +34,11 @@ fn partition(leader: u64, replicas: &[u64], isr: &[u64]) -> PartitionRecord {
     }
 }
 
+/// The ordinary three-replica fixture led by node 1, with an explicit ISR.
+fn three_replica_partition(isr: &[u64]) -> PartitionRecord {
+    partition(1, &[1, 2, 3], isr)
+}
+
 /// `record` under leader epoch `epoch`: the change that elects, as the
 /// scans bump the epoch on every election.
 fn at_epoch(record: PartitionRecord, epoch: i32) -> PartitionRecord {
@@ -43,12 +48,7 @@ fn at_epoch(record: PartitionRecord, epoch: i32) -> PartitionRecord {
     }
 }
 
-fn elr(eligible: &[i32], last_known: &[i32]) -> PartitionElr {
-    PartitionElr {
-        eligible_leader_replicas: eligible.to_vec(),
-        last_known_elr: last_known.to_vec(),
-    }
-}
+use crate::test_support::partition_elr as elr;
 
 fn update(partition: PartitionRecord, eligible: &[u64], last_known: &[u64]) -> MetadataRecord {
     MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
@@ -120,40 +120,40 @@ fn the_elr_follows_the_isr_across_min_insync_replicas() {
             "an ISR at min ISR keeps the ELR empty",
             Some("2"),
             elr(&[], &[]),
-            partition(1, &[1, 2, 3], &[1, 2, 3]),
-            partition(1, &[1, 2, 3], &[1, 2]),
+            three_replica_partition(&[1, 2, 3]),
+            three_replica_partition(&[1, 2]),
             elr(&[], &[]),
         ),
         (
             "a shrink below min ISR makes the replicas it dropped eligible",
             Some("2"),
             elr(&[], &[]),
-            partition(1, &[1, 2, 3], &[1, 2, 3]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1, 2, 3]),
+            three_replica_partition(&[1]),
             elr(&[2, 3], &[]),
         ),
         (
             "a further shrink adds to the ELR rather than replacing it",
             Some("3"),
             elr(&[3], &[]),
-            partition(1, &[1, 2, 3], &[1, 2]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1, 2]),
+            three_replica_partition(&[1]),
             elr(&[2, 3], &[]),
         ),
         (
             "a replica that rejoins the ISR leaves the ELR",
             Some("3"),
             elr(&[2, 3], &[]),
-            partition(1, &[1, 2, 3], &[1]),
-            partition(1, &[1, 2, 3], &[1, 2]),
+            three_replica_partition(&[1]),
+            three_replica_partition(&[1, 2]),
             elr(&[3], &[]),
         ),
         (
             "an expand to min ISR clears both sets",
             Some("2"),
             elr(&[2, 3], &[]),
-            partition(1, &[1, 2, 3], &[1]),
-            partition(1, &[1, 2, 3], &[1, 2]),
+            three_replica_partition(&[1]),
+            three_replica_partition(&[1, 2]),
             elr(&[], &[]),
         ),
         // krabka's own rule: a replica the partition no longer has cannot be
@@ -163,7 +163,7 @@ fn the_elr_follows_the_isr_across_min_insync_replicas() {
             "an ELR replica dropped from the replica set leaves the ELR",
             Some("3"),
             elr(&[2, 3], &[]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1]),
             partition(1, &[1, 2], &[1]),
             elr(&[2], &[]),
         ),
@@ -189,7 +189,7 @@ fn the_elr_follows_the_isr_across_min_insync_replicas() {
             "electing an ELR replica is clean, so the rest stays eligible",
             Some("3"),
             elr(&[2, 3], &[]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1]),
             partition(2, &[1, 2, 3], &[2]),
             elr(&[1, 3], &[]),
         ),
@@ -197,16 +197,16 @@ fn the_elr_follows_the_isr_across_min_insync_replicas() {
             "Kafka's default min ISR of 1 can never leave a replica eligible",
             None,
             elr(&[], &[]),
-            partition(1, &[1, 2, 3], &[1, 2, 3]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1, 2, 3]),
+            three_replica_partition(&[1]),
             elr(&[], &[]),
         ),
         (
             "a min ISR above the replication factor is capped by it",
             Some("5"),
             elr(&[], &[]),
-            partition(1, &[1, 2, 3], &[1, 2, 3]),
-            partition(1, &[1, 2, 3], &[1, 2, 3]),
+            three_replica_partition(&[1, 2, 3]),
+            three_replica_partition(&[1, 2, 3]),
             elr(&[], &[]),
         ),
     ] {
@@ -226,7 +226,7 @@ fn the_elr_follows_the_isr_across_min_insync_replicas() {
 /// with no ELR whatever its ISR looks like.
 #[test]
 fn a_new_partition_starts_with_no_elr() {
-    let created = partition(1, &[1, 2, 3], &[1]);
+    let created = three_replica_partition(&[1]);
     let image = image(Some("3"), None, &created);
 
     let got = next_partition_elr(
@@ -339,7 +339,7 @@ fn the_rows_of_partition_change_builder_test_for_a_partition_without_a_leader() 
             "lastKnownElrShouldBePopulatedWhenNoLeader: nobody acceptable, the ISR unchanged",
             Some("3"),
             elr(&[2], &[]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1]),
             vec![1],
             vec![],
             elr(&[2], &[1]),
@@ -348,7 +348,7 @@ fn the_rows_of_partition_change_builder_test_for_a_partition_without_a_leader() 
             "a partition that stays without a leader keeps the value it has",
             Some("3"),
             elr(&[1, 2], &[1]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1]),
             vec![],
             vec![],
             elr(&[1, 2], &[1]),
@@ -357,7 +357,7 @@ fn the_rows_of_partition_change_builder_test_for_a_partition_without_a_leader() 
             "Kafka's default min ISR of 1 still records the last leader as eligible",
             None,
             elr(&[], &[]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1]),
             vec![],
             vec![],
             elr(&[1], &[1]),
@@ -366,7 +366,7 @@ fn the_rows_of_partition_change_builder_test_for_a_partition_without_a_leader() 
             "the last leader that shut down uncleanly is not eligible, but is still the last leader",
             Some("2"),
             elr(&[], &[]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1]),
             vec![],
             vec![1],
             elr(&[], &[1]),
@@ -478,13 +478,13 @@ fn a_change_that_gives_a_leaderless_partition_a_leader_clears_the_last_known_elr
 /// second row publishes no record at all: both sets are what they were.
 #[test]
 fn an_unclean_shutdown_replica_is_not_re_derived_from_the_isr_it_is_leaving() {
-    let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
+    let before = three_replica_partition(&[1, 2, 3]);
     let image = image(Some("3"), None, &before);
-    let shrink = MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1, 2]));
+    let shrink = MetadataRecord::V1Partition(three_replica_partition(&[1, 2]));
 
     let mut plain = vec![shrink.clone()];
     ElrPublisher::new(&image).extend(&mut plain);
-    assert!(plain == vec![update(partition(1, &[1, 2, 3], &[1, 2]), &[3], &[])]);
+    assert!(plain == vec![update(three_replica_partition(&[1, 2]), &[3], &[])]);
 
     let mut excluded = vec![shrink.clone()];
     ElrPublisher::after_unclean_shutdown(&image, NodeId(3)).extend(&mut excluded);
@@ -499,7 +499,7 @@ fn an_unclean_shutdown_replica_is_not_re_derived_from_the_isr_it_is_leaving() {
 /// it, where an election of another replica folds all three into one update.
 #[test]
 fn an_election_of_the_named_leader_keeps_its_epoch_bump_out_of_a_partition_update() {
-    let before = partition(1, &[1, 2, 3], &[1]);
+    let before = three_replica_partition(&[1]);
     let image = image(Some("2"), Some("0::1"), &before);
     let recovering =
         MetadataRecord::V1PartitionRecovery(krabka_metadata::PartitionRecoveryRecord {
@@ -508,7 +508,7 @@ fn an_election_of_the_named_leader_keeps_its_epoch_bump_out_of_a_partition_updat
             state: krabka_metadata::LeaderRecoveryState::Recovering,
         });
 
-    let same_leader = at_epoch(partition(1, &[1, 2, 3], &[1]), 8);
+    let same_leader = at_epoch(three_replica_partition(&[1]), 8);
     let mut whole = vec![
         MetadataRecord::V1Partition(same_leader.clone()),
         recovering.clone(),
@@ -556,7 +556,7 @@ fn an_election_of_the_named_leader_keeps_its_epoch_bump_out_of_a_partition_updat
 /// re-drive a partition every tick.
 #[test]
 fn a_leaderless_partition_publishes_its_elr_and_its_last_leader_once() {
-    let before = partition(1, &[1, 2, 3], &[1]);
+    let before = three_replica_partition(&[1]);
     let mut image = image(Some("2"), Some("0:2,3:"), &before);
 
     let mut first = Vec::new();
@@ -593,7 +593,7 @@ fn a_leaderless_partition_publishes_its_elr_and_its_last_leader_once() {
 /// the state `canElectLastKnownLeader` acts on.
 #[test]
 fn an_unclean_restart_of_the_last_leader_leaves_an_empty_elr_and_the_last_leader() {
-    let before = partition(1, &[1, 2, 3], &[1]);
+    let before = three_replica_partition(&[1]);
     let image = image(Some("2"), None, &before);
 
     let mut changes = Vec::new();
@@ -616,18 +616,18 @@ fn an_unclean_restart_of_the_last_leader_leaves_an_empty_elr_and_the_last_leader
 /// carry the topic's other overrides forward alongside the ELR value.
 #[test]
 fn the_published_record_keeps_the_topics_other_overrides() {
-    let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
+    let before = three_replica_partition(&[1, 2, 3]);
     let image = image(Some("2"), None, &before);
-    let mut changes = vec![MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1]))];
+    let mut changes = vec![MetadataRecord::V1Partition(three_replica_partition(&[1]))];
 
     ElrPublisher::new(&image).extend(&mut changes);
 
-    assert!(changes == vec![update(partition(1, &[1, 2, 3], &[1]), &[2, 3], &[])]);
+    assert!(changes == vec![update(three_replica_partition(&[1]), &[2, 3], &[])]);
 }
 
 #[test]
 fn a_partition_change_migrates_legacy_elr_without_losing_it() {
-    let before = partition(1, &[1, 2, 3], &[1]);
+    let before = three_replica_partition(&[1]);
     let mut image = image(Some("3"), None, &before);
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: TOPIC.into(),
@@ -658,7 +658,7 @@ fn a_partition_change_migrates_legacy_elr_without_losing_it() {
 /// says "no ELR", so `DescribeConfigs` stops reporting it at all.
 #[test]
 fn a_recovered_topic_drops_the_key_and_keeps_the_rest() {
-    let before = partition(1, &[1, 2, 3], &[1]);
+    let before = three_replica_partition(&[1]);
     let image = image(Some("2"), Some("0:2,3:"), &before);
     let mut changes = vec![MetadataRecord::V1Partition(partition(
         1,
@@ -668,7 +668,7 @@ fn a_recovered_topic_drops_the_key_and_keeps_the_rest() {
 
     ElrPublisher::new(&image).extend(&mut changes);
 
-    assert!(changes == vec![update(partition(1, &[1, 2, 3], &[1, 2]), &[], &[])]);
+    assert!(changes == vec![update(three_replica_partition(&[1, 2]), &[], &[])]);
 }
 
 /// Nothing is appended when the state does not move. This is what keeps the
@@ -681,22 +681,22 @@ fn an_unchanged_state_publishes_nothing() {
             "a healthy topic that stays healthy",
             Some("2"),
             None,
-            partition(1, &[1, 2, 3], &[1, 2, 3]),
-            partition(1, &[1, 2, 3], &[1, 2]),
+            three_replica_partition(&[1, 2, 3]),
+            three_replica_partition(&[1, 2]),
         ),
         (
             "a topic whose ELR is recomputed to what it already holds",
             Some("3"),
             Some("0:2,3:"),
-            partition(1, &[1, 2, 3], &[1]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1]),
+            three_replica_partition(&[1]),
         ),
         (
             "a topic with no min ISR override at all",
             None,
             None,
-            partition(1, &[1, 2, 3], &[1, 2, 3]),
-            partition(1, &[1, 2, 3], &[1]),
+            three_replica_partition(&[1, 2, 3]),
+            three_replica_partition(&[1]),
         ),
     ] {
         let image = image(min_isr, published, &before);
@@ -712,7 +712,7 @@ fn an_unchanged_state_publishes_nothing() {
 /// override; the ELR record must not put it back.
 #[test]
 fn the_appended_record_builds_on_a_topic_config_the_batch_already_carries() {
-    let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
+    let before = three_replica_partition(&[1, 2, 3]);
     let mut image = image(Some("2"), None, &before);
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: TOPIC.into(),
@@ -730,22 +730,22 @@ fn the_appended_record_builds_on_a_topic_config_the_batch_already_carries() {
                 .into_iter()
                 .collect(),
         }),
-        MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1])),
+        MetadataRecord::V1Partition(three_replica_partition(&[1])),
     ];
 
     ElrPublisher::new(&image).extend(&mut changes);
 
-    assert!(changes[1..] == [update(partition(1, &[1, 2, 3], &[1]), &[2, 3], &[])]);
+    assert!(changes[1..] == [update(three_replica_partition(&[1]), &[2, 3], &[])]);
 }
 
 /// A batch that deletes the topic gets no ELR record: the delete removes the
 /// topic's config map, and a record after it would resurrect one.
 #[test]
 fn a_deleted_topic_publishes_nothing() {
-    let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
+    let before = three_replica_partition(&[1, 2, 3]);
     let image = image(Some("2"), None, &before);
     let mut changes = vec![
-        MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1])),
+        MetadataRecord::V1Partition(three_replica_partition(&[1])),
         MetadataRecord::V1DeleteTopic(krabka_metadata::DeleteTopicRecord { name: TOPIC.into() }),
     ];
 
@@ -758,13 +758,13 @@ fn a_deleted_topic_publishes_nothing() {
 /// that moves both appends one record carrying both entries.
 #[test]
 fn one_record_carries_every_partition_the_batch_moved() {
-    let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
+    let before = three_replica_partition(&[1, 2, 3]);
     let mut image = image(Some("2"), None, &before);
     let mut sibling = before.clone();
     sibling.partition = 1;
     image.apply(&MetadataRecord::V1Partition(sibling));
 
-    let shrunk_zero = partition(1, &[1, 2, 3], &[1]);
+    let shrunk_zero = three_replica_partition(&[1]);
     let mut shrunk_one = partition(2, &[1, 2, 3], &[2]);
     shrunk_one.partition = 1;
     let mut changes = vec![
@@ -777,7 +777,7 @@ fn one_record_carries_every_partition_the_batch_moved() {
     assert!(
         changes
             == [
-                update(partition(1, &[1, 2, 3], &[1]), &[2, 3], &[]),
+                update(three_replica_partition(&[1]), &[2, 3], &[]),
                 update(shrunk_one, &[1, 3], &[]),
             ]
     );
@@ -791,8 +791,8 @@ fn one_record_carries_every_partition_the_batch_moved() {
 /// same batch and the same image differ only by the finalized level.
 #[test]
 fn the_publisher_appends_nothing_below_feature_level_one() {
-    let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
-    let shrink = MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1]));
+    let before = three_replica_partition(&[1, 2, 3]);
+    let shrink = MetadataRecord::V1Partition(three_replica_partition(&[1]));
 
     for (case, enabled) in [
         ("the feature is off", false),
@@ -827,7 +827,7 @@ fn the_publisher_appends_nothing_below_feature_level_one() {
 
         if enabled {
             assert!(
-                changes == vec![update(partition(1, &[1, 2, 3], &[1]), &[2, 3], &[])],
+                changes == vec![update(three_replica_partition(&[1]), &[2, 3], &[])],
                 "{case}"
             );
         } else {

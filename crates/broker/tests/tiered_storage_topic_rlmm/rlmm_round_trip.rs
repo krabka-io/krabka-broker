@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 use assert2::assert;
 use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-};
+use krabka_protocol::owned::fetch_request::FetchRequest;
 
-use crate::support::topic_id_for;
+use crate::support::{
+    fetch::{fetch_partition, single_partition_fetch},
+    topic_id_for,
+};
 
 /// Shared copy→metadata→read body: create a tiered topic, wait for the
 /// config to propagate, produce enough to seal segments, wait for the RLM
@@ -33,25 +33,12 @@ pub(crate) async fn copy_then_fetch_round_trip(
     // Tiny `internal.segment.bytes` so a modest produce seals several segments;
     // `local.retention.bytes=1` evicts every copied segment from local
     // disk so the read-back must consult the remote tier.
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: crate::topic_fixture::tiered_configs(Some("1024")),
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics failed: {:?}",
-        resp.topics[0].error_message
-    );
+    crate::topic_fixture::create_configured_topic(
+        client,
+        topic,
+        crate::topic_fixture::tiered_configs(Some("1024")),
+    )
+    .await;
 
     // Wait for the tiered config to flow from the metadata image through
     // the supervisor's reconcile loop into the partition's `LogConfig`.
@@ -113,22 +100,12 @@ pub(crate) async fn copy_then_fetch_round_trip(
     let fetch_deadline = Instant::now() + Duration::from_secs(30);
     let value = loop {
         let r = client
-            .send(FetchRequest {
-                max_wait_ms: 500,
-                min_bytes: 1,
-                topics: vec![FetchTopic {
-                    topic: topic.into(),
-                    topic_id,
-                    partitions: vec![FetchPartition {
-                        partition: 0,
-                        fetch_offset: 0,
-                        partition_max_bytes: 1_048_576,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(single_partition_fetch(
+                topic,
+                topic_id,
+                fetch_partition(0, 0, 1_048_576),
+                (500, 1, FetchRequest::default().max_bytes),
+            ))
             .await
             .expect("Fetch");
         if let Some(batches) = r
@@ -154,29 +131,4 @@ pub(crate) async fn copy_then_fetch_round_trip(
     );
 }
 
-/// Current `*.log` files and legacy files named `log` under `root`. Each one
-/// is the `LocalTieredStorage` segment-bytes object for a copied segment.
-///
-/// The paths, rather than a count, because a test that watches for a deletion
-/// while the copy task is still adding segments needs to name the objects it
-/// expects to lose.
-pub(crate) fn remote_log_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    fn walk(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, found);
-            } else if path.extension().and_then(|extension| extension.to_str()) == Some("log")
-                || path.file_name().and_then(|name| name.to_str()) == Some("log")
-            {
-                found.push(path);
-            }
-        }
-    }
-    let mut found = Vec::new();
-    walk(root, &mut found);
-    found
-}
+pub use crate::support::storage::remote_log_files;

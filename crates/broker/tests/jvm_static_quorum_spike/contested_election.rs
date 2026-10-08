@@ -7,11 +7,10 @@
 
 use std::{process::Command, time::Duration};
 
-use tempfile::TempDir;
 use uuid::Uuid;
 
 use crate::{
-    static_quorum_harness::{KAFKA_IMAGE, docker_rm, kafka_cluster_id_string},
+    static_quorum_harness::{docker_rm, kafka_cluster_id_string},
     support,
 };
 
@@ -46,51 +45,21 @@ async fn contested_election_krabka_counts_jvm_prevote() {
     let cluster_id = Uuid::from_u128(0x4b69_7039_3936_4350_7245_566f_7445_7374);
     let cid_str = kafka_cluster_id_string(cluster_id);
 
-    let endpoints = crate::static_quorum_harness::MixedQuorum::allocate().await;
-    let [p1, p2, p3] = endpoints.ports;
-    let ([c1, c2], [_dir1, _dir2]) = endpoints
-        .start_pair(cluster_id, Some(krabka_units::secs(2)))
-        .await;
+    let ([p1, p2, p3], [c1, c2], [_dir1, _dir2]) =
+        crate::static_quorum_harness::MixedQuorum::start(cluster_id, Some(krabka_units::secs(2)))
+            .await;
 
     // JVM voter id 3: release the dead leader fast, self-nominate slowly.
-    let props = format!(
-        "process.roles=controller\n\
-         node.id=3\n\
-         controller.quorum.voters=1@host.docker.internal:{p1},2@host.docker.internal:{p2},3@localhost:{p3}\n\
-         controller.listener.names=CONTROLLER\n\
-         listeners=CONTROLLER://0.0.0.0:{p3}\n\
-         listener.security.protocol.map=CONTROLLER:PLAINTEXT\n\
-         controller.quorum.fetch.timeout.ms=300\n\
-         controller.quorum.election.timeout.ms=10000\n\
-         log.dirs=/tmp/kraft-controller-logs\n"
+    let props = crate::static_quorum_harness::jvm_controller_properties(
+        [p1, p2, p3],
+        "controller.quorum.fetch.timeout.ms=300\ncontroller.quorum.election.timeout.ms=10000\n",
     );
-    let propdir = TempDir::new().unwrap();
-    let proppath = propdir.path().join("controller.properties");
-    std::fs::write(&proppath, props).unwrap();
-    let entry = format!(
-        "/opt/kafka/bin/kafka-storage.sh format -t {cid_str} --config /tmp/c.properties --ignore-formatted && \
-         exec /opt/kafka/bin/kafka-server-start.sh /tmp/c.properties"
+    let _propdir = crate::static_quorum_harness::start_jvm_controller(
+        CONTESTED_CONTAINER,
+        p3,
+        &cid_str,
+        &props,
     );
-    let status = Command::new("docker")
-        .args([
-            "run",
-            "-d",
-            "--name",
-            CONTESTED_CONTAINER,
-            "--add-host=host.docker.internal:host-gateway",
-            "-p",
-            &format!("{p3}:{p3}"),
-            "-v",
-            &format!("{}:/tmp/c.properties", proppath.display()),
-            "--entrypoint",
-            "bash",
-            KAFKA_IMAGE,
-            "-c",
-            &entry,
-        ])
-        .status()
-        .expect("docker run JVM controller");
-    assert2::assert!(status.success(), "docker run failed");
 
     // ── Phase 1: a Krabka node leads and the JVM joins as a follower. ───────
     let deadline = std::time::Instant::now() + Duration::from_secs(50);
@@ -148,16 +117,7 @@ async fn contested_election_krabka_counts_jvm_prevote() {
     }
     if !jvm_joined {
         eprintln!("==== JVM controller logs (tail) — JVM NEVER JOINED ====");
-        for line in last_jvm_log
-            .lines()
-            .rev()
-            .take(40)
-            .collect::<Vec<_>>()
-            .iter()
-            .rev()
-        {
-            eprintln!("{line}");
-        }
+        support::print_log_tail(&last_jvm_log, 40);
         let _ = std::fs::write("/tmp/jvm_contested.log", &last_jvm_log);
         docker_rm(CONTESTED_CONTAINER);
         // Best-effort cleanup of the in-process brokers; the process is dying.
@@ -260,32 +220,14 @@ async fn contested_election_krabka_counts_jvm_prevote() {
 
 fn capture_contested_jvm_logs() -> bool {
     // Capture JVM logs for diagnosis regardless of outcome.
-    let logs = Command::new("docker")
-        .args(["logs", CONTESTED_CONTAINER])
-        .output()
-        .expect("docker logs");
-    let log_text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&logs.stdout),
-        String::from_utf8_lossy(&logs.stderr)
-    );
-    let _ = std::fs::write("/tmp/jvm_contested.log", &log_text);
+    let log_text = support::save_jvm_logs(CONTESTED_CONTAINER, "/tmp/jvm_contested.log");
     let jvm_fatal_fault = log_text.contains("Encountered fatal fault");
 
     // Dump the JVM log tail to stderr (pass or fail) — it shows whether the JVM
     // granted/rejected the survivor's preVote/Vote, and whether it tried to
     // become candidate/leader itself.
     eprintln!("==== JVM controller logs (tail) — contested election ====");
-    for line in log_text
-        .lines()
-        .rev()
-        .take(40)
-        .collect::<Vec<_>>()
-        .iter()
-        .rev()
-    {
-        eprintln!("{line}");
-    }
+    support::print_log_tail(&log_text, 40);
 
     jvm_fatal_fault
 }

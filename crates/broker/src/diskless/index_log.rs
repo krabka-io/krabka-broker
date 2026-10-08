@@ -530,16 +530,30 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn catch_up_resolves_only_once_the_topic_backlog_is_projected() {
-        let event_log = InProcessMetadataEventLog::new(2);
-        let topic_id = Uuid::from_u128(7);
-        let seed = DisklessIndexLog::start(event_log.clone()).await.unwrap();
-        for (key, first, last) in [("object-a", 0, 3), ("object-b", 4, 7)] {
+    async fn seeded_index(
+        event_log: Arc<dyn MetadataEventLog>,
+        topic_id: Uuid,
+        ranges: &[(&str, i64, i64)],
+    ) -> DisklessIndexLog {
+        let seed = DisklessIndexLog::start(event_log).await.unwrap();
+        for &(key, first, last) in ranges {
             seed.publish_flush(&flush_record(key, topic_id, first, last))
                 .await
                 .unwrap();
         }
+        seed
+    }
+
+    #[tokio::test]
+    async fn catch_up_resolves_only_once_the_topic_backlog_is_projected() {
+        let event_log = InProcessMetadataEventLog::new(2);
+        let topic_id = Uuid::from_u128(7);
+        let _seed = seeded_index(
+            event_log.clone(),
+            topic_id,
+            &[("object-a", 0, 3), ("object-b", 4, 7)],
+        )
+        .await;
 
         // A restart against the now-populated topic.
         let restarted = DisklessIndexLog::start(event_log).await.unwrap();
@@ -619,10 +633,8 @@ mod tests {
     #[tokio::test]
     async fn catch_up_gives_up_when_the_replay_stops_making_progress() {
         let event_log = InProcessMetadataEventLog::new(1);
-        let seed = DisklessIndexLog::start(event_log.clone()).await.unwrap();
-        seed.publish_flush(&flush_record("object-a", Uuid::from_u128(7), 0, 3))
-            .await
-            .unwrap();
+        let _seed =
+            seeded_index(event_log.clone(), Uuid::from_u128(7), &[("object-a", 0, 3)]).await;
 
         // A silent-but-open stream is what a dead partition fetch loop leaves
         // behind. Waiting on it forever would never flush again.
@@ -640,12 +652,12 @@ mod tests {
     async fn catch_up_keeps_waiting_while_a_slow_replay_still_advances() {
         let event_log = InProcessMetadataEventLog::new(1);
         let topic_id = Uuid::from_u128(7);
-        let seed = DisklessIndexLog::start(event_log.clone()).await.unwrap();
-        for (key, first, last) in [("object-a", 0, 3), ("object-b", 4, 7)] {
-            seed.publish_flush(&flush_record(key, topic_id, first, last))
-                .await
-                .unwrap();
-        }
+        let _seed = seeded_index(
+            event_log.clone(),
+            topic_id,
+            &[("object-a", 0, 3), ("object-b", 4, 7)],
+        )
+        .await;
 
         // Every record lands well inside the stall window, but the replay as a
         // whole outlasts it: progress, not elapsed time, is what the gate
@@ -664,10 +676,7 @@ mod tests {
     async fn catch_up_covers_a_record_appended_while_the_subscription_opens() {
         let event_log = InProcessMetadataEventLog::new(1);
         let topic_id = Uuid::from_u128(7);
-        let seed = DisklessIndexLog::start(event_log.clone()).await.unwrap();
-        seed.publish_flush(&flush_record("object-a", topic_id, 0, 3))
-            .await
-            .unwrap();
+        let _seed = seeded_index(event_log.clone(), topic_id, &[("object-a", 0, 3)]).await;
 
         // The previous leader's in-flight flush lands while this projection is
         // subscribing. Pacing the replay keeps the assertion off the pump's
@@ -701,10 +710,7 @@ mod tests {
     async fn a_delete_floor_survives_a_rebuilt_projection() {
         let event_log = InProcessMetadataEventLog::new(1);
         let topic_id = Uuid::from_u128(7);
-        let seed = DisklessIndexLog::start(event_log.clone()).await.unwrap();
-        seed.publish_flush(&flush_record("object-a", topic_id, 0, 7))
-            .await
-            .unwrap();
+        let seed = seeded_index(event_log.clone(), topic_id, &[("object-a", 0, 7)]).await;
         seed.publish_delete_floor(topic_id, 0, 4, Duration::from_secs(5))
             .await
             .unwrap();

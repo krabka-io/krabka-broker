@@ -7,14 +7,13 @@ use krabka_units::convert::TimeExt as _;
 
 use super::*;
 
-/// A time argument takes any unit the broker's own configuration takes, so
-/// an operator never has to convert to milliseconds by hand, and a number
-/// with no unit is refused rather than guessed at.
-#[test]
-fn a_time_argument_takes_any_unit() {
-    let cases = [
-        ("500ms", Some(500)),
-        ("30s", Some(30_000)),
+krabka_macros::duration_parser_fixture!(
+    {
+        /// A time argument takes any unit the broker's own configuration takes, so
+        /// an operator never has to convert to milliseconds by hand, and a number
+        /// with no unit is refused rather than guessed at.
+    },
+    [
         ("30m", Some(1_800_000)),
         ("1h", Some(3_600_000)),
         ("1 hour", Some(3_600_000)),
@@ -24,25 +23,13 @@ fn a_time_argument_takes_any_unit() {
         ("0", Some(0)),
         ("banana", None),
         ("", None),
-    ];
-    for (raw, expected) in cases {
-        check!(
-            parse_time(raw).ok().map(Time::millis_i64) == expected,
-            "{raw}"
-        );
-    }
-}
+    ]
+);
 
-/// `--bootstrap-server` is the one flag every subcommand needs, so the
-/// parser refuses a command line without it rather than defaulting to a
-/// guess about where the cluster is.
-#[test]
-fn a_command_line_without_a_bootstrap_server_is_refused() {
-    assert!(Cli::try_parse_from(["krabka-guard", "freeze", "list"]).is_err());
-    assert!(
-        Cli::try_parse_from(["krabka-guard", "-b", "localhost:9092", "freeze", "list"]).is_ok()
-    );
-}
+krabka_macros::bootstrap_parser_fixture!(
+    ["krabka-guard", "freeze", "list"],
+    ["krabka-guard", "-b", "localhost:9092", "freeze", "list"]
+);
 
 /// `--topic` and `--prefix` name the two pattern types, and exactly one of
 /// them is given. A freeze with neither would have no scope, and a freeze

@@ -1,13 +1,13 @@
-(* #"/workspace/crates/verified/src/opa.rs" 73 0 73 68 *)
+(* #"/workspace/crates/verified/src/opa.rs" 65 0 65 68 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
-let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sopa = "/workspace/crates/verified/src/opa.rs" 74 17 74 18
-let%span sopa'0 = "/workspace/crates/verified/src/opa.rs" 77 29 77 47
-let%span sopa'1 = "/workspace/crates/verified/src/opa.rs" 77 10 77 48
-let%span sopa'2 = "/workspace/crates/verified/src/opa.rs" 67 10 71 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sopa = "/workspace/crates/verified/src/opa.rs" 66 17 66 18
+let%span sopa'0 = "/workspace/crates/verified/src/opa.rs" 69 29 69 47
+let%span sopa'1 = "/workspace/crates/verified/src/opa.rs" 69 10 69 48
+let%span sopa'2 = "/workspace/crates/verified/src/opa.rs" 59 10 63 1
 
 use creusot.int.Int64
 use creusot.int.Int128
@@ -52,7 +52,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let opa_cache_expiry [#"/workspace/crates/verified/src/opa.rs" 73 0 73 68] (now_ms: Int128.t) (ttl_ms: Int64.t)
+let opa_cache_expiry [#"/workspace/crates/verified/src/opa.rs" 65 0 65 68] (now_ms: Int128.t) (ttl_ms: Int64.t)
   (return (x: t_OpaCacheExpiry)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_7 <- Int64.le ttl_ms ([%#sopa] (0: Int64.t)) ] s1

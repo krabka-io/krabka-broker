@@ -25,10 +25,11 @@ use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
     describe_cluster_request::DescribeClusterRequest,
-    describe_cluster_response::DescribeClusterResponse, metadata_request::MetadataRequest,
-    metadata_response::MetadataResponse,
+    describe_cluster_response::DescribeClusterResponse, metadata_response::MetadataResponse,
 };
 use krabka_units::convert::TimeExt as _;
+
+use crate::support::{client::connect_client, discovery::topic_metadata_request};
 
 mod support;
 
@@ -47,22 +48,11 @@ const FENCING_DEADLINE: Duration = Duration::from_secs(30);
 async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
     support::init_tracing();
 
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let mut cluster = crate::support::registered_cluster(3).await;
 
     // The node under test must not be the one holding the heartbeat registry,
     // or the answer could come from local state rather than from the log.
-    let leader = cluster[0].0.wait_until_controller_leader().await;
-    let followers: Vec<usize> = (0..cluster.len())
-        .filter(|&i| cluster[i].0.node_id() != leader.0)
-        .collect();
-    assert!(
-        followers.len() == 2,
-        "a three-node cluster has two non-controller nodes"
-    );
-    // `followers` ascends, so removing the victim leaves the observer's index
-    // where it was.
-    let (observer_index, victim_index) = (followers[0], followers[1]);
+    let (leader, observer_index, victim_index) = support::two_controller_followers(&cluster).await;
     let observer_addr = cluster[observer_index].0.listen_addr();
     let victim_id = cluster[victim_index].0.node_id();
     let everyone: BTreeSet<i32> = cluster.iter().map(|(h, _, _)| node_id_of(h)).collect();
@@ -72,11 +62,7 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
         .filter(|&id| id != node_id_of(&cluster[victim_index].0))
         .collect();
 
-    let client = Client::builder()
-        .bootstrap(observer_addr.to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(observer_addr.to_string(), None).await;
 
     let leader_index = (0..cluster.len())
         .find(|&i| cluster[i].0.node_id() == leader.0)
@@ -109,10 +95,7 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
     let dead_id = i32::try_from(victim_id).expect("node id fits an i32");
     for _ in 0..REQUESTS {
         let resp: MetadataResponse = client
-            .send(MetadataRequest {
-                topics: Some(vec![]),
-                ..Default::default()
-            })
+            .send(topic_metadata_request(Some(vec![])))
             .await
             .unwrap();
         assert!(
@@ -145,9 +128,7 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
         "the observer must still be a follower for this test to mean anything"
     );
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 fn node_id_of(handle: &BrokerHandle) -> i32 {
@@ -217,10 +198,7 @@ async fn advertised_over_a_run(client: &Client) -> BTreeSet<i32> {
     let mut advertised = BTreeSet::new();
     for _ in 0..REQUESTS {
         let resp: MetadataResponse = client
-            .send(MetadataRequest {
-                topics: Some(vec![]),
-                ..Default::default()
-            })
+            .send(topic_metadata_request(Some(vec![])))
             .await
             .unwrap();
         advertised.insert(resp.controller_id);

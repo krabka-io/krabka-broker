@@ -392,29 +392,7 @@ mod tests {
         (log, dir)
     }
 
-    // test helper
-    fn batch(base: i64, epoch: i32, value: &[u8]) -> RecordBatch {
-        use krabka_protocol::records::{Attributes, Record};
-        RecordBatch {
-            base_offset: base,
-            partition_leader_epoch: epoch,
-            attributes: Attributes::default(),
-            last_offset_delta: 0,
-            base_timestamp: 0,
-            max_timestamp: 0,
-            producer_id: -1,
-            producer_epoch: -1,
-            base_sequence: -1,
-            records: vec![Record {
-                attributes: 0,
-                timestamp_delta: 0,
-                offset_delta: 0,
-                key: None,
-                value: Some(bytes::Bytes::copy_from_slice(value)),
-                headers: Vec::new(),
-            }],
-        }
-    }
+    krabka_macros::epoch_record_batch_fixture!(batch);
 
     #[test]
     fn opens_empty_at_offset_zero() {

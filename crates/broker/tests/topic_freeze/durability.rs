@@ -11,7 +11,7 @@ use krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL;
 use crate::{
     control_plane::{freeze_scope, wait_for_registry_len},
     support,
-    wire::{CONTROL, accepted, create_topic, produce_outcome, refused},
+    wire::{CONTROL, accepted, refused},
 };
 
 /// A freeze survives a controller restart.
@@ -27,25 +27,17 @@ async fn a_freeze_survives_a_controller_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
     {
         let (broker, client) = support::start_with_dir(dir.path()).await;
-        let frozen = create_topic(&broker, &client, "orders").await;
-        create_topic(&broker, &client, CONTROL).await;
-        check!(produce_outcome(&broker, &client, "orders", frozen).await == accepted(1));
+        let (frozen, _control) =
+            crate::wire::create_controlled_topic(&broker, &client, "orders").await;
+        crate::wire::check_produce!(&broker, &client, "orders", frozen => accepted(1));
 
         freeze_scope(&client, PATTERN_TYPE_LITERAL, "orders", "cutover").await;
-        check!(
-            produce_outcome(&broker, &client, "orders", frozen).await
-                == refused("literal", "orders", "cutover", 1)
-        );
+        crate::wire::check_produce!(&broker, &client, "orders", frozen => refused("literal", "orders", "cutover", 1));
         broker.shutdown().await;
     }
 
     let (broker, client) = support::start_with_dir(dir.path()).await;
-    for topic in ["orders", CONTROL] {
-        broker.wait_until_partition_present(topic, 0).await;
-        broker
-            .wait_until_local_partition_leader(topic, 0, krabka_broker::NodeId(broker.node_id()))
-            .await;
-    }
+    crate::wire::wait_controlled_partitions(&broker, "orders").await;
 
     let entries = wait_for_registry_len(&client, 1).await;
     check!(entries[0].scope == "orders");
@@ -53,11 +45,8 @@ async fn a_freeze_survives_a_controller_restart() {
 
     let frozen = support::topic_id_for(&client, "orders").await;
     let control = support::topic_id_for(&client, CONTROL).await;
-    check!(
-        produce_outcome(&broker, &client, "orders", frozen).await
-            == refused("literal", "orders", "cutover", 1)
-    );
-    check!(produce_outcome(&broker, &client, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&broker, &client;
+        "orders", frozen => refused("literal", "orders", "cutover", 1), CONTROL, control => accepted(1));
 
     broker.shutdown().await;
 }

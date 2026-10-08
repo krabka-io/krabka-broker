@@ -6,20 +6,15 @@ use std::time::{Duration, Instant};
 
 use krabka_broker::codes;
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    primitives::uuid::Uuid as WireUuid,
+use krabka_protocol::primitives::uuid::Uuid as WireUuid;
+
+use crate::{
+    N_RECORDS, TOPIC,
+    support::{client::connect_owned, produce::single_partition_produce},
 };
 
-use crate::{N_RECORDS, TOPIC};
-
 pub async fn client_at(addr: &str) -> Client {
-    Client::builder()
-        .bootstrap(addr.to_string())
-        .client_id("stretch-cluster-test")
-        .build()
-        .await
-        .expect("client build")
+    connect_owned(addr.to_string(), "stretch-cluster-test", "client build").await
 }
 
 /// Create `TOPIC` with one partition and rf=3, and return its id.
@@ -30,21 +25,13 @@ pub async fn create_topic(client: &Client) -> WireUuid {
 /// The partition-level error code of one `acks=all` produce.
 pub async fn produce_once(client: &Client, topic_id: WireUuid, timeout_ms: i32) -> i16 {
     let resp = client
-        .send(ProduceRequest {
-            acks: -1,
-            timeout_ms,
-            topic_data: vec![TopicProduceData {
-                name: TOPIC.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(crate::support::client::value_batch(N_RECORDS).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            TOPIC,
+            topic_id,
+            0,
+            Some(crate::support::client::value_batch(N_RECORDS).into()),
+            (-1, timeout_ms),
+        ))
         .await
         .expect("Produce round-trip");
     resp.responses[0].partition_responses[0].error_code

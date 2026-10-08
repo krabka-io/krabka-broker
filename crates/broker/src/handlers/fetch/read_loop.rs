@@ -22,6 +22,25 @@ use super::{
 };
 use crate::{broker::Broker, codes, partition::Partition};
 
+/// The initial pass and a long-poll re-read use the same planned read inputs.
+fn planned_read_request(
+    broker: &Broker,
+    read: &PendingRead,
+    max_bytes: i32,
+    sendfile_capable: bool,
+) -> ReadRequest {
+    ReadRequest {
+        topic_id: Some(uuid::Uuid::from_bytes(read.topic_id.0)),
+        hot_tail: Some(broker.hot_tail.clone()),
+        fetch_offset: Offset(read.fetch_offset),
+        max_bytes,
+        read_committed: read.read_committed,
+        is_follower_fetch: read.is_follower_fetch,
+        sendfile_capable,
+        sendfile_min_bytes: broker.config.sendfile_min.bytes_usize(),
+    }
+}
+
 type WaitFut = std::pin::Pin<Box<dyn std::future::Future<Output = Woken> + Send>>;
 
 /// The waiter that fired: which pending read it belongs to, and the notifier
@@ -302,16 +321,7 @@ pub(super) async fn execute_pending_reads(
             .map(|position| (position, partition.log_end_offset()));
         state.bytes[index] = do_read(
             &partition,
-            ReadRequest {
-                topic_id: Some(uuid::Uuid::from_bytes(read.topic_id.0)),
-                hot_tail: Some(broker.hot_tail.clone()),
-                fetch_offset: Offset(read.fetch_offset),
-                max_bytes: budget,
-                read_committed: read.read_committed,
-                is_follower_fetch: read.is_follower_fetch,
-                sendfile_capable,
-                sendfile_min_bytes: broker.config.sendfile_min.bytes_usize(),
-            },
+            planned_read_request(broker, read, budget, sendfile_capable),
             &broker.log_dir_status,
             &mut read.out,
         )
@@ -554,17 +564,7 @@ async fn reread_woken(
     let read_start = std::time::Instant::now();
     let mut bytes = do_read(
         &part,
-        ReadRequest {
-            topic_id: Some(uuid::Uuid::from_bytes(read.topic_id.0)),
-            hot_tail: Some(broker.hot_tail.clone()),
-            // Wrap the decoded-request wire offset into `Offset` for the read.
-            fetch_offset: Offset(read.fetch_offset),
-            max_bytes: read_budget,
-            read_committed: read.read_committed,
-            is_follower_fetch: read.is_follower_fetch,
-            sendfile_capable: state.sendfile_capable,
-            sendfile_min_bytes: broker.config.sendfile_min.bytes_usize(),
-        },
+        planned_read_request(broker, read, read_budget, state.sendfile_capable),
         &broker.log_dir_status,
         &mut read.out,
     )
@@ -829,8 +829,10 @@ mod tests {
         const TOPIC_B: &str = "budget-progress-b";
         const PAYLOAD: &[u8; 512] = &[b'x'; 512];
 
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, dir, broker),
+            crate::handlers::test_support::start_broker()
+        );
 
         let part_a = nonempty_local_partition(&broker, dir.path(), TOPIC_A, PAYLOAD).await;
         let part_b = nonempty_local_partition(&broker, dir.path(), TOPIC_B, PAYLOAD).await;
@@ -844,28 +846,8 @@ mod tests {
             partition_max_bytes: 1 << 20,
         };
         let pending = vec![
-            super::PendingRead::planned(
-                TOPIC_A,
-                WireUuid::ZERO,
-                &request,
-                (false, true),
-                Some(std::sync::Arc::clone(&part_a)),
-                super::PartitionData {
-                    partition_index: 0,
-                    ..Default::default()
-                },
-            ),
-            super::PendingRead::planned(
-                TOPIC_B,
-                WireUuid::ZERO,
-                &request,
-                (false, true),
-                Some(std::sync::Arc::clone(&part_b)),
-                super::PartitionData {
-                    partition_index: 0,
-                    ..Default::default()
-                },
-            ),
+            planned_follower(TOPIC_A, &part_a, &request, crate::codes::NONE),
+            planned_follower(TOPIC_B, &part_b, &request, crate::codes::NONE),
         ];
         let phases = RequestPhases::default();
         // A response budget far smaller than either partition's one batch:
@@ -972,6 +954,16 @@ mod tests {
         ]
     }
 
+    /// Independent null-versus-empty aborted-transaction expectations for both isolation modes.
+    macro_rules! aborted_isolation_cases {
+        () => {
+            [
+                ("read_uncommitted", false, None),
+                ("read_committed", true, Some(Vec::new())),
+            ]
+        };
+    }
+
     /// A partition the response budget has no room for gets the row an
     /// empty read produces, including the aborted-transaction list: Kafka
     /// reads nothing for it, so the aborted range it looks up ends at the
@@ -982,13 +974,12 @@ mod tests {
     /// one gets `None`.
     #[tokio::test]
     async fn a_metadata_only_row_carries_an_empty_reads_aborted_transactions() {
-        let cases = [
-            ("read_uncommitted", false, None),
-            ("read_committed", true, Some(Vec::new())),
-        ];
+        let cases = aborted_isolation_cases!();
 
-        let (broker_handle, _dir) = crate::handlers::test_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            crate::handlers::test_support::start_broker()
+        );
 
         for (name, read_committed, want_aborted) in cases {
             // The first partition spends the response's one progress
@@ -1088,14 +1079,10 @@ mod tests {
         const TOPIC_B: &str = "budget-cold-b";
 
         let object_dir = tempfile::tempdir().expect("object tempdir");
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
-            config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
-                dir: object_dir.path().to_path_buf(),
-            });
-            config.remote_log_metadata = crate::config::RlmmKind::InMemory;
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, dir, broker),
+            local_remote_storage(object_dir)
+        );
 
         let topic_a = uuid::Uuid::from_u128(0xA0);
         let topic_b = uuid::Uuid::from_u128(0xB0);
@@ -1249,14 +1236,10 @@ mod tests {
     #[tokio::test]
     async fn cold_tier_fallback_charges_the_object_store_read_to_the_remote_phase() {
         let object_dir = tempfile::tempdir().expect("object tempdir");
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
-            config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
-                dir: object_dir.path().to_path_buf(),
-            });
-            config.remote_log_metadata = crate::config::RlmmKind::InMemory;
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, dir, broker),
+            local_remote_storage(object_dir)
+        );
 
         let topic_id = uuid::Uuid::from_u128(0xC01D);
         let mut flushed = BytesMut::new();
@@ -1346,12 +1329,11 @@ mod tests {
     async fn long_poll_reread_rechecks_follower_epoch() {
         const TOPIC: &str = "long-poll-epoch";
 
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         // A follower fetch reads only from the leader.
-        part.install_replication_target(None, broker.config.node_id.0, 0)
-            .await;
+        broker_fixture!(
+            (broker_handle, dir, broker, part),
+            local_follower_partition(TOPIC)
+        );
         let mut pending = [follower_read(TOPIC, &part, crate::codes::NONE)];
 
         part.install_leader_change(1, 1).await;
@@ -1391,12 +1373,11 @@ mod tests {
     async fn a_partition_error_completes_the_long_poll() {
         const TOPIC: &str = "long-poll-error";
 
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         // A follower fetch reads only from the leader.
-        part.install_replication_target(None, broker.config.node_id.0, 0)
-            .await;
+        broker_fixture!(
+            (broker_handle, dir, broker, part),
+            local_follower_partition(TOPIC)
+        );
         let mut pending = [follower_read(
             TOPIC,
             &part,
@@ -1427,9 +1408,7 @@ mod tests {
     async fn a_leader_change_completes_a_parked_follower_fetch() {
         const TOPIC: &str = "long-poll-leader-change";
 
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
+        broker_fixture!((broker_handle, dir, broker, part), local_partition(TOPIC));
         let node_id = broker.config.node_id.0;
         part.install_replication_target(None, node_id, 0).await;
         let request = super::EffectivePartition {
@@ -1440,17 +1419,7 @@ mod tests {
             log_start_offset: -1,
             partition_max_bytes: 1024,
         };
-        let mut pending = [super::PendingRead::planned(
-            TOPIC,
-            WireUuid::ZERO,
-            &request,
-            (false, true),
-            Some(std::sync::Arc::clone(&part)),
-            super::PartitionData {
-                partition_index: 0,
-                ..Default::default()
-            },
-        )];
+        let mut pending = [planned_follower(TOPIC, &part, &request, crate::codes::NONE)];
 
         // What `execute_pending_reads` arms around its first pass: the append
         // waiters before it, the leadership waiters after it.
@@ -1487,13 +1456,12 @@ mod tests {
     /// the (here empty) list its read found.
     #[tokio::test]
     async fn a_reread_carries_aborted_transactions_only_for_read_committed() {
-        let cases = [
-            ("read_uncommitted", false, None),
-            ("read_committed", true, Some(Vec::new())),
-        ];
+        let cases = aborted_isolation_cases!();
 
-        let (broker_handle, _dir) = crate::handlers::test_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            crate::handlers::test_support::start_broker()
+        );
 
         for (name, read_committed, want_aborted) in cases {
             let (part, _part_dir) = consumer_partition(Vec::new()).await;
@@ -1528,9 +1496,7 @@ mod tests {
     async fn a_diverging_recheck_carries_null_aborted_transactions() {
         const TOPIC: &str = "recheck-diverge";
 
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
+        broker_fixture!((broker_handle, dir, broker, part), local_partition(TOPIC));
         {
             let mut log = part.log.lock().expect("log mutex poisoned");
             for epoch in [0, 0, 1, 1] {
@@ -1624,12 +1590,11 @@ mod tests {
         const TOPIC: &str = "min-bytes-floor";
         const PAYLOAD: &[u8; 64] = &[b'x'; 64];
 
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         // A follower fetch reads only from the leader.
-        part.install_replication_target(None, broker.config.node_id.0, 0)
-            .await;
+        broker_fixture!(
+            (broker_handle, dir, broker, part),
+            local_follower_partition(TOPIC)
+        );
 
         // One batch's worth of bytes, so the floor can be set between two
         // appends and three.
@@ -1659,17 +1624,7 @@ mod tests {
             log_start_offset: -1,
             partition_max_bytes: i32::try_from(one_batch * 8).expect("small budget"),
         };
-        let pending = vec![super::PendingRead::planned(
-            TOPIC,
-            WireUuid::ZERO,
-            &request,
-            (false, true),
-            Some(std::sync::Arc::clone(&part)),
-            super::PartitionData {
-                partition_index: 0,
-                ..Default::default()
-            },
-        )];
+        let pending = vec![planned_follower(TOPIC, &part, &request, crate::codes::NONE)];
         let phases = RequestPhases::default();
         let (topics, _cpu) = super::execute_pending_reads(
             &broker,
@@ -1699,12 +1654,11 @@ mod tests {
     async fn an_append_that_lands_before_the_park_is_not_missed() {
         const TOPIC: &str = "append-before-park";
 
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         // A follower fetch reads only from the leader.
-        part.install_replication_target(None, broker.config.node_id.0, 0)
-            .await;
+        broker_fixture!(
+            (broker_handle, dir, broker, part),
+            local_follower_partition(TOPIC)
+        );
 
         let mut pending = [follower_read(TOPIC, &part, crate::codes::NONE)];
 
@@ -1730,14 +1684,34 @@ mod tests {
         assert!(served_base_offsets(&pending[0].out) == vec![0]);
         broker_handle.shutdown().await;
     }
-    fn follower_read(
+    fn planned_follower(
         topic: &str,
         part: &std::sync::Arc<crate::partition::Partition>,
+        request: &super::EffectivePartition,
         error_code: i16,
     ) -> super::PendingRead {
         super::PendingRead::planned(
             topic,
             WireUuid::ZERO,
+            request,
+            (false, true),
+            Some(std::sync::Arc::clone(part)),
+            super::PartitionData {
+                partition_index: 0,
+                error_code,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn follower_read(
+        topic: &str,
+        part: &std::sync::Arc<crate::partition::Partition>,
+        error_code: i16,
+    ) -> super::PendingRead {
+        planned_follower(
+            topic,
+            part,
             &super::EffectivePartition {
                 partition: 0,
                 current_leader_epoch: 0,
@@ -1746,13 +1720,7 @@ mod tests {
                 log_start_offset: -1,
                 partition_max_bytes: 1024,
             },
-            (false, true),
-            Some(std::sync::Arc::clone(part)),
-            super::PartitionData {
-                partition_index: 0,
-                error_code,
-                ..Default::default()
-            },
+            error_code,
         )
     }
 }

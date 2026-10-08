@@ -28,7 +28,7 @@ use crate::coordinator::unified::{
     GroupSeed,
     consumer_state::{ClassicMemberFacade, GroupState, MemberState},
     migration::target_to_consumer_assignment,
-    persistence_next_gen::{AssignedTopicPartitions, MemberAssignmentState},
+    persistence_next_gen::AssignedTopicPartitions,
     reconciler::ReconcileInput,
 };
 
@@ -136,7 +136,6 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             awaiting_sync: true,
         });
         state.add_or_update_member(MemberState {
-            member_id: mid.clone(),
             instance_id: meta.instance_id,
             rack_id: meta.rack_id,
             client_id: meta.client_id,
@@ -151,20 +150,11 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
                 u64::try_from(meta.rebalance_timeout_ms.max(0))
                     .unwrap_or(FALLBACK_REBALANCE_TIMEOUT_MS),
             ),
-            member_epoch: 0,
-            previous_member_epoch: 0,
-            assignment_state: MemberAssignmentState::Stable,
-            assigned_partitions: HashMap::new(),
-            partitions_pending_revocation: HashMap::new(),
-            assignment_epochs: HashMap::new(),
-            last_seen: Instant::now(),
             classic,
+            ..MemberState::empty(mid.clone(), Instant::now())
         });
     }
-    for (mid, cur) in seed.current_per_member {
-        if let Some(m) = state.members.get_mut(&mid) {
-            m.member_epoch = cur.member_epoch;
-            m.previous_member_epoch = cur.previous_member_epoch;
+    crate::coordinator::unified::seeds::hydrate_member_epochs!(state, seed; m, cur {
             m.assignment_state = cur.state;
             // Kafka's `ConsumerGroupMember.Builder.updateWith` reads each
             // partition's assignment epoch through
@@ -187,8 +177,7 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
                 m.partitions_pending_revocation
                     .insert(tp.topic_id, tp.partitions);
             }
-        }
-    }
+    });
     // The k7 target the group last installed. Without it the group would come
     // back with `target.epoch` set but no per-member target at all, so the
     // first RPC after the failover would hand a member an empty assignment.
@@ -231,7 +220,8 @@ mod tests {
             migration::serve_classic_heartbeat,
             persistence_next_gen::{
                 ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
-                MemberMetadataValue, RegularExpressionValue, TargetAssignmentMemberValue,
+                MemberAssignmentState, MemberMetadataValue, RegularExpressionValue,
+                TargetAssignmentMemberValue,
             },
         },
     };
@@ -239,10 +229,25 @@ mod tests {
     const TOPIC: Uuid = Uuid([7; 16]);
 
     fn image() -> ReconcileInput {
-        ReconcileInput {
-            topic_id_by_name: [("t".to_string(), TOPIC)].into(),
-            partitions_per_topic: [(TOPIC, 2)].into(),
-            ..ReconcileInput::default()
+        crate::coordinator::unified::actor::test_support::topic_reconcile_input("t", TOPIC, 2)
+    }
+
+    /// The replayed client identity and timeout shared by the member seed fixtures.
+    fn seeded_member_metadata(
+        topics: &[&str],
+        regex: Option<&str>,
+        classic: Option<ClassicMemberMetadata>,
+    ) -> MemberMetadataValue {
+        MemberMetadataValue {
+            instance_id: None,
+            rack_id: None,
+            client_id: "c".to_string(),
+            client_host: "/127.0.0.1".to_string(),
+            subscribed_topic_names: topics.iter().map(|topic| (*topic).to_string()).collect(),
+            subscribed_topic_regex: regex.map(str::to_string),
+            server_assignor: None,
+            rebalance_timeout_ms: 60_000,
+            classic,
         }
     }
 
@@ -256,23 +261,17 @@ mod tests {
             target_epoch: 5,
             members: [(
                 "m".to_string(),
-                MemberMetadataValue {
-                    instance_id: None,
-                    rack_id: None,
-                    client_id: "c".to_string(),
-                    client_host: "/127.0.0.1".to_string(),
-                    subscribed_topic_names: vec!["t".to_string()],
-                    subscribed_topic_regex: None,
-                    server_assignor: None,
-                    rebalance_timeout_ms: 60_000,
-                    classic: Some(ClassicMemberMetadata {
+                seeded_member_metadata(
+                    &["t"],
+                    None,
+                    Some(ClassicMemberMetadata {
                         session_timeout_ms: 30_000,
                         supported_protocols: vec![(
                             "range".to_string(),
                             Bytes::from_static(b"meta"),
                         )],
                     }),
-                },
+                ),
             )]
             .into(),
             target_per_member: [(
@@ -385,17 +384,7 @@ mod tests {
             target_epoch: 5,
             members: [(
                 "m".to_string(),
-                MemberMetadataValue {
-                    instance_id: None,
-                    rack_id: None,
-                    client_id: "c".to_string(),
-                    client_host: "/127.0.0.1".to_string(),
-                    subscribed_topic_names: vec!["orders".to_string()],
-                    subscribed_topic_regex: Some("pay.*".to_string()),
-                    server_assignor: None,
-                    rebalance_timeout_ms: 60_000,
-                    classic: None,
-                },
+                seeded_member_metadata(&["orders"], Some("pay.*"), None),
             )]
             .into(),
             resolved_regexes: resolved

@@ -48,6 +48,18 @@ fn supers(names: &[&str]) -> HashSet<String> {
     names.iter().map(|s| (*s).to_string()).collect()
 }
 
+fn authorizer(super_users: HashSet<String>, url: String, allow_on_error: bool) -> OpaAuthorizer {
+    OpaAuthorizer::new(super_users, url, allow_on_error, 100, minutes(1), secs(5)).unwrap()
+}
+
+macro_rules! request_fixture {
+    ($image:ident, $principal:ident, $host:ident, $name:literal) => {
+        let $image = img();
+        let $principal = test_principal($name);
+        let $host = host();
+    };
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn super_user_bypasses_opa_call() {
     let mock = MockServer::start().await;
@@ -60,18 +72,8 @@ async fn super_user_bypasses_opa_call() {
         .mount(&mock)
         .await;
 
-    let auth = OpaAuthorizer::new(
-        supers(&["admin"]),
-        opa_url(&mock),
-        false,
-        100,
-        minutes(1),
-        secs(5),
-    )
-    .unwrap();
-    let image = img();
-    let p = test_principal("admin");
-    let h = host();
+    let auth = authorizer(supers(&["admin"]), opa_url(&mock), false);
+    request_fixture!(image, p, h, "admin");
     assert!(auth.authorize(&image, &req(&p, &h, "anything")) == AuthorizationResult::Allow);
 }
 
@@ -99,18 +101,8 @@ async fn check_cached_decision(topic: &str, allow: bool, expected: Authorization
         .expect(1)
         .mount(&mock)
         .await;
-    let auth = OpaAuthorizer::new(
-        HashSet::new(),
-        opa_url(&mock),
-        false,
-        100,
-        minutes(1),
-        secs(5),
-    )
-    .unwrap();
-    let image = img();
-    let principal = test_principal("alice");
-    let host = host();
+    let auth = authorizer(HashSet::new(), opa_url(&mock), false);
+    request_fixture!(image, principal, host, "alice");
     // The second call must preserve the decision and use the cache: expect(1)
     // verifies that only the initial authorization reached HTTP.
     for _ in 0..2 {
@@ -140,9 +132,7 @@ async fn cache_entry_expires_after_ttl() {
         timeline.clone(),
     )
     .unwrap();
-    let image = img();
-    let p = test_principal("alice");
-    let h = host();
+    request_fixture!(image, p, h, "alice");
     // Cache miss -> HTTP call #1; caches the decision with expires_at = now+10ms.
     assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
     // The exact deadline is stale: freshness is a strict comparison.
@@ -178,18 +168,8 @@ async fn http_error_with_allow_on_error_true_returns_allow() {
         .await;
 
     // allow_on_error=true → 500 maps to Allow.
-    let auth = OpaAuthorizer::new(
-        HashSet::new(),
-        opa_url(&mock),
-        true,
-        100,
-        minutes(1),
-        secs(5),
-    )
-    .unwrap();
-    let image = img();
-    let p = test_principal("alice");
-    let h = host();
+    let auth = authorizer(HashSet::new(), opa_url(&mock), true);
+    request_fixture!(image, p, h, "alice");
     assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
 }
 
@@ -201,18 +181,8 @@ async fn http_error_with_allow_on_error_false_returns_deny() {
         .mount(&mock)
         .await;
 
-    let auth = OpaAuthorizer::new(
-        HashSet::new(),
-        opa_url(&mock),
-        false,
-        100,
-        minutes(1),
-        secs(5),
-    )
-    .unwrap();
-    let image = img();
-    let p = test_principal("alice");
-    let h = host();
+    let auth = authorizer(HashSet::new(), opa_url(&mock), false);
+    request_fixture!(image, p, h, "alice");
     assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Deny);
 }
 
@@ -237,9 +207,7 @@ async fn configured_http_timeout_fails_closed() {
         millis(25),
     )
     .unwrap();
-    let image = img();
-    let p = test_principal("alice");
-    let h = host();
+    request_fixture!(image, p, h, "alice");
 
     assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Deny);
 }
@@ -259,26 +227,10 @@ async fn json_response_parse_error_returns_per_allow_on_error_config() {
     let h = host();
     let image = img();
 
-    let auth_open = OpaAuthorizer::new(
-        HashSet::new(),
-        opa_url(&mock),
-        true,
-        100,
-        minutes(1),
-        secs(5),
-    )
-    .unwrap();
+    let auth_open = authorizer(HashSet::new(), opa_url(&mock), true);
     assert!(auth_open.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
 
-    let auth_closed = OpaAuthorizer::new(
-        HashSet::new(),
-        opa_url(&mock),
-        false,
-        100,
-        minutes(1),
-        secs(5),
-    )
-    .unwrap();
+    let auth_closed = authorizer(HashSet::new(), opa_url(&mock), false);
     assert!(auth_closed.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Deny);
 }
 
@@ -287,14 +239,10 @@ async fn json_response_parse_error_returns_per_allow_on_error_config() {
 /// the Kafka metadata log a caller might otherwise key its own cache on.
 #[tokio::test(flavor = "multi_thread")]
 async fn decision_ttl_reports_the_configured_cache_expiry() {
-    let auth = OpaAuthorizer::new(
+    let auth = authorizer(
         HashSet::new(),
         "http://localhost/v1/data/kafka/authz/allow".into(),
         false,
-        100,
-        minutes(1),
-        secs(5),
-    )
-    .unwrap();
+    );
     assert!(auth.decision_ttl() == Some(Duration::from_secs(60)));
 }

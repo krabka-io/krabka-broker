@@ -69,10 +69,10 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
         .filter_map(Result::transpose)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let ident = item.ident;
-    let (impl_generics, type_generics, where_clause) = item.generics.split();
-    Ok(moxy::template! {
-        impl {{ impl_generics }} {{ ident }} {{ type_generics }} {{ where_clause }} {
+    Ok(crate::meta::impl_block(
+        item,
+        &TokenStream::new(),
+        &moxy::template! {
             pub(crate) fn copy_into(&self, target: &mut {{ target }}) {
                 @for copy in &copies {
                     @if let Assignment::Plain(field) = copy {
@@ -86,6 +86,6 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
                     }
                 }
             }
-        }
-    })
+        },
+    ))
 }

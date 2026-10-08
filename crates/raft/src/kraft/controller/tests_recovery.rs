@@ -8,18 +8,15 @@ use assert2::{assert, check};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 use super::*;
-use crate::kraft::{
-    controller::{
-        control_state::voter_set_to_wire,
-        quorum_state_file::{load_quorum_state, save_quorum_state},
-        records::typed_control_batch,
-        recovery::{control_state_at, replay_committed, replay_control_records},
-        test_support::{
-            TEST_ELECTION_TIMEOUT, await_leader, build_engine_only, elect_single_voter_engine,
-            submit_change_with_timeout, test_metadata_log, topic_record, voter_set,
-        },
+use crate::kraft::controller::{
+    control_state::voter_set_to_wire,
+    quorum_state_file::{load_quorum_state, save_quorum_state},
+    records::typed_control_batch,
+    recovery::{control_state_at, replay_committed, replay_control_records},
+    test_support::{
+        await_leader, open_test_controller, submit_change_with_timeout, test_kraft_config,
+        topic_record, voter_set,
     },
-    transport::NullPeerSender,
 };
 
 fn recovery_voters() -> (VoterSet, VoterSet, VoterSet) {
@@ -30,13 +27,27 @@ fn recovery_voters() -> (VoterSet, VoterSet, VoterSet) {
     )
 }
 
-#[test]
-fn restart_replays_control_records_only_through_persisted_high_watermark() {
+fn reopened_control_log(write: impl FnOnce(&mut KraftLog)) -> (tempfile::TempDir, KraftLog) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (initial, committed, uncommitted) = recovery_voters();
     {
         let mut log =
             KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
+        write(&mut log);
+    }
+    let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("reopen log");
+    (dir, log)
+}
+
+fn replayed_control_state(log: &KraftLog, initial: VoterSet) -> QuorumState {
+    let mut state = QuorumState::bootstrap(uuid::Uuid::nil(), initial);
+    replay_control_records(log, &mut state, MetadataRaftFetchMax::default());
+    state
+}
+
+#[test]
+fn restart_replays_control_records_only_through_persisted_high_watermark() {
+    let (initial, committed, uncommitted) = recovery_voters();
+    let (_dir, log) = reopened_control_log(|log| {
         let mut batch =
             typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&committed))])
                 .expect("committed voter batch");
@@ -48,22 +59,16 @@ fn restart_replays_control_records_only_through_persisted_high_watermark() {
                 .expect("uncommitted voter batch");
         log.append(&mut batch, 0)
             .expect("append uncommitted voter batch");
-    }
-
-    let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("reopen log");
+    });
     assert2::assert!(log.hwm() < log.log_end_offset());
-    let mut state = QuorumState::bootstrap(uuid::Uuid::nil(), initial);
-    replay_control_records(&log, &mut state, MetadataRaftFetchMax::default());
+    let state = replayed_control_state(&log, initial);
     assert2::assert!(state.voters == committed);
 }
 
 #[test]
 fn control_replay_stops_inside_a_partially_committed_batch() {
-    let dir = tempfile::tempdir().expect("tempdir");
     let (initial, committed, uncommitted) = recovery_voters();
-    {
-        let mut log =
-            KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
+    let (_dir, log) = reopened_control_log(|log| {
         let mut batch = typed_control_batch(
             1,
             &[
@@ -74,21 +79,16 @@ fn control_replay_stops_inside_a_partially_committed_batch() {
         .expect("mixed-commit voter batch");
         log.append(&mut batch, 0).expect("append voter batch");
         log.advance_hwm(Offset(1));
-    }
-
-    let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("reopen log");
-    let mut state = QuorumState::bootstrap(uuid::Uuid::nil(), initial);
-    replay_control_records(&log, &mut state, MetadataRaftFetchMax::default());
+    });
+    let state = replayed_control_state(&log, initial);
 
     assert2::assert!(state.voters == committed);
 }
 
 #[test]
 fn replay_committed_rebuilds_image_from_log_records() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&topic_record("replayed"), reply);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &topic_record("replayed"));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
 
     let mut recovered = MetadataImage::new(uuid::Uuid::nil());
@@ -107,8 +107,7 @@ fn replay_committed_rebuilds_image_from_log_records() {
 fn replay_committed_captures_metadata_downgrade_snapshot() {
     use krabka_metadata::FeatureLevelRecord;
 
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     let (reply, mut rx) = oneshot::channel();
     engine.on_submit_change(
         &[MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -146,8 +145,7 @@ fn replay_committed_captures_metadata_downgrade_snapshot() {
 
 #[test]
 fn downgrade_snapshot_failures_remaining_decrements_and_eventually_succeeds() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     let (reply, _rx) = oneshot::channel();
     engine.on_submit_change(
         &[MetadataRecord::V1FeatureLevel(
@@ -255,24 +253,11 @@ async fn snapshot_then_restart_recovers_image() {
         let log =
             KraftLog::open(&data_dir, &crate::MetadataLogConfig::default()).expect("open log");
         let ctrl = KraftController::spawn(
-            KraftConfig {
-                me: NodeId(1),
+            test_kraft_config(
+                NodeId(1),
                 cluster_id,
-                directory_id: uuid::Uuid::nil(),
-                initial_state: QuorumState::bootstrap(cluster_id, voters.clone()),
-                election_timeout: TEST_ELECTION_TIMEOUT,
-                heartbeat_interval: None,
-                controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
-                metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
-                metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
-                peers: Arc::new(NullPeerSender),
-                snapshot_interval_records: 0,
-                max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
-                max_snapshot_interval: krabka_units::prelude::millis(0),
-                metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
-                metadata_log: test_metadata_log(),
-                activation: crate::kraft::Activation::default(),
-            },
+                QuorumState::bootstrap(cluster_id, voters.clone()),
+            ),
             log,
             data_dir.clone(),
         );
@@ -289,26 +274,7 @@ async fn snapshot_then_restart_recovers_image() {
     }
 
     // Reopen over the same dir: the image is rebuilt from checkpoint+log.
-    let ctrl2 = KraftController::open(
-        data_dir.clone(),
-        NodeId(1),
-        cluster_id,
-        uuid::Uuid::nil(),
-        voters,
-        TEST_ELECTION_TIMEOUT,
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        krabka_units::prelude::bytes(0),
-        krabka_units::prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        test_metadata_log(),
-        crate::kraft::Activation::default(),
-    )
-    .expect("reopen");
+    let ctrl2 = open_test_controller(data_dir.clone(), cluster_id, voters).expect("reopen");
     assert2::assert!(ctrl2.current_image().topic("recovered").is_some());
     ctrl2.shutdown().await;
 }
@@ -335,26 +301,7 @@ async fn open_with_legacy_54_byte_quorum_state_advances_hwm() {
 
     std::fs::write(data_dir.join(QUORUM_STATE_FILE), [0u8; 54]).expect("write 54 bytes");
 
-    let ctrl = KraftController::open(
-        data_dir,
-        NodeId(1),
-        cluster_id,
-        uuid::Uuid::nil(),
-        voters,
-        TEST_ELECTION_TIMEOUT,
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        krabka_units::prelude::bytes(0),
-        krabka_units::prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        test_metadata_log(),
-        crate::kraft::Activation::default(),
-    )
-    .expect("open");
+    let ctrl = open_test_controller(data_dir, cluster_id, voters).expect("open");
 
     let hwm = ctrl.quorum_state().await.unwrap().high_watermark;
     assert2::assert!(hwm > 0);

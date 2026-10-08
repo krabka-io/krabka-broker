@@ -1,18 +1,16 @@
 //! Diskless WAL admission decisions.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// Result of authorizing and epoch-fencing one diskless WAL Fetch.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum WalFetchAdmission {
-    Denied,
-    FencedLeaderEpoch,
-    UnknownLeaderEpoch,
-    Serve,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Result of authorizing and epoch-fencing one diskless WAL Fetch.
+    pub enum WalFetchAdmission {
+        Denied,
+        FencedLeaderEpoch,
+        UnknownLeaderEpoch,
+        Serve,
+    }
 }
 
 mod batch_equal;
@@ -29,6 +27,14 @@ use select_wal_voters::contains;
 pub use select_wal_voters::{
     select_wal_voter_index, select_wal_voters, wal_fetch_admission, wal_voter_set_valid,
 };
+
+open_logic! {
+/// Every selected WAL voter has a distinct node ID and rack ID.
+pub fn placement_identities_distinct(selected: Seq<(u64, u64)>) -> bool {
+    pearlite! { forall<i: Int, j: Int> 0 <= i && i < j && j < selected.len()
+    ==> selected[i].0 != selected[j].0 && selected[i].1 != selected[j].1 }
+}
+}
 
 #[cfg(test)]
 mod tests;

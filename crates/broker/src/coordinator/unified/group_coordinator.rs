@@ -170,6 +170,15 @@ impl GroupCoordinator {
         let _ = self.share_persister.set(persister);
     }
 
+    /// Snapshot the classic and consumer registry's ids before sending actor requests.
+    #[must_use]
+    pub(crate) fn group_ids(&self) -> Vec<String> {
+        self.groups
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
     /// The installed share-state persister, if there is one.
     ///
     /// It is `None` in the unit tests that construct a bare

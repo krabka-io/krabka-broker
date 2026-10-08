@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/break_glass.rs" 38 27 38 32 *)
+(* #"/workspace/crates/verified/src/break_glass.rs" 6 19 6 36 *)
 
 (* <break_glass::BreakGlassProposalFacts as std::clone::Clone> *)
 
@@ -22,7 +22,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_BreakGlassProposalFacts [#"/workspace/crates/verified/src/break_glass.rs" 38 27 38 32]
+let clone_BreakGlassProposalFacts [#"/workspace/crates/verified/src/break_glass.rs" 6 19 6 36]
   (self: t_BreakGlassProposalFacts) (return (x: t_BreakGlassProposalFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_BreakGlassProposalFacts = Any.any_l () | & self: t_BreakGlassProposalFacts = self ])

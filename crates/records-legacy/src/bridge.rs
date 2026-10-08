@@ -113,16 +113,8 @@ pub fn legacy_to_v2_with_policy(
     let records = decode_message_set_with_policy(&mut cur, set_bytes.len(), policy)?;
     if records.is_empty() {
         return Ok(RecordBatch {
-            base_offset: 0,
             partition_leader_epoch: -1,
-            attributes: Attributes::default(),
-            last_offset_delta: 0,
-            base_timestamp: 0,
-            max_timestamp: 0,
-            producer_id: -1,
-            producer_epoch: -1,
-            base_sequence: -1,
-            records: Vec::new(),
+            ..RecordBatch::default()
         });
     }
     let base_offset = records
@@ -259,17 +251,11 @@ mod tests {
         }
     }
 
+    krabka_macros::legacy_policy_fixture!(policy_wire, crate);
+
     #[test]
     fn decompression_policy_limits_legacy_upconversion() {
-        let records = vec![ParsedRecord {
-            offset: Offset(0),
-            timestamp: Some(1),
-            key: None,
-            value: Some(Bytes::from(vec![b'x'; 4096])),
-        }];
-        let mut wire = BytesMut::new();
-        encode_compressed_message_set(&records, Magic::V1, CompressionType::Lz4, &mut wire)
-            .unwrap();
+        let wire = policy_wire();
 
         legacy_to_v2(&wire).unwrap();
 
@@ -311,26 +297,10 @@ mod tests {
         let recs = decode_message_set(&mut cur, legacy_bytes.len()).unwrap();
         // No structural representation of headers in v0/v1.
         assert2::assert!(
-            recs == vec![
-                ParsedRecord {
-                    offset: Offset(1000),
-                    timestamp: Some(1_700_000_000),
-                    key: Some(Bytes::from_static(b"a")),
-                    value: Some(Bytes::from_static(b"1")),
-                },
-                ParsedRecord {
-                    offset: Offset(1001),
-                    timestamp: Some(1_700_000_100),
-                    key: Some(Bytes::from_static(b"b")),
-                    value: Some(Bytes::from_static(b"2")),
-                },
-                ParsedRecord {
-                    offset: Offset(1002),
-                    timestamp: Some(1_700_000_500),
-                    key: None,
-                    value: Some(Bytes::from_static(b"3")),
-                },
-            ]
+            recs == crate::set::test_support::sample_records_v1_at(
+                1000,
+                [1_700_000_000, 1_700_000_100, 1_700_000_500]
+            )
         );
     }
 

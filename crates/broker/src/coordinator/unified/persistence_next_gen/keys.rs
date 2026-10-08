@@ -20,13 +20,7 @@
 //! `apiKey` 4 is Kafka's `ConsumerGroupPartitionMetadata`. The broker does not
 //! write it, and the number is not reused.
 
-use bytes::Bytes;
-use krabka_protocol::ProtocolError;
-
-use crate::{
-    coordinator::unified::persistence::{encode_string_key, get_string},
-    error::BrokerError,
-};
+use crate::coordinator::unified::persistence::group_record_keys;
 
 pub const KEY_GROUP_METADATA: i16 = 3;
 pub const KEY_MEMBER_METADATA: i16 = 5;
@@ -35,81 +29,29 @@ pub const KEY_TARGET_ASSIGNMENT_MEMBER: i16 = 7;
 pub const KEY_CURRENT_MEMBER_ASSIGNMENT: i16 = 8;
 pub const KEY_REGULAR_EXPRESSION: i16 = 16;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NextGenKey {
-    GroupMetadata { group_id: String },
-    MemberMetadata { group_id: String, member_id: String },
-    TargetAssignmentMetadata { group_id: String },
-    TargetAssignmentMember { group_id: String, member_id: String },
-    CurrentMemberAssignment { group_id: String, member_id: String },
-    RegularExpression { group_id: String, regex: String },
-}
-
-/// # Errors
-/// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-pub fn parse_key(version: i16, mut buf: &[u8]) -> Result<NextGenKey, BrokerError> {
-    let key = match version {
-        KEY_GROUP_METADATA => NextGenKey::GroupMetadata {
-            group_id: get_string(&mut buf)?,
-        },
-        KEY_MEMBER_METADATA => NextGenKey::MemberMetadata {
-            group_id: get_string(&mut buf)?,
-            member_id: get_string(&mut buf)?,
-        },
-        KEY_TARGET_ASSIGNMENT_METADATA => NextGenKey::TargetAssignmentMetadata {
-            group_id: get_string(&mut buf)?,
-        },
-        KEY_TARGET_ASSIGNMENT_MEMBER => NextGenKey::TargetAssignmentMember {
-            group_id: get_string(&mut buf)?,
-            member_id: get_string(&mut buf)?,
-        },
-        KEY_CURRENT_MEMBER_ASSIGNMENT => NextGenKey::CurrentMemberAssignment {
-            group_id: get_string(&mut buf)?,
-            member_id: get_string(&mut buf)?,
-        },
-        KEY_REGULAR_EXPRESSION => NextGenKey::RegularExpression {
-            group_id: get_string(&mut buf)?,
-            regex: get_string(&mut buf)?,
-        },
-        _ => {
-            return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-                "unknown next-gen key version",
-            )));
-        }
-    };
-    Ok(key)
-}
-
-/// Encodes a [`NextGenKey`] with its leading `i16` key version.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes, which a non-flexible key string cannot carry.
-pub fn encode_key(key: &NextGenKey) -> Result<Bytes, BrokerError> {
-    match key {
-        NextGenKey::GroupMetadata { group_id } => {
-            encode_string_key(KEY_GROUP_METADATA, &[group_id])
-        }
-        NextGenKey::MemberMetadata {
-            group_id,
-            member_id,
-        } => encode_string_key(KEY_MEMBER_METADATA, &[group_id, member_id]),
-        NextGenKey::TargetAssignmentMetadata { group_id } => {
-            encode_string_key(KEY_TARGET_ASSIGNMENT_METADATA, &[group_id])
-        }
-        NextGenKey::TargetAssignmentMember {
-            group_id,
-            member_id,
-        } => encode_string_key(KEY_TARGET_ASSIGNMENT_MEMBER, &[group_id, member_id]),
-        NextGenKey::CurrentMemberAssignment {
-            group_id,
-            member_id,
-        } => encode_string_key(KEY_CURRENT_MEMBER_ASSIGNMENT, &[group_id, member_id]),
-        NextGenKey::RegularExpression { group_id, regex } => {
-            encode_string_key(KEY_REGULAR_EXPRESSION, &[group_id, regex])
-        }
+group_record_keys! {
+    pub enum NextGenKey {
+        GroupMetadata => KEY_GROUP_METADATA,
+        MemberMetadata(member_id) => KEY_MEMBER_METADATA,
+        TargetAssignmentMetadata => KEY_TARGET_ASSIGNMENT_METADATA,
+        TargetAssignmentMember(member_id) => KEY_TARGET_ASSIGNMENT_MEMBER,
+        CurrentMemberAssignment(member_id) => KEY_CURRENT_MEMBER_ASSIGNMENT,
+        RegularExpression(regex) => KEY_REGULAR_EXPRESSION,
     }
+
+    /// # Errors
+    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    fn parse_key;
+
+    /// Encodes a [`NextGenKey`] with its leading `i16` key version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes, which a non-flexible key string cannot carry.
+    fn encode_key;
+
+    invalid "unknown next-gen key version";
 }
 
 #[cfg(test)]

@@ -75,6 +75,14 @@ use crate::{
     metadata_source::MetadataSource,
 };
 
+/// The localhost ECDSA pair used by reload and socket-drain tests.
+pub(crate) fn localhost_ecdsa_pair() -> (rcgen::Certificate, rcgen::KeyPair) {
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    let params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+    let cert = params.self_signed(&key).unwrap();
+    (cert, key)
+}
+
 /// Binds an HTTPS fixture with a fresh loopback certificate and returns the
 /// trust bundle path. The directory stays alive for background client requests.
 pub(crate) async fn loopback_tls_listener()
@@ -110,6 +118,17 @@ pub(crate) fn open_partition(
     let path = crate::log_dir::partition_dir(log_dir, topic, partition);
     std::fs::create_dir_all(&path).expect("create partition directory");
     let log = krabka_log::Log::open(&path, krabka_log::LogConfig::default()).expect("open log");
+    spawn_standalone_partition(log_dir, topic, partition, log, false)
+}
+
+/// Start a standalone writer over the caller's already-opened log.
+pub(crate) fn spawn_standalone_partition(
+    log_dir: &std::path::Path,
+    topic: &str,
+    partition: i32,
+    log: krabka_log::Log,
+    diskless: bool,
+) -> Arc<crate::partition::Partition> {
     crate::broker::spawn_partition(
         topic.to_owned(),
         krabka_ids::PartitionIndex(partition),
@@ -117,7 +136,7 @@ pub(crate) fn open_partition(
         log,
         crate::log_dir_status::LogDirRegistry::default(),
         Arc::new(crate::producer_state::ProducerState::new()),
-        false,
+        diskless,
     )
 }
 
@@ -145,26 +164,20 @@ pub(crate) fn block_log_artifact_paths(
     blocked
 }
 
+krabka_macros::bound_start_fixture!(config, bound_controller_config, crate);
+krabka_macros::bound_start_fixture!(
+    start,
+    start_bound_controller,
+    crate,
+    expect,
+    bound_controller_config
+);
+
 /// Boot a broker leading a single-voter quorum with separate loopback listeners.
 pub(crate) async fn start_controller() -> (BrokerHandle, SocketAddr, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind data listener");
-    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind controller listener");
-    let data_addr = data_listener.local_addr().expect("data addr");
-    let controller_addr = controller_listener.local_addr().expect("controller addr");
-    let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listen_addr = data_addr;
-    config.advertised_listener = data_addr.to_string();
-    config.controller_listen_addr = controller_addr;
-    config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
-    let broker =
-        crate::Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
-            .await
-            .expect("broker start");
+    let (controller, controller_addr, dir) = start_bound_controller(|_| {}).await;
+    // Bind the handle after the directory so a failed readiness wait drops the broker first.
+    let broker = controller;
     broker.wait_until_controller_leader().await;
     (broker, controller_addr, dir)
 }
@@ -224,6 +237,100 @@ pub(crate) fn fixture_records_batch(
         records,
     }
 }
+
+/// A mock broker serving the caller's version handshake and one request kind.
+pub(crate) async fn mock_request_broker(
+    request_key: i16,
+    mut response: impl FnMut() -> Vec<u8> + Send + 'static,
+    versions: fn() -> Vec<u8>,
+) -> krabka_client_core::MockBroker {
+    krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+        if api_key == krabka_protocol::owned::api_versions_request::API_KEY {
+            return Some(versions());
+        }
+        if api_key == request_key {
+            return Some(response());
+        }
+        None
+    })
+    .await
+}
+
+/// Owned configuration pairs, preserving the input's duplicate-key policy.
+pub(crate) fn string_pairs(values: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+    values
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+/// The signed-action placeholder metadata used by retention freeze fixtures.
+pub(crate) fn topic_freeze_record(
+    scope: &str,
+    pattern_type: krabka_metadata::PatternType,
+    frozen: bool,
+    reason: &str,
+) -> krabka_metadata::TopicFreezeRecord {
+    krabka_metadata::TopicFreezeRecord {
+        scope: scope.to_owned(),
+        pattern_type,
+        frozen,
+        reason: reason.to_owned(),
+        set_by: "User:alice".to_owned(),
+        set_at_ms: 1_770_000_000_000,
+        proposal_id: uuid::Uuid::nil(),
+        key_id: String::new(),
+        signature: Vec::new(),
+    }
+}
+
+/// Apply one topic before constructing its partition fixture.
+pub(crate) fn topic_partition_image(
+    topic: &str,
+    replication_factor: i16,
+    partition: impl FnOnce() -> PartitionRecord,
+) -> MetadataImage {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&MetadataRecord::V1Topic(TopicRecord {
+        name: topic.into(),
+        topic_id: uuid::Uuid::nil(),
+        partitions: 1,
+        replication_factor,
+    }));
+    image.apply(&MetadataRecord::V1Partition(partition()));
+    image
+}
+
+/// The directory-aware partition image used by controller failover fixtures.
+pub(crate) fn directory_partition_image(
+    leader: NodeId,
+    replicas: impl ExactSizeIterator<Item = NodeId>,
+    isr: impl Iterator<Item = NodeId>,
+    directories: &[uuid::Uuid],
+) -> MetadataImage {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&MetadataRecord::V1Topic(TopicRecord {
+        name: "t".into(),
+        topic_id: uuid::Uuid::nil(),
+        partitions: 1,
+        replication_factor: i16::try_from(replicas.len()).unwrap(),
+    }));
+    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        topic: "t".into(),
+        partition: 0,
+        leader,
+        replicas: replicas.collect(),
+        isr: isr.collect(),
+        leader_epoch: krabka_metadata::LeaderEpoch(5),
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        directories: directories.to_vec(),
+        partition_epoch: 0,
+    }));
+    image
+}
+
+krabka_macros::topic_record_fixture!(single_partition_topic);
 
 /// Seeds the one-partition reassignment fixtures with the fixed leader epoch.
 pub(crate) fn reassignment_partition(
@@ -964,6 +1071,17 @@ pub(crate) async fn dispatch_wire<Resp: Decode<'static>>(
     decode_response(&bytes, version)
 }
 
+/// Configure one transaction-state partition with the supplied authorizer.
+/// Readiness waits remain the caller's responsibility.
+pub(crate) fn configure_single_partition_transactions(
+    config: &mut BrokerConfig,
+    authorizer: Arc<dyn crate::authorizer::Authorizer>,
+) {
+    config.authorizer = authorizer;
+    config.transaction_state_num_partitions = 1;
+    config.transaction_state_replication_factor = 1;
+}
+
 /// Start an in-process broker over a fresh temp dir. It applies `configure` to
 /// the [`BrokerConfig::for_tests`] baseline before start.
 ///
@@ -1240,7 +1358,36 @@ pub(crate) struct FakeMetadataSource {
     controller_bound_addr_calls: AtomicUsize,
 }
 
+/// Yield-poll a condition with a bounded guard against a stalled test.
+pub(crate) async fn await_until(what: &str, mut cond: impl FnMut() -> bool) {
+    for _ in 0..200_000 {
+        if cond() {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("condition never held: {what}");
+}
+
+/// Plaintext controller transport for fixtures with no configured voters.
+pub(crate) fn plaintext_controller_dialer() -> crate::controller_endpoint::ControllerDialer {
+    crate::controller_endpoint::ControllerDialer {
+        outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
+        listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+        server_name: "localhost".to_owned(),
+        quorum_voters: Vec::new(),
+    }
+}
+
 impl FakeMetadataSource {
+    /// A static image with no elected controller and an ephemeral loopback listener.
+    pub(crate) fn static_image(image: MetadataImage) -> Self {
+        Self::builder()
+            .image(image)
+            .controller_bound_addr(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .build()
+    }
+
     /// A builder over an empty image with no elected leader, no committed
     /// metadata, and an unspecified controller address. Every seam is a
     /// method on the returned builder.
@@ -1447,15 +1594,8 @@ impl MetadataSource for FakeMetadataSource {
     fn quorum_state(&self) -> QuorumState {
         QuorumState {
             current_term: self.term,
-            last_applied_index: 0,
             current_leader: *self.leader_tx.borrow(),
-            voters: Vec::new(),
-            voter_nodes: std::collections::BTreeMap::new(),
-            per_voter_matched_index: std::collections::BTreeMap::new(),
-            per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
-            per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
-            observer_directory_ids: std::collections::BTreeMap::new(),
-            is_leader: false,
+            ..Default::default()
         }
     }
 
@@ -1942,4 +2082,56 @@ mod tests {
         assert!(result == SubmitChangeResult::default());
         assert!(source.submitted() == vec![Vec::<MetadataRecord>::new()]);
     }
+}
+
+/// Independent published ELR fixture; both lists retain the caller's order.
+pub(crate) fn partition_elr(
+    eligible: &[i32],
+    last_known: &[i32],
+) -> crate::elr::state::PartitionElr {
+    crate::elr::state::PartitionElr {
+        eligible_leader_replicas: eligible.to_vec(),
+        last_known_elr: last_known.to_vec(),
+    }
+}
+
+/// A plaintext dialer that records each connection's client ID before dialing.
+#[derive(Clone)]
+pub(crate) struct RecordingDialer {
+    pub(crate) client_ids: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl krabka_raft::OutboundDialer for RecordingDialer {
+    async fn dial(
+        &self,
+        target: NodeId,
+        addr: &str,
+        options: krabka_client_core::ConnectionOptions,
+    ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
+        self.client_ids
+            .lock()
+            .unwrap()
+            .push(options.client_id.clone());
+        krabka_raft::PlaintextDialer
+            .dial(target, addr, options)
+            .await
+    }
+}
+
+krabka_macros::keyed_record_batch_fixture!(keyed_records_batch);
+
+/// An empty-payload fixture batch with the protocol's original default headers.
+pub(crate) fn default_records_batch(n: i32) -> RecordBatch {
+    let mut batch = RecordBatch {
+        last_offset_delta: n - 1,
+        ..RecordBatch::default()
+    };
+    for offset_delta in 0..n {
+        batch.records.push(Record {
+            offset_delta,
+            ..Default::default()
+        });
+    }
+    batch
 }

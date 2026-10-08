@@ -16,6 +16,8 @@ pub mod verify;
 
 #[cfg(test)]
 mod spool_model;
+#[cfg(test)]
+mod test_support;
 
 pub use chain::{ChainState, GENESIS_HEAD, chain_hash};
 pub use checkpoint::{Checkpoint, EVENT_CLASS_CHECKPOINT};

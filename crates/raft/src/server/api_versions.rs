@@ -678,7 +678,7 @@ mod tests {
     /// epoch is the metadata offset the view carries.
     #[test]
     fn feature_fields_match_kafka_on_the_controller_listener() {
-        use krabka_metadata::{KRaftVersionRecord, metadata_version::METADATA_VERSION_MIN};
+        use krabka_metadata::metadata_version::METADATA_VERSION_MIN;
         use krabka_protocol::owned::api_versions_response::{
             FinalizedFeatureKey, SupportedFeatureKey,
         };
@@ -691,18 +691,9 @@ mod tests {
             want_finalized: Vec<FinalizedFeatureKey>,
         }
 
-        let supported = |name: &str, min_version, max_version| SupportedFeatureKey {
-            name: name.into(),
-            min_version,
-            max_version,
-            ..Default::default()
-        };
-        let finalized = |name: &str, level| FinalizedFeatureKey {
-            name: name.into(),
-            min_version_level: level,
-            max_version_level: level,
-            ..Default::default()
-        };
+        krabka_macros::supported_feature_fixture!(supported);
+        krabka_macros::supported_features_fixture!(modern_supported, supported);
+        krabka_macros::finalized_feature_fixture!(finalized);
         // The listener's default, `unstable.api.versions.enable=false`, caps
         // metadata.version at 4.3.1's latest production level.
         let metadata_max = crate::LATEST_PRODUCTION_METADATA_VERSION;
@@ -711,15 +702,10 @@ mod tests {
             METADATA_VERSION_MIN,
             metadata_max,
         )];
-        let modern = vec![
+        let modern = modern_supported(
             supported("metadata.version", METADATA_VERSION_MIN, metadata_max),
-            supported("group.version", 0, 1),
-            supported("transaction.version", 0, 2),
-            supported("share.version", 0, 1),
-            supported("streams.version", 0, 1),
-            supported("eligible.leader.replicas.version", 0, 1),
-            supported("kraft.version", 0, 1),
-        ];
+            1,
+        );
         let rows = [
             Row {
                 version: 3,
@@ -757,16 +743,7 @@ mod tests {
             want_finalized,
         } in rows
         {
-            let mut image = krabka_metadata::MetadataImage::new(Uuid::nil());
-            image.apply(&MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
-                kraft_version,
-            }));
-            for (name, level) in levels {
-                image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                    name: (*name).into(),
-                    level: *level,
-                }));
-            }
+            let image = crate::test_support::feature_image(kraft_version, levels);
             let body = super::api_versions_response_body(version, view(&image, 1234));
             let resp = ApiVersionsResponse::decode(&mut &body[..], version).expect("decode");
             assert2::check!(

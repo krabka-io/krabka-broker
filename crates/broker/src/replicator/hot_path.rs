@@ -16,24 +16,16 @@
 
 use std::{
     path::Path,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicI32, AtomicU64},
-    },
+    sync::{Arc, Mutex},
 };
 
 use arc_swap::ArcSwap;
-use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig, LogError, Offset};
 use krabka_protocol::records::RecordBatch;
 
 use crate::{
-    delivery::DeliveryHandles,
-    error::BrokerError,
-    log_dir_status::LogDirRegistry,
-    partition::{Partition, WriterMessage, initial_replication_target},
+    error::BrokerError, log_dir_status::LogDirRegistry, partition::Partition,
     producer_state::ProducerState,
-    replica_state::ReplicaState,
 };
 
 /// A follower partition over `dir`, with its writer actor running.
@@ -47,7 +39,7 @@ pub struct ReplicaSeam {
 
 impl ReplicaSeam {
     /// Open a log under `dir` and spawn the partition writer that drains its
-    /// [`WriterMessage`] channel.
+    /// [`crate::partition::WriterMessage`] channel.
     ///
     /// Must be called from inside a Tokio runtime: the writer is a spawned
     /// task, exactly as it is under `Broker`.
@@ -58,55 +50,27 @@ impl ReplicaSeam {
     pub fn spawn(dir: &Path) -> Result<Self, LogError> {
         let log = Arc::new(Mutex::new(Log::open(dir, LogConfig::default())?));
         let log_dir = Arc::new(ArcSwap::from_pointee(dir.to_path_buf()));
-        let (writer_tx, rx) = tokio::sync::mpsc::channel::<WriterMessage>(8);
-        let append_notify = Arc::new(tokio::sync::Notify::new());
-        let replica_state = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
-        let hw_advance_notify = Arc::new(tokio::sync::Notify::new());
-        // The writer and the partition share one set of delivery handles, as
-        // they do in production: the writer refreshes the mirror the partition
-        // reads.
-        let delivery = DeliveryHandles::new();
-        let writer = tokio::spawn(crate::partition_writer::run_with_sequencer(
-            ("bench-topic".to_string(), PartitionIndex(0)),
-            (Arc::clone(&log), Arc::clone(&log_dir)),
-            rx,
-            (
-                Arc::clone(&append_notify),
-                Arc::clone(&replica_state),
-                Arc::clone(&hw_advance_notify),
-                delivery.clone(),
-            ),
-            (
-                LogDirRegistry::default(),
-                Arc::new(ProducerState::new()),
-                None,
-            ),
-            crate::config::BrokerConfig::default().max_produce_group,
-            None,
-        ));
         Ok(Self {
-            partition: Partition {
-                topic: "bench-topic".to_string(),
-                index: PartitionIndex(0),
-                log_dir,
+            partition: Partition::writer_fixture(
+                "bench-topic",
                 log,
-                writer_tx,
-                // Empty, exactly as `broker::partition_spawn` leaves it: this
-                // seam replicates data batches and never materializes a
-                // transaction marker, so nothing ever reaches this map.
-                marker_materialization: Arc::new(tokio::sync::Mutex::new(
-                    std::collections::HashMap::default(),
-                )),
-                append_notify,
-                replica_state,
-                hw_advance_notify,
-                current_leader: Arc::new(AtomicU64::new(0)),
-                current_leader_epoch: Arc::new(AtomicI32::new(0)),
-                delivery,
-                replication_target: initial_replication_target(None),
-                diskless: false,
-                writer_handle: Arc::new(Mutex::new(Some(writer))),
-            },
+                log_dir,
+                |identity, storage, rx, signals| {
+                    tokio::spawn(crate::partition_writer::run_with_sequencer(
+                        identity,
+                        storage,
+                        rx,
+                        signals,
+                        (
+                            LogDirRegistry::default(),
+                            Arc::new(ProducerState::new()),
+                            None,
+                        ),
+                        crate::config::BrokerConfig::default().max_produce_group,
+                        None,
+                    ))
+                },
+            ),
         })
     }
 

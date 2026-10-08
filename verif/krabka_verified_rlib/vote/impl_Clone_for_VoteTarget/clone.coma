@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/vote.rs" 118 27 118 32 *)
+(* #"/workspace/crates/verified/src/vote.rs" 102 19 102 36 *)
 
 (* <vote::VoteTarget as std::clone::Clone> *)
 
@@ -11,7 +11,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_VoteTarget [#"/workspace/crates/verified/src/vote.rs" 118 27 118 32] (self: t_VoteTarget)
+let clone_VoteTarget [#"/workspace/crates/verified/src/vote.rs" 102 19 102 36] (self: t_VoteTarget)
   (return (x: t_VoteTarget)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_VoteTarget = Any.any_l () | & self: t_VoteTarget = self ])

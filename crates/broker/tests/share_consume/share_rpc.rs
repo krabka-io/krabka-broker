@@ -6,16 +6,16 @@
 
 use assert2::assert;
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    share_acknowledge_request::{
-        AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AckAckBatch,
-        ShareAcknowledgeRequest,
-    },
-    share_acknowledge_response::ShareAcknowledgeResponse,
-};
+use krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse;
 
 pub use crate::support::share::{acquired_count, share_fetch_req};
-use crate::{NONE, RENEW, harness::wire};
+use crate::{
+    NONE, RENEW,
+    harness::wire,
+    support::share::{
+        acknowledge_partition, acknowledge_request, acknowledge_topic, acknowledgement,
+    },
+};
 
 /// `ShareFetch`. This helper retries while the share-state leadership and
 /// acquisition are still settling. The first acquire pass after topic creation
@@ -77,27 +77,19 @@ pub async fn share_renew(
     first: i64,
     last: i64,
 ) -> krabka_protocol::owned::share_acknowledge_response::PartitionData {
-    let req = ShareAcknowledgeRequest {
-        group_id: Some("g1".into()),
-        member_id: Some(member.into()),
-        share_session_epoch: epoch,
-        is_renew_ack: true,
-        topics: vec![AcknowledgeTopic {
-            topic_id: wire(tid),
-            partitions: vec![AcknowledgePartition {
-                partition_index: 0,
-                acknowledgement_batches: vec![AckAckBatch {
-                    first_offset: first,
-                    last_offset: last,
-                    acknowledge_types: vec![RENEW],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = acknowledge_request(
+        Some("g1".into()),
+        Some(member.into()),
+        epoch,
+        Some(true),
+        vec![acknowledge_topic(
+            wire(tid),
+            vec![acknowledge_partition(
+                0,
+                vec![acknowledgement(first, last, vec![RENEW])],
+            )],
+        )],
+    );
     let resp: ShareAcknowledgeResponse = client.send(req).await.expect("ShareAcknowledge renew");
     assert!(
         resp.error_code == NONE,
@@ -107,22 +99,8 @@ pub async fn share_renew(
     resp.responses[0].partitions[0].clone()
 }
 
-/// Do the very first `ShareFetch` for a freshly-created topic. This helper
-/// retries until the acquire pass actually returns records. Leadership and
-/// materialization of both the data partition and `__share_group_state` may
-/// still be settling. Asserts the supplied invariant on the resulting row.
-pub async fn fetch_until_acquired(
-    client: &Client,
-    group: &str,
-    member: &str,
-    tid: uuid::Uuid,
-    partition: i32,
-    epoch: i32,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
-    crate::support::share::fetch_until_acquired(
-        client,
-        share_fetch_req(group, member, tid, partition, epoch, 0, vec![]),
-        true,
-    )
-    .await
-}
+// Do the very first `ShareFetch` for a freshly-created topic. This helper
+// retries until the acquire pass actually returns records. Leadership and
+// materialization of both the data partition and `__share_group_state` may
+// still be settling. Asserts the supplied invariant on the resulting row.
+crate::share_first_fetch_fixture!(fetch_until_acquired, true);

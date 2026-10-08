@@ -6,14 +6,11 @@ use super::{
     kafka_reload_keeps, kafka_replay_start, snapshot_last_record_valid, snapshot_transaction_valid,
 };
 
+open_logic! {
 /// What a snapshot at `snapshot_offset` can truthfully say about one
 /// producer: a real producer identity, a coordinator epoch that is real or
 /// Kafka's `-1`, and last-record and transaction fields that describe only
 /// records before the snapshot's offset.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn snapshot_entry_valid_model(snapshot_offset: Int, entry: ProducerSnapshotEntryFacts) -> bool {
     pearlite! {
         snapshot_offset >= 0
@@ -23,6 +20,7 @@ pub fn snapshot_entry_valid_model(snapshot_offset: Int, entry: ProducerSnapshotE
             && snapshot_last_record_valid(snapshot_offset, entry)
             && snapshot_transaction_valid(snapshot_offset, entry)
     }
+}
 }
 
 /// Validate one decoded producer entry against its snapshot's exclusive

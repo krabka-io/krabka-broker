@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 33 0 41 8 *)
+(* #"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 26 0 34 8 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 32 10 32 15
-let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 49 16 53 5
-let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 12 16 12 70
+let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 25 10 25 15
+let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 63 16 67 5
+let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 33 16 33 70
 
 use creusot.int.UInt64
 use seq.Seq
@@ -29,10 +29,10 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 11 0 11 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
+predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 32 0 32 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
   [%#sspec'1] exists i: int. 0 <= i /\ i < count /\ Seq.get nodes i = node
 
-predicate expected_member [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 42 0 48 9] (nodes: Seq.seq UInt64.t) (count: int) (kind: t_VoterChangeKind) (target: UInt64.t) (node: UInt64.t) =
+predicate expected_member [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 56 0 62 9] (nodes: Seq.seq UInt64.t) (count: int) (kind: t_VoterChangeKind) (target: UInt64.t) (node: UInt64.t) =
   [%#sspec'0] match kind with
     | Add -> has_node nodes count node \/ node = target
     | Remove -> has_node nodes count node /\ node <> target
@@ -57,7 +57,7 @@ constant new : bool
 
 constant count : int
 
-function prefix_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 33 0 41 8] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (kind: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : int
+function prefix_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 26 0 34 8] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (kind: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : int
 
 goal vc_prefix_count: if count <= 0 then
     true

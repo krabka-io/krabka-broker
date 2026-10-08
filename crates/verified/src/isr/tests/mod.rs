@@ -8,6 +8,13 @@ const ELIGIBLE: IsrEligibilityFacts = IsrEligibilityFacts {
     alive_broker_epoch: Some(7),
 };
 
+fn check_proposal_changes() {
+    assert2::check!(!isr_proposal_changed(0, 0));
+    assert2::check!(isr_proposal_changed(1, 0));
+    assert2::check!(isr_proposal_changed(0, 1));
+    assert2::check!(isr_proposal_changed(usize::MAX, usize::MAX));
+}
+
 mod replica_isr_eligibility_follows_kip_841;
 
 mod leader_high_watermark_follows_kafka;

@@ -8,20 +8,23 @@
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, file_config::FileConfig};
+use krabka_broker::{BrokerConfig, BrokerHandle, file_config::FileConfig};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         produce_response::PartitionProduceResponse,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
+    records::{RecordBatch, RecordsPayload},
 };
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
+};
+
+use crate::support::{
+    produce::single_partition_produce, records::value_record, topics::creatable_topic,
 };
 
 /// Kafka error 87. KIP-467 added it for "one or more records in the batch were
@@ -60,18 +63,7 @@ pub fn order_avro_body() -> Vec<u8> {
 
 /// A single-record batch carrying `value`. `None` is a tombstone.
 pub fn batch_with_value(value: Option<Bytes>) -> RecordBatch {
-    let mut b = RecordBatch {
-        last_offset_delta: 0,
-        max_timestamp: 12_345,
-        producer_id: -1,
-        ..RecordBatch::default()
-    };
-    b.records.push(Record {
-        offset_delta: 0,
-        value,
-        ..Default::default()
-    });
-    b
+    batch_with_values(vec![value])
 }
 
 /// A two-record batch: the first record is fine, the second is not.
@@ -83,11 +75,8 @@ pub fn batch_with_values(values: Vec<Option<Bytes>>) -> RecordBatch {
         ..RecordBatch::default()
     };
     for (i, value) in values.into_iter().enumerate() {
-        b.records.push(Record {
-            offset_delta: i32::try_from(i).unwrap(),
-            value,
-            ..Default::default()
-        });
+        b.records
+            .push(value_record(i32::try_from(i).unwrap(), value));
     }
     b
 }
@@ -145,29 +134,57 @@ pub async fn registry() -> MockServer {
 /// The configuration goes in through `FileConfig`, the same path a real
 /// `broker.toml` takes, so this covers the config wiring as well as the
 /// produce path.
-pub async fn boot(registry_url: &str) -> (BrokerHandle, Client, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    let file: FileConfig = toml::from_str(&format!(
-        r#"
+pub fn boot(
+    registry_url: &str,
+) -> impl std::future::Future<Output = (BrokerHandle, Client, tempfile::TempDir)> {
+    Box::pin(async move {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        crate::harness::apply_registry_config(
+            &mut config,
+            &format!(
+                r#"
         [schema_registry]
         url = "{registry_url}"
         expire_after_ms = 60000
         "#
-    ))
-    .expect("broker.toml parses");
-    file.apply_to(&mut config)
-        .expect("[schema_registry] applies");
+            ),
+        );
 
-    let broker = Broker::start(config).await.expect("broker start");
-    let bootstrap = broker.listen_addr().to_string();
-    let client = Client::builder()
-        .bootstrap(&bootstrap)
-        .client_id("schema-validation-test")
-        .build()
-        .await
-        .expect("client build");
-    (broker, client, dir)
+        let (broker, client) = boot_config(config).await;
+        (broker, client, dir)
+    })
+}
+
+/// A mock-backed topic, retaining the registry and directory in their original order.
+pub fn mock_topic_fixture(
+    topic: &str,
+    configs: &[(&str, &str)],
+) -> impl std::future::Future<
+    Output = (
+        MockServer,
+        BrokerHandle,
+        Client,
+        tempfile::TempDir,
+        WireUuid,
+    ),
+> {
+    Box::pin(async move {
+        let registry = registry().await;
+        let (broker, client, dir) = boot(&registry.uri()).await;
+        let id = create_topic(&broker, &client, topic, configs).await;
+        (registry, broker, client, dir, id)
+    })
+}
+
+/// Send one nullable value using the suite's timestamp and producer batch fixture.
+pub async fn produce_value(
+    client: &Client,
+    topic: &str,
+    topic_id: WireUuid,
+    value: Option<Bytes>,
+) -> PartitionProduceResponse {
+    produce(client, topic, topic_id, batch_with_value(value)).await
 }
 
 /// Create `name` with the given topic configs and wait for its partition.
@@ -195,12 +212,7 @@ pub async fn create_topic_rf(
     configs: &[(&str, &str)],
     replication_factor: i16,
 ) -> WireUuid {
-    let topic = CreatableTopic {
-        name: name.into(),
-        num_partitions: 1,
-        replication_factor,
-        ..Default::default()
-    };
+    let topic = creatable_topic(name, 1, replication_factor);
     create_topic_from(broker, client, topic, configs).await
 }
 
@@ -229,14 +241,7 @@ async fn create_topic_from(
     let resp = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
-                configs: configs
-                    .iter()
-                    .map(|(k, v)| CreatableTopicConfig {
-                        name: (*k).to_owned(),
-                        value: Some((*v).to_owned()),
-                        ..Default::default()
-                    })
-                    .collect(),
+                configs: crate::support::topics::topic_configs(configs.iter().copied()),
                 ..topic
             }],
             timeout_ms: 5_000,
@@ -267,21 +272,13 @@ pub async fn produce(
     batch: RecordBatch,
 ) -> PartitionProduceResponse {
     let resp = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(RecordsPayload::V2(vec![batch])),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            topic,
+            topic_id,
+            0,
+            Some(RecordsPayload::V2(vec![batch])),
+            (1, 5_000),
+        ))
         .await
         .expect("Produce");
     resp.responses[0].partition_responses[0].clone()
@@ -290,13 +287,41 @@ pub async fn produce(
 /// The topic configs that turn `id`-mode value validation on.
 pub const VALIDATED: &[(&str, &str)] = &[("schema.validation.value", "true")];
 
-pub async fn boot_config(config: BrokerConfig) -> (BrokerHandle, Client) {
-    let broker = Broker::start(config).await.expect("broker start");
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("schema-validation-test")
-        .build()
+pub fn boot_config(
+    config: BrokerConfig,
+) -> impl std::future::Future<Output = (BrokerHandle, Client)> {
+    Box::pin(async move {
+        crate::support::client::start_broker_client(
+            config,
+            "schema-validation-test",
+            "broker start",
+            "client build",
+        )
         .await
-        .expect("client build");
-    (broker, client)
+    })
+}
+
+/// Apply the registry settings through the same TOML/`FileConfig` path as the CLI.
+///
+/// # Panics
+/// Panics if the TOML cannot be parsed or its registry section cannot be applied.
+pub fn apply_registry_config(config: &mut BrokerConfig, text: &str) {
+    let file: FileConfig = toml::from_str(text).expect("broker.toml parses");
+    file.apply_to(config).expect("[schema_registry] applies");
+}
+
+/// Check the value's response and, when specified, the independent append expectation.
+pub async fn check_value_append(
+    broker: &BrokerHandle,
+    client: &Client,
+    topic: &str,
+    topic_id: WireUuid,
+    value: Option<Bytes>,
+    expected: (i16, Option<i64>),
+) {
+    let out = produce_value(client, topic, topic_id, value).await;
+    assert2::check!(out.error_code == expected.0, "{out:?}");
+    if let Some(log_end) = expected.1 {
+        assert2::check!(broker.local_log_end_offset(topic, 0) == Some(log_end));
+    }
 }

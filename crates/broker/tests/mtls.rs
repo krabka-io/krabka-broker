@@ -26,15 +26,9 @@ use std::sync::Arc;
 
 use assert2::assert;
 use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-    },
-};
-use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_protocol::{Decode, Encode, owned::create_topics_response::CreateTopicsResponse};
+use krabka_security::{ClientAuthMode, TlsConfig};
 use tokio::net::TcpStream;
 use tokio_rustls::{
     TlsConnector,
@@ -43,6 +37,8 @@ use tokio_rustls::{
         pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject as _},
     },
 };
+
+use crate::support::topics::{creatable_topic, create_topic_request};
 
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-mtls-test";
@@ -99,51 +95,26 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     // an earlier installer.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (_log_dir, _pem_dir, mut cfg) = mtls_fixture(ClientAuthMode::Required);
     // The cert's Subject DN is the principal name. Set it as a
     // super-user so the authorizer permits CreateTopics; with no
     // super-users + no ACLs the compat shim would allow everything
     // regardless of principal, which would mask the principal-derivation
     // path under test.
-    cfg.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_string()};
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (_log_dir, _pem_dir, handle, addr) = mtls_super_user(ClientAuthMode::Required).await;
 
     // Build the test TLS client: pin the broker's self-issued cert,
     // present the fixture client cert + key.
-    let server_cert_der: CertificateDer<'static> =
-        CertificateDer::pem_slice_iter(DEV_CERT.as_bytes())
-            .next()
-            .expect("dev server cert present")
-            .expect("dev server cert parses")
-            .clone();
+    let server_cert_der = server_certificate();
     let client_cfg = client_config_with_pinned_server_and_client_cert(server_cert_der);
     let connector = TlsConnector::from(client_cfg);
 
-    let tcp = TcpStream::connect(addr).await.expect("tcp connect");
-    let server_name = ServerName::try_from("krabka-dev").unwrap();
-    let mut tls = connector
-        .connect(server_name, tcp)
-        .await
-        .expect("mTLS handshake must succeed");
+    let mut tls = mtls_connect(addr, connector, "mTLS handshake must succeed").await;
 
     // Send CreateTopics. Authorize gate: Cluster Create on the
     // super-user path. Any non-super-user principal (including
     // ANONYMOUS, which is what a non-mTLS connection would see) would
     // get CLUSTER_AUTHORIZATION_FAILED.
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: "mtls-smoke".into(),
-            num_partitions: 1,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let mut body = BytesMut::new();
-    req.encode(&mut body, 7).expect("encode CreateTopics");
+    let body = create_topics_body("mtls-smoke");
     let resp_bytes = kafka_wire::round_trip(&mut tls, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .unwrap();
@@ -175,35 +146,11 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
 async fn an_unmappable_certificate_dn_closes_the_connection() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let log_dir = tempfile::tempdir().unwrap();
-    let pem_dir = tempfile::tempdir().unwrap();
-    let server_cert_path = write_fixture(pem_dir.path(), "server.pem", DEV_CERT);
-    let server_key_path = write_fixture(pem_dir.path(), "server.key", DEV_KEY);
-    let client_ca_path = write_fixture(pem_dir.path(), "client_ca.pem", DEV_CLIENT_CA);
-
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SSL".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::Ssl,
-        tls_config: None,
-        sasl_mechanisms: None,
-        // Matches only `OU=ServiceUsers` DNs, and there is no `DEFAULT` tail.
-        // The fixture client is `OU=integration`, so nothing matches it.
-        principal_mapper: krabka_broker::SslPrincipalMapper::parse(&[
-            "RULE:^CN=(.*?),OU=ServiceUsers.*$/$1/",
-        ])
-        .expect("the rule list parses"),
-    }];
-    cfg.inter_broker_listener_name = "SSL".to_string();
-    cfg.tls_config = Some(TlsConfig {
-        cert_chain_path: server_cert_path,
-        private_key_path: server_key_path,
-        trust_roots_path: None,
-        client_ca_path: Some(client_ca_path),
-        client_auth: ClientAuthMode::Required,
-    });
+    let (_log_dir, _pem_dir, mut cfg) = mtls_fixture(ClientAuthMode::Required);
+    // Matches only OU=ServiceUsers; the fixture DN has no matching rule.
+    cfg.listeners[0].principal_mapper =
+        krabka_broker::SslPrincipalMapper::parse(&["RULE:^CN=(.*?),OU=ServiceUsers.*$/$1/"])
+            .expect("the rule list parses");
     // Both regressions would produce a *response* rather than a closed
     // connection: a DN pass-through authorizes as this super-user and
     // succeeds, an ANONYMOUS fall-through comes back
@@ -214,37 +161,14 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
 
-    let server_cert_der: CertificateDer<'static> =
-        CertificateDer::pem_slice_iter(DEV_CERT.as_bytes())
-            .next()
-            .expect("dev server cert present")
-            .expect("dev server cert parses")
-            .clone();
+    let server_cert_der = server_certificate();
     let connector = TlsConnector::from(client_config_with_pinned_server_and_client_cert(
         server_cert_der,
     ));
 
-    let tcp = TcpStream::connect(addr).await.expect("tcp connect");
-    let server_name = ServerName::try_from("krabka-dev").unwrap();
-    // The handshake itself is fine: the cert chains to the configured client
-    // CA. The refusal happens after it, when the DN meets the rule list.
-    let mut tls = connector
-        .connect(server_name, tcp)
-        .await
-        .expect("mTLS handshake must succeed");
+    let mut tls = mtls_connect(addr, connector, "mTLS handshake must succeed").await;
 
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: "unmappable-dn".into(),
-            num_partitions: 1,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let mut body = BytesMut::new();
-    req.encode(&mut body, 7).expect("encode CreateTopics");
+    let body = create_topics_body("unmappable-dn");
 
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -274,18 +198,9 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
 async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (_log_dir, _pem_dir, mut cfg) = mtls_fixture(ClientAuthMode::Optional);
-    cfg.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_string()};
+    let (_log_dir, _pem_dir, handle, addr) = mtls_super_user(ClientAuthMode::Optional).await;
 
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-
-    let server_cert_der: CertificateDer<'static> =
-        CertificateDer::pem_slice_iter(DEV_CERT.as_bytes())
-            .next()
-            .expect("dev server cert present")
-            .expect("dev server cert parses")
-            .clone();
+    let server_cert_der = server_certificate();
     let client_cfg = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(crate::support::tls::PinnedCertVerifier {
@@ -296,25 +211,14 @@ async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(client_cfg));
 
-    let tcp = TcpStream::connect(addr).await.expect("tcp connect");
-    let server_name = ServerName::try_from("krabka-dev").unwrap();
-    let mut tls = connector
-        .connect(server_name, tcp)
-        .await
-        .expect("a certificate-less TLS handshake must succeed on an Optional listener");
+    let mut tls = mtls_connect(
+        addr,
+        connector,
+        "a certificate-less TLS handshake must succeed on an Optional listener",
+    )
+    .await;
 
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: "anonymous-tls".into(),
-            num_partitions: 1,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let mut body = BytesMut::new();
-    req.encode(&mut body, 7).expect("encode CreateTopics");
+    let body = create_topics_body("anonymous-tls");
 
     // The broker answers, which is the whole claim: the session was built.
     // The refusal test above sends the same request over the same listener
@@ -359,4 +263,44 @@ fn mtls_fixture(
         },
     );
     (log_dir, pem_dir, cfg)
+}
+
+fn server_certificate() -> CertificateDer<'static> {
+    CertificateDer::pem_slice_iter(DEV_CERT.as_bytes())
+        .next()
+        .expect("dev server cert present")
+        .expect("dev server cert parses")
+        .clone()
+}
+
+fn create_topics_body(topic: &str) -> BytesMut {
+    let request = create_topic_request(creatable_topic(topic, 1, 1), 5_000);
+    let mut body = BytesMut::new();
+    request.encode(&mut body, 7).expect("encode CreateTopics");
+    body
+}
+
+async fn mtls_connect(
+    addr: std::net::SocketAddr,
+    connector: TlsConnector,
+    context: &str,
+) -> tokio_rustls::client::TlsStream<TcpStream> {
+    let tcp = TcpStream::connect(addr).await.expect("tcp connect");
+    let server_name = ServerName::try_from("krabka-dev").unwrap();
+    connector.connect(server_name, tcp).await.expect(context)
+}
+
+async fn mtls_super_user(
+    client_auth: ClientAuthMode,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    BrokerHandle,
+    std::net::SocketAddr,
+) {
+    let (log_dir, pem_dir, mut config) = mtls_fixture(client_auth);
+    config.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_string()};
+    let handle = Broker::start(config).await.expect("broker must start");
+    let addr = handle.listen_addr();
+    (log_dir, pem_dir, handle, addr)
 }

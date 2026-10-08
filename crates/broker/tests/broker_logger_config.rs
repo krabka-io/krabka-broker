@@ -8,27 +8,25 @@
 //! whole point of the feature is the events, not the config entry.
 
 use assert2::{assert, check};
+
+use crate::support::{
+    client::connect_owned,
+    configs::{describe_resource, incremental_config, incremental_request, incremental_resource},
+};
 mod support;
 
 use std::sync::{Arc, Mutex};
 
 use krabka_protocol::owned::{
-    describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+    describe_configs_request::DescribeConfigsRequest,
     describe_configs_response::DescribeConfigsResponse,
-    incremental_alter_configs_request::{
-        AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-    },
     incremental_alter_configs_response::IncrementalAlterConfigsResponse,
     list_config_resources_request::ListConfigResourcesRequest,
     list_config_resources_response::ListConfigResourcesResponse,
 };
 use krabka_telemetry::LogLevelController;
 use support::start_n_node_with;
-use tracing::{Event, Subscriber};
-use tracing_subscriber::{
-    Layer,
-    layer::{Context, SubscriberExt as _},
-};
+use tracing_subscriber::{Layer, layer::SubscriberExt as _};
 
 /// Kafka resource type id for `BROKER_LOGGER`.
 const RESOURCE_TYPE_BROKER_LOGGER: i8 = 8;
@@ -51,21 +49,8 @@ const CHILD_TARGET: &str = "krabka_broker::broker_logger_wire_test";
 /// not exist!` instead of passing against a fixture nobody ships.
 const STARTING_SPEC: &str = krabka_broker::config::DEFAULT_LOG_FILTER;
 
-/// Events a subscriber let through, as `target:LEVEL`.
-type Captured = Arc<Mutex<Vec<String>>>;
-
-/// A layer that records the events its filter admits.
-struct CaptureLayer(Captured);
-
-impl<S: Subscriber> Layer<S> for CaptureLayer {
-    fn on_event(&self, event: &Event<'_>, _cx: Context<'_, S>) {
-        let meta = event.metadata();
-        self.0
-            .lock()
-            .unwrap()
-            .push(format!("{}:{}", meta.target(), meta.level()));
-    }
-}
+// Record admitted events as target:LEVEL and panic on a poisoned capture lock.
+krabka_macros::capture_layer_fixture!(CaptureLayer, Captured, unwrap);
 
 /// Emit one `DEBUG` event on [`CHILD_TARGET`] through `dispatch` and report
 /// whether the broker's live filter let it through.
@@ -85,23 +70,22 @@ fn debug_event_is_emitted(dispatch: &tracing::Dispatch, captured: &Captured) -> 
 }
 
 async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
-    krabka_client_core::Client::builder()
-        .bootstrap(format!("127.0.0.1:{}", addr.port()))
-        .client_id("broker-logger-config-test")
-        .build()
-        .await
-        .expect("client build")
+    connect_owned(
+        format!("127.0.0.1:{}", addr.port()),
+        "broker-logger-config-test",
+        "client build",
+    )
+    .await
 }
 
 /// A `BROKER_LOGGER` describe for `resource_name`.
 fn describe_request(resource_name: &str) -> DescribeConfigsRequest {
     DescribeConfigsRequest {
-        resources: vec![DescribeConfigsResource {
-            resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-            resource_name: resource_name.to_owned(),
-            configuration_keys: None,
-            ..Default::default()
-        }],
+        resources: vec![describe_resource(
+            RESOURCE_TYPE_BROKER_LOGGER,
+            resource_name.to_owned(),
+            None,
+        )],
         include_synonyms: false,
         include_documentation: false,
         ..Default::default()
@@ -147,21 +131,18 @@ async fn broker_logger_alter_moves_the_live_filter_and_the_describe_agrees() {
 
     // ── Step 2: IncrementalAlterConfigs ──────────────────────────────────────
     let alter_resp: IncrementalAlterConfigsResponse = client
-        .send(IncrementalAlterConfigsRequest {
-            resources: vec![AlterConfigsResource {
-                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-                resource_name: node.clone(),
-                configs: vec![AlterableConfig {
-                    name: "krabka_broker".to_owned(),
-                    config_operation: CONFIG_OP_SET,
-                    value: Some("DEBUG".to_owned()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            validate_only: false,
-            ..Default::default()
-        })
+        .send(incremental_request(
+            vec![incremental_resource(
+                RESOURCE_TYPE_BROKER_LOGGER,
+                node.clone(),
+                vec![incremental_config(
+                    "krabka_broker".to_owned(),
+                    Some("DEBUG".to_owned()),
+                    CONFIG_OP_SET,
+                )],
+            )],
+            false,
+        ))
         .await
         .expect("IncrementalAlterConfigs");
 

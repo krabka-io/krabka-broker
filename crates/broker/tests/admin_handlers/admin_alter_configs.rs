@@ -7,20 +7,16 @@ use std::time::Duration;
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_protocol::{
-    owned::{
-        alter_configs_request::{AlterConfigsRequest, AlterConfigsResource, AlterableConfig},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
-    primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::{primitives::uuid::Uuid as WireUuid, records::RecordBatch};
 
 use crate::{
     RESOURCE_TYPE_TOPIC,
-    admin_harness::{build_client, create_topic_helper},
-    support::start_n_node,
+    admin_harness::create_topic_helper,
+    support::{
+        configs::{legacy_config, legacy_request, legacy_resource},
+        produce::single_partition_produce,
+        records::{batch_from_records, value_record},
+    },
 };
 
 /// `AlterConfigs` round-trip: a request that sets `retention.ms` on a known
@@ -28,26 +24,19 @@ use crate::{
 /// into the partition's log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_configs_round_trip() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (broker, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (cluster, client) = crate::support::start_n_node_client(1, "admin-handlers-test").await;
+    let broker = &cluster[0].0;
 
     create_topic_helper(&client, "t-alter", 1).await;
 
-    let req = AlterConfigsRequest {
-        resources: vec![AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_TOPIC,
-            resource_name: "t-alter".into(),
-            configs: vec![AlterableConfig {
-                name: "retention.ms".into(),
-                value: Some("60000".into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        validate_only: false,
-        ..Default::default()
-    };
+    let req = legacy_request(
+        vec![legacy_resource(
+            RESOURCE_TYPE_TOPIC,
+            "t-alter".into(),
+            vec![legacy_config("retention.ms".into(), Some("60000".into()))],
+        )],
+        false,
+    );
     let resp = client.send(req).await.expect("alter_configs");
     assert!(
         resp.responses[0].error_code == 0,
@@ -89,26 +78,21 @@ async fn alter_configs_round_trip() {
 /// and includes the offending key name in the error message.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_configs_rejects_unknown_key() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (_, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (_cluster, client) = crate::support::start_n_node_client(1, "admin-handlers-test").await;
 
     create_topic_helper(&client, "t-bad-cfg", 1).await;
 
-    let req = AlterConfigsRequest {
-        resources: vec![AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_TOPIC,
-            resource_name: "t-bad-cfg".into(),
-            configs: vec![AlterableConfig {
-                name: "not.a.topic.config".into(),
-                value: Some("1000".into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        validate_only: false,
-        ..Default::default()
-    };
+    let req = legacy_request(
+        vec![legacy_resource(
+            RESOURCE_TYPE_TOPIC,
+            "t-bad-cfg".into(),
+            vec![legacy_config(
+                "not.a.topic.config".into(),
+                Some("1000".into()),
+            )],
+        )],
+        false,
+    );
     let resp = client.send(req).await.expect("alter_configs");
     // 40 = INVALID_CONFIG
     assert!(
@@ -135,9 +119,8 @@ async fn alter_configs_rejects_unknown_key() {
 /// covered by `leadership.rs`'s table test.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (broker, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (cluster, client) = crate::support::start_n_node_client(1, "admin-handlers-test").await;
+    let broker = &cluster[0].0;
 
     create_topic_helper(&client, "t-min-isr", 1).await;
 
@@ -148,13 +131,7 @@ async fn min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {
     // Produce v13+ drops `name` from the wire and demands `topic_id`.
     // Fetch it via Metadata so the produce calls below resolve.
     let md = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some("t-min-isr".into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(crate::support::discovery::named_topic_metadata("t-min-isr"))
         .await
         .expect("Metadata for topic_id");
     let topic_id: WireUuid = md
@@ -166,20 +143,17 @@ async fn min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {
 
     // Set min.insync.replicas=2 on the topic. The topic has one replica, so
     // the effective threshold is min(2, 1) = 1.
-    let alter = AlterConfigsRequest {
-        resources: vec![AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_TOPIC,
-            resource_name: "t-min-isr".into(),
-            configs: vec![AlterableConfig {
-                name: "min.insync.replicas".into(),
-                value: Some("2".into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        validate_only: false,
-        ..Default::default()
-    };
+    let alter = legacy_request(
+        vec![legacy_resource(
+            RESOURCE_TYPE_TOPIC,
+            "t-min-isr".into(),
+            vec![legacy_config(
+                "min.insync.replicas".into(),
+                Some("2".into()),
+            )],
+        )],
+        false,
+    );
     let alter_resp = client.send(alter).await.expect("alter_configs");
     assert!(
         alter_resp.responses[0].error_code == 0,
@@ -191,31 +165,18 @@ async fn min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {
     let batch = RecordBatch {
         last_offset_delta: 0,
         max_timestamp: 0,
-        records: vec![Record {
-            offset_delta: 0,
-            value: Some(Bytes::from_static(b"x")),
-            ..Default::default()
-        }],
-        ..RecordBatch::default()
+        ..batch_from_records(vec![value_record(0, Some(Bytes::from_static(b"x")))])
     };
 
     // acks=-1 ("all"): ISR={1} meets the clamped threshold of 1.
     let all = client
-        .send(ProduceRequest {
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "t-min-isr".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.clone().into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "t-min-isr",
+            topic_id,
+            0,
+            Some(batch.clone().into()),
+            (-1, 5_000),
+        ))
         .await
         .expect("Produce (acks=-1)");
     assert!(
@@ -227,21 +188,13 @@ async fn min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {
 
     // acks=1: leader-only; min.insync.replicas never gates it.
     let ok = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "t-min-isr".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "t-min-isr",
+            topic_id,
+            0,
+            Some(batch.into()),
+            (1, 5_000),
+        ))
         .await
         .expect("Produce (acks=1)");
     assert!(

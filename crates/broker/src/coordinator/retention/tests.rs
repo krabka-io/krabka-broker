@@ -5,7 +5,7 @@
 //! real `OffsetFetch` handler. The sweep's clock is a parameter, so a test
 //! moves time forward by passing a later `now_ms` rather than sleeping.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
@@ -28,7 +28,7 @@ use crate::{
         unified::{
             GroupType,
             actor::{GroupActorMessage, GroupKindTag},
-            classic_state::{ClassicGroup, GroupState, Member, OffsetEntry},
+            classic_state::{ClassicGroup, GroupState, OffsetEntry},
             group::{CoordinatorGroup, GroupKind},
         },
     },
@@ -52,6 +52,29 @@ const RETENTION_MS: i64 = 60_000;
 /// The sweep interval a test runs with, and so the grace a memberless group
 /// gets before the pass may delete it for holding no offsets.
 const CHECK_INTERVAL_MS: i64 = 600_000;
+
+/// Sweep locally owned groups with the retention settings shared by these cases.
+async fn sweep_at(broker: &Broker, now_ms: i64) -> Vec<(String, super::ReapOutcome)> {
+    sweep(
+        &broker.group_coordinator,
+        |_| true,
+        now_ms,
+        RETENTION_MS,
+        CHECK_INTERVAL_MS,
+    )
+    .await
+}
+
+/// Independent expected result for a pass that deletes the group.
+fn deleted_group(reaped: Vec<(String, i32)>) -> Vec<(String, super::ReapOutcome)> {
+    vec![(
+        GROUP.to_string(),
+        super::ReapOutcome {
+            reaped,
+            group_deleted: true,
+        },
+    )]
+}
 
 /// Start a broker that holds `TOPIC`, since `OffsetCommit` answers
 /// `UNKNOWN_TOPIC_OR_PARTITION` for a topic the image does not hold.
@@ -90,14 +113,7 @@ async fn start() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
 fn seed_group_with_member(broker: &Broker) {
     let mut state = ClassicGroup::new(GROUP);
     state.protocol_type = Some("consumer".into());
-    state.add_member(Member::new(
-        MEMBER,
-        "client",
-        "127.0.0.1",
-        Duration::from_secs(30),
-        Duration::from_mins(1),
-        vec![("range".into(), bytes::Bytes::new())],
-    ));
+    state.add_member(crate::coordinator::unified::actor::test_support::classic_member(MEMBER));
     state.state = GroupState::Stable;
     state.generation_id = GENERATION;
     let group = CoordinatorGroup::seeded(
@@ -267,25 +283,9 @@ async fn empty_group_loses_its_offsets_after_the_retention() {
     remove_last_member(&broker).await;
 
     let now_ms = empty_since_ms(&broker).await + RETENTION_MS + 1;
-    let swept = sweep(
-        &broker.group_coordinator,
-        |_| true,
-        now_ms,
-        RETENTION_MS,
-        CHECK_INTERVAL_MS,
-    )
-    .await;
+    let swept = sweep_at(&broker, now_ms).await;
 
-    assert!(
-        swept
-            == vec![(
-                GROUP.to_string(),
-                super::ReapOutcome {
-                    reaped: vec![(TOPIC.to_string(), 0)],
-                    group_deleted: true,
-                },
-            )]
-    );
+    assert!(swept == deleted_group(vec![(TOPIC.to_string(), 0)]));
     // The group left the directory, rather than merely being emptied. Check it
     // before the fetch, which re-creates an actor for an unknown id.
     check!(broker.group_coordinator.find(GROUP).is_none());
@@ -310,14 +310,7 @@ async fn live_group_keeps_its_offsets_across_the_same_interval() {
 
     // The same clock reading that reaped the empty group above, and then some.
     let now_ms = crate::time_util::now_ms() + RETENTION_MS * 10;
-    let swept = sweep(
-        &broker.group_coordinator,
-        |_| true,
-        now_ms,
-        RETENTION_MS,
-        CHECK_INTERVAL_MS,
-    )
-    .await;
+    let swept = sweep_at(&broker, now_ms).await;
 
     assert!(swept.is_empty());
     check!(fetched_offset(&broker).await == 42);
@@ -418,14 +411,7 @@ async fn a_streams_group_offset_home_is_not_swept() {
     let _ = broker.group_coordinator.get_or_create_streams(GROUP);
 
     let now_ms = crate::time_util::now_ms() + RETENTION_MS + 1;
-    let swept = sweep(
-        &broker.group_coordinator,
-        |_| true,
-        now_ms,
-        RETENTION_MS,
-        CHECK_INTERVAL_MS,
-    )
-    .await;
+    let swept = sweep_at(&broker, now_ms).await;
 
     assert!(swept.is_empty());
     check!(fetched_offset(&broker).await == 42);
@@ -439,14 +425,7 @@ async fn a_broker_with_no_groups_sweeps_nothing() {
     let broker = broker_handle.broker_arc_for_test();
 
     let now_ms = crate::time_util::now_ms() + RETENTION_MS + 1;
-    let swept = sweep(
-        &broker.group_coordinator,
-        |_| true,
-        now_ms,
-        RETENTION_MS,
-        CHECK_INTERVAL_MS,
-    )
-    .await;
+    let swept = sweep_at(&broker, now_ms).await;
 
     assert!(swept.is_empty());
 }
@@ -474,15 +453,7 @@ async fn an_empty_group_that_holds_no_offsets_is_reaped() {
     // its first message lands.
     let now_ms = crate::time_util::now_ms();
     check!(
-        sweep(
-            &broker.group_coordinator,
-            |_| true,
-            now_ms,
-            RETENTION_MS,
-            CHECK_INTERVAL_MS,
-        )
-        .await
-        .is_empty(),
+        sweep_at(&broker, now_ms).await.is_empty(),
         "a group that has only just been created is left alone"
     );
 
@@ -490,25 +461,9 @@ async fn an_empty_group_that_holds_no_offsets_is_reaped() {
     // this test reads. The stamp lands on the actor's turn, which a loaded
     // machine can schedule after any instant read here; measuring from the
     // stamp is what makes the grace exactly one interval either way.
-    let swept = sweep(
-        &broker.group_coordinator,
-        |_| true,
-        empty_since_ms(&broker).await + CHECK_INTERVAL_MS,
-        RETENTION_MS,
-        CHECK_INTERVAL_MS,
-    )
-    .await;
+    let swept = sweep_at(&broker, empty_since_ms(&broker).await + CHECK_INTERVAL_MS).await;
 
-    assert!(
-        swept
-            == vec![(
-                GROUP.to_string(),
-                super::ReapOutcome {
-                    reaped: Vec::new(),
-                    group_deleted: true,
-                },
-            )]
-    );
+    assert!(swept == deleted_group(Vec::new()));
     check!(broker.group_coordinator.find(GROUP).is_none());
     check!(has_tombstone(
         &offsets_log_records(&broker),
@@ -542,25 +497,9 @@ async fn a_group_whose_last_offset_was_deleted_is_reaped_next_pass() {
         .expect("send RemoveCommitted");
     done.await.expect("RemoveCommitted reply");
 
-    let swept = sweep(
-        &broker.group_coordinator,
-        |_| true,
-        crate::time_util::now_ms() + CHECK_INTERVAL_MS,
-        RETENTION_MS,
-        CHECK_INTERVAL_MS,
-    )
-    .await;
+    let swept = sweep_at(&broker, crate::time_util::now_ms() + CHECK_INTERVAL_MS).await;
 
-    assert!(
-        swept
-            == vec![(
-                GROUP.to_string(),
-                super::ReapOutcome {
-                    reaped: Vec::new(),
-                    group_deleted: true,
-                },
-            )]
-    );
+    assert!(swept == deleted_group(Vec::new()));
     check!(broker.group_coordinator.find(GROUP).is_none());
 }
 
@@ -614,25 +553,9 @@ async fn a_simple_group_expires_from_its_commit_not_from_the_restart() {
     let restarted_at = crate::time_util::now_ms();
     seed_replayed_group(&broker, None, None, restarted_at - RETENTION_MS * 10);
 
-    let swept = sweep(
-        &broker.group_coordinator,
-        |_| true,
-        restarted_at,
-        RETENTION_MS,
-        CHECK_INTERVAL_MS,
-    )
-    .await;
+    let swept = sweep_at(&broker, restarted_at).await;
 
-    assert!(
-        swept
-            == vec![(
-                GROUP.to_string(),
-                super::ReapOutcome {
-                    reaped: vec![(TOPIC.to_string(), 0)],
-                    group_deleted: true,
-                },
-            )]
-    );
+    assert!(swept == deleted_group(vec![(TOPIC.to_string(), 0)]));
     check!(broker.group_coordinator.find(GROUP).is_none());
     check!(fetched_offset(&broker).await == -1);
 }
@@ -654,34 +577,12 @@ async fn a_joined_group_expires_from_the_moment_it_emptied() {
         emptied_at - RETENTION_MS * 10,
     );
 
-    let early = sweep(
-        &broker.group_coordinator,
-        |_| true,
-        emptied_at + RETENTION_MS - 1,
-        RETENTION_MS,
-        CHECK_INTERVAL_MS,
-    )
-    .await;
+    let early = sweep_at(&broker, emptied_at + RETENTION_MS - 1).await;
     assert!(early.is_empty());
     check!(fetched_offset(&broker).await == 42);
 
-    let late = sweep(
-        &broker.group_coordinator,
-        |_| true,
-        emptied_at + RETENTION_MS,
-        RETENTION_MS,
-        CHECK_INTERVAL_MS,
-    )
-    .await;
-    assert!(
-        late == vec![(
-            GROUP.to_string(),
-            super::ReapOutcome {
-                reaped: vec![(TOPIC.to_string(), 0)],
-                group_deleted: true,
-            },
-        )]
-    );
+    let late = sweep_at(&broker, emptied_at + RETENTION_MS).await;
+    assert!(late == deleted_group(vec![(TOPIC.to_string(), 0)]));
     check!(fetched_offset(&broker).await == -1);
 }
 

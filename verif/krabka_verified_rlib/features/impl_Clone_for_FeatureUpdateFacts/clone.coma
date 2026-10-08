@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/features.rs" 54 27 54 32 *)
+(* #"/workspace/crates/verified/src/features.rs" 15 19 15 36 *)
 
 (* <features::FeatureUpdateFacts as std::clone::Clone> *)
 
@@ -23,8 +23,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FeatureUpdateFacts [#"/workspace/crates/verified/src/features.rs" 54 27 54 32]
-  (self: t_FeatureUpdateFacts) (return (x: t_FeatureUpdateFacts)) = (! bb0
+let clone_FeatureUpdateFacts [#"/workspace/crates/verified/src/features.rs" 15 19 15 36] (self: t_FeatureUpdateFacts)
+  (return (x: t_FeatureUpdateFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FeatureUpdateFacts = Any.any_l () | & self: t_FeatureUpdateFacts = self ])
   [ return (result: t_FeatureUpdateFacts) -> (! return {result}) ]

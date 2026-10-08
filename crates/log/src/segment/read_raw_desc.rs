@@ -50,12 +50,11 @@ impl Segment {
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawSegmentDesc, LogError> {
-        if fetch_offset > self.last_offset || fetch_offset >= limit_offset {
+        let Some(start_pos) =
+            self.raw_start_position(fetch_offset, limit_offset, "read_raw_desc")?
+        else {
             return Ok(RawSegmentDesc::empty());
-        }
-        let target_rel = u32::try_from((fetch_offset.0 - self.base_offset.0).max(0))
-            .map_err(|_| LogError::Corrupt("read_raw_desc target offset out of range".into()))?;
-        let start_pos = self.read_start_position(target_rel)?;
+        };
 
         // Use the buffered reader's initial window, without reading payloads.
         let max_bytes = max_size.bytes_usize();
@@ -90,28 +89,15 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::FileExt;
-
     use krabka_units::prelude::{bytes, mebibytes};
 
     use super::*;
     use crate::segment::test_support::{DENSE_INDEX, test_batch_at, test_segment};
 
-    /// `pread` a `FileRegion` into a fresh `Vec`. These are the bytes that the
-    /// broker's sendfile would transmit, and that its TLS pread-fallback would
-    /// copy.
-    fn region_bytes(region: &krabka_protocol::records::FileRegion) -> Vec<u8> {
-        let mut buf = vec![0u8; region.len];
-        let mut filled = 0;
-        let mut off = region.offset;
-        while filled < buf.len() {
-            let n = region.file.read_at(&mut buf[filled..], off).unwrap();
-            assert2::assert!(n > 0);
-            filled += n;
-            off += n as u64;
-        }
-        buf
-    }
+    // `pread` a `FileRegion` into a fresh `Vec`. These are the bytes that the
+    // broker's sendfile would transmit, and that its TLS pread-fallback would
+    // copy.
+    krabka_macros::file_region_fixture!(region_bytes);
 
     /// The load-bearing Increment-D/E invariant: the `read_raw_desc` region
     /// maps to exactly the bytes that `read_raw` would have returned, for the

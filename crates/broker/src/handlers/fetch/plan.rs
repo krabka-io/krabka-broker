@@ -922,6 +922,23 @@ mod tests {
     /// The witness gate refuses a client fetch with the witness row. It lets a
     /// follower fetch through, and the leader check then refuses it with the
     /// read row, because a witness never leads the partition.
+    macro_rules! rack_aware_fixture {
+        (($handle:ident, $directory:ident, $broker:ident, $partition:ident)) => {
+            broker_fixture!(
+                ($handle, $directory, $broker),
+                crate::handlers::test_support::start_broker_with(|config| {
+                    config.replica_selector =
+                        crate::replica_selector::ReplicaSelectorKind::RackAware;
+                })
+            );
+            let $partition = crate::handlers::test_support::local_partition(
+                &$broker,
+                $directory.path(),
+                "orders",
+            );
+        };
+    }
+
     #[tokio::test]
     async fn witness_refuses_a_client_fetch_and_passes_a_follower_fetch_on() {
         const TOPIC: &str = "witness-fetch";
@@ -1000,13 +1017,7 @@ mod tests {
         // The consumer sits in `dc-b`, the witness site. Node 2 is the only
         // same-rack in-ISR replica, so it is exactly the redirect a rack-aware
         // selector wants to make.
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
-            config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let partition =
-            crate::handlers::test_support::local_partition(&broker, dir.path(), "orders");
+        rack_aware_fixture!((broker_handle, dir, broker, partition));
 
         for (name, witness_ids, want) in [
             ("node 2 is a plain broker in dc-b", &[][..], 2),
@@ -1035,13 +1046,7 @@ mod tests {
     /// trimmed the offset away, must never be offered.
     #[tokio::test]
     async fn preferred_read_replica_excludes_a_follower_outside_its_reported_range() {
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
-            config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let partition =
-            crate::handlers::test_support::local_partition(&broker, dir.path(), "orders");
+        rack_aware_fixture!((broker_handle, dir, broker, partition));
         let image = stretch_image(&[]);
 
         for (name, follower_leo, follower_log_start, fetch_offset, want) in [
@@ -1090,13 +1095,7 @@ mod tests {
     /// this partition (#873).
     #[tokio::test]
     async fn a_named_preferred_read_replica_skips_the_read() {
-        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
-            config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let partition =
-            crate::handlers::test_support::local_partition(&broker, dir.path(), "orders");
+        rack_aware_fixture!((broker_handle, dir, broker, partition));
         broker.partitions.insert(
             "orders".into(),
             PartitionIndex(0),
@@ -1201,13 +1200,11 @@ mod tests {
     }
 
     fn epoch_checks_partition(dir: &std::path::Path) -> Arc<crate::partition::Partition> {
-        crate::broker::spawn_partition(
-            "diverge".to_string(),
-            PartitionIndex(0),
-            dir.to_path_buf(),
+        crate::test_support::spawn_standalone_partition(
+            dir,
+            "diverge",
+            0,
             Log::open(dir, LogConfig::default()).expect("open partition log"),
-            crate::log_dir_status::LogDirRegistry::default(),
-            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
             false,
         )
     }
@@ -1300,6 +1297,21 @@ mod tests {
                 .expect("move log start");
         }
 
+        // Both histories have HW/LSO 4 and start 0; epoch 0 ends at offset 2.
+        let expected_history_divergence = || super::PartitionData {
+            partition_index: 0,
+            error_code: crate::codes::NONE,
+            high_watermark: 4,
+            last_stable_offset: 4,
+            log_start_offset: 0,
+            diverging_epoch: super::EpochEndOffset {
+                epoch: 0,
+                end_offset: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
         for (name, partition, last_fetched_epoch, fetch_offset, want_final, want_out) in [
             (
                 "empty epoch history: Kafka cannot place the epoch",
@@ -1324,22 +1336,7 @@ mod tests {
                 2,
                 4,
                 true,
-                super::PartitionData {
-                    partition_index: 0,
-                    error_code: crate::codes::NONE,
-                    high_watermark: 4,
-                    last_stable_offset: 4,
-                    // `with_history` is never trimmed, so its live log start
-                    // is still 0, not the wire default (-1) that
-                    // `apply_epoch_checks` now fills over on this row.
-                    log_start_offset: 0,
-                    diverging_epoch: super::EpochEndOffset {
-                        epoch: 0,
-                        end_offset: 2,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+                expected_history_divergence(),
             ),
             (
                 "last_fetched_epoch is the latest and the fetch offset is \
@@ -1368,22 +1365,7 @@ mod tests {
                 0,
                 4,
                 true,
-                super::PartitionData {
-                    partition_index: 0,
-                    error_code: crate::codes::NONE,
-                    high_watermark: 4,
-                    last_stable_offset: 4,
-                    // `with_history` is never trimmed, so its live log start
-                    // is still 0, not the wire default (-1) that
-                    // `apply_epoch_checks` now fills over on this row.
-                    log_start_offset: 0,
-                    diverging_epoch: super::EpochEndOffset {
-                        epoch: 0,
-                        end_offset: 2,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+                expected_history_divergence(),
             ),
         ] {
             check_epoch_placement(
@@ -1519,26 +1501,7 @@ mod tests {
                 .expect("move log start");
         }
 
-        let request = effective_partition(0, 0);
-        let mut output = super::PartitionData {
-            partition_index: 0,
-            ..Default::default()
-        };
-        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let final_ = super::apply_epoch_checks(
-            &image,
-            "diverge",
-            0,
-            &request,
-            super::ReadRole {
-                partition: &partition,
-                required_leader: None,
-                assigned_follower: true,
-                log_dir_offline: true,
-            },
-            &mut output,
-        )
-        .await;
+        let (final_, _) = epoch_check(&partition, 0, 0, true).await;
         assert!(!final_, "defers to the caller's own offline check");
     }
 
@@ -1618,14 +1581,13 @@ mod tests {
             assert!(recorded == want, "{name}");
         }
     }
-    async fn check_epoch_placement(
-        name: &str,
+    /// Exercise the epoch gate with the same wire row and caller-selected offline status.
+    async fn epoch_check(
         partition: &crate::partition::Partition,
         last_fetched_epoch: i32,
         fetch_offset: i64,
-        want_final: bool,
-        want_out: super::PartitionData,
-    ) {
+        log_dir_offline: bool,
+    ) -> (bool, super::PartitionData) {
         let request = effective_partition(last_fetched_epoch, fetch_offset);
         let mut output = super::PartitionData {
             partition_index: 0,
@@ -1637,10 +1599,26 @@ mod tests {
             "diverge",
             0,
             &request,
-            read_role(partition),
+            super::ReadRole {
+                log_dir_offline,
+                ..read_role(partition)
+            },
             &mut output,
         )
         .await;
+        (final_, output)
+    }
+
+    async fn check_epoch_placement(
+        name: &str,
+        partition: &crate::partition::Partition,
+        last_fetched_epoch: i32,
+        fetch_offset: i64,
+        want_final: bool,
+        want_out: super::PartitionData,
+    ) {
+        let (final_, output) =
+            epoch_check(partition, last_fetched_epoch, fetch_offset, false).await;
         assert!(final_ == want_final, "{name}: final");
         assert!(output == want_out, "{name}: got {output:?}");
     }

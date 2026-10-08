@@ -1,21 +1,19 @@
 //! Storage-transition admission decisions.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// Segment-prefix and active-segment selection for a tail truncation.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct LocalTruncationPlan {
-    pub retained_sealed: usize,
-    pub keep_active: bool,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Segment-prefix and active-segment selection for a tail truncation.
+    pub struct LocalTruncationPlan {
+        pub retained_sealed: usize,
+        pub keep_active: bool,
+    }
 }
 
 /// KIP-405 `RemoteLogSegmentState`, shared by every remote-segment kernel so
 /// the host maps its state onto one type.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(creusot, derive(std::clone::Clone, Copy, DeepModel))]
 #[cfg_attr(
     not(creusot),
     derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)
@@ -27,29 +25,28 @@ pub enum RemoteSegmentLifecycle {
     DeleteFinished,
 }
 
-/// KIP-405 `RemotePartitionDeleteState`.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum RemotePartitionDeleteLifecycle {
-    Marked,
-    Started,
-    Finished,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// KIP-405 `RemotePartitionDeleteState`.
+    pub enum RemotePartitionDeleteLifecycle {
+        Marked,
+        Started,
+        Finished,
+    }
 
-/// Mutation of the primary remote-metadata cache and its derived epoch index.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum RemoteCacheAction {
-    /// Reject a stale, conflicting, or resurrection attempt.
-    Reject,
-    /// Preserve state for an exact retry or an already-absent tombstone.
-    Noop,
-    /// Store the new readable state and rebuild the derived epoch index.
-    StoreFinished,
-    /// Store a non-readable state and rebuild the index without it.
-    StoreHidden,
-    /// Remove primary state and rebuild the index without it.
-    Remove,
+    /// Mutation of the primary remote-metadata cache and its derived epoch index.
+    pub enum RemoteCacheAction {
+        /// Reject a stale, conflicting, or resurrection attempt.
+        Reject,
+        /// Preserve state for an exact retry or an already-absent tombstone.
+        Noop,
+        /// Store the new readable state and rebuild the derived epoch index.
+        StoreFinished,
+        /// Store a non-readable state and rebuild the index without it.
+        StoreHidden,
+        /// Remove primary state and rebuild the index without it.
+        Remove,
+    }
 }
 
 mod future_log_swap_admission;

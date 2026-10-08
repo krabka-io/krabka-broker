@@ -65,37 +65,7 @@ fn wait_for_group_stable(group: &str, consumer_groups_tool: &str) {
 }
 
 pub(crate) fn prepare_classic_groups() {
-    let created = exec(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--bootstrap-server",
-        "localhost:9092",
-        "--topic",
-        TOPIC,
-        "--partitions",
-        "2",
-        "--replication-factor",
-        "1",
-    ]);
-    assert!(
-        created.status.success(),
-        "create topic failed: {}",
-        String::from_utf8_lossy(&created.stderr)
-    );
-
-    let produced = exec(&[
-        "bash",
-        "-c",
-        &format!(
-            "printf 'r1\\nr2\\nr3\\nr4\\n' | kafka-console-producer --bootstrap-server localhost:9092 --topic {TOPIC}"
-        ),
-    ]);
-    assert!(
-        produced.status.success(),
-        "produce failed: {}",
-        String::from_utf8_lossy(&produced.stderr)
-    );
+    prepare_topic("kafka-topics", "kafka-console-producer");
     exec_detached(&format!(
         "kafka-console-consumer --bootstrap-server localhost:9092 --topic {TOPIC} --group {GROUP} \
          --consumer-property partition.assignment.strategy=org.apache.kafka.clients.consumer.RangeAssignor \
@@ -123,8 +93,22 @@ pub(crate) fn prepare_classic_groups() {
 }
 
 pub(crate) fn prepare_next_gen_group() {
-    let created = exec(&[
+    prepare_topic(
         "/opt/kafka/bin/kafka-topics.sh",
+        "/opt/kafka/bin/kafka-console-producer.sh",
+    );
+    exec_detached(&format!(
+        "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic {TOPIC} \
+         --group {NEXT_GEN_GROUP} --consumer-property group.protocol=consumer \
+         --from-beginning --timeout-ms 180000 > /tmp/consumer.out 2>&1"
+    ));
+    wait_for_group_stable(NEXT_GEN_GROUP, "/opt/kafka/bin/kafka-consumer-groups.sh");
+}
+
+/// Seed the same two-partition workload with each image's original tool paths.
+fn prepare_topic(topics_tool: &str, producer_tool: &str) {
+    let created = exec(&[
+        topics_tool,
         "--create",
         "--if-not-exists",
         "--bootstrap-server",
@@ -146,7 +130,7 @@ pub(crate) fn prepare_next_gen_group() {
         "bash",
         "-c",
         &format!(
-            "printf 'r1\\nr2\\nr3\\nr4\\n' | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic {TOPIC}"
+            "printf 'r1\\nr2\\nr3\\nr4\\n' | {producer_tool} --bootstrap-server localhost:9092 --topic {TOPIC}"
         ),
     ]);
     assert!(
@@ -154,10 +138,4 @@ pub(crate) fn prepare_next_gen_group() {
         "produce failed: {}",
         String::from_utf8_lossy(&produced.stderr)
     );
-    exec_detached(&format!(
-        "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic {TOPIC} \
-         --group {NEXT_GEN_GROUP} --consumer-property group.protocol=consumer \
-         --from-beginning --timeout-ms 180000 > /tmp/consumer.out 2>&1"
-    ));
-    wait_for_group_stable(NEXT_GEN_GROUP, "/opt/kafka/bin/kafka-consumer-groups.sh");
 }

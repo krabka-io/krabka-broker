@@ -6,16 +6,13 @@ use std::collections::{HashMap, HashSet};
 
 use krabka_protocol::primitives::uuid::Uuid;
 
-use super::records::state_partition_metadata_from;
+use super::records::{
+    current_assignment_value, member_metadata_value, state_partition_metadata_from,
+    target_assignment_value,
+};
 use crate::coordinator::unified::{
     ShareGroupSeed,
-    share::{
-        persistence::{
-            ShareGroupCurrentMemberAssignmentValue, ShareGroupMemberMetadataValue,
-            ShareGroupTargetAssignmentMemberValue,
-        },
-        state::{ShareGroupState, ShareMemberState},
-    },
+    share::state::{ShareGroupState, ShareMemberState},
 };
 
 pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
@@ -27,15 +24,11 @@ pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
         m.rack_id = meta.rack_id;
         state.members.insert(mid, m);
     }
-    for (mid, cur) in seed.current_per_member {
-        if let Some(m) = state.members.get_mut(&mid) {
-            m.member_epoch = cur.member_epoch;
-            m.previous_member_epoch = cur.previous_member_epoch;
+    crate::coordinator::unified::seeds::hydrate_member_epochs!(state, seed; m, cur {
             for (tid, parts) in cur.assigned_partitions {
                 m.assigned_partitions.insert(tid, parts);
             }
-        }
-    }
+    });
     for (mid, tv) in seed.target_per_member {
         let entry: HashMap<Uuid, Vec<i32>> = tv.topic_partitions.into_iter().collect();
         state.target.per_member.insert(mid, entry);
@@ -53,62 +46,46 @@ pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
     state.initializing.clear();
     state.topic_names.clear();
     let replayed_at = super::records::chrono_now_ms();
-    for topic in &seed.state_partition_metadata.initializing {
-        let tid = Uuid(*topic.topic_id.as_bytes());
-        state.topic_names.insert(tid, topic.topic_name.clone());
-        for p in &topic.partitions {
-            state.initializing.insert((tid, *p), replayed_at);
-        }
-    }
-    for topic in &seed.state_partition_metadata.initialized {
-        let tid = Uuid(*topic.topic_id.as_bytes());
-        state.topic_names.insert(tid, topic.topic_name.clone());
-        for p in &topic.partitions {
-            state.mark_initialized((tid, *p));
-        }
-    }
+    restore_named_partitions(
+        state,
+        &seed.state_partition_metadata.initializing,
+        |state, partition| {
+            state.initializing.insert(partition, replayed_at);
+        },
+    );
+    restore_named_partitions(
+        state,
+        &seed.state_partition_metadata.initialized,
+        ShareGroupState::mark_initialized,
+    );
     state.forget_unused_topic_names();
     state.dirty = false;
+}
+
+/// Restore every topic name before applying its partition lifecycle action.
+fn restore_named_partitions(
+    state: &mut ShareGroupState,
+    topics: &[crate::coordinator::unified::share::persistence::TopicPartitionsInfo],
+    mut restore: impl FnMut(&mut ShareGroupState, (Uuid, i32)),
+) {
+    for topic in topics {
+        let tid = Uuid(*topic.topic_id.as_bytes());
+        state.topic_names.insert(tid, topic.topic_name.clone());
+        for p in &topic.partitions {
+            restore(state, (tid, *p));
+        }
+    }
 }
 
 /// Snapshot a `ShareGroupState` into a `ShareGroupSeed` that can restore
 /// a freshly-respawned actor. It mirrors what bootstrap replay produces.
 pub(super) fn snapshot_seed(state: &ShareGroupState) -> ShareGroupSeed {
-    let mut members = HashMap::new();
-    let mut target_per_member = HashMap::new();
-    let mut current_per_member = HashMap::new();
-    for (mid, m) in &state.members {
-        members.insert(
-            mid.clone(),
-            ShareGroupMemberMetadataValue {
-                rack_id: m.rack_id.clone(),
-                client_id: m.client_id.clone(),
-                client_host: m.client_host.clone(),
-                subscribed_topic_names: m.subscribed_topic_names.iter().cloned().collect(),
-            },
-        );
-        current_per_member.insert(
-            mid.clone(),
-            ShareGroupCurrentMemberAssignmentValue {
-                member_epoch: m.member_epoch,
-                previous_member_epoch: m.previous_member_epoch,
-                assigned_partitions: m
-                    .assigned_partitions
-                    .iter()
-                    .map(|(tid, parts)| (*tid, parts.clone()))
-                    .collect(),
-            },
-        );
-        if let Some(target) = state.target.per_member.get(mid) {
-            target_per_member.insert(
-                mid.clone(),
-                ShareGroupTargetAssignmentMemberValue {
-                    topic_partitions: target
-                        .iter()
-                        .map(|(tid, parts)| (*tid, parts.clone()))
-                        .collect(),
-                },
-            );
+    crate::coordinator::unified::seeds::snapshot_member_maps! { state;
+        members, current_per_member, target_per_member;
+        member_metadata_value, current_assignment_value; |mid, m| {
+            if let Some(target) = state.target.per_member.get(mid) {
+                target_per_member.insert(mid.clone(), target_assignment_value(target));
+            }
         }
     }
     ShareGroupSeed {

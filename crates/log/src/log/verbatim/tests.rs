@@ -12,8 +12,44 @@ use crate::{
     log::test_support::{
         log_append_time_log, sample_batch, test_batch_at, test_log, verbatim_from,
     },
-    stamp_index::{StampEntry, StampIndex},
 };
+
+fn check_transaction_offsets(log: &Log, stable: Offset) {
+    assert2::assert!(log.log_end_offset() == Offset(2));
+    assert2::assert!(log.lso() == stable);
+}
+
+fn producer_with_timestamp(timestamp: i64) -> RecordBatch {
+    let mut producer = test_batch_at(0);
+    producer.base_timestamp = timestamp;
+    producer.max_timestamp = timestamp;
+    producer
+}
+
+fn two_record_producer(producer_id: i64, transactional: bool) -> RecordBatch {
+    let mut producer = test_batch_at(0);
+    producer.last_offset_delta = 1; // spans offsets 0..=1
+    producer.producer_id = producer_id;
+    producer.producer_epoch = 0;
+    if transactional {
+        producer.attributes = producer.attributes.with_transactional(true);
+    }
+    producer
+}
+
+fn stored_bytes(log: &Log) -> bytes::Bytes {
+    log.read_raw(Offset(0), log.log_end_offset(), mebibytes(10))
+        .unwrap()
+        .bytes
+}
+
+/// The two fields outside the CRC are always assigned by the replication append.
+fn assigned_header(wire: &[u8], epoch: i32) -> Vec<u8> {
+    let mut expected = wire.to_vec();
+    expected[0..8].copy_from_slice(&0i64.to_be_bytes());
+    expected[12..16].copy_from_slice(&epoch.to_be_bytes());
+    expected
+}
 
 #[test]
 fn append_verbatim_assigns_offsets_and_is_byte_exact() {
@@ -188,16 +224,11 @@ fn append_verbatim_transactional_holds_lso() {
     let (dir, mut log) = test_log();
     // A transactional batch must hold the LSO at the batch's base offset
     // (it isn't stable until a commit/abort marker arrives).
-    let mut producer = test_batch_at(0);
-    producer.last_offset_delta = 1; // spans offsets 0..=1
-    producer.producer_id = 77;
-    producer.producer_epoch = 0;
-    producer.attributes = producer.attributes.with_transactional(true);
+    let producer = two_record_producer(77, true);
     let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(0));
     log.append_verbatim(&vb).unwrap();
     // LSO stays at 0 (the open txn's first offset), not log_end (2).
-    assert2::assert!(log.log_end_offset() == Offset(2));
-    assert2::assert!(log.lso() == Offset(0));
+    check_transaction_offsets(&log, Offset(0));
     drop(dir);
 }
 
@@ -209,11 +240,7 @@ fn append_verbatim_transactional_holds_lso() {
 /// on that path, which the owned-append tests above do not exercise.
 #[test]
 fn append_verbatim_stamps_full_offset_range() {
-    let (dir, mut log) = test_log();
-    log.set_stamp_source(std::sync::Arc::new(
-        crate::stamp_source::MonotonicStampSource::new(500, 1),
-    ))
-    .unwrap();
+    let (dir, mut log) = crate::log::test_support::stamped_test_log(500, 1);
 
     // A four-record producer batch, appended verbatim, spans offsets 0..=3.
     let mut producer = sample_batch(4);
@@ -227,14 +254,9 @@ fn append_verbatim_stamps_full_offset_range() {
     check!(log.stamp_for_offset(Offset(3)) == Some(500));
     check!(log.stamp_for_offset(Offset(4)) == None);
 
-    let idx = StampIndex::open(dir.path().join("00000000000000000000.stampindex")).unwrap();
     assert2::assert!(
-        idx.entries()
-            == [StampEntry {
-                base_offset: Offset(0),
-                last_offset: Offset(3),
-                stamp: 500,
-            }]
+        crate::log::test_support::stamp_entries(dir.path(), 0)
+            == [crate::test_support::stamp_entry(0, 3, 500)]
     );
 }
 
@@ -245,15 +267,11 @@ fn append_verbatim_stamps_full_offset_range() {
 #[test]
 fn non_txn_verbatim_batch_with_valid_pid_advances_lso() {
     let (dir, mut log) = test_log();
-    let mut producer = test_batch_at(0);
-    producer.last_offset_delta = 1; // spans offsets 0..=1
-    producer.producer_id = 55; // valid pid, but NOT transactional
-    producer.producer_epoch = 0;
+    let producer = two_record_producer(55, false); // valid pid, but NOT transactional
     assert2::assert!(!producer.attributes.is_transactional());
     let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(0));
     log.append_verbatim(&vb).unwrap();
-    assert2::assert!(log.log_end_offset() == Offset(2));
-    assert2::assert!(log.lso() == Offset(2));
+    check_transaction_offsets(&log, Offset(2));
     drop(dir);
 }
 
@@ -265,11 +283,9 @@ fn non_txn_verbatim_batch_with_valid_pid_advances_lso() {
 #[test]
 fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
     let (dir, mut log) = log_append_time_log();
-    let mut producer = test_batch_at(0);
+    let mut producer = producer_with_timestamp(1_000);
     producer.base_offset = 999;
     producer.partition_leader_epoch = -1;
-    producer.base_timestamp = 1_000;
-    producer.max_timestamp = 1_000;
     let (wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
 
     let (base_offset, stamp) = log.append_verbatim(&vb).unwrap();
@@ -278,9 +294,7 @@ fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
     assert!(base_offset == Offset(0));
     // The expectation is the producer's bytes with the three fields patched,
     // plus the two fields every verbatim append patches outside the CRC.
-    let mut expected = wire.to_vec();
-    expected[0..8].copy_from_slice(&0i64.to_be_bytes());
-    expected[12..16].copy_from_slice(&4i32.to_be_bytes());
+    let mut expected = assigned_header(&wire, 4);
     let attributes = producer
         .attributes
         .with_timestamp_type(krabka_protocol::records::TimestampType::LogAppendTime);
@@ -289,12 +303,10 @@ fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
     let crc = crc32c::crc32c(&expected[CRC_COVERAGE_START..]);
     expected[CRC_RANGE].copy_from_slice(&crc.to_be_bytes());
 
-    let stored = log
-        .read_raw(Offset(0), log.log_end_offset(), mebibytes(10))
-        .unwrap();
-    assert!(&stored.bytes[..] == &expected[..]);
+    let stored = stored_bytes(&log);
+    assert!(&stored[..] == &expected[..]);
     // And the stored bytes decode, which is the CRC check the reader runs.
-    let mut cursor: &[u8] = &stored.bytes;
+    let mut cursor: &[u8] = &stored;
     let decoded = RecordBatch::decode(&mut cursor).unwrap();
     assert!(
         decoded
@@ -319,15 +331,12 @@ fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
 #[test]
 fn verbatim_offset_for_timestamp_answers_in_append_time() {
     let (dir, mut log) = log_append_time_log();
-    let mut producer = test_batch_at(0);
-    producer.base_timestamp = 1_000;
-    producer.max_timestamp = 1_000;
+    let producer = producer_with_timestamp(1_000);
     let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(0));
 
     let (_base_offset, stamp) = log.append_verbatim(&vb).unwrap();
 
-    let stamp = stamp.expect("a LogAppendTime log reports the stamp it wrote");
-    check!(log.offset_for_timestamp(1_000) == Some((Offset(0), stamp)));
+    let stamp = crate::log::test_support::check_append_time_lookup(&log, stamp);
     check!(log.offset_for_timestamp(stamp + 1) == None);
     drop(dir);
 }
@@ -345,13 +354,9 @@ fn verbatim_create_time_reports_no_stamp() {
 
     assert!(base_offset == Offset(0));
     assert!(stamp == None);
-    let mut expected = wire.to_vec();
-    expected[0..8].copy_from_slice(&0i64.to_be_bytes());
-    expected[12..16].copy_from_slice(&4i32.to_be_bytes());
-    let stored = log
-        .read_raw(Offset(0), log.log_end_offset(), mebibytes(10))
-        .unwrap();
-    assert!(&stored.bytes[..] == &expected[..]);
+    let expected = assigned_header(&wire, 4);
+    let stored = stored_bytes(&log);
+    assert!(&stored[..] == &expected[..]);
     drop(dir);
 }
 
@@ -384,10 +389,7 @@ fn verbatim_append_flush_logic() {
     assert!(sync_observer::take_segment_flushes().is_empty());
 
     // With stamp_source, non-transactional flushes
-    log.set_stamp_source(std::sync::Arc::new(
-        crate::stamp_source::MonotonicStampSource::new(10, 1),
-    ))
-    .unwrap();
+    crate::log::test_support::install_stamps(&mut log, 10, 1);
     sync_observer::take_segment_flushes();
     log.append_verbatim(&vb).unwrap();
     assert!(!sync_observer::take_segment_flushes().is_empty());

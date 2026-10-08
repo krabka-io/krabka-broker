@@ -17,11 +17,13 @@ use assert2::check;
 use clap::Parser as _;
 use krabka_format::MetadataRecord;
 use krabka_metadata::{
-    KRaftVersionRecord, LeaderEpoch, NodeId, PartitionRecord, TopicRecord, VoterSet, VotersRecord,
+    KRaftVersionRecord, NodeId, PartitionRecord, TopicRecord, VoterSet, VotersRecord,
 };
 use serde_wincode::SerdeCompat;
 use uuid::Uuid;
 use wincode::Deserialize as _;
+
+krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
 /// Pinned so two formats of the same arguments are byte-comparable.
 const CLUSTER_ID: &str = "8a2f4e1c-0000-4000-8000-00000000c1d0";
@@ -47,16 +49,8 @@ fn restored_topic(name: &str, topic_id: u128, partitions: i32) -> Vec<MetadataRe
     })];
     records.extend((0..partitions).map(|partition| {
         MetadataRecord::V1Partition(PartitionRecord {
-            topic: name.to_string(),
-            partition,
-            leader: NodeId(1),
-            replicas: vec![NodeId(1)],
-            isr: vec![NodeId(1)],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
             directories: vec![Uuid::nil()],
-            partition_epoch: 0,
+            ..single_replica_partition(name, partition, NodeId(1))
         })
     }));
     records
@@ -147,11 +141,7 @@ async fn seeded_records_follow_the_features_and_lead_the_acl_entries() {
 /// carries the seeded records as well.
 #[tokio::test]
 async fn the_manifest_mirrors_the_seeded_binary_stream() {
-    let parent = tempfile::tempdir().unwrap();
-    let log_dir = empty_log_dir(&parent, "seeded");
-    let extra = restored_topic("restored-orders", 1, 2);
-
-    format(&log_dir, &[], extra.clone()).await;
+    let (_parent, log_dir, extra) = formatted_restored_topic(&[]).await;
 
     let records = bootstrap_records(&log_dir);
     let manifest: serde_json::Value = serde_json::from_slice(
@@ -180,11 +170,7 @@ async fn the_manifest_mirrors_the_seeded_binary_stream() {
 /// would boot a different cluster.
 #[tokio::test]
 async fn a_dynamic_format_seeds_the_offset_zero_checkpoint() {
-    let parent = tempfile::tempdir().unwrap();
-    let log_dir = empty_log_dir(&parent, "seeded");
-    let extra = restored_topic("restored-orders", 1, 2);
-
-    format(&log_dir, &["--no-initial-controllers"], extra.clone()).await;
+    let (_parent, log_dir, extra) = formatted_restored_topic(&["--no-initial-controllers"]).await;
 
     let stream = bootstrap_records(&log_dir);
     check!(stream.ends_with(&extra));
@@ -254,4 +240,14 @@ async fn run_writes_what_run_with_records_writes_for_no_extras() {
     let seam_checkpoint =
         std::fs::read(offset_zero_checkpoint(&via_seam)).expect("run_with_records checkpoint");
     check!(run_checkpoint == seam_checkpoint);
+}
+
+async fn formatted_restored_topic(
+    extra_args: &[&str],
+) -> (tempfile::TempDir, std::path::PathBuf, Vec<MetadataRecord>) {
+    let parent = tempfile::tempdir().unwrap();
+    let log_dir = empty_log_dir(&parent, "seeded");
+    let extra = restored_topic("restored-orders", 1, 2);
+    format(&log_dir, extra_args, extra.clone()).await;
+    (parent, log_dir, extra)
 }

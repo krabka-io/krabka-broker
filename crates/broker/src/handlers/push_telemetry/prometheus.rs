@@ -165,18 +165,12 @@ mod tests {
     };
 
     use super::*;
-    use crate::handlers::push_telemetry::test_support::{metrics_data, number_point};
+    use crate::handlers::push_telemetry::test_support::{gauge_metric, metrics_data, number_point};
 
     #[test]
     fn flatten_for_prometheus_preserves_gauge_sum_and_histogram_points() {
         let md = metrics_data(vec![
-            Metric {
-                name: "cpu.utilization".into(),
-                data: Some(metric::Data::Gauge(Gauge {
-                    data_points: vec![number_point(number_data_point::Value::AsDouble(0.75))],
-                })),
-                ..Default::default()
-            },
+            gauge_metric("cpu.utilization", number_data_point::Value::AsDouble(0.75)),
             Metric {
                 name: "requests.total".into(),
                 data: Some(metric::Data::Sum(Sum {

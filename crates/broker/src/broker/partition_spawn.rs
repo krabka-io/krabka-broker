@@ -13,7 +13,7 @@ use krabka_ids::PartitionIndex;
 use crate::{
     config::BrokerConfig,
     error::BrokerError,
-    partition::{Partition, WriterMessage},
+    partition::{Partition, PartitionRuntimeConfig, WriterMessage, empty_marker_materialization},
 };
 
 type PartitionWal = (
@@ -78,15 +78,8 @@ fn partition_wal(
 /// access to the `Log` mutex on the hot path, and so
 /// `DescribeLogDirs` can attribute the partition to a dir even when
 /// the path is not stable across canonicalisation.
-pub(crate) fn spawn_partition(
-    topic: String,
-    partition_id: PartitionIndex,
-    log_dir: std::path::PathBuf,
-    log: krabka_log::Log,
-    log_dir_status: crate::log_dir_status::LogDirRegistry,
-    producer_state: Arc<crate::producer_state::ProducerState>,
-    diskless: bool,
-) -> Arc<Partition> {
+#[krabka_macros::partition_spawn_parameters]
+pub(crate) fn spawn_partition() -> Arc<Partition> {
     #[cfg(test)]
     let topic_id = diskless.then(uuid::Uuid::new_v4);
     #[cfg(not(test))]
@@ -108,16 +101,8 @@ pub(crate) fn spawn_partition(
 }
 
 #[allow(clippy::too_many_arguments)] // Mirrors spawn_partition plus the replication target.
-pub(crate) fn spawn_partition_with_replication_target(
-    topic: String,
-    replication_target: crate::partition::ReplicationTarget,
-    partition_id: PartitionIndex,
-    log_dir: std::path::PathBuf,
-    log: krabka_log::Log,
-    log_dir_status: crate::log_dir_status::LogDirRegistry,
-    producer_state: Arc<crate::producer_state::ProducerState>,
-    diskless: bool,
-) -> Arc<Partition> {
+#[krabka_macros::partition_spawn_parameters(target)]
+pub(crate) fn spawn_partition_with_replication_target() -> Arc<Partition> {
     let broker_config = BrokerConfig::default();
     #[cfg(test)]
     let wal_shards = replication_target.topic_id.map(|topic_id| {
@@ -155,13 +140,15 @@ pub(crate) fn spawn_partition_with_replication_target(
             log,
             log_dir_status,
             producer_state,
-            max_produce_group: broker_config.max_produce_group,
-            partition_writer_queue_depth: broker_config.partition_writer_queue_depth,
-            diskless_wal_local_replica_count,
-            diskless,
-            hot_tail: None,
-            wal_shards,
-            sequencer: None,
+            runtime: PartitionRuntimeConfig::new(
+                (
+                    broker_config.max_produce_group,
+                    broker_config.partition_writer_queue_depth,
+                    diskless_wal_local_replica_count,
+                ),
+                diskless,
+                (None, wal_shards, None),
+            ),
         },
         replication_target,
     )
@@ -176,13 +163,7 @@ pub(crate) struct PartitionSpawnConfig {
     pub log: krabka_log::Log,
     pub log_dir_status: crate::log_dir_status::LogDirRegistry,
     pub producer_state: Arc<crate::producer_state::ProducerState>,
-    pub max_produce_group: usize,
-    pub partition_writer_queue_depth: usize,
-    pub diskless_wal_local_replica_count: usize,
-    pub diskless: bool,
-    pub hot_tail: Option<Arc<crate::diskless::hot_tail::HotTailCache>>,
-    pub wal_shards: Option<Arc<crate::wal::quorum::registry::WalShardRegistry>>,
-    pub sequencer: Option<Arc<dyn crate::wal::OffsetSequencer>>,
+    pub runtime: PartitionRuntimeConfig,
 }
 
 pub(crate) fn try_spawn_partition_with_sequencer(
@@ -209,6 +190,9 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         log,
         log_dir_status,
         producer_state,
+        runtime,
+    } = config;
+    let PartitionRuntimeConfig {
         max_produce_group,
         partition_writer_queue_depth,
         diskless_wal_local_replica_count,
@@ -216,7 +200,7 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         hot_tail,
         wal_shards,
         sequencer,
-    } = config;
+    } = runtime;
     let log = Arc::new(Mutex::new(log));
     let (wal, recovered_durable_watermark, wal_engine) = partition_wal(
         (&topic, topic_id, partition_id),
@@ -293,9 +277,7 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         log_dir,
         log,
         writer_tx: tx,
-        marker_materialization: Arc::new(tokio::sync::Mutex::new(
-            std::collections::HashMap::default(),
-        )),
+        marker_materialization: empty_marker_materialization(),
         append_notify: notify,
         replica_state,
         hw_advance_notify,

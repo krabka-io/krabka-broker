@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_lemma_sum_prefix_step": { "prover": "alt-ergo", "time": 0.007 }
+      "vc_lemma_sum_prefix_step": { "prover": "alt-ergo", "time": 0.012 }
     }
   }
 }

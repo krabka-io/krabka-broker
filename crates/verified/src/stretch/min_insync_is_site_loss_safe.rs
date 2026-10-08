@@ -1,5 +1,21 @@
 use creusot_std::prelude::*;
 
+// All site-load lemmas share the same integer domain and proof annotations.
+macro_rules! round_robin_site_lemma {
+    ($(#[$doc:meta])* contracts [$(#[$contract:meta])*]
+        pub fn $name:ident($rf:ident, $sites:ident, $site:ident)
+        from $minimum:literal $body:block) => {
+        $(#[$doc])*
+        // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+        #[cfg(creusot)]
+        #[cfg_attr(test, mutants::skip)]
+        #[logic]
+        #[requires($rf >= $minimum && $sites >= 1 && 0 <= $site && $site < $sites)]
+        $(#[$contract])*
+        pub fn $name($rf: Int, $sites: Int, $site: Int) $body
+    };
+}
+
 /// The replicas that round-robin placement puts on `site`: the placement
 /// visits sites `0, 1, ..., sites - 1, 0, 1, ...` in turn, so replica `r`
 /// lands on site `r % sites`, and this counts the `r < rf` that land on
@@ -52,16 +68,14 @@ pub fn lemma_div_exact(divisor: Int, quotient: Int, remainder: Int) {
     proof_assert!(remainder / divisor == 0);
 }
 
+round_robin_site_lemma! {
 /// One more replica raises the closed form `(rf - site + sites - 1) / sites`
 /// by one exactly when that replica lands on `site`.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic]
-#[requires(rf >= 1 && sites >= 1 && 0 <= site && site < sites)]
+contracts [
 #[ensures((rf - site + sites - 1) / sites
     == (rf - 1 - site + sites - 1) / sites + if (rf - 1) % sites == site { 1 } else { 0 })]
-pub fn lemma_round_robin_step(rf: Int, sites: Int, site: Int) {
+]
+pub fn lemma_round_robin_step(rf, sites, site) from 1 {
     let q = (rf - 1) / sites;
     let r = (rf - 1) % sites;
     // Division of the nonnegative `rf - 1`: quotient `q`, remainder `r`.
@@ -85,36 +99,35 @@ pub fn lemma_round_robin_step(rf: Int, sites: Int, site: Int) {
         lemma_div_exact(sites, q, sites + r - site - 1);
     }
 }
+}
 
+round_robin_site_lemma! {
 /// The closed form of `round_robin_load`: site `site` holds
 /// `(rf - site + sites - 1) / sites` replicas.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic]
-#[requires(rf >= 0 && sites >= 1 && 0 <= site && site < sites)]
+contracts [
 #[ensures(round_robin_load(rf, sites, site) == (rf - site + sites - 1) / sites)]
 #[variant(rf)]
-pub fn lemma_round_robin_load(rf: Int, sites: Int, site: Int) {
+]
+pub fn lemma_round_robin_load(rf, sites, site) from 0 {
     if rf > 0 {
         lemma_round_robin_load(rf - 1, sites, site);
         lemma_round_robin_step(rf, sites, site);
     }
 }
+}
 
+round_robin_site_lemma! {
 /// No site holds more than site 0 under round-robin placement, so site 0 is
 /// a fullest site.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic]
-#[requires(rf >= 0 && sites >= 1 && 0 <= site && site < sites)]
+contracts [
 #[ensures(round_robin_load(rf, sites, site) <= round_robin_load(rf, sites, 0))]
-pub fn lemma_site_load_at_most_first(rf: Int, sites: Int, site: Int) {
+]
+pub fn lemma_site_load_at_most_first(rf, sites, site) from 0 {
     // Both loads in closed form; site 0 has the largest numerator.
     lemma_round_robin_load(rf, sites, site);
     lemma_round_robin_load(rf, sites, 0);
     lemma_div_monotone(rf - site + sites - 1, rf + sites - 1, sites);
+}
 }
 
 /// The replica count that survives the loss of any one site.

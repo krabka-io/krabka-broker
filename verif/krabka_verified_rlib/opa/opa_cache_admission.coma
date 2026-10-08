@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/opa.rs" 50 0 54 22 *)
+(* #"/workspace/crates/verified/src/opa.rs" 42 0 46 22 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sopa = "/workspace/crates/verified/src/opa.rs" 44 10 48 1
+let%span sopa = "/workspace/crates/verified/src/opa.rs" 36 10 40 1
 
 use creusot.int.Int128
 use creusot.prelude.Any
@@ -19,7 +19,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let opa_cache_admission [#"/workspace/crates/verified/src/opa.rs" 50 0 54 22] (now_ms: Int128.t)
+let opa_cache_admission [#"/workspace/crates/verified/src/opa.rs" 42 0 46 22] (now_ms: Int128.t)
   (expires_at_ms: Int128.t) (cached_decision: t_OpaAuthorizationDecision) (return (x: t_OpaCacheAdmission)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_8 <- Int128.gt expires_at_ms now_ms ] s1

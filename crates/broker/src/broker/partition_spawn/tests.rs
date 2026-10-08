@@ -14,13 +14,15 @@ async fn nondefault_partition_writer_queue_depth_backpressures_at_bound() {
         log: krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).expect("open log"),
         log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
         producer_state: Arc::new(crate::producer_state::ProducerState::new()),
-        max_produce_group: crate::config::BrokerConfig::default().max_produce_group,
-        partition_writer_queue_depth: 2,
-        diskless_wal_local_replica_count: 3,
-        diskless: false,
-        hot_tail: None,
-        wal_shards: None,
-        sequencer: None,
+        runtime: PartitionRuntimeConfig::new(
+            (
+                crate::config::BrokerConfig::default().max_produce_group,
+                2,
+                3,
+            ),
+            false,
+            (None, None, None),
+        ),
     })
     .expect("spawn partition");
 
@@ -142,13 +144,11 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         log,
         log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
         producer_state: Arc::new(crate::producer_state::ProducerState::new()),
-        max_produce_group: 1_024,
-        partition_writer_queue_depth: 64,
-        diskless_wal_local_replica_count: 3,
-        diskless: true,
-        hot_tail: None,
-        wal_shards: Some(registry.clone()),
-        sequencer: None,
+        runtime: PartitionRuntimeConfig::new(
+            (1_024, 64, 3),
+            true,
+            (None, Some(registry.clone()), None),
+        ),
     })
     .expect("spawn recovered partition");
     assert!(partition.high_watermark().await == krabka_log::Offset(0));

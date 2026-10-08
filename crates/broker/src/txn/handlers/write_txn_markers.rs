@@ -287,8 +287,9 @@ mod tests {
     use super::*;
     use crate::{
         coordinator::{
-            bootstrap::OFFSETS_TOPIC, persistence::OffsetCommitValue,
-            unified::actor::GroupActorMessage,
+            bootstrap::OFFSETS_TOPIC,
+            persistence::OffsetCommitValue,
+            unified::actor::{GroupActorMessage, test_support::rpc},
         },
         txn::handlers::write_txn_markers::test_support::{open_partition, start_broker},
     };
@@ -567,19 +568,12 @@ mod tests {
     #[tokio::test]
     async fn committed_offsets_are_published_by_the_offsets_partition_marker() {
         use krabka_log::Offset;
-        use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
         let group_id = "marker-materialization-group";
-        let offsets_partition = crate::coordinator::partitioner::partition_for_group(
-            &broker.controller.current_image(),
-            group_id,
-        );
-        let part = broker
-            .partitions
-            .get(OFFSETS_TOPIC, PartitionIndex(offsets_partition))
-            .expect("local offsets partition");
+        let (offsets_partition, part) =
+            super::test_support::local_offsets_partition_with_index(&broker, group_id);
         let value = OffsetCommitValue {
             offset: Offset(42),
             leader_epoch: 3,
@@ -591,18 +585,11 @@ mod tests {
             expire_timestamp_ms: None,
             topic_id: None,
         };
-        part.produce_batch(RecordBatch {
-            producer_id: 91,
-            producer_epoch: 4,
-            base_sequence: 0,
-            attributes: Attributes::default().with_transactional(true),
-            records: vec![Record {
-                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 2).unwrap()),
-                value: Some(value.encode_value()),
-                ..Default::default()
-            }],
-            ..RecordBatch::default()
-        })
+        part.produce_batch(super::test_support::transactional_offset_batch(
+            (krabka_log::ProducerId(91), 4),
+            (group_id, "orders", 2),
+            &value,
+        ))
         .await
         .expect("append transactional offset");
 
@@ -614,13 +601,7 @@ mod tests {
             .group_coordinator
             .find(group_id)
             .expect("offset home actor");
-        let (reply, result) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::FetchOffsets { reply })
-            .await
-            .unwrap();
-        let committed = result.await.unwrap().committed;
+        let committed = rpc::fetch_offsets(&handle).await.committed;
         let entry = committed
             .get(&("orders".to_string(), 2))
             .expect("committed offset visible");
@@ -638,43 +619,26 @@ mod tests {
     #[tokio::test]
     async fn abort_marker_succeeds_when_the_groups_actor_has_exited() {
         use krabka_log::Offset;
-        use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
         use crate::coordinator::unified::actor::GroupKindTag;
 
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
         let group_id = "abort-after-actor-exit";
-        let offsets_partition = crate::coordinator::partitioner::partition_for_group(
-            &broker.controller.current_image(),
-            group_id,
-        );
-        let part = broker
-            .partitions
-            .get(OFFSETS_TOPIC, PartitionIndex(offsets_partition))
-            .expect("local offsets partition");
-        part.produce_batch(RecordBatch {
-            producer_id: 91,
-            producer_epoch: 4,
-            base_sequence: 0,
-            attributes: Attributes::default().with_transactional(true),
-            records: vec![Record {
-                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 2).unwrap()),
-                value: Some(
-                    OffsetCommitValue {
-                        offset: Offset(42),
-                        leader_epoch: 3,
-                        metadata: "txn".into(),
-                        commit_timestamp_ms: 123,
-                        expire_timestamp_ms: None,
-                        topic_id: None,
-                    }
-                    .encode_value(),
-                ),
-                ..Default::default()
-            }],
-            ..RecordBatch::default()
-        })
+        let (offsets_partition, part) =
+            super::test_support::local_offsets_partition_with_index(&broker, group_id);
+        part.produce_batch(super::test_support::transactional_offset_batch(
+            (krabka_log::ProducerId(91), 4),
+            (group_id, "orders", 2),
+            &OffsetCommitValue {
+                offset: Offset(42),
+                leader_epoch: 3,
+                metadata: "txn".into(),
+                commit_timestamp_ms: 123,
+                expire_timestamp_ms: None,
+                topic_id: None,
+            },
+        ))
         .await
         .expect("append transactional offset");
 
@@ -683,25 +647,15 @@ mod tests {
         let handle = broker
             .group_coordinator
             .get_or_create_group(group_id, GroupKindTag::Classic);
-        let (reply, ack) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::AddPendingTxnOffsets {
-                producer_id: 91,
-                written_at: 0,
-                keys: vec![("orders".to_string(), 2)],
-                reply,
-            })
-            .await
-            .expect("send AddPendingTxnOffsets");
+        let ack = rpc::begin(&handle, |reply| GroupActorMessage::AddPendingTxnOffsets {
+            producer_id: 91,
+            written_at: 0,
+            keys: vec![("orders".to_string(), 2)],
+            reply,
+        })
+        .await;
         ack.await.expect("AddPendingTxnOffsets ack");
-        let (reply, ack) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Shutdown(reply))
-            .await
-            .expect("send Shutdown");
-        ack.await.expect("Shutdown ack");
+        rpc::shutdown(&handle).await;
         for _ in 0..1000 {
             if handle.tx.is_closed() {
                 break;
@@ -813,17 +767,13 @@ mod tests {
             let handle = broker
                 .group_coordinator
                 .get_or_create_group(group_id, GroupKindTag::Classic);
-            let (reply, ack) = tokio::sync::oneshot::channel();
-            handle
-                .tx
-                .send(GroupActorMessage::AddPendingTxnOffsets {
-                    producer_id: 91,
-                    written_at: 0,
-                    keys: vec![(topic.to_string(), partition)],
-                    reply,
-                })
-                .await
-                .expect("send AddPendingTxnOffsets");
+            let ack = rpc::begin(&handle, |reply| GroupActorMessage::AddPendingTxnOffsets {
+                producer_id: 91,
+                written_at: 0,
+                keys: vec![(topic.to_string(), partition)],
+                reply,
+            })
+            .await;
             ack.await.expect("AddPendingTxnOffsets ack");
         }
 
@@ -838,13 +788,7 @@ mod tests {
                 .group_coordinator
                 .find(group_id)
                 .expect("offset home actor");
-            let (reply, result) = tokio::sync::oneshot::channel();
-            handle
-                .tx
-                .send(GroupActorMessage::FetchOffsets { reply })
-                .await
-                .expect("send FetchOffsets");
-            let offsets = result.await.expect("FetchOffsets reply");
+            let offsets = rpc::fetch_offsets(&handle).await;
             assert!(
                 offsets
                     .committed

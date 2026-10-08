@@ -5,13 +5,14 @@
 //! the inbound path, broker A accepts auth'd raft frames from broker B.
 //! On the outbound path, `InterBrokerDialer` dials with SASL credentials.
 
+mod support;
+
 use std::{net::SocketAddr, time::Duration};
 
 use assert2::assert;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::{
-    BootstrapMode, Broker, BrokerConfig, BrokerHandle,
-    config::{InterBrokerCredentials, ListenerSpec},
+    BootstrapMode, Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials,
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
@@ -24,15 +25,7 @@ fn oauth_token() -> String {
     )
 }
 
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .with_test_writer()
-        .try_init();
-}
+use crate::support::init_tracing;
 
 /// Build a `SASL_PLAINTEXT` data-plane listener config for broker `i`
 /// (0-indexed) and parameterized `controller_listener_protocol`.
@@ -47,26 +40,17 @@ fn sasl_broker_config(
 ) -> BrokerConfig {
     let (ctrl, ctrl_addr) = controller;
     let (plain_user, plain_pass) = credentials;
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.broker_id = i32::try_from(i + 1).unwrap();
+    let mut cfg = crate::support::node_config(i, log_dir);
     cfg.listen_addr = data_addr;
     cfg.advertised_listener = data_addr.to_string();
-    cfg.node_id = krabka_broker::NodeId(u64::try_from(i + 1).unwrap());
     cfg.controller_listen_addr = ctrl_addr;
-    cfg.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-        .collect();
+    cfg.controller_quorum_voters = crate::support::controller_voters(voters);
     cfg.bootstrap_mode = mode;
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: data_addr,
-        advertised: data_addr.to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
+    cfg.listeners = vec![crate::support::listeners::listener(
+        "SASL_PLAINTEXT",
+        data_addr,
+        ListenerProtocol::SaslPlaintext,
+    )];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.controller_listener_protocol = ctrl;
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
@@ -157,6 +141,55 @@ async fn start_two_brokers_with_controller_protocol(
     (broker0, broker1, dir0, dir1)
 }
 
+/// Independent single-voter clusters cannot merge when authentication or authorization fails.
+/// Start broker 1 then broker 2, retain both directories, and observe the original 3s window.
+async fn assert_disconnected_controllers(
+    credentials: [(&str, &str); 2],
+    deny_controller: bool,
+    failure: &str,
+) {
+    init_tracing();
+    let (ctrl_addrs, [ctrl_l1, ctrl_l2]) = reserve_ctrl_listeners().await;
+    let dir1 = TempDir::new().unwrap();
+    let dir2 = TempDir::new().unwrap();
+    // A shared two-voter quorum would never elect with these failures and would
+    // block Broker::start on its leader wait. Each node instead bootstraps itself.
+    let config = |index: usize, dir: &TempDir| {
+        let mut config = sasl_broker_config(
+            index,
+            data_listen_addr(),
+            (ListenerProtocol::SaslPlaintext, ctrl_addrs[index]),
+            &[(u64::try_from(index).unwrap() + 1, ctrl_addrs[index])],
+            dir.path(),
+            BootstrapMode::Bootstrap,
+            credentials[index],
+        );
+        if deny_controller {
+            // Valid SASL credentials are still denied CLUSTER_ACTION without
+            // super users or ACLs. Construct each authorizer independently.
+            config.authorizer =
+                std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
+                    std::collections::HashSet::new(),
+                ));
+        }
+        config
+    };
+    let c1 = config(0, &dir1);
+    let c2 = config(1, &dir2);
+    let b1 = Broker::start_with_controller_listener(c1, Some(ctrl_l1))
+        .await
+        .expect("start b1");
+    let b2 = Broker::start_with_controller_listener(c2, Some(ctrl_l2))
+        .await
+        .expect("start b2");
+    // Intentional negative observation: no awaiter can assert that state stays put.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(b1.broker_count() < 2, "{failure}");
+    let _ = &b2;
+    b2.shutdown().await;
+    b1.shutdown().await;
+}
+
 // Exercises follower → leader `submit_change` forwarding under SASL.
 //
 // With `controller_listener_protocol = SaslPlaintext`, broker 1 elects itself,
@@ -237,63 +270,13 @@ async fn controller_listener_oauthbearer_two_broker_quorum() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {
-    // Start broker A with username=alice; broker B with username=bob.
-    // Neither has the other's password, so inbound raft auth fails on
-    // both sides. Expect they never converge.
-    init_tracing();
-    let (ctrl_addrs, [ctrl_l1, ctrl_l2]) = reserve_ctrl_listeners().await;
-
-    let dir1 = TempDir::new().unwrap();
-    let dir2 = TempDir::new().unwrap();
-
-    // Each broker is a *single-voter* standalone bootstrap of itself: b1's
-    // voter set is {1}, b2's is {2}. b1 self-elects immediately (so its
-    // `Broker::start` returns) and sees only itself. b2 likewise. Because
-    // their SASL creds mismatch (alice vs bob), neither can authenticate the
-    // other's raft listener — there is no path for the two single-voter
-    // clusters to merge, so b1's broker view never grows past 1. (A shared
-    // 2-voter set is unusable here: with bad creds no leader is ever elected,
-    // and `Broker::start` would block on its 2-minute leader-wait.)
-    let c1 = sasl_broker_config(
-        0,
-        data_listen_addr(),
-        (ListenerProtocol::SaslPlaintext, ctrl_addrs[0]),
-        &[(1, ctrl_addrs[0])],
-        dir1.path(),
-        BootstrapMode::Bootstrap,
-        ("alice", "wonderland"),
-    );
-    let c2 = sasl_broker_config(
-        1,
-        data_listen_addr(),
-        (ListenerProtocol::SaslPlaintext, ctrl_addrs[1]),
-        &[(2, ctrl_addrs[1])],
-        dir2.path(),
-        BootstrapMode::Bootstrap,
-        ("bob", "burgers"),
-    );
-
-    let b1 = Broker::start_with_controller_listener(c1, Some(ctrl_l1))
-        .await
-        .expect("start b1");
-
-    // Start b2 (its own single-voter cluster). With bad creds it can never
-    // join b1's cluster, but it self-elects fine, so this returns promptly.
-    let b2 = Broker::start_with_controller_listener(c2, Some(ctrl_l2))
-        .await
-        .expect("start b2");
-
-    // Give the brokers time to (fail to) discover each other. Each is its own
-    // single-voter cluster and mismatched creds block any raft cross-talk, so
-    // b1 must still see only itself.
-    // intentional: negative test — observe that no convergence happens within a
-    // fixed window; there is no awaiter for "state stays put".
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(b1.broker_count() < 2, "mismatched creds must not converge");
-    let _ = &b2;
-
-    b2.shutdown().await;
-    b1.shutdown().await;
+    // Neither broker has the other's password, so authentication fails both ways.
+    Box::pin(assert_disconnected_controllers(
+        [("alice", "wonderland"), ("bob", "burgers")],
+        false,
+        "mismatched creds must not converge",
+    ))
+    .await;
 }
 
 // H-1: authentication is not authorization. Here both brokers present
@@ -306,63 +289,13 @@ async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {
 // never exchange controller RPCs to merge. b1 must still see only itself.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn controller_listener_sasl_denies_unauthorized_principal() {
-    init_tracing();
-    let (ctrl_addrs, [ctrl_l1, ctrl_l2]) = reserve_ctrl_listeners().await;
-
-    let dir1 = TempDir::new().unwrap();
-    let dir2 = TempDir::new().unwrap();
-
-    // Single-voter standalone bootstraps with MATCHING creds (auth succeeds)
-    // — same structure as the mismatched-creds test, but the failure mode
-    // here is authorization, not authentication.
-    let mut c1 = sasl_broker_config(
-        0,
-        data_listen_addr(),
-        (ListenerProtocol::SaslPlaintext, ctrl_addrs[0]),
-        &[(1, ctrl_addrs[0])],
-        dir1.path(),
-        BootstrapMode::Bootstrap,
-        ("broker", "secret"),
-    );
-    let mut c2 = sasl_broker_config(
-        1,
-        data_listen_addr(),
-        (ListenerProtocol::SaslPlaintext, ctrl_addrs[1]),
-        &[(2, ctrl_addrs[1])],
-        dir2.path(),
-        BootstrapMode::Bootstrap,
-        ("broker", "secret"),
-    );
-    // Deny-by-default authorizer: empty super-user set, no ACLs ⇒ every
-    // principal (including the authenticated inter-broker one) is denied.
-    c1.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-        std::collections::HashSet::new(),
-    ));
-    c2.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-        std::collections::HashSet::new(),
-    ));
-
-    let b1 = Broker::start_with_controller_listener(c1, Some(ctrl_l1))
-        .await
-        .expect("start b1");
-    let b2 = Broker::start_with_controller_listener(c2, Some(ctrl_l2))
-        .await
-        .expect("start b2");
-
-    // Authentication succeeds but CLUSTER_ACTION is denied, so the
-    // controller listener refuses every cross-broker RPC: the clusters never
-    // merge.
-    // intentional: negative test — observe that no convergence happens within a
-    // fixed window; there is no awaiter for "state stays put".
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(
-        b1.broker_count() < 2,
-        "unauthorized principal must not be able to drive controller RPCs"
-    );
-    let _ = &b2;
-
-    b2.shutdown().await;
-    b1.shutdown().await;
+    // Both credentials authenticate; the empty authorizers deny controller RPCs.
+    Box::pin(assert_disconnected_controllers(
+        [("broker", "secret"), ("broker", "secret")],
+        true,
+        "unauthorized principal must not be able to drive controller RPCs",
+    ))
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -379,29 +312,19 @@ async fn controller_listener_plaintext_legacy_path_unchanged() {
 
     // Plain (no SASL) configs: don't use sasl_broker_config because we
     // want zero auth on either listener (legacy path).
-    let mut c1 = BrokerConfig::for_tests(dir1.path().to_path_buf());
-    c1.broker_id = 1;
-    c1.node_id = krabka_broker::NodeId(1);
+    let mut c1 = crate::support::node_config(0, dir1.path());
     c1.listen_addr = data_listen_addr();
     c1.advertised_listener = data_listen_addr().to_string();
     c1.controller_listen_addr = ctrl_addrs[0];
-    c1.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-        .collect();
+    c1.controller_quorum_voters = crate::support::controller_voters(&voters);
     c1.bootstrap_mode = BootstrapMode::Bootstrap;
     c1.controller_listener_protocol = ListenerProtocol::Plaintext;
 
-    let mut c2 = BrokerConfig::for_tests(dir2.path().to_path_buf());
-    c2.broker_id = 2;
-    c2.node_id = krabka_broker::NodeId(2);
+    let mut c2 = crate::support::node_config(1, dir2.path());
     c2.listen_addr = data_listen_addr();
     c2.advertised_listener = data_listen_addr().to_string();
     c2.controller_listen_addr = ctrl_addrs[1];
-    c2.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-        .collect();
+    c2.controller_quorum_voters = crate::support::controller_voters(&voters);
     c2.bootstrap_mode = BootstrapMode::Bootstrap;
     c2.controller_listener_protocol = ListenerProtocol::Plaintext;
 

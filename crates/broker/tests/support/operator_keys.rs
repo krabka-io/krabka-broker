@@ -10,6 +10,8 @@
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 
+use crate::support::client::connect_owned;
+
 /// One operator key pair on disk, in the forms a test and a broker need.
 ///
 /// The broker is handed only `public`; the private half stays here and signs
@@ -96,12 +98,12 @@ pub async fn start_with_operator_keys(
     let config = operator_config(dir, keys, approvers);
 
     let broker = Broker::start(config.clone()).await.expect("broker start");
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("krabka-broker-test")
-        .build()
-        .await
-        .expect("client build");
+    let client = connect_owned(
+        broker.listen_addr().to_string(),
+        "krabka-broker-test",
+        "client build",
+    )
+    .await;
     (broker, client, config)
 }
 
@@ -132,15 +134,10 @@ pub async fn start_with_operator_keys_sasl(
     users: &[(&str, &str)],
 ) -> (BrokerHandle, String, BrokerConfig) {
     let mut config = operator_config(dir, keys, approvers);
-    config.listeners = vec![krabka_broker::config::ListenerSpec {
-        name: "SASL_PLAINTEXT".to_owned(),
-        bind_addr: "127.0.0.1:0".parse().expect("bind addr"),
-        advertised: "127.0.0.1:0".to_owned(),
-        protocol: krabka_security::ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
+    config.listeners = vec![crate::support::listeners::loopback_listener(
+        "SASL_PLAINTEXT",
+        krabka_security::ListenerProtocol::SaslPlaintext,
+    )];
     "SASL_PLAINTEXT".clone_into(&mut config.inter_broker_listener_name);
     config.enabled_sasl_mechanisms = vec![krabka_security::SaslMechanism::Plain];
     for (name, pass) in users {

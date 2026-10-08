@@ -5,14 +5,12 @@
 //! from one grant -- an allowed topic and a denied one -- and so seeds two
 //! topics and runs two consumers, which no other ACL case does.
 
-use std::process::Stdio;
-
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    nc_check_connectivity, plain_jaas, start_sasl_plaintext_broker_with_super_user,
-    write_client_props,
+    ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, broker0_advertised,
+    docker_run_kafka_tool_with_image_and_mount, nc_check_connectivity, plain_jaas,
+    start_sasl_plaintext_broker_with_super_user, write_client_props,
 };
 
 /// JVM acceptance: a prefixed topic ACL grants exactly the prefix.
@@ -36,10 +34,6 @@ async fn jvm_prefixed_topic_acl_works() {
     const TOPIC_OK: &str = "team-foo";
     const TOPIC_DENIED: &str = "other-foo";
     const GROUP: &str = "cg-prefixed";
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
-    const ALICE: &str = "alice";
-    const ALICE_PASS: &str = "alice-secret";
 
     let (broker, _dir) = start_sasl_plaintext_broker_with_super_user(
         ADMIN,
@@ -158,31 +152,12 @@ async fn jvm_prefixed_topic_acl_works() {
     );
 
     // ---- Alice: consume other-foo (denied — no matching prefix).
-    let denied_out = crate::support::jvm_docker_command(
-        KAFKA_IMAGE_TXN,
-        &[&alice_mount],
-        &[
-            "kafka-console-consumer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC_DENIED,
-            "--group",
-            GROUP,
-            "--from-beginning",
-            "--max-messages",
-            "1",
-            "--timeout-ms",
-            "15000",
-            "--consumer.config",
-            "/client.properties",
-        ],
-        false,
-    )
-    .stderr(Stdio::piped())
-    .stdout(Stdio::piped())
-    .output()
-    .expect("spawn alice denied consumer");
+    let denied_out = crate::jvm_acceptance::denied_console_consumer(
+        &alice_mount,
+        TOPIC_DENIED,
+        GROUP,
+        "spawn alice denied consumer",
+    );
     let denied_stderr = String::from_utf8_lossy(&denied_out.stderr);
     let denied_stdout = String::from_utf8_lossy(&denied_out.stdout);
     eprintln!(

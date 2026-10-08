@@ -18,14 +18,10 @@ use std::{net::SocketAddr, time::Duration};
 use assert2::assert;
 use bytes::BytesMut;
 use krabka_broker::BrokerHandle;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-    },
-};
+use krabka_protocol::{Decode, Encode, owned::create_topics_response::CreateTopicsResponse};
 use tokio::net::TcpStream;
+
+use crate::support::topics::{creatable_topic, create_topic_request};
 
 mod kafka_wire;
 mod support;
@@ -37,16 +33,7 @@ const CREATE_TOPICS_VERSION: i16 = 7;
 const CLIENT_ID: &str = "krabka-controlled-shutdown-test";
 
 async fn create_topic(addr: SocketAddr, name: &str, partitions: i32, rf: i16) {
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_string(),
-            num_partitions: partitions,
-            replication_factor: rf,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    let req = create_topic_request(creatable_topic(name.to_string(), partitions, rf), 5_000);
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_TOPICS_VERSION)
@@ -154,8 +141,7 @@ async fn controlled_shutdown_drains_leadership_and_returns_ok() {
 
     support::init_tracing();
 
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let mut cluster = crate::support::registered_cluster(3).await;
 
     // Resolve the raft (controller) leader. We then pick a *follower*
     // broker as the controlled-shutdown target. Picking the controller
@@ -255,9 +241,7 @@ async fn controlled_shutdown_drains_leadership_and_returns_ok() {
     }
 
     // Tidy up surviving brokers.
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// A controller-only node has no partitions to drain and no heartbeat client

@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/reassignment.rs" 33 0 33 98 *)
+(* #"/workspace/crates/verified/src/reassignment.rs" 29 0 29 98 *)
 
-let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 35 18 35 41
-let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 36 16 36 40
-let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 37 18 37 42
-let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 28 10 28 54
-let%span sreassignment'3 = "/workspace/crates/verified/src/reassignment.rs" 29 10 29 53
-let%span sreassignment'4 = "/workspace/crates/verified/src/reassignment.rs" 30 10 30 55
-let%span sreassignment'5 = "/workspace/crates/verified/src/reassignment.rs" 31 10 31 45
+let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 31 18 31 41
+let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 32 16 32 40
+let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 33 18 33 42
+let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 24 10 24 54
+let%span sreassignment'3 = "/workspace/crates/verified/src/reassignment.rs" 25 10 25 53
+let%span sreassignment'4 = "/workspace/crates/verified/src/reassignment.rs" 26 10 26 55
+let%span sreassignment'5 = "/workspace/crates/verified/src/reassignment.rs" 27 10 27 45
 
 use creusot.prelude.Any
 
@@ -16,7 +16,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reassignment_set_membership [#"/workspace/crates/verified/src/reassignment.rs" 33 0 33 98] (in_current: bool)
+let reassignment_set_membership [#"/workspace/crates/verified/src/reassignment.rs" 29 0 29 98] (in_current: bool)
   (in_target: bool) (return (x: t_ReassignmentSetMembership)) = (! bb0
   [ bb0 = any [ br0 -> {in_current = false} (! bb2) | br1 -> {in_current} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_13 <- [%#sreassignment] true ] s1 | s1 = bb3 ]

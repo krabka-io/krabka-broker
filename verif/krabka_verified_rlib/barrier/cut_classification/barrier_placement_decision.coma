@@ -1,6 +1,6 @@
 (* #"/workspace/crates/verified/src/barrier/cut_classification.rs" 91 0 91 91 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span scut_classification = "/workspace/crates/verified/src/barrier/cut_classification.rs" 92 30 92 31
 let%span scut_classification'0 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 89 10 89 85
 

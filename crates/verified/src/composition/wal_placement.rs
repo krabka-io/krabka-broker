@@ -5,11 +5,8 @@ use super::{election_has_quorum, select_wal_voters, wal_voter_set_valid};
 type InstalledPlacement = (Vec<(u64, u64)>, Vec<u64>, bool);
 type RackLossPlacement = (Vec<(u64, u64)>, Vec<u64>, bool, bool);
 
+open_logic! {
 /// A maximal local-first placement uses distinct nodes and racks from its input.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 fn placement_valid(
     candidates: Seq<(u64, u64)>,
     selected: Seq<(u64, u64)>,
@@ -21,9 +18,10 @@ fn placement_valid(
             && ((selected.len() == 0) == (requested == 0 || forall<i: Int> 0 <= i && i < candidates.len() ==> candidates[i].0 != local))
             && (selected.len() > 0 ==> selected[0].0 == local)
             && (forall<i: Int> 0 <= i && i < selected.len() ==> exists<j: Int> 0 <= j && j < candidates.len() && selected[i] == candidates[j])
-            && (forall<i: Int, j: Int> 0 <= i && i < j && j < selected.len() ==> selected[i].0 != selected[j].0 && selected[i].1 != selected[j].1)
+            && (crate::wal::placement_identities_distinct(selected))
             && (0 < selected.len() && selected.len() < requested ==> forall<i: Int> 0 <= i && i < candidates.len() ==> exists<j: Int> 0 <= j && j < selected.len() && (candidates[i].0 == selected[j].0 || candidates[i].1 == selected[j].1))
     }
+}
 }
 
 /// Return the actual placement, projected node IDs and exact installer admission.
@@ -35,8 +33,7 @@ fn placement_valid(
 #[ensures(result.2 == (requested@ > 0 && result.0@.len() == requested@))]
 #[ensures(result.2 == (requested@ > 0 && result.1@.len() == requested@
     && result.1@[0] == local_node
-    && forall<i: Int, j: Int> 0 <= i && i < j && j < result.1@.len()
-        ==> result.1@[i] != result.1@[j]))]
+    && crate::sequence::distinct(result.1@)))]
 pub(super) fn constructed_wal_placement_is_installable(
     candidates: &[(u64, u64)],
     local_node: u64,
@@ -70,8 +67,7 @@ pub(super) fn constructed_wal_placement_is_installable(
         && result.1@[i] == result.0@[j].0 && result.0@[j].1 != failed_rack)]
 #[ensures(forall<i: Int> 0 <= i && i < result.0@.len() && result.0@[i].1 != failed_rack
     ==> exists<j: Int> 0 <= j && j < result.1@.len() && result.1@[j] == result.0@[i].0)]
-#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result.1@.len()
-    ==> result.1@[i] != result.1@[j])]
+#[ensures(crate::sequence::distinct(result.1@))]
 #[ensures(forall<i: Int, j: Int, a: Int, b: Int>
     0 <= i && i < j && j < result.1@.len() && 0 <= a && a < result.0@.len()
         && 0 <= b && b < result.0@.len()
@@ -86,8 +82,7 @@ pub(super) fn wal_placement_survives_one_rack_loss(
     let (selected, nodes, installed) =
         constructed_wal_placement_is_installable(candidates, local_node, requested);
     // Losing one rack can remove at most one selected node.
-    proof_assert!(forall<i: Int, j: Int> 0 <= i && i < j && j < selected@.len()
-        ==> selected@[i].0 != selected@[j].0 && selected@[i].1 != selected@[j].1);
+    proof_assert!(crate::wal::placement_identities_distinct(selected@));
     let mut survivors: Vec<u64> = Vec::new();
     #[cfg(creusot)]
     let mut removed: Option<usize> = None;
@@ -103,8 +98,7 @@ pub(super) fn wal_placement_survives_one_rack_loss(
             && survivors@[j] == selected@[k].0 && selected@[k].1 != failed_rack)]
     #[invariant(forall<j: Int> 0 <= j && j < i@ && selected@[j].1 != failed_rack
         ==> exists<k: Int> 0 <= k && k < survivors@.len() && survivors@[k] == selected@[j].0)]
-    #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < survivors@.len()
-        ==> survivors@[j] != survivors@[k])]
+    #[invariant(crate::sequence::distinct(survivors@))]
     #[invariant(forall<j: Int, k: Int, a: Int, b: Int>
         0 <= j && j < k && k < survivors@.len() && 0 <= a && a < selected@.len()
             && 0 <= b && b < selected@.len()

@@ -10,11 +10,19 @@ use krabka_metadata::LeaderEpoch;
 use super::*;
 use crate::{
     config_keys::{UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
-    leader_election::test_support::{img_with_dirs, one_partition_change, set_topic_config},
+    leader_election::test_support::{
+        expected_clean_election, expected_partition, img_with_dirs, liveness_with_alive,
+        one_partition_change, set_topic_config,
+    },
 };
 
-async fn scan_offline_dir(image: &MetadataImage, broker: u64, bad: uuid::Uuid) -> FailoverPlan {
-    let liveness = crate::leader_election::test_support::liveness_with_alive(&[1, 2, 3]).await;
+async fn scan_offline_dir(
+    image: &MetadataImage,
+    broker: u64,
+    bad: uuid::Uuid,
+    alive: &[u64],
+) -> FailoverPlan {
+    let liveness = liveness_with_alive(alive).await;
     compute_offline_dir_failover_changes(
         image,
         NodeId(broker),
@@ -30,15 +38,11 @@ async fn offline_dir_elects_alive_isr_member_when_leader_dir_failed() {
     let bad = uuid::Uuid::from_u128(0xDEAD);
     let good = uuid::Uuid::from_u128(0x1);
     let img = img_with_dirs("t", 1, &[1, 2, 3], &[1, 2, 3], &[bad, good, good]);
-    let plan = scan_offline_dir(&img, 1, bad).await;
+    let plan = scan_offline_dir(&img, 1, bad, &[1, 2, 3]).await;
     let MetadataRecord::V1Partition(pr) = &plan.changes[0] else {
         panic!()
     };
-    let expected = crate::leader_election::test_support::expected_clean_election(
-        2,
-        &[2, 3],
-        vec![bad, good, good],
-    );
+    let expected = expected_clean_election(2, &[2, 3], vec![bad, good, good]);
     assert!(*pr == expected);
 }
 
@@ -47,7 +51,7 @@ async fn offline_dir_leaves_healthy_dir_partition_untouched() {
     let bad = uuid::Uuid::from_u128(0xDEAD);
     let good = uuid::Uuid::from_u128(0x1);
     let img = img_with_dirs("t", 1, &[1, 2, 3], &[1, 2, 3], &[good, good, good]);
-    let plan = scan_offline_dir(&img, 1, bad).await;
+    let plan = scan_offline_dir(&img, 1, bad, &[1, 2, 3]).await;
     assert!(plan.changes.is_empty());
 }
 
@@ -56,22 +60,11 @@ async fn offline_dir_shrinks_isr_for_non_leader_replica() {
     let bad = uuid::Uuid::from_u128(0xDEAD);
     let good = uuid::Uuid::from_u128(0x1);
     let img = img_with_dirs("t", 1, &[1, 2, 3], &[1, 2, 3], &[good, bad, good]);
-    let plan = scan_offline_dir(&img, 2, bad).await;
+    let plan = scan_offline_dir(&img, 2, bad, &[1, 2, 3]).await;
     let MetadataRecord::V1Partition(pr) = &plan.changes[0] else {
         panic!()
     };
-    let expected = PartitionRecord {
-        topic: "t".into(),
-        partition: 0,
-        leader: NodeId(1),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(1), NodeId(3)],
-        leader_epoch: LeaderEpoch(5),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![good, bad, good],
-        partition_epoch: 1,
-    };
+    let expected = expected_partition("t", 1, &[1, 3], LeaderEpoch(5), vec![good, bad, good]);
     assert!(*pr == expected);
 }
 
@@ -82,7 +75,7 @@ async fn offline_dir_idempotent_after_failover() {
     // After failover: broker 1's dir is bad but broker 1 is no longer
     // leader (broker 2 is), and broker 1 is not in ISR {2,3} either.
     let img = img_with_dirs("t", 2, &[1, 2, 3], &[2, 3], &[bad, good, good]);
-    let plan = scan_offline_dir(&img, 1, bad).await;
+    let plan = scan_offline_dir(&img, 1, bad, &[1, 2, 3]).await;
     assert!(plan.changes.is_empty());
 }
 
@@ -96,18 +89,8 @@ async fn offline_dir_empty_isr_balanced_strategy_defers_to_urm() {
     let good = uuid::Uuid::from_u128(0x1);
     let mut img = img_with_dirs("t", 1, &[1, 2, 3], &[1, 2], &[bad, good, good]);
     set_topic_config(&mut img, "t", UNCLEAN_RECOVERY_STRATEGY, "Balanced");
-    let l = ControllerLivenessState::new(krabka_units::secs(10));
     // Only broker 3 alive but it's NOT in the ISR — alive_isr = empty.
-    l.record_heartbeat(3).await;
-    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
-    let plan = compute_offline_dir_failover_changes(
-        &img,
-        NodeId(1),
-        &offline,
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
     assert!(
         plan.changes.is_empty(),
         "Balanced strategy must not make an immediate change; got {:?}",
@@ -127,18 +110,8 @@ async fn offline_dir_empty_isr_aggressive_strategy_defers_to_urm() {
     let good = uuid::Uuid::from_u128(0x1);
     let mut img = img_with_dirs("t", 1, &[1, 2, 3], &[1, 2], &[bad, good, good]);
     set_topic_config(&mut img, "t", UNCLEAN_RECOVERY_STRATEGY, "Aggressive");
-    let l = ControllerLivenessState::new(krabka_units::secs(10));
     // broker 2 is not alive, broker 3 is alive but not in ISR.
-    l.record_heartbeat(3).await;
-    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
-    let plan = compute_offline_dir_failover_changes(
-        &img,
-        NodeId(1),
-        &offline,
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
     assert!(plan.changes.is_empty());
     assert!(
         plan.recoveries == vec![("t".to_string(), 0, RecoveryStrategy::Aggressive)],
@@ -167,11 +140,7 @@ async fn offline_dir_empty_isr_unclean_enabled_elects_out_of_isr_replica() {
     let pr = one_partition_change(&plan.changes);
     // Must elect broker 3 (only alive out-of-ISR) with a singleton
     // ISR (unclean election) and a bumped leader_epoch.
-    let expected = crate::leader_election::test_support::expected_clean_election(
-        3,
-        &[3],
-        vec![bad, good, good],
-    );
+    let expected = expected_clean_election(3, &[3], vec![bad, good, good]);
     assert!(*pr == expected);
     assert!(
         metrics.unclean_leader_elections_total.get() == 1,
@@ -186,17 +155,8 @@ async fn offline_dir_empty_isr_no_unclean_leaves_partition_unavailable() {
     let bad = uuid::Uuid::from_u128(0xDEAD);
     let good = uuid::Uuid::from_u128(0x1);
     let img = img_with_dirs("t", 1, &[1, 2, 3], &[1, 2], &[bad, good, good]);
-    let l = ControllerLivenessState::new(krabka_units::secs(10));
-    l.record_heartbeat(3).await; // only 3 alive, but not in ISR
-    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
-    let plan = compute_offline_dir_failover_changes(
-        &img,
-        NodeId(1),
-        &offline,
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    // only 3 alive, but not in ISR
+    let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
     assert!(
         plan.changes.is_empty(),
         "default-off must not emit any change; got {:?}",

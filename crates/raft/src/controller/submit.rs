@@ -6,7 +6,7 @@
 
 use krabka_metadata::MetadataRecord;
 
-use super::ControllerHandle;
+use super::{ControllerHandle, connection_options};
 use crate::{
     error::RaftError,
     network::OutboundDialer,
@@ -92,12 +92,11 @@ impl ControllerHandle {
         mutations: &[crate::DelegationTokenMutation],
     ) -> Result<crate::SubmitChangeResult, RaftError> {
         let body = encode_delegation_token_mutation_body(mutations)?;
-        let options = krabka_client_core::ConnectionOptions {
-            client_id: self.client_id.clone(),
-            dispatch_queue_capacity: self.client_dispatch_queue_capacity,
-            frame_max: self.client_frame_max,
-            ..krabka_client_core::ConnectionOptions::default()
-        };
+        let options = connection_options(
+            &self.client_id,
+            self.client_dispatch_queue_capacity,
+            self.client_frame_max,
+        );
         let connection = self
             .dialer
             .dial(leader, addr, options)
@@ -150,12 +149,11 @@ impl ControllerHandle {
                 current_leader: Some(leader),
             });
         };
-        let opts = krabka_client_core::ConnectionOptions {
-            client_id: self.client_id.clone(),
-            dispatch_queue_capacity: self.client_dispatch_queue_capacity,
-            frame_max: self.client_frame_max,
-            ..krabka_client_core::ConnectionOptions::default()
-        };
+        let opts = connection_options(
+            &self.client_id,
+            self.client_dispatch_queue_capacity,
+            self.client_frame_max,
+        );
         let conn = self
             .dialer
             .dial(leader, &addr, opts)
@@ -261,7 +259,7 @@ impl SubmitChangeTransport for DialerSubmitTransport<'_> {
     // no offline signal (a `krabka_client_core::Connection` cannot be built in a
     // test). `#[mutants::skip]` rather than an `exclude_re` because cargo-mutants'
     // name-regex exclusions do not reliably match the struct-field-deletion mutant
-    // this method's `ConnectionOptions { .. }` literal generates.
+    // its outbound connection options would otherwise generate.
     #[cfg_attr(test, mutants::skip)]
     async fn send_submit_change(
         &self,
@@ -269,12 +267,11 @@ impl SubmitChangeTransport for DialerSubmitTransport<'_> {
         addr: &str,
         body: Vec<u8>,
     ) -> Result<bytes::Bytes, krabka_client_core::ClientError> {
-        let opts = krabka_client_core::ConnectionOptions {
-            client_id: self.client_id.to_owned(),
-            dispatch_queue_capacity: self.client_dispatch_queue_capacity,
-            frame_max: self.client_frame_max,
-            ..krabka_client_core::ConnectionOptions::default()
-        };
+        let opts = connection_options(
+            self.client_id,
+            self.client_dispatch_queue_capacity,
+            self.client_frame_max,
+        );
         let conn = self.dialer.dial(leader, addr, opts).await?;
         let resp_body = conn
             .raw_request(
@@ -317,12 +314,7 @@ fn encode_submit_change_body(
         &records.to_vec(),
     )
     .map_err(RaftError::from)?;
-    let payload = crate::wire::KrabkaSubmitChangeRequest {
-        records: bytes::Bytes::from(body_bytes),
-    };
-    let mut body = Vec::with_capacity(payload.records.len() + 4);
-    payload.encode_v0(&mut body)?;
-    Ok(body)
+    submit_change_frame(body_bytes)
 }
 
 fn encode_delegation_token_mutation_body(
@@ -332,6 +324,10 @@ fn encode_delegation_token_mutation_body(
         &mutations.to_vec(),
     )
     .map_err(RaftError::from)?;
+    submit_change_frame(payload)
+}
+
+fn submit_change_frame(payload: Vec<u8>) -> Result<Vec<u8>, RaftError> {
     let request = crate::wire::KrabkaSubmitChangeRequest {
         records: bytes::Bytes::from(payload),
     };
@@ -641,37 +637,16 @@ mod tests {
 
     #[tokio::test]
     async fn controller_handle_voter_addr_resolves_known_voter() {
-        use tempfile::TempDir;
-
-        use crate::{config::ControllerConfig, controller::Controller};
-
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
-        let ctrl = Controller::start(cfg).await.expect("start");
+        let (_dir, ctrl) = crate::controller::test_support::bootstrap_controller("start").await;
         let addr = ctrl.voter_addr(NodeId(1));
         assert2::assert!(addr == Some("127.0.0.1:0".to_string()));
         assert2::assert!(ctrl.voter_addr(NodeId(999)).is_none());
         ctrl.shutdown().await;
     }
 
-    async fn joining_controller() -> (tempfile::TempDir, crate::controller::ControllerHandle) {
-        use crate::{
-            config::{BootstrapMode, ControllerConfig},
-            controller::Controller,
-        };
-        let dir = tempfile::TempDir::new().unwrap();
-        let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Join,
-            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
-            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
-        };
-        let ctrl = Controller::start(cfg).await.expect("join start");
-        (dir, ctrl)
-    }
-
     #[tokio::test]
     async fn forward_raw_with_no_known_leader_rejects_not_leader() {
-        let (_dir, ctrl) = joining_controller().await;
+        let (_dir, ctrl) = crate::controller::test_support::joining_controller("join start").await;
 
         let err = ctrl
             .forward_raw(crate::wire::API_KEY_METADATA_FETCH, 0, bytes::Bytes::new())
@@ -688,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_delegation_token_mutations_on_join_node_rejects_not_leader() {
-        let (_dir, ctrl) = joining_controller().await;
+        let (_dir, ctrl) = crate::controller::test_support::joining_controller("join start").await;
         let res = ctrl.submit_delegation_token_mutations(vec![]).await;
         assert2::assert!(matches!(
             res,

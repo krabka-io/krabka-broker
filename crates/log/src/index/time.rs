@@ -3,17 +3,10 @@
 //! `TimeIndex.maybeAppend` keeps them, and the offset is the last offset of the
 //! batch that set the timestamp.
 
-use std::{
-    fs::File,
-    io::{Seek, SeekFrom},
-    path::Path,
-};
+use std::{fs::File, path::Path};
 
 use tracing::instrument;
-use zerocopy::{
-    BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
-    byteorder::{I64, U32},
-};
+use zerocopy::{BigEndian, IntoBytes, byteorder::I64};
 
 use crate::{
     error::LogError,
@@ -28,12 +21,7 @@ pub const TIME_ENTRY_SIZE: usize = 12;
 const NO_TIMESTAMP: i64 = -1;
 
 /// On-disk byte layout of one time-index entry.
-#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
-#[repr(C)]
-struct TimeEntryRaw {
-    timestamp: I64<BigEndian>,
-    relative_offset: U32<BigEndian>,
-}
+type TimeEntryRaw = super::IndexEntryRaw<I64<BigEndian>>;
 
 const _: [(); TIME_ENTRY_SIZE] = [(); std::mem::size_of::<TimeEntryRaw>()];
 
@@ -45,41 +33,18 @@ pub struct TimeIndex {
 }
 
 impl TimeIndex {
-    flush_handle!();
+    index_methods!(IoTarget::TimeIndex);
 
-    #[instrument(
-        level = "debug",
-        skip_all,
-        fields(path = %path.display(), entries = tracing::field::Empty),
-        err,
-    )]
-    pub fn open(path: &Path) -> Result<Self, LogError> {
-        let (file, buf) = super::open_index_file(path)?;
-        let truncated_len = (buf.len() / TIME_ENTRY_SIZE) * TIME_ENTRY_SIZE;
-        let raws = <[TimeEntryRaw]>::ref_from_bytes(&buf[..truncated_len])
-            .expect("length is a multiple of TIME_ENTRY_SIZE and TimeEntryRaw is Unaligned");
-        // Relative offsets strictly increase across real entries; trailing
-        // `(0, 0)` padding from a preallocated Kafka index decodes as a
-        // non-increasing offset. Stop there. Padding carries timestamp 0,
-        // which is a legal timestamp, so the offset column is the
-        // discriminator.
-        let mut entries: Vec<(i64, u32)> = Vec::with_capacity(raws.len());
-        for r in raws {
-            let (ts, rel) = (r.timestamp.get(), r.relative_offset.get());
-            if let Some(&(_, prev_rel)) = entries.last()
-                && rel <= prev_rel
-            {
-                break;
-            }
-            entries.push((ts, rel));
-        }
-        tracing::Span::current().record("entries", entries.len());
-        Ok(Self {
-            file,
-            io: crate::io::file_io(),
-            entries,
-        })
-    }
+    // Relative offsets strictly increase across real entries; trailing
+    // `(0, 0)` padding from a preallocated Kafka index decodes as a
+    // non-increasing offset. Stop there. Padding carries timestamp 0,
+    // which is a legal timestamp, so the offset column is the
+    // discriminator.
+    index_constructor!(TimeEntryRaw,
+        "length is a multiple of TIME_ENTRY_SIZE and TimeEntryRaw is Unaligned",
+        |raw| (raw.key.get(), raw.coordinate.get());
+
+    );
 
     /// Kafka's `TimeIndex.maybeAppend`: append the entry only when `timestamp`
     /// is greater than the newest entry's, so the timestamps in the file
@@ -100,13 +65,17 @@ impl TimeIndex {
     /// Append an entry. The caller must keep the entries monotonic.
     pub fn append(&mut self, timestamp: i64, relative_offset: u32) -> Result<(), LogError> {
         let raw = TimeEntryRaw {
-            timestamp: I64::new(timestamp),
-            relative_offset: U32::new(relative_offset),
+            key: I64::new(timestamp),
+            coordinate: zerocopy::byteorder::U32::new(relative_offset),
         };
-        self.file.seek(SeekFrom::End(0))?;
-        crate::io::write_all(&*self.io, IoTarget::TimeIndex, &self.file, raw.as_bytes())?;
-        self.entries.push((timestamp, relative_offset));
-        Ok(())
+        super::append_index(
+            &mut self.file,
+            &*self.io,
+            IoTarget::TimeIndex,
+            raw.as_bytes(),
+            &mut self.entries,
+            (timestamp, relative_offset),
+        )
     }
 
     /// Start a forward scan before the first record at or above the target.
@@ -118,16 +87,12 @@ impl TimeIndex {
 
     #[instrument(level = "debug", skip(self), fields(entries = tracing::field::Empty), err)]
     pub fn truncate_by_relative_offset(&mut self, max_rel_exclusive: u32) -> Result<(), LogError> {
-        let new_len = self
-            .entries
-            .iter()
-            .take_while(|(_, rel)| *rel < max_rel_exclusive)
-            .count();
-        self.entries.truncate(new_len);
-        self.file.set_len((new_len * TIME_ENTRY_SIZE) as u64)?;
-        self.file.seek(SeekFrom::End(0))?;
-        tracing::Span::current().record("entries", new_len);
-        Ok(())
+        super::truncate_index(
+            &mut self.file,
+            &mut self.entries,
+            TIME_ENTRY_SIZE,
+            max_rel_exclusive,
+        )
     }
 
     /// Newest `(timestamp, relative_offset)` entry, or `None` when the index
@@ -140,43 +105,24 @@ impl TimeIndex {
     pub fn last_entry(&self) -> Option<(i64, u32)> {
         self.entries.last().copied()
     }
-
-    /// The number of entries the index holds, which decides when the
-    /// segment is full under `segment.index.bytes`.
-    #[must_use]
-    pub fn entry_count(&self) -> usize {
-        self.entries.len()
-    }
-
-    #[instrument(level = "debug", skip_all, err)]
-    pub fn flush(&mut self) -> Result<(), LogError> {
-        self.io
-            .sync_file(IoTarget::TimeIndex, &self.file)
-            .map_err(LogError::Io)
-    }
-
-    /// Route this index's writes and syncs through `io`.
-    pub(crate) fn set_io(&mut self, io: std::sync::Arc<dyn LogIo>) {
-        self.io = io;
-    }
 }
 
 #[cfg(test)]
 mod time_tests {
-    use std::fs::OpenOptions;
+    use std::{fs::OpenOptions, io::Write};
 
     use assert2::check;
-    use tempfile::tempdir;
 
     use super::*;
+
+    seed_index_fixture!(TimeIndex, i64);
 
     /// The time index truncates on relative offset, with the same exclusive
     /// bound and the same file-length obligation.
     #[test]
     fn time_index_truncation_drops_entries_at_the_bound_and_shortens_the_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.timeindex");
-        let mut idx = TimeIndex::open(&path).unwrap();
+        let (_dir, path, mut idx) =
+            super::super::index_fixture("00000000000000000000.timeindex", TimeIndex::open);
         for i in 0..5u32 {
             idx.append(1_000 + i64::from(i), i * 10).unwrap();
         }
@@ -226,26 +172,20 @@ mod time_tests {
                 vec![(100, 5), (101, 9)],
             ),
         ] {
-            let dir = tempdir().unwrap();
-            let mut idx = TimeIndex::open(&dir.path().join("0.timeindex")).unwrap();
-            for (timestamp, relative_offset) in existing {
-                idx.append(timestamp, relative_offset).unwrap();
-            }
+            let (_dir, path, mut idx) = populated_index("0.timeindex", &existing);
             idx.maybe_append(appended.0, appended.1).unwrap();
             check!(idx.entries == want, "case {label}");
-            let reopened = TimeIndex::open(&dir.path().join("0.timeindex")).unwrap();
+            let reopened = TimeIndex::open(&path).unwrap();
             check!(reopened.entries == want, "case {label}: on disk");
         }
     }
 
     #[test]
     fn append_and_choose_scan_start() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.timeindex");
-        let mut idx = TimeIndex::open(&path).unwrap();
-        idx.append(1_000_000, 0).unwrap();
-        idx.append(2_000_000, 100).unwrap();
-        idx.append(3_000_000, 200).unwrap();
+        let (_dir, _path, idx) = populated_index(
+            "00000000000000000000.timeindex",
+            &[(1_000_000, 0), (2_000_000, 100), (3_000_000, 200)],
+        );
         for (name, ts, want) in [
             ("before first", 0, 0),
             ("floor first", 1_500_000, 0),
@@ -259,29 +199,17 @@ mod time_tests {
 
     #[test]
     fn persists_across_reopen() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.timeindex");
-        {
-            let mut idx = TimeIndex::open(&path).unwrap();
-            idx.append(1, 0).unwrap();
-            idx.append(2, 50).unwrap();
-            idx.flush().unwrap();
-        }
+        let (_dir, path) = written_index("00000000000000000000.timeindex", &[(1, 0), (2, 50)]);
         let idx = TimeIndex::open(&path).unwrap();
         assert2::assert!(idx.entry_count() == 2);
     }
 
     #[test]
     fn ignores_trailing_zero_padding() {
-        use std::io::Write;
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.timeindex");
-        {
-            let mut idx = TimeIndex::open(&path).unwrap();
-            idx.append(1_000, 0).unwrap();
-            idx.append(2_000, 100).unwrap();
-            idx.flush().unwrap();
-        }
+        let (_dir, path) = written_index(
+            "00000000000000000000.timeindex",
+            &[(1_000, 0), (2_000, 100)],
+        );
         let mut f = OpenOptions::new().append(true).open(&path).unwrap();
         f.write_all(&[0u8; TIME_ENTRY_SIZE * 2]).unwrap();
         f.sync_data().unwrap();

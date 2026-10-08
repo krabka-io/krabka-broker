@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 87 0 91 8 *)
+(* #"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 79 0 83 8 *)
 
-let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 95 20 95 21
-let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 78 10 85 1
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 87 20 87 21
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 70 10 77 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -20,7 +20,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let producer_snapshot_reload_log_start [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 87 0 91 8]
+let producer_snapshot_reload_log_start [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 79 0 83 8]
   (remote_storage_enable: bool) (established: t_Option_i64) (local_log_start: Int64.t) (return (x: Int64.t)) = (! bb0
   [ bb0 = any [ br0 -> {remote_storage_enable = false} (! bb6) | br1 -> {remote_storage_enable} (! bb1) ]
   | bb1 = any [ br0 -> {established = None} (! bb4) | br1 (x0: Int64.t) -> {established = Some x0} (! bb5) ]

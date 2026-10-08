@@ -6,10 +6,7 @@ use super::{
     restore_record_selected,
 };
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub(super) fn selection_input_valid(
     frame: RestoreBatchFrame,
     records: Seq<(RestoreRecordDeltas, RestoreExclusions)>,
@@ -19,11 +16,9 @@ pub(super) fn selection_input_valid(
     && forall<i: Int> 0 <= i && i < records.len()
         ==> crate::restore::restore_record_placeable(frame, records[i].0) }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub(super) fn restore_source_selected(
     frame: RestoreBatchFrame,
     row: (RestoreRecordDeltas, RestoreExclusions),
@@ -36,16 +31,15 @@ pub(super) fn restore_source_selected(
         && !(row.1.producer || row.1.offset || row.1.content.key || row.1.content.header)
     }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub(super) fn selection_ordered(selected: Seq<usize>, count: Int) -> bool {
     pearlite! {
         (forall<j: Int> 0 <= j && j < selected.len() ==> selected[j]@ < count)
-        && (forall<j: Int, k: Int> 0 <= j && j < k && k < selected.len() ==> selected[j]@ < selected[k]@)
+        && (crate::sequence::strictly_increasing(selected))
     }
+}
 }
 
 /// Return the original indices of exactly every selected record, in source
@@ -57,9 +51,9 @@ pub(super) fn selection_ordered(selected: Seq<usize>, count: Int) -> bool {
         && next@ == frame.base_offset@ + frame.last_offset_delta@ + 1
         && selected@.len() <= records@.len()
         && (forall<i: Int> 0 <= i && i < selected@.len() ==> selected@[i]@ < records@.len())
-        && (forall<i: Int, j: Int> 0 <= i && i < j && j < selected@.len() ==> selected@[i]@ < selected@[j]@)
+        && (crate::sequence::strictly_increasing(selected@))
         && (forall<i: Int> 0 <= i && i < records@.len() ==>
-            (exists<j: Int> 0 <= j && j < selected@.len() && selected@[j]@ == i)
+            (crate::sequence::contains_source_index(selected@, i))
                 == restore_source_selected(frame, records@[i], offset_bound, timestamp_bound))
         && (forall<i: Int> 0 <= i && i < selected@.len() ==>
             restore_source_selected(frame, records@[selected@[i]@], offset_bound, timestamp_bound)
@@ -90,7 +84,7 @@ pub(super) fn restore_selection_respects_batch_extent(
         && frame.base_offset@ <= frame.base_offset@ + records@[selected@[j]@].0.offset_delta@
         && frame.base_offset@ + records@[selected@[j]@].0.offset_delta@ < next@)]
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
-        (exists<k: Int> 0 <= k && k < selected@.len() && selected@[k]@ == j)
+        (crate::sequence::contains_source_index(selected@, j))
             == restore_source_selected(frame, records@[j], offset_bound, timestamp_bound))]
     #[variant(records@.len() - i@)]
     while i < records.len() {

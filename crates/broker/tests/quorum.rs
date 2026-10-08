@@ -21,13 +21,14 @@ use std::time::Duration;
 use assert2::assert;
 use krabka_broker::{BrokerConfig, BrokerHandle};
 
+use crate::support::{
+    client::connect_client,
+    discovery::topic_metadata_request,
+    topics::{creatable_topic, create_topic_request},
+};
+
 mod support;
 
-use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    metadata_request::MetadataRequest,
-};
 use support::cluster_lock;
 use tempfile::TempDir;
 
@@ -62,9 +63,7 @@ async fn three_node_cluster_elects_leader() {
         leaders.len() == 1 && !leaders.contains(&krabka_broker::NodeId(0)),
         "leader not converged: {leaders:?}"
     );
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -74,50 +73,25 @@ async fn create_topic_on_any_node_propagates() {
     wait_for_leader(&cluster).await;
 
     // CreateTopics against node 0.
-    let c = Client::builder()
-        .bootstrap(cluster[0].1.listen_addr.to_string())
-        .build()
-        .await
-        .unwrap();
+    let c = connect_client(cluster[0].1.listen_addr.to_string(), None).await;
     let resp = c
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "prop".into(),
-                num_partitions: 3,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic("prop", 3, 1), 5_000))
         .await
         .unwrap();
     assert!(resp.topics[0].error_code == 0);
 
     // Metadata against node 2 should see it within 1s.
-    let c2 = Client::builder()
-        .bootstrap(cluster[2].1.listen_addr.to_string())
-        .build()
-        .await
-        .unwrap();
+    let c2 = connect_client(cluster[2].1.listen_addr.to_string(), None).await;
     // Await the topic in node 2's controller image (deterministic), then the
     // client metadata reflects it immediately.
     cluster[2].0.wait_until_partition_present("prop", 0).await;
-    let m = c2
-        .send(MetadataRequest {
-            topics: None,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    let m = c2.send(topic_metadata_request(None)).await.unwrap();
     assert!(
         m.topics.iter().any(|t| t.name.as_deref() == Some("prop")),
         "topic 'prop' not visible to node 2"
     );
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -167,29 +141,17 @@ async fn leader_kill_recovers() {
     );
 
     // CreateTopics against a survivor succeeds.
-    let c = Client::builder()
-        .bootstrap(cluster[0].1.listen_addr.to_string())
-        .build()
-        .await
-        .unwrap();
+    let c = connect_client(cluster[0].1.listen_addr.to_string(), None).await;
     let resp = c
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "post-kill".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("post-kill", 1, 1),
+            5_000,
+        ))
         .await
         .unwrap();
     assert!(resp.topics[0].error_code == 0);
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -208,29 +170,17 @@ async fn follower_forwards_create_topic() {
     }
     let follower_idx = follower_idx.expect("at least one follower");
 
-    let c = Client::builder()
-        .bootstrap(cluster[follower_idx].1.listen_addr.to_string())
-        .build()
-        .await
-        .unwrap();
+    let c = connect_client(cluster[follower_idx].1.listen_addr.to_string(), None).await;
     let resp = c
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "via-follower".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("via-follower", 1, 1),
+            5_000,
+        ))
         .await
         .unwrap();
     assert!(resp.topics[0].error_code == 0);
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 // macOS-gated for the same reason quorum.rs is windows-gated at the
@@ -255,13 +205,7 @@ async fn concurrent_topic_creates_one_wins() {
     let clients = {
         let mut v = Vec::new();
         for (_, cfg, _) in &cluster {
-            v.push(
-                Client::builder()
-                    .bootstrap(cfg.listen_addr.to_string())
-                    .build()
-                    .await
-                    .unwrap(),
-            );
+            v.push(connect_client(cfg.listen_addr.to_string(), None).await);
         }
         v
     };
@@ -269,18 +213,9 @@ async fn concurrent_topic_creates_one_wins() {
     let mut joins = Vec::new();
     for c in clients {
         joins.push(tokio::spawn(async move {
-            c.send(CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: "race".into(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            })
-            .await
-            .unwrap()
+            c.send(create_topic_request(creatable_topic("race", 1, 1), 5_000))
+                .await
+                .unwrap()
         }));
     }
     let mut zero = 0;
@@ -305,7 +240,5 @@ async fn concurrent_topic_creates_one_wins() {
         "two losers see TOPIC_ALREADY_EXISTS, got zero={zero} already={already}"
     );
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

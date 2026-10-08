@@ -1,11 +1,12 @@
 (* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 84 0 84 88 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 92 16 92 92
-let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 36 10 82 1
+let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 48 10 82 1
 let%span smutation_decision'1 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 24 10 24 84
 let%span smutation_decision'2 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 17 8 19 51
+let%span smutation_decision'3 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 37 16 43 72
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -22,7 +23,7 @@ type t_FreezeSignatureFacts = {
   replaced_set_at_ms: Int64.t;
   signature_valid: bool }
 
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
 
@@ -46,9 +47,14 @@ type t_FreezeSignatureDecision =
   | SignatureInvalid'0
   | Admit'0
 
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
 
 meta "rewrite_def" predicate gt_log_Int
+
+predicate freeze_signature_preconditions [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 36 0 36 70] (facts: t_FreezeSignatureFacts) =
+  [%#smutation_decision'3] facts.identity = Bound
+  /\ freeze_timestamp_in_window_model facts.set_at_ms facts.now_ms facts.max_skew_ms
+  /\ (not facts.replaces \/ gt_log_Int (Int64.to_int facts.set_at_ms) (Int64.to_int facts.replaced_set_at_ms))
 
 meta "compute_max_steps" 1000000
 
@@ -63,12 +69,12 @@ let freeze_signature_decision [#"/workspace/crates/verified/src/freeze/mutation_
     | br3 -> {facts.identity = Bound} (! bb5) ]
   | bb5 = s0
     [ s0 = freeze_timestamp_in_window [%#smutation_decision] {facts.set_at_ms} {facts.now_ms} {facts.max_skew_ms}
-        (fun (_x: bool) -> [ &_11 <- _x ] s1)
-    | s1 = any [ br0 -> {_11 = false} (! bb11) | br1 -> {_11} (! bb10) ] ]
+        (fun (_x: bool) -> [ &_5 <- _x ] s1)
+    | s1 = any [ br0 -> {_5 = false} (! bb11) | br1 -> {_5} (! bb10) ] ]
   | bb10 = any [ br0 -> {facts.replaces = false} (! bb15) | br1 -> {facts.replaces} (! bb12) ]
   | bb12 = s0
-    [ s0 = [ &_16 <- Int64.le facts.set_at_ms facts.replaced_set_at_ms ] s1
-    | s1 = any [ br0 -> {_16 = false} (! bb15) | br1 -> {_16} (! bb13) ] ]
+    [ s0 = [ &_10 <- Int64.le facts.set_at_ms facts.replaced_set_at_ms ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb15) | br1 -> {_10} (! bb13) ] ]
   | bb13 = s0 [ s0 = [ &_ret <- TimestampNotNewer'0 ] s1 | s1 = return {_ret} ]
   | bb15 = any [ br0 -> {facts.signature_valid = false} (! bb16) | br1 -> {facts.signature_valid} (! bb17) ]
   | bb17 = s0 [ s0 = [ &_ret <- Admit'0 ] s1 | s1 = return {_ret} ]
@@ -79,8 +85,8 @@ let freeze_signature_decision [#"/workspace/crates/verified/src/freeze/mutation_
   | bb8 = s0 [ s0 = [ &_ret <- UnknownKey'0 ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FreezeSignatureDecision = Any.any_l ()
   | & facts: t_FreezeSignatureFacts = facts
-  | & _11: bool = Any.any_l ()
-  | & _16: bool = Any.any_l () ])
+  | & _5: bool = Any.any_l ()
+  | & _10: bool = Any.any_l () ])
   [ return (result: t_FreezeSignatureDecision) ->
   {[@stop_split] [@expl:freeze_signature_decision ensures] [%#smutation_decision'0] match result with
       | UnknownKey'0 -> facts.identity = UnknownKey
@@ -91,13 +97,7 @@ let freeze_signature_decision [#"/workspace/crates/verified/src/freeze/mutation_
       | TimestampNotNewer'0 -> facts.identity = Bound
       /\ freeze_timestamp_in_window_model facts.set_at_ms facts.now_ms facts.max_skew_ms
       /\ facts.replaces /\ Int64.to_int facts.set_at_ms <= Int64.to_int facts.replaced_set_at_ms
-      | SignatureInvalid'0 -> facts.identity = Bound
-      /\ freeze_timestamp_in_window_model facts.set_at_ms facts.now_ms facts.max_skew_ms
-      /\ (not facts.replaces \/ gt_log_Int (Int64.to_int facts.set_at_ms) (Int64.to_int facts.replaced_set_at_ms))
-      /\ not facts.signature_valid
-      | Admit'0 -> facts.identity = Bound
-      /\ freeze_timestamp_in_window_model facts.set_at_ms facts.now_ms facts.max_skew_ms
-      /\ (not facts.replaces \/ gt_log_Int (Int64.to_int facts.set_at_ms) (Int64.to_int facts.replaced_set_at_ms))
-      /\ facts.signature_valid
+      | SignatureInvalid'0 -> freeze_signature_preconditions facts /\ not facts.signature_valid
+      | Admit'0 -> freeze_signature_preconditions facts /\ facts.signature_valid
       end}
     (! return {result}) ]

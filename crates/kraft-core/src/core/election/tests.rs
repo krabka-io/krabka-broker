@@ -2,17 +2,14 @@ use assert2::check;
 
 use super::*;
 use crate::{
-    core::test_support::{FakeLog, machine, voters},
+    core::test_support::{FakeLog, machine, three_voter_machine, voters},
     event::{Event, LogEnd},
 };
 
 /// An election at time 2000 with a fresh, up-to-date epoch-1 log.
 fn start_election(ids: &[NodeId]) -> (QuorumStateMachine, FakeLog) {
     let mut m = machine(NodeId(1), ids);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
+    let log = FakeLog::new(5, 1);
     m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
     (m, log)
 }
@@ -45,10 +42,7 @@ fn vote_response(
 /// the vote we are holding, so whether the vote survives is the tell.
 #[test]
 fn only_a_rejection_from_a_higher_epoch_steps_us_down() {
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
+    let log = FakeLog::new(5, 1);
     // (what it is, granted, epoch offered, do we keep the vote we hold?)
     let cases = [
         ("a rejection at our own epoch", false, 3, true),
@@ -56,7 +50,7 @@ fn only_a_rejection_from_a_higher_epoch_steps_us_down() {
         ("a rejection from a higher epoch", false, 9, false),
     ];
     for (what, vote_granted, epoch, keeps_vote) in cases {
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let mut m = three_voter_machine();
         // Cast a binding vote at epoch 3, so a step-down has something to
         // clear and "nothing happened" is distinguishable.
         m.on_event(
@@ -90,11 +84,8 @@ fn only_a_rejection_from_a_higher_epoch_steps_us_down() {
 
 #[test]
 fn election_timeout_starts_prevote_prospective() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
+    let mut m = three_voter_machine();
+    let log = FakeLog::new(5, 1);
     let actions = m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
     assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
     assert2::assert!(
@@ -148,10 +139,7 @@ fn real_majority_promotes_to_leader_and_appends_leader_change() {
 #[test]
 fn observer_never_starts_election() {
     let mut m = machine(NodeId(99), &[NodeId(1), NodeId(2), NodeId(3)]); // 99 is not a voter
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
+    let log = FakeLog::new(5, 1);
     let actions = m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
     assert2::assert!(matches!(m.role(), Role::Observer { .. }));
     assert2::assert!(

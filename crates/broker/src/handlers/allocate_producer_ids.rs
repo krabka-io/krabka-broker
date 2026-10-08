@@ -10,35 +10,33 @@ use krabka_protocol::owned::{
 use crate::{
     broker::Broker,
     codes,
-    error::BrokerError,
     producer_id_manager::{ProducerIdAllocationError, allocate_block},
 };
 
-/// Checks `ClusterAction` on the cluster, then allocates a block.
-///
-/// Kafka's `ControllerApis.handleAllocateProducerIdsRequest` calls
-/// `authorizeClusterOperation(request, CLUSTER_ACTION)` before the controller
-/// runs. A denial becomes `AllocateProducerIdsRequest.getErrorResponse`:
-/// `CLUSTER_AUTHORIZATION_FAILED` and the default block fields, and no block
-/// is allocated. A request that arrives in an `Envelope` runs this check
-/// against the principal that the envelope names.
-pub(crate) async fn handle(
-    broker: &Broker,
-    request: AllocateProducerIdsRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<AllocateProducerIdsResponse, BrokerError> {
-    if crate::handlers::cluster_action_denied(
-        broker.config.authorizer.as_ref(),
-        &broker.controller.current_image(),
-        ctx,
-    ) {
-        return Ok(AllocateProducerIdsResponse {
-            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            ..Default::default()
-        });
+context_handler! {
+    /// Checks `ClusterAction` on the cluster, then allocates a block.
+    ///
+    /// Kafka's `ControllerApis.handleAllocateProducerIdsRequest` calls
+    /// `authorizeClusterOperation(request, CLUSTER_ACTION)` before the controller
+    /// runs. A denial becomes `AllocateProducerIdsRequest.getErrorResponse`:
+    /// `CLUSTER_AUTHORIZATION_FAILED` and the default block fields, and no block
+    /// is allocated. A request that arrives in an `Envelope` runs this check
+    /// against the principal that the envelope names.
+    AllocateProducerIdsRequest => AllocateProducerIdsResponse,
+    (broker, request, _version, ctx),
+    {
+        if crate::handlers::cluster_action_denied(
+            broker.config.authorizer.as_ref(),
+            &broker.controller.current_image(),
+            ctx,
+        ) {
+            return Ok(AllocateProducerIdsResponse {
+                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+                ..Default::default()
+            });
+        }
+        Ok(serve(broker, &request).await)
     }
-    Ok(serve(broker, &request).await)
 }
 
 async fn serve(
@@ -95,16 +93,21 @@ mod tests {
         broker: &Broker,
         request: AllocateProducerIdsRequest,
     ) -> AllocateProducerIdsResponse {
-        let user = crate::test_support::principal("ANONYMOUS");
-        let address = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&user, &address, "allocate-test");
+        request_identity!(
+            (user, address, ctx),
+            crate::test_support::principal("ANONYMOUS"),
+            client_id = "allocate-test",
+            address = crate::test_support::peer()
+        );
         handle(broker, request, 0, &ctx).await.expect("handle")
     }
 
     #[tokio::test]
     async fn allocates_consecutive_durable_blocks_and_fences_stale_epochs() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit().await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            crate::test_support::start_broker_no_audit()
+        );
         let broker_id = i32::try_from(broker.config.node_id.0).unwrap();
         let broker_epoch = broker
             .controller
@@ -212,11 +215,7 @@ mod tests {
     /// the next block start does not move.
     #[tokio::test]
     async fn allocation_needs_cluster_action() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
-            config.authorizer = std::sync::Arc::new(crate::test_support::GrantsInPrincipalName);
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), principal_grants);
         let request = AllocateProducerIdsRequest {
             broker_id: i32::try_from(broker.config.node_id.0).unwrap(),
             broker_epoch: broker

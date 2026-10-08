@@ -129,15 +129,10 @@ impl ShareModel {
     /// in `share_partition::state::acquire`'s unit tests).
     pub(super) fn log_start_advance() -> Self {
         Self {
-            t0: Instant::now(),
-            members: 1,
-            max_offset: Offset(3),
-            max_tick: 2,
-            max_attempts: 2,
-            max_inflight: 3,
             allow_reload: true,
             allow_defer: false,
             allow_log_start_advance: true,
+            ..Self::deferral_wide()
         }
     }
 

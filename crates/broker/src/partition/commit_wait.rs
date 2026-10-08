@@ -190,21 +190,13 @@ mod tests {
             partition.install_leader_change(1, 0).await;
             partition.replica_state.lock().await.hw = Offset(case.hw_now);
 
-            let changes = {
-                let partition = Arc::clone(&partition);
-                let (moves_to, hw_later) = (case.moves_to, case.hw_later);
-                tokio::spawn(async move {
-                    // intentional: the wait has to start before the changes land.
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                    if let Some((leader, epoch)) = moves_to {
-                        partition.install_leader_change(leader, epoch).await;
-                    }
-                    if let Some(hw) = hw_later {
-                        partition.replica_state.lock().await.hw = Offset(hw);
-                        hw_notify.notify_waiters();
-                    }
-                })
-            };
+            let changes = crate::coordinator::test_support::schedule_commit_changes!(case, partition;
+                captures {} leader(leader, epoch) {
+                    partition.install_leader_change(leader, epoch).await;
+                } notify {
+                    hw_notify.notify_waiters();
+                }
+            );
             let result = partition
                 .await_committed_while(
                     Offset(2),

@@ -8,15 +8,11 @@
 //! and these tests need to pin v0 and v3 exactly.
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BytesMut};
 use krabka_protocol::{
     Decode, Encode,
     kafka_3_6_2::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::ProduceResponse,
-    },
+    owned::produce_response::ProduceResponse,
     records::{RecordBatch, RecordsPayload},
 };
 use tokio::{
@@ -24,7 +20,29 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::kafka_wire;
+use crate::{
+    kafka_wire,
+    support::{
+        produce::single_partition_produce,
+        topics::{creatable_topic, create_topic_request},
+    },
+};
+
+/// Verify successful down-conversion and extract the exact legacy bytes.
+///
+/// # Panics
+/// Panics on a partition error, absent records, or a non-legacy payload.
+pub fn legacy_bytes(
+    error_code: i16,
+    records: Option<&RecordsPayload>,
+    mismatch: &str,
+) -> bytes::Bytes {
+    assert!(error_code == 0, "fetch partition error: {}", error_code);
+    match records.expect("records field should be Some") {
+        RecordsPayload::Legacy(bytes) => bytes.clone(),
+        _ => panic!("{mismatch}"),
+    }
+}
 
 // ── Wire helpers ──────────────────────────────────────────────────────────────
 
@@ -67,16 +85,10 @@ pub async fn create_topic_with_partitions(
     num_partitions: i32,
 ) {
     let cr = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic(name, num_partitions, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(
@@ -101,20 +113,13 @@ pub async fn produce_batch_to(
     batch: RecordBatch,
 ) {
     const PRODUCE_VERSION: i16 = 9;
-    let req = ProduceRequest {
-        acks: 1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.into(),
-            partition_data: vec![PartitionProduceData {
-                index: partition,
-                records: Some(RecordsPayload::V2(vec![batch])),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = single_partition_produce(
+        topic,
+        krabka_protocol::primitives::uuid::Uuid::default(),
+        partition,
+        Some(RecordsPayload::V2(vec![batch])),
+        (1, 5_000),
+    );
     let mut body = BytesMut::new();
     req.encode(&mut body, PRODUCE_VERSION)
         .expect("encode ProduceRequest v9");
@@ -122,15 +127,13 @@ pub async fn produce_batch_to(
     let mut stream = TcpStream::connect(addr).await.expect("connect for produce");
     stream.set_nodelay(true).ok();
     // ProduceRequest v9 is flexible (FLEXIBLE_MIN = 9).
-    let client_id = "legacy-fetch-produce";
-    let mut frame = BytesMut::new();
-    frame.put_i16(0); // api_key = Produce
-    frame.put_i16(PRODUCE_VERSION);
-    frame.put_i32(99); // correlation_id
-    frame.put_i16(i16::try_from(client_id.len()).unwrap());
-    frame.put_slice(client_id.as_bytes());
-    frame.put_u8(0); // flexible request header: empty tagged fields
-    frame.put_slice(&body);
+    let frame = crate::support::wire::request_frame(
+        (0, PRODUCE_VERSION, 99, true),
+        "legacy-fetch-produce",
+        &body,
+        None,
+        None,
+    );
 
     stream
         .write_u32(u32::try_from(frame.len()).unwrap())

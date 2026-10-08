@@ -1,32 +1,32 @@
-(* #"/workspace/crates/verified/src/wal/batch_equal.rs" 123 0 128 16 *)
+(* #"/workspace/crates/verified/src/wal/batch_equal.rs" 122 0 127 16 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 129 15 129 16
-let%span sbatch_equal'0 = "/workspace/crates/verified/src/wal/batch_equal.rs" 129 38 129 49
-let%span sbatch_equal'1 = "/workspace/crates/verified/src/wal/batch_equal.rs" 129 53 129 64
-let%span sbatch_equal'2 = "/workspace/crates/verified/src/wal/batch_equal.rs" 133 27 133 38
-let%span sbatch_equal'3 = "/workspace/crates/verified/src/wal/batch_equal.rs" 139 16 139 27
-let%span sbatch_equal'4 = "/workspace/crates/verified/src/wal/batch_equal.rs" 139 41 139 42
-let%span sbatch_equal'5 = "/workspace/crates/verified/src/wal/batch_equal.rs" 139 35 139 43
-let%span sbatch_equal'6 = "/workspace/crates/verified/src/wal/batch_equal.rs" 139 46 139 47
-let%span sbatch_equal'7 = "/workspace/crates/verified/src/wal/batch_equal.rs" 139 57 139 58
-let%span sbatch_equal'8 = "/workspace/crates/verified/src/wal/batch_equal.rs" 139 51 139 59
-let%span sbatch_equal'9 = "/workspace/crates/verified/src/wal/batch_equal.rs" 139 77 139 78
-let%span sbatch_equal'10 = "/workspace/crates/verified/src/wal/batch_equal.rs" 139 71 139 79
-let%span sbatch_equal'11 = "/workspace/crates/verified/src/wal/batch_equal.rs" 142 50 142 51
-let%span sbatch_equal'12 = "/workspace/crates/verified/src/wal/batch_equal.rs" 142 44 142 52
-let%span sbatch_equal'13 = "/workspace/crates/verified/src/wal/batch_equal.rs" 142 8 142 61
-let%span sbatch_equal'14 = "/workspace/crates/verified/src/wal/batch_equal.rs" 145 15 145 16
-let%span sbatch_equal'15 = "/workspace/crates/verified/src/wal/batch_equal.rs" 145 9 145 17
-let%span sbatch_equal'16 = "/workspace/crates/verified/src/wal/batch_equal.rs" 103 28 109 1
-let%span sbatch_equal'17 = "/workspace/crates/verified/src/wal/batch_equal.rs" 110 28 117 1
-let%span sbatch_equal'18 = "/workspace/crates/verified/src/wal/batch_equal.rs" 118 28 121 1
+let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 128 15 128 16
+let%span sbatch_equal'0 = "/workspace/crates/verified/src/wal/batch_equal.rs" 128 38 128 49
+let%span sbatch_equal'1 = "/workspace/crates/verified/src/wal/batch_equal.rs" 128 53 128 64
+let%span sbatch_equal'2 = "/workspace/crates/verified/src/wal/batch_equal.rs" 132 27 132 38
+let%span sbatch_equal'3 = "/workspace/crates/verified/src/wal/batch_equal.rs" 138 16 138 27
+let%span sbatch_equal'4 = "/workspace/crates/verified/src/wal/batch_equal.rs" 138 41 138 42
+let%span sbatch_equal'5 = "/workspace/crates/verified/src/wal/batch_equal.rs" 138 35 138 43
+let%span sbatch_equal'6 = "/workspace/crates/verified/src/wal/batch_equal.rs" 138 46 138 47
+let%span sbatch_equal'7 = "/workspace/crates/verified/src/wal/batch_equal.rs" 138 57 138 58
+let%span sbatch_equal'8 = "/workspace/crates/verified/src/wal/batch_equal.rs" 138 51 138 59
+let%span sbatch_equal'9 = "/workspace/crates/verified/src/wal/batch_equal.rs" 138 77 138 78
+let%span sbatch_equal'10 = "/workspace/crates/verified/src/wal/batch_equal.rs" 138 71 138 79
+let%span sbatch_equal'11 = "/workspace/crates/verified/src/wal/batch_equal.rs" 141 50 141 51
+let%span sbatch_equal'12 = "/workspace/crates/verified/src/wal/batch_equal.rs" 141 44 141 52
+let%span sbatch_equal'13 = "/workspace/crates/verified/src/wal/batch_equal.rs" 141 8 141 61
+let%span sbatch_equal'14 = "/workspace/crates/verified/src/wal/batch_equal.rs" 144 15 144 16
+let%span sbatch_equal'15 = "/workspace/crates/verified/src/wal/batch_equal.rs" 144 9 144 17
+let%span sbatch_equal'16 = "/workspace/crates/verified/src/wal/batch_equal.rs" 102 28 108 1
+let%span sbatch_equal'17 = "/workspace/crates/verified/src/wal/batch_equal.rs" 109 28 116 1
+let%span sbatch_equal'18 = "/workspace/crates/verified/src/wal/batch_equal.rs" 117 28 120 1
 let%span sbatch_equal'19 = "/workspace/crates/verified/src/wal/batch_equal.rs" 36 28 41 6
 let%span sbatch_equal'20 = "/workspace/crates/verified/src/wal/batch_equal.rs" 42 28 42 87
 let%span sbatch_equal'21 = "/workspace/crates/verified/src/wal/batch_equal.rs" 43 28 44 80
 let%span sbatch_equal'22 = "/workspace/crates/verified/src/wal/batch_equal.rs" 45 28 46 67
-let%span sbatch_equal'23 = "/workspace/crates/verified/src/wal/batch_equal.rs" 90 8 97 9
+let%span sbatch_equal'23 = "/workspace/crates/verified/src/wal/batch_equal.rs" 88 8 95 9
 let%span sbatch_equal'24 = "/workspace/crates/verified/src/wal/batch_equal.rs" 9 10 9 29
 let%span sbatch_equal'25 = "/workspace/crates/verified/src/wal/batch_equal.rs" 7 11 7 37
 let%span sbatch_equal'26 = "/workspace/crates/verified/src/wal/batch_equal.rs" 8 11 8 45
@@ -64,7 +64,7 @@ axiom exact_wal_batch_suffix_def:
       /\ exact_wal_batch_suffix bases lasts (index + 1) (Int64.to_int (Seq.get lasts index) + 1) target
     )
 
-predicate wal_batch_layout [#"/workspace/crates/verified/src/wal/batch_equal.rs" 88 0 88 90] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (start: int) (target: int) =
+predicate wal_batch_layout [#"/workspace/crates/verified/src/wal/batch_equal.rs" 86 0 86 90] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (start: int) (target: int) =
   [%#sbatch_equal'23] Seq.length bases = Seq.length lasts
   /\ (if start = target then
     Seq.length bases = 0
@@ -106,7 +106,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let wal_covering_batch_range [#"/workspace/crates/verified/src/wal/batch_equal.rs" 123 0 128 16]
+let wal_covering_batch_range [#"/workspace/crates/verified/src/wal/batch_equal.rs" 122 0 127 16]
   (bases: Slice64.slice Int64.t) (lasts: Slice64.slice Int64.t) (start: Int64.t) (target: Int64.t)
   (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
@@ -218,10 +218,8 @@ let wal_covering_batch_range [#"/workspace/crates/verified/src/wal/batch_equal.r
   | & _73: UInt64.t = Any.any_l ()
   | & _74: bool = Any.any_l () ])
   [ return (result: t_Option_i64) ->
-  {[@stop_split] [@expl:wal_covering_batch_range ensures] ([@stop_split] [@expl:wal_covering_batch_range ensures #0] [%#sbatch_equal'16] match result with
-          | None -> false
-          | Some _ -> true
-          end
+  {[@stop_split] [@expl:wal_covering_batch_range ensures] ([@stop_split] [@expl:wal_covering_batch_range ensures #0] [%#sbatch_equal'16] (result
+        <> None)
       = (0 <= Int64.to_int start
       /\ Int64.to_int start <= Int64.to_int target
       /\ Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)

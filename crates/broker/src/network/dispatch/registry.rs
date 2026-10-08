@@ -5,7 +5,6 @@
 use std::net::SocketAddr;
 
 use bytes::Bytes;
-use futures_util::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 use tracing::Instrument as _;
@@ -79,11 +78,7 @@ where
         );
         response.throttle = response.throttle.max(handler_throttle);
     }
-    if let Err(error) = framed.send(response.bytes).await {
-        tracing::warn!(%error, "framed.send error, closing");
-        return AfterResponse::Close;
-    }
-    AfterResponse::Mute(response.throttle)
+    super::response::send_throttled_response(framed, response).await
 }
 
 #[derive(Clone, Copy)]

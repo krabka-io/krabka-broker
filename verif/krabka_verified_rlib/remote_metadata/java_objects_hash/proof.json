@@ -2,11 +2,11 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_java_int_image": { "prover": "alt-ergo", "time": 0.026 },
-      "vc_java_long_hash": { "prover": "alt-ergo", "time": 0.029 },
-      "vc_java_objects_hash": { "prover": "alt-ergo", "time": 0.037 },
-      "vc_wrapping_add": { "prover": "alt-ergo", "time": 0.019 },
-      "vc_wrapping_mul": { "prover": "alt-ergo", "time": 0.016 }
+      "vc_java_int_image": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_java_long_hash": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_java_objects_hash": { "prover": "alt-ergo", "time": 0.024 },
+      "vc_wrapping_add": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_wrapping_mul": { "prover": "alt-ergo", "time": 0.009 }
     }
   }
 }

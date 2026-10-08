@@ -159,19 +159,7 @@ async fn controller_signed_oauth_requires_a_fresh_published_cache() {
         }
         .encode(&mut body, 2)
         .unwrap();
-        client
-            .write_all(&request_frame(
-                API_KEY_SASL_AUTHENTICATE,
-                2,
-                2,
-                None,
-                true,
-                &body,
-            ))
-            .await
-            .unwrap();
-        let frame = read_response_frame(&mut client).await;
-        let response = SaslAuthenticateResponse::decode(&mut &frame[5..], 2).unwrap();
+        let response = authenticate_round_trip(&mut client, 2, &body).await;
         assert!(response.error_code == 0);
         assert!(
             response.auth_bytes.is_empty() == admitted,
@@ -192,21 +180,29 @@ async fn controller_signed_oauth_requires_a_fresh_published_cache() {
             }
             .encode(&mut body, 2)
             .unwrap();
-            client
-                .write_all(&request_frame(
-                    API_KEY_SASL_AUTHENTICATE,
-                    2,
-                    3,
-                    None,
-                    true,
-                    &body,
-                ))
-                .await
-                .unwrap();
-            let frame = read_response_frame(&mut client).await;
-            let response = SaslAuthenticateResponse::decode(&mut &frame[5..], 2).unwrap();
+            let response = authenticate_round_trip(&mut client, 3, &body).await;
             assert!(response.error_code == crate::codes::SASL_AUTHENTICATION_FAILED);
             assert!(task.await.unwrap().is_err());
         }
     }
+}
+
+async fn authenticate_round_trip(
+    client: &mut TcpStream,
+    correlation_id: i32,
+    body: &[u8],
+) -> SaslAuthenticateResponse {
+    client
+        .write_all(&request_frame(
+            API_KEY_SASL_AUTHENTICATE,
+            2,
+            correlation_id,
+            None,
+            true,
+            body,
+        ))
+        .await
+        .unwrap();
+    let frame = read_response_frame(client).await;
+    SaslAuthenticateResponse::decode(&mut &frame[5..], 2).unwrap()
 }

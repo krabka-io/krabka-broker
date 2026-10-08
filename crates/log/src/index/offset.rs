@@ -3,16 +3,10 @@
 //! `LogSegment.append`, the offset is the **last** offset of the batch that
 //! starts at the position, not its base offset.
 
-use std::{
-    fs::File,
-    io::{Seek, SeekFrom},
-    path::Path,
-};
+use std::{fs::File, path::Path};
 
 use tracing::instrument;
-use zerocopy::{
-    BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, byteorder::U32,
-};
+use zerocopy::{BigEndian, IntoBytes, byteorder::U32};
 
 use crate::{
     error::LogError,
@@ -23,12 +17,7 @@ use crate::{
 pub const OFFSET_ENTRY_SIZE: usize = 8;
 
 /// On-disk byte layout of one offset-index entry.
-#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
-#[repr(C)]
-struct OffsetEntryRaw {
-    relative_offset: U32<BigEndian>,
-    position: U32<BigEndian>,
-}
+type OffsetEntryRaw = super::IndexEntryRaw<U32<BigEndian>>;
 
 const _: [(); OFFSET_ENTRY_SIZE] = [(); std::mem::size_of::<OffsetEntryRaw>()];
 
@@ -42,56 +31,36 @@ pub struct OffsetIndex {
 }
 
 impl OffsetIndex {
-    flush_handle!();
+    index_methods!(IoTarget::OffsetIndex);
 
-    /// Open or create an offset-index file. If the file exists, this method
-    /// loads its entries into memory. If it does not exist, this method
-    /// creates an empty file.
-    #[instrument(
-        level = "debug",
-        skip_all,
-        fields(path = %path.display(), entries = tracing::field::Empty),
-        err,
-    )]
-    pub fn open(path: &Path) -> Result<Self, LogError> {
-        let (file, buf) = super::open_index_file(path)?;
-        let truncated_len = (buf.len() / OFFSET_ENTRY_SIZE) * OFFSET_ENTRY_SIZE;
-        let raws = <[OffsetEntryRaw]>::ref_from_bytes(&buf[..truncated_len])
-            .expect("length is a multiple of OFFSET_ENTRY_SIZE and OffsetEntryRaw is Unaligned");
-        // Byte positions strictly increase across real entries. A Kafka
-        // index file is preallocated to `segment.index.bytes` and only
-        // truncated on clean roll/shutdown, so an unclean copy carries
-        // trailing zero-padding that decodes to `(0, 0)`. Stop at the
-        // first non-increasing position to keep `lookup`'s binary search
-        // operating over a monotonic slice.
-        let mut entries: Vec<(u32, u32)> = Vec::with_capacity(raws.len());
-        for r in raws {
-            let (rel, pos) = (r.relative_offset.get(), r.position.get());
-            if let Some(&(_, prev_pos)) = entries.last()
-                && pos <= prev_pos
-            {
-                break;
-            }
-            entries.push((rel, pos));
-        }
-        tracing::Span::current().record("entries", entries.len());
-        Ok(Self {
-            file,
-            io: crate::io::file_io(),
-            entries,
-        })
-    }
+    // Byte positions strictly increase across real entries. A Kafka
+    // index file is preallocated to `segment.index.bytes` and only
+    // truncated on clean roll/shutdown, so an unclean copy carries
+    // trailing zero-padding that decodes to `(0, 0)`. Stop at the
+    // first non-increasing position to keep `lookup`'s binary search
+    // operating over a monotonic slice.
+    index_constructor!(OffsetEntryRaw,
+        "length is a multiple of OFFSET_ENTRY_SIZE and OffsetEntryRaw is Unaligned",
+        |raw| (raw.key.get(), raw.coordinate.get());
+        /// Open or create an offset-index file. If the file exists, this method
+        /// loads its entries into memory. If it does not exist, this method
+        /// creates an empty file.
+    );
 
     /// Append a new entry. The caller must keep the entries monotonic.
     pub fn append(&mut self, relative_offset: u32, position: u32) -> Result<(), LogError> {
         let raw = OffsetEntryRaw {
-            relative_offset: U32::new(relative_offset),
-            position: U32::new(position),
+            key: U32::new(relative_offset),
+            coordinate: zerocopy::byteorder::U32::new(position),
         };
-        self.file.seek(SeekFrom::End(0))?;
-        crate::io::write_all(&*self.io, IoTarget::OffsetIndex, &self.file, raw.as_bytes())?;
-        self.entries.push((relative_offset, position));
-        Ok(())
+        super::append_index(
+            &mut self.file,
+            &*self.io,
+            IoTarget::OffsetIndex,
+            raw.as_bytes(),
+            &mut self.entries,
+            (relative_offset, position),
+        )
     }
 
     /// Find the byte position where a read for a given relative offset must
@@ -116,17 +85,12 @@ impl OffsetIndex {
     /// `position >= max_position_exclusive` remains.
     #[instrument(level = "debug", skip(self), fields(entries = tracing::field::Empty), err)]
     pub fn truncate_by_position(&mut self, max_position_exclusive: u32) -> Result<(), LogError> {
-        let new_len = self
-            .entries
-            .iter()
-            .take_while(|(_, pos)| *pos < max_position_exclusive)
-            .count();
-        self.entries.truncate(new_len);
-        let new_file_len = (new_len * OFFSET_ENTRY_SIZE) as u64;
-        self.file.set_len(new_file_len)?;
-        self.file.seek(SeekFrom::End(0))?;
-        tracing::Span::current().record("entries", new_len);
-        Ok(())
+        super::truncate_index(
+            &mut self.file,
+            &mut self.entries,
+            OFFSET_ENTRY_SIZE,
+            max_position_exclusive,
+        )
     }
 
     /// Byte position of the first entry whose `relative_offset >= target`, or
@@ -143,35 +107,29 @@ impl OffsetIndex {
     pub fn last_entry(&self) -> Option<(u32, u32)> {
         self.entries.last().copied()
     }
-
-    /// The number of entries the index holds, which decides when the
-    /// segment is full under `segment.index.bytes`.
-    #[must_use]
-    pub fn entry_count(&self) -> usize {
-        self.entries.len()
-    }
-
-    #[instrument(level = "debug", skip_all, err)]
-    pub fn flush(&mut self) -> Result<(), LogError> {
-        self.io
-            .sync_file(IoTarget::OffsetIndex, &self.file)
-            .map_err(LogError::Io)
-    }
-
-    /// Route this index's writes and syncs through `io`.
-    pub(crate) fn set_io(&mut self, io: std::sync::Arc<dyn LogIo>) {
-        self.io = io;
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs::OpenOptions;
+    use std::{fs::OpenOptions, io::Write};
 
     use assert2::check;
-    use tempfile::tempdir;
 
     use super::*;
+
+    seed_index_fixture!(OffsetIndex, u32);
+
+    fn reference_index() -> (tempfile::TempDir, std::path::PathBuf, OffsetIndex) {
+        populated_index(
+            "00000000000000000000.index",
+            &[(0, 0), (100, 4096), (200, 8192)],
+        )
+    }
+
+    fn assert_entry_metadata(index: &OffsetIndex, count: usize, last: Option<(u32, u32)>) {
+        assert2::assert!(index.entry_count() == count);
+        assert2::assert!(index.last_entry() == last);
+    }
 
     /// Truncation drops every entry at or past the bound and shortens the file
     /// to match.
@@ -182,9 +140,8 @@ mod tests {
     /// resurrects offsets the log no longer has.
     #[test]
     fn offset_index_truncation_drops_entries_at_the_bound_and_shortens_the_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.index");
-        let mut idx = OffsetIndex::open(&path).unwrap();
+        let (_dir, path, mut idx) =
+            super::super::index_fixture("00000000000000000000.index", OffsetIndex::open);
         for i in 0..5u32 {
             idx.append(i * 10, i * 100).unwrap();
         }
@@ -204,12 +161,7 @@ mod tests {
 
     #[test]
     fn append_and_lookup() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.index");
-        let mut idx = OffsetIndex::open(&path).unwrap();
-        idx.append(0, 0).unwrap();
-        idx.append(100, 4096).unwrap();
-        idx.append(200, 8192).unwrap();
+        let (_dir, _path, idx) = reference_index();
         for (name, offset, want) in [
             ("floor first", 50, 0),
             ("exact middle", 100, 4096),
@@ -223,9 +175,8 @@ mod tests {
 
     #[test]
     fn empty_index_returns_zero() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.index");
-        let idx = OffsetIndex::open(&path).unwrap();
+        let (_dir, _path, idx) =
+            super::super::index_fixture("00000000000000000000.index", OffsetIndex::open);
         for (_name, offset) in [("zero", 0), ("positive", 1000)] {
             assert2::assert!(idx.lookup(offset) == 0);
         }
@@ -233,14 +184,7 @@ mod tests {
 
     #[test]
     fn persists_across_reopen() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.index");
-        {
-            let mut idx = OffsetIndex::open(&path).unwrap();
-            idx.append(0, 0).unwrap();
-            idx.append(100, 4096).unwrap();
-            idx.flush().unwrap();
-        }
+        let (_dir, path) = written_index("00000000000000000000.index", &[(0, 0), (100, 4096)]);
         let idx = OffsetIndex::open(&path).unwrap();
         assert2::assert!(idx.entry_count() == 2);
         assert2::assert!(idx.lookup(100) == 4096);
@@ -252,15 +196,7 @@ mod tests {
         // truncates on clean shutdown; an unclean copy carries trailing
         // zero entries. Loading must stop at the real data so the binary
         // search stays monotonic.
-        use std::io::Write;
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.index");
-        {
-            let mut idx = OffsetIndex::open(&path).unwrap();
-            idx.append(0, 0).unwrap();
-            idx.append(100, 4096).unwrap();
-            idx.flush().unwrap();
-        }
+        let (_dir, path) = written_index("00000000000000000000.index", &[(0, 0), (100, 4096)]);
         // Append two zero-filled entries (preallocation padding).
         let mut f = OpenOptions::new().append(true).open(&path).unwrap();
         f.write_all(&[0u8; OFFSET_ENTRY_SIZE * 2]).unwrap();
@@ -268,8 +204,7 @@ mod tests {
         drop(f);
 
         let idx = OffsetIndex::open(&path).unwrap();
-        assert2::assert!(idx.entry_count() == 2);
-        assert2::assert!(idx.last_entry() == Some((100, 4096)));
+        assert_entry_metadata(&idx, 2, Some((100, 4096)));
         assert2::assert!(idx.lookup(150) == 4096);
     }
 
@@ -277,11 +212,7 @@ mod tests {
     /// the indexed batch ends exactly on its target.
     #[test]
     fn floor_entry_is_the_entry_lookup_lands_on() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.index");
-        let mut idx = OffsetIndex::open(&path).unwrap();
-        idx.append(4, 0).unwrap();
-        idx.append(9, 50).unwrap();
+        let (_dir, _path, idx) = populated_index("00000000000000000000.index", &[(4, 0), (9, 50)]);
         for (name, target, want) in [
             ("below the first entry", 3, None),
             ("exact first", 4, Some((4, 0))),
@@ -299,12 +230,7 @@ mod tests {
 
     #[test]
     fn position_at_or_after_finds_ceiling() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.index");
-        let mut idx = OffsetIndex::open(&path).unwrap();
-        idx.append(0, 0).unwrap();
-        idx.append(100, 4096).unwrap();
-        idx.append(200, 8192).unwrap();
+        let (_dir, _path, idx) = reference_index();
         for (name, offset, want) in [
             ("exact", 100, Some(4096)),
             ("ceiling", 150, Some(8192)),
@@ -320,14 +246,8 @@ mod tests {
 
     #[test]
     fn truncate_by_position() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("00000000000000000000.index");
-        let mut idx = OffsetIndex::open(&path).unwrap();
-        idx.append(0, 0).unwrap();
-        idx.append(100, 4096).unwrap();
-        idx.append(200, 8192).unwrap();
+        let (_dir, _path, mut idx) = reference_index();
         idx.truncate_by_position(8192).unwrap();
-        assert2::assert!(idx.entry_count() == 2);
-        assert2::assert!(idx.last_entry() == Some((100, 4096)));
+        assert_entry_metadata(&idx, 2, Some((100, 4096)));
     }
 }

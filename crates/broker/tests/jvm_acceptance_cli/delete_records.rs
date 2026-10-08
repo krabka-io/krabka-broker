@@ -188,8 +188,5 @@ fn jvm_earliest_offset(topic: &str) -> i64 {
         .map(str::trim)
         .find(|line| line.starts_with(&prefix))
         .unwrap_or_else(|| panic!("kafka-get-offsets printed no row for {topic}-0: {stdout}"));
-    line.rsplit(':')
-        .next()
-        .and_then(|offset| offset.parse::<i64>().ok())
-        .unwrap_or_else(|| panic!("kafka-get-offsets row is not an offset: {line}"))
+    crate::support::jvm_parse_offset(line)
 }

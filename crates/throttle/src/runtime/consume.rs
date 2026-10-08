@@ -295,6 +295,28 @@ mod tests {
         (bucket, clock)
     }
 
+    fn bucket_state(
+        rate: u64,
+        burst: u64,
+        available: u64,
+        debt: u64,
+        last_refill: u64,
+    ) -> BucketState {
+        BucketState {
+            micro_rate_per_sec: rate,
+            micro_burst: burst,
+            micro_available: available,
+            micro_debt: debt,
+            last_refill_nanos: last_refill,
+            micro_refill_fraction: 0,
+        }
+    }
+
+    fn advance_one_ns_and_poll(bucket: &TokenBucket, clock: &ManualMonotonicClock) {
+        clock.advance(Duration::from_nanos(1)).unwrap();
+        check!(bucket.try_consume(0) == 0);
+    }
+
     const TRY_CONSUME_TIMEOUT: Duration = Duration::from_secs(2);
 
     fn try_consume_with_timeout(bucket: &Arc<TokenBucket>, requested: u64) -> u64 {
@@ -521,106 +543,98 @@ mod tests {
     fn consume_step_refills_caps_and_grants() {
         const SEC: u64 = 1_000_000_000;
         const M: u64 = MICROS_PER_TOKEN;
-        let group = |rate, burst, available, debt, last_refill| BucketState {
-            micro_rate_per_sec: rate,
-            micro_burst: burst,
-            micro_available: available,
-            micro_debt: debt,
-            last_refill_nanos: last_refill,
-            micro_refill_fraction: 0,
-        };
         // (label, group before, now, requested, grant, group after)
         let cases = [
             (
                 "rate 0 grants the request and leaves the group alone",
-                group(0, 0, 0, 0, 0),
+                bucket_state(0, 0, 0, 0, 0),
                 5 * SEC,
                 7,
                 None,
-                group(0, 0, 0, 0, 0),
+                bucket_state(0, 0, 0, 0, 0),
             ),
             (
                 "the whole elapsed second becomes tokens",
-                group(10 * M, 20 * M, 0, 0, 0),
+                bucket_state(10 * M, 20 * M, 0, 0, 0),
                 SEC,
                 4,
                 Some(4 * M),
-                group(10 * M, 20 * M, 6 * M, 0, SEC),
+                bucket_state(10 * M, 20 * M, 6 * M, 0, SEC),
             ),
             (
                 "the refill is capped at the burst, and the time is still claimed",
-                group(10 * M, 20 * M, 15 * M, 0, 0),
+                bucket_state(10 * M, 20 * M, 15 * M, 0, 0),
                 SEC,
                 0,
                 Some(0),
-                group(10 * M, 20 * M, 20 * M, 0, SEC),
+                bucket_state(10 * M, 20 * M, 20 * M, 0, SEC),
             ),
             (
                 "a part-micro-token remainder survives after claiming the whole gap",
-                group(4, 10 * M, 0, 0, 0),
+                bucket_state(4, 10 * M, 0, 0, 0),
                 SEC / 2 + SEC / 8,
                 10,
                 Some(0),
                 BucketState {
                     micro_refill_fraction: 500_000_000,
-                    ..group(4, 10 * M, 2, 0, SEC / 2 + SEC / 8)
+                    ..bucket_state(4, 10 * M, 2, 0, SEC / 2 + SEC / 8)
                 },
             ),
             (
                 "a positive rate with a zero burst grants nothing",
-                group(10 * M, 0, 0, 0, 0),
+                bucket_state(10 * M, 0, 0, 0, 0),
                 SEC,
                 3,
                 Some(0),
-                group(10 * M, 0, 0, 0, SEC),
+                bucket_state(10 * M, 0, 0, 0, SEC),
             ),
             (
                 "a clock reading behind last_refill refills nothing",
-                group(10 * M, 20 * M, 3 * M, 0, SEC),
+                bucket_state(10 * M, 20 * M, 3 * M, 0, SEC),
                 0,
                 5,
                 Some(3 * M),
-                group(10 * M, 20 * M, 0, 0, SEC),
+                bucket_state(10 * M, 20 * M, 0, 0, SEC),
             ),
             (
                 "a whole-token consume leaves half a token in the bucket",
-                group(M / 2, M, 0, 0, 0),
+                bucket_state(M / 2, M, 0, 0, 0),
                 SEC,
                 1,
                 Some(0),
-                group(M / 2, M, M / 2, 0, SEC),
+                bucket_state(M / 2, M, M / 2, 0, SEC),
             ),
             (
                 "two seconds at half a token per second make one whole token",
-                group(M / 2, M, 0, 0, 0),
+                bucket_state(M / 2, M, 0, 0, 0),
                 2 * SEC,
                 1,
                 Some(M),
-                group(M / 2, M, 0, 0, 2 * SEC),
+                bucket_state(M / 2, M, 0, 0, 2 * SEC),
             ),
             (
                 "a whole-token consume grants the whole tokens of a part balance",
-                group(M, 3 * M, 2 * M + M / 4, 0, 0),
+                bucket_state(M, 3 * M, 2 * M + M / 4, 0, 0),
                 0,
                 5,
                 Some(2 * M),
-                group(M, 3 * M, M / 4, 0, 0),
+                bucket_state(M, 3 * M, M / 4, 0, 0),
             ),
             (
                 "a bucket in debt grants nothing and repays from the refill",
-                group(10 * M, 20 * M, 0, 8 * M, 0),
+                bucket_state(10 * M, 20 * M, 0, 8 * M, 0),
                 SEC / 2,
                 3,
                 Some(0),
-                group(10 * M, 20 * M, 0, 3 * M, SEC / 2),
+                bucket_state(10 * M, 20 * M, 0, 3 * M, SEC / 2),
             ),
             (
                 "a refill past the debt goes to the balance",
-                group(10 * M, 20 * M, 0, 4 * M, 0),
+                bucket_state(10 * M, 20 * M, 0, 4 * M, 0),
                 SEC,
                 3,
                 Some(3 * M),
-                group(10 * M, 20 * M, 3 * M, 0, SEC),
+                bucket_state(10 * M, 20 * M, 3 * M, 0, SEC),
             ),
         ];
 
@@ -638,82 +652,74 @@ mod tests {
     fn record_step_charges_in_full_and_leaves_the_rest_as_debt() {
         const SEC: u64 = 1_000_000_000;
         const M: u64 = MICROS_PER_TOKEN;
-        let group = |rate, burst, available, debt, last_refill| BucketState {
-            micro_rate_per_sec: rate,
-            micro_burst: burst,
-            micro_available: available,
-            micro_debt: debt,
-            last_refill_nanos: last_refill,
-            micro_refill_fraction: 0,
-        };
         // (label, group before, now, tokens charged, debt reported, group after)
         let cases = [
             (
                 "rate 0 records nothing",
-                group(0, 0, 0, 0, 0),
+                bucket_state(0, 0, 0, 0, 0),
                 5 * SEC,
                 7,
                 None,
-                group(0, 0, 0, 0, 0),
+                bucket_state(0, 0, 0, 0, 0),
             ),
             (
                 "a charge inside the balance leaves no debt",
-                group(10 * M, 20 * M, 20 * M, 0, 0),
+                bucket_state(10 * M, 20 * M, 20 * M, 0, 0),
                 0,
                 12,
                 Some(0),
-                group(10 * M, 20 * M, 8 * M, 0, 0),
+                bucket_state(10 * M, 20 * M, 8 * M, 0, 0),
             ),
             (
                 "a charge past the balance is debt",
-                group(10 * M, 20 * M, 5 * M, 0, 0),
+                bucket_state(10 * M, 20 * M, 5 * M, 0, 0),
                 0,
                 12,
                 Some(7 * M),
-                group(10 * M, 20 * M, 0, 7 * M, 0),
+                bucket_state(10 * M, 20 * M, 0, 7 * M, 0),
             ),
             (
                 "a second charge adds to the debt the first left",
-                group(10 * M, 20 * M, 0, 7 * M, 0),
+                bucket_state(10 * M, 20 * M, 0, 7 * M, 0),
                 0,
                 3,
                 Some(10 * M),
-                group(10 * M, 20 * M, 0, 10 * M, 0),
+                bucket_state(10 * M, 20 * M, 0, 10 * M, 0),
             ),
             (
                 "the refill repays debt before the charge",
-                group(10 * M, 20 * M, 0, 7 * M, 0),
+                bucket_state(10 * M, 20 * M, 0, 7 * M, 0),
                 SEC,
                 4,
                 Some(M),
-                group(10 * M, 20 * M, 0, M, SEC),
+                bucket_state(10 * M, 20 * M, 0, M, SEC),
             ),
             (
                 "a part-micro-token remainder survives after claiming the whole gap",
-                group(4, 10 * M, 0, 0, 0),
+                bucket_state(4, 10 * M, 0, 0, 0),
                 SEC / 2 + SEC / 8,
                 10,
                 Some(10 * M - 2),
                 BucketState {
                     micro_refill_fraction: 500_000_000,
-                    ..group(4, 10 * M, 0, 10 * M - 2, SEC / 2 + SEC / 8)
+                    ..bucket_state(4, 10 * M, 0, 10 * M - 2, SEC / 2 + SEC / 8)
                 },
             ),
             (
                 "half a token per second owes half a token for a token",
-                group(M / 2, M, M / 2, 0, 0),
+                bucket_state(M / 2, M, M / 2, 0, 0),
                 0,
                 1,
                 Some(M / 2),
-                group(M / 2, M, 0, M / 2, 0),
+                bucket_state(M / 2, M, 0, M / 2, 0),
             ),
             (
                 "the debt saturates instead of wrapping",
-                group(M, M, 0, u64::MAX - 5, 0),
+                bucket_state(M, M, 0, u64::MAX - 5, 0),
                 0,
                 1,
                 Some(u64::MAX),
-                group(M, M, 0, u64::MAX, 0),
+                bucket_state(M, M, 0, u64::MAX, 0),
             ),
         ];
 
@@ -786,12 +792,10 @@ mod tests {
         let (bucket, clock) = manual_bucket();
         bucket.set_token_rate_with_burst(1_500, 10);
         check!(bucket.try_consume(10) == 10);
-        clock.advance(Duration::from_nanos(1)).unwrap();
-        check!(bucket.try_consume(0) == 0);
+        advance_one_ns_and_poll(&bucket, &clock);
         check!(bucket.lock_state().micro_refill_fraction == 500_000_000);
         bucket.set_token_rate_with_burst(500, 10);
-        clock.advance(Duration::from_nanos(1)).unwrap();
-        check!(bucket.try_consume(0) == 0);
+        advance_one_ns_and_poll(&bucket, &clock);
         check!(bucket.lock_state().micro_available == 2);
         check!(bucket.lock_state().micro_refill_fraction == 0);
 
@@ -802,8 +806,7 @@ mod tests {
         // Refill while full, then empty it at this same clock reading.
         check!(bucket.try_consume(10) == 10);
         check!(bucket.lock_state().micro_refill_fraction == 0);
-        clock.advance(Duration::from_nanos(1)).unwrap();
-        check!(bucket.try_consume(0) == 0);
+        advance_one_ns_and_poll(&bucket, &clock);
         check!(bucket.lock_state().micro_available == 1);
         check!(bucket.lock_state().micro_refill_fraction == 500_000_000);
     }

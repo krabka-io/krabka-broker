@@ -4,6 +4,8 @@ use creusot_std::prelude::*;
 use super::time_index::sparse_timestamp_window_valid;
 #[cfg(creusot)]
 use super::trim::{trim_frontier, trim_store_frontiers_valid, trim_well_formed};
+#[cfg(creusot)]
+use super::trim::{trim_has_no_snapshot, trim_rejection};
 use super::{
     DeleteRecordsTrimDecision, DeleteRecordsTrimFacts, SparseTimestampWindow,
     admitted_trim_bounds_reload_and_retry, constructed_index_retained_candidate,
@@ -19,21 +21,16 @@ type TrimTimestampWitness = (i64, Option<usize>, i64, Option<usize>);
 #[requires(base@ >= 0)]
 #[requires(forall<i: Int> 0 <= i && i < window.0@.len() ==> base@ + window.0@[i]@ < facts.log_end@)]
 #[ensures(match result {
-    Err(error) => match error {
-        DeleteRecordsTrimDecision::RejectMalformed => !trim_well_formed(facts),
-        DeleteRecordsTrimDecision::RejectOutOfRange => trim_well_formed(facts) && facts.requested@ != -1 && facts.requested@ > facts.high_watermark@,
-        _ => false,
-    },
+    Err(error) => trim_rejection(facts, error),
     Ok((floor, snapshot, cursor, selected)) => trim_well_formed(facts)
         && (facts.requested@ == -1 || facts.requested@ <= facts.high_watermark@)
         && floor@ == trim_frontier(facts).max(stores.0@).max(stores.1@)
         && 0 <= floor@ && floor@ <= cursor@ && cursor@ <= facts.log_end@
         && floor@ <= facts.high_watermark@ && (!facts.has_delivery_watermark || floor@ <= facts.delivery_watermark@)
         && match snapshot {
-            None => cursor == floor && forall<i: Int> 0 <= i && i < snapshots@.len() ==> !(floor@ < snapshots@[i]@ && snapshots@[i]@ <= facts.log_end@),
+            None => trim_has_no_snapshot(snapshots@, floor, facts.log_end, cursor),
             Some(index) => index@ < snapshots@.len() && floor@ < snapshots@[index@]@ && cursor == snapshots@[index@]
-                && forall<i: Int> 0 <= i && i < snapshots@.len() && floor@ < snapshots@[i]@ && snapshots@[i]@ <= facts.log_end@
-                    ==> snapshots@[i]@ <= cursor@,
+                && super::trim::latest_retained_snapshot(snapshots@, floor@, facts.log_end@, cursor@),
         }
         && match selected {
             None => forall<i: Int> 0 <= i && i < window.0@.len() ==> base@ + window.0@[i]@ < floor@ || window.1@[i]@ < target@,

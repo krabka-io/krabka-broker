@@ -8,13 +8,12 @@ use std::sync::Arc;
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_log::{Offset, ProducerId};
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataImage, NodeId};
 use krabka_protocol::{
     UnknownTaggedFields, owned::describe_transactions_response::TransactionState,
 };
 use krabka_units::mebibytes;
 use tempfile::{TempDir, tempdir};
-use uuid::Uuid;
 
 use super::*;
 use crate::{
@@ -131,23 +130,7 @@ fn prepared_two_pc_entry(last_update_ms: i64) -> TxnEntry {
 /// A metadata image where `__transaction_state` has one partition, led by
 /// `leader`.
 fn image_with_leader(leader: NodeId, leader_epoch: i32) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: bootstrap::TOPIC.to_string(),
-        topic_id: Uuid::from_u128(1),
-        partitions: 1,
-        replication_factor: 1,
-    }));
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: bootstrap::TOPIC.to_string(),
-        partition: 0,
-        leader,
-        replicas: vec![leader],
-        isr: vec![leader],
-        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
-        ..Default::default()
-    }));
-    image
+    crate::txn::coordinator::test_support::state_image(leader, leader_epoch, &[leader])
 }
 
 /// A coordinator that persisted `entry` as the leader of the single

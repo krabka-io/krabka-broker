@@ -23,30 +23,10 @@ use krabka_protocol::{
 
 use super::{request::TopicNameRequest, wire::delete_topic_result};
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
 };
-
-/// Whether `Delete` on the `Cluster` resource is denied for this principal.
-fn cluster_delete_denied(
-    broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
-    context: &crate::handlers::RequestContext<'_>,
-) -> bool {
-    // Kafka makes this shortcut check with `logIfDenied = false`: a Deny falls
-    // back to the per-topic checks, so it is no refusal to audit.
-    broker.config.authorizer.authorize_quiet(
-        image,
-        &AuthorizationRequest {
-            principal: context.principal,
-            host: context.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::Delete,
-        },
-    ) == AuthorizationResult::Deny
-}
 
 /// The topics of one request that the principal may describe and may delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +70,7 @@ pub(super) fn topic_access<'a>(
     context: &crate::handlers::RequestContext<'_>,
     names: impl IntoIterator<Item = &'a str> + Clone,
 ) -> TopicAccess {
-    if !cluster_delete_denied(broker, image, context) {
+    if !crate::handlers::cluster_shortcut_denied(broker, image, context, AclOperation::Delete) {
         return TopicAccess::Cluster;
     }
     TopicAccess::Topics {

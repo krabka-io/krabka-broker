@@ -3,7 +3,7 @@
 //! metadata records that seed a topic and a controller-mutation quota into a
 //! running broker.
 
-use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataRecord, TopicRecord};
 use krabka_protocol::owned::create_partitions_request::{
     CreatePartitionsAssignment, CreatePartitionsRequest, CreatePartitionsTopic,
 };
@@ -43,7 +43,6 @@ pub fn request(topics: Vec<CreatePartitionsTopic>, validate_only: bool) -> Creat
 }
 
 pub async fn seed_topic(handle: &BrokerHandle, name: &str, partitions: i32, rf: i16) {
-    let replicas = vec![NodeId(handle.node_id())];
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
         name: name.into(),
         topic_id: uuid::Uuid::new_v4(),
@@ -51,18 +50,13 @@ pub async fn seed_topic(handle: &BrokerHandle, name: &str, partitions: i32, rf: 
         replication_factor: rf,
     })];
     for partition in 0..partitions {
-        records.push(MetadataRecord::V1Partition(PartitionRecord {
-            topic: name.into(),
-            partition,
-            leader: NodeId(handle.node_id()),
-            replicas: replicas.clone(),
-            isr: replicas.clone(),
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
+        records.push(MetadataRecord::V1Partition(
+            crate::handlers::test_support::single_replica_partition(
+                name,
+                partition,
+                NodeId(handle.node_id()),
+            ),
+        ));
     }
     handle
         .broker_arc_for_test()
@@ -74,4 +68,27 @@ pub async fn seed_topic(handle: &BrokerHandle, name: &str, partitions: i32, rf: 
 
 pub async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
     crate::handlers::test_support::seed_controller_quota(handle, rate).await;
+}
+
+/// Independent complete wire rows expected by the handler tests.
+pub fn expected_result(
+    name: &str,
+    error_code: i16,
+    error_message: Option<String>,
+) -> krabka_protocol::owned::create_partitions_response::CreatePartitionsTopicResult {
+    tagged_wire!(
+        krabka_protocol::owned::create_partitions_response::CreatePartitionsTopicResult {
+            name: name.into(),
+            error_code,
+            error_message,
+        }
+    )
+}
+
+pub fn expected_response(
+    results: Vec<krabka_protocol::owned::create_partitions_response::CreatePartitionsTopicResult>,
+) -> krabka_protocol::owned::create_partitions_response::CreatePartitionsResponse {
+    unthrottled_wire!(
+        krabka_protocol::owned::create_partitions_response::CreatePartitionsResponse { results }
+    )
 }

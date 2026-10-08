@@ -25,6 +25,17 @@ pub fn img_with_partition(
     replicas: &[u64],
     isr: &[u64],
 ) -> MetadataImage {
+    image_with_dirs(topic, partition, leader, replicas, isr, &[])
+}
+
+fn image_with_dirs(
+    topic: &str,
+    partition: i32,
+    leader: u64,
+    replicas: &[u64],
+    isr: &[u64],
+    dirs: &[Uuid],
+) -> MetadataImage {
     let mut img = MetadataImage::new(Uuid::nil());
     img.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: topic.into(),
@@ -32,7 +43,22 @@ pub fn img_with_partition(
         partitions: 1,
         replication_factor: i16::try_from(replicas.len()).unwrap(),
     }));
-    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
+    img.apply(&MetadataRecord::V1Partition(seed_partition(
+        topic, partition, leader, replicas, isr, dirs,
+    )));
+    img
+}
+
+/// Input partition for election tests, before any leader or ISR change.
+pub fn seed_partition(
+    topic: &str,
+    partition: i32,
+    leader: u64,
+    replicas: &[u64],
+    isr: &[u64],
+    dirs: &[Uuid],
+) -> PartitionRecord {
+    PartitionRecord {
         topic: topic.into(),
         partition,
         leader: NodeId(leader),
@@ -41,10 +67,34 @@ pub fn img_with_partition(
         leader_epoch: LeaderEpoch(5),
         adding_replicas: vec![],
         removing_replicas: vec![],
-        directories: vec![],
+        directories: dirs.to_vec(),
         partition_epoch: 0,
-    }));
-    img
+    }
+}
+
+/// Run a failover scan whose metrics are not inspected by the test.
+pub async fn failover(
+    image: &MetadataImage,
+    dead: NodeId,
+    liveness: &ControllerLivenessState,
+) -> super::policy::FailoverPlan {
+    super::scan::compute_failover_changes(
+        image,
+        dead,
+        liveness,
+        &crate::metrics::BrokerMetrics::new(),
+    )
+    .await
+}
+
+/// Run a scan with a fresh liveness registry containing the given live brokers.
+pub async fn failover_with_alive(
+    image: &MetadataImage,
+    dead: NodeId,
+    alive: &[u64],
+) -> super::policy::FailoverPlan {
+    let liveness = liveness_with_alive(alive).await;
+    failover(image, dead, &liveness).await
 }
 
 /// Independent expected result of a clean election for the three-replica fixture.
@@ -53,13 +103,24 @@ pub fn expected_clean_election(
     isr: &[u64],
     directories: Vec<Uuid>,
 ) -> PartitionRecord {
+    expected_partition("t", leader, isr, LeaderEpoch(6), directories)
+}
+
+/// Independent expected partition after one change to the three-replica fixture.
+pub fn expected_partition(
+    topic: &str,
+    leader: u64,
+    isr: &[u64],
+    leader_epoch: LeaderEpoch,
+    directories: Vec<Uuid>,
+) -> PartitionRecord {
     PartitionRecord {
-        topic: "t".into(),
+        topic: topic.into(),
         partition: 0,
         leader: NodeId(leader),
         replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
         isr: isr.iter().copied().map(NodeId).collect(),
-        leader_epoch: LeaderEpoch(6),
+        leader_epoch,
         adding_replicas: vec![],
         removing_replicas: vec![],
         directories,
@@ -287,24 +348,5 @@ pub fn img_with_dirs(
     isr: &[u64],
     dirs: &[uuid::Uuid],
 ) -> MetadataImage {
-    let mut img = MetadataImage::new(uuid::Uuid::nil());
-    img.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: topic.into(),
-        topic_id: uuid::Uuid::nil(),
-        partitions: 1,
-        replication_factor: i16::try_from(replicas.len()).unwrap(),
-    }));
-    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: topic.into(),
-        partition: 0,
-        leader: NodeId(leader),
-        replicas: replicas.iter().copied().map(NodeId).collect(),
-        isr: isr.iter().copied().map(NodeId).collect(),
-        leader_epoch: LeaderEpoch(5),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: dirs.to_vec(),
-        partition_epoch: 0,
-    }));
-    img
+    image_with_dirs(topic, 0, leader, replicas, isr, dirs)
 }

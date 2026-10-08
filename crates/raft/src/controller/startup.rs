@@ -429,12 +429,7 @@ mod tests {
         let _ = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             ctrl.submit_change(vec![krabka_metadata::MetadataRecord::V1Topic(
-                krabka_metadata::TopicRecord {
-                    name: "after-the-failure".into(),
-                    topic_id: Uuid::new_v4(),
-                    partitions: 1,
-                    replication_factor: 1,
-                },
+                crate::test_support::single_partition_topic("after-the-failure", Uuid::new_v4()),
             )]),
         )
         .await;
@@ -471,18 +466,9 @@ mod tests {
                     },
                 ),
                 // No record creates the topic, so the leader refuses this one.
-                krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                    topic: "missing".into(),
-                    partition: 0,
-                    leader: NodeId(1),
-                    replicas: vec![NodeId(1)],
-                    isr: vec![NodeId(1)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![],
-                    partition_epoch: 0,
-                }),
+                krabka_metadata::MetadataRecord::V1Partition(
+                    crate::test_support::single_replica_partition("missing", 0, NodeId(1)),
+                ),
             ],
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
         })
@@ -509,23 +495,14 @@ mod tests {
 
     #[tokio::test]
     async fn bootstrap_on_non_empty_log_errors() {
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Bootstrap,
-            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
-        };
-        let ctrl = Controller::start(cfg).await.expect("first bootstrap ok");
+        let (dir, ctrl) =
+            crate::controller::test_support::bootstrap_controller("first bootstrap ok").await;
         // Drive a commit so the log is non-empty on the second boot.
         wait_for_leader(&ctrl).await;
         submit_change_with_timeout(
             &ctrl,
             vec![krabka_metadata::MetadataRecord::V1Topic(
-                krabka_metadata::TopicRecord {
-                    name: "seed".into(),
-                    topic_id: Uuid::new_v4(),
-                    partitions: 1,
-                    replication_factor: 1,
-                },
+                crate::test_support::single_partition_topic("seed", Uuid::new_v4()),
             )],
             "bootstrap seed",
         )
@@ -564,15 +541,9 @@ mod tests {
 
     #[tokio::test]
     async fn join_on_empty_log_starts_unattached() {
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Join,
-            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
-            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
-        };
-        let ctrl = Controller::start(cfg)
-            .await
-            .expect("Join on empty log starts ok");
+        let (_dir, ctrl) =
+            crate::controller::test_support::joining_controller("Join on empty log starts ok")
+                .await;
         // Without voters this node never elects.
         assert2::assert!(ctrl.watch_leader().borrow().is_none());
         ctrl.shutdown().await;

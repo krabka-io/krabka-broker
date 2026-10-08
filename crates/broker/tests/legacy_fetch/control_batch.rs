@@ -8,7 +8,7 @@
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_client_producer::Producer;
 use krabka_protocol::{
     Decode, kafka_3_6_2::owned::fetch_response::FetchResponse as LegacyFetchResponse,
 };
@@ -44,11 +44,12 @@ async fn fetch_v3_drops_control_batch() {
     producer.init_transactions().await.unwrap();
     let transaction = producer.begin_transaction().await.unwrap();
     producer
-        .send(ProducerRecord {
-            topic: "legacy_fetch_ctrl".into(),
-            value: Some(Bytes::from_static(b"data-before-marker")),
-            ..Default::default()
-        })
+        .send(crate::support::producer::producer_record(
+            "legacy_fetch_ctrl",
+            None,
+            None,
+            Some(Bytes::from_static(b"data-before-marker")),
+        ))
         .await
         .expect("transactional produce");
     transaction.commit().await.expect("commit transaction");

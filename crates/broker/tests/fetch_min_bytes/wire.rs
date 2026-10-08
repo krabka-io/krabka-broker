@@ -10,14 +10,17 @@ use std::time::{Duration, Instant};
 use assert2::assert;
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
+    owned::fetch_request::FetchRequest,
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
+    records::{Record, RecordsPayload},
+};
+
+use crate::support::{
+    client::connect_owned,
+    fetch::{fetch_partition, single_partition_fetch},
+    produce::single_partition_produce,
+    records::batch_from_records,
+    topics::{creatable_topic, create_topic_request},
 };
 
 /// The floor the fetch asks for. 64 KiB is orders of magnitude above the one
@@ -63,42 +66,26 @@ const APPEND_AFTER: Duration = Duration::from_millis(300);
 
 /// A client on `bootstrap`.
 async fn connect(bootstrap: &str) -> Client {
-    Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("krabka-fetch-min-bytes")
-        .build()
-        .await
-        .expect("client build")
+    connect_owned(bootstrap, "krabka-fetch-min-bytes", "client build").await
 }
 
 /// Append one small record -- small enough that `MIN_BYTES` stays out of reach
 /// whatever the batch overhead of the broker on the other end is.
 async fn produce_one(client: &Client, topic: &str, topic_id: WireUuid, value: &'static [u8]) {
     let produced = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 10_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(
-                        RecordBatch {
-                            records: vec![Record {
-                                value: Some(bytes::Bytes::from_static(value)),
-                                ..Default::default()
-                            }],
-                            ..Default::default()
-                        }
-                        .into(),
-                    ),
+        .send(single_partition_produce(
+            topic,
+            topic_id,
+            0,
+            Some(
+                batch_from_records(vec![Record {
+                    value: Some(bytes::Bytes::from_static(value)),
                     ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+                }])
+                .into(),
+            ),
+            (1, 10_000),
+        ))
         .await
         .expect("Produce");
     assert!(
@@ -111,16 +98,7 @@ async fn produce_one(client: &Client, topic: &str, topic_id: WireUuid, value: &'
 /// behind.
 async fn create_topic(client: &Client, topic: &str) {
     let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 10_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(topic, 1, 1), 10_000))
         .await
         .expect("CreateTopics");
     let code = response.topics[0].error_code;
@@ -135,13 +113,7 @@ async fn topic_id(client: &Client, topic: &str) -> WireUuid {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let response = client
-            .send(MetadataRequest {
-                topics: Some(vec![MetadataRequestTopic {
-                    name: Some(topic.into()),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            })
+            .send(crate::support::discovery::named_topic_metadata(topic))
             .await
             .expect("Metadata");
         if let Some(found) = response
@@ -202,22 +174,12 @@ pub(crate) async fn min_bytes_exchange(bootstrap: &str, topic: &str) -> (Duratio
 
     let started = Instant::now();
     let fetched = client
-        .send(FetchRequest {
-            max_wait_ms: MAX_WAIT_MS,
-            min_bytes: MIN_BYTES,
-            topics: vec![FetchTopic {
-                topic: topic.into(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1_048_576,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_fetch(
+            topic,
+            topic_id,
+            fetch_partition(0, 0, 1_048_576),
+            (MAX_WAIT_MS, MIN_BYTES, FetchRequest::default().max_bytes),
+        ))
         .await
         .expect("Fetch");
     let held = started.elapsed();

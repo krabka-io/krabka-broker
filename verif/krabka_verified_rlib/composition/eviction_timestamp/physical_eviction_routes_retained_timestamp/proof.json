@@ -2,20 +2,20 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_closure0": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_closure0": { "prover": "alt-ergo", "time": 0.019 },
       "vc_constructed_index_retained_candidate": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.022
       },
       "vc_diskless_trim_reconciliation_preserves_coverage": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.019
       },
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_map_usize": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_map_usize": { "prover": "alt-ergo", "time": 0.018 },
       "vc_physical_eviction_routes_retained_timestamp": {
         "prover": "z3",
-        "time": 0.012
+        "time": 0.024
       }
     }
   }

@@ -26,6 +26,21 @@ use super::{
     signing, verify,
 };
 
+// Commands share transport errors and the broker's ordinary refusal report.
+// Their success responses retain each command's distinct interpretation.
+macro_rules! checked_response {
+    ($client:expr, $request:expr) => {{
+        let response = $client.send($request).await.map_err(Failure::from)?;
+        if response.error_code != 0 {
+            return Ok(report_error(
+                response.error_code,
+                response.error_message.as_deref(),
+            ));
+        }
+        response
+    }};
+}
+
 /// Send one command's request and print its response.
 ///
 /// # Errors
@@ -143,13 +158,7 @@ async fn list_freezes(
         pattern_type_filter: PATTERN_TYPE_ANY,
         ..api::DescribeTopicFreezesRequest::default()
     };
-    let response = client.send(request).await.map_err(Failure::from)?;
-    if response.error_code != 0 {
-        return Ok(report_error(
-            response.error_code,
-            response.error_message.as_deref(),
-        ));
-    }
+    let response = checked_response!(client, request);
     let Some(operator_keys) = operator_keys.filter(|_| verify_signatures) else {
         for freeze in &response.freezes {
             print_freeze(freeze, None);
@@ -178,13 +187,7 @@ async fn propose(
         ttl_ms: ttl.map_or(0, Time::millis_i64),
         ..bg::ProposeBreakGlassRequest::default()
     };
-    let response = client.send(request).await.map_err(Failure::from)?;
-    if response.error_code != 0 {
-        return Ok(report_error(
-            response.error_code,
-            response.error_message.as_deref(),
-        ));
-    }
+    let response = checked_response!(client, request);
     println!(
         "proposal {}",
         uuid::Uuid::from_bytes(response.proposal_id.0)
@@ -228,13 +231,7 @@ async fn approve(
         withdraw: false,
         ..bg::ApproveBreakGlassRequest::default()
     };
-    let response = client.send(request).await.map_err(Failure::from)?;
-    if response.error_code != 0 {
-        return Ok(report_error(
-            response.error_code,
-            response.error_message.as_deref(),
-        ));
-    }
+    let response = checked_response!(client, request);
     println!(
         "approvals {} of {}",
         response.approvals_held, response.approvals_required
@@ -254,13 +251,7 @@ async fn withdraw(
         withdraw: true,
         ..bg::ApproveBreakGlassRequest::default()
     };
-    let response = client.send(request).await.map_err(Failure::from)?;
-    if response.error_code != 0 {
-        return Ok(report_error(
-            response.error_code,
-            response.error_message.as_deref(),
-        ));
-    }
+    let _response = checked_response!(client, request);
     println!("withdrawn {proposal}");
     Ok(0)
 }
@@ -276,13 +267,7 @@ async fn list_proposals(
         proposal_id: proposal.map_or(WireUuid::ZERO, |id| WireUuid(*id.as_bytes())),
         ..bg::DescribeBreakGlassRequest::default()
     };
-    let response = client.send(request).await.map_err(Failure::from)?;
-    if response.error_code != 0 {
-        return Ok(report_error(
-            response.error_code,
-            response.error_message.as_deref(),
-        ));
-    }
+    let response = checked_response!(client, request);
     for stored in &response.proposals {
         print_proposal(stored);
     }

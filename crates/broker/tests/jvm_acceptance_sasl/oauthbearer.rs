@@ -8,7 +8,6 @@
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE, nc_check_connectivity, oauthbearer_jaas, start_oauthbearer_broker,
-    write_client_props,
 };
 
 /// End-to-end `SASL_PLAINTEXT` + OAUTHBEARER drive of the JVM
@@ -34,18 +33,8 @@ async fn jvm_sasl_oauthbearer_produce_consume() {
          sasl.jaas.config={}\n",
         oauthbearer_jaas(USER),
     );
-    let props_file = write_client_props(&props);
-    let mount = props_file.mount_str();
-
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[&mount],
-        TOPIC,
-        1,
-        1,
-    );
-
-    crate::jvm_acceptance::authenticated_console_round_trip(KAFKA_IMAGE, &[&mount], TOPIC);
+    let _props_file =
+        crate::jvm_acceptance::console_round_trip_with_props(KAFKA_IMAGE, TOPIC, &props);
 
     broker.shutdown().await;
 }

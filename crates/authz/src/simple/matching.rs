@@ -127,7 +127,8 @@ mod tests {
     use crate::{
         AuthorizationResult, Authorizer, SimpleAclAuthorizer,
         simple::test_support::{
-            acl_op_on, addr, alice, cidr_img, img, no_super, req, req_on, topic_acl, topic_acl_op,
+            AliceAuthorizer, acl_image, acl_op_on, alice, check_topic_access, cidr_img,
+            image_with_acls, img, no_super, req, topic_acl, topic_acl_op,
         },
     };
 
@@ -204,35 +205,27 @@ mod tests {
 
     #[test]
     fn principal_wildcard_matches_any_user() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+        let img = acl_image([topic_acl(
             PermissionType::Allow,
             AclOperation::Read,
             "User:*",
             "*",
             PatternType::Literal,
             "foo",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        assert2::assert!(
-            auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read))
-                == AuthorizationResult::Allow
-        );
+        )]);
+        check_topic_access(&img, "foo", AclOperation::Read, AuthorizationResult::Allow);
     }
 
     #[test]
     fn host_filter_matches_specific_ip() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+        let img = acl_image([topic_acl(
             PermissionType::Allow,
             AclOperation::Read,
             "User:alice",
             "127.0.0.1",
             PatternType::Literal,
             "foo",
-        )));
+        )]);
         let a = alice();
         let h_match: SocketAddr = "127.0.0.1:5000".parse().unwrap();
         let h_nomatch: SocketAddr = "127.0.0.2:5000".parse().unwrap();
@@ -249,235 +242,178 @@ mod tests {
 
     #[test]
     fn operation_all_matches_any_op() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+        let img = acl_image([topic_acl_op(
             PermissionType::Allow,
             AclOperation::All,
-            "User:alice",
-            "*",
-            PatternType::Literal,
             "foo",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
+        )]);
+        let caller = AliceAuthorizer::default();
         for op in [
             AclOperation::Read,
             AclOperation::Write,
             AclOperation::Describe,
             AclOperation::Delete,
         ] {
-            assert2::assert!(
-                auth.authorize(&img, &req(&a, &h, "foo", op)) == AuthorizationResult::Allow
-            );
+            assert2::assert!(caller.authorize(&img, "foo", op) == AuthorizationResult::Allow);
         }
     }
 
     #[test]
     fn operation_specific_does_not_match_others() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+        let img = acl_image([topic_acl_op(
             PermissionType::Allow,
             AclOperation::Read,
-            "User:alice",
-            "*",
-            PatternType::Literal,
             "foo",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
+        )]);
+        let caller = AliceAuthorizer::default();
         assert2::assert!(
             [AclOperation::Read, AclOperation::Write]
-                .map(|operation| { auth.authorize(&img, &req(&a, &h, "foo", operation)) })
+                .map(|operation| { caller.authorize(&img, "foo", operation) })
                 == [AuthorizationResult::Allow, AuthorizationResult::Deny]
         );
     }
 
     #[test]
     fn read_implies_describe_on_topic() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl_op(
+        let img = acl_image([topic_acl_op(
             PermissionType::Allow,
             AclOperation::Read,
             "foo",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        assert2::assert!(
-            auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Describe))
-                == AuthorizationResult::Allow
+        )]);
+        check_topic_access(
+            &img,
+            "foo",
+            AclOperation::Describe,
+            AuthorizationResult::Allow,
         );
     }
 
     #[test]
     fn write_implies_describe_on_topic() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl_op(
+        let img = acl_image([topic_acl_op(
             PermissionType::Allow,
             AclOperation::Write,
             "foo",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        assert2::assert!(
-            auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Describe))
-                == AuthorizationResult::Allow
+        )]);
+        check_topic_access(
+            &img,
+            "foo",
+            AclOperation::Describe,
+            AuthorizationResult::Allow,
         );
     }
 
     #[test]
     fn delete_implies_describe() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl_op(
+        let img = acl_image([topic_acl_op(
             PermissionType::Allow,
             AclOperation::Delete,
             "foo",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        assert2::assert!(
-            auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Describe))
-                == AuthorizationResult::Allow
+        )]);
+        check_topic_access(
+            &img,
+            "foo",
+            AclOperation::Describe,
+            AuthorizationResult::Allow,
         );
     }
 
     #[test]
     fn alter_implies_describe() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl_op(
+        let img = acl_image([topic_acl_op(
             PermissionType::Allow,
             AclOperation::Alter,
             "foo",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        assert2::assert!(
-            auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Describe))
-                == AuthorizationResult::Allow
+        )]);
+        check_topic_access(
+            &img,
+            "foo",
+            AclOperation::Describe,
+            AuthorizationResult::Allow,
         );
     }
 
     #[test]
     fn alter_configs_implies_describe_configs() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl_op(
+        let img = acl_image([topic_acl_op(
             PermissionType::Allow,
             AclOperation::AlterConfigs,
             "foo",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        assert2::assert!(
-            auth.authorize(&img, &req(&a, &h, "foo", AclOperation::DescribeConfigs))
-                == AuthorizationResult::Allow
+        )]);
+        check_topic_access(
+            &img,
+            "foo",
+            AclOperation::DescribeConfigs,
+            AuthorizationResult::Allow,
         );
     }
 
     #[test]
     fn describe_does_not_imply_read() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl_op(
+        let img = acl_image([topic_acl_op(
             PermissionType::Allow,
             AclOperation::Describe,
             "foo",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        assert2::assert!(
-            auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read))
-                == AuthorizationResult::Deny
-        );
+        )]);
+        check_topic_access(&img, "foo", AclOperation::Read, AuthorizationResult::Deny);
     }
 
     #[test]
     fn implication_works_on_group_resource() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(acl_op_on(
+        let img = acl_image([acl_op_on(
             ResourceType::Group,
             PermissionType::Allow,
             AclOperation::Read,
             "cg-1",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
+        )]);
+        let caller = AliceAuthorizer::default();
         assert2::assert!(
-            auth.authorize(
-                &img,
-                &req_on(&a, &h, ResourceType::Group, "cg-1", AclOperation::Describe)
-            ) == AuthorizationResult::Allow
+            caller.authorize_on(&img, ResourceType::Group, "cg-1", AclOperation::Describe)
+                == AuthorizationResult::Allow
         );
     }
 
     #[test]
     fn implication_works_on_cluster_resource() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(acl_op_on(
+        let img = acl_image([acl_op_on(
             ResourceType::Cluster,
             PermissionType::Allow,
             AclOperation::Alter,
             "kafka-cluster",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
+        )]);
+        let caller = AliceAuthorizer::default();
         assert2::assert!(
-            auth.authorize(
+            caller.authorize_on(
                 &img,
-                &req_on(
-                    &a,
-                    &h,
-                    ResourceType::Cluster,
-                    "kafka-cluster",
-                    AclOperation::Describe
-                )
+                ResourceType::Cluster,
+                "kafka-cluster",
+                AclOperation::Describe
             ) == AuthorizationResult::Allow
         );
     }
 
     #[test]
     fn implication_works_on_transactional_id_resource() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(acl_op_on(
+        let img = acl_image([acl_op_on(
             ResourceType::TransactionalId,
             PermissionType::Allow,
             AclOperation::Write,
             "tx-1",
-        )));
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super());
+        )]);
+        let caller = AliceAuthorizer::default();
         assert2::assert!(
-            auth.authorize(
+            caller.authorize_on(
                 &img,
-                &req_on(
-                    &a,
-                    &h,
-                    ResourceType::TransactionalId,
-                    "tx-1",
-                    AclOperation::Describe
-                )
+                ResourceType::TransactionalId,
+                "tx-1",
+                AclOperation::Describe
             ) == AuthorizationResult::Allow
         );
     }
 
     #[test]
     fn matches_resource_filters_by_type_name_and_pattern() {
-        let entry = topic_acl(
-            PermissionType::Allow,
-            AclOperation::Read,
-            "User:alice",
-            "*",
-            PatternType::Literal,
-            "orders",
-        );
+        let entry = topic_acl_op(PermissionType::Allow, AclOperation::Read, "orders");
         assert2::assert!(matches_resource(&entry, ResourceType::Topic, "orders"));
         assert2::assert!(!matches_resource(&entry, ResourceType::Topic, "payments"));
         assert2::assert!(!matches_resource(&entry, ResourceType::Group, "orders"));
@@ -507,6 +443,46 @@ mod tests {
         ));
     }
 
+    /// Check the same literal host ACL across peer addresses, with a caller-selected metadata version.
+    fn check_host_cases(
+        image: impl Fn() -> krabka_metadata::MetadataImage,
+        cases: &[(&str, &str, AuthorizationResult)],
+    ) {
+        let principal = alice();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        for (peer, acl_host, expected) in cases {
+            let img = image_with_acls(
+                image(),
+                [topic_acl(
+                    PermissionType::Allow,
+                    AclOperation::Read,
+                    "User:alice",
+                    acl_host,
+                    PatternType::Literal,
+                    "foo",
+                )],
+            );
+            check_peer(&auth, &principal, &img, peer, *expected, Some(acl_host));
+        }
+    }
+
+    fn check_peer(
+        auth: &SimpleAclAuthorizer,
+        principal: &krabka_security::Principal,
+        image: &krabka_metadata::MetadataImage,
+        peer: &str,
+        expected: AuthorizationResult,
+        acl_host: Option<&str>,
+    ) {
+        let host: SocketAddr = peer.parse().unwrap();
+        let decision = auth.authorize(image, &req(principal, &host, "foo", AclOperation::Read));
+        if let Some(acl_host) = acl_host {
+            assert2::assert!(decision == expected, "peer {peer} vs acl host {acl_host}");
+        } else {
+            assert2::assert!(decision == expected, "peer {peer}");
+        }
+    }
+
     /// The ACL host comparison must use the JDK's `getHostAddress()` text,
     /// not Rust's `Display` text, because that is what Kafka tooling writes
     /// into ACL host strings. See the module doc on
@@ -533,24 +509,7 @@ mod tests {
                 AuthorizationResult::Allow,
             ),
         ];
-        let a = alice();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        for (peer, acl_host, expected) in cases {
-            let mut img = img();
-            img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
-                PermissionType::Allow,
-                AclOperation::Read,
-                "User:alice",
-                acl_host,
-                PatternType::Literal,
-                "foo",
-            )));
-            let h: SocketAddr = peer.parse().unwrap();
-            assert2::assert!(
-                auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == *expected,
-                "peer {peer} vs acl host {acl_host}"
-            );
-        }
+        check_host_cases(img, cases);
     }
 
     /// KIP-1276: a CIDR ACL host matches by numeric range, not by comparing
@@ -571,24 +530,7 @@ mod tests {
                 AuthorizationResult::Deny,
             ),
         ];
-        let a = alice();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        for (peer, acl_host, expected) in cases {
-            let mut img = cidr_img();
-            img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
-                PermissionType::Allow,
-                AclOperation::Read,
-                "User:alice",
-                acl_host,
-                PatternType::Literal,
-                "foo",
-            )));
-            let h: SocketAddr = peer.parse().unwrap();
-            assert2::assert!(
-                auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == *expected,
-                "peer {peer} vs acl host {acl_host}"
-            );
-        }
+        check_host_cases(cidr_img, cases);
     }
 
     /// Kafka 4.3.1 compares every ACL host as text, and trunk reads a range
@@ -638,23 +580,20 @@ mod tests {
     /// same deny-wins-over-allow rule as a literal host ACL.
     #[test]
     fn cidr_deny_overrides_wildcard_allow_inside_range() {
-        let mut img = cidr_img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
-            PermissionType::Allow,
-            AclOperation::Read,
-            "User:alice",
-            "*",
-            PatternType::Literal,
-            "foo",
-        )));
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
-            PermissionType::Deny,
-            AclOperation::Read,
-            "User:alice",
-            "10.0.0.0/8",
-            PatternType::Literal,
-            "foo",
-        )));
+        let img = image_with_acls(
+            cidr_img(),
+            [
+                topic_acl_op(PermissionType::Allow, AclOperation::Read, "foo"),
+                topic_acl(
+                    PermissionType::Deny,
+                    AclOperation::Read,
+                    "User:alice",
+                    "10.0.0.0/8",
+                    PatternType::Literal,
+                    "foo",
+                ),
+            ],
+        );
         let a = alice();
         let auth = SimpleAclAuthorizer::new(no_super());
         let cases: &[(&str, AuthorizationResult)] = &[
@@ -662,11 +601,7 @@ mod tests {
             ("192.168.0.1:5000", AuthorizationResult::Allow),
         ];
         for (peer, expected) in cases {
-            let h: SocketAddr = peer.parse().unwrap();
-            assert2::assert!(
-                auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == *expected,
-                "peer {peer}"
-            );
+            check_peer(&auth, &a, &img, peer, *expected, None);
         }
     }
 
@@ -675,23 +610,17 @@ mod tests {
     /// the security-relevant direction of the bug in #651.
     #[test]
     fn deny_acl_in_jdk_host_form_blocks_ipv4_mapped_peer() {
-        let mut img = img();
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
-            PermissionType::Allow,
-            AclOperation::Read,
-            "User:alice",
-            "*",
-            PatternType::Literal,
-            "foo",
-        )));
-        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
-            PermissionType::Deny,
-            AclOperation::Read,
-            "User:alice",
-            "10.0.0.5",
-            PatternType::Literal,
-            "foo",
-        )));
+        let img = acl_image([
+            topic_acl_op(PermissionType::Allow, AclOperation::Read, "foo"),
+            topic_acl(
+                PermissionType::Deny,
+                AclOperation::Read,
+                "User:alice",
+                "10.0.0.5",
+                PatternType::Literal,
+                "foo",
+            ),
+        ]);
         let a = alice();
         let h: SocketAddr = "[::ffff:10.0.0.5]:5000".parse().unwrap();
         let auth = SimpleAclAuthorizer::new(no_super());

@@ -81,7 +81,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        share_coordinator::persistence::StateBatch,
+        share_coordinator::coordinator::test_support::state_batch,
         share_partition::state::{
             AckType, AcquiredRange, DS_AVAILABLE,
             test_support::{LOCK, t0},
@@ -159,18 +159,8 @@ mod tests {
         check!(
             batches
                 == vec![
-                    StateBatch {
-                        first_offset: Offset(0),
-                        last_offset: Offset(1),
-                        delivery_state: DS_AVAILABLE,
-                        delivery_count: 0,
-                    },
-                    StateBatch {
-                        first_offset: Offset(2),
-                        last_offset: Offset(3),
-                        delivery_state: DS_AVAILABLE,
-                        delivery_count: 0,
-                    },
+                    state_batch(0, 1, DS_AVAILABLE, 0),
+                    state_batch(2, 3, DS_AVAILABLE, 0),
                 ]
         );
 

@@ -5,7 +5,7 @@
 
 use krabka_metadata::{AclEntry, PatternType, ResourceType};
 
-use crate::AclSource;
+use crate::{AclEntries, AclSource};
 
 /// Immutable ACL snapshot. Each refresh rebuilds it wholesale.
 #[derive(Debug, Clone, Default)]
@@ -48,11 +48,7 @@ impl AclCache {
 }
 
 impl AclSource for AclCache {
-    fn matching_acls<'a>(
-        &'a self,
-        rt: ResourceType,
-        name: &'a str,
-    ) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a> {
+    fn matching_acls<'a>(&'a self, rt: ResourceType, name: &'a str) -> AclEntries<'a> {
         // MUST mirror MetadataImage::matching_acls: same resource_type, and
         // (LITERAL == name) || (LITERAL == "*") || (PREFIXED && name.starts_with(resource_name)).
         Box::new(self.entries.iter().filter(move |e| {
@@ -64,7 +60,7 @@ impl AclSource for AclCache {
         }))
     }
 
-    fn acls_of_type<'a>(&'a self, rt: ResourceType) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a> {
+    fn acls_of_type(&self, rt: ResourceType) -> AclEntries<'_> {
         Box::new(self.entries.iter().filter(move |e| e.resource_type == rt))
     }
 
@@ -108,7 +104,7 @@ mod tests {
         )
     }
 
-    fn sorted_keys<'a>(it: Box<dyn Iterator<Item = &'a AclEntry> + 'a>) -> Vec<String> {
+    fn sorted_keys(it: AclEntries<'_>) -> Vec<String> {
         let mut v: Vec<_> = it.map(key).collect();
         v.sort();
         v

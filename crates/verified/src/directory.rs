@@ -1,19 +1,15 @@
 //! Replica-directory assignment and controller-response decisions.
 
-#[cfg(creusot)]
-use std::clone::Clone;
+use creusot_std::prelude::*;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
-
-/// Change selected for one reported topic-partition replica.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum DirectoryAssignmentDecision {
-    Ignore,
-    NoOp,
-    Assign(usize),
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Change selected for one reported topic-partition replica.
+    pub enum DirectoryAssignmentDecision {
+        Ignore,
+        NoOp,
+        Assign(usize),
+    }
 }
 
 /// Select only the reporting broker's exact replica slot, and suppress an
@@ -35,13 +31,14 @@ pub fn directory_assignment_decision(
     }
 }
 
-/// Classification of an assignment report's controller response.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum DirectoryResponseDecision {
-    ControllerError,
-    StaleController,
-    Accept,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Classification of an assignment report's controller response.
+    pub enum DirectoryResponseDecision {
+        ControllerError,
+        StaleController,
+        Accept,
+    }
 }
 
 /// Accept success only while the controller identity that answered remains

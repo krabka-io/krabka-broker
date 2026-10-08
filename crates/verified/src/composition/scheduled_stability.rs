@@ -1,12 +1,16 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
-use super::delivery::{scheduled_activation_due, scheduled_batches_valid};
+use super::delivery::{
+    scheduled_activation_due, scheduled_batches_valid, scheduled_inputs_coherent,
+};
 use super::{
     FetchWatermarks, committed_fetch_excludes_unstable, fetch_visibility,
     scheduled_prefix_bounds_fetch,
 };
 use crate::broker::FetchVisibility;
+#[cfg(creusot)]
+use crate::transaction::pending_starts_bound_fetch;
 
 type ScheduledStablePrefix = (i64, i64, FetchVisibility, FetchVisibility);
 
@@ -14,8 +18,7 @@ type ScheduledStablePrefix = (i64, i64, FetchVisibility, FetchVisibility);
 /// inputs, then expose the greatest consumer prefix allowed by both gates.
 /// Replication remains ungated. Cached input LSO/delivery fields are ignored;
 /// decoded bytes, cached-cursor invalidation and input completeness are external.
-#[requires(batches@.len() == activations@.len())]
-#[requires(0 <= w.log_start@ && w.log_start@ <= w.log_end@)]
+#[requires(scheduled_inputs_coherent(batches@, activations@, w.log_start@, w.log_end@))]
 #[ensures(match result {
     None => !scheduled_batches_valid(batches@, w.log_start@, w.log_end@)
         || exists<i: Int> 0 <= i && i < starts@.len() && starts@[i]@ > w.log_end@,
@@ -27,14 +30,11 @@ type ScheduledStablePrefix = (i64, i64, FetchVisibility, FetchVisibility);
         && (delivery@ == w.log_end@ || exists<i: Int> 0 <= i && i < batches@.len()
             && delivery@ == batches@[i].0@
             && !scheduled_activation_due(activations@[i]@, uncertainty@, now@))
-        && (forall<i: Int> 0 <= i && i < starts@.len()
-            ==> starts@[i]@ <= w.log_end@ && lso@ <= starts@[i]@ && consumer.limit_offset@ <= starts@[i]@)
+        && (pending_starts_bound_fetch(starts@, w.log_end@, lso@, consumer.limit_offset@))
         && ((starts@.len() == 0 && lso@ == w.log_end@)
             || exists<i: Int> 0 <= i && i < starts@.len() && lso@ == starts@[i]@)
         && consumer.limit_offset@ == w.hw@.min(lso@).min(delivery@)
-        && consumer.effective_lso@ == w.hw@.min(lso@) && consumer.response_lso@ == w.hw@.min(lso@)
-        && consumer.response_hw == w.hw && consumer.read_committed_aborts && !consumer.out_of_range
-        && consumer.empty == (w.log_start@ >= w.hw@.min(delivery@))
+        && crate::broker::committed_fetch_response(consumer, w.hw, lso, delivery, w.log_start@)
         && follower.limit_offset == w.log_end && follower.response_hw == w.hw
         && follower.response_lso@ == w.hw@.min(lso@) && follower.effective_lso == lso
         && !follower.read_committed_aborts && !follower.out_of_range

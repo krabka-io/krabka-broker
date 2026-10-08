@@ -3716,6 +3716,7 @@ dependencies = [
  "crc32fast",
  "krabka-compression",
  "krabka-ids",
+ "krabka-macros",
  "krabka-protocol",
  "krabka-units",
  "proptest",
@@ -3975,6 +3976,7 @@ version = "0.7.0"
 dependencies = [
  "assert2",
  "derive_more",
+ "krabka-macros",
  "krabka-units",
  "krabka-verified",
  "num-traits",
@@ -4013,6 +4015,7 @@ dependencies = [
  "creusot-std",
  "derive_more",
  "krabka-ids",
+ "krabka-macros",
  "mutants",
  "proptest",
 ]

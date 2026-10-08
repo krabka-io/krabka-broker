@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/throttle.rs" 96 0 101 34 *)
+(* #"/workspace/crates/verified/src/throttle.rs" 56 0 61 34 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
@@ -11,16 +11,16 @@ let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
 let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
 let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 102 16 102 52
-let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 102 16 102 65
-let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 103 18 103 69
-let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 104 16 104 38
-let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 105 40 105 53
-let%span sthrottle'4 = "/workspace/crates/verified/src/throttle.rs" 87 10 87 37
-let%span sthrottle'5 = "/workspace/crates/verified/src/throttle.rs" 88 10 88 33
-let%span sthrottle'6 = "/workspace/crates/verified/src/throttle.rs" 89 10 89 80
-let%span sthrottle'7 = "/workspace/crates/verified/src/throttle.rs" 90 10 94 1
-let%span sthrottle'8 = "/workspace/crates/verified/src/throttle.rs" 79 4 83 5
+let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 62 16 62 52
+let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 62 16 62 65
+let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 63 18 63 69
+let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 64 16 64 38
+let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 65 40 65 53
+let%span sthrottle'4 = "/workspace/crates/verified/src/throttle.rs" 47 10 47 37
+let%span sthrottle'5 = "/workspace/crates/verified/src/throttle.rs" 48 10 48 33
+let%span sthrottle'6 = "/workspace/crates/verified/src/throttle.rs" 49 10 49 80
+let%span sthrottle'7 = "/workspace/crates/verified/src/throttle.rs" 50 10 54 1
+let%span sthrottle'8 = "/workspace/crates/verified/src/throttle.rs" 38 4 42 5
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -70,7 +70,7 @@ let min_u64 (self_: UInt64.t) (o: UInt64.t) (return (x: UInt64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_u64 o <= deep_model_u64 self_ -> result = o)}
     (! return {result}) ]
 
-function capped [#"/workspace/crates/verified/src/throttle.rs" 78 0 78 61] (available: int) (refill: int) (burst: int) : int
+function capped [#"/workspace/crates/verified/src/throttle.rs" 37 0 37 61] (available: int) (refill: int) (burst: int) : int
  = [%#sthrottle'8] if available + refill <= burst then available + refill else burst
 
 type t_RequestedTokens = { f0'2: UInt64.t }
@@ -85,7 +85,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let plan_consume [#"/workspace/crates/verified/src/throttle.rs" 96 0 101 34] (available: t_AvailableTokens)
+let plan_consume [#"/workspace/crates/verified/src/throttle.rs" 56 0 61 34] (available: t_AvailableTokens)
   (refill: t_RefillTokens) (burst: t_BurstCapacity) (requested: t_RequestedTokens)
   (return (x: tup2_GrantedTokens_NewAvailable)) = (! bb0
   [ bb0 = s0

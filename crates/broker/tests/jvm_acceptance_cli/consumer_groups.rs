@@ -4,14 +4,11 @@
 //! These runs exercise the JVM `AdminClient` group APIs rather than a consumer,
 //! so they stay apart from the `kafka-console-consumer` suites.
 
-use std::{io::Write as _, process::Stdio};
+use std::io::Write as _;
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{
-    KAFKA_IMAGE, broker0_advertised, docker_run_kafka_tool, nc_check_connectivity,
-    start_host_broker,
-};
+use crate::jvm_acceptance::{KAFKA_IMAGE, broker0_advertised, docker_run_kafka_tool};
 
 /// `kafka-consumer-groups --list` and `--describe` round-trip after a
 /// real consumer has joined a group.
@@ -21,36 +18,7 @@ async fn kafka_consumer_groups_list_describe() {
     const TOPIC: &str = "krabka-cg-list-itest";
     const GROUP: &str = "krabka-cg-list-grp";
 
-    let (_broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        1,
-        1,
-    );
-
-    // Produce one record so the consumer has something to settle on.
-    let _ = crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"alpha\n");
-
-    // Consume one record with --group so the group is registered with
-    // the coordinator.
-    docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--topic",
-        TOPIC,
-        "--group",
-        GROUP,
-        "--from-beginning",
-        "--max-messages",
-        "1",
-        "--timeout-ms",
-        "10000",
-    ]);
+    let (_broker, _dir) = crate::jvm_acceptance::start_console_group(TOPIC, GROUP, 1).await;
 
     let list_out = docker_run_kafka_tool(&[
         "kafka-consumer-groups",
@@ -61,14 +29,7 @@ async fn kafka_consumer_groups_list_describe() {
     let s = String::from_utf8_lossy(&list_out.stdout);
     assert!(s.contains(GROUP), "list output missing {GROUP}: {s}");
 
-    let desc_out = docker_run_kafka_tool(&[
-        "kafka-consumer-groups",
-        "--describe",
-        "--group",
-        GROUP,
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+    let desc_out = crate::jvm_acceptance::describe_console_group(GROUP);
     let s = String::from_utf8_lossy(&desc_out.stdout);
     assert!(
         s.contains(TOPIC),
@@ -88,51 +49,12 @@ async fn kafka_consumer_groups_delete_offsets() {
     const TOPIC: &str = "krabka-cg-delete-offsets-itest";
     const GROUP: &str = "krabka-cg-delete-offsets-grp";
 
-    let (_broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        2,
-        1,
-    );
-
-    // Produce one record so the consumer has something to commit on.
-    let _ = crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"alpha\n");
-
-    // Consume one record with --group so an offset is committed and the
-    // group is registered with the coordinator. After --max-messages exits
-    // the consumer disconnects → group transitions to Empty, so KIP-496's
-    // subscription guard skips and the subsequent --delete-offsets path
-    // returns NONE per partition instead of GROUP_SUBSCRIBED_TO_TOPIC.
-    docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--topic",
-        TOPIC,
-        "--group",
-        GROUP,
-        "--from-beginning",
-        "--max-messages",
-        "1",
-        "--timeout-ms",
-        "10000",
-    ]);
+    let (_broker, _dir) = crate::jvm_acceptance::start_console_group(TOPIC, GROUP, 2).await;
 
     // Sanity: --describe before delete should list TOPIC for GROUP. If this
     // fails, the failure is on the commit/coordinator path — not on
     // OffsetDelete — and the test would otherwise pass-by-accident below.
-    let pre_desc = docker_run_kafka_tool(&[
-        "kafka-consumer-groups",
-        "--describe",
-        "--group",
-        GROUP,
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+    let pre_desc = crate::jvm_acceptance::describe_console_group(GROUP);
     let pre_s = String::from_utf8_lossy(&pre_desc.stdout);
     assert!(
         pre_s.contains(TOPIC),
@@ -143,26 +65,24 @@ async fn kafka_consumer_groups_delete_offsets() {
     // 2.7 build may emit is satisfied. `kafka-consumer-groups` in 2.7
     // generally does not prompt for --delete-offsets when all flags are
     // supplied; the piped "y\n" is defensive and ignored otherwise.
-    let mut child = crate::support::jvm_docker_command(
-        KAFKA_IMAGE,
-        &[],
-        &[
-            "kafka-consumer-groups",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--delete-offsets",
-            "--group",
-            GROUP,
-            "--topic",
-            TOPIC,
-        ],
-        true,
-    )
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .expect("spawn delete-offsets");
+    let mut child = crate::support::jvm_spawn_piped(
+        &mut crate::support::jvm_docker_command(
+            KAFKA_IMAGE,
+            &[],
+            &[
+                "kafka-consumer-groups",
+                "--bootstrap-server",
+                broker0_advertised(),
+                "--delete-offsets",
+                "--group",
+                GROUP,
+                "--topic",
+                TOPIC,
+            ],
+            true,
+        ),
+        "spawn delete-offsets",
+    );
     {
         let stdin = child.stdin.as_mut().expect("stdin");
         writeln!(stdin, "y").expect("write y");
@@ -188,14 +108,7 @@ async fn kafka_consumer_groups_delete_offsets() {
     // GROUP. Header text may still mention column names, so guard with a
     // line-level check that the line both belongs to GROUP and refers to
     // TOPIC.
-    let post_desc = docker_run_kafka_tool(&[
-        "kafka-consumer-groups",
-        "--describe",
-        "--group",
-        GROUP,
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+    let post_desc = crate::jvm_acceptance::describe_console_group(GROUP);
     let post_s = String::from_utf8_lossy(&post_desc.stdout);
     let leaked = post_s
         .lines()
@@ -223,7 +136,7 @@ use crate::{
         DeleteOutcome, ResetRow, kafka_exceptions, parse_delete_groups, parse_export_csv,
         parse_reset_table,
     },
-    oracle::{CliRun, Oracle, Side, ToolFile},
+    oracle::{CliRun, Side, ToolFile},
 };
 
 /// The topic every reset case reads. One partition, so the record-to-partition
@@ -447,18 +360,8 @@ async fn reset_offsets_modes_match_apache_kafka() {
 
     // Kafka first. A wrong rule fails here, on somebody else's broker, before
     // krabka is asked the same question.
-    let oracle = tokio::task::spawn_blocking(|| Oracle::start("reset-offsets"))
-        .await
-        .expect("oracle boot");
-    let oracle_side = Side::Oracle(&oracle);
-
-    // The single-node coordinator shape the sibling cases in this file use.
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-    let advertised = broker0_advertised().to_owned();
-    let krabka_side = Side::Krabka {
-        bootstrap: &advertised,
-    };
+    let comparison = crate::oracle::OracleComparison::start("reset-offsets").await;
+    let [oracle_side, krabka_side] = comparison.sides();
 
     for side in [&oracle_side, &krabka_side] {
         seed_topic(side);
@@ -610,7 +513,7 @@ async fn reset_offsets_modes_match_apache_kafka() {
         );
     }
 
-    broker.shutdown().await;
+    comparison.broker.shutdown().await;
 }
 
 /// A live group refuses a reset and refuses a delete, an absent group refuses
@@ -626,17 +529,8 @@ async fn group_delete_and_reset_refusals_match_apache_kafka() {
     const EMPTY_GROUP: &str = "krabka-group-empty-grp";
     const ABSENT_GROUP: &str = "krabka-group-absent-grp";
 
-    let oracle = tokio::task::spawn_blocking(|| Oracle::start("group-lifecycle"))
-        .await
-        .expect("oracle boot");
-    let oracle_side = Side::Oracle(&oracle);
-
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-    let advertised = broker0_advertised().to_owned();
-    let krabka_side = Side::Krabka {
-        bootstrap: &advertised,
-    };
+    let comparison = crate::oracle::OracleComparison::start("group-lifecycle").await;
+    let [oracle_side, krabka_side] = comparison.sides();
 
     for side in [&oracle_side, &krabka_side] {
         seed_topic(side);
@@ -740,7 +634,7 @@ async fn group_delete_and_reset_refusals_match_apache_kafka() {
         );
     }
 
-    broker.shutdown().await;
+    comparison.broker.shutdown().await;
 }
 
 /// Poll `--describe --state` until `group` reports `Stable`.

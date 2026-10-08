@@ -7,26 +7,22 @@
 
 use assert2::check;
 
-use crate::harness::{
-    KNOWN_ID, VALIDATED, batch_with_value, boot, create_topic, framed, produce, registry,
-};
+use crate::harness::{KNOWN_ID, VALIDATED, framed};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_record_framed_with_a_bound_schema_id_is_accepted() {
-    let registry = registry().await;
-    let (broker, client, _dir) = boot(&registry.uri()).await;
-    let id = create_topic(&broker, &client, "validated", VALIDATED).await;
+    let (_registry, broker, client, _dir, id) =
+        crate::harness::mock_topic_fixture("validated", VALIDATED).await;
 
-    let out = produce(
+    crate::harness::check_value_append(
+        &broker,
         &client,
         "validated",
         id,
-        batch_with_value(Some(framed(KNOWN_ID, b"anything"))),
+        Some(framed(KNOWN_ID, b"anything")),
+        (0, Some(1)),
     )
     .await;
-
-    check!(out.error_code == 0, "{out:?}");
-    check!(broker.local_log_end_offset("validated", 0) == Some(1));
 
     broker.shutdown().await;
 }
@@ -40,34 +36,35 @@ async fn a_record_framed_with_a_bound_schema_id_is_accepted() {
 /// actual produce through the validator.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_cache_counters_move_on_a_validated_produce() {
-    let registry = registry().await;
-    let (broker, client, _dir) = boot(&registry.uri()).await;
-    let id = create_topic(&broker, &client, "validated", VALIDATED).await;
+    let (_registry, broker, client, _dir, id) =
+        crate::harness::mock_topic_fixture("validated", VALIDATED).await;
 
     check!(broker.metrics().schema_validation_cache_misses.get() == 0);
     check!(broker.metrics().schema_validation_cache_hits.get() == 0);
 
     // First produce of this id: nothing cached, so one registry round trip.
-    let out = produce(
+    crate::harness::check_value_append(
+        &broker,
         &client,
         "validated",
         id,
-        batch_with_value(Some(framed(KNOWN_ID, b"anything"))),
+        Some(framed(KNOWN_ID, b"anything")),
+        (0, None),
     )
     .await;
-    check!(out.error_code == 0, "{out:?}");
     check!(broker.metrics().schema_validation_cache_misses.get() == 1);
     check!(broker.metrics().schema_validation_cache_hits.get() == 0);
 
     // Same id inside the TTL: served from the cache, and counted as a hit.
-    let out = produce(
+    crate::harness::check_value_append(
+        &broker,
         &client,
         "validated",
         id,
-        batch_with_value(Some(framed(KNOWN_ID, b"anything"))),
+        Some(framed(KNOWN_ID, b"anything")),
+        (0, None),
     )
     .await;
-    check!(out.error_code == 0, "{out:?}");
     check!(broker.metrics().schema_validation_cache_misses.get() == 1);
     check!(broker.metrics().schema_validation_cache_hits.get() == 1);
 
@@ -76,16 +73,12 @@ async fn the_cache_counters_move_on_a_validated_produce() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tombstone_is_accepted_on_a_validated_topic() {
-    let registry = registry().await;
-    let (broker, client, _dir) = boot(&registry.uri()).await;
-    let id = create_topic(&broker, &client, "validated", VALIDATED).await;
+    let (_registry, broker, client, _dir, id) =
+        crate::harness::mock_topic_fixture("validated", VALIDATED).await;
 
     // A null value is a tombstone. Rejecting it would make schema validation
     // and compaction mutually exclusive.
-    let out = produce(&client, "validated", id, batch_with_value(None)).await;
-
-    check!(out.error_code == 0, "{out:?}");
-    check!(broker.local_log_end_offset("validated", 0) == Some(1));
+    crate::harness::check_value_append(&broker, &client, "validated", id, None, (0, Some(1))).await;
 
     broker.shutdown().await;
 }

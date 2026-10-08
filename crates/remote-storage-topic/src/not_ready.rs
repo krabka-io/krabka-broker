@@ -117,6 +117,8 @@ mod tests {
 
     use super::*;
 
+    krabka_macros::remote_started_segment!(synthetic_started_segment, krabka_remote_storage);
+
     fn tp() -> TopicIdPartition {
         TopicIdPartition::new(Uuid::from_u128(1), "orders", 3)
     }
@@ -150,20 +152,7 @@ mod tests {
     #[test]
     fn add_returns_not_ready_with_partition() {
         let m = NotReadyRlmm::new();
-        let md = RemoteLogSegmentMetadata::new(
-            seg_id(10),
-            0,
-            99,
-            100,
-            1,
-            100,
-            krabka_remote_storage::RemoteLogSegmentDetails::new(
-                2048,
-                RemoteLogSegmentState::CopySegmentStarted,
-                maplit::btreemap! {LeaderEpoch(0) => 0},
-            ),
-        )
-        .unwrap();
+        let md = synthetic_started_segment(seg_id(10), 0, 99, 100);
         let err = m.add_remote_log_segment_metadata(md).unwrap_err();
         assert!(matches!(err, RemoteStorageError::NotReady { partition: 3 }));
     }

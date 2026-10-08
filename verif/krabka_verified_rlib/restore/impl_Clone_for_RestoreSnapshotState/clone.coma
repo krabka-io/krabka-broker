@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/restore.rs" 44 27 44 32 *)
+(* #"/workspace/crates/verified/src/restore.rs" 7 19 7 36 *)
 
 (* <restore::RestoreSnapshotState as std::clone::Clone> *)
 
@@ -10,8 +10,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RestoreSnapshotState [#"/workspace/crates/verified/src/restore.rs" 44 27 44 32]
-  (self: t_RestoreSnapshotState) (return (x: t_RestoreSnapshotState)) = (! bb0
+let clone_RestoreSnapshotState [#"/workspace/crates/verified/src/restore.rs" 7 19 7 36] (self: t_RestoreSnapshotState)
+  (return (x: t_RestoreSnapshotState)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RestoreSnapshotState = Any.any_l () | & self: t_RestoreSnapshotState = self ])
   [ return (result: t_RestoreSnapshotState) -> (! return {result}) ]

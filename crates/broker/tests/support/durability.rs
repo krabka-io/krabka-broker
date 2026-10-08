@@ -3,13 +3,28 @@
 use assert2::assert;
 use bytes::Bytes;
 use krabka_broker::BrokerHandle;
-use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::create_topics_request::CreateTopicsRequest,
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::records::RecordBatch;
 
 use super::topic_id_for;
+use crate::support::{client::connect_client, records::value_record, topics::create_topic_request};
+
+/// Boot registered brokers and create a topic on the first `rf` replicas.
+///
+/// # Panics
+/// Panics if the brokers or the replicated topic cannot be created.
+pub async fn replicated_topic_fixture(
+    brokers: u64,
+    topic: &str,
+    rf: i16,
+) -> (
+    Vec<(BrokerHandle, krabka_broker::BrokerConfig, tempfile::TempDir)>,
+    String,
+) {
+    let cluster = crate::support::registered_cluster(brokers).await;
+    let bootstrap = cluster[0].1.listen_addr.to_string();
+    create_topic_on_replicas(&cluster[0].0, &bootstrap, topic, rf).await;
+    (cluster, bootstrap)
+}
 
 pub fn record_batch_with_values(values: &[&str]) -> RecordBatch {
     let mut batch = RecordBatch {
@@ -18,28 +33,22 @@ pub fn record_batch_with_values(values: &[&str]) -> RecordBatch {
         ..RecordBatch::default()
     };
     for (i, v) in values.iter().enumerate() {
-        batch.records.push(Record {
-            offset_delta: i32::try_from(i).unwrap(),
-            value: Some(Bytes::from(v.to_string())),
-            ..Default::default()
-        });
+        batch.records.push(value_record(
+            i32::try_from(i).unwrap(),
+            Some(Bytes::from(v.to_string())),
+        ));
     }
     batch
 }
 
 pub async fn create_topic_on_replicas(broker: &BrokerHandle, bootstrap: &str, name: &str, rf: i16) {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.to_string(), None).await;
     let replicas: Vec<i32> = (1..=i32::from(rf)).collect();
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![super::topic_on(name, &[&replicas])],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            super::topic_on(name, &[&replicas]),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(
@@ -60,11 +69,7 @@ pub async fn produce_batch(
     acks: i16,
     timeout_ms: i32,
 ) -> Result<i64, i16> {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.to_string(), None).await;
     let topic_id = topic_id_for(&client, topic).await;
     let pr = super::client::produce_batch(&client, topic, topic_id, batch, acks, timeout_ms).await;
     if pr.error_code == 0 {

@@ -12,8 +12,8 @@ use wiremock::{
     matchers::{method, path},
 };
 
-use super::{SchemaValidator, UNAVAILABLE_TTL_MS};
-use crate::metrics::BrokerMetrics;
+use super::{RejectReason, SchemaValidator, UNAVAILABLE_TTL_MS};
+use crate::{metrics::BrokerMetrics, schema_validation::ValidationMode};
 
 pub(super) const KNOWN_ID: u32 = 42;
 const AVRO: &str = r#"{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}"#;
@@ -60,9 +60,25 @@ pub(super) async fn json_endpoint(
     body: serde_json::Value,
     calls: Option<u64>,
 ) {
+    response_endpoint(
+        server,
+        route,
+        ResponseTemplate::new(200).set_body_json(body),
+        calls,
+    )
+    .await;
+}
+
+/// Mount a registry response with the caller's exact body, status and call bound.
+pub(super) async fn response_endpoint(
+    server: &MockServer,
+    route: &str,
+    response: ResponseTemplate,
+    calls: Option<u64>,
+) {
     let mock = Mock::given(method("GET"))
         .and(path(route))
-        .respond_with(ResponseTemplate::new(200).set_body_json(body));
+        .respond_with(response);
     let mock = match calls {
         Some(calls) => mock.expect(calls),
         None => mock,
@@ -98,8 +114,24 @@ pub(super) async fn referenced_avro(schema: &str) -> MockServer {
     server
 }
 
+pub(super) fn configured_validator(
+    url: String,
+    fail_open: bool,
+) -> Result<SchemaValidator, super::SchemaValidatorError> {
+    SchemaValidator::new(url, fail_open, 100, minutes(1), secs(5))
+}
+
 pub(super) fn validator(url: String) -> SchemaValidator {
-    SchemaValidator::new(url, false, 100, minutes(1), secs(5)).expect("validator")
+    configured_validator(url, false).expect("validator")
+}
+
+pub(super) async fn status_registry(status: u16) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(status))
+        .mount(&server)
+        .await;
+    server
 }
 
 /// Metrics for a check whose counters the test does not assert on. The
@@ -107,6 +139,17 @@ pub(super) fn validator(url: String) -> SchemaValidator {
 /// misses accumulate across calls.
 pub(super) fn no_metrics() -> BrokerMetrics {
     BrokerMetrics::new()
+}
+
+/// Validate the orders value fixture when no counters need to be inspected.
+pub(super) async fn value_check(
+    validator: &SchemaValidator,
+    mode: ValidationMode,
+    field: &[u8],
+) -> Result<(), RejectReason> {
+    validator
+        .check("orders", super::Role::Value, mode, field, &no_metrics())
+        .await
 }
 
 /// [`UNAVAILABLE_TTL_MS`] as a `u64`, so a test advances the clock by the

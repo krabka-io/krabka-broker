@@ -6,12 +6,11 @@
 //! leader-epoch behavior exercised over the wire.
 
 use assert2::check;
-use krabka_client_core::Client;
-use krabka_protocol::owned::produce_request::{
-    PartitionProduceData, ProduceRequest, TopicProduceData,
-};
 
-use crate::epoch_harness::{boot_single, create_topic, record, set_leader_epoch, topic_id_for};
+use crate::{
+    epoch_harness::{boot_single, create_topic, record, set_leader_epoch, topic_id_for},
+    support::{client::connect_client, produce::single_partition_produce},
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn epoch_checkpoint_byte_compat() {
@@ -19,49 +18,29 @@ async fn epoch_checkpoint_byte_compat() {
     create_topic(&broker, &bootstrap, "ckpt").await;
 
     // Produce at epoch 0.
-    let client = Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "ckpt").await;
     client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "ckpt".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(record("v0").into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "ckpt",
+            topic_id,
+            0,
+            Some(record("v0").into()),
+            (1, 5_000),
+        ))
         .await
         .expect("produce");
 
     // Bump epoch to 1 + produce another.
     set_leader_epoch(&broker, "ckpt", 1).await;
     client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "ckpt".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(record("v1").into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "ckpt",
+            topic_id,
+            0,
+            Some(record("v1").into()),
+            (1, 5_000),
+        ))
         .await
         .expect("produce");
 

@@ -13,13 +13,9 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use krabka_metadata::{AclOperation, GroupConfigRecord, MetadataRecord, ResourceType};
+use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     owned::{
-        share_acknowledge_request::{
-            AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
-            ShareAcknowledgeRequest,
-        },
         share_acknowledge_response::ShareAcknowledgeResponse,
         share_fetch_request::{
             AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic,
@@ -31,14 +27,11 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
+    authorizer::AuthorizationResult,
     broker::BrokerHandle,
     codes,
     share_partition::state::RecordState::{self, Acquired},
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context,
-        start_broker_no_audit_with,
-    },
+    test_support::start_broker_no_audit_with,
 };
 
 const TOPIC: &str = "ack-order";
@@ -62,22 +55,16 @@ type Batch = (i64, i64, &'static [i8]);
 #[derive(Debug)]
 struct DenyOnePrincipal;
 
-impl Authorizer for DenyOnePrincipal {
-    fn authorize(
-        &self,
-        _source: &dyn AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        if request.principal.name == DENIED
-            && request.resource_type == ResourceType::Topic
-            && request.operation == AclOperation::Read
-        {
-            AuthorizationResult::Deny
-        } else {
-            AuthorizationResult::Allow
-        }
+test_authorizer!(DenyOnePrincipal, (self, _source, request), {
+    if request.principal.name == DENIED
+        && request.resource_type == ResourceType::Topic
+        && request.operation == AclOperation::Read
+    {
+        AuthorizationResult::Deny
+    } else {
+        AuthorizationResult::Allow
     }
-}
+});
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
     start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(DenyOnePrincipal)).await
@@ -95,30 +82,10 @@ async fn produce(broker: &BrokerHandle) {
 /// Starts `group` at the earliest offset and lets [`READER`] acquire offsets
 /// 0 to 2 at epoch 0.
 async fn acquire_all(broker: &BrokerHandle, group: &str, topic_id: WireUuid) {
-    broker
-        .broker_arc_for_test()
-        .controller
-        .submit_change(vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
-            group_id: group.to_string(),
-            configs: maplit::btreemap! {
-                "share.auto.offset.reset".to_owned() => "earliest".to_owned()
-            },
-        })])
-        .await
-        .expect("set the group config");
-    crate::test_support::initialize_share_state(
-        broker,
-        group,
-        uuid::Uuid::from_bytes(topic_id.0),
-        0,
-    )
-    .await;
+    crate::handlers::test_support::initialize_earliest_share(broker, group, topic_id, 0..1).await;
     let response = share_fetch(broker, READER, group, 0, topic_id, &[(0, &[])], false).await;
-    let acquired: Vec<_> = response.responses[0].partitions[0]
-        .acquired_records
-        .iter()
-        .map(|range| (range.first_offset, range.last_offset))
-        .collect();
+    let acquired: Vec<_> =
+        crate::handlers::test_support::acquired_share_records(&response.responses[0].partitions[0]);
     assert!(acquired == vec![(0, 2)], "{response:?}");
 }
 
@@ -146,17 +113,10 @@ async fn share_fetch(
                 .iter()
                 .map(|&(partition_index, batches)| FetchPartition {
                     partition_index,
-                    acknowledgement_batches: batches
-                        .iter()
-                        .map(
-                            |&(first_offset, last_offset, types)| FetchAcknowledgeBatch {
-                                first_offset,
-                                last_offset,
-                                acknowledge_types: types.to_vec(),
-                                ..Default::default()
-                            },
-                        )
-                        .collect(),
+                    acknowledgement_batches: acknowledgement_batches!(
+                        FetchAcknowledgeBatch,
+                        batches
+                    ),
                     ..Default::default()
                 })
                 .collect(),
@@ -164,21 +124,7 @@ async fn share_fetch(
         }],
         ..Default::default()
     };
-    let shared = broker.broker_arc_for_test();
-    let user = principal(user);
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let bytes = encode_request(&request, VERSION);
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
-        VERSION,
-        &bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle share fetch");
-    decode_response(&response, VERSION)
+    crate::handlers::test_support::share_fetch_wire_as(broker, VERSION, user, &request).await
 }
 
 async fn share_acknowledge(
@@ -188,58 +134,19 @@ async fn share_acknowledge(
     topic_id: WireUuid,
     (partition_index, batches): (i32, &[Batch]),
 ) -> ShareAcknowledgeResponse {
-    let request = ShareAcknowledgeRequest {
-        group_id: Some(group.into()),
-        member_id: Some("member".into()),
-        share_session_epoch: 1,
-        topics: vec![AcknowledgeTopic {
-            topic_id,
-            partitions: vec![AcknowledgePartition {
-                partition_index,
-                acknowledgement_batches: batches
-                    .iter()
-                    .map(|&(first_offset, last_offset, types)| AcknowledgeBatch {
-                        first_offset,
-                        last_offset,
-                        acknowledge_types: types.to_vec(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let shared = broker.broker_arc_for_test();
-    let user = principal(user);
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let bytes = encode_request(&request, VERSION);
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_acknowledge_request::API_KEY,
-        VERSION,
-        &bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle share acknowledge");
-    decode_response(&response, VERSION)
+    let request = crate::handlers::test_support::acknowledge_batches_request(
+        group,
+        "member",
+        1,
+        topic_id,
+        (partition_index, batches),
+        false,
+    );
+    crate::handlers::test_support::share_acknowledge_wire_as(broker, VERSION, user, &request).await
 }
 
 async fn record_states(broker: &BrokerHandle, group: &str, topic_id: WireUuid) -> Vec<RecordState> {
-    let cell = broker
-        .broker_arc_for_test()
-        .share_partition_leaders
-        .peek_for_test(group, uuid::Uuid::from_bytes(topic_id.0), 0)
-        .expect("a loaded share partition");
-    let state = cell.lock().await;
-    state
-        .record_states()
-        .into_iter()
-        .map(|(_, state)| state)
-        .collect()
+    crate::handlers::test_support::share_record_states(broker, group, topic_id).await
 }
 
 /// One scenario for both APIs.

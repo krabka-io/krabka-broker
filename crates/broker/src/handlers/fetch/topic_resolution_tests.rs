@@ -24,7 +24,9 @@ use krabka_protocol::{
     records::RecordsPayload,
 };
 
-use super::FIRST_TOPIC_ID_VERSION;
+use super::{
+    FIRST_TOPIC_ID_VERSION, test_support::expected_refused_partition as refused_partition,
+};
 use crate::{
     authorizer::{AllowAllAuthorizer, Authorizer},
     broker::BrokerHandle,
@@ -45,29 +47,9 @@ const UNKNOWN_NAME: &str = "no-such-topic";
 /// The highest `Fetch` version that the broker serves.
 const MAX_VERSION: i16 = krabka_protocol::owned::fetch_request::MAX_VERSION;
 
-/// The topic reference that one request row carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TopicRef {
-    /// The name of a topic that exists, with the zero id (v12 and earlier).
-    KnownName,
-    /// A name that no topic has, with the zero id (v12 and earlier).
-    UnknownName,
-    /// The id of a topic that exists, with an empty name (v13 and later).
-    KnownId,
-    /// A non-zero id that no topic has, with an empty name (v13 and later).
-    UnknownId,
-    /// The zero id, with an empty name (v13 and later).
-    ZeroId,
-}
-
-/// One row of a table: the request version, the topic reference, and the
-/// error code that Kafka puts on the partition row.
-#[derive(Debug, Clone, Copy)]
-struct Case {
-    version: i16,
-    topic: TopicRef,
-    error_code: i16,
-}
+use crate::handlers::test_support::{
+    TopicRef, TopicResolutionCase as Case, unauthorized_topic_cases,
+};
 
 /// The actual or the expected outcome of one [`Case`].
 type Outcome = (i16, TopicRef, FetchResponse);
@@ -75,23 +57,6 @@ type Outcome = (i16, TopicRef, FetchResponse);
 /// The empty record set, as a client decodes it.
 fn no_records() -> RecordsPayload {
     RecordsPayload::Legacy(Bytes::new())
-}
-
-/// The partition row of Kafka's `FetchResponse.partitionResponse`, which
-/// `KafkaApis.handleFetchRequest` builds for a row that it refuses before the
-/// read.
-fn refused_partition(partition_index: i32, error_code: i16) -> PartitionData {
-    PartitionData {
-        partition_index,
-        error_code,
-        high_watermark: -1,
-        last_stable_offset: -1,
-        log_start_offset: -1,
-        aborted_transactions: Some(Vec::new()),
-        preferred_read_replica: -1,
-        records: Some(no_records()),
-        ..Default::default()
-    }
 }
 
 /// The partition row of an empty topic that the consumer may read, as it
@@ -153,13 +118,9 @@ async fn drive(
     case: Case,
 ) -> (Outcome, Outcome) {
     let (known_name, known_id) = known.unwrap_or(("", WireUuid::ZERO));
-    let (name, topic_id) = match case.topic {
-        TopicRef::KnownName => (known_name, WireUuid::ZERO),
-        TopicRef::UnknownName => (UNKNOWN_NAME, WireUuid::ZERO),
-        TopicRef::KnownId => ("", known_id),
-        TopicRef::UnknownId => ("", UNKNOWN_ID),
-        TopicRef::ZeroId => ("", WireUuid::ZERO),
-    };
+    let (name, topic_id) = case
+        .topic
+        .wire_reference((known_name, known_id), (UNKNOWN_NAME, UNKNOWN_ID));
     let request = FetchRequest {
         max_wait_ms: 0,
         min_bytes: 0,
@@ -176,21 +137,7 @@ async fn drive(
         refused_partition(0, case.error_code)
     };
     let id_only = case.version >= FIRST_TOPIC_ID_VERSION;
-    let expected = FetchResponse {
-        error_code: codes::NONE,
-        session_id: INVALID_SESSION_ID,
-        responses: vec![FetchableTopicResponse {
-            topic: if id_only {
-                String::new()
-            } else {
-                name.to_owned()
-            },
-            topic_id: if id_only { topic_id } else { WireUuid::ZERO },
-            partitions: vec![partition],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let expected = super::test_support::expected_single_topic(id_only, (name, topic_id), partition);
     (
         (case.version, case.topic, actual),
         (case.version, case.topic, expected),
@@ -200,44 +147,16 @@ async fn drive(
 #[tokio::test]
 async fn topic_row_error_follows_version_and_topic_reference() {
     let mut cases = vec![
-        Case {
-            version: 4,
-            topic: TopicRef::KnownName,
-            error_code: codes::NONE,
-        },
-        Case {
-            version: 4,
-            topic: TopicRef::UnknownName,
-            error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-        },
-        Case {
-            version: 12,
-            topic: TopicRef::KnownName,
-            error_code: codes::NONE,
-        },
-        Case {
-            version: 12,
-            topic: TopicRef::UnknownName,
-            error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-        },
+        Case::new(4, TopicRef::KnownName, codes::NONE),
+        Case::new(4, TopicRef::UnknownName, codes::UNKNOWN_TOPIC_OR_PARTITION),
+        Case::new(12, TopicRef::KnownName, codes::NONE),
+        Case::new(12, TopicRef::UnknownName, codes::UNKNOWN_TOPIC_OR_PARTITION),
     ];
     for version in [FIRST_TOPIC_ID_VERSION, MAX_VERSION] {
         cases.extend([
-            Case {
-                version,
-                topic: TopicRef::KnownId,
-                error_code: codes::NONE,
-            },
-            Case {
-                version,
-                topic: TopicRef::UnknownId,
-                error_code: codes::UNKNOWN_TOPIC_ID,
-            },
-            Case {
-                version,
-                topic: TopicRef::ZeroId,
-                error_code: codes::UNKNOWN_TOPIC_ID,
-            },
+            Case::new(version, TopicRef::KnownId, codes::NONE),
+            Case::new(version, TopicRef::UnknownId, codes::UNKNOWN_TOPIC_ID),
+            Case::new(version, TopicRef::ZeroId, codes::UNKNOWN_TOPIC_ID),
         ]);
     }
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
@@ -259,30 +178,13 @@ async fn topic_row_error_follows_version_and_topic_reference() {
 /// and 29 for a name that does not resolve.
 #[tokio::test]
 async fn unresolved_id_answers_before_topic_authorization() {
-    let cases = [
-        Case {
-            version: 12,
-            topic: TopicRef::UnknownName,
-            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-        },
-        Case {
-            version: FIRST_TOPIC_ID_VERSION,
-            topic: TopicRef::UnknownId,
-            error_code: codes::UNKNOWN_TOPIC_ID,
-        },
-        Case {
-            version: FIRST_TOPIC_ID_VERSION,
-            topic: TopicRef::ZeroId,
-            error_code: codes::UNKNOWN_TOPIC_ID,
-        },
-    ];
-    let (broker, _dir) = start(Arc::new(DenyAll)).await;
-
-    crate::handlers::test_support::check_cases(cases, async |case| {
-        drive(&broker, None, case).await
-    })
+    let cases = unauthorized_topic_cases(12, FIRST_TOPIC_ID_VERSION);
+    crate::handlers::test_support::check_denied_topic_cases(
+        cases,
+        start(Arc::new(DenyAll)),
+        async |broker, case| drive(broker, None, case).await,
+    )
     .await;
-    broker.shutdown().await;
 }
 
 /// Each topic whose id does not resolve keeps its own topic row. Kafka's
@@ -385,7 +287,6 @@ async fn a_fetch_session_repeats_unknown_topic_id() {
 /// a client may take for a topic that was deleted.
 #[tokio::test]
 async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_leader_or_follower() {
-    use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
     use krabka_protocol::owned::fetch_response::LeaderIdAndEpoch;
 
     const KIP_951_VERSION: i16 = 16;
@@ -395,30 +296,15 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
     // Node 1, this broker, is not a replica: node 2 leads and node 3 follows.
     let topic_id = uuid::Uuid::from_u128(0x51);
-    broker
-        .submit_metadata_record_for_test(MetadataRecord::V1Topic(TopicRecord {
-            name: "moved".into(),
-            topic_id,
-            partitions: 1,
-            replication_factor: 2,
-        }))
-        .await
-        .expect("submit topic record");
-    broker
-        .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-            topic: "moved".into(),
-            partition: 0,
-            leader: krabka_audit::NodeId(2),
-            replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-            isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-            leader_epoch: krabka_metadata::LeaderEpoch(4),
-            adding_replicas: Vec::new(),
-            removing_replicas: Vec::new(),
-            directories: vec![uuid::Uuid::nil(); 2],
-            partition_epoch: 0,
-        }))
-        .await
-        .expect("submit partition record");
+    crate::handlers::test_support::seed_partition_replicas(
+        &broker,
+        "moved",
+        topic_id,
+        krabka_audit::NodeId(2),
+        &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+        4,
+    )
+    .await;
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while broker
             .controller_image_for_test()

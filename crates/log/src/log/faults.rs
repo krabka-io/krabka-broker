@@ -25,12 +25,12 @@ use tempfile::tempdir;
 
 use super::Log;
 use crate::{
-    CleanupPolicy,
     config::LogConfig,
     error::LogError,
     io::{IoTarget, LogIo},
     log::test_support::{
-        compaction_ctx, keyed_batch, sample_batch, sample_batch_with_epoch, tiny_segments,
+        append_keyed_samples, compacting_segments, compaction_ctx, sample_batch,
+        sample_batch_with_epoch, tiny_segments, write_with_budget,
     },
     name,
 };
@@ -62,12 +62,7 @@ impl LogIo for DiskFull {
             return (&*file).write(buf);
         }
         let mut budget = self.budget.lock().unwrap();
-        if *budget == 0 {
-            return Err(std::io::ErrorKind::StorageFull.into());
-        }
-        let written = (&*file).write(&buf[..buf.len().min(*budget)])?;
-        *budget -= written;
-        Ok(written)
+        write_with_budget(file, buf, &mut budget)
     }
 }
 
@@ -169,22 +164,25 @@ fn is_storage_full(error: &LogError) -> bool {
 /// `StorageFull`, and a short write that lands `prefix` bytes first.
 const PREFIXES: [(&str, usize); 2] = [("outright StorageFull", 0), ("after a short write", 6)];
 
+fn durable_sample_log(config: &LogConfig) -> (tempfile::TempDir, Log, Offset) {
+    let dir = tempdir().unwrap();
+    let log = crate::log::test_support::synced_sample_log(dir.path(), config.clone(), 1, 2);
+    let durable = log.log_end_offset();
+    (dir, log, durable)
+}
+
 /// A sparse-index write that fails is reported, and the batch it indexed is
 /// rolled back rather than left half-indexed for the next open to find.
 #[test]
 fn a_disk_full_sparse_index_write_is_reported_and_rolled_back() {
     for target in [IoTarget::OffsetIndex, IoTarget::TimeIndex] {
         for (label, prefix) in PREFIXES {
-            let dir = tempdir().unwrap();
             // One index entry per batch, so the very next append writes one.
             let config = LogConfig {
                 index_interval: bytes(1),
                 ..LogConfig::default()
             };
-            let mut log = Log::open(dir.path(), config.clone()).unwrap();
-            log.append(&mut sample_batch(2)).unwrap();
-            log.sync().unwrap();
-            let durable = log.log_end_offset();
+            let (dir, mut log, durable) = durable_sample_log(&config);
 
             log.test_set_io(DiskFull::new(target, prefix));
             // A newer timestamp, because the time index only takes an entry
@@ -211,17 +209,13 @@ fn a_disk_full_sparse_index_write_is_reported_and_rolled_back() {
 #[test]
 fn a_disk_full_producer_snapshot_fails_the_roll_and_the_log_reopens_without_it() {
     for (label, prefix) in PREFIXES {
-        let dir = tempdir().unwrap();
         // Every append after the first rolls the active segment, and a roll is
         // what publishes the boundary snapshot.
         let config = LogConfig {
             flush_on_append: true,
             ..tiny_segments()
         };
-        let mut log = Log::open(dir.path(), config.clone()).unwrap();
-        log.append(&mut sample_batch(2)).unwrap();
-        log.sync().unwrap();
-        let durable = log.log_end_offset();
+        let (dir, mut log, durable) = durable_sample_log(&config);
 
         log.test_set_io(DiskFull::new(IoTarget::ProducerSnapshot, prefix));
         let error = log
@@ -276,16 +270,9 @@ fn a_disk_full_leader_epoch_checkpoint_leaves_the_previous_checkpoint_standing()
 /// Build a compactable log of twelve one-record segments under one key each,
 /// so a pass has real work and produces a real swap.
 fn compactable_log(dir: &Path) -> (LogConfig, Log) {
-    let config = LogConfig {
-        cleanup_policy: CleanupPolicy::Compact,
-        ..tiny_segments()
-    };
+    let config = compacting_segments();
     let mut log = Log::open(dir, config.clone()).unwrap();
-    for i in 0..12 {
-        let key = format!("k{}", i % 3);
-        let mut batch = keyed_batch(i, &[(0, key.as_bytes(), b"v")]);
-        log.append(&mut batch).unwrap();
-    }
+    append_keyed_samples(&mut log, 12, |i| format!("k{}", i % 3));
     log.sync().unwrap();
     (config, log)
 }
@@ -374,11 +361,7 @@ fn a_failed_segment_deletion_keeps_the_bytes_accounted_for_and_the_next_tick_ret
             retention_size: Some(ByteSize::ZERO),
             ..tiny_segments()
         };
-        let mut log = Log::open(dir.path(), config).unwrap();
-        for _ in 0..4 {
-            log.append(&mut sample_batch(2)).unwrap();
-        }
-        log.sync().unwrap();
+        let mut log = crate::log::test_support::synced_sample_log(dir.path(), config, 4, 2);
 
         let fault = FailSegmentDeletionOnce::new(
             &format!("{}.log", name::format_base_offset(0)),
@@ -428,11 +411,7 @@ fn a_failed_segment_deletion_keeps_the_bytes_accounted_for_and_the_next_tick_ret
 fn log_open_reclaims_what_an_interrupted_segment_deletion_left_behind() {
     let dir = tempdir().unwrap();
     let config = tiny_segments();
-    let mut log = Log::open(dir.path(), config.clone()).unwrap();
-    for _ in 0..4 {
-        log.append(&mut sample_batch(2)).unwrap();
-    }
-    log.sync().unwrap();
+    let log = crate::log::test_support::synced_sample_log(dir.path(), config.clone(), 4, 2);
     let end = log.log_end_offset();
     drop(log);
 

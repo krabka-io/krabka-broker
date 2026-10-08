@@ -6,6 +6,9 @@
 
 use krabka_metadata::{AclEntry, ResourceType};
 
+/// Borrowed ACL entries returned by a metadata image or gateway snapshot.
+pub type AclEntries<'a> = Box<dyn Iterator<Item = &'a AclEntry> + 'a>;
+
 /// A source of ACL entries the authorizer can match against.
 ///
 /// `matching_acls` MUST return every entry whose resource pattern matches
@@ -15,18 +18,14 @@ use krabka_metadata::{AclEntry, ResourceType};
 /// Mirror [`krabka_metadata::MetadataImage::matching_acls`] in
 /// `crates/metadata/src/image.rs`.
 pub trait AclSource {
-    fn matching_acls<'a>(
-        &'a self,
-        rt: ResourceType,
-        name: &'a str,
-    ) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a>;
+    fn matching_acls<'a>(&'a self, rt: ResourceType, name: &'a str) -> AclEntries<'a>;
 
     /// Every stored entry of resource type `rt`, regardless of resource name.
     ///
     /// [`crate::SimpleAclAuthorizer`]'s `authorize_by_resource_type` scans
     /// this set for an ALLOW grant that no DENY covers, so unlike
     /// `matching_acls` it is not scoped to one candidate resource name.
-    fn acls_of_type<'a>(&'a self, rt: ResourceType) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a>;
+    fn acls_of_type(&self, rt: ResourceType) -> AclEntries<'_>;
 
     /// Whether a stored host containing `/` is a CIDR range (KIP-1276) rather
     /// than plain text. Kafka 4.3.1 compares every host as text, and trunk
@@ -42,17 +41,13 @@ pub trait AclSource {
 // adapt its iterator. (Trait is local ⇒ orphan rule satisfied for the foreign
 // MetadataImage type.)
 impl AclSource for krabka_metadata::MetadataImage {
-    fn matching_acls<'a>(
-        &'a self,
-        rt: ResourceType,
-        name: &'a str,
-    ) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a> {
+    fn matching_acls<'a>(&'a self, rt: ResourceType, name: &'a str) -> AclEntries<'a> {
         Box::new(krabka_metadata::MetadataImage::matching_acls(
             self, rt, name,
         ))
     }
 
-    fn acls_of_type<'a>(&'a self, rt: ResourceType) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a> {
+    fn acls_of_type(&self, rt: ResourceType) -> AclEntries<'_> {
         Box::new(
             krabka_metadata::MetadataImage::all_acls(self).filter(move |e| e.resource_type == rt),
         )

@@ -79,6 +79,22 @@ pub struct SegmentInventory {
     pub transaction_index: Option<ArchiveObject>,
 }
 
+impl SegmentInventory {
+    /// Present artifacts in Kafka's log, offset, time, producer, epoch and transaction order.
+    pub(crate) fn artifacts(&self) -> impl Iterator<Item = &ArchiveObject> {
+        [
+            self.log.as_ref(),
+            self.offset_index.as_ref(),
+            self.time_index.as_ref(),
+            self.producer_snapshot.as_ref(),
+            self.leader_epoch.as_ref(),
+            self.transaction_index.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
 /// One partition of the archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartitionInventory {

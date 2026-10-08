@@ -8,17 +8,12 @@
 use krabka_metadata::{AclEntry, AclOperation, ResourceType};
 use krabka_protocol::owned::delete_acls_request::{DeleteAclsFilter, DeleteAclsRequest};
 
+pub(super) use crate::handlers::acl_test_support::{
+    OPERATION_ANY, OPERATION_READ, OPERATION_WRITE, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL,
+    PATTERN_TYPE_MATCH, PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY,
+    RESOURCE_TYPE_TOPIC,
+};
 pub(super) const VERSION: i16 = 3;
-pub(super) const RESOURCE_TYPE_TOPIC: i8 = 2;
-pub(super) const PATTERN_TYPE_ANY: i8 = 1;
-pub(super) const PATTERN_TYPE_MATCH: i8 = 2;
-pub(super) const PATTERN_TYPE_LITERAL: i8 = 3;
-pub(super) const PATTERN_TYPE_PREFIXED: i8 = 4;
-pub(super) const OPERATION_ANY: i8 = 1;
-pub(super) const OPERATION_READ: i8 = 3;
-pub(super) const OPERATION_WRITE: i8 = 4;
-pub(super) const PERMISSION_ANY: i8 = 1;
-pub(super) const PERMISSION_ALLOW: i8 = 3;
 
 pub(super) fn acl(resource_name: &str, principal: &str, operation: AclOperation) -> AclEntry {
     crate::test_support::allow_acl(ResourceType::Topic, resource_name, principal, operation)
@@ -46,14 +41,14 @@ pub(super) fn request(filters: Vec<DeleteAclsFilter>) -> DeleteAclsRequest {
 
 crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 
-/// An authorizer an operator actually configured, which lets the `admin` test
-/// principal through as a super user.
-///
-/// The ACL RPCs answer `SECURITY_DISABLED` under the default
-/// `AllowAllAuthorizer`, so every case about the deleting path needs a broker
-/// that has an authorizer at all.
-pub(super) fn configured_authorizer() -> std::sync::Arc<dyn crate::authorizer::Authorizer> {
-    std::sync::Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
-        std::iter::once("admin".to_owned()).collect(),
-    ))
+pub(super) use crate::handlers::acl_test_support::configured_authorizer;
+
+/// Build ordered name/principal filters without sharing any expected response facts.
+pub(super) fn named_filters(filters: &[(&str, &str)]) -> DeleteAclsRequest {
+    request(
+        filters
+            .iter()
+            .map(|&(name, principal)| filter(Some(name), Some(principal)))
+            .collect(),
+    )
 }

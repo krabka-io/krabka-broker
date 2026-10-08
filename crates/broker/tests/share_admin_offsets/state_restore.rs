@@ -8,11 +8,9 @@
 //! summary rather than on a Describe, Alter, or Delete response.
 
 use assert2::assert;
-use krabka_broker::{BootstrapMode, Broker};
 
 use crate::harness::{
-    ACCEPT, NONE, ShareAck, acquired_count, bootstrap_share_state, broker_config,
-    broker_test_permit, connect, fetch_until_acquired, share_ack,
+    ACCEPT, NONE, ShareAck, acquired_count, broker_test_permit, fetch_until_acquired, share_ack,
 };
 
 /// Lag restore: `delivery_complete_count` survives a broker restart.
@@ -31,11 +29,9 @@ async fn delivery_complete_count_restored_across_restart() {
 
     let tid;
     {
-        let (broker, client, topic) =
-            crate::support::share::start_topic(broker_config(log_dir.clone()), "t", 1).await;
+        let (broker, client, topic, member) =
+            crate::harness::initialized_topic(log_dir.clone(), N).await;
         tid = topic;
-        let (member, _epoch) =
-            crate::harness::initialize_consumption(&broker, &client, tid, N).await;
 
         // Acquire 0..N-1 and Accept 1..N-1: the SPSO stays at 0 behind the
         // still-acquired offset 0, and the window holds N-1 terminal records.
@@ -72,11 +68,7 @@ async fn delivery_complete_count_restored_across_restart() {
     }
 
     {
-        let mut cfg = broker_config(log_dir);
-        cfg.bootstrap_mode = BootstrapMode::Rejoin;
-        let broker = Broker::start(cfg).await.unwrap();
-        let client = connect(&broker.listen_addr().to_string()).await;
-        bootstrap_share_state(&broker, &client, "g1").await;
+        let (broker, _client) = crate::support::share::rejoin_group(log_dir, "g1").await;
 
         // The summary load is driven by the share coordinator reading the
         // persisted record; await until the recovered state is present.

@@ -293,6 +293,17 @@ mod tests {
             verify_only: bool,
             topics: &'static [(&'static str, &'static [i32])],
         }
+        fn entry(
+            epoch: i16,
+            verify_only: bool,
+            topics: &'static [(&'static str, &'static [i32])],
+        ) -> Entry {
+            Entry {
+                epoch,
+                verify_only,
+                topics,
+            }
+        }
         /// The `(topic, [(partition, code)])` rows one entry answers.
         type Rows = &'static [(&'static str, &'static [(i32, i16)])];
         struct Case {
@@ -312,16 +323,8 @@ mod tests {
             Case {
                 name: "both entries add the second entry's partitions",
                 entries: [
-                    Entry {
-                        epoch: EPOCH,
-                        verify_only: false,
-                        topics: &[("a", &[0])],
-                    },
-                    Entry {
-                        epoch: EPOCH,
-                        verify_only: false,
-                        topics: &[("b", &[0])],
-                    },
+                    entry(EPOCH, false, &[("a", &[0])]),
+                    entry(EPOCH, false, &[("b", &[0])]),
                 ],
                 results: [&[("a", &[(0, NONE)])], &[("a", &[(0, NONE)])]],
                 enlisted: &[("b", 0)],
@@ -329,16 +332,8 @@ mod tests {
             Case {
                 name: "each entry is checked with its own producer epoch",
                 entries: [
-                    Entry {
-                        epoch: EPOCH - 1,
-                        verify_only: false,
-                        topics: &[("a", &[0])],
-                    },
-                    Entry {
-                        epoch: EPOCH,
-                        verify_only: false,
-                        topics: &[("b", &[0])],
-                    },
+                    entry(EPOCH - 1, false, &[("a", &[0])]),
+                    entry(EPOCH, false, &[("b", &[0])]),
                 ],
                 results: [&[("a", &[(0, FENCED)])], &[("a", &[(0, NONE)])]],
                 enlisted: &[("b", 0)],
@@ -346,16 +341,8 @@ mod tests {
             Case {
                 name: "a failed partition check lists the checked partitions",
                 entries: [
-                    Entry {
-                        epoch: EPOCH,
-                        verify_only: false,
-                        topics: &[("a", &[0])],
-                    },
-                    Entry {
-                        epoch: EPOCH,
-                        verify_only: false,
-                        topics: &[("b", &[0]), ("missing", &[0])],
-                    },
+                    entry(EPOCH, false, &[("a", &[0])]),
+                    entry(EPOCH, false, &[("b", &[0]), ("missing", &[0])]),
                 ],
                 results: [
                     &[("b", &[(0, NOT_ATTEMPTED)]), ("missing", &[(0, UNKNOWN)])],
@@ -366,16 +353,8 @@ mod tests {
             Case {
                 name: "the verify-only entry verifies what the add entry added",
                 entries: [
-                    Entry {
-                        epoch: EPOCH,
-                        verify_only: false,
-                        topics: &[("a", &[0])],
-                    },
-                    Entry {
-                        epoch: EPOCH,
-                        verify_only: true,
-                        topics: &[("b", &[0])],
-                    },
+                    entry(EPOCH, false, &[("a", &[0])]),
+                    entry(EPOCH, true, &[("b", &[0])]),
                 ],
                 results: [&[("a", &[(0, NONE)])], &[("b", &[(0, NONE)])]],
                 enlisted: &[("b", 0)],

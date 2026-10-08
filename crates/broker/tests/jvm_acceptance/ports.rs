@@ -24,11 +24,11 @@ pub(crate) struct Ports {
 pub(crate) fn ports() -> &'static Ports {
     static PORTS: std::sync::OnceLock<Ports> = std::sync::OnceLock::new();
     PORTS.get_or_init(|| {
-        let client: [u16; 3] = std::array::from_fn(|_| crate::support::free_port());
+        let (client, listen, advertised) = crate::support::jvm_client_ports::<3>();
         let controller: [u16; 3] = std::array::from_fn(|_| crate::support::free_port());
         Ports {
-            client: client.map(|p| format!("0.0.0.0:{p}")),
-            advertised: client.map(|p| format!("host.docker.internal:{p}")),
+            client: listen,
+            advertised,
             controller: controller.map(|p| format!("0.0.0.0:{p}")),
             loopback: format!("127.0.0.1:{}", client[0]),
             minio: crate::support::free_port(),

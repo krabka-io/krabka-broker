@@ -13,7 +13,7 @@ use assert2::assert;
 use krabka_broker::NodeId;
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
+    owned::create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
     primitives::uuid::Uuid as WireUuid,
 };
 
@@ -33,17 +33,16 @@ use crate::{
 pub(crate) async fn create_diskless_topic(client: &Client) -> WireUuid {
     let response = client
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: i16::try_from(VOTERS).expect("small cluster"),
-                configs: vec![CreatableTopicConfig {
+            topics: vec![crate::support::topics::creatable_topic_with_configs(
+                TOPIC.into(),
+                1,
+                i16::try_from(VOTERS).expect("small cluster"),
+                vec![CreatableTopicConfig {
                     name: "krabka.diskless".into(),
                     value: Some("true".into()),
                     ..Default::default()
                 }],
-                ..Default::default()
-            }],
+            )],
             timeout_ms: 10_000,
             ..Default::default()
         })

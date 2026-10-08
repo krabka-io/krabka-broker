@@ -2,6 +2,13 @@ use assert2::assert;
 
 use super::*;
 
+fn check_two_durable_followers(reported: &[i64], watermarks: FetchWatermarks) {
+    assert!(
+        installed_wal_quorum_bounds_fetch(&[1, 2, 3], reported, 1, 3, 0, watermarks)
+            == Some((10, 10, std::vec![(2, 10), (3, 10)]))
+    );
+}
+
 #[test]
 fn checked_wal_copy_boundaries() {
     let source = [(0, 1, std::vec![1, 2]), (2, 0, std::vec![3, 4, 5])];
@@ -91,10 +98,7 @@ fn installed_wal_fetch_support_boundaries() {
         lso: 10,
         deliverable: 10,
     };
-    assert!(
-        installed_wal_quorum_bounds_fetch(&[1, 2, 3], &[0, 10, 10], 1, 3, 0, w)
-            == Some((10, 10, std::vec![(2, 10), (3, 10)]))
-    );
+    check_two_durable_followers(&[0, 10, 10], w);
     // The unsynced leader end is not a second vote for a single follower.
     assert!(
         installed_wal_quorum_bounds_fetch(&[1, 2, 3], &[0, 10, 0], 1, 3, 0, w)
@@ -132,10 +136,7 @@ fn installed_wal_fetch_support_boundaries() {
         installed_wal_quorum_bounds_fetch(&[1], &[i64::MAX], 1, 1, 0, maximum)
             == Some((i64::MAX, i64::MAX, std::vec![(1, i64::MAX)]))
     );
-    assert!(
-        installed_wal_quorum_bounds_fetch(&[1, 2, 3], &[0, i64::MAX, i64::MAX], 1, 3, 0, w)
-            == Some((10, 10, std::vec![(2, 10), (3, 10)]))
-    );
+    check_two_durable_followers(&[0, i64::MAX, i64::MAX], w);
     assert!(
         installed_wal_quorum_bounds_fetch(
             &[1, 2, 3],

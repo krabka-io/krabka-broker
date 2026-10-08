@@ -346,10 +346,8 @@ mod tests {
         ];
 
         for (name, authorizer, expected_code, expected_message) in cases {
-            let (broker_handle, _dir) = start_broker(authorizer).await;
-            let broker = broker_handle.broker_arc_for_test();
-            let p = principal("alice");
-            let peer = peer();
+            broker_fixture!((broker_handle, _dir, broker), start_broker(authorizer));
+            request_identity!((p, peer), principal("alice"));
             let req = request(name, &[0]);
 
             let resp = drive(&broker, &req, &p, &peer);
@@ -380,8 +378,10 @@ mod tests {
     /// with no message.
     #[tokio::test]
     async fn handle_gives_the_message_only_for_a_topic_the_image_lacks() {
-        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(Arc::new(AllowAllAuthorizer))
+        );
         broker
             .controller
             .submit_change(vec![
@@ -402,8 +402,7 @@ mod tests {
             ])
             .await
             .expect("seed the known topic");
-        let p = principal("alice");
-        let peer = peer();
+        request_identity!((p, peer), principal("alice"));
 
         // (topic, expected error message)
         let cases = [
@@ -438,10 +437,11 @@ mod tests {
     /// partition, not only the first.
     #[tokio::test]
     async fn handle_invalid_topic_name_marks_every_requested_partition() {
-        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(Arc::new(AllowAllAuthorizer))
+        );
+        request_identity!((p, peer), principal("alice"));
         let req = request("a/b", &[0, 1, 4]);
 
         let resp = drive(&broker, &req, &p, &peer);
@@ -595,8 +595,10 @@ mod tests {
     /// `KAFKA_STORAGE_ERROR`.
     #[tokio::test]
     async fn handle_answers_from_the_log_of_every_hosted_replica() {
-        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(Arc::new(AllowAllAuthorizer))
+        );
         let local = broker.config.node_id;
         let remote = krabka_metadata::NodeId(local.0 + 1);
 
@@ -640,8 +642,7 @@ mod tests {
             .await
             .expect("replicate an open transaction");
 
-        let p = principal("alice");
-        let peer = peer();
+        request_identity!((p, peer), principal("alice"));
         let request = DescribeProducersRequest {
             topics: ["leads", "follows", "moved"]
                 .into_iter()

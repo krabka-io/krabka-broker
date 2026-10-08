@@ -154,8 +154,6 @@ pub(super) fn validate(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::assert;
     use krabka_metadata::{
         BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, GroupConfigRecord, MetadataRecord,
@@ -163,6 +161,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::test_support::string_pairs as configs;
 
     fn broker_config(node_id: NodeId, name: &str, value: &str) -> MetadataRecord {
         MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
@@ -170,13 +169,6 @@ mod tests {
             config_name: name.to_owned(),
             config_value: Some(value.to_owned()),
         })
-    }
-
-    fn configs(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect()
     }
 
     /// An image with `group` configured as `group_configs`, and the topic

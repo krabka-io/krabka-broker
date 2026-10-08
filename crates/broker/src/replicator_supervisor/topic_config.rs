@@ -78,9 +78,8 @@ mod tests {
     use super::*;
     use crate::{
         api_catalog::UnstableApiVersions,
-        replicator_supervisor::{
-            materialize::materialize_partition,
-            test_support::{MaterializeFixture, await_until, single_partition_image},
+        replicator_supervisor::test_support::{
+            MaterializeFixture, await_until, single_partition_image,
         },
     };
 
@@ -93,13 +92,13 @@ mod tests {
     ) -> LogConfig {
         let dir = tempdir().expect("tempdir");
         let partitions = Arc::new(PartitionRegistry::new());
-        materialize_partition(MaterializeFixture::default().config(
+        MaterializeFixture::default().materialize(
             &partitions,
             "t",
             &[dir.path().to_path_buf()],
             base,
-        ))
-        .expect("materialize");
+            "materialize",
+        );
         let desired = HashSet::from([("t".to_owned(), 0)]);
         push_topic_configs(&desired, &partitions, image, base, NodeId(1), unstable).await;
         let part = partitions.get("t", PartitionIndex(0)).expect("partition");

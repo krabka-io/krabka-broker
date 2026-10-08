@@ -93,6 +93,7 @@ async fn tuple_quota_throttles_only_matching_client_id() {
     // No (user=alice)-only quota is set, so (alice, other) has no quota at all.
     let alter_resp = drive_alter_client_quotas_sasl(
         addr,
+        crate::CLIENT_ID,
         "admin",
         &admin_password,
         vec![(

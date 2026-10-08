@@ -21,6 +21,21 @@ use crate::{
     test_support::principal,
 };
 
+/// Alice's identity and request context, with caller-owned borrowed storage.
+macro_rules! freeze_fixture {
+    ($image:ident, $principal:ident, $peer:ident, $ctx:ident; $entries:expr $(; $env:ident, $config:ident)?) => {
+        let $image = crate::freeze::handlers::set_freeze::tests::image($entries);
+        let $principal = crate::test_support::principal(crate::freeze::handlers::set_freeze::tests::ALICE_NAME);
+        let $peer = crate::freeze::handlers::set_freeze::tests::peer();
+        let $ctx = crate::freeze::handlers::set_freeze::tests::context(&$principal, &$peer);
+        $(let $env = crate::freeze::handlers::set_freeze::checks::FreezeEnv {
+            config: &$config,
+            image: &$image,
+            ctx: &$ctx,
+        };)?
+    };
+}
+
 mod approval;
 mod audit;
 mod scope;

@@ -196,17 +196,7 @@ mod tests {
     }
 
     fn freeze(scope: &str, pattern_type: PatternType, reason: &str) -> TopicFreezeRecord {
-        TopicFreezeRecord {
-            scope: scope.to_owned(),
-            pattern_type,
-            frozen: true,
-            reason: reason.to_owned(),
-            set_by: "User:alice".to_owned(),
-            set_at_ms: 1_770_000_000_000,
-            proposal_id: Uuid::nil(),
-            key_id: String::new(),
-            signature: Vec::new(),
-        }
+        crate::test_support::topic_freeze_record(scope, pattern_type, true, reason)
     }
 
     fn frozen(image: &mut MetadataImage, scope: &str, pattern_type: PatternType, reason: &str) {

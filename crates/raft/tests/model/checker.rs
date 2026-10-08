@@ -28,6 +28,22 @@ use super::{
     },
 };
 
+fn append_to_leader(state: &mut ModelState, leader: NodeId, client: ClientId, value: u64) -> i64 {
+    let epoch = state.nodes[&leader].machine.quorum_state().leader_epoch;
+    let offset = state.nodes[&leader].log.end_offset();
+    let _ = state
+        .linz
+        .on_invoke(client, LogOp::Append(value))
+        .expect("fresh client id has no in-flight op");
+    state
+        .nodes
+        .get_mut(&leader)
+        .expect("leader exists")
+        .log
+        .append_in_epoch(epoch, 1);
+    offset
+}
+
 impl Model for ConsensusModel {
     type State = ModelState;
     type Action = ModelAction;
@@ -228,19 +244,8 @@ impl Model for ConsensusModel {
                     .iter()
                     .find(|(id, n)| is_leader(n) && !state.crashed.contains(*id))
                     .map(|(&id, _)| id)?;
-                let epoch = state.nodes[&leader].machine.quorum_state().leader_epoch;
-                let offset = state.nodes[&leader].log.end_offset();
                 // Record the invocation, append at the leader, track until committed.
-                let _ = state
-                    .linz
-                    .on_invoke(client, LogOp::Append(value))
-                    .expect("fresh client id has no in-flight op");
-                state
-                    .nodes
-                    .get_mut(&leader)
-                    .expect("leader exists")
-                    .log
-                    .append_in_epoch(epoch, 1);
+                let offset = append_to_leader(&mut state, leader, client, value);
                 state
                     .pending
                     .insert(offset, (client, value, CommitPoint::KRaftHighWatermark));
@@ -248,18 +253,7 @@ impl Model for ConsensusModel {
             }
             ModelAction::AppendVia(appender, client, value) => {
                 let leader = live_authority(&state)?;
-                let epoch = state.nodes[&leader].machine.quorum_state().leader_epoch;
-                let offset = state.nodes[&leader].log.end_offset();
-                let _ = state
-                    .linz
-                    .on_invoke(client, LogOp::Append(value))
-                    .expect("fresh client id has no in-flight op");
-                state
-                    .nodes
-                    .get_mut(&leader)
-                    .expect("leader exists")
-                    .log
-                    .append_in_epoch(epoch, 1);
+                let offset = append_to_leader(&mut state, leader, client, value);
                 state.appenders_seen.insert(appender);
                 state
                     .pending

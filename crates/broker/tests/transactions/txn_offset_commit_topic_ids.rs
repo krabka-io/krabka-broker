@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use assert2::assert;
 use krabka_client_admin::AdminClient;
-use krabka_client_producer::{ConsumerGroupMetadata, Producer, ProducerError};
+use krabka_client_producer::{ConsumerGroupMetadata, ProducerError};
 
 use crate::txn_harness::{boot_single_trunk, create_topic};
 
@@ -31,13 +31,8 @@ async fn send_offsets_to_transaction_commits_by_topic_id() {
     let (broker, bootstrap, _dir) = boot_single_trunk().await;
     create_topic(&bootstrap, "v6-in").await;
 
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("v6-tid")
-        .build()
-        .await
-        .unwrap();
-    producer.init_transactions().await.unwrap();
+    let producer =
+        crate::support::producer::transactional_producer(bootstrap.clone(), "v6-tid").await;
 
     let txn = producer.begin_transaction().await.unwrap();
     let gone = ConsumerGroupMetadata {

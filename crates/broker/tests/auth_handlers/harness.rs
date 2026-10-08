@@ -34,27 +34,8 @@ pub fn wrong_scram_password() -> String {
     ['h', 'u', 'n', 't', 'e', 'r', '2'].iter().collect()
 }
 
-/// One length-prefixed request/response exchange; see
-/// [`kafka_wire::round_trip`].
-pub async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        "krabka-sasl-test",
-        flexible,
-        body,
-    )
-    .await
-}
+// One length-prefixed request/response exchange, bound to this suite.
+crate::socket_round_trip_fixture!(pub round_trip, "krabka-sasl-test");
 
 /// Post-auth Metadata proves the session survived and the data plane remains reachable.
 pub async fn metadata_probe(stream: &mut TcpStream, corr_id: i32) -> io::Result<()> {
@@ -104,8 +85,8 @@ pub async fn start_scram_admin(
     password: &str,
     mechanisms: Vec<krabka_security::SaslMechanism>,
 ) -> (krabka_broker::BrokerHandle, std::net::SocketAddr) {
-    let mut config = crate::support::sasl_plaintext_config(log_dir.to_path_buf());
-    config.enabled_sasl_mechanisms = mechanisms;
+    let mut config =
+        crate::support::sasl::sasl_plaintext_mechanisms(log_dir.to_path_buf(), mechanisms);
     config
         .plain_credentials
         .insert("admin".to_string(), password.to_string());
@@ -121,8 +102,10 @@ pub fn alice_plain_config(
     log_dir: std::path::PathBuf,
     password: String,
 ) -> krabka_broker::BrokerConfig {
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir);
-    cfg.enabled_sasl_mechanisms = vec![krabka_security::SaslMechanism::Plain];
+    let mut cfg = crate::support::sasl::sasl_plaintext_mechanisms(
+        log_dir,
+        vec![krabka_security::SaslMechanism::Plain],
+    );
     cfg.plain_credentials.insert("alice".into(), password);
     cfg
 }
@@ -131,8 +114,7 @@ pub async fn start_scram_alice(
     log_dir: std::path::PathBuf,
     mechanism: krabka_security::SaslMechanism,
 ) -> krabka_broker::BrokerHandle {
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir);
-    cfg.enabled_sasl_mechanisms = vec![mechanism];
+    let cfg = crate::support::sasl::sasl_plaintext_mechanisms(log_dir, vec![mechanism]);
     let broker = krabka_broker::Broker::start(cfg)
         .await
         .expect("broker must start");
@@ -144,5 +126,89 @@ pub async fn start_scram_alice(
         4096,
     )
     .await;
+    broker
+}
+
+/// PLAIN Alice fixture, retaining the log directory through the test.
+///
+/// # Panics
+/// Panics if the temporary directory or broker cannot be created.
+pub async fn start_alice_plain(
+    password: String,
+) -> (
+    tempfile::TempDir,
+    krabka_broker::BrokerHandle,
+    std::net::SocketAddr,
+) {
+    let log_dir = tempfile::tempdir().unwrap();
+    let cfg = alice_plain_config(log_dir.path().to_path_buf(), password);
+    let (handle, log_dir, addr) = crate::support::sasl::start_broker(cfg, log_dir).await;
+    (log_dir, handle, addr)
+}
+
+/// Keep the SCRAM provisioning broker's directory alive beside its handle.
+pub async fn scram_admin_fixture(
+    mechanisms: Vec<krabka_security::SaslMechanism>,
+) -> (
+    tempfile::TempDir,
+    krabka_broker::BrokerHandle,
+    std::net::SocketAddr,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let (broker, addr) = start_scram_admin(dir.path(), &admin_plain_password(), mechanisms).await;
+    (dir, broker, addr)
+}
+
+/// A PLAIN broker and its first socket, retaining the log directory beside the handle.
+///
+/// # Panics
+/// Panics if the broker fixture or the TCP connection cannot be created.
+pub async fn alice_plain_socket(
+    password: String,
+) -> (
+    tempfile::TempDir,
+    krabka_broker::BrokerHandle,
+    std::net::SocketAddr,
+    TcpStream,
+) {
+    let (dir, broker, addr) = start_alice_plain(password).await;
+    let stream = TcpStream::connect(addr).await.unwrap();
+    (dir, broker, addr, stream)
+}
+
+/// Provision Alice and Bob for the selected reauthentication mechanism.
+/// PLAIN credentials are installed before startup; SCRAM credentials commit afterward.
+///
+/// # Panics
+/// Panics if broker startup or SCRAM metadata submission fails.
+pub async fn start_reauth_broker(
+    log_dir: &std::path::Path,
+    max_reauth: krabka_units::Time,
+    mechanism: krabka_security::SaslMechanism,
+) -> krabka_broker::BrokerHandle {
+    let mut config = reauth_config(log_dir, max_reauth);
+    config.enabled_sasl_mechanisms = vec![mechanism];
+    if mechanism == krabka_security::SaslMechanism::Plain {
+        for user in ["alice", "bob"] {
+            config
+                .plain_credentials
+                .insert(user.to_string(), alice_password());
+        }
+    }
+    let broker = krabka_broker::Broker::start(config)
+        .await
+        .expect("broker must start");
+    if mechanism == krabka_security::SaslMechanism::ScramSha512 {
+        for user in ["alice", "bob"] {
+            crate::support::sasl::provision_scram(
+                &broker,
+                user,
+                alice_password().as_bytes(),
+                mechanism,
+                4096,
+            )
+            .await;
+        }
+    }
     broker
 }

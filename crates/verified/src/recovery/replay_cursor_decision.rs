@@ -5,14 +5,11 @@ use super::{
     ReplayCursorDecision, ReplayRecordDecision,
 };
 
+open_logic! {
 /// A record is replayed iff its absolute offset `batch_base + record_delta`
 /// lies in the half-open replay window `[from, end)` and its batch is of the
 /// kind this pass replays: data batches for the metadata image, control
 /// batches for the voter and quorum state.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn replay_record_admitted(
     batch_base: i64,
     record_delta: i32,
@@ -27,6 +24,7 @@ pub fn replay_record_admitted(
             && from@ <= batch_base@ + record_delta@
             && batch_base@ + record_delta@ < end@
     }
+}
 }
 
 /// Decide whether controller recovery replays one decoded metadata record,

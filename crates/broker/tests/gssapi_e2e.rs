@@ -73,13 +73,7 @@ fn gssapi_fixtures() -> PathBuf {
 /// The broker has one `SASL_PLAINTEXT` listener that advertises `GSSAPI`. The
 /// KDC fixture's `kafka.keytab` backs that listener.
 async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_tracing_with("krabka_broker=debug,info");
 
     let kdc_url =
         std::env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_string());

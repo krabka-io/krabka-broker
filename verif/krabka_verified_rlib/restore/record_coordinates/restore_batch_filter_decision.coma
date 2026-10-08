@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 57 0 57 93 *)
+(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 55 0 55 93 *)
 
-let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 51 10 55 1
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 49 10 53 1
 
 use creusot.prelude.Any
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_batch_filter_decision [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 57 0 57 93]
+let restore_batch_filter_decision [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 55 0 55 93]
   (saw_keep: bool) (saw_drop: bool) (return (x: t_RestoreFilterDecision)) = (! bb0
   [ bb0 = any [ br0 -> {saw_keep = false} (! bb3) | br1 -> {saw_keep} (! bb1) ]
   | bb1 = any [ br0 -> {saw_drop = false} (! bb3) | br1 -> {saw_drop} (! bb2) ]

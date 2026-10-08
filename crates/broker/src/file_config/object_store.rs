@@ -209,9 +209,7 @@ prefix = "cluster-a"
 endpoint = "http://minio:9000"
 allow_http = true
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         match cfg.remote_storage_backend {
             Some(crate::config::RemoteStorageBackend::S3(s3)) => {
                 // Credentials default to None and the multipart knobs default
@@ -242,9 +240,7 @@ region = "us-east-1"
 multipart_threshold = 8192
 multipart_chunk_size = 5242880
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         match cfg.remote_storage_backend {
             Some(crate::config::RemoteStorageBackend::S3(s3)) => {
                 assert!(s3.multipart_threshold == 8192);
@@ -262,9 +258,7 @@ prefix = "cluster-a"
 endpoint = "http://fake-gcs:4443"
 allow_http = true
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         match cfg.remote_storage_backend {
             Some(crate::config::RemoteStorageBackend::Gcs(g)) => {
                 // Leaving all credential fields unset selects Workload
@@ -292,9 +286,7 @@ allow_http = true
 bucket = "b"
 service_account_path = "/etc/gcs/key.json"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         match cfg.remote_storage_backend {
             Some(crate::config::RemoteStorageBackend::Gcs(g)) => {
                 assert!(g.bucket == "b");
@@ -349,9 +341,7 @@ signing_key_path = "/etc/krabka/worm-signing.pk8"
 signing_key_id = "worm-2026-q3"
 write_only = true
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         check!(
             cfg.remote_storage_worm
                 == Some(krabka_remote_storage::WormConfig {
@@ -371,9 +361,7 @@ bucket = "krabka-archive"
 
 [remote_storage.worm]
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         // An empty table still enables WORM; every knob takes its default.
         check!(cfg.remote_storage_worm == Some(krabka_remote_storage::WormConfig::default()));
     }
@@ -434,9 +422,7 @@ bucket = "krabka-archive"
 bucket = "krabka-prod"
 region = "us-east-1"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         check!(cfg.remote_storage_worm.is_none());
     }
     #[test]
@@ -467,9 +453,7 @@ region = "us-east-1"
 max_retries = 3
 request_timeout = "10s"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         let defaults = krabka_remote_storage::S3Config::default();
         match cfg.remote_storage_backend {
             Some(crate::config::RemoteStorageBackend::S3(s3)) => {
@@ -491,9 +475,7 @@ bucket = "krabka-prod"
 retry_timeout = "45s"
 connect_timeout = "2s"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         let defaults = krabka_remote_storage::GcsConfig::default();
         match cfg.remote_storage_backend {
             Some(crate::config::RemoteStorageBackend::Gcs(gcs)) => {
@@ -517,9 +499,7 @@ bucket = "b"
 region = "us-east-1"
 max_retries = 0
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         match cfg.remote_storage_backend {
             Some(crate::config::RemoteStorageBackend::S3(s3)) => {
                 check!(s3.max_retries == 0);

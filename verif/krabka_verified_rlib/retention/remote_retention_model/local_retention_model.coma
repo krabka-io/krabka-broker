@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/retention/remote_retention_model.rs" 72 0 78 8 *)
+(* #"/workspace/crates/verified/src/retention/remote_retention_model.rs" 67 0 73 8 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 71 10 71 19
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 66 10 66 19
 
 use creusot.int.UInt64
 use seq.Seq
@@ -38,7 +38,7 @@ constant debt : int
 
 constant sizing : bool
 
-function local_retention_model [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 72 0 78 8] (segments: Seq.seq t_LocalRetentionSegment) (limit: int) (i: int) (debt: int) (sizing: bool) : int
+function local_retention_model [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 67 0 73 8] (segments: Seq.seq t_LocalRetentionSegment) (limit: int) (i: int) (debt: int) (sizing: bool) : int
 
 goal vc_local_retention_model: if ge_log_Int i limit then
     true

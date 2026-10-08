@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use assert2::assert;
 use bytes::Bytes;
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
-use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_client_producer::Producer;
 
 use crate::{
     harness::{
@@ -108,21 +108,12 @@ async fn alter_replica_log_dirs_preserves_records_across_move() {
         .build()
         .await
         .expect("producer build");
-    for i in 0..50i32 {
-        // `Producer::enqueue` returns a delivery handle for the ack;
-        // drop it and let `flush` synchronize before the alter. This
-        // matches the pattern in `crates/broker/tests/durability.rs`.
-        drop(
-            producer
-                .enqueue(ProducerRecord {
-                    topic: "t".into(),
-                    value: Some(Bytes::from(format!("v{i}"))),
-                    ..Default::default()
-                })
-                .await
-                .expect("record is queued"),
-        );
-    }
+    crate::support::producer::enqueue_unkeyed_values(
+        &producer,
+        "t",
+        (0..50i32).map(|i| Bytes::from(format!("v{i}"))),
+    )
+    .await;
     producer.flush().await.expect("flush");
 
     // Pick the OTHER dir as the move target.

@@ -1,16 +1,11 @@
-use creusot_std::prelude::*;
-
-use crate::{
-    quota::{quota_refill, quota_whole_request},
-    throttle::{AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume},
-};
+use super::*;
 
 /// Arbitrarily many whole-token consumes conserve elapsed-time credit,
 /// including debt, fractional credit, and credit discarded at the burst.
 /// Repeated/backward clocks cannot mint another interval. The host serializes
 /// these steps with a fixed positive rate and burst; requests are in whole
 /// tokens. The runtime's rate-0 unlimited fast path is outside this theorem.
-#[requires(initial.0@ <= burst@ && (initial.0@ == 0 || initial.1@ == 0))]
+#[requires(crate::quota::balance_within_burst(initial.0@, initial.1@, burst@))]
 #[requires(initial.2@ < 1_000_000_000 && units_per_token@ > 0)]
 #[requires(rate@ > 0)]
 #[ensures(result.1.0@ <= burst@ && (result.1.0@ == 0 || result.1.1@ == 0))]

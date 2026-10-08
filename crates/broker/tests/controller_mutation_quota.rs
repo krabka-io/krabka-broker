@@ -17,8 +17,6 @@
 #[path = "controller_mutation_quota/cluster.rs"]
 mod cluster;
 mod kafka_wire;
-#[path = "controller_mutation_quota/quota_admin.rs"]
-mod quota_admin;
 mod support;
 #[path = "controller_mutation_quota/topic_admin.rs"]
 mod topic_admin;
@@ -28,30 +26,16 @@ mod topic_admin;
 const CLIENT_ID: &str = "krabka-mutation-quota-test";
 
 use assert2::{assert, check};
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
-
-use crate::{
-    cluster::start_single_broker_sasl_plaintext_with_users,
-    quota_admin::drive_alter_client_quotas_sasl,
-    topic_admin::{drive_create_topics_sasl, drive_delete_topics_sasl},
-};
+use krabka_metadata::AclOperation;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Integration tests
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Renders the broker's registry as the exposition text an operator scrapes,
-/// and reads one series' value out of it.
-///
-/// `Histogram::sum` and `Histogram::count` are behind prometheus-client's
-/// `test-util` feature, which this workspace does not enable, so a test reads a
-/// histogram the way Prometheus does. A missing series reads as `0.0`: a
-/// `Family` emits nothing until it has an entry.
-async fn metric_value(handle: &krabka_broker::BrokerHandle, series: &str) -> f64 {
-    crate::support::client::metric_value(handle, series).await
-}
+use crate::support::client::metric_value;
+use crate::{
+    cluster::start_single_broker_sasl_plaintext_with_users,
+    topic_admin::{drive_create_topics_sasl, drive_delete_topics_sasl},
+};
 
 /// Test 1: Set `controller_mutation_rate=2.0` for alice. A strict v7 request
 /// may cross the limit, but the following mutation is rejected while debt
@@ -66,30 +50,20 @@ async fn controller_mutation_rate_throttles_create_topics() {
 
     // Seed an ACL granting alice Cluster Create — this also disables the
     // compat shim (allow-all when no ACLs present in image).
-    let admin_acl = MetadataRecord::V1AccessControlEntry(AclEntry {
-        resource_type: ResourceType::Cluster,
-        resource_name: "kafka-cluster".into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: AclOperation::Create,
-        permission_type: PermissionType::Allow,
-    });
+    let admin_acl =
+        crate::support::acl::cluster_acl_record("User:alice", "*", AclOperation::Create);
     handle
         .submit_metadata_record_for_test(admin_acl)
         .await
         .expect("seed ACL");
 
     // Set controller_mutation_rate=2.0 for (user=alice).
-    let alter = drive_alter_client_quotas_sasl(
+    let alter = crate::kafka_wire::quotas::alter_user_quota(
         addr,
-        "admin",
-        "admin-secret",
-        vec![(
-            vec![("user".into(), Some("alice".into()))],
-            vec![("controller_mutation_rate".into(), 2.0, false)],
-        )],
-        false,
+        crate::CLIENT_ID,
+        ("admin", "admin-secret"),
+        "alice",
+        ("controller_mutation_rate", 2.0),
     )
     .await;
     assert!(alter[0].1 == 0, "alter should succeed");
@@ -157,15 +131,11 @@ async fn controller_mutation_rate_throttles_delete_topics() {
 
     // Seed a dummy ACL to disable the compat shim (allow-all when no ACLs present).
     // Use an unrelated ACL; the real alice ACLs come below.
-    let shim_disable = MetadataRecord::V1AccessControlEntry(AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: "__compat_shim_disable__".into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:admin".into(),
-        host: "*".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
-    });
+    let shim_disable = crate::support::acl::topic_acl_record(
+        "__compat_shim_disable__",
+        "User:admin",
+        AclOperation::Read,
+    );
     handle
         .submit_metadata_record_for_test(shim_disable)
         .await
@@ -184,15 +154,8 @@ async fn controller_mutation_rate_throttles_delete_topics() {
     assert!(ec == 0);
 
     // Grant alice Topic Delete on "to-delete".
-    let alice_delete_acl = MetadataRecord::V1AccessControlEntry(AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: "to-delete".into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: AclOperation::Delete,
-        permission_type: PermissionType::Allow,
-    });
+    let alice_delete_acl =
+        crate::support::acl::topic_acl_record("to-delete", "User:alice", AclOperation::Delete);
     handle
         .submit_metadata_record_for_test(alice_delete_acl)
         .await
@@ -207,15 +170,12 @@ async fn controller_mutation_rate_throttles_delete_topics() {
         .await;
 
     // Now set the quota for alice and delete.
-    let alter = drive_alter_client_quotas_sasl(
+    let alter = crate::kafka_wire::quotas::alter_user_quota(
         addr,
-        "admin",
-        "admin-secret",
-        vec![(
-            vec![("user".into(), Some("alice".into()))],
-            vec![("controller_mutation_rate".into(), 2.0, false)],
-        )],
-        false,
+        crate::CLIENT_ID,
+        ("admin", "admin-secret"),
+        "alice",
+        ("controller_mutation_rate", 2.0),
     )
     .await;
     assert!(alter[0].1 == 0);

@@ -8,7 +8,7 @@
 use assert2::assert;
 use krabka_broker::Broker;
 use krabka_protocol::owned::alter_user_scram_credentials_request::{
-    AlterUserScramCredentialsRequest, ScramCredentialDeletion, ScramCredentialUpsertion,
+    AlterUserScramCredentialsRequest, ScramCredentialDeletion,
 };
 use krabka_security::SaslMechanism;
 
@@ -18,7 +18,8 @@ use crate::{
         KAFKA_UNSUPPORTED_SASL_MECHANISM, WIRE_MECH_SCRAM_SHA_256, WIRE_MECH_SCRAM_SHA_512,
         drive_alter_user_scram_credentials_as_plain, pbkdf2_salt_and_salted,
     },
-    harness::{admin_plain_password, alice_password},
+    harness::alice_password,
+    support::sasl::scram_upsertion,
 };
 
 /// `iterations < 4096` gives `UNACCEPTABLE_CREDENTIAL`.
@@ -27,34 +28,24 @@ use crate::{
 /// is the parameter validation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_low_iterations_rejected() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let (handle, addr) = crate::harness::start_scram_admin(
-        log_dir.path(),
-        &admin_plain_password(),
-        vec![SaslMechanism::Plain],
-    )
-    .await;
+    let (_log_dir, handle, addr) =
+        crate::harness::scram_admin_fixture(vec![SaslMechanism::Plain]).await;
 
     // 64-byte salted_password length is valid; only `iterations` violates.
     let req = AlterUserScramCredentialsRequest {
-        upsertions: vec![ScramCredentialUpsertion {
-            name: "alice".to_string(),
-            mechanism: WIRE_MECH_SCRAM_SHA_512,
-            iterations: 1,
-            salt: bytes::Bytes::from(vec![0u8; 16]),
-            salted_password: bytes::Bytes::from(vec![0u8; 64]),
-            ..Default::default()
-        }],
+        upsertions: vec![scram_upsertion(
+            "alice".to_string(),
+            WIRE_MECH_SCRAM_SHA_512,
+            1,
+            (
+                bytes::Bytes::from(vec![0u8; 16]),
+                bytes::Bytes::from(vec![0u8; 64]),
+            ),
+        )],
         ..Default::default()
     };
-    let resp = drive_alter_user_scram_credentials_as_plain(
-        addr,
-        "admin",
-        admin_plain_password().as_bytes(),
-        req,
-    )
-    .await
-    .expect("PLAIN auth + AUSCR (rejected)");
+    let resp =
+        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR (rejected)").await;
     handle.shutdown().await;
     assert!(resp.results.len() == 1);
     assert!(
@@ -66,43 +57,35 @@ async fn alter_scram_creds_low_iterations_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let (handle, addr) = crate::harness::start_scram_admin(
-        log_dir.path(),
-        &admin_plain_password(),
-        vec![SaslMechanism::Plain],
-    )
-    .await;
+    let (_log_dir, handle, addr) =
+        crate::harness::scram_admin_fixture(vec![SaslMechanism::Plain]).await;
     let req = AlterUserScramCredentialsRequest {
         upsertions: vec![
-            ScramCredentialUpsertion {
-                name: "too-high".to_string(),
-                mechanism: WIRE_MECH_SCRAM_SHA_512,
-                iterations: KAFKA_MAX_SCRAM_ITERATIONS + 1,
-                salt: bytes::Bytes::from(vec![0u8; 16]),
-                salted_password: bytes::Bytes::from(vec![0u8; 64]),
-                ..Default::default()
-            },
-            ScramCredentialUpsertion {
-                name: "max".to_string(),
-                mechanism: WIRE_MECH_SCRAM_SHA_512,
-                iterations: KAFKA_MAX_SCRAM_ITERATIONS,
-                salt: bytes::Bytes::from(vec![1u8; 16]),
-                salted_password: bytes::Bytes::from(vec![1u8; 64]),
-                ..Default::default()
-            },
+            scram_upsertion(
+                "too-high".to_string(),
+                WIRE_MECH_SCRAM_SHA_512,
+                KAFKA_MAX_SCRAM_ITERATIONS + 1,
+                (
+                    bytes::Bytes::from(vec![0u8; 16]),
+                    bytes::Bytes::from(vec![0u8; 64]),
+                ),
+            ),
+            scram_upsertion(
+                "max".to_string(),
+                WIRE_MECH_SCRAM_SHA_512,
+                KAFKA_MAX_SCRAM_ITERATIONS,
+                (
+                    bytes::Bytes::from(vec![1u8; 16]),
+                    bytes::Bytes::from(vec![1u8; 64]),
+                ),
+            ),
         ],
         ..Default::default()
     };
 
-    let resp = drive_alter_user_scram_credentials_as_plain(
-        addr,
-        "admin",
-        admin_plain_password().as_bytes(),
-        req,
-    )
-    .await
-    .expect("PLAIN auth + AUSCR high iterations");
+    let resp =
+        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR high iterations")
+            .await;
 
     handle.shutdown().await;
     assert!(resp.results.len() == 2, "one row per distinct username");
@@ -147,14 +130,15 @@ async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism(
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
     let req = AlterUserScramCredentialsRequest {
-        upsertions: vec![ScramCredentialUpsertion {
-            name: "alice".to_string(),
-            mechanism: 99,
-            iterations: 4096,
-            salt: bytes::Bytes::from(vec![0u8; 16]),
-            salted_password: bytes::Bytes::from(vec![0u8; 64]),
-            ..Default::default()
-        }],
+        upsertions: vec![scram_upsertion(
+            "alice".to_string(),
+            99,
+            4096,
+            (
+                bytes::Bytes::from(vec![0u8; 16]),
+                bytes::Bytes::from(vec![0u8; 64]),
+            ),
+        )],
         ..Default::default()
     };
 
@@ -177,23 +161,19 @@ async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism(
 /// `DUPLICATE_RESOURCE` (92) even when the mechanisms differ.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_duplicate_resource_rejected() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let (handle, addr) = crate::harness::start_scram_admin(
-        log_dir.path(),
-        &admin_plain_password(),
-        vec![SaslMechanism::Plain],
-    )
-    .await;
+    let (_log_dir, handle, addr) =
+        crate::harness::scram_admin_fixture(vec![SaslMechanism::Plain]).await;
 
     let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
-    let upsert = ScramCredentialUpsertion {
-        name: "alice".to_string(),
-        mechanism: WIRE_MECH_SCRAM_SHA_512,
-        iterations: 4096,
-        salt: bytes::Bytes::from(salt),
-        salted_password: bytes::Bytes::from(salted.to_vec()),
-        ..Default::default()
-    };
+    let upsert = scram_upsertion(
+        "alice".to_string(),
+        WIRE_MECH_SCRAM_SHA_512,
+        4096,
+        (
+            bytes::Bytes::from(salt),
+            bytes::Bytes::from(salted.to_vec()),
+        ),
+    );
     let mut upsert_sha256 = upsert.clone();
     upsert_sha256.mechanism = WIRE_MECH_SCRAM_SHA_256;
     upsert_sha256.salted_password = bytes::Bytes::from(vec![7; 32]);
@@ -201,14 +181,8 @@ async fn alter_scram_creds_duplicate_resource_rejected() {
         upsertions: vec![upsert, upsert_sha256],
         ..Default::default()
     };
-    let resp = drive_alter_user_scram_credentials_as_plain(
-        addr,
-        "admin",
-        admin_plain_password().as_bytes(),
-        req,
-    )
-    .await
-    .expect("PLAIN auth + AUSCR (duplicate)");
+    let resp =
+        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR (duplicate)").await;
     handle.shutdown().await;
     assert!(resp.results.len() == 1, "one result row per username");
     assert!(
@@ -220,14 +194,7 @@ async fn alter_scram_creds_duplicate_resource_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let admin_password = uuid::Uuid::new_v4().to_string();
-    let (handle, addr) = crate::harness::start_scram_admin(
-        log_dir.path(),
-        &admin_password,
-        vec![SaslMechanism::Plain],
-    )
-    .await;
+    let (_log_dir, admin_password, handle, addr) = random_scram_admin_fixture().await;
     handle
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
             krabka_metadata::ScramCredentialRecord {
@@ -254,14 +221,15 @@ async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() 
             mechanism: WIRE_MECH_SCRAM_SHA_512,
             ..Default::default()
         }],
-        upsertions: vec![ScramCredentialUpsertion {
-            name: "alice".to_string(),
-            mechanism: WIRE_MECH_SCRAM_SHA_256,
-            iterations: 4096,
-            salt: bytes::Bytes::from(vec![4u8; 16]),
-            salted_password: bytes::Bytes::from(vec![5u8; 32]),
-            ..Default::default()
-        }],
+        upsertions: vec![scram_upsertion(
+            "alice".to_string(),
+            WIRE_MECH_SCRAM_SHA_256,
+            4096,
+            (
+                bytes::Bytes::from(vec![4u8; 16]),
+                bytes::Bytes::from(vec![5u8; 32]),
+            ),
+        )],
         ..Default::default()
     };
 
@@ -282,14 +250,7 @@ async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_missing_deletion_returns_resource_not_found_91() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let admin_password = uuid::Uuid::new_v4().to_string();
-    let (handle, addr) = crate::harness::start_scram_admin(
-        log_dir.path(),
-        &admin_password,
-        vec![SaslMechanism::Plain],
-    )
-    .await;
+    let (_log_dir, admin_password, handle, addr) = random_scram_admin_fixture().await;
     let req = AlterUserScramCredentialsRequest {
         deletions: vec![ScramCredentialDeletion {
             name: "ghost".to_string(),
@@ -311,4 +272,21 @@ async fn alter_scram_creds_missing_deletion_returns_resource_not_found_91() {
         "missing deletion target must get RESOURCE_NOT_FOUND (91), got {:?}",
         resp.results[0]
     );
+}
+
+async fn random_scram_admin_fixture() -> (
+    tempfile::TempDir,
+    String,
+    krabka_broker::BrokerHandle,
+    std::net::SocketAddr,
+) {
+    let log_dir = tempfile::tempdir().unwrap();
+    let admin_password = uuid::Uuid::new_v4().to_string();
+    let (handle, addr) = crate::harness::start_scram_admin(
+        log_dir.path(),
+        &admin_password,
+        vec![SaslMechanism::Plain],
+    )
+    .await;
+    (log_dir, admin_password, handle, addr)
 }

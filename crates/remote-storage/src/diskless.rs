@@ -153,6 +153,21 @@ pub struct WalFlushRecord {
 impl WalFlushRecord {
     pub const FORMAT_VERSION: u16 = 2;
 
+    /// Encode one keyed WAL range in the format a flusher publishes.
+    ///
+    /// # Errors
+    /// Returns the index codec's serialization error.
+    pub fn keyed_entry(object_key: &str, entry: WalIndexEntry) -> Result<(Bytes, Bytes), String> {
+        let key = WalIndexKey::from(&entry).to_bytes();
+        let value = Self {
+            object_key: object_key.into(),
+            format_version: Self::FORMAT_VERSION,
+            entries: vec![entry],
+        }
+        .to_bytes()?;
+        Ok((key, value))
+    }
+
     /// Encode with the index topic codec.
     ///
     /// # Errors

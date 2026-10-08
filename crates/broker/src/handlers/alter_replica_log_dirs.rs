@@ -155,11 +155,29 @@ mod tests {
 
     crate::test_support::codec_helpers!(AlterReplicaLogDirsRequest, AlterReplicaLogDirsResponse);
 
+    fn expected_partition_response(
+        topic: &str,
+        partition_index: i32,
+        error_code: i16,
+    ) -> AlterReplicaLogDirsResponse {
+        unthrottled_wire!(AlterReplicaLogDirsResponse {
+            results: vec![tagged_wire!(AlterReplicaLogDirTopicResult {
+                topic_name: topic.to_string(),
+                partitions: vec![tagged_wire!(AlterReplicaLogDirPartitionResult {
+                    partition_index,
+                    error_code,
+                })],
+            })],
+        })
+    }
+
     #[tokio::test]
     async fn handle_preserves_unknown_target_response_shape() {
         let version = 2;
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            crate::test_support::start_broker_with(|_| {})
+        );
         let req = AlterReplicaLogDirsRequest {
             dirs: vec![AlterReplicaLogDir {
                 path: "/tmp/krabka-missing-log-dir".into(),
@@ -179,19 +197,15 @@ mod tests {
             .expect("handle");
         let resp = decode_response(&bytes, version);
 
-        let expected = AlterReplicaLogDirsResponse {
-            throttle_time_ms: 0,
-            results: vec![AlterReplicaLogDirTopicResult {
+        let expected = unthrottled_wire!(AlterReplicaLogDirsResponse {
+            results: vec![tagged_wire!(AlterReplicaLogDirTopicResult {
                 topic_name: "orders".to_string(),
-                partitions: vec![AlterReplicaLogDirPartitionResult {
+                partitions: vec![tagged_wire!(AlterReplicaLogDirPartitionResult {
                     partition_index: 7,
                     error_code: codes::LOG_DIR_NOT_FOUND,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                }],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            }],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
+                })],
+            })],
+        });
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }
@@ -219,12 +233,7 @@ mod tests {
             .expect("tempdir has a name")
             .to_string_lossy()
             .to_string();
-        let (broker_handle, _dir) = crate::test_support::start_broker_with({
-            let extra_dir = extra_dir.clone();
-            move |cfg| cfg.extra_log_dirs = vec![extra_dir]
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), extra_log_dir(extra_dir));
 
         // A topic of 213 characters gives Kafka's future directory name,
         // `<topic>-0.<32 hex>-future`, exactly 255 characters.
@@ -303,19 +312,7 @@ mod tests {
                 .await
                 .expect("handle");
 
-            let expected = AlterReplicaLogDirsResponse {
-                throttle_time_ms: 0,
-                results: vec![AlterReplicaLogDirTopicResult {
-                    topic_name: topic.to_string(),
-                    partitions: vec![AlterReplicaLogDirPartitionResult {
-                        partition_index: 0,
-                        error_code,
-                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                    }],
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                }],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            };
+            let expected = expected_partition_response(topic, 0, error_code);
             assert!(decode_response(&bytes, version) == expected, "case {label}");
         }
         broker_handle.shutdown().await;
@@ -330,12 +327,7 @@ mod tests {
         let version = 2;
         let extra = tempfile::tempdir().expect("extra log dir");
         let extra_dir = extra.path().to_path_buf();
-        let (broker_handle, _dir) = crate::test_support::start_broker_with({
-            let extra_dir = extra_dir.clone();
-            move |cfg| cfg.extra_log_dirs = vec![extra_dir]
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), extra_log_dir(extra_dir));
         let primary = broker.config.log_dir.clone();
         let partition_dir = crate::log_dir::partition_dir(&primary, "orders", 0);
         std::fs::create_dir_all(&partition_dir).expect("partition dir");
@@ -394,19 +386,7 @@ mod tests {
                 .await
                 .expect("handle");
 
-            let expected = AlterReplicaLogDirsResponse {
-                throttle_time_ms: 0,
-                results: vec![AlterReplicaLogDirTopicResult {
-                    topic_name: "orders".to_string(),
-                    partitions: vec![AlterReplicaLogDirPartitionResult {
-                        partition_index: 0,
-                        error_code,
-                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                    }],
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                }],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            };
+            let expected = expected_partition_response("orders", 0, error_code);
             assert!(decode_response(&bytes, version) == expected, "{name}");
             // An empty partition moves within milliseconds once a move starts,
             // so a move that never starts is given a short look.

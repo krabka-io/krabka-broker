@@ -12,6 +12,16 @@ use crate::{
     log::test_support::{NO_LIMIT, sample_batch, test_batch_at, test_log, tiny_segments},
 };
 
+/// Read a complete raw response and check every byte against the written wire image.
+fn check_raw_bytes(log: &Log, wire: &[u8]) -> crate::log::RawRead {
+    let log_end = log.log_end_offset();
+    let read = log.read_raw(Offset(0), log_end, mebibytes(10)).unwrap();
+    assert2::assert!(read.start_offset == Offset(0));
+    assert2::assert!(read.total == wire.len());
+    assert2::assert!(&read.bytes[..] == wire);
+    read
+}
+
 #[test]
 fn batch_header_floor_is_the_protocol_header_length() {
     // `read_raw`'s anti-stall floor: each segment must be asked for at
@@ -24,10 +34,7 @@ fn batch_header_floor_is_the_protocol_header_length() {
 #[test]
 fn a_raw_fetch_outside_the_readable_range_is_refused_or_empty() {
     let (_dir, mut log) = test_log();
-    for _ in 0..4 {
-        let mut batch = sample_batch(2);
-        log.append(&mut batch).expect("append");
-    }
+    crate::log::test_support::append_samples(&mut log, 4, 2);
     log.set_log_start_offset(Offset(2)).expect("set log start");
 
     let below = log.read_raw(Offset(1), Offset(99), mebibytes(1));
@@ -57,15 +64,8 @@ fn a_raw_fetch_outside_the_readable_range_is_refused_or_empty() {
 fn a_fetch_across_the_seal_joins_its_chunks_in_order() {
     let dir = tempdir().unwrap();
     // A small segment cap so the appends roll and the fetch has to cross.
-    let config = LogConfig {
-        segment_size: kibibytes(1),
-        ..LogConfig::default()
-    };
-    let mut log = Log::open(dir.path(), config).unwrap();
-    for _ in 0..40 {
-        let mut batch = sample_batch(2);
-        log.append(&mut batch).expect("append");
-    }
+    let mut log = crate::test_support::segmented_log(dir.path(), kibibytes(1));
+    crate::log::test_support::append_samples(&mut log, 40, 2);
     check!(!log.segments.is_empty(), "the appends should have rolled");
 
     let end = log.log_end_offset();
@@ -105,11 +105,7 @@ fn log_read_raw_spans_and_is_byte_exact() {
         b.encode(&mut wire).unwrap();
     }
     let wire = wire.freeze();
-    let log_end = log.log_end_offset();
-    let r = log.read_raw(Offset(0), log_end, mebibytes(10)).unwrap();
-    assert2::assert!(r.start_offset == Offset(0));
-    assert2::assert!(r.total == wire.len());
-    assert2::assert!(&r.bytes[..] == &wire[..]);
+    check_raw_bytes(&log, &wire);
     drop(dir);
 }
 
@@ -121,11 +117,8 @@ fn log_read_raw_spans_multiple_segments() {
     // that `log_read_raw_spans_and_is_byte_exact` (default ~1 GiB
     // segments) never reaches.
     let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(100), // tiny: roll after roughly each batch
-        ..LogConfig::default()
-    };
-    let mut log = Log::open(dir.path(), config).unwrap();
+    // tiny: roll after roughly each batch
+    let mut log = crate::test_support::segmented_log(dir.path(), bytes(100));
 
     let n: i64 = 6;
     let mut wire = bytes::BytesMut::new();
@@ -143,11 +136,7 @@ fn log_read_raw_spans_multiple_segments() {
     assert2::assert!(!log.segments.is_empty());
     assert2::assert!(log.active.is_some());
 
-    let log_end = log.log_end_offset();
-    let r = log.read_raw(Offset(0), log_end, mebibytes(10)).unwrap();
-    assert2::assert!(r.start_offset == Offset(0));
-    assert2::assert!(r.total == wire.len());
-    assert2::assert!(&r.bytes[..] == &wire[..]);
+    let r = check_raw_bytes(&log, &wire);
 
     // Decode back to N batches with the expected base offsets.
     let mut cur: &[u8] = &r.bytes;
@@ -169,11 +158,8 @@ crate::sendfile_cfg! {
 fn log_read_raw_desc_multi_segment_regions_equal_read_raw() {
     use std::os::unix::fs::FileExt;
     let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(100), // tiny: roll roughly each batch
-        ..LogConfig::default()
-    };
-    let mut log = Log::open(dir.path(), config).unwrap();
+    // tiny: roll roughly each batch
+    let mut log = crate::test_support::segmented_log(dir.path(), bytes(100));
 
     let n: i64 = 6;
     for off in 0..n {
@@ -420,9 +406,7 @@ fn read_raw_multi_segment_budget_and_limit() {
     let dir = TempDir::new().unwrap();
     let cfg = tiny_segments();
     let mut log = Log::open(dir.path(), cfg).unwrap();
-    log.append(&mut sample_batch(1)).unwrap();
-    log.append(&mut sample_batch(1)).unwrap();
-    log.append(&mut sample_batch(1)).unwrap();
+    crate::log::test_support::append_samples(&mut log, 3, 1);
 
     let full = log.read_raw(Offset(0), Offset(3), mebibytes(1)).unwrap();
     assert2::assert!(full.start_offset == Offset(0));
@@ -453,9 +437,7 @@ fn a_small_budget_preserves_unindexed_records_before_a_segment_seam() {
         ..LogConfig::default()
     };
     let mut log = Log::open(dir.path(), config).unwrap();
-    for _ in 0..8 {
-        log.append(&mut sample_batch(1)).unwrap();
-    }
+    crate::log::test_support::append_samples(&mut log, 8, 1);
     check!(!log.segments.is_empty());
     let end = log.log_end_offset();
     let mut actual = Vec::new();

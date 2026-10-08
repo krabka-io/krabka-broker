@@ -45,15 +45,12 @@ pub(super) fn test_coordinator(
             krabka_raft::NodeId(1),
         ),
     );
-    Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+    crate::coordinator::test_support::default_coordinator(
         Arc::new(crate::coordinator::unified::ImageMetadataProvider {
             controller: controller.clone(),
         }),
         offsets_log,
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ))
+    )
 }
 
 /// Build a bare `GroupCoordinator` with no metadata wiring and no
@@ -74,28 +71,14 @@ pub(super) fn bare_coordinator() -> Arc<GroupCoordinator> {
 pub(super) fn bare_coordinator_with_mailbox(
     actor_mailbox_capacity: usize,
 ) -> Arc<GroupCoordinator> {
-    use crate::coordinator::unified::{
-        offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-    };
-
-    #[derive(Debug)]
-    struct EmptyMeta;
-    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput::default()
-        }
-    }
-
-    Arc::new(GroupCoordinator::new(
+    crate::coordinator::test_support::coordinator_with_config(
         crate::coordinator::unified::config::NextGenConfig {
             actor_mailbox_capacity,
             ..crate::coordinator::unified::config::NextGenConfig::default()
         },
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
-        Arc::new(InMemoryOffsetsLog::default()),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ))
+        crate::coordinator::unified::actor::test_support::empty_metadata(),
+        Arc::new(crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog::default()),
+    )
 }
 
 /// Encode a classic k2 `GroupMetadata` key-value record pair for group
@@ -128,6 +111,42 @@ pub(super) fn classic_group_record(
     (key, value)
 }
 
+/// Group and member metadata written by an upgrade, in log order.
+pub(super) fn consumer_group_records(
+    epoch: i32,
+    classic: Option<crate::coordinator::unified::persistence_next_gen::ClassicMemberMetadata>,
+) -> [(bytes::Bytes, bytes::Bytes); 2] {
+    use crate::coordinator::unified::persistence_next_gen as ng;
+    [
+        (
+            ng::encode_key(&ng::NextGenKey::GroupMetadata {
+                group_id: "g".into(),
+            })
+            .unwrap(),
+            ng::GroupMetadataValue { epoch }.encode(),
+        ),
+        (
+            ng::encode_key(&ng::NextGenKey::MemberMetadata {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+            })
+            .unwrap(),
+            ng::MemberMetadataValue {
+                instance_id: None,
+                rack_id: None,
+                client_id: "c1".into(),
+                client_host: "/127.0.0.1".into(),
+                subscribed_topic_names: vec!["t".into()],
+                subscribed_topic_regex: None,
+                server_assignor: None,
+                rebalance_timeout_ms: 60_000,
+                classic,
+            }
+            .encode(),
+        ),
+    ]
+}
+
 /// Apply a stream of record values and tombstones in log order.
 pub(super) fn replay_stream(
     coordinator: &Arc<GroupCoordinator>,
@@ -144,6 +163,28 @@ pub(super) fn replay_stream(
         }
     }
     replayed
+}
+
+/// Compacted downgrade residue: one k6 record, then the authoritative classic
+/// k2 snapshot. The caller supplies the literal k6 value or tombstone.
+pub(super) fn replay_classic_residue(
+    target_metadata: Option<bytes::Bytes>,
+) -> (Arc<GroupCoordinator>, super::replay::Replayed) {
+    use crate::coordinator::unified::persistence_next_gen::{NextGenKey, encode_key};
+    let coordinator = bare_coordinator();
+    let (key, value) = classic_group_record("g", "m1");
+    let stream = [
+        (
+            encode_key(&NextGenKey::TargetAssignmentMetadata {
+                group_id: "g".into(),
+            })
+            .unwrap(),
+            target_metadata,
+        ),
+        (key, Some(value)),
+    ];
+    let replayed = replay_stream(&coordinator, stream);
+    (coordinator, replayed)
 }
 
 pub(super) async fn assert_classic_replayed(coordinator: &GroupCoordinator) {
@@ -176,20 +217,5 @@ pub(super) fn commit_record_for_group(
     partition: i32,
     offset: i64,
 ) -> krabka_protocol::records::Record {
-    use crate::coordinator::persistence::OffsetCommitValue;
-    krabka_protocol::records::Record {
-        key: Some(OffsetCommitValue::encode_key(group, "t", partition).unwrap()),
-        value: Some(
-            OffsetCommitValue {
-                offset: krabka_log::Offset(offset),
-                leader_epoch: -1,
-                metadata: String::new(),
-                commit_timestamp_ms: 0,
-                expire_timestamp_ms: None,
-                topic_id: None,
-            }
-            .encode_value(),
-        ),
-        ..Default::default()
-    }
+    crate::coordinator::test_support::offset_record(group, "t", partition, offset)
 }

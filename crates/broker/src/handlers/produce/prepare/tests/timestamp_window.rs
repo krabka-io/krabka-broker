@@ -6,11 +6,7 @@
 //! function the produce handler resolves it with, so a case fails if the
 //! config key stops reaching the gate as much as if the gate stops applying.
 
-use std::{
-    collections::BTreeMap,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use assert2::check;
 use bytes::Bytes;
@@ -35,16 +31,12 @@ use crate::{
 /// An hour, the window every case configures.
 const WINDOW_MS: i64 = 3_600_000;
 
-/// This broker's wall clock, which is the one the gate reads.
-fn now_ms() -> i64 {
-    i64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("the clock is at or after the epoch")
-            .as_millis(),
-    )
-    .expect("a millisecond clock reading fits in i64")
-}
+// This broker's wall clock, which is the one the gate reads.
+krabka_macros::unix_millis_fixture!(
+    now_ms,
+    "the clock is at or after the epoch",
+    "a millisecond clock reading fits in i64"
+);
 
 /// The policy a topic carrying `overrides` resolves to.
 fn policy(overrides: &[(&str, &str)]) -> TimestampPolicy {

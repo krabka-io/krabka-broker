@@ -5,7 +5,7 @@
 
 use std::{
     collections::HashMap,
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     path::{Path, PathBuf},
 };
 
@@ -30,6 +30,21 @@ mod record_limit_tests;
 mod tests;
 #[cfg(test)]
 mod transaction_tests;
+
+/// Encode one retained batch and advance the inclusive output frontier after its write.
+fn write_rewritten_batch(
+    io: &dyn crate::io::LogIo,
+    file: &File,
+    batch: &RecordBatch,
+    previous_last: Offset,
+) -> Result<Offset, LogError> {
+    let mut bytes = BytesMut::with_capacity(batch.encoded_len());
+    batch.encode(&mut bytes)?;
+    crate::io::write_all(io, crate::io::IoTarget::CompactionSwap, file, &bytes)?;
+    Ok(previous_last.max(Offset(
+        batch.base_offset + i64::from(batch.last_offset_delta),
+    )))
+}
 
 /// Kafka's `RecordBatch.NO_TIMESTAMP`: the base timestamp of a batch that has
 /// no records.
@@ -303,13 +318,7 @@ pub fn rewrite_segments(
                 continue;
             }
             let out_batch = bare_header(batch);
-            let mut buf = BytesMut::with_capacity(out_batch.encoded_len());
-            out_batch.encode(&mut buf)?;
-            crate::io::write_all(io, crate::io::IoTarget::CompactionSwap, &log_file, &buf)?;
-            let batch_last = Offset(out_batch.base_offset + i64::from(out_batch.last_offset_delta));
-            if batch_last > last_kept_offset {
-                last_kept_offset = batch_last;
-            }
+            last_kept_offset = write_rewritten_batch(io, &log_file, &out_batch, last_kept_offset)?;
             continue;
         }
 
@@ -342,14 +351,7 @@ pub fn rewrite_segments(
             out_batch = out_batch.with_delete_horizon(h);
         }
 
-        let mut buf = BytesMut::with_capacity(out_batch.encoded_len());
-        out_batch.encode(&mut buf)?;
-        crate::io::write_all(io, crate::io::IoTarget::CompactionSwap, &log_file, &buf)?;
-
-        let batch_last = Offset(out_batch.base_offset + i64::from(out_batch.last_offset_delta));
-        if batch_last > last_kept_offset {
-            last_kept_offset = batch_last;
-        }
+        last_kept_offset = write_rewritten_batch(io, &log_file, &out_batch, last_kept_offset)?;
     }
     io.sync_file(crate::io::IoTarget::CompactionSwap, &log_file)?;
 

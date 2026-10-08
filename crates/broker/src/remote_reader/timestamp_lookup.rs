@@ -87,16 +87,16 @@ mod tests {
     use assert2::assert;
 
     use crate::remote_reader::test_support::{
-        append_time_remote_segment_reader, compressed_remote_segment_reader, populated_reader,
+        append_time_remote_segment_reader, compressed_remote_segment_reader,
         sparse_remote_segment_reader, sparse_remote_segment_reader_with_max_timestamp, tp,
         unordered_timestamps_remote_segment_reader,
     };
 
     #[tokio::test]
     async fn timestamp_lookup_excludes_records_before_the_logical_floor() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let (reader, log) = populated_reader(log_dir.path(), remote_dir.path());
+        crate::remote_reader::test_support::populated_reader_fixture!(
+            log_dir, remote_dir, reader, log
+        );
         let end = log.tierable_segments().last().unwrap().last_offset.0 + 1;
         for minimum in [0, 1, 3, end - 1, end, i64::MAX] {
             let expected = (minimum < end).then_some((minimum, 0));
@@ -133,10 +133,9 @@ mod tests {
 
     #[tokio::test]
     async fn offset_for_timestamp_locates_remote_segment() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let (reader, log) = populated_reader(log_dir.path(), remote_dir.path());
-        let exports = log.tierable_segments();
+        crate::remote_reader::test_support::populated_reader_fixture!(
+            log_dir, remote_dir, reader, log, exports
+        );
         // The segment metadata copies `max_timestamp` from the export; the
         // log's batch builder leaves base_timestamp at 0 by default, so
         // every batch's max_timestamp is 0 — so segments' max_timestamps are
@@ -211,9 +210,9 @@ mod tests {
 
     #[tokio::test]
     async fn offset_for_timestamp_returns_none_when_past_last() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let (reader, _log) = populated_reader(log_dir.path(), remote_dir.path());
+        crate::remote_reader::test_support::populated_reader_fixture!(
+            log_dir, remote_dir, reader, _log
+        );
         // All segments have max_ts=0 by construction (see test above); any
         // strictly-positive target is past every remote segment.
         let got = reader

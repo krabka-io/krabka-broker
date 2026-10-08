@@ -2,15 +2,15 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.005 },
-      "vc_max_i64": { "prover": "alt-ergo", "time": 0.003 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_max_i64": { "prover": "alt-ergo", "time": 0.009 },
       "vc_producer_snapshot_reload_keeps": {
         "prover": "alt-ergo",
-        "time": 0.006
+        "time": 0.01
       },
       "vc_producer_snapshot_replay_start": {
         "prover": "alt-ergo",
-        "time": 0.026
+        "time": 0.059
       }
     }
   }

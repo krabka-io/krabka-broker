@@ -4,10 +4,14 @@
 //! their partition records, and an empty [`StoredSubtopology`] that a test then
 //! fills in with only the fields the scenario needs.
 
-use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
 use uuid::Uuid;
 
-use crate::coordinator::unified::streams::persistence::StoredSubtopology;
+use crate::coordinator::unified::streams::persistence::{
+    StoredCopartitionGroup, StoredSubtopology, StoredTopicInfo,
+};
+
+krabka_macros::single_replica_partition_fixture!(partition_record);
 
 fn topic_record(name: &str, id: u8, partitions: i32) -> TopicRecord {
     TopicRecord {
@@ -27,18 +31,11 @@ pub fn image_with(topics: &[(&str, u8, i32)]) -> MetadataImage {
     for &(name, id, partitions) in topics {
         image.apply(&MetadataRecord::V1Topic(topic_record(name, id, partitions)));
         for p in 0..partitions {
-            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-                topic: name.to_string(),
-                partition: p,
-                leader: krabka_audit::NodeId(1),
-                replicas: vec![krabka_audit::NodeId(1)],
-                isr: vec![krabka_audit::NodeId(1)],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }));
+            image.apply(&MetadataRecord::V1Partition(partition_record(
+                name,
+                p,
+                krabka_audit::NodeId(1),
+            )));
         }
     }
     image
@@ -53,5 +50,32 @@ pub fn sub(id: &str) -> StoredSubtopology {
         state_changelog_topics: vec![],
         repartition_source_topics: vec![],
         copartition_groups: vec![],
+    }
+}
+
+/// A persisted topology fixture, independent of the wire-to-stored mapper.
+pub fn example_subtopology() -> StoredSubtopology {
+    StoredSubtopology {
+        subtopology_id: "0".into(),
+        source_topics: vec!["in-a".into(), "in-b".into()],
+        source_topic_regex: vec!["^orders-.*".into()],
+        repartition_sink_topics: vec!["rp-1".into()],
+        state_changelog_topics: vec![StoredTopicInfo {
+            name: "store-changelog".into(),
+            partitions: 4,
+            replication_factor: 3,
+            topic_configs: vec![("cleanup.policy".into(), "compact".into())],
+        }],
+        repartition_source_topics: vec![StoredTopicInfo {
+            name: "rp-1".into(),
+            partitions: 4,
+            replication_factor: 3,
+            topic_configs: vec![],
+        }],
+        copartition_groups: vec![StoredCopartitionGroup {
+            source_topics: vec![0, 1],
+            source_topic_regex: vec![0],
+            repartition_source_topics: vec![0],
+        }],
     }
 }

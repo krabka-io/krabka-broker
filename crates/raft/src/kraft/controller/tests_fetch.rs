@@ -17,9 +17,9 @@ use crate::kraft::{
             snapshot_fetch_response_invalid,
         },
         test_support::{
-            await_leader, build, build_engine_only, build_engine_only_with_policy,
-            elect_single_voter_engine, one_offset_batch, record_peer_sends, recv_peer_send,
-            recv_peer_send_with_api, submit_change_with_timeout, topic_record,
+            build_engine_only, build_engine_only_with_policy, elect_single_voter_engine,
+            one_offset_batch, record_peer_sends, recv_peer_send, recv_peer_send_with_api,
+            submit_change_with_timeout, topic_record,
         },
     },
     types::LogOffsetMetadata,
@@ -1065,11 +1065,9 @@ fn a_metadata_fetch_needs_a_snapshot_only_below_the_retained_log() {
 /// an image, and never registers.
 #[tokio::test]
 async fn a_metadata_fetch_below_the_pruned_log_start_returns_the_snapshot_id() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     for name in ["a", "b", "c"] {
-        let (reply, mut rx) = oneshot::channel();
-        engine.on_submit_change(&topic_record(name), reply);
+        let mut rx = super::test_support::submit_on_engine(&mut engine, &topic_record(name));
         assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     }
     engine
@@ -1359,9 +1357,7 @@ fn an_observer_silent_for_five_minutes_is_dropped() {
 
 #[tokio::test]
 async fn kraft_controller_metadata_fetch_returns_slice() {
-    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1)]);
-    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-    await_leader(&ctrl, Some(NodeId(1))).await;
+    let (ctrl, _dir) = super::test_support::single_voter_leader().await;
     submit_change_with_timeout(&ctrl, topic_record("fetch-test"), "fetch seed")
         .await
         .unwrap();

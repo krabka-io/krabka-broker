@@ -17,17 +17,8 @@ pub fn sasl_plain_broker_config(
     creds: &[(&str, &str)],
     super_user: Option<&str>,
 ) -> BrokerConfig {
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    for (u, p) in creds {
-        cfg.plain_credentials
-            .insert((*u).to_string(), (*p).to_string());
-    }
-    cfg.super_users = super_user.map(str::to_string).into_iter().collect();
-    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(with_controller_peer(
-        &cfg.super_users,
-    )));
-    cfg
+    let super_users: Vec<&str> = super_user.into_iter().collect();
+    sasl_plain_broker_config_multi_super(log_dir, creds, &super_users)
 }
 
 /// Like `sasl_plain_broker_config`, but it accepts multiple super-users. The
@@ -38,8 +29,10 @@ pub fn sasl_plain_broker_config_multi_super(
     creds: &[(&str, &str)],
     super_users: &[&str],
 ) -> BrokerConfig {
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    let mut cfg = crate::support::sasl::sasl_plaintext_mechanisms(
+        log_dir.to_path_buf(),
+        vec![SaslMechanism::Plain],
+    );
     for (u, p) in creds {
         cfg.plain_credentials
             .insert((*u).to_string(), (*p).to_string());
@@ -76,4 +69,17 @@ pub async fn start_admin_alice() -> (BrokerHandle, tempfile::TempDir, std::net::
         Some("admin"),
     );
     crate::support::sasl::start_broker(cfg, dir).await
+}
+
+/// Provisioning fixture with the caller's exact credential set and the admin super-user.
+pub async fn start_admin_with(
+    creds: &[(&str, &str)],
+) -> (tempfile::TempDir, BrokerHandle, std::net::SocketAddr) {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = sasl_plain_broker_config(dir.path(), creds, Some("admin"));
+    let handle = krabka_broker::Broker::start(cfg)
+        .await
+        .expect("broker must start");
+    let addr = handle.listen_addr();
+    (dir, handle, addr)
 }

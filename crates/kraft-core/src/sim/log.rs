@@ -6,7 +6,7 @@
 
 use crate::{
     event::LogEnd,
-    types::{Epoch, LogOffsetMetadata, LogView},
+    types::{Epoch, LogView},
 };
 
 /// A growable in-memory replicated log.
@@ -19,19 +19,7 @@ pub(super) struct SimLog {
     epochs: Vec<Epoch>,
 }
 
-impl LogView for SimLog {
-    fn end_offset(&self) -> i64 {
-        i64::try_from(self.epochs.len()).expect("log length fits in i64")
-    }
-
-    fn last_epoch(&self) -> Epoch {
-        self.epochs.last().copied().unwrap_or(0)
-    }
-
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
-        LogOffsetMetadata::end_of_epoch_in(&self.epochs, epoch)
-    }
-}
+krabka_macros::epoch_log_view!(SimLog, crate);
 
 impl SimLog {
     pub(super) fn append_in_epoch(&mut self, epoch: Epoch, count: usize) {

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/raft.rs" 27 27 27 32 *)
+(* #"/workspace/crates/verified/src/raft.rs" 7 19 7 36 *)
 
 (* <raft::FetchFence as std::clone::Clone> *)
 
@@ -18,7 +18,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FetchFence [#"/workspace/crates/verified/src/raft.rs" 27 27 27 32] (self: t_FetchFence)
+let clone_FetchFence [#"/workspace/crates/verified/src/raft.rs" 7 19 7 36] (self: t_FetchFence)
   (return (x: t_FetchFence)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FetchFence = Any.any_l () | & self: t_FetchFence = self ])

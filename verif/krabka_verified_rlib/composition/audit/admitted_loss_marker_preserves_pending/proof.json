@@ -4,16 +4,16 @@
     "Coma": {
       "vc_admitted_loss_marker_preserves_pending": {
         "prover": "alt-ergo",
-        "time": 0.033
+        "time": 0.049
       },
       "vc_audit_loss_marker_admission": {
         "prover": "alt-ergo",
         "time": 0.009
       },
-      "vc_elim_Admit": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_elim_Admit": { "prover": "alt-ergo", "time": 0.012 },
       "vc_loss_settlement_is_idempotent": {
         "prover": "alt-ergo",
-        "time": 0.006
+        "time": 0.008
       }
     }
   }

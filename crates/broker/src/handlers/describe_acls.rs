@@ -149,27 +149,18 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use krabka_metadata::{AclOperation, MetadataRecord, PatternType, ResourceType};
-    use krabka_protocol::UnknownTaggedFields;
+    use krabka_metadata::{AclOperation, PatternType, ResourceType};
 
     use super::*;
     use crate::{
-        broker::BrokerHandle,
-        handlers::acl_wire::binding_filter::{AxisFilter, PatternTypeFilter},
+        handlers::acl_test_support::{
+            OPERATION_ANY, OPERATION_READ, OPERATION_WRITE, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL,
+            PATTERN_TYPE_MATCH, PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY,
+            RESOURCE_TYPE_TOPIC,
+        },
         test_support::DenyAll,
     };
-
     const VERSION: i16 = 3;
-    const RESOURCE_TYPE_TOPIC: i8 = 2;
-    const PATTERN_TYPE_ANY: i8 = 1;
-    const PATTERN_TYPE_MATCH: i8 = 2;
-    const PATTERN_TYPE_LITERAL: i8 = 3;
-    const PATTERN_TYPE_PREFIXED: i8 = 4;
-    const OPERATION_ANY: i8 = 1;
-    const OPERATION_READ: i8 = 3;
-    const OPERATION_WRITE: i8 = 4;
-    const PERMISSION_ANY: i8 = 1;
-    const PERMISSION_ALLOW: i8 = 3;
 
     /// A describe-table row: the filter pattern type and name, and the
     /// (resource name, pattern type) pairs the listing must hold.
@@ -198,58 +189,18 @@ mod tests {
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
-
-    /// An authorizer an operator actually configured, which lets the `admin`
-    /// test principal through as a super user.
-    ///
-    /// The ACL RPCs answer `SECURITY_DISABLED` under the default
-    /// `AllowAllAuthorizer`, so every case about the describing path needs a
-    /// broker that has an authorizer at all.
-    fn configured_authorizer() -> Arc<dyn crate::authorizer::Authorizer> {
-        Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
-            std::iter::once("admin".to_owned()).collect(),
-        ))
-    }
-
-    async fn seed_acls(handle: &BrokerHandle, entries: Vec<AclEntry>) {
-        handle
-            .broker_arc_for_test()
-            .controller
-            .submit_change(
-                entries
-                    .into_iter()
-                    .map(MetadataRecord::V1AccessControlEntry)
-                    .collect(),
-            )
-            .await
-            .expect("seed ACLs");
-    }
+    use crate::{
+        handlers::acl_test_support::{configured_authorizer, seed_acls},
+        test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx},
+    };
 
     #[test]
     fn build_filter_keeps_empty_strings_and_decodes_axes() {
-        let req = DescribeAclsRequest {
-            resource_type_filter: RESOURCE_TYPE_TOPIC,
-            resource_name_filter: Some(String::new()),
-            pattern_type_filter: PATTERN_TYPE_MATCH,
-            principal_filter: Some(String::new()),
-            host_filter: None,
-            operation: OPERATION_ANY,
-            permission_type: PERMISSION_ANY,
-            ..Default::default()
-        };
+        let req = empty_match_acl_filter!(DescribeAclsRequest);
 
         let built = build_filter(&req).expect("filter");
 
-        let expected = AclBindingFilter {
-            resource_type: AxisFilter::Exact(ResourceType::Topic),
-            resource_name: Some(String::new()),
-            pattern_type: PatternTypeFilter::Match,
-            principal: Some(String::new()),
-            host: None,
-            operation: AxisFilter::Any,
-            permission_type: AxisFilter::Any,
-        };
+        let expected = crate::handlers::acl_test_support::expected_empty_match_filter();
         assert!(built == expected);
     }
 
@@ -282,23 +233,20 @@ mod tests {
             codes::SECURITY_DISABLED,
             Some(NO_AUTHORIZER_MESSAGE.into()),
         );
-        let expected_err = DescribeAclsResponse {
-            throttle_time_ms: 0,
+        let expected_err = unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::SECURITY_DISABLED,
             error_message: Some("No Authorizer is configured on the broker".into()),
             resources: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(err == expected_err);
 
         let desc = acl_description(&acl("orders", "User:alice", AclOperation::Read));
-        let expected_desc = AclDescription {
+        let expected_desc = tagged_wire!(AclDescription {
             principal: "User:alice".into(),
             host: "*".into(),
             operation: OPERATION_READ,
             permission_type: PERMISSION_ALLOW,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(desc == expected_desc);
 
         let resource = describe_acls_resource(
@@ -307,31 +255,30 @@ mod tests {
             PATTERN_TYPE_LITERAL,
             vec![desc.clone()],
         );
-        let expected_resource = DescribeAclsResource {
+        let expected_resource = tagged_wire!(DescribeAclsResource {
             resource_type: RESOURCE_TYPE_TOPIC,
             resource_name: "orders".into(),
             pattern_type: PATTERN_TYPE_LITERAL,
             acls: vec![desc],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(resource == expected_resource);
 
         let resp = describe_acls_response(vec![resource.clone()]);
-        let expected_resp = DescribeAclsResponse {
-            throttle_time_ms: 0,
+        let expected_resp = unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
             resources: vec![resource],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(resp == expected_resp);
     }
 
     #[tokio::test]
     async fn handle_denies_cluster_describe() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            deny_all,
+            context(ctx, "alice")
+        );
 
         let resp = handle(
             &broker,
@@ -341,28 +288,23 @@ mod tests {
         )
         .expect("handle");
 
-        let expected = DescribeAclsResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("Request DescribeAcls needs DESCRIBE permission.".into()),
             resources: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 
     #[tokio::test]
     async fn handle_answers_security_disabled_when_no_authorizer_is_configured() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        seed_acls(
-            &broker_handle,
+        seeded_acl_fixture!(
+            (broker_handle, _dir, broker, ctx),
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)),
             vec![acl("orders", "User:alice", AclOperation::Read)],
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+            "admin"
+        );
 
         let resp = handle(
             &broker,
@@ -372,13 +314,11 @@ mod tests {
         )
         .expect("handle");
 
-        let expected = DescribeAclsResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::SECURITY_DISABLED,
             error_message: Some("No Authorizer is configured on the broker".into()),
             resources: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }
@@ -388,9 +328,11 @@ mod tests {
     /// principal that would be denied gets the same close.
     #[tokio::test]
     async fn handle_closes_the_connection_on_an_unknown_element() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            deny_all,
+            context(ctx, "alice")
+        );
         let mut req = request(Some("orders"), Some("User:alice"), OPERATION_READ);
         req.operation = 0;
 
@@ -412,14 +354,12 @@ mod tests {
     async fn handle_answers_an_empty_listing_for_values_no_binding_carries() {
         type Edit = fn(&mut DescribeAclsRequest);
 
-        let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-        seed_acls(
-            &broker_handle,
+        seeded_acl_fixture!(
+            (broker_handle, _dir, broker, ctx),
+            start_broker(configured_authorizer()),
             vec![acl("orders", "User:alice", AclOperation::Read)],
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+            "admin"
+        );
         let any = DescribeAclsRequest {
             resource_type_filter: 1,
             resource_name_filter: None,
@@ -439,13 +379,11 @@ mod tests {
             ("CREATE_TOKENS operation", |r| r.operation = 13),
             ("DESCRIBE_TOKENS operation", |r| r.operation = 14),
         ];
-        let expected = DescribeAclsResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
             resources: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         for (name, edit) in cases {
             let mut req = any.clone();
             edit(&mut req);
@@ -552,28 +490,26 @@ mod tests {
             resp.resources
                 .sort_by(|a, b| a.resource_name.cmp(&b.resource_name));
 
-            let expected = DescribeAclsResponse {
-                throttle_time_ms: 0,
+            let expected = unthrottled_wire!(DescribeAclsResponse {
                 error_code: codes::NONE,
                 error_message: Some(String::new()),
                 resources: want
                     .iter()
-                    .map(|(resource_name, pattern_type)| DescribeAclsResource {
-                        resource_type: RESOURCE_TYPE_TOPIC,
-                        resource_name: (*resource_name).into(),
-                        pattern_type: *pattern_type,
-                        acls: vec![AclDescription {
-                            principal: "User:alice".into(),
-                            host: "*".into(),
-                            operation: OPERATION_READ,
-                            permission_type: PERMISSION_ALLOW,
-                            unknown_tagged_fields: UnknownTaggedFields::default(),
-                        }],
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    })
+                    .map(
+                        |(resource_name, pattern_type)| tagged_wire!(DescribeAclsResource {
+                            resource_type: RESOURCE_TYPE_TOPIC,
+                            resource_name: (*resource_name).into(),
+                            pattern_type: *pattern_type,
+                            acls: vec![tagged_wire!(AclDescription {
+                                principal: "User:alice".into(),
+                                host: "*".into(),
+                                operation: OPERATION_READ,
+                                permission_type: PERMISSION_ALLOW,
+                            })],
+                        })
+                    )
                     .collect(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            };
+            });
             check!(resp == expected, "pattern {pattern_type} name {name:?}");
         }
         broker_handle.shutdown().await;
@@ -583,14 +519,12 @@ mod tests {
     /// only an empty field.
     #[tokio::test]
     async fn handle_takes_only_null_principal_and_host_as_any() {
-        let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-        seed_acls(
-            &broker_handle,
+        seeded_acl_fixture!(
+            (broker_handle, _dir, broker, ctx),
+            start_broker(configured_authorizer()),
             vec![acl("orders", "User:alice", AclOperation::Read)],
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+            "admin"
+        );
 
         let cases: [(Option<&str>, Option<&str>, usize); 4] = [
             (None, None, 1),
@@ -620,17 +554,15 @@ mod tests {
 
     #[tokio::test]
     async fn handle_returns_only_matching_acl_fields() {
-        let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-        seed_acls(
-            &broker_handle,
+        seeded_acl_fixture!(
+            (broker_handle, _dir, broker, ctx),
+            start_broker(configured_authorizer()),
             vec![
                 acl("orders", "User:alice", AclOperation::Read),
                 acl("payments", "User:bob", AclOperation::Write),
             ],
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+            "admin"
+        );
 
         let resp = handle(
             &broker,
@@ -640,25 +572,21 @@ mod tests {
         )
         .expect("handle");
 
-        let expected = DescribeAclsResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
-            resources: vec![DescribeAclsResource {
+            resources: vec![tagged_wire!(DescribeAclsResource {
                 resource_type: RESOURCE_TYPE_TOPIC,
                 resource_name: "orders".into(),
                 pattern_type: PATTERN_TYPE_LITERAL,
-                acls: vec![AclDescription {
+                acls: vec![tagged_wire!(AclDescription {
                     principal: "User:alice".into(),
                     host: "*".into(),
                     operation: OPERATION_READ,
                     permission_type: PERMISSION_ALLOW,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+                })],
+            })],
+        });
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }

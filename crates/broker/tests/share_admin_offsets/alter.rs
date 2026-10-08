@@ -15,8 +15,8 @@ use krabka_protocol::owned::alter_share_group_offsets_request::{
 use crate::{
     describe::describe_until,
     harness::{
-        NON_EMPTY_GROUP, NONE, bootstrap_share_state, broker_test_permit, fetch_until_acquired,
-        join, produce_n, wait_for_share_init,
+        NON_EMPTY_GROUP, NONE, bootstrap_share_state, fetch_until_acquired, join, produce_n,
+        wait_for_share_init,
     },
 };
 
@@ -37,8 +37,8 @@ use crate::{
 /// cache.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_resets_empty_group() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     // Make the share coordinator write-ready WITHOUT joining (no members).
     bootstrap_share_state(&broker, &client, "g1").await;
     // Produce 6 records so offset 5 exists.
@@ -101,8 +101,8 @@ async fn alter_resets_empty_group() {
 /// The group has a live member, so the response carries `NON_EMPTY_GROUP`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_non_empty_group_fenced() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     bootstrap_share_state(&broker, &client, "g1").await;
     produce_n(&client, "t", tid, 0, 3).await;
 

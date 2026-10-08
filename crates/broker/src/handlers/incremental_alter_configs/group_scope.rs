@@ -98,8 +98,28 @@ mod tests {
         coordinator::unified::streams::config::{
             KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET,
         },
-        handlers::incremental_alter_configs::RESOURCE_TYPE_GROUP,
+        handlers::incremental_alter_configs::{
+            RESOURCE_TYPE_GROUP,
+            test_support::{make_scoped_resource, make_set_cfg},
+        },
     };
+
+    fn drive(
+        resource: &AlterConfigsResource,
+        unstable: UnstableApiVersions,
+    ) -> (AlterConfigsResourceResponse, Vec<MetadataRecord>) {
+        let mut out = AlterConfigsResourceResponse::default();
+        let mut records = Vec::new();
+        handle_group_scoped(
+            resource,
+            &MetadataImage::new(uuid::Uuid::nil()),
+            &GroupBounds::default(),
+            unstable,
+            &mut out,
+            &mut records,
+        );
+        (out, records)
+    }
 
     /// Kafka's `ControllerConfigurationValidator` accepts every key of
     /// `GroupConfig.CONFIG_DEF`, whatever the group coordinators apply, and the
@@ -124,66 +144,32 @@ mod tests {
             ("streams.assignment.interval.ms", "500"),
             (KEY_NUM_STANDBY_REPLICAS, "1"),
         ];
-        let resource = AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_GROUP,
-            resource_name: "g".into(),
-            configs: keys
-                .iter()
-                .map(|(name, value)| AlterableConfig {
-                    name: (*name).into(),
-                    config_operation: OP_SET,
-                    value: Some((*value).into()),
-                    ..Default::default()
-                })
+        let resource = make_scoped_resource(
+            RESOURCE_TYPE_GROUP,
+            "g",
+            keys.iter()
+                .map(|(name, value)| make_set_cfg(name, value))
                 .collect(),
-            ..Default::default()
-        };
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut records = Vec::new();
-        handle_group_scoped(
-            &resource,
-            &MetadataImage::new(uuid::Uuid::nil()),
-            &GroupBounds::default(),
-            crate::api_catalog::UnstableApiVersions::Disabled,
-            &mut out,
-            &mut records,
         );
+        let (out, records) = drive(&resource, UnstableApiVersions::Disabled);
         assert!(out.error_code == codes::NONE, "{out:?}");
         assert!(
             records
                 == vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
                     group_id: "g".into(),
-                    configs: keys
-                        .iter()
-                        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-                        .collect(),
+                    configs: crate::test_support::string_pairs(&keys),
                 })]
         );
     }
 
     #[test]
     fn group_config_set_validates_and_stages_authoritative_map() {
-        let resource = AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_GROUP,
-            resource_name: "streams-app".into(),
-            configs: vec![AlterableConfig {
-                name: KEY_NUM_STANDBY_REPLICAS.into(),
-                config_operation: OP_SET,
-                value: Some("1".into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut records = Vec::new();
-        handle_group_scoped(
-            &resource,
-            &MetadataImage::new(uuid::Uuid::nil()),
-            &GroupBounds::default(),
-            crate::api_catalog::UnstableApiVersions::Enabled,
-            &mut out,
-            &mut records,
+        let resource = make_scoped_resource(
+            RESOURCE_TYPE_GROUP,
+            "streams-app",
+            vec![make_set_cfg(KEY_NUM_STANDBY_REPLICAS, "1")],
         );
+        let (out, records) = drive(&resource, UnstableApiVersions::Enabled);
         assert!(out.error_code == codes::NONE);
         assert!(matches!(
             records.as_slice(),
@@ -206,27 +192,12 @@ mod tests {
             ("by_duration:", codes::INVALID_CONFIG),
             ("none", codes::INVALID_CONFIG),
         ] {
-            let resource = AlterConfigsResource {
-                resource_type: RESOURCE_TYPE_GROUP,
-                resource_name: "share-workers".into(),
-                configs: vec![AlterableConfig {
-                    name: KEY_SHARE_AUTO_OFFSET_RESET.into(),
-                    config_operation: OP_SET,
-                    value: Some(value.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            };
-            let mut out = AlterConfigsResourceResponse::default();
-            let mut records = Vec::new();
-            handle_group_scoped(
-                &resource,
-                &MetadataImage::new(uuid::Uuid::nil()),
-                &GroupBounds::default(),
-                crate::api_catalog::UnstableApiVersions::Enabled,
-                &mut out,
-                &mut records,
+            let resource = make_scoped_resource(
+                RESOURCE_TYPE_GROUP,
+                "share-workers",
+                vec![make_set_cfg(KEY_SHARE_AUTO_OFFSET_RESET, value)],
             );
+            let (out, records) = drive(&resource, UnstableApiVersions::Enabled);
             assert!(
                 out.error_code == want_code,
                 "{KEY_SHARE_AUTO_OFFSET_RESET}={value}"
@@ -249,27 +220,12 @@ mod tests {
 
     #[test]
     fn group_config_rejects_values_outside_broker_bounds() {
-        let resource = AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_GROUP,
-            resource_name: "streams-app".into(),
-            configs: vec![AlterableConfig {
-                name: KEY_SESSION_TIMEOUT_MS.into(),
-                config_operation: OP_SET,
-                value: Some("1000".into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut records = Vec::new();
-        handle_group_scoped(
-            &resource,
-            &MetadataImage::new(uuid::Uuid::nil()),
-            &GroupBounds::default(),
-            crate::api_catalog::UnstableApiVersions::Enabled,
-            &mut out,
-            &mut records,
+        let resource = make_scoped_resource(
+            RESOURCE_TYPE_GROUP,
+            "streams-app",
+            vec![make_set_cfg(KEY_SESSION_TIMEOUT_MS, "1000")],
         );
+        let (out, records) = drive(&resource, UnstableApiVersions::Enabled);
         assert!(out.error_code == codes::INVALID_CONFIG);
         assert!(records.is_empty());
     }
@@ -279,12 +235,7 @@ mod tests {
     /// outcome.
     #[test]
     fn group_resources_follow_kafkas_merge_and_validation_order() {
-        let set = |key: &str, value: &str| AlterableConfig {
-            name: key.into(),
-            config_operation: OP_SET,
-            value: Some(value.into()),
-            ..Default::default()
-        };
+        let set = |key: &str, value: &str| make_set_cfg(key, value);
         let append = |key: &str| AlterableConfig {
             name: key.into(),
             config_operation: 2,
@@ -329,12 +280,7 @@ mod tests {
             ),
         ];
         for (name, configs, want) in cases {
-            let resource = AlterConfigsResource {
-                resource_type: RESOURCE_TYPE_GROUP,
-                resource_name: name.into(),
-                configs: configs.clone(),
-                ..Default::default()
-            };
+            let resource = make_scoped_resource(RESOURCE_TYPE_GROUP, name, configs.clone());
             assert!(
                 group_record(
                     &resource,

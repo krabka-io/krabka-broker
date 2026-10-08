@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use krabka_remote_storage::{
-    RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
-    RemoteLogSegmentState, RemotePartitionDeleteMetadata, RemotePartitionDeleteState,
-    RemoteStorageManager, TopicIdPartition,
+    RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentState,
+    RemotePartitionDeleteMetadata, RemotePartitionDeleteState, RemoteStorageManager,
+    TopicIdPartition,
 };
 use tracing::{debug, warn};
 
@@ -136,21 +136,20 @@ pub(super) async fn delete_one_segment(
     index_cache.remove_segment(id.id);
     // Transition to DeleteSegmentStarted unless the segment is already
     // there (cascade may retry against a partially-cleaned partition).
-    if md.state() == RemoteLogSegmentState::CopySegmentFinished {
-        let upd = RemoteLogSegmentMetadataUpdate {
-            remote_log_segment_id: id.clone(),
-            event_timestamp_ms: now_ms(),
-            custom_metadata: None,
-            state: RemoteLogSegmentState::DeleteSegmentStarted,
+    if md.state() == RemoteLogSegmentState::CopySegmentFinished
+        && let Err(e) = super::rlmm::update_segment(
+            rlmm,
+            id.clone(),
+            None,
+            RemoteLogSegmentState::DeleteSegmentStarted,
             broker_id,
-        };
-        if let Err(e) = rlmm_mutate(rlmm, move |m| m.update_remote_log_segment_metadata(upd)).await
-        {
-            warn!(topic = %tp.topic, partition = tp.partition, base = md.start_offset(),
-                  error = %e,
-                  "remote-log-manager: failed to record DeleteSegmentStarted");
-            return false;
-        }
+        )
+        .await
+    {
+        warn!(topic = %tp.topic, partition = tp.partition, base = md.start_offset(),
+              error = %e,
+              "remote-log-manager: failed to record DeleteSegmentStarted");
+        return false;
     }
 
     match archive {
@@ -186,14 +185,15 @@ pub(super) async fn delete_one_segment(
         }
     }
 
-    let upd = RemoteLogSegmentMetadataUpdate {
-        remote_log_segment_id: id,
-        event_timestamp_ms: now_ms(),
-        custom_metadata: None,
-        state: RemoteLogSegmentState::DeleteSegmentFinished,
+    if let Err(e) = super::rlmm::update_segment(
+        rlmm,
+        id,
+        None,
+        RemoteLogSegmentState::DeleteSegmentFinished,
         broker_id,
-    };
-    if let Err(e) = rlmm_mutate(rlmm, move |m| m.update_remote_log_segment_metadata(upd)).await {
+    )
+    .await
+    {
         warn!(topic = %tp.topic, partition = tp.partition, base = md.start_offset(),
               error = %e, "remote-log-manager: failed to record DeleteSegmentFinished");
         return false;
@@ -207,11 +207,22 @@ pub(super) async fn delete_one_segment(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_ids::LeaderEpoch;
+    use fixtures::{copy_all_exports, copy_exports, local_backends};
     use krabka_remote_storage::{InmemoryRemoteLogMetadataManager, LocalTieredStorage};
 
     use super::*;
-    use crate::remote_log_manager::test_support::{copy_all_exports, local_backends};
+    use crate::remote_log_manager::test_support as fixtures;
+
+    fn dumped_delete_state(
+        rlmm: &InmemoryRemoteLogMetadataManager,
+    ) -> Option<RemotePartitionDeleteState> {
+        let dump = rlmm.export();
+        dump.partitions
+            .iter()
+            .find(|partition| partition.topic_id_partition == tp())
+            .expect("partition delete state should be dumped")
+            .delete_state
+    }
 
     /// The delete paths take an index cache so a segment they remove stops
     /// holding its bytes. These tests assert on the RLMM lifecycle, so the
@@ -219,17 +230,11 @@ mod tests {
     fn disabled_index_cache() -> Arc<krabka_remote_storage::RemoteIndexCache> {
         Arc::new(krabka_remote_storage::RemoteIndexCache::disabled())
     }
-    use crate::remote_log_manager::{
-        copy_eligible,
-        test_support::{FakeWormArchive, rolled_log, synth_export, tier, tp},
-    };
+    use fixtures::{FakeWormArchive, tier, tp};
 
     #[tokio::test]
     async fn cascade_remote_partition_delete_drops_every_segment() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let log = rolled_log(log_dir.path());
-        let exports = log.tierable_segments();
+        fixtures::rolled_log_fixture!(log_dir, remote_dir, log, exports);
         let rsm: Arc<dyn RemoteStorageManager> =
             Arc::new(LocalTieredStorage::new(remote_dir.path()));
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
@@ -254,15 +259,8 @@ mod tests {
         let part_dir = remote_dir.path().join("orders-0-AAAAAAAAAAAAAAAAAAAAAQ");
         let entries: Vec<_> = std::fs::read_dir(&part_dir).unwrap().collect();
         assert!(entries.is_empty(), "stray remote files: {entries:?}");
-        let dump = rlmm_impl.export();
-        let partition = dump
-            .partitions
-            .iter()
-            .find(|partition| partition.topic_id_partition == tp())
-            .expect("partition delete state should be dumped");
-        assert!(
-            partition.delete_state == Some(RemotePartitionDeleteState::DeletePartitionFinished)
-        );
+        let state = dumped_delete_state(&rlmm_impl);
+        assert!(state == Some(RemotePartitionDeleteState::DeletePartitionFinished));
     }
 
     #[tokio::test]
@@ -290,12 +288,9 @@ mod tests {
         let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
         let rlmm: Arc<dyn RemoteLogMetadataManager> = rlmm_impl.clone();
-        let copied = copy_eligible(
+        let copied = copy_exports(
             &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)],
+            fixtures::two_exports(),
         )
         .await;
         check!(copied == 2);
@@ -315,13 +310,8 @@ mod tests {
             rlmm.list_remote_log_segments(&tp()).unwrap().is_empty(),
             "the broker's own metadata is still cleared"
         );
-        let dump = rlmm_impl.export();
-        let partition = dump
-            .partitions
-            .iter()
-            .find(|partition| partition.topic_id_partition == tp())
-            .expect("partition delete state should be dumped");
-        check!(partition.delete_state == Some(RemotePartitionDeleteState::DeletePartitionFinished));
+        let state = dumped_delete_state(&rlmm_impl);
+        check!(state == Some(RemotePartitionDeleteState::DeletePartitionFinished));
         check!(
             archive.archived_segments() == 2,
             "deleting a topic must not erase a compliance archive"

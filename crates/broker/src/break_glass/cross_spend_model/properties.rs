@@ -48,26 +48,26 @@ impl Model for CrossSpendModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
-        match action {
-            Step::Approve(index, principal) => self.settle(&mut state, index, principal, false),
-            Step::Withdraw(index, principal) => self.settle(&mut state, index, principal, true),
-            Step::Expire => state.now_ms = (state.now_ms + 1).min(EXPIRES_AT),
-            Step::Consume(request) => self.consume(&mut state, request),
-        }
-        // Headline safety, per transition, so a counterexample names the step
-        // that broke it rather than surfacing at the end of the run.
-        assert2::assert!(
-            !state.cross_spent,
-            "a proposal was spent on a request it does not cover after {action:?}: {state:?}"
-        );
-        assert2::assert!(
-            state.spends.iter().all(|spent| *spent <= 1),
-            "a proposal was spent twice after {action:?}: {state:?}"
-        );
-        Some(state)
-    }
+    krabka_macros::model_transition!(last, action, state; {
+            match action {
+                Step::Approve(index, principal) => self.settle(&mut state, index, principal, false),
+                Step::Withdraw(index, principal) => self.settle(&mut state, index, principal, true),
+                Step::Expire => state.now_ms = (state.now_ms + 1).min(EXPIRES_AT),
+                Step::Consume(request) => self.consume(&mut state, request),
+            }
+            // Headline safety, per transition, so a counterexample names the step
+            // that broke it rather than surfacing at the end of the run.
+            assert2::assert!(
+                !state.cross_spent,
+                "a proposal was spent on a request it does not cover after {action:?}: {state:?}"
+            );
+            assert2::assert!(
+                state.spends.iter().all(|spent| *spent <= 1),
+                "a proposal was spent twice after {action:?}: {state:?}"
+            );
+            Some(state)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![

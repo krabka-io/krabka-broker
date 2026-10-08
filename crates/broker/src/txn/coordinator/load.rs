@@ -24,20 +24,14 @@ use super::{
 };
 use crate::{error::BrokerError, txn::bootstrap};
 
-/// The load tasks that one refresh started.
-///
-/// A caller that does not wait drops this value. The tasks run on.
-#[derive(Debug, Default)]
-pub(crate) struct ScheduledLoads(Vec<tokio::task::JoinHandle<()>>);
-
-impl ScheduledLoads {
+crate::task_util::scheduled_tasks_type! {
+    /// The load tasks that one refresh started.
+    ///
+    /// A caller that does not wait drops this value. The tasks run on.
+    pub(crate) struct ScheduledLoads;
     /// Waits until every load task of this refresh has ended.
-    pub(crate) async fn finished(self) {
-        for handle in self.0 {
-            if let Err(error) = handle.await {
-                warn!(%error, "__transaction_state load task failed");
-            }
-        }
+    |error| {
+        warn!(%error, "__transaction_state load task failed");
     }
 }
 

@@ -10,7 +10,6 @@ use assert2::assert;
 
 use crate::{
     NONE,
-    harness::broker_test_permit,
     share_rpc::{acquired_count, fetch_until_acquired, share_fetch, share_renew},
 };
 
@@ -18,17 +17,11 @@ use crate::{
 /// expires, so the next fetch re-delivers at an incremented count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lock_timeout_redelivers() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |cfg| {
-        cfg.share_group.record_lock_duration = Duration::from_millis(200);
-    })
-    .await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
+    let (_permit, broker, client, _dir, tid, member) =
+        lock_fixture(Duration::from_millis(200), None).await;
 
     // Fetch but DO NOT acknowledge.
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
-    assert!(acquired_count(&row) == 1, "acquire the single offset");
-    assert!(row.acquired_records[0].delivery_count == 1);
+    acquire_initial_record(&client, &member, tid).await;
 
     // Wait until the lock expires and the background sweeper reverts the
     // record to Available (acquired-batch count drops to 0).
@@ -54,13 +47,8 @@ async fn lock_timeout_redelivers() {
 /// an Accept (poison pill). Later fetches acquire nothing and the SPSO advances.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delivery_limit_archives() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |cfg| {
-        cfg.share_group.record_lock_duration = Duration::from_millis(150);
-        cfg.share_group.max_delivery_attempts = 2;
-    })
-    .await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
+    let (_permit, broker, client, _dir, tid, member) =
+        lock_fixture(Duration::from_millis(150), Some(2)).await;
 
     // Delivery 1 (no ack).
     let row1 = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
@@ -110,18 +98,12 @@ async fn delivery_limit_archives() {
 /// nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn renew_extends_lock_not_redelivered() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |cfg| {
-        cfg.share_group.record_lock_duration = Duration::from_millis(500);
-    })
-    .await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
+    let (_permit, _broker, client, _dir, tid, member) =
+        lock_fixture(Duration::from_millis(500), None).await;
 
     // Acquire offset 0 (lock 500ms, delivery_count 1). Epoch is now 1.
     let acquire_at = std::time::Instant::now();
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
-    assert!(acquired_count(&row) == 1, "acquire the single offset");
-    assert!(row.acquired_records[0].delivery_count == 1);
+    acquire_initial_record(&client, &member, tid).await;
 
     // Intentional calibrated timing: renew ~200ms in (before the 500ms lock
     // expires) to reset the deadline to renew-time + 500ms ≈ T0+700ms. Epoch
@@ -157,16 +139,10 @@ async fn renew_extends_lock_not_redelivered() {
 /// suppressed the redelivery, and that slack in the timing did not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_renew_redelivers_after_lock_expiry() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |cfg| {
-        cfg.share_group.record_lock_duration = Duration::from_millis(500);
-    })
-    .await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
+    let (_permit, _broker, client, _dir, tid, member) =
+        lock_fixture(Duration::from_millis(500), None).await;
 
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
-    assert!(acquired_count(&row) == 1, "acquire the single offset");
-    assert!(row.acquired_records[0].delivery_count == 1);
+    acquire_initial_record(&client, &member, tid).await;
 
     // Intentional calibrated timing: no renew — wait 800ms (well past the 500ms
     // lock + a sweeper tick) so the record is reverted to Available and
@@ -184,4 +160,38 @@ async fn no_renew_redelivers_after_lock_expiry() {
         "re-delivery after lock timeout must bump delivery_count to 2, got {}",
         row2.acquired_records[0].delivery_count
     );
+}
+
+/// Hold the broker permit, materialize t, and join its single-record share group.
+async fn lock_fixture(
+    lock_duration: Duration,
+    max_delivery_attempts: Option<i16>,
+) -> (
+    tokio::sync::OwnedSemaphorePermit,
+    krabka_broker::BrokerHandle,
+    std::sync::Arc<krabka_client_core::Client>,
+    tempfile::TempDir,
+    uuid::Uuid,
+    String,
+) {
+    let (permit, broker, client, dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |config| {
+            config.share_group.record_lock_duration = lock_duration;
+            if let Some(attempts) = max_delivery_attempts {
+                config.share_group.max_delivery_attempts = attempts;
+            }
+        })
+        .await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
+    (permit, broker, client, dir, tid, member)
+}
+
+async fn acquire_initial_record(
+    client: &krabka_client_core::Client,
+    member: &str,
+    tid: uuid::Uuid,
+) {
+    let row = fetch_until_acquired(client, "g1", member, tid, 0, 0).await;
+    assert!(acquired_count(&row) == 1, "acquire the single offset");
+    assert!(row.acquired_records[0].delivery_count == 1);
 }

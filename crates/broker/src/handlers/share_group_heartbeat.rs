@@ -11,106 +11,102 @@ use crate::{
     broker::Broker,
     codes,
     coordinator::unified::{GroupCoordinator, GroupType, share::actor::ShareGroupActorMessage},
-    error::BrokerError,
-    handlers::{ErrorResponse as _, group_read_denied},
+    handlers::ErrorResponse as _,
     task_util::{AskError, ask},
 };
 
 /// Kafka's `ShareGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`.
 const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: ShareGroupHeartbeatRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<ShareGroupHeartbeatResponse, BrokerError> {
-    let ng = broker.group_coordinator.clone();
+context_handler! {
+    ShareGroupHeartbeatRequest => ShareGroupHeartbeatResponse,
+    (broker, req, _version, ctx),
+    {
+        let ng = broker.group_coordinator.clone();
 
-    // ── Protocol gate ───────────────────────────────────────────
-    // Kafka's `handleShareGroupHeartbeat` checks whether share groups are
-    // enabled BEFORE any ACL check, so a disabled feature answers
-    // `UNSUPPORTED_VERSION` even to a caller with no ACLs on the group at
-    // all. They are enabled by a finalized `share.version` of 1.
-    let image = broker.controller.current_image();
-    if !crate::features::share_groups_enabled(&image) {
-        return Ok(reply(codes::UNSUPPORTED_VERSION, None));
-    }
+        // ── Protocol gate ───────────────────────────────────────────
+        // Kafka's `handleShareGroupHeartbeat` checks whether share groups are
+        // enabled BEFORE any ACL check, so a disabled feature answers
+        // `UNSUPPORTED_VERSION` even to a caller with no ACLs on the group at
+        // all. They are enabled by a finalized `share.version` of 1.
+        let image = broker.controller.current_image();
 
-    // ── ACL preamble ────────────────────────────────────────────
-    // KIP-932 share groups still gate membership on `Read` on
-    // `Group(group_id)`. On Deny → whole-response
-    // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
-    if group_read_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        &req.group_id,
-    ) {
-        return Ok(reply(codes::GROUP_AUTHORIZATION_FAILED, None));
-    }
-
-    // Kafka's `KafkaApis.isMemberIdValid`: the member id must be set and
-    // at most 36 characters long. The share consumer mints its own id, so
-    // even a first join must carry one. `getErrorResponse` sets only the
-    // code. This runs before the topic `Describe` check, so a malformed
-    // request that names a denied topic answers `INVALID_REQUEST`.
-    if !crate::handlers::share_fetch::member_id_is_valid(&req.member_id) {
-        return Ok(reply(codes::INVALID_REQUEST, None));
-    }
-
-    // `Describe` on every distinct name in `subscribed_topic_names`
-    // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
-    // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
-    // `TOPIC_AUTHORIZATION_FAILED` (29); the group is never touched, so an
-    // unauthorized caller cannot learn a denied topic's id or partitions
-    // by being admitted as a member. This runs before
-    // `group_coordinator_error` -- Kafka authorizes the request before it
-    // ever reaches coordinator routing, so an unauthorized subscription
-    // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-    if crate::handlers::subscribed_names_describe_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        req.subscribed_topic_names.as_deref(),
-    ) {
-        return Ok(reply(codes::TOPIC_AUTHORIZATION_FAILED, None));
-    }
-
-    // Kafka's `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`
-    // runs before the operation reaches a coordinator shard.
-    if let Some(message) = invalid_request_message(&req) {
-        return Ok(reply(codes::INVALID_REQUEST, Some(message.to_owned())));
-    }
-
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-        return Ok(reply(error_code, None));
-    }
-
-    // Kafka creates a share group only on a join, and answers
-    // GROUP_ID_NOT_FOUND for a missing group on any other epoch and for a
-    // group of another type, without touching any group.
-    if let Some(message) = share_group_lookup_error(&ng, &req.group_id, req.member_epoch) {
-        return Ok(reply(codes::GROUP_ID_NOT_FOUND, Some(message)));
-    }
-
-    ng.mark_share(&req.group_id);
-    let handle = ng.get_or_create_share(&req.group_id);
-    let group_id = req.group_id.clone();
-    let asked = ask(&handle.tx, |reply| ShareGroupActorMessage::Heartbeat {
-        request: req,
-        client_id: ctx.client_id.unwrap_or_default().to_owned(),
-        client_host: ctx.client_host(),
-        reply,
-    })
-    .await;
-    Ok(match asked {
-        Ok(resp) => resp,
-        Err(AskError::Closed) => reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None),
-        Err(AskError::Dropped) => {
-            ShareGroupHeartbeatResponse::error(stopped_actor_code(broker, &group_id), None)
+        // ── ACL preamble ────────────────────────────────────────────
+        // KIP-932 share groups still gate membership on `Read` on
+        // `Group(group_id)`. On Deny → whole-response
+        // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
+        if let Some(error_code) = crate::handlers::acl_gates::group_protocol_refusal(
+            crate::features::share_groups_enabled(&image),
+            broker,
+            &image,
+            ctx,
+            &req.group_id,
+        ) {
+            return Ok(reply(error_code, None));
         }
-    })
+
+        // Kafka's `KafkaApis.isMemberIdValid`: the member id must be set and
+        // at most 36 characters long. The share consumer mints its own id, so
+        // even a first join must carry one. `getErrorResponse` sets only the
+        // code. This runs before the topic `Describe` check, so a malformed
+        // request that names a denied topic answers `INVALID_REQUEST`.
+        if !crate::handlers::share_fetch::member_id_is_valid(&req.member_id) {
+            return Ok(reply(codes::INVALID_REQUEST, None));
+        }
+
+        // `Describe` on every distinct name in `subscribed_topic_names`
+        // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
+        // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
+        // `TOPIC_AUTHORIZATION_FAILED` (29); the group is never touched, so an
+        // unauthorized caller cannot learn a denied topic's id or partitions
+        // by being admitted as a member. This runs before
+        // `group_coordinator_error` -- Kafka authorizes the request before it
+        // ever reaches coordinator routing, so an unauthorized subscription
+        // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
+        if crate::handlers::subscribed_names_describe_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            req.subscribed_topic_names.as_deref(),
+        ) {
+            return Ok(reply(codes::TOPIC_AUTHORIZATION_FAILED, None));
+        }
+
+        // Kafka's `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`
+        // runs before the operation reaches a coordinator shard.
+        if let Some(message) = invalid_request_message(&req) {
+            return Ok(reply(codes::INVALID_REQUEST, Some(message.to_owned())));
+        }
+
+        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+            return Ok(reply(error_code, None));
+        }
+
+        // Kafka creates a share group only on a join, and answers
+        // GROUP_ID_NOT_FOUND for a missing group on any other epoch and for a
+        // group of another type, without touching any group.
+        if let Some(message) = share_group_lookup_error(&ng, &req.group_id, req.member_epoch) {
+            return Ok(reply(codes::GROUP_ID_NOT_FOUND, Some(message)));
+        }
+
+        ng.mark_share(&req.group_id);
+        let handle = ng.get_or_create_share(&req.group_id);
+        let group_id = req.group_id.clone();
+        let asked = ask(&handle.tx, |reply| ShareGroupActorMessage::Heartbeat {
+            request: req,
+            client_id: ctx.client_id.unwrap_or_default().to_owned(),
+            client_host: ctx.client_host(),
+            reply,
+        })
+        .await;
+        Ok(match asked {
+            Ok(resp) => resp,
+            Err(AskError::Closed) => reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None),
+            Err(AskError::Dropped) => {
+                ShareGroupHeartbeatResponse::error(stopped_actor_code(broker, &group_id), None)
+            }
+        })
+    }
 }
 
 /// The `GROUP_ID_NOT_FOUND` message for a heartbeat that must not reach a
@@ -212,8 +208,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        handlers::group_heartbeat_test_support::{
-            acl_authorizer, alice, describe_acl, group_read_acl, topic_with_partitions,
+        handlers::{
+            group_heartbeat_test_support::{
+                acl_authorizer, alice, describe_acl, group_read_acl, topic_with_partitions,
+            },
+            group_read_denied,
         },
         test_support::{peer, principal, start_broker_with_authorizer as start_broker, test_ctx},
     };
@@ -224,10 +223,11 @@ mod tests {
     fn group_read_denied_yields_group_authorization_failed() {
         let authorizer = acl_authorizer();
         let image = MetadataImage::new(uuid::Uuid::nil());
-        let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = peer();
-
-        let ctx = crate::test_support::request_context(&principal, &peer, "share-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("ANONYMOUS"),
+            client_id = "share-client"
+        );
 
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
         assert!(!group_read_denied(
@@ -249,6 +249,17 @@ mod tests {
     }
 
     crate::test_support::context_helper!(client_id = "client-a");
+
+    macro_rules! share_group_view {
+        (($actor:ident, $view:ident), $broker:ident, $group:expr) => {
+            let $actor = $broker.group_coordinator.get_or_create_share($group);
+            let $view = crate::task_util::ask(&$actor.tx, |reply| {
+                ShareGroupActorMessage::Describe { reply }
+            })
+            .await
+            .expect("share group view");
+        };
+    }
 
     fn request(group_id: &str, subscribed: Vec<&str>) -> ShareGroupHeartbeatRequest {
         ShareGroupHeartbeatRequest {
@@ -288,8 +299,10 @@ mod tests {
     /// when the protocol itself is unavailable.
     #[tokio::test]
     async fn handle_protocol_gate_precedes_group_acl() {
-        let (broker_handle, _dir) = start_broker(Arc::new(acl_authorizer())).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(Arc::new(acl_authorizer()))
+        );
         crate::test_support::finalize_share_version(&broker, 0).await;
         test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group", vec!["t1"]);
@@ -305,8 +318,10 @@ mod tests {
 
     #[tokio::test]
     async fn handle_group_read_denied_preserves_error_response() {
-        let (broker_handle, _dir) = start_broker(Arc::new(acl_authorizer())).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(Arc::new(acl_authorizer()))
+        );
         test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group", vec!["t1"]);
 
@@ -329,16 +344,21 @@ mod tests {
     /// `TOPIC_AUTHORIZATION_FAILED`.
     #[tokio::test]
     async fn handle_malformed_member_id_precedes_topic_authorization() {
-        let (broker_handle, _dir) = start_broker(Arc::new(acl_authorizer())).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(Arc::new(acl_authorizer()))
+        );
         broker
             .controller
             .submit_change(vec![group_read_acl("g")])
             .await
             .expect("grant group Read");
-        let principal = alice();
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "c");
+        request_identity!(
+            (principal, peer, ctx),
+            alice(),
+            client_id = "c",
+            address = peer()
+        );
         // No Describe grant for "topic-b" -- if the malformed-request check
         // did not run first, this would answer `TOPIC_AUTHORIZATION_FAILED`.
         let req = ShareGroupHeartbeatRequest {
@@ -364,10 +384,11 @@ mod tests {
     #[tokio::test]
     async fn handle_refuses_malformed_heartbeats_as_kafka_does() {
         let version = VERSION;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "ANONYMOUS");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "ANONYMOUS")
+        );
         let valid = ShareGroupHeartbeatRequest {
             group_id: "g".into(),
             member_id: "member-1".into(),
@@ -482,16 +503,21 @@ mod tests {
     #[tokio::test]
     async fn handle_subscribed_name_describe_denied_refuses_whole_heartbeat_no_member_created() {
         // Deliberately no Describe grant for "topic-b".
-        let (broker_handle, _dir) = start_broker(Arc::new(acl_authorizer())).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(Arc::new(acl_authorizer()))
+        );
         broker
             .controller
             .submit_change(vec![group_read_acl("g"), describe_acl("topic-a")])
             .await
             .expect("grant group Read and Describe(topic-a)");
-        let principal = alice();
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "c");
+        request_identity!(
+            (principal, peer, ctx),
+            alice(),
+            client_id = "c",
+            address = peer()
+        );
         let req = request("g", vec!["topic-a", "topic-b"]);
 
         let resp = handle(&broker, req, VERSION, &ctx)
@@ -502,12 +528,7 @@ mod tests {
             "{resp:?}"
         );
 
-        let actor = broker.group_coordinator.get_or_create_share("g");
-        let view = crate::task_util::ask(&actor.tx, |reply| ShareGroupActorMessage::Describe {
-            reply,
-        })
-        .await
-        .expect("share group view");
+        share_group_view!((actor, view), broker, "g");
         assert!(view.members.is_empty(), "{view:?}");
 
         broker_handle.shutdown().await;
@@ -533,9 +554,12 @@ mod tests {
             .submit_change(records)
             .await
             .expect("grant ACLs and create topic");
-        let principal = alice();
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "c");
+        request_identity!(
+            (principal, peer, ctx),
+            alice(),
+            client_id = "c",
+            address = peer()
+        );
         let req = request("g", vec!["topic-a"]);
 
         let resp = handle(&broker, req, VERSION, &ctx)
@@ -543,12 +567,7 @@ mod tests {
             .expect("ShareGroupHeartbeat handler");
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
-        let actor = broker.group_coordinator.get_or_create_share("g");
-        let view = crate::task_util::ask(&actor.tx, |reply| ShareGroupActorMessage::Describe {
-            reply,
-        })
-        .await
-        .expect("share group view");
+        share_group_view!((actor, view), broker, "g");
         assert!(view.members.len() == 1, "{view:?}");
 
         broker_handle.shutdown().await;
@@ -561,9 +580,7 @@ mod tests {
             start_broker(std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal("ANONYMOUS");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        request_identity!((principal, peer, ctx), principal("ANONYMOUS"), test_context);
         let req = ShareGroupHeartbeatRequest {
             group_id: "identity-group".into(),
             member_id: "member-1".into(),

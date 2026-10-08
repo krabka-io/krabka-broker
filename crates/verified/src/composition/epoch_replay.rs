@@ -8,6 +8,8 @@ use super::{
 };
 use crate::broker::FetchVisibility;
 #[cfg(creusot)]
+use crate::broker::{clamped_fetch_watermarks, committed_fetch_response};
+#[cfg(creusot)]
 use crate::leader_epoch::kafka_end_offset_for;
 
 type EpochSnapshotReplay = (i32, FetchWatermarks, FetchVisibility, Option<usize>, i64);
@@ -27,17 +29,11 @@ type EpochSnapshotReplay = (i32, FetchWatermarks, FetchVisibility, Option<usize>
         && epoch_archive_valid(entries@, segment_base@, w.log_end@)
         && 0 <= local_start@ && local_start@ <= w.log_end@
         && kafka_end_offset_for(entries@, requested@, w.log_end@, -1, -1),
-    Ok(Some((found, bounded, visibility, selected, cursor))) => epoch_window_valid(segment_base@, w.log_start@, w.log_end@)
-        && epoch_archive_valid(entries@, segment_base@, w.log_end@)
-        && kafka_end_offset_for(entries@, requested@, w.log_end@, found@, bounded.log_end@)
+    Ok(Some((found, bounded, visibility, selected, cursor))) => super::epoch::resolved_epoch_cut(entries@, segment_base@, w, requested@, found@, bounded.log_end@)
         && found@ <= requested@ && segment_base@ <= bounded.log_end@ && bounded.log_end@ <= w.log_end@
-        && bounded.log_start == w.log_start && bounded.hw@ == w.hw@.min(bounded.log_end@)
-        && bounded.lso@ == w.lso@.min(bounded.log_end@)
-        && bounded.deliverable@ == w.deliverable@.min(bounded.log_end@)
+        && clamped_fetch_watermarks(w, bounded)
         && visibility.limit_offset@ == w.hw@.min(w.lso@).min(w.deliverable@).min(bounded.log_end@)
-        && visibility.response_hw == bounded.hw && visibility.response_lso@ == bounded.hw@.min(bounded.lso@)
-        && visibility.effective_lso@ == bounded.hw@.min(bounded.lso@) && visibility.read_committed_aborts
-        && !visibility.out_of_range && visibility.empty == (w.log_start@ >= bounded.hw@.min(bounded.deliverable@))
+        && committed_fetch_response(visibility, bounded.hw, bounded.lso, bounded.deliverable, w.log_start@)
         && 0 <= local_start@ && local_start@ <= cursor@ && w.log_start@ <= cursor@ && cursor@ <= bounded.log_end@
         && match selected {
             None => cursor@ == w.log_start@.max(local_start@)
@@ -46,9 +42,7 @@ type EpochSnapshotReplay = (i32, FetchWatermarks, FetchVisibility, Option<usize>
             Some(index) => index@ < snapshots@.len()
                 && w.log_start@ < snapshots@[index@]@ && snapshots@[index@]@ <= bounded.log_end@
                 && cursor@ == local_start@.max(snapshots@[index@]@)
-                && forall<i: Int> 0 <= i && i < snapshots@.len()
-                    && w.log_start@ < snapshots@[i]@ && snapshots@[i]@ <= bounded.log_end@
-                    ==> snapshots@[i]@ <= snapshots@[index@]@,
+                && super::trim::latest_retained_snapshot(snapshots@, w.log_start@, bounded.log_end@, snapshots@[index@]@),
         },
 })]
 pub(super) fn resolved_epoch_bounds_retained_replay(

@@ -78,6 +78,13 @@ pub(super) struct Segment {
     pub(super) manifest: SegmentManifest,
 }
 
+pub(super) fn first_break_reason(report: &ArchiveVerifyReport) -> String {
+    report
+        .first_break()
+        .map(|found| found.reason.clone())
+        .unwrap_or_default()
+}
+
 /// A WORM archive built object by object, the way a backend writes one.
 pub(super) struct Archive {
     pub(super) store: Arc<dyn ObjectStore>,
@@ -159,7 +166,11 @@ impl Archive {
 
     /// A default [`verify_archive`] run over this archive, trusting its key.
     pub(super) async fn verify(&self) -> ArchiveVerifyReport {
-        verify_archive(&self.store, &VerifyRequest::default(), &self.trusted())
+        self.verify_with(&VerifyRequest::default()).await
+    }
+
+    pub(super) async fn verify_with(&self, request: &VerifyRequest) -> ArchiveVerifyReport {
+        verify_archive(&self.store, request, &self.trusted())
             .await
             .unwrap()
     }
@@ -240,6 +251,13 @@ impl std::fmt::Display for VersionedStore {
     }
 }
 
+#[krabka_macros::object_store_delegate(
+    put_multipart_opts,
+    delete_stream,
+    list,
+    list_with_delimiter,
+    copy_opts
+)]
 #[async_trait::async_trait]
 impl ObjectStore for VersionedStore {
     async fn put_opts(
@@ -260,14 +278,6 @@ impl ObjectStore for VersionedStore {
             .insert((location.to_string(), version.clone()), bytes);
         result.version = Some(version);
         Ok(result)
-    }
-
-    async fn put_multipart_opts(
-        &self,
-        location: &Path,
-        opts: object_store::PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
-        self.inner.put_multipart_opts(location, opts).await
     }
 
     async fn get_opts(
@@ -302,37 +312,6 @@ impl ObjectStore for VersionedStore {
             attributes: object_store::Attributes::default(),
             extensions: object_store::Extensions::default(),
         })
-    }
-
-    fn delete_stream(
-        &self,
-        locations: futures_util::stream::BoxStream<'static, object_store::Result<Path>>,
-    ) -> futures_util::stream::BoxStream<'static, object_store::Result<Path>> {
-        self.inner.delete_stream(locations)
-    }
-
-    fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
-    {
-        self.inner.list(prefix)
-    }
-
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<object_store::ListResult> {
-        self.inner.list_with_delimiter(prefix).await
-    }
-
-    async fn copy_opts(
-        &self,
-        from: &Path,
-        to: &Path,
-        options: object_store::CopyOptions,
-    ) -> object_store::Result<()> {
-        self.inner.copy_opts(from, to, options).await
     }
 }
 

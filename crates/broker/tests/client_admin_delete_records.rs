@@ -1,50 +1,30 @@
+mod support;
+
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig};
-use krabka_client_admin::{AdminClient, CreateTopicSpec, DeleteRecordsOp};
+use krabka_client_admin::DeleteRecordsOp;
 use krabka_client_core::{ClientError, Connection, ConnectionOptions, fetch_partition};
-use krabka_client_producer::{Producer, ProducerRecord};
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_records_truncates_wal_and_maps_outcome() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let bootstrap = broker.listen_addr().to_string();
-
-    let mut admin = AdminClient::connect(std::slice::from_ref(&bootstrap))
-        .await
-        .unwrap();
+    let (_dir, _broker, bootstrap, mut admin) = crate::support::admin::standalone_admin().await;
     admin
         .create_topics(
-            &[CreateTopicSpec {
-                name: "wal".to_string(),
-                partitions: 1,
-                replicas: 1,
-                configs: std::collections::BTreeMap::default(),
-                replica_assignments: std::collections::BTreeMap::new(),
-            }],
+            &[crate::support::admin::topic_spec("wal".to_string(), 1, 1)],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
         .unwrap();
 
-    let producer = Producer::builder()
-        .bootstrap(&bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let producer = crate::support::producer::default_producer(&bootstrap).await;
     for offset in 0..100 {
         producer
-            .send(ProducerRecord {
-                topic: "wal".to_string(),
-                partition: Some(0),
-                key: None,
-                value: Some(format!("frame-{offset}").into_bytes().into()),
-                headers: Vec::new(),
-                timestamp_ms: None,
-            })
+            .send(crate::support::producer::producer_record(
+                "wal".to_string(),
+                Some(0),
+                None,
+                Some(format!("frame-{offset}").into_bytes().into()),
+            ))
             .await
             .unwrap();
     }

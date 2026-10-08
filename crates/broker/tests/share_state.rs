@@ -19,32 +19,29 @@ mod support;
 use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        delete_share_group_state_request::{
-            DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePart,
-        },
-        find_coordinator_request::FindCoordinatorRequest,
-        find_coordinator_response::Coordinator,
-        initialize_share_group_state_request::{
-            InitializeShareGroupStateRequest, InitializeStateData, PartitionData as InitPart,
-        },
-        read_share_group_state_request::{
-            PartitionData as ReadPart, ReadShareGroupStateRequest, ReadStateData,
-        },
-        read_share_group_state_summary_request::{
-            PartitionData as SummaryPart, ReadShareGroupStateSummaryRequest, ReadStateSummaryData,
-        },
-        write_share_group_state_request::{
-            PartitionData as WritePart, StateBatch, WriteShareGroupStateRequest, WriteStateData,
-        },
+use krabka_protocol::owned::{
+    delete_share_group_state_request::{
+        DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePart,
     },
-    primitives::uuid::Uuid as WireUuid,
+    find_coordinator_request::FindCoordinatorRequest,
+    find_coordinator_response::Coordinator,
+    initialize_share_group_state_request::{
+        InitializeShareGroupStateRequest, InitializeStateData, PartitionData as InitPart,
+    },
+    read_share_group_state_request::{
+        PartitionData as ReadPart, ReadShareGroupStateRequest, ReadStateData,
+    },
+    read_share_group_state_summary_request::{
+        PartitionData as SummaryPart, ReadShareGroupStateSummaryRequest, ReadStateSummaryData,
+    },
+    write_share_group_state_request::{
+        PartitionData as WritePart, StateBatch, WriteShareGroupStateRequest, WriteStateData,
+    },
 };
+
+use crate::support::{client::connect_client, discovery::coordinator_lookup_request};
 
 const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
 const COORDINATOR_NOT_AVAILABLE: i16 = 15;
@@ -58,70 +55,31 @@ fn not_ready(code: i16) -> bool {
         || code == NOT_COORDINATOR
 }
 
-async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let bootstrap = broker.listen_addr().to_string();
-    (broker, bootstrap, dir)
-}
+use crate::support::boot_single as boot;
 
 async fn connect(bootstrap: &str) -> Arc<Client> {
-    Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap)
-            .client_id("c1")
-            .build()
-            .await
-            .unwrap(),
-    )
+    Arc::new(connect_client(bootstrap, Some("c1")).await)
 }
 
 /// Create a one-partition data topic and return its topic id. The share
 /// coordinator refuses a read or a write of a topic partition that the
 /// metadata image does not hold.
 async fn create_topic(client: &Client, name: &str) -> uuid::Uuid {
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "topic create failed: {resp:?}"
-    );
-    uuid::Uuid::from_bytes(resp.topics[0].topic_id.0)
+    let id = crate::support::client::create_topic_with(client, name, 1, 1, 5_000).await;
+    uuid::Uuid::from_bytes(id.0)
 }
 
-fn wire(tid: uuid::Uuid) -> WireUuid {
-    WireUuid(*tid.as_bytes())
-}
-
-fn share_coordinator_key(group: &str, tid: uuid::Uuid, partition: i32) -> String {
-    format!(
-        "{group}:{}:{partition}",
-        URL_SAFE_NO_PAD.encode(tid.as_bytes())
-    )
-}
+use crate::support::share::{coordinator_key as share_coordinator_key, wire};
 
 /// Sends one `FindCoordinator(SHARE)` for `key` and returns its row. A lookup
 /// before `__share_group_state` exists asks for the topic.
 async fn find_share_once(client: &Client, key: &str) -> Coordinator {
     let resp = client
-        .send(FindCoordinatorRequest {
-            key_type: support::KEY_TYPE_SHARE,
-            coordinator_keys: vec![key.to_string()],
-            ..Default::default()
-        })
+        .send(coordinator_lookup_request(
+            FindCoordinatorRequest::default().key,
+            support::KEY_TYPE_SHARE,
+            vec![key.to_string()],
+        ))
         .await
         .expect("FindCoordinator(SHARE)");
     let [row] = resp.coordinators.as_slice() else {
@@ -311,14 +269,7 @@ async fn persister_round_trip() {
     let tid = create_topic(&client, "round-trip").await;
 
     // Bootstrap __share_group_state, then initialize (retrying until led).
-    support::find_coordinator(
-        &client,
-        support::KEY_TYPE_SHARE,
-        &share_coordinator_key("g1", tid, 0),
-    )
-    .await;
-    let init = initialize_ready(&client, "g1", tid, 0, 0, 0).await;
-    assert!(init == 0, "initialize error: {init}");
+    initialize_partition(&client, "g1", tid, 0, (0, 0)).await;
 
     // Write an in-flight batch above the new SPSO (5).
     let w = write_state(
@@ -466,14 +417,7 @@ async fn state_survives_restart() {
         let client = connect(&broker.listen_addr().to_string()).await;
         let tid = create_topic(&client, "survives-restart").await;
 
-        support::find_coordinator(
-            &client,
-            support::KEY_TYPE_SHARE,
-            &share_coordinator_key("g1", tid, 0),
-        )
-        .await;
-        let init = initialize_ready(&client, "g1", tid, 0, 0, 0).await;
-        assert!(init == 0, "initialize error: {init}");
+        initialize_partition(&client, "g1", tid, 0, (0, 0)).await;
         let w = write_state(
             &client,
             StateWrite {
@@ -510,4 +454,22 @@ async fn state_survives_restart() {
             "recovered SPSO must be 7, got {start_offset}"
         );
     }
+}
+
+/// Resolve and initialize a share partition before its first write.
+async fn initialize_partition(
+    client: &Client,
+    group: &str,
+    tid: uuid::Uuid,
+    partition: i32,
+    (state_epoch, start_offset): (i32, i64),
+) {
+    support::find_coordinator(
+        client,
+        support::KEY_TYPE_SHARE,
+        &share_coordinator_key(group, tid, partition),
+    )
+    .await;
+    let init = initialize_ready(client, group, tid, partition, state_epoch, start_offset).await;
+    assert!(init == 0, "initialize error: {init}");
 }

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/freeze.rs" 46 27 46 32 *)
+(* #"/workspace/crates/verified/src/freeze.rs" 7 19 7 36 *)
 
 (* <freeze::FreezeScopeRank as std::clone::Clone> *)
 
@@ -11,8 +11,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FreezeScopeRank [#"/workspace/crates/verified/src/freeze.rs" 46 27 46 32]
-  (self: t_FreezeScopeRank) (return (x: t_FreezeScopeRank)) = (! bb0
+let clone_FreezeScopeRank [#"/workspace/crates/verified/src/freeze.rs" 7 19 7 36] (self: t_FreezeScopeRank)
+  (return (x: t_FreezeScopeRank)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FreezeScopeRank = Any.any_l () | & self: t_FreezeScopeRank = self ])
   [ return (result: t_FreezeScopeRank) -> (! return {result}) ]

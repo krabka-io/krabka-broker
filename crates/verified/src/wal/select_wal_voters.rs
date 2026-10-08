@@ -37,13 +37,10 @@ pub(super) fn contains(values: &[u64], value: u64) -> bool {
     false
 }
 
+open_logic! {
 /// A `(node, rack)` candidate may not become a WAL voter when its node or its
 /// rack is already used, or when only the local broker is eligible and the
 /// candidate is another broker.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 fn voter_blocked(
     candidate: (u64, u64),
     used_nodes: Seq<u64>,
@@ -56,6 +53,7 @@ fn voter_blocked(
             || (exists<j: Int> 0 <= j && j < used_racks.len() && used_racks[j] == candidate.1)
             || (require_local && candidate.0 != local_node)
     }
+}
 }
 
 /// Select the first candidate, in the caller's order, whose node and rack are
@@ -99,8 +97,7 @@ pub fn select_wal_voter_index(
 /// A repeated ID cannot vote twice through the same durable-offset map entry.
 #[ensures(result == (expected@ > 0 && voters@.len() == expected@
     && voters@[0] == local_node
-    && forall<i: Int, j: Int> 0 <= i && i < j && j < voters@.len()
-        ==> voters@[i] != voters@[j]))]
+    && crate::sequence::distinct(voters@)))]
 #[must_use]
 pub fn wal_voter_set_valid(voters: &[u64], local_node: u64, expected: usize) -> bool {
     if expected == 0 || voters.len() != expected || voters[0] != local_node {
@@ -167,8 +164,7 @@ pub fn wal_fetch_admission(
 #[ensures(result@.len() > 0 ==> result@[0].0 == local_node)]
 #[ensures(forall<i: Int> 0 <= i && i < result@.len()
     ==> exists<j: Int> 0 <= j && j < candidates@.len() && result@[i] == candidates@[j])]
-#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result@.len()
-    ==> result@[i].0 != result@[j].0 && result@[i].1 != result@[j].1)]
+#[ensures(crate::wal::placement_identities_distinct(result@))]
 #[ensures(0 < result@.len() && result@.len() < requested@ ==>
     forall<i: Int> 0 <= i && i < candidates@.len() ==>
         exists<j: Int> 0 <= j && j < result@.len()
@@ -189,8 +185,7 @@ pub fn select_wal_voters(
         ==> selected@[i].0 == nodes@[i] && selected@[i].1 == racks@[i])]
     #[invariant(forall<i: Int> 0 <= i && i < selected@.len()
         ==> exists<j: Int> 0 <= j && j < candidates@.len() && selected@[i] == candidates@[j])]
-    #[invariant(forall<i: Int, j: Int> 0 <= i && i < j && j < selected@.len()
-        ==> selected@[i].0 != selected@[j].0 && selected@[i].1 != selected@[j].1)]
+    #[invariant(crate::wal::placement_identities_distinct(selected@))]
     #[variant(requested@ - selected@.len())]
     while selected.len() < requested {
         let Some(index) = select_wal_voter_index(

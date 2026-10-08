@@ -4,7 +4,7 @@
     "Coma": {
       "vc_first_timestamp_record_index": {
         "prover": "alt-ergo",
-        "time": 0.019
+        "time": 0.031
       },
       "vc_len_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.008 }
     }

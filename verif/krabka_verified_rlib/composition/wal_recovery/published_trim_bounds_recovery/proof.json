@@ -4,28 +4,28 @@
     "Coma": {
       "vc_branch_Option_tup2_usize_i64": {
         "prover": "alt-ergo",
-        "time": 0.005
+        "time": 0.013
       },
       "vc_checkpoint_truncation_bounds_fetch": {
         "prover": "alt-ergo",
-        "time": 0.004
+        "time": 0.016
       },
       "vc_delete_records_trim_application": {
         "prover": "alt-ergo",
         "time": 0.004
       },
-      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.006 },
-      "vc_elim_Complete": { "prover": "alt-ergo", "time": 0.005 },
-      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.007 },
-      "vc_elim_TrimLocal": { "prover": "alt-ergo", "time": 0.004 },
-      "vc_elim_TrimWal": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.016 },
+      "vc_elim_Complete": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.017 },
+      "vc_elim_TrimLocal": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_elim_TrimWal": { "prover": "alt-ergo", "time": 0.013 },
       "vc_from_residual_Option_tup5_i64_i64_usize_i64_bool": {
         "prover": "alt-ergo",
-        "time": 0.005
+        "time": 0.011
       },
-      "vc_in_half_open_window": { "prover": "alt-ergo", "time": 0.006 },
-      "vc_published_trim_bounds_recovery": { "prover": "z3", "time": 0.015 },
-      "vc_truncation_frontier": { "prover": "alt-ergo", "time": 0.005 }
+      "vc_in_half_open_window": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_published_trim_bounds_recovery": { "prover": "z3", "time": 0.031 },
+      "vc_truncation_frontier": { "prover": "alt-ergo", "time": 0.013 }
     }
   }
 }

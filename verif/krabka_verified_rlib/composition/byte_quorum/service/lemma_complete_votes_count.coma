@@ -7,9 +7,9 @@ let%span sservice = "/workspace/crates/verified/src/composition/byte_quorum/serv
 let%span sservice'0 = "/workspace/crates/verified/src/composition/byte_quorum/service.rs" 8 11 8 47
 let%span sservice'1 = "/workspace/crates/verified/src/composition/byte_quorum/service.rs" 9 11 9 74
 let%span sservice'2 = "/workspace/crates/verified/src/composition/byte_quorum/service.rs" 10 10 10 81
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 181 10 181 15
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 184 8 190 9
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 175 8 175 48
 
 use creusot.int.Int64
 use seq.Seq
@@ -23,10 +23,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 173 0 173 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'1] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 187 0 187 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 182 0 182 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts

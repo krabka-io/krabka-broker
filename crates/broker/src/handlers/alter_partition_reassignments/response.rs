@@ -81,21 +81,19 @@ mod tests {
     #[test]
     fn row_builders_preserve_non_default_fields() {
         let ok = ok_row(7);
-        let expected_ok = ReassignablePartitionResponse {
+        let expected_ok = tagged_wire!(ReassignablePartitionResponse {
             partition_index: 7,
             error_code: 0,
             error_message: None,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(ok == expected_ok);
 
         let err = err_row(8, UNKNOWN_TOPIC_OR_PARTITION, "missing partition".into());
-        let expected_err = ReassignablePartitionResponse {
+        let expected_err = tagged_wire!(ReassignablePartitionResponse {
             partition_index: 8,
             error_code: UNKNOWN_TOPIC_OR_PARTITION,
             error_message: Some("missing partition".into()),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(err == expected_err);
     }
 
@@ -105,23 +103,19 @@ mod tests {
 
         let resp = whole_request_error(&req, CLUSTER_AUTHORIZATION_FAILED, "denied");
 
-        let expected = AlterPartitionReassignmentsResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(AlterPartitionReassignmentsResponse {
             allow_replication_factor_change: true,
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("denied".into()),
-            responses: vec![ReassignableTopicResponse {
+            responses: vec![tagged_wire!(ReassignableTopicResponse {
                 name: "payments".into(),
-                partitions: vec![ReassignablePartitionResponse {
+                partitions: vec![tagged_wire!(ReassignablePartitionResponse {
                     partition_index: 8,
                     error_code: CLUSTER_AUTHORIZATION_FAILED,
                     error_message: Some("denied".into()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+                })],
+            })],
+        });
         assert!(resp == expected);
     }
 }

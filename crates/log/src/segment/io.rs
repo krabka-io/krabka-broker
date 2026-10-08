@@ -56,16 +56,8 @@ pub(super) fn seek_to_log_size(file: &File, log_size: u64) -> std::io::Result<()
     Ok(())
 }
 
-pub(super) fn write_all(io: &dyn LogIo, file: &File, mut buf: &[u8]) -> std::io::Result<()> {
-    while !buf.is_empty() {
-        match io.write(file, buf) {
-            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
-            Ok(written) => buf = &buf[written..],
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
+pub(super) fn write_all(io: &dyn LogIo, file: &File, buf: &[u8]) -> std::io::Result<()> {
+    crate::io::write_all_with(buf, |remaining| io.write(file, remaining))
 }
 
 pub(super) fn write_all_vectored(
@@ -74,12 +66,8 @@ pub(super) fn write_all_vectored(
     mut bufs: &mut [IoSlice<'_>],
 ) -> std::io::Result<()> {
     while !bufs.is_empty() {
-        match io.write_vectored(file, bufs) {
-            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
-            Ok(written) => IoSlice::advance_slices(&mut bufs, written),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
+        let written = crate::io::write_progress(|| io.write_vectored(file, bufs))?;
+        IoSlice::advance_slices(&mut bufs, written);
     }
     Ok(())
 }
@@ -224,55 +212,47 @@ mod tests {
             error_kind: ErrorKind,
         }
 
-        impl LogIo for MockIo {
-            fn write(&self, _file: &File, buf: &[u8]) -> std::io::Result<usize> {
-                if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                    Err(std::io::Error::from(self.error_kind))
-                } else {
-                    Ok(buf.len())
+        impl MockIo {
+            fn new(error_kind: ErrorKind) -> Self {
+                Self {
+                    calls: std::sync::atomic::AtomicUsize::new(0),
+                    error_kind,
                 }
             }
 
-            fn write_vectored(&self, _file: &File, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
+            fn offered(&self, len: usize) -> std::io::Result<usize> {
                 if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
                     Err(std::io::Error::from(self.error_kind))
                 } else {
-                    Ok(bufs.iter().map(|b| b.len()).sum())
+                    Ok(len)
                 }
+            }
+        }
+
+        impl LogIo for MockIo {
+            fn write(&self, _file: &File, buf: &[u8]) -> std::io::Result<usize> {
+                self.offered(buf.len())
+            }
+
+            fn write_vectored(&self, _file: &File, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
+                self.offered(bufs.iter().map(|b| b.len()).sum())
             }
         }
 
         let temp = tempfile::tempdir().unwrap();
         let file = File::create(temp.path().join("test")).unwrap();
 
-        // Interrupted is retried
-        let io = MockIo {
-            calls: std::sync::atomic::AtomicUsize::new(0),
-            error_kind: ErrorKind::Interrupted,
-        };
-        assert2::check!(write_all(&io, &file, b"hello").is_ok());
+        for (error, succeeds) in [
+            (ErrorKind::Interrupted, true),       // Interrupted is retried.
+            (ErrorKind::PermissionDenied, false), // Other errors propagate.
+        ] {
+            let io = MockIo::new(error);
+            assert2::check!(write_all(&io, &file, b"hello").is_ok() == succeeds);
 
-        let io = MockIo {
-            calls: std::sync::atomic::AtomicUsize::new(0),
-            error_kind: ErrorKind::Interrupted,
-        };
-        let slice = *b"hi";
-        let mut slices = [IoSlice::new(&slice)];
-        assert2::check!(write_all_vectored(&io, &file, &mut slices).is_ok());
-
-        // Non-interrupted error propagates
-        let io = MockIo {
-            calls: std::sync::atomic::AtomicUsize::new(0),
-            error_kind: ErrorKind::PermissionDenied,
-        };
-        assert2::check!(write_all(&io, &file, b"hello").is_err());
-
-        let io = MockIo {
-            calls: std::sync::atomic::AtomicUsize::new(0),
-            error_kind: ErrorKind::PermissionDenied,
-        };
-        let slice = *b"hi";
-        let mut slices = [IoSlice::new(&slice)];
-        assert2::check!(write_all_vectored(&io, &file, &mut slices).is_err());
+            let io = MockIo::new(error);
+            let slice = *b"hi";
+            let mut slices = [IoSlice::new(&slice)];
+            assert2::check!(write_all_vectored(&io, &file, &mut slices).is_ok() == succeeds);
+        }
     }
 }

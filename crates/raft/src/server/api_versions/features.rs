@@ -88,44 +88,16 @@ pub fn finalized_feature_keys(image: &krabka_metadata::MetadataImage) -> Vec<Fin
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_metadata::{
-        FeatureLevelRecord, KRaftVersionRecord, MetadataImage, MetadataRecord,
-        metadata_version::{METADATA_VERSION_MAX, METADATA_VERSION_MIN},
-    };
+    use krabka_metadata::metadata_version::{METADATA_VERSION_MAX, METADATA_VERSION_MIN};
 
     use super::*;
 
-    fn supported(name: &str, min_version: i16, max_version: i16) -> SupportedFeatureKey {
-        SupportedFeatureKey {
-            name: name.into(),
-            min_version,
-            max_version,
-            ..Default::default()
-        }
-    }
+    krabka_macros::supported_feature_fixture!(supported);
+    krabka_macros::supported_features_fixture!(modern_supported, supported);
 
-    fn finalized(name: &str, level: i16) -> FinalizedFeatureKey {
-        FinalizedFeatureKey {
-            name: name.into(),
-            max_version_level: level,
-            min_version_level: level,
-            ..Default::default()
-        }
-    }
+    krabka_macros::finalized_feature_fixture!(finalized);
 
-    fn image(kraft_version: u16, levels: &[(&str, i16)]) -> MetadataImage {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
-            kraft_version,
-        }));
-        for (name, level) in levels {
-            image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: (*name).into(),
-                level: *level,
-            }));
-        }
-        image
-    }
+    use crate::test_support::feature_image as image;
 
     /// #783's table: below v4 only the features with a non-zero minimum stay;
     /// from v4 every feature is advertised from Kafka's minimum production
@@ -136,15 +108,10 @@ mod tests {
     fn supported_features_follow_kafkas_minimums_and_alter_level_zero() {
         use crate::UnstableFeatureVersions;
         let modern = |metadata_max, share_max| {
-            vec![
+            modern_supported(
                 supported("metadata.version", METADATA_VERSION_MIN, metadata_max),
-                supported("group.version", 0, 1),
-                supported("transaction.version", 0, 2),
-                supported("share.version", 0, share_max),
-                supported("streams.version", 0, 1),
-                supported("eligible.leader.replicas.version", 0, 1),
-                supported("kraft.version", 0, 1),
-            ]
+                share_max,
+            )
         };
         let legacy = |metadata_max| {
             vec![supported(

@@ -35,13 +35,14 @@
 //! instead, and the bounded read it blocks on gives that window twenty times
 //! its length to fire.
 
+mod support;
+
 use std::{io, net::SocketAddr, path::Path, time::Duration};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
 use krabka_broker::{
     Broker, BrokerConfig, BrokerHandle,
-    config::ListenerSpec,
     metrics::{ConnectionCloseReason, ConnectionCloseReasonLabel},
 };
 use krabka_protocol::{
@@ -50,6 +51,7 @@ use krabka_protocol::{
 };
 use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
 use krabka_units::Time;
+use support::listeners::loopback_listener;
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -67,19 +69,6 @@ fn write_pem(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, body).expect("write PEM fixture");
     path
-}
-
-/// One listener of `protocol`, bound on an OS-assigned loopback port.
-fn loopback_listener(name: &str, protocol: ListenerProtocol) -> ListenerSpec {
-    ListenerSpec {
-        name: name.to_string(),
-        bind_addr: "127.0.0.1:0".parse().expect("loopback bind address"),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }
 }
 
 /// A single-broker cluster serving one PLAINTEXT listener, plus the log

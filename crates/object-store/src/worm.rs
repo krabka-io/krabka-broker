@@ -191,7 +191,6 @@ async fn get_bucket_xml<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use tokio::io::AsyncWriteExt as _;
 
     use super::*;
 
@@ -204,48 +203,18 @@ mod tests {
 
     #[tokio::test]
     async fn requires_versioning_and_positive_compliance_retention() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            for (query, body) in [
-                (
-                    "versioning",
-                    "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>",
-                ),
-                (
-                    "object-lock",
-                    "<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Days>30</Days></DefaultRetention></Rule></ObjectLockConfiguration>",
-                ),
-            ] {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let request = crate::test_support::read_request(&mut socket).await;
-                check!(request.starts_with(&format!("GET /bucket?{query}= HTTP/1.1")));
-                check!(
-                    request
-                        .to_ascii_lowercase()
-                        .contains("authorization: aws4-hmac-sha256")
-                );
-                socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            }
-        });
-        let cfg = S3Config {
-            bucket: "bucket".into(),
-            region: "us-east-1".into(),
-            endpoint: Some(endpoint),
-            access_key_id: Some("key".into()),
-            secret_access_key: Some("secret".into()),
-            allow_http: true,
-            ..Default::default()
-        };
+        let pages = [
+            (
+                "versioning",
+                "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>",
+            ),
+            (
+                "object-lock",
+                "<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Days>30</Days></DefaultRetention></Rule></ObjectLockConfiguration>",
+            ),
+        ].into_iter().map(|(query, body)| (format!("GET /bucket?{query}= HTTP/1.1"), "200 OK", body)).collect();
+        let (endpoint, server) = crate::test_support::serve_http_pages(pages, true).await;
+        let cfg = crate::test_support::s3_config("bucket", endpoint);
 
         verify_s3_worm_bucket(&cfg).await.unwrap();
         server.await.unwrap();
@@ -341,24 +310,11 @@ mod tests {
     /// to make. Returns the endpoint to point a `GcsConfig` at, and the task
     /// to join once the check has run.
     async fn serve_bucket_policy(body: &'static str) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let request = crate::test_support::read_request(&mut socket).await;
-            check!(request.starts_with("GET /storage/v1/b/bucket?fields="));
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-        });
-        (endpoint, server)
+        crate::test_support::serve_http_pages(
+            vec![("GET /storage/v1/b/bucket?fields=".into(), "200 OK", body)],
+            false,
+        )
+        .await
     }
 
     fn gcs_cfg(endpoint: String) -> GcsConfig {

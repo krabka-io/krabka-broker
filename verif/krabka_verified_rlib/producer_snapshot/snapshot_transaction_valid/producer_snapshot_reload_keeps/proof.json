@@ -4,7 +4,7 @@
     "Coma": {
       "vc_producer_snapshot_reload_keeps": {
         "prover": "alt-ergo",
-        "time": 0.006
+        "time": 0.014
       }
     }
   }

@@ -2,16 +2,14 @@
 //! throwaway topic record to submit, and a wait for a freshly started
 //! controller to elect itself.
 
-use krabka_metadata::{MetadataRecord, TopicRecord};
+use krabka_metadata::MetadataRecord;
 use uuid::Uuid;
 
 pub(super) fn topic_record(name: &str) -> MetadataRecord {
-    MetadataRecord::V1Topic(TopicRecord {
-        name: name.into(),
-        topic_id: Uuid::new_v4(),
-        partitions: 1,
-        replication_factor: 1,
-    })
+    MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+        name,
+        Uuid::new_v4(),
+    ))
 }
 
 pub(super) async fn wait_for_controller_leader(ctrl: &krabka_raft::ControllerHandle) {

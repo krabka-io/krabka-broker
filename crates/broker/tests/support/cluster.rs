@@ -13,6 +13,45 @@ use assert2::assert;
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId};
 use tempfile::TempDir;
 
+/// Set the one-based broker and node identities without changing cluster policy.
+///
+/// # Panics
+/// Panics if the one-based index cannot be represented as a broker or node ID.
+pub fn node_config(index: usize, log_dir: &std::path::Path) -> BrokerConfig {
+    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
+    cfg.broker_id = i32::try_from(index + 1).unwrap();
+    cfg.node_id = NodeId(u64::try_from(index + 1).unwrap());
+    cfg
+}
+
+/// Advertise each controller's supplied endpoint in the original voter order.
+pub fn controller_voters(voters: &[(u64, SocketAddr)]) -> Vec<(NodeId, String)> {
+    voters
+        .iter()
+        .map(|(id, addr)| (NodeId(*id), addr.to_string()))
+        .collect()
+}
+
+/// Pair held data and controller listeners in their original node order.
+pub fn listener_pairs(
+    clients: Vec<tokio::net::TcpListener>,
+    controllers: Vec<tokio::net::TcpListener>,
+) -> impl Iterator<Item = (usize, (tokio::net::TcpListener, tokio::net::TcpListener))> {
+    clients.into_iter().zip(controllers).enumerate()
+}
+
+/// Keep broker start failures and task panics distinct while joining starts in order.
+///
+/// # Errors
+/// Returns the broker's startup error, or a Startup error when its task panics.
+pub async fn await_broker_start(
+    start: tokio::task::JoinHandle<Result<BrokerHandle, BrokerError>>,
+) -> Result<BrokerHandle, BrokerError> {
+    start
+        .await
+        .map_err(|error| BrokerError::Startup(format!("broker start task panicked: {error}")))?
+}
+
 /// Build a `BrokerConfig` for broker `i` (0-indexed) in a static `n`-voter
 /// cluster. Every broker boots in `Bootstrap` mode with the *same* configured
 /// `controller_quorum_voters` set, so each node seeds the full voter set and
@@ -25,9 +64,7 @@ fn static_voter_broker_config(
     voters: &[(u64, SocketAddr)],
     log_dir: &std::path::Path,
 ) -> BrokerConfig {
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.broker_id = i32::try_from(i + 1).unwrap();
-    cfg.node_id = NodeId(u64::try_from(i + 1).unwrap());
+    let mut cfg = crate::support::node_config(i, log_dir);
     // Bind a concrete (pre-bound) client port. The broker self-registers its
     // `advertised_listener` host:port into the controller image *before* it
     // binds its listeners and rewrites a `:0` advertised port to the real one
@@ -40,10 +77,7 @@ fn static_voter_broker_config(
     cfg.controller_listen_addr = own_controller_addr;
     cfg.directory_id = uuid::Uuid::from_u128(u128::from(cfg.node_id.0));
     cfg.bootstrap_mode = BootstrapMode::Bootstrap;
-    cfg.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, a)| (NodeId(*id), a.to_string()))
-        .collect();
+    cfg.controller_quorum_voters = crate::support::controller_voters(voters);
     cfg.auto_join = false;
     cfg.bootstrap_servers = vec![];
     cfg
@@ -105,10 +139,8 @@ pub async fn start_n_node_with(
     // alone. Spawn every broker's `start` and join them.
     let mut starts = Vec::with_capacity(n_usize);
     let mut metas: Vec<(BrokerConfig, TempDir)> = Vec::with_capacity(n_usize);
-    for (i, (data_listener, controller_listener)) in client_listeners
-        .into_iter()
-        .zip(controller_listeners)
-        .enumerate()
+    for (i, (data_listener, controller_listener)) in
+        listener_pairs(client_listeners, controller_listeners)
     {
         let dir = TempDir::new().unwrap();
         // Size the coordinator topics for the cluster, as Kafka's defaults
@@ -137,9 +169,7 @@ pub async fn start_n_node_with(
 
     let mut out: Vec<(BrokerHandle, BrokerConfig, TempDir)> = Vec::with_capacity(n_usize);
     for (handle, (cfg, dir)) in starts.into_iter().zip(metas) {
-        let broker = handle
-            .await
-            .map_err(|e| BrokerError::Startup(format!("broker start task panicked: {e}")))??;
+        let broker = await_broker_start(handle).await?;
         out.push((broker, cfg, dir));
     }
 
@@ -175,4 +205,50 @@ pub async fn start_n_node_with(
     );
 
     Ok(out)
+}
+
+/// Start the static cluster before connecting its original loopback admin client.
+///
+/// # Panics
+/// Panics if cluster startup or the client connection fails.
+pub async fn start_n_node_client(
+    n: u64,
+    client_id: &str,
+) -> (
+    Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    krabka_client_core::Client,
+) {
+    let cluster = crate::support::start_n_node(n).await.expect("start_n_node");
+    let client = crate::support::client::connect_owned(
+        format!("127.0.0.1:{}", cluster[0].1.listen_addr.port()),
+        client_id,
+        "client build",
+    )
+    .await;
+    (cluster, client)
+}
+
+/// Three brokers whose internal-topic ISR stays fixed while one broker is stopped.
+///
+/// # Panics
+/// Panics if the cluster cannot start or register its brokers.
+pub async fn fixed_internal_isr_cluster(
+    customize: impl Fn(&mut krabka_broker::BrokerConfig),
+) -> Vec<(
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerConfig,
+    tempfile::TempDir,
+)> {
+    let cluster = start_n_node_with(3, |_, config| {
+        *config = config.clone().with_internal_topics_for(3);
+        config.share_coordinator.state_topic_num_partitions = 1;
+        customize(config);
+        config.replica_lag_time_max = krabka_units::secs(30);
+        config.isr_scan_interval = krabka_units::hours(1);
+        config.heartbeat_timeout = krabka_units::minutes(10);
+    })
+    .await
+    .expect("start the cluster");
+    crate::support::wait_for_all_brokers_registered(&cluster, 3).await;
+    cluster
 }

@@ -344,17 +344,7 @@ mod tests {
             },
             Case { ..valid },
         ];
-        let image = image_with_partition(
-            &PartitionFixture {
-                partition: 7,
-                leader: 2,
-                replicas: &[2, 4, 6],
-                isr: &[2, 4],
-                leader_epoch: 9,
-                partition_epoch: 11,
-            },
-            &[(2, 20), (4, 40), (6, 60)],
-        );
+        let image = non_default_partition_image();
         let active = image.brokers().map(|broker| broker.node_id.0).collect();
         for case in cases {
             let mut changes = Vec::new();
@@ -397,19 +387,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn matching_epochs_succeed() {
-        let image = image_with(&[(1, 10), (2, 20), (3, 30)]);
-        let mut changes = Vec::new();
-        let isr = vec![bs(1, 10), bs(2, 20), bs(3, 30)];
-        let resp = handle_partition(&image, "t", 0, 5, &[], &isr, &mut changes);
-        assert!(resp.error_code == codes::NONE, "got {}", resp.error_code);
-        assert!(changes.len() == 1);
+    /// Epoch-state cases use the same current partition and admission checks.
+    macro_rules! epoch_state_case {
+        ($registrations:expr, $states:expr, $error:expr, $changes:ident) => {
+            let image = image_with($registrations);
+            let mut changes = Vec::new();
+            let isr = $states;
+            let resp = handle_partition(&image, "t", 0, 5, &[], &isr, &mut changes);
+            assert!(resp.error_code == $error, "got {}", resp.error_code);
+            epoch_state_case!(@$changes changes);
+        };
+        (@admitted $changes:ident) => { assert!($changes.len() == 1); };
+        (@refused $changes:ident) => { assert!($changes.is_empty()); };
     }
 
     #[test]
-    fn success_response_preserves_non_default_partition_fields() {
-        let image = image_with_partition(
+    fn matching_epochs_succeed() {
+        epoch_state_case!(
+            &[(1, 10), (2, 20), (3, 30)],
+            vec![bs(1, 10), bs(2, 20), bs(3, 30)],
+            codes::NONE,
+            admitted
+        );
+    }
+
+    fn non_default_partition_image() -> krabka_metadata::MetadataImage {
+        image_with_partition(
             &PartitionFixture {
                 partition: 7,
                 leader: 2,
@@ -419,11 +422,16 @@ mod tests {
                 partition_epoch: 11,
             },
             &[(2, 20), (4, 40), (6, 60)],
-        );
+        )
+    }
+
+    #[test]
+    fn success_response_preserves_non_default_partition_fields() {
+        let image = non_default_partition_image();
         let mut changes = Vec::new();
         let resp = handle_partition(&image, "t", 7, 9, &[2, 4], &[], &mut changes);
 
-        let expected = RespPartitionData {
+        let expected = tagged_wire!(RespPartitionData {
             partition_index: 7,
             error_code: codes::NONE,
             leader_id: 2,
@@ -431,8 +439,7 @@ mod tests {
             isr: vec![2, 4],
             leader_recovery_state: 0,
             partition_epoch: 12,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(resp == expected);
         assert!(changes.len() == 1);
         let MetadataRecord::V1Partition(record) = &changes[0] else {
@@ -621,17 +628,7 @@ mod tests {
 
     #[test]
     fn error_response_matches_kafkas_default_fields() {
-        let image = image_with_partition(
-            &PartitionFixture {
-                partition: 7,
-                leader: 2,
-                replicas: &[2, 4, 6],
-                isr: &[2, 4],
-                leader_epoch: 9,
-                partition_epoch: 11,
-            },
-            &[(2, 20), (4, 40), (6, 60)],
-        );
+        let image = non_default_partition_image();
         let mut changes = Vec::new();
         let resp = handle_partition(&image, "t", 7, 8, &[2, 4], &[], &mut changes);
 
@@ -649,7 +646,7 @@ mod tests {
         let image = image_with(&[(1, 10), (2, 20), (3, 30)]);
         let mut changes = Vec::new();
         let resp = handle_partition(&image, "t", 0, 5, &[1, 2], &[bs(3, 30)], &mut changes);
-        let expected = RespPartitionData {
+        let expected = tagged_wire!(RespPartitionData {
             partition_index: 0,
             error_code: codes::NONE,
             leader_id: 1,
@@ -657,8 +654,7 @@ mod tests {
             isr: vec![1, 2],
             leader_recovery_state: 0,
             partition_epoch: 1,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(resp == expected);
         assert!(changes.len() == 1);
         let MetadataRecord::V1Partition(record) = &changes[0] else {
@@ -669,40 +665,35 @@ mod tests {
 
     #[test]
     fn stale_epoch_is_ineligible() {
-        let image = image_with(&[(1, 10), (2, 20), (3, 30)]);
-        let mut changes = Vec::new();
-        let isr = vec![bs(1, 10), bs(2, 20), bs(3, 29)]; // 29 != image 30
-        let resp = handle_partition(&image, "t", 0, 5, &[], &isr, &mut changes);
-        assert!(
-            resp.error_code == codes::INELIGIBLE_REPLICA,
-            "got {}",
-            resp.error_code
+        // 29 disagrees with broker 3's registered epoch 30.
+        epoch_state_case!(
+            &[(1, 10), (2, 20), (3, 30)],
+            vec![bs(1, 10), bs(2, 20), bs(3, 29)],
+            codes::INELIGIBLE_REPLICA,
+            refused
         );
-        assert!(changes.is_empty());
     }
 
     #[test]
     fn unregistered_replica_is_ineligible() {
-        let image = image_with(&[(1, 10), (2, 20)]); // broker 3 never registered
-        let mut changes = Vec::new();
-        let isr = vec![bs(1, 10), bs(2, 20), bs(3, -1)];
-        let resp = handle_partition(&image, "t", 0, 5, &[], &isr, &mut changes);
-        assert!(
-            resp.error_code == codes::INELIGIBLE_REPLICA,
-            "got {}",
-            resp.error_code
+        // Broker 3 was never registered.
+        epoch_state_case!(
+            &[(1, 10), (2, 20)],
+            vec![bs(1, 10), bs(2, 20), bs(3, -1)],
+            codes::INELIGIBLE_REPLICA,
+            refused
         );
-        assert!(changes.is_empty());
     }
 
     #[test]
     fn sentinel_epoch_skips_epoch_check() {
-        let image = image_with(&[(1, 10), (2, 20), (3, 30)]);
-        let mut changes = Vec::new();
-        let isr = vec![bs(1, -1), bs(2, -1), bs(3, -1)]; // -1 = don't check
-        let resp = handle_partition(&image, "t", 0, 5, &[], &isr, &mut changes);
-        assert!(resp.error_code == codes::NONE, "got {}", resp.error_code);
-        assert!(changes.len() == 1);
+        // -1 skips the epoch comparison.
+        epoch_state_case!(
+            &[(1, 10), (2, 20), (3, 30)],
+            vec![bs(1, -1), bs(2, -1), bs(3, -1)],
+            codes::NONE,
+            admitted
+        );
     }
 
     /// A v2 request carries no broker epochs, so none is compared, but every

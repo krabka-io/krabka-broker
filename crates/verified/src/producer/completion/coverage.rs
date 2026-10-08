@@ -1,6 +1,6 @@
 use creusot_std::prelude::*;
 
-use super::completion_offset;
+use super::{completion_offset, five_completions_above};
 
 mod order;
 mod witness;
@@ -41,12 +41,10 @@ pub(super) fn lemma_identity_window(selected: Seq<usize>) -> bool {
     completion_offset(ends, incoming, selected[i]@) < completion_offset(ends, incoming, selected[j]@)))]
 #[ensures(result ==> (forall<i: Int> 0 <= i && i < ends.len()
     && !(exists<j: Int> 0 <= j && j < selected.len() && selected[j]@ == i) ==>
-        selected.len() == 5 && (forall<j: Int> 0 <= j && j < selected.len() ==>
-            ends[i]@ < completion_offset(ends, incoming, selected[j]@))))]
+        five_completions_above(ends, incoming, selected, ends[i]@)))]
 #[ensures(result ==> (!(exists<j: Int> 0 <= j && j < selected.len()
     && completion_offset(ends, incoming, selected[j]@) == incoming@) ==>
-        selected.len() == 5 && (forall<j: Int> 0 <= j && j < selected.len() ==>
-            incoming@ < completion_offset(ends, incoming, selected[j]@))))]
+        five_completions_above(ends, incoming, selected, incoming@)))]
 pub(super) fn lemma_inserted_window(
     ends: Seq<i64>,
     incoming: i64,

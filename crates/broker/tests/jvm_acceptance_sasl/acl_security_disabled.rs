@@ -24,11 +24,7 @@ use std::collections::BTreeSet;
 
 use assert2::assert;
 
-use crate::{
-    acl_output::parse_acls,
-    jvm_acceptance::{broker0_advertised, nc_check_connectivity, start_host_broker},
-    oracle::{CliRun, Oracle, Side},
-};
+use crate::{acl_output::parse_acls, oracle::CliRun};
 
 /// The package every Kafka client-facing exception is rendered under. The
 /// tool's stack trace names the class by this path, on both sides.
@@ -63,17 +59,8 @@ fn kafka_errors(run: &CliRun) -> BTreeSet<String> {
 async fn acl_list_is_refused_as_apache_kafka_refuses_it_with_no_authorizer() {
     // No `KAFKA_AUTHORIZER_CLASS_NAME`: this oracle is the unsecured broker
     // the case is about, which is also the image's own default.
-    let oracle = tokio::task::spawn_blocking(|| Oracle::start("acls-disabled"))
-        .await
-        .expect("oracle boot");
-    let oracle_side = Side::Oracle(&oracle);
-
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-    let advertised = broker0_advertised().to_owned();
-    let krabka_side = Side::Krabka {
-        bootstrap: &advertised,
-    };
+    let comparison = crate::oracle::OracleComparison::start("acls-disabled").await;
+    let [oracle_side, krabka_side] = comparison.sides();
 
     let mut refusals: Vec<BTreeSet<String>> = Vec::new();
     for side in [&oracle_side, &krabka_side] {
@@ -109,5 +96,5 @@ async fn acl_list_is_refused_as_apache_kafka_refuses_it_with_no_authorizer() {
         "krabka and Apache Kafka refuse --list differently: {refusals:?}",
     );
 
-    broker.shutdown().await;
+    comparison.broker.shutdown().await;
 }

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/transaction.rs" 58 27 58 32 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 20 19 20 36 *)
 
 (* <transaction::TransactionMarkerPartitionState as std::clone::Clone> *)
 
@@ -15,7 +15,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TransactionMarkerPartitionState [#"/workspace/crates/verified/src/transaction.rs" 58 27 58 32]
+let clone_TransactionMarkerPartitionState [#"/workspace/crates/verified/src/transaction.rs" 20 19 20 36]
   (self: t_TransactionMarkerPartitionState) (return (x: t_TransactionMarkerPartitionState)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TransactionMarkerPartitionState = Any.any_l () | & self: t_TransactionMarkerPartitionState = self ])

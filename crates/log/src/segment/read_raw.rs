@@ -116,6 +116,20 @@ impl Segment {
         )
     }
 
+    pub(super) fn raw_start_position(
+        &self,
+        fetch_offset: Offset,
+        limit_offset: Offset,
+        operation: &str,
+    ) -> Result<Option<u64>, LogError> {
+        if fetch_offset > self.last_offset || fetch_offset >= limit_offset {
+            return Ok(None);
+        }
+        let target_rel = u32::try_from((fetch_offset.0 - self.base_offset.0).max(0))
+            .map_err(|_| LogError::Corrupt(format!("{operation} target offset out of range")))?;
+        self.read_start_position(target_rel).map(Some)
+    }
+
     pub(crate) fn read_raw_with_buffer_cap(
         &self,
         fetch_offset: Offset,
@@ -123,12 +137,10 @@ impl Segment {
         max_size: ByteSize,
         read_buffer_cap: ByteSize,
     ) -> Result<RawSegmentRead, LogError> {
-        if fetch_offset > self.last_offset || fetch_offset >= limit_offset {
+        let Some(start_pos) = self.raw_start_position(fetch_offset, limit_offset, "read_raw")?
+        else {
             return Ok(RawSegmentRead::empty());
-        }
-        let target_rel = u32::try_from((fetch_offset.0 - self.base_offset.0).max(0))
-            .map_err(|_| LogError::Corrupt("read_raw target offset out of range".into()))?;
-        let start_pos = self.read_start_position(target_rel)?;
+        };
 
         // Below this line the budget indexes into a byte buffer, so it
         // crosses back to `usize` once, here.
@@ -172,7 +184,7 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        DENSE_INDEX, NO_LIMIT, sample_batch, test_batch_at, test_segment,
+        DENSE_INDEX, NO_LIMIT, sample_batch, seeded_segment, test_batch_at, test_segment,
     };
 
     /// A fetch reads nothing when it starts past the segment, and nothing when
@@ -181,8 +193,13 @@ mod tests {
     #[test]
     fn a_fetch_past_the_segment_or_at_the_limit_reads_nothing() {
         let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-        seg.append(&sample_batch(0, 3, 100), DENSE_INDEX).unwrap(); // offsets 0..=2
+        let seg = seeded_segment(
+            dir.path(),
+            0,
+            &[
+                (0, 3, 100), // offsets 0..=2
+            ],
+        );
 
         let past = seg.read_raw(Offset(3), Offset(99), NO_LIMIT).unwrap();
         check!(past.is_empty(), "a fetch past the last offset");
@@ -202,8 +219,7 @@ mod tests {
     /// out of the middle of a record.
     #[test]
     fn a_fetch_mid_segment_steps_over_the_batches_before_it() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (_dir, mut seg) = crate::segment::test_support::test_segment();
         // A sparse index, so only the first batch gets an entry and the lookup
         // lands at the segment head. The walk then has to step over the two
         // batches before the one asked for -- with a dense index it would jump
@@ -232,8 +248,7 @@ mod tests {
     /// reading from anywhere else returns a different batch, or nothing.
     #[test]
     fn a_batch_too_large_for_the_first_read_is_fetched_from_its_own_position() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (_dir, mut seg) = crate::segment::test_support::test_segment();
         for i in 0..4i64 {
             seg.append(&sample_batch(i * 2, 2, 100 + i), DENSE_INDEX)
                 .unwrap();
@@ -254,8 +269,7 @@ mod tests {
     #[test]
     fn batch_too_large_with_nonzero_start_pos_and_pos() {
         let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-        seg.append(&sample_batch(0, 2, 100), DENSE_INDEX).unwrap();
+        let mut seg = seeded_segment(dir.path(), 0, &[(0, 2, 100)]);
         let p1 = seg.log_size;
         seg.append(&sample_batch(2, 2, 200), DENSE_INDEX).unwrap();
         let b1_len = seg.log_size - p1;
@@ -274,8 +288,7 @@ mod tests {
     /// small budget returns fewer batches than an unlimited one.
     #[test]
     fn the_byte_budget_bounds_how_much_a_fetch_returns() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (_dir, mut seg) = crate::segment::test_support::test_segment();
         for i in 0..6i64 {
             seg.append(&sample_batch(i * 2, 2, 100 + i), DENSE_INDEX)
                 .unwrap();

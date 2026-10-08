@@ -375,6 +375,22 @@ async fn seed_returning_broker(
     (handle, broker, dir)
 }
 
+async fn assert_returning_broker_withdrawal(min_isr: &str, check_initial: bool) {
+    let (handle, broker, _dir) = seed_returning_broker(min_isr).await;
+    if check_initial {
+        // Broker 3 is explicitly fenced so its returning incarnation is
+        // deterministic even when coverage instrumentation delays the test.
+        assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2, 3], &[]));
+    }
+    register_broker_3(&broker, 2).await;
+    assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2], &[]));
+    // Every later derivation still excludes broker 3 while allowing broker 2,
+    // which left an ISR whose log was never called into question.
+    alter_isr(&broker, &[1]).await;
+    assert!(describe_partition(&broker).await == offline_followers_row(&[1], &[2]));
+    handle.shutdown().await;
+}
+
 /// krabka-io/krabka-broker#314: a broker that comes back under a new
 /// incarnation must not be re-derived into the ELR from the ISR the image
 /// still holds it in.
@@ -391,26 +407,7 @@ async fn seed_returning_broker(
 /// is the whole point of KIP-966.
 #[tokio::test]
 async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
-    let (handle, broker, _dir) = seed_returning_broker("2").await;
-
-    // Broker 3 is registered and in a healthy ISR, so nothing is published
-    // about it. It is explicitly fenced so the returning incarnation is
-    // deterministic even when coverage instrumentation delays this test.
-    assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2, 3], &[]));
-
-    register_broker_3(&broker, 2).await;
-
-    // The registration itself takes broker 3 out of the ISR. The ISR that is
-    // left still meets `min.insync.replicas`, so nothing is eligible yet.
-    assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2], &[]));
-
-    // The change that used to re-derive the membership. Broker 2 left an ISR
-    // that met min ISR, so it is eligible; broker 3 is no longer in any ISR
-    // the derivation reads, so it is not.
-    alter_isr(&broker, &[1]).await;
-    assert!(describe_partition(&broker).await == offline_followers_row(&[1], &[2]));
-
-    handle.shutdown().await;
+    assert_returning_broker_withdrawal("2", true).await;
 }
 
 /// The same defect one step earlier: with `min.insync.replicas` at the
@@ -428,18 +425,7 @@ async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
 /// process actually has.
 #[tokio::test]
 async fn the_registration_batch_cannot_publish_the_broker_it_is_withdrawing() {
-    let (handle, broker, _dir) = seed_returning_broker("3").await;
-
-    register_broker_3(&broker, 2).await;
-
-    assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2], &[]));
-
-    // And it stays out of every later derivation, while broker 2 -- which
-    // left the ISR without its log being called into question -- goes in.
-    alter_isr(&broker, &[1]).await;
-    assert!(describe_partition(&broker).await == offline_followers_row(&[1], &[2]));
-
-    handle.shutdown().await;
+    assert_returning_broker_withdrawal("3", false).await;
 }
 
 /// The state the controller publishes is an ordinary `V1TopicConfig`, so a

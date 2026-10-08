@@ -229,38 +229,16 @@ mod tests {
 
     use assert2::assert;
     use krabka_log::{Offset, ProducerId};
-    use krabka_protocol::records::{Attributes, Record, RecordBatch};
+    use krabka_protocol::records::{Record, RecordBatch};
 
     use super::{CommittedOffsets, checked_batch_advance, scan_pending_offset_entries};
-    use crate::coordinator::{persistence::OffsetCommitValue, unified::classic_state::OffsetEntry};
-
-    fn entry(offset: i64) -> OffsetEntry {
-        OffsetEntry {
-            offset: Offset(offset),
-            leader_epoch: -1,
-            metadata: String::new(),
-            commit_timestamp_ms: 0,
-            expire_timestamp_ms: None,
-            topic_id: None,
-        }
-    }
+    use crate::coordinator::{
+        persistence::OffsetCommitValue,
+        test_support::{offset_entry as entry, replay_offset_batch},
+    };
 
     fn commit(group: &str, topic: &str, partition: i32, offset: i64) -> Record {
-        Record {
-            key: Some(OffsetCommitValue::encode_key(group, topic, partition).unwrap()),
-            value: Some(
-                OffsetCommitValue {
-                    offset: Offset(offset),
-                    leader_epoch: -1,
-                    metadata: String::new(),
-                    commit_timestamp_ms: 0,
-                    expire_timestamp_ms: None,
-                    topic_id: None,
-                }
-                .encode_value(),
-            ),
-            ..Default::default()
-        }
+        crate::coordinator::test_support::offset_record(group, topic, partition, offset)
     }
 
     fn tombstone(group: &str, topic: &str, partition: i32) -> Record {
@@ -272,22 +250,7 @@ mod tests {
     }
 
     fn batch(transactional: bool, records: Vec<Record>) -> RecordBatch {
-        let records: Vec<Record> = records
-            .into_iter()
-            .zip(0..)
-            .map(|(record, offset_delta)| Record {
-                offset_delta,
-                ..record
-            })
-            .collect();
-        RecordBatch {
-            producer_id: if transactional { 7 } else { -1 },
-            producer_epoch: if transactional { 0 } else { -1 },
-            attributes: Attributes::default().with_transactional(transactional),
-            last_offset_delta: i32::try_from(records.len()).unwrap() - 1,
-            records,
-            ..RecordBatch::default()
-        }
+        replay_offset_batch(transactional.then_some(7), records)
     }
 
     /// Kafka's `OffsetMetadataManager.replay` removes a key from every open

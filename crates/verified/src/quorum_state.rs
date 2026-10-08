@@ -1,19 +1,17 @@
 //! `KRaft` quorum-state persistence admission.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::ensures;
 #[cfg(creusot)]
 use creusot_std::prelude::{DeepModel, logic};
 
-/// Whether an in-memory quorum state can be represented exactly by Kafka's
-/// signed, versioned JSON fields.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum QuorumStateWriteDecision {
-    Reject,
-    Accept,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Whether an in-memory quorum state can be represented exactly by Kafka's
+    /// signed, versioned JSON fields.
+    pub enum QuorumStateWriteDecision {
+        Reject,
+        Accept,
+    }
 }
 
 /// The in-memory quorum state has an exact representation in Kafka's
@@ -77,13 +75,14 @@ pub fn quorum_state_write_decision(
     }
 }
 
-/// How a parsed quorum-state record may restore the durable vote.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum QuorumStateLoadDecision {
-    Reject,
-    RestoreNoVote,
-    RestoreVote,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// How a parsed quorum-state record may restore the durable vote.
+    pub enum QuorumStateLoadDecision {
+        Reject,
+        RestoreNoVote,
+        RestoreVote,
+    }
 }
 
 /// Admit only schema v0 or v1 records with a nonnegative term, the exact vote

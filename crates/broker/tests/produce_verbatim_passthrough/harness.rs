@@ -6,22 +6,25 @@
 //! every scenario needs the same batch shape; only the codec, the record count,
 //! and the producer identity differ between them.
 
-use std::time::{Duration, Instant};
-
 use assert2::assert;
 use bytes::Bytes;
 use krabka_compression::CompressionType;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
+        fetch_request::FetchRequest,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
+    records::{RecordBatch, RecordsPayload},
 };
 
 pub use crate::support::topic_id_for;
+use crate::support::{
+    client::connect_client,
+    fetch::{fetch_partition, single_partition_fetch},
+    produce::single_partition_produce,
+    records::value_record,
+};
 
 /// Build a single v2 `RecordBatch` that carries `n` copies of `value`, with the
 /// given codec. The encoder compresses the body when the codec is not `None`.
@@ -34,11 +37,10 @@ pub fn batch(codec: CompressionType, n: usize, value: &[u8]) -> RecordBatch {
     };
     b.attributes = b.attributes.with_compression(codec);
     for i in 0..n {
-        b.records.push(Record {
-            offset_delta: i32::try_from(i).unwrap(),
-            value: Some(Bytes::copy_from_slice(value)),
-            ..Default::default()
-        });
+        b.records.push(value_record(
+            i32::try_from(i).unwrap(),
+            Some(Bytes::copy_from_slice(value)),
+        ));
     }
     b
 }
@@ -62,25 +64,7 @@ pub async fn create_topic(broker: &krabka_broker::BrokerHandle, bootstrap: &str,
     create_topic_with_configs(broker, bootstrap, name, vec![]).await;
 }
 
-pub async fn wait_for_compression(
-    broker: &krabka_broker::BrokerHandle,
-    topic: &str,
-    expected: Option<CompressionType>,
-) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Some(cfg) = broker.partition_log_config_for_test(topic, 0)
-            && cfg.compression_type == expected
-        {
-            return;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "compression_type={expected:?} never propagated to partition LogConfig within 10s"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
+pub use crate::support::partitions::wait_for_compression;
 
 pub async fn create_topic_with_configs(
     broker: &krabka_broker::BrokerHandle,
@@ -88,20 +72,15 @@ pub async fn create_topic_with_configs(
     name: &str,
     configs: Vec<CreatableTopicConfig>,
 ) {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.to_string(), None).await;
     let resp = client
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
+            topics: vec![crate::support::topics::creatable_topic_with_configs(
+                name.into(),
+                1,
+                1,
                 configs,
-                ..Default::default()
-            }],
+            )],
             timeout_ms: 5_000,
             ..Default::default()
         })
@@ -141,21 +120,13 @@ pub async fn produce_payload(
     records: RecordsPayload,
 ) -> Result<i64, i16> {
     let resp = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(records),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            topic,
+            topic_id,
+            0,
+            Some(records),
+            (1, 5_000),
+        ))
         .await
         .expect("Produce");
     let pr = &resp.responses[0].partition_responses[0];
@@ -183,21 +154,12 @@ pub async fn fetch_first_batch(
     let resp = client
         .send(FetchRequest {
             replica_id: -1,
-            max_wait_ms: 1_000,
-            min_bytes: 1,
-            max_bytes: 8 << 20,
-            topics: vec![FetchTopic {
-                topic: topic.into(),
+            ..single_partition_fetch(
+                topic,
                 topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 8 << 20,
-                    ..FetchPartition::default()
-                }],
-                ..FetchTopic::default()
-            }],
-            ..FetchRequest::default()
+                fetch_partition(0, 0, 8 << 20),
+                (1_000, 1, 8 << 20),
+            )
         })
         .await
         .expect("Fetch");

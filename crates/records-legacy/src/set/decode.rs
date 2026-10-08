@@ -162,17 +162,11 @@ mod tests {
         assert2::check!(size_of_slice(&[0u8; 4096]) == kibibytes(4));
     }
 
+    krabka_macros::legacy_policy_fixture!(policy_wire, crate);
+
     #[test]
     fn decompression_policy_limits_legacy_decode() {
-        let records = vec![ParsedRecord {
-            offset: Offset(0),
-            timestamp: Some(1),
-            key: None,
-            value: Some(Bytes::from(vec![b'x'; 4096])),
-        }];
-        let mut wire = BytesMut::new();
-        encode_compressed_message_set(&records, Magic::V1, CompressionType::Lz4, &mut wire)
-            .unwrap();
+        let wire = policy_wire();
 
         decode_message_set(&mut &wire[..], wire.len()).unwrap();
 
@@ -249,29 +243,26 @@ mod tests {
         assert2::assert!(matches!(err, LegacyRecordsError::Truncated { needed: 4 }));
     }
 
+    fn entry_error(size: i32, trailing: &[u8]) -> LegacyRecordsError {
+        let mut data = BytesMut::new();
+        data.put_i64(0);
+        data.put_i32(size);
+        data.put_slice(trailing);
+        decode_message_set(&mut &data[..], data.len()).unwrap_err()
+    }
+
     #[test]
     fn entry_zero_message_size_is_malformed() {
         // offset(8) + size(0): clears the `< 12` and `size < 0` guards, then
         // Message::decode_from rejects the 0-byte frame as Malformed (< 6).
         // Distinguishes the `<` boundaries from `<=`/`==`.
-        let mut data = BytesMut::new();
-        data.put_i64(0);
-        data.put_i32(0);
-        let n = data.len();
-        let mut cur: &[u8] = &data[..];
-        let err = decode_message_set(&mut cur, n).unwrap_err();
+        let err = entry_error(0, &[]);
         assert2::assert!(matches!(err, LegacyRecordsError::Malformed(_)));
     }
 
     #[test]
     fn entry_negative_message_size_rejected() {
-        let mut data = BytesMut::new();
-        data.put_i64(0);
-        data.put_i32(-1);
-        data.put_slice(&[0u8; 4]); // keep region >= 12 bytes
-        let n = data.len();
-        let mut cur: &[u8] = &data[..];
-        let err = decode_message_set(&mut cur, n).unwrap_err();
+        let err = entry_error(-1, &[0u8; 4]); // keep region >= 12 bytes
         assert2::assert!(matches!(
             err,
             LegacyRecordsError::NegativeLength {
@@ -285,13 +276,7 @@ mod tests {
     fn entry_message_body_truncated_reports_needed() {
         // Entry claims a 10-byte message but only 2 bytes follow:
         // needed = 10 - 2 = 8.
-        let mut data = BytesMut::new();
-        data.put_i64(0);
-        data.put_i32(10);
-        data.put_slice(&[0u8; 2]);
-        let n = data.len();
-        let mut cur: &[u8] = &data[..];
-        let err = decode_message_set(&mut cur, n).unwrap_err();
+        let err = entry_error(10, &[0u8; 2]);
         assert2::assert!(matches!(err, LegacyRecordsError::Truncated { needed: 8 }));
     }
 
@@ -307,10 +292,9 @@ mod tests {
             key: None,
             value: Some(Bytes::from(big.clone())),
         }];
-        let mut buf = BytesMut::new();
-        encode_compressed_message_set(&recs, Magic::V1, CompressionType::Gzip, &mut buf).unwrap();
-        let mut cur: &[u8] = &buf[..];
-        let decoded = decode_message_set(&mut cur, buf.len()).unwrap();
+        let buf =
+            crate::set::test_support::compressed_bytes(&recs, Magic::V1, CompressionType::Gzip);
+        let decoded = crate::set::test_support::decode_bytes(&buf);
         assert2::assert!(decoded == recs);
     }
 
@@ -344,8 +328,7 @@ mod tests {
         ];
         encode_compressed_message_set(&inner, Magic::V1, CompressionType::Gzip, &mut buf).unwrap();
 
-        let mut cur: &[u8] = &buf[..];
-        let decoded = decode_message_set(&mut cur, buf.len()).unwrap();
+        let decoded = crate::set::test_support::decode_bytes(&buf);
         let expected = std::iter::once(flat).chain(inner).collect::<Vec<_>>();
         assert2::assert!(decoded == expected);
     }

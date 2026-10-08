@@ -216,6 +216,19 @@ impl RemoteLogSegmentMetadata {
         &self.segment_leader_epochs
     }
 
+    /// The first offset of `epoch` and the earliest offset belonging to a later epoch.
+    #[must_use]
+    pub fn epoch_bounds(&self, epoch: LeaderEpoch) -> (Option<i64>, Option<i64>) {
+        let start = self.segment_leader_epochs.get(&epoch).copied();
+        let next = self
+            .segment_leader_epochs
+            .iter()
+            .filter(|(candidate, _)| **candidate > epoch)
+            .map(|(_, start)| *start)
+            .min();
+        (start, next)
+    }
+
     /// Attaches custom metadata in builder style. RSM copy paths use it when
     /// they produce a key before they record `CopySegmentFinished`.
     #[must_use]
@@ -274,6 +287,30 @@ mod tests {
         maplit::btreemap! {LeaderEpoch(0) => 0}
     }
 
+    fn metadata_range(
+        start: i64,
+        end: i64,
+        leader_epochs: BTreeMap<LeaderEpoch, i64>,
+    ) -> Result<RemoteLogSegmentMetadata, RemoteStorageError> {
+        RemoteLogSegmentMetadata::new(
+            seg_id(),
+            start,
+            end,
+            123,
+            1,
+            456,
+            crate::metadata::RemoteLogSegmentDetails::new(
+                1024,
+                RemoteLogSegmentState::CopySegmentStarted,
+                leader_epochs,
+            ),
+        )
+    }
+
+    fn started_metadata() -> RemoteLogSegmentMetadata {
+        metadata_range(0, 10, epochs()).unwrap()
+    }
+
     #[test]
     fn accessors_return_constructed_values() {
         // max_timestamp_ms / segment_size_in_bytes accessors were never read
@@ -298,58 +335,19 @@ mod tests {
 
     #[test]
     fn metadata_rejects_empty_leader_epochs() {
-        let err = RemoteLogSegmentMetadata::new(
-            seg_id(),
-            0,
-            10,
-            123,
-            1,
-            456,
-            crate::metadata::RemoteLogSegmentDetails::new(
-                1024,
-                RemoteLogSegmentState::CopySegmentStarted,
-                BTreeMap::new(),
-            ),
-        )
-        .unwrap_err();
+        let err = metadata_range(0, 10, BTreeMap::new()).unwrap_err();
         assert!(matches!(err, RemoteStorageError::InvalidArgument(_)));
     }
 
     #[test]
     fn metadata_rejects_end_before_start() {
-        let err = RemoteLogSegmentMetadata::new(
-            seg_id(),
-            10,
-            5,
-            123,
-            1,
-            456,
-            crate::metadata::RemoteLogSegmentDetails::new(
-                1024,
-                RemoteLogSegmentState::CopySegmentStarted,
-                epochs(),
-            ),
-        )
-        .unwrap_err();
+        let err = metadata_range(10, 5, epochs()).unwrap_err();
         assert!(matches!(err, RemoteStorageError::InvalidArgument(_)));
     }
 
     #[test]
     fn with_update_advances_state_and_fields() {
-        let started = RemoteLogSegmentMetadata::new(
-            seg_id(),
-            0,
-            10,
-            123,
-            1,
-            456,
-            crate::metadata::RemoteLogSegmentDetails::new(
-                1024,
-                RemoteLogSegmentState::CopySegmentStarted,
-                epochs(),
-            ),
-        )
-        .unwrap();
+        let started = started_metadata();
         let update = RemoteLogSegmentMetadataUpdate {
             remote_log_segment_id: seg_id(),
             event_timestamp_ms: 789,
@@ -369,21 +367,7 @@ mod tests {
 
     #[test]
     fn with_update_keeps_custom_metadata_when_update_omits_it() {
-        let started = RemoteLogSegmentMetadata::new(
-            seg_id(),
-            0,
-            10,
-            123,
-            1,
-            456,
-            crate::metadata::RemoteLogSegmentDetails::new(
-                1024,
-                RemoteLogSegmentState::CopySegmentStarted,
-                epochs(),
-            ),
-        )
-        .unwrap()
-        .with_custom_metadata(CustomMetadata(vec![9]));
+        let started = started_metadata().with_custom_metadata(CustomMetadata(vec![9]));
         let update = RemoteLogSegmentMetadataUpdate {
             remote_log_segment_id: seg_id(),
             event_timestamp_ms: 789,
@@ -397,20 +381,7 @@ mod tests {
 
     #[test]
     fn with_update_rejects_invalid_transition() {
-        let started = RemoteLogSegmentMetadata::new(
-            seg_id(),
-            0,
-            10,
-            123,
-            1,
-            456,
-            crate::metadata::RemoteLogSegmentDetails::new(
-                1024,
-                RemoteLogSegmentState::CopySegmentStarted,
-                epochs(),
-            ),
-        )
-        .unwrap();
+        let started = started_metadata();
         let update = RemoteLogSegmentMetadataUpdate {
             remote_log_segment_id: seg_id(),
             event_timestamp_ms: 789,
@@ -427,20 +398,7 @@ mod tests {
 
     #[test]
     fn with_update_rejects_mismatched_id() {
-        let started = RemoteLogSegmentMetadata::new(
-            seg_id(),
-            0,
-            10,
-            123,
-            1,
-            456,
-            crate::metadata::RemoteLogSegmentDetails::new(
-                1024,
-                RemoteLogSegmentState::CopySegmentStarted,
-                epochs(),
-            ),
-        )
-        .unwrap();
+        let started = started_metadata();
         let other = RemoteLogSegmentId::new(tp(), Uuid::from_u128(1234));
         let update = RemoteLogSegmentMetadataUpdate {
             remote_log_segment_id: other,

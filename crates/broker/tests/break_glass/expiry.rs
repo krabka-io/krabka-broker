@@ -14,7 +14,7 @@ use crate::{
     cluster::boot,
     principals::{ALICE, BOB, CAROL},
     proposals::{ACTION_DELETE_TOPIC, approve, now_ms, propose, stored},
-    topics::{create_topic, delete_topic, topic_exists},
+    topics::{delete_topic, topic_exists},
 };
 
 /// Sleep until the wall clock is past `expires_at_ms`.
@@ -40,11 +40,8 @@ async fn sleep_past(expires_at_ms: i64) {
 /// image.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_expired_proposal_authorizes_nothing() {
-    let cluster = boot().await;
-    let alice = cluster.client(ALICE).await;
-    let bob = cluster.client(BOB).await;
-    let carol = cluster.client(CAROL).await;
-    create_topic(&alice, "doomed", 1).await;
+    crate::cluster::client_fixture!(cluster = boot();
+        alice => ALICE, bob => BOB, carol => CAROL; topic(alice, "doomed", 1));
 
     // The approve path. Nobody approved it before it ran out.
     let short = propose(&alice, ACTION_DELETE_TOPIC, "doomed", 500).await;

@@ -27,12 +27,10 @@ fn delivery_replication_and_restore_composition_boundaries() {
         lso: 6,
         deliverable: 6,
     };
-    for (batches, activations) in [
-        (&[(0, 1), (2, 1), (4, 1)][..], &[0, 100, 0][..]),
-        (&[(0, 1), (4, 1)][..], &[10, 20][..]),
+    for (batches, activations) in super::VALID_SCHEDULES.into_iter().chain([
         (&[(0, -1)][..], &[10][..]),
         (&[(0, 1), (1, 1)][..], &[10, 20][..]),
-    ] {
+    ]) {
         for (uncertainty, now) in [(-1, 100), (0, 0), (0, 100), (2, 100), (i64::MAX, i64::MAX)] {
             let result = scheduled_prefix_bounds_fetch(batches, activations, uncertainty, now, w);
             assert!(

@@ -122,25 +122,14 @@ fn decode_subscribed_topics(metadata: &[u8]) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use bytes::{BufMut as _, Bytes};
-    use krabka_protocol::Encode as _;
+    use bytes::Bytes;
 
     use super::*;
     use crate::coordinator::unified::{
+        actor::test_support::subscription_blob_at as subscription,
         classic_state::Member as ClassicMember,
         consumer_state::{ResolvedRegularExpression, test_support::member},
     };
-
-    fn subscription(version: i16, topics: &[&str]) -> Bytes {
-        let sub = ConsumerProtocolSubscription {
-            topics: topics.iter().map(|s| (*s).to_string()).collect(),
-            ..Default::default()
-        };
-        let mut out = bytes::BytesMut::new();
-        out.put_i16(version);
-        sub.encode(&mut out, version).unwrap();
-        out.freeze()
-    }
 
     fn named(topics: &[&str]) -> SubscribedTopics {
         SubscribedTopics::Named(topics.iter().map(|s| (*s).to_string()).collect())

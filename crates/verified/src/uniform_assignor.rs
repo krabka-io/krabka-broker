@@ -11,43 +11,37 @@
 //! heterogeneous builder. The host in `krabka-broker` owns the partition
 //! bookkeeping around them.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// Kafka's floor-and-remainder split of a partition total over the members.
-#[cfg_attr(creusot, derive(Clone, Copy))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct UniformQuotaSplit {
-    /// `minimumMemberQuota`: every member gets at least this many partitions.
-    pub minimum_quota: usize,
-    /// `remainingMembersToGetAnExtraPartition`: this many members get one
-    /// partition more than `minimum_quota`.
-    pub extra_quotas: usize,
-}
+model_types! {
+    @copy_only
+    /// Kafka's floor-and-remainder split of a partition total over the members.
+    pub struct UniformQuotaSplit {
+        /// `minimumMemberQuota`: every member gets at least this many partitions.
+        pub minimum_quota: usize,
+        /// `remainingMembersToGetAnExtraPartition`: this many members get one
+        /// partition more than `minimum_quota`.
+        pub extra_quotas: usize,
+    }
 
-/// One member's quota in the homogeneous builder.
-#[cfg_attr(creusot, derive(Clone, Copy))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct HomogeneousMemberQuota {
-    /// Whether the member's target is `minimum_quota + 1`, not
-    /// `minimum_quota`.
-    pub takes_extra: bool,
-    /// How many partitions the member keeps from its current assignment.
-    pub retain: usize,
-    /// How many unassigned partitions the member receives.
-    pub fill: usize,
-}
+    /// One member's quota in the homogeneous builder.
+    pub struct HomogeneousMemberQuota {
+        /// Whether the member's target is `minimum_quota + 1`, not
+        /// `minimum_quota`.
+        pub takes_extra: bool,
+        /// How many partitions the member keeps from its current assignment.
+        pub retain: usize,
+        /// How many unassigned partitions the member receives.
+        pub fill: usize,
+    }
 
-/// A subscriber's load while the heterogeneous builder assigns one topic.
-#[cfg_attr(creusot, derive(Clone, Copy))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct SubscriberLoad {
-    /// Partitions the member holds now, across every topic.
-    pub assigned: usize,
-    /// Partitions the member held when the builder started on this topic.
-    pub assigned_at_topic_start: usize,
+    /// A subscriber's load while the heterogeneous builder assigns one topic.
+    pub struct SubscriberLoad {
+        /// Partitions the member holds now, across every topic.
+        pub assigned: usize,
+        /// Partitions the member held when the builder started on this topic.
+        pub assigned_at_topic_start: usize,
+    }
 }
 
 mod select_least_loaded;

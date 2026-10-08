@@ -96,179 +96,79 @@ fn longest<'a>(strings: impl IntoIterator<Item = &'a str>) -> usize {
     strings.into_iter().map(str::len).max().unwrap_or(0)
 }
 
-impl RecordStrings for JoinGroupRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            [
-                self.group_id.as_str(),
-                self.member_id.as_str(),
-                self.protocol_type.as_str(),
-            ]
-            .into_iter()
-            .chain(self.group_instance_id.as_deref())
-            .chain(self.reason.as_deref())
-            .chain(self.protocols.iter().map(|protocol| protocol.name.as_str())),
-        )
-    }
-}
-
-impl RecordStrings for SyncGroupRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            [self.group_id.as_str(), self.member_id.as_str()]
-                .into_iter()
-                .chain(self.group_instance_id.as_deref())
-                .chain(self.protocol_type.as_deref())
-                .chain(self.protocol_name.as_deref())
-                .chain(
-                    self.assignments
-                        .iter()
-                        .map(|assignment| assignment.member_id.as_str()),
-                ),
-        )
-    }
-}
-
-impl RecordStrings for HeartbeatRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            [self.group_id.as_str(), self.member_id.as_str()]
-                .into_iter()
-                .chain(self.group_instance_id.as_deref()),
-        )
-    }
-}
-
-impl RecordStrings for LeaveGroupRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            [self.group_id.as_str(), self.member_id.as_str()]
-                .into_iter()
-                .chain(self.members.iter().flat_map(|member| {
-                    std::iter::once(member.member_id.as_str())
-                        .chain(member.group_instance_id.as_deref())
-                        .chain(member.reason.as_deref())
-                })),
-        )
-    }
-}
-
-impl RecordStrings for OffsetCommitRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            [self.group_id.as_str(), self.member_id.as_str()]
-                .into_iter()
-                .chain(self.group_instance_id.as_deref())
-                .chain(self.topics.iter().flat_map(|topic| {
-                    std::iter::once(topic.name.as_str()).chain(
-                        topic
-                            .partitions
-                            .iter()
-                            .filter_map(|partition| partition.committed_metadata.as_deref()),
-                    )
-                })),
-        )
-    }
-}
-
-impl RecordStrings for TxnOffsetCommitRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            [
-                self.transactional_id.as_str(),
-                self.group_id.as_str(),
-                self.member_id.as_str(),
-            ]
-            .into_iter()
-            .chain(self.group_instance_id.as_deref())
-            .chain(self.topics.iter().flat_map(|topic| {
-                std::iter::once(topic.name.as_str()).chain(
-                    topic
-                        .partitions
-                        .iter()
-                        .filter_map(|partition| partition.committed_metadata.as_deref()),
+/// List the record strings of a request once, retaining required, optional
+/// and nested field traversal without repeating the bound-check implementation.
+macro_rules! record_string_fields {
+    ($request:ty, $receiver:ident; [$($required:ident),*]; [$($optional:ident),*] $(; $extra:expr)?) => {
+        impl RecordStrings for $request {
+            fn longest_record_string(&$receiver) -> usize {
+                longest(
+                    [$($receiver.$required.as_str(),)*].into_iter()
+                    $(.chain($receiver.$optional.as_deref()))*
+                    $(.chain($extra))?
                 )
-            })),
-        )
-    }
+            }
+        }
+    };
 }
 
-impl RecordStrings for ConsumerGroupHeartbeatRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            [self.group_id.as_str(), self.member_id.as_str()]
-                .into_iter()
-                .chain(self.instance_id.as_deref())
-                .chain(self.rack_id.as_deref())
-                .chain(self.subscribed_topic_regex.as_deref())
-                .chain(self.server_assignor.as_deref())
-                .chain(
-                    self.subscribed_topic_names
-                        .iter()
-                        .flatten()
-                        .map(String::as_str),
-                ),
-        )
-    }
+/// Both offset-commit APIs store topic names and each partition's metadata.
+macro_rules! offset_record_strings {
+    ($request:ident) => {
+        $request.topics.iter().flat_map(|topic| {
+            std::iter::once(topic.name.as_str()).chain(
+                topic
+                    .partitions
+                    .iter()
+                    .filter_map(|partition| partition.committed_metadata.as_deref()),
+            )
+        })
+    };
 }
 
-impl RecordStrings for ShareGroupHeartbeatRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            [self.group_id.as_str(), self.member_id.as_str()]
-                .into_iter()
-                .chain(self.rack_id.as_deref())
-                .chain(
-                    self.subscribed_topic_names
-                        .iter()
-                        .flatten()
-                        .map(String::as_str),
-                ),
-        )
-    }
-}
-
-impl RecordStrings for StreamsGroupHeartbeatRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            [self.group_id.as_str(), self.member_id.as_str()]
-                .into_iter()
-                .chain(self.instance_id.as_deref())
-                .chain(self.rack_id.as_deref())
-                .chain(self.process_id.as_deref()),
-        )
-    }
-}
-
-impl RecordStrings for DeleteGroupsRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(self.groups_names.iter().map(String::as_str))
-    }
-}
-
-impl RecordStrings for AlterShareGroupOffsetsRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            std::iter::once(self.group_id.as_str())
-                .chain(self.topics.iter().map(|topic| topic.topic_name.as_str())),
-        )
-    }
-}
-
-impl RecordStrings for DeleteShareGroupOffsetsRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(
-            std::iter::once(self.group_id.as_str())
-                .chain(self.topics.iter().map(|topic| topic.topic_name.as_str())),
-        )
-    }
-}
-
-impl RecordStrings for InitProducerIdRequest {
-    fn longest_record_string(&self) -> usize {
-        longest(self.transactional_id.as_deref())
-    }
-}
+record_string_fields!(JoinGroupRequest, self;
+    [group_id, member_id, protocol_type]; [group_instance_id, reason];
+    self.protocols.iter().map(|protocol| protocol.name.as_str())
+);
+record_string_fields!(SyncGroupRequest, self;
+    [group_id, member_id]; [group_instance_id, protocol_type, protocol_name];
+    self.assignments.iter().map(|assignment| assignment.member_id.as_str())
+);
+record_string_fields!(HeartbeatRequest, self; [group_id, member_id]; [group_instance_id]);
+record_string_fields!(LeaveGroupRequest, self; [group_id, member_id]; [];
+    self.members.iter().flat_map(|member| {
+        std::iter::once(member.member_id.as_str())
+            .chain(member.group_instance_id.as_deref())
+            .chain(member.reason.as_deref())
+    })
+);
+record_string_fields!(OffsetCommitRequest, self;
+    [group_id, member_id]; [group_instance_id]; offset_record_strings!(self)
+);
+record_string_fields!(TxnOffsetCommitRequest, self;
+    [transactional_id, group_id, member_id]; [group_instance_id]; offset_record_strings!(self)
+);
+record_string_fields!(ConsumerGroupHeartbeatRequest, self;
+    [group_id, member_id]; [instance_id, rack_id, subscribed_topic_regex, server_assignor];
+    self.subscribed_topic_names.iter().flatten().map(String::as_str)
+);
+record_string_fields!(ShareGroupHeartbeatRequest, self;
+    [group_id, member_id]; [rack_id];
+    self.subscribed_topic_names.iter().flatten().map(String::as_str)
+);
+record_string_fields!(StreamsGroupHeartbeatRequest, self;
+    [group_id, member_id]; [instance_id, rack_id, process_id]
+);
+record_string_fields!(DeleteGroupsRequest, self; []; [];
+    self.groups_names.iter().map(String::as_str)
+);
+record_string_fields!(AlterShareGroupOffsetsRequest, self; [group_id]; [];
+    self.topics.iter().map(|topic| topic.topic_name.as_str())
+);
+record_string_fields!(DeleteShareGroupOffsetsRequest, self; [group_id]; [];
+    self.topics.iter().map(|topic| topic.topic_name.as_str())
+);
+record_string_fields!(InitProducerIdRequest, self; []; [transactional_id]);
 
 /// The share-state requests carry no string but the group id, which names the
 /// `__share_group_state` record key.

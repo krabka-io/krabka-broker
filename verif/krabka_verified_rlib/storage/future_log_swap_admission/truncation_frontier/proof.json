@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_truncation_frontier": { "prover": "alt-ergo", "time": 0.005 }
+      "vc_truncation_frontier": { "prover": "alt-ergo", "time": 0.007 }
     }
   }
 }

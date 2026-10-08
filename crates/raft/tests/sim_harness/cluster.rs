@@ -112,6 +112,13 @@ impl<L: SimNodeLog> Sim<L> {
         }
     }
 
+    /// Reach a stable cluster within the caller's limit and require exactly one leader.
+    pub fn stabilize_one_leader(&mut self, max_ticks: usize) -> NodeId {
+        self.run_until_stable(max_ticks);
+        assert2::assert!(self.leaders().len() == 1);
+        self.leaders()[0]
+    }
+
     /// A deterministic snapshot of every node's observable state, which detects
     /// the steady-state fixed point. It is ordered by node id, in a `BTreeMap`.
     fn fingerprint(&self) -> Vec<(NodeId, &'static str, Epoch, usize, i64)> {
@@ -212,13 +219,4 @@ impl<L: SimNodeLog> Sim<L> {
     }
 }
 
-fn make_voter_set(ids: &[NodeId]) -> krabka_metadata::voters::VoterSet {
-    krabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
-        krabka_metadata::voters::Voter {
-            id,
-            directory_id: uuid::Uuid::nil(),
-            endpoints: Vec::new(),
-            kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
-        }
-    }))
-}
+krabka_macros::empty_endpoint_voters!(make_voter_set);

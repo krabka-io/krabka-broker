@@ -1,34 +1,39 @@
 (* #"/workspace/crates/verified/src/composition/retained_timestamp.rs" 25 0 30 18 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sslice'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 469 19 469 38
-let%span sslice'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 470 18 470 46
-let%span sslice'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 233 20 233 44
-let%span sslice'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 238 20 238 67
-let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 190 11 190 46
-let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 191 11 192 35
-let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 193 11 194 69
-let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 195 11 196 63
-let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 197 10 197 40
-let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 198 10 201 93
-let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 202 10 203 79
-let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 204 10 206 42
-let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 207 10 211 1
-let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 52 11 52 46
-let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 53 11 54 35
-let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 55 11 55 70
-let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 56 10 60 1
-let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 42 8 45 48
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span stime_index = "/workspace/crates/verified/src/composition/time_index.rs" 20 8 23 129
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 469 19 469 38
+let%span sslice'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 470 18 470 46
+let%span sslice'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 233 20 233 44
+let%span sslice'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 238 20 238 67
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 183 11 183 46
+let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 184 11 184 43
+let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 185 11 186 69
+let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 187 11 188 63
+let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 189 10 189 40
+let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 190 10 193 93
+let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 194 10 195 79
+let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 196 10 198 42
+let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 199 10 199 63
+let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 61 11 61 46
+let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 62 11 62 43
+let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 63 11 63 70
+let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 64 10 64 61
+let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 14 8 14 53
+let%span stimestamp'13 = "/workspace/crates/verified/src/timestamp.rs" 15 8 20 9
+let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 52 8 53 68
+let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 252 16 253 65
+let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 14 16 14 72
+let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span stime_index = "/workspace/crates/verified/src/composition/time_index.rs" 17 8 20 129
 let%span sretained_timestamp = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 33 8 33 81
 let%span sretained_timestamp'0 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 34 20 34 26
 let%span sretained_timestamp'1 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 37 14 37 37
@@ -59,6 +64,7 @@ use creusot.int.UInt32
 use creusot.int.Int64
 use creusot.int.UInt64
 use seq.Seq
+use map.Map
 use creusot.prelude.Any
 use int.Int
 
@@ -75,7 +81,20 @@ type t_Option_usize = None | Some UInt64.t
 
 type tup2_Vec_tup2_i64_u32_Global_Option_usize = { f0'1: t_Vec_tup2_i64_u32_Global; f1'1: t_Option_usize }
 
-type tup2_i64_u32 = { f0'2: Int64.t; f1'2: UInt32.t }
+type tup2_u32_u32 = { f0'2: UInt32.t; f1'2: UInt32.t }
+
+predicate pairwise_u32 [#"/workspace/crates/verified/src/sequence.rs" 20 0 20 95] (values: Seq.seq UInt32.t) (relation: Map.map tup2_u32_u32 bool) =
+  [%#ssequence'0] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length values
+    -> Map.get relation { f0'2 = Seq.get values i; f1'2 = Seq.get values j }
+
+predicate strictly_increasing_u32 [#"/workspace/crates/verified/src/sequence.rs" 13 0 13 73] (values: Seq.seq UInt32.t) =
+  [%#ssequence] pairwise_u32 values (fun (__0: tup2_u32_u32) -> let {f0'2 = left; f1'2 = right} = __0 in UInt32.t'int left
+  < UInt32.t'int right)
+
+predicate record_offsets_ordered [#"/workspace/crates/verified/src/composition/timestamp.rs" 12 0 12 63] (offsets: Seq.seq UInt32.t) =
+  [%#stimestamp'12] strictly_increasing_u32 offsets
+
+type tup2_i64_u32 = { f0'3: Int64.t; f1'3: UInt32.t }
 
 constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
 
@@ -89,14 +108,19 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
+predicate first_timestamp_match [#"/workspace/crates/verified/src/timestamp.rs" 9 0 13 9] (timestamps: Seq.seq Int64.t) (target: int) (matched: t_Option_usize) =
+  [%#stimestamp'13] match matched with
+    | Some index -> UInt64.t'int index < Seq.length timestamps
+    /\ ge_log_Int (Int64.to_int (Seq.get timestamps (UInt64.t'int index))) target
+    /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index -> Int64.to_int (Seq.get timestamps i) < target)
+    | None -> forall i: int. 0 <= i /\ i < Seq.length timestamps -> Int64.to_int (Seq.get timestamps i) < target
+    end
+
 let constructed_time_index_preserves_first (offsets: Slice64.slice UInt32.t) (timestamps: Slice64.slice Int64.t)
   (rows: Slice64.slice tup2_usize_usize) (target: Int64.t) (return (x: tup2_Vec_tup2_i64_u32_Global_Option_usize)) =
 {[@stop_split] [@expl:constructed_time_index_preserves_first requires] ([@stop_split] [@expl:constructed_time_index_preserves_first requires #0] [%#stimestamp] Seq.length (Slice64.view offsets)
     = Seq.length (Slice64.view timestamps))
-  /\ ([@stop_split] [@expl:constructed_time_index_preserves_first requires #1] [%#stimestamp'0] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view offsets)
-      -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))
+  /\ ([@stop_split] [@expl:constructed_time_index_preserves_first requires #1] [%#stimestamp'0] record_offsets_ordered (Slice64.view offsets))
   /\ ([@stop_split] [@expl:constructed_time_index_preserves_first requires #2] [%#stimestamp'1] forall i: int. 0 <= i
         /\ i < Seq.length (Slice64.view rows)
       -> UInt64.t'int (Seq.get (Slice64.view rows) i).f0 <= UInt64.t'int (Seq.get (Slice64.view rows) i).f1
@@ -112,38 +136,31 @@ let constructed_time_index_preserves_first (offsets: Slice64.slice UInt32.t) (ti
       = Seq.length (Slice64.view rows))
     /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #1] [%#stimestamp'4] forall i: int. 0 <= i
           /\ i < Seq.length (Slice64.view rows)
-        -> (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f1'2
+        -> (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f1'3
           = Seq.get (Slice64.view offsets) (UInt64.t'int (Seq.get (Slice64.view rows) i).f0)
         /\ (exists j: int. 0 <= j
             /\ j <= UInt64.t'int (Seq.get (Slice64.view rows) i).f1
-            /\ (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0'2 = Seq.get (Slice64.view timestamps) j)
+            /\ (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0'3 = Seq.get (Slice64.view timestamps) j)
         /\ (forall j: int. 0 <= j /\ j <= UInt64.t'int (Seq.get (Slice64.view rows) i).f1
           -> Int64.to_int (Seq.get (Slice64.view timestamps) j)
-          <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0'2))
+          <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0'3))
     /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #2] [%#stimestamp'5] forall i: int, j: int. 0
             <= i
           /\ i < j /\ j < Seq.length (view_Vec_tup2_i64_u32_Global result.f0'1)
-        -> Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0'2
-          <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) j).f0'2
-        /\ UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f1'2
-        < UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) j).f1'2)
+        -> Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0'3
+          <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) j).f0'3
+        /\ UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f1'3
+        < UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) j).f1'3)
     /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #3] [%#stimestamp'6] forall i: int, j: int. 0
             <= i
           /\ i < Seq.length (view_Vec_tup2_i64_u32_Global result.f0'1)
           /\ 0 <= j
           /\ j < Seq.length (Slice64.view offsets)
           /\ UInt32.t'int (Seq.get (Slice64.view offsets) j)
-          <= UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f1'2
+          <= UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f1'3
         -> Int64.to_int (Seq.get (Slice64.view timestamps) j)
-        <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0'2)
-    /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #4] [%#stimestamp'7] match result.f1'1 with
-      | Some index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
-      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
-      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target
-      end)}
+        <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0'3)
+    /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #4] [%#stimestamp'7] first_timestamp_match (Slice64.view timestamps) (Int64.to_int target) result.f1'1)}
     (! return {result}) ]
 
 predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
@@ -198,33 +215,26 @@ let deref_Vec_tup2_i64_u32_Global (self_: t_Vec_tup2_i64_u32_Global) (return (x:
     = view_Vec_tup2_i64_u32_Global self_}
     (! return {result}) ]
 
-predicate sparse_maxima_bound_prefix [#"/workspace/crates/verified/src/composition/timestamp.rs" 36 0 40 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) =
-  [%#stimestamp'12] (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length entries
-      -> Int64.to_int (Seq.get entries i).f0'2 <= Int64.to_int (Seq.get entries j).f0'2)
-  /\ (forall i: int, j: int. 0 <= i
+predicate sparse_rows_bound_records [#"/workspace/crates/verified/src/composition/timestamp.rs" 247 0 251 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (times: Seq.seq Int64.t) =
+  [%#stimestamp'15] forall i: int, j: int. 0 <= i
       /\ i < Seq.length entries
-      /\ 0 <= j /\ j < Seq.length offsets /\ UInt32.t'int (Seq.get offsets j) < UInt32.t'int (Seq.get entries i).f1'2
-    -> Int64.to_int (Seq.get timestamps j) <= Int64.to_int (Seq.get entries i).f0'2)
+      /\ 0 <= j /\ j < Seq.length offsets /\ UInt32.t'int (Seq.get offsets j) < UInt32.t'int (Seq.get entries i).f1'3
+    -> Int64.to_int (Seq.get times j) <= Int64.to_int (Seq.get entries i).f0'3
+
+predicate sparse_maxima_bound_prefix [#"/workspace/crates/verified/src/composition/timestamp.rs" 46 0 50 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) =
+  [%#stimestamp'14] (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length entries
+      -> Int64.to_int (Seq.get entries i).f0'3 <= Int64.to_int (Seq.get entries j).f0'3)
+  /\ sparse_rows_bound_records entries offsets timestamps
 
 let indexed_timestamp_scan_finds_first (entries: Slice64.slice tup2_i64_u32) (offsets: Slice64.slice UInt32.t)
   (timestamps: Slice64.slice Int64.t) (target: Int64.t) (return (x: t_Option_usize)) =
 {[@stop_split] [@expl:indexed_timestamp_scan_finds_first requires] ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #0] [%#stimestamp'8] Seq.length (Slice64.view offsets)
     = Seq.length (Slice64.view timestamps))
-  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #1] [%#stimestamp'9] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view offsets)
-      -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #1] [%#stimestamp'9] record_offsets_ordered (Slice64.view offsets))
   /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #2] [%#stimestamp'10] sparse_maxima_bound_prefix (Slice64.view entries) (Slice64.view offsets) (Slice64.view timestamps))}
   any
   [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:indexed_timestamp_scan_finds_first ensures] [%#stimestamp'11] match result with
-      | Some index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
-      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
-      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target
-      end}
+  {[@stop_split] [@expl:indexed_timestamp_scan_finds_first ensures] [%#stimestamp'11] first_timestamp_match (Slice64.view timestamps) (Int64.to_int target) result}
     (! return {result}) ]
 
 type t_Option_Infallible = None'0 | Some'0 ()
@@ -240,7 +250,7 @@ predicate inv_Option_Infallible (_1: t_Option_Infallible)
 axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
     = match x with
       | None'0 -> true
-      | Some'0 f0'3 -> inv_Infallible f0'3
+      | Some'0 f0'4 -> inv_Infallible f0'4
       end
 
 predicate inv_ControlFlow_Option_Infallible_usize (_1: t_ControlFlow_Option_Infallible_usize)
@@ -248,8 +258,8 @@ predicate inv_ControlFlow_Option_Infallible_usize (_1: t_ControlFlow_Option_Infa
 axiom inv_axiom'0 [@rewrite]:
   forall x: t_ControlFlow_Option_Infallible_usize [inv_ControlFlow_Option_Infallible_usize x]. inv_ControlFlow_Option_Infallible_usize x
     = match x with
-      | Continue f0'3 -> true
-      | Break f0'3 -> inv_Option_Infallible f0'3
+      | Continue f0'4 -> true
+      | Break f0'4 -> inv_Option_Infallible f0'4
       end
 
 let branch_Option_usize (self_: t_Option_usize) (return (x: t_ControlFlow_Option_Infallible_usize)) = any
@@ -261,8 +271,8 @@ let branch_Option_usize (self_: t_Option_usize) (return (x: t_ControlFlow_Option
       end)}
     (! return {result}) ]
 
-let elim_Break (_x: t_ControlFlow_Option_Infallible_usize) (return (f0'3: t_Option_Infallible)) = any
-  [ _k (f0'3: t_Option_Infallible) -> {Break f0'3 = _x} (! return {f0'3})
+let elim_Break (_x: t_ControlFlow_Option_Infallible_usize) (return (f0'4: t_Option_Infallible)) = any
+  [ _k (f0'4: t_Option_Infallible) -> {Break f0'4 = _x} (! return {f0'4})
   | _chk -> (! {[@expl:elim Break] match _x with
       | Break _ -> true
       | _ -> false
@@ -275,18 +285,17 @@ let from_residual_Option_usize (residual: t_Option_Infallible) (return (x: t_Opt
   [ return (result: t_Option_usize) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None}
     (! return {result}) ]
 
-let elim_Continue (_x: t_ControlFlow_Option_Infallible_usize) (return (f0'3: UInt64.t)) = any
-  [ _k (f0'3: UInt64.t) -> {Continue f0'3 = _x} (! return {f0'3})
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_usize) (return (f0'4: UInt64.t)) = any
+  [ _k (f0'4: UInt64.t) -> {Continue f0'4 = _x} (! return {f0'4})
   | _chk -> (! {[@expl:elim Continue] match _x with
       | Continue _ -> true
       | _ -> false
       end}
     any) ]
 
-predicate sparse_timestamp_window_valid [#"/workspace/crates/verified/src/composition/time_index.rs" 14 0 18 9] (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) (rows: Seq.seq tup2_usize_usize) =
+predicate sparse_timestamp_window_valid [#"/workspace/crates/verified/src/composition/time_index.rs" 11 0 15 9] (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) (rows: Seq.seq tup2_usize_usize) =
   [%#stime_index] Seq.length offsets = Seq.length timestamps
-  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length offsets
-      -> UInt32.t'int (Seq.get offsets i) < UInt32.t'int (Seq.get offsets j))
+  /\ strictly_increasing_u32 offsets
   /\ (forall i: int. 0 <= i /\ i < Seq.length rows
       -> UInt64.t'int (Seq.get rows i).f0 <= UInt64.t'int (Seq.get rows i).f1
       /\ UInt64.t'int (Seq.get rows i).f1 < Seq.length timestamps)
@@ -370,9 +379,9 @@ let constructed_index_retained_candidate [#"/workspace/crates/verified/src/compo
           /\ 0 <= j
           /\ j < Seq.length (Slice64.view retained_offsets)
           /\ UInt32.t'int (Seq.get (Slice64.view retained_offsets) j)
-          < UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global entries) i).f1'2
+          < UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global entries) i).f1'3
         -> Int64.to_int (Seq.get (Slice64.view retained_timestamps) j)
-        <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global entries) i).f0'2}
+        <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global entries) i).f0'3}
       s9
     | s9 = [ &_94 <- entries ] s10
     | s10 = deref_Vec_tup2_i64_u32_Global [%#sretained_timestamp'15] {_94}

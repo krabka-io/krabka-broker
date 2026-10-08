@@ -4,11 +4,7 @@
 
 use assert2::{assert, check};
 use krabka_protocol::owned::{
-    describe_producers_request::{DescribeProducersRequest, TopicRequest},
-    produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    write_txn_markers_request::{
-        WritableTxnMarker, WritableTxnMarkerTopic, WriteTxnMarkersRequest,
-    },
+    produce_request::ProduceRequest, write_txn_markers_request::WriteTxnMarkersRequest,
 };
 
 use crate::{
@@ -16,6 +12,7 @@ use crate::{
         create_topic, init_transactional_producer, topic_id_for, transactional_batch,
     },
     support,
+    support::produce::single_partition_produce,
 };
 
 #[tokio::test]
@@ -29,115 +26,85 @@ async fn transactional_fields_follow_open_and_completed_transactions() {
         .client
         .send(ProduceRequest {
             transactional_id: Some("describe-producers-tid".into()),
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "transactions".into(),
+            ..single_partition_produce(
+                "transactions",
                 topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(transactional_batch(pid, epoch, 0, &["first"]).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+                0,
+                Some(transactional_batch(pid, epoch, 0, &["first"]).into()),
+                (-1, 5_000),
+            )
         })
         .await
         .expect("transactional Produce");
     assert!(produce_response.responses[0].partition_responses[0].error_code == 0);
 
-    let describe = p
-        .client
-        .send(DescribeProducersRequest {
-            topics: vec![TopicRequest {
-                name: "transactions".into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeProducers during first transaction");
-    let producer_row = &describe.topics[0].partitions[0].active_producers[0];
-    check!(producer_row.current_txn_start_offset == 0);
-    check!(producer_row.coordinator_epoch == -1);
+    check_transaction_state(
+        &p.client,
+        "DescribeProducers during first transaction",
+        (0, -1),
+    )
+    .await;
 
     let marker = p
         .client
         .send(WriteTxnMarkersRequest {
-            markers: vec![WritableTxnMarker {
-                producer_id: pid,
-                producer_epoch: epoch,
-                transaction_result: true,
-                coordinator_epoch: 17,
-                transaction_version: 1,
-                topics: vec![WritableTxnMarkerTopic {
-                    name: "transactions".into(),
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
+            markers: vec![crate::support::transactions::transaction_marker(
+                (pid, epoch),
+                true,
+                17,
+                1,
+                vec![crate::support::transactions::marker_topic(
+                    "transactions".into(),
+                    vec![0],
+                )],
+            )],
             ..Default::default()
         })
         .await
         .expect("WriteTxnMarkers");
     assert!(marker.markers[0].topics[0].partitions[0].error_code == 0);
 
-    let describe = p
-        .client
-        .send(DescribeProducersRequest {
-            topics: vec![TopicRequest {
-                name: "transactions".into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeProducers after marker");
-    let producer_row = &describe.topics[0].partitions[0].active_producers[0];
-    check!(producer_row.current_txn_start_offset == -1);
-    check!(producer_row.coordinator_epoch == 17);
+    check_transaction_state(&p.client, "DescribeProducers after marker", (-1, 17)).await;
 
     let produce_response = p
         .client
         .send(ProduceRequest {
             transactional_id: Some("describe-producers-tid".into()),
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "transactions".into(),
+            ..single_partition_produce(
+                "transactions",
                 topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(transactional_batch(pid, epoch, 1, &["second"]).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+                0,
+                Some(transactional_batch(pid, epoch, 1, &["second"]).into()),
+                (-1, 5_000),
+            )
         })
         .await
         .expect("second transactional Produce");
     assert!(produce_response.responses[0].partition_responses[0].error_code == 0);
 
-    let describe = p
-        .client
-        .send(DescribeProducersRequest {
-            topics: vec![TopicRequest {
-                name: "transactions".into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeProducers during second transaction");
-    let producer_row = &describe.topics[0].partitions[0].active_producers[0];
-    check!(producer_row.current_txn_start_offset == 2);
-    check!(producer_row.coordinator_epoch == 17);
+    check_transaction_state(
+        &p.client,
+        "DescribeProducers during second transaction",
+        (2, 17),
+    )
+    .await;
 
     p.broker.shutdown().await;
+}
+
+async fn check_transaction_state(
+    client: &krabka_client_core::Client,
+    context: &str,
+    expected: (i64, i32),
+) {
+    let describe = client
+        .send(crate::support::admin::describe_producers_request(
+            "transactions".into(),
+            vec![0],
+        ))
+        .await
+        .expect(context);
+    let producer_row = &describe.topics[0].partitions[0].active_producers[0];
+    check!(producer_row.current_txn_start_offset == expected.0);
+    check!(producer_row.coordinator_epoch == expected.1);
 }

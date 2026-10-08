@@ -1,7 +1,7 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
-use super::timestamp::sparse_maxima_bound_prefix;
+use super::timestamp::{record_offsets_ordered, sparse_maxima_bound_prefix};
 use super::{first_unstable_offset, indexed_timestamp_scan_finds_first};
 use crate::list_offsets::{
     ListOffsetsBoundDecision, ListOffsetsBoundFacts, ListOffsetsSelectionDecision,
@@ -19,8 +19,7 @@ use crate::list_offsets::{
 #[requires(request.2@ >= 0 && candidate_epoch@ >= -1)]
 #[requires(forall<i: Int> 0 <= i && i < offsets@.len()
     ==> frontiers.0@ + offsets@[i]@ < frontiers.1@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < offsets@.len()
-    ==> offsets@[i]@ < offsets@[j]@)]
+#[requires(record_offsets_ordered(offsets@))]
 #[requires(forall<i: Int> 0 <= i && i < starts@.len()
     ==> 0 <= starts@[i]@ && starts@[i]@ <= frontiers.1@)]
 #[requires(sparse_maxima_bound_prefix(entries@, offsets@, timestamps@))]
@@ -32,16 +31,10 @@ use crate::list_offsets::{
             && offset@ == frontiers.0@ + offsets@[i]@
             && timestamp == timestamps@[i] && timestamp@ >= request.2@
             && (forall<j: Int> 0 <= j && j < i ==> timestamps@[j]@ < request.2@)
-            && offset@ < (if request.0@ == -1 { frontiers.2@ } else { frontiers.1@ })
-            && (request.0@ == -1 && request.1@ == 1 ==>
-                forall<j: Int> 0 <= j && j < starts@.len() ==> offset@ < starts@[j]@),
+            && list_offset_candidate_visible(frontiers, request, starts@, offset@),
     ListOffsetsSelectionDecision::Unknown =>
         !(exists<i: Int> 0 <= i && i < offsets@.len() && timestamps@[i]@ >= request.2@
-            && frontiers.0@ + offsets@[i]@
-                < (if request.0@ == -1 { frontiers.2@ } else { frontiers.1@ })
-            && (request.0@ == -1 && request.1@ == 1 ==>
-                forall<j: Int> 0 <= j && j < starts@.len()
-                    ==> frontiers.0@ + offsets@[i]@ < starts@[j]@)),
+            && list_offset_candidate_visible(frontiers, request, starts@, frontiers.0@ + offsets@[i]@)),
 })]
 pub(super) fn timestamp_list_offsets_finds_first_visible(
     entries: &[(i64, u32)],
@@ -77,4 +70,18 @@ pub(super) fn timestamp_list_offsets_finds_first_visible(
         candidate_epoch,
         last_fetchable: bound,
     })
+}
+
+open_logic! {
+/// A candidate lies below the replica bound and every applicable unstable start.
+fn list_offset_candidate_visible(
+    frontiers: (i64, i64, i64),
+    request: (i32, i8, i64),
+    starts: Seq<i64>,
+    offset: Int,
+) -> bool {
+    pearlite! { offset < (if request.0@ == -1 { frontiers.2@ } else { frontiers.1@ })
+    && (request.0@ == -1 && request.1@ == 1 ==>
+        forall<j: Int> 0 <= j && j < starts.len() ==> offset < starts[j]@) }
+}
 }

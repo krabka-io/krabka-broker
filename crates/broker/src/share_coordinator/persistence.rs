@@ -101,6 +101,36 @@ pub struct StateBatch {
     pub delivery_count: i16,
 }
 
+/// Share reads and writes carry the same batch fields in distinct wire types.
+/// Conversions keep protocol defaults for their tagged fields.
+macro_rules! wire_state_batch {
+    ($wire:ty; from [$($from_ref:tt)*]; to [$($to_ref:tt)*]) => {
+        impl From<$($from_ref)* $wire> for StateBatch {
+            fn from(batch: $($from_ref)* $wire) -> Self {
+                Self {
+                    first_offset: Offset(batch.first_offset),
+                    last_offset: Offset(batch.last_offset),
+                    delivery_state: batch.delivery_state,
+                    delivery_count: batch.delivery_count,
+                }
+            }
+        }
+        impl From<$($to_ref)* StateBatch> for $wire {
+            fn from(batch: $($to_ref)* StateBatch) -> Self {
+                Self {
+                    first_offset: batch.first_offset.0,
+                    last_offset: batch.last_offset.0,
+                    delivery_state: batch.delivery_state,
+                    delivery_count: batch.delivery_count,
+                    ..Self::default()
+                }
+            }
+        }
+    };
+}
+wire_state_batch!(krabka_protocol::owned::read_share_group_state_response::StateBatch; from []; to [&]);
+wire_state_batch!(krabka_protocol::owned::write_share_group_state_request::StateBatch; from [&]; to []);
+
 /// Kafka's `ShareSnapshotValue` version 0, a full state image of one key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShareSnapshotValue {
@@ -116,51 +146,6 @@ pub struct ShareSnapshotValue {
     pub state_batches: Vec<StateBatch>,
 }
 
-impl ShareSnapshotValue {
-    /// Encodes the value with its `i16` version prefix, as Kafka's
-    /// `CoordinatorRecordSerde.serializeValue` does.
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        buf.put_i32(self.snapshot_epoch);
-        buf.put_i32(self.state_epoch);
-        buf.put_i32(self.leader_epoch);
-        buf.put_i64(self.start_offset.0);
-        buf.put_i64(self.create_timestamp);
-        buf.put_i64(self.write_timestamp);
-        put_batches(&mut buf, &self.state_batches);
-        put_value_tags(&mut buf, self.delivery_complete_count);
-        buf.freeze()
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error when the bytes are not a version 0
-    /// `ShareSnapshotValue`.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        check_version(&mut buf)?;
-        let snapshot_epoch = get_i32(&mut buf)?;
-        let state_epoch = get_i32(&mut buf)?;
-        let leader_epoch = get_i32(&mut buf)?;
-        let start_offset = Offset(get_i64(&mut buf)?);
-        let create_timestamp = get_i64(&mut buf)?;
-        let write_timestamp = get_i64(&mut buf)?;
-        let state_batches = get_batches(&mut buf)?;
-        let delivery_complete_count = get_value_tags(&mut buf)?;
-        Ok(Self {
-            snapshot_epoch,
-            state_epoch,
-            leader_epoch,
-            start_offset,
-            delivery_complete_count,
-            create_timestamp,
-            write_timestamp,
-            state_batches,
-        })
-    }
-}
-
 /// Kafka's `ShareUpdateValue` version 0, a delta over the latest snapshot of
 /// one key. It has no state epoch and no timestamps.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,39 +157,54 @@ pub struct ShareUpdateValue {
     pub state_batches: Vec<StateBatch>,
 }
 
-impl ShareUpdateValue {
-    /// Encodes the value with its `i16` version prefix.
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        buf.put_i32(self.snapshot_epoch);
-        buf.put_i32(self.leader_epoch);
-        buf.put_i64(self.start_offset.0);
-        put_batches(&mut buf, &self.state_batches);
-        put_value_tags(&mut buf, self.delivery_complete_count);
-        buf.freeze()
-    }
+/// The two schemas share framing, batches and tags, but declare their own wire fields.
+macro_rules! state_value_codec {
+    ($name:ident, $encode:literal, $error:literal; $($field:ident: $codec:ident),+ $(,)?) => {
+        impl $name {
+            #[doc = $encode]
+            #[must_use]
+            pub fn encode(&self) -> Bytes {
+                let mut buf = BytesMut::new();
+                buf.put_i16(0);
+                $(state_value_codec!(@put &mut buf, self.$field, $codec);)+
+                put_batches(&mut buf, &self.state_batches);
+                put_value_tags(&mut buf, self.delivery_complete_count);
+                buf.freeze()
+            }
 
-    /// # Errors
-    ///
-    /// Returns an error when the bytes are not a version 0 `ShareUpdateValue`.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        check_version(&mut buf)?;
-        let snapshot_epoch = get_i32(&mut buf)?;
-        let leader_epoch = get_i32(&mut buf)?;
-        let start_offset = Offset(get_i64(&mut buf)?);
-        let state_batches = get_batches(&mut buf)?;
-        let delivery_complete_count = get_value_tags(&mut buf)?;
-        Ok(Self {
-            snapshot_epoch,
-            leader_epoch,
-            start_offset,
-            delivery_complete_count,
-            state_batches,
-        })
-    }
+            /// # Errors
+            ///
+            #[doc = $error]
+            pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
+                check_version(&mut buf)?;
+                $(let $field = state_value_codec!(@get &mut buf, $codec);)+
+                let state_batches = get_batches(&mut buf)?;
+                let delivery_complete_count = get_value_tags(&mut buf)?;
+                Ok(Self { $($field,)+ delivery_complete_count, state_batches })
+            }
+        }
+    };
+    (@put $buf:expr, $value:expr, i32) => { ($buf).put_i32($value) };
+    (@put $buf:expr, $value:expr, i64) => { ($buf).put_i64($value) };
+    (@put $buf:expr, $value:expr, Offset) => { ($buf).put_i64(($value).0) };
+    (@get $buf:expr, i32) => { get_i32($buf)? };
+    (@get $buf:expr, i64) => { get_i64($buf)? };
+    (@get $buf:expr, Offset) => { Offset(get_i64($buf)?) };
 }
+
+state_value_codec!(ShareSnapshotValue, "Encodes the value with its `i16` version prefix, as Kafka's `CoordinatorRecordSerde.serializeValue` does.", "Returns an error when the bytes are not a version 0 `ShareSnapshotValue`.";
+    snapshot_epoch: i32,
+    state_epoch: i32,
+    leader_epoch: i32,
+    start_offset: Offset,
+    create_timestamp: i64,
+    write_timestamp: i64,
+);
+state_value_codec!(ShareUpdateValue, "Encodes the value with its `i16` version prefix.", "Returns an error when the bytes are not a version 0 `ShareUpdateValue`.";
+    snapshot_epoch: i32,
+    leader_epoch: i32,
+    start_offset: Offset,
+);
 
 /// Reads the `i16` value version and refuses every version but 0, the only
 /// version of both schemas.
@@ -288,6 +288,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
+    use crate::share_coordinator::coordinator::test_support::state_batch;
 
     fn peek_type(buf: &[u8]) -> i16 {
         let mut r = buf;
@@ -296,22 +297,9 @@ mod tests {
 
     /// Bytes from a hex string that may hold spaces.
     fn hex(s: &str) -> Vec<u8> {
-        let digits: Vec<u8> = s.bytes().filter(u8::is_ascii_hexdigit).collect();
-        digits
-            .chunks(2)
-            .map(|pair| {
-                u8::from_str_radix(std::str::from_utf8(pair).expect("ascii"), 16).expect("hex")
-            })
-            .collect()
-    }
-
-    fn state_batch(first: i64, last: i64, state: i8, count: i16) -> StateBatch {
-        StateBatch {
-            first_offset: Offset(first),
-            last_offset: Offset(last),
-            delivery_state: state,
-            delivery_count: count,
-        }
+        crate::coordinator::unified::test_support::wire_bytes(
+            &s.split_whitespace().collect::<Vec<_>>(),
+        )
     }
 
     #[test]

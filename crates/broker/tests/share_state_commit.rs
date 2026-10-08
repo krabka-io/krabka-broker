@@ -18,7 +18,6 @@ use krabka_broker::{BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         delete_share_group_state_request::{
             DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePart,
         },
@@ -48,6 +47,11 @@ use krabka_protocol::{
 };
 use tempfile::TempDir;
 
+use crate::support::{
+    client::connect_owned,
+    topics::{creatable_topic, create_topic_request},
+};
+
 mod support;
 
 const GROUP: &str = "share-commit";
@@ -70,27 +74,19 @@ type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 /// on lag, and the controller does not fence the broker, for longer than the
 /// test runs.
 async fn start_three() -> Cluster {
-    let cluster = support::start_n_node_with(3, |_, config| {
-        *config = config.clone().with_internal_topics_for(3);
-        config.share_coordinator.state_topic_num_partitions = 1;
+    support::fixed_internal_isr_cluster(|config| {
         config.share_coordinator.write_timeout = WRITE_TIMEOUT;
-        config.replica_lag_time_max = krabka_units::secs(30);
-        config.isr_scan_interval = krabka_units::hours(1);
-        config.heartbeat_timeout = krabka_units::minutes(10);
     })
     .await
-    .expect("start the cluster");
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    cluster
 }
 
 async fn client(handle: &BrokerHandle) -> Client {
-    Client::builder()
-        .bootstrap(handle.listen_addr().to_string())
-        .client_id("share-state-commit")
-        .build()
-        .await
-        .expect("client")
+    connect_owned(
+        handle.listen_addr().to_string(),
+        "share-state-commit",
+        "client",
+    )
+    .await
 }
 
 /// Creates the one-partition data topic `orders` and returns its topic id.
@@ -98,16 +94,7 @@ async fn client(handle: &BrokerHandle) -> Client {
 /// metadata image does not hold.
 async fn create_orders(client: &Client) -> uuid::Uuid {
     let created = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "orders".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic("orders", 1, 1), 5_000))
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == 0, "{created:?}");
@@ -366,8 +353,6 @@ async fn a_share_state_request_is_answered_only_when_committed() {
     }
     member.close();
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }

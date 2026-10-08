@@ -11,7 +11,9 @@
 
 use std::sync::Arc;
 
-use super::{BrokerMetrics, PartitionLabel, TopicLabel};
+#[cfg(test)]
+use super::PartitionLabel;
+use super::{BrokerMetrics, TopicLabel};
 
 impl BrokerMetrics {
     /// Convenience: record a Produce hit on `topic` with the given
@@ -74,28 +76,12 @@ impl BrokerMetrics {
     /// Called once per partition by the request handler (alongside the
     /// existing topic-level `record_produce`).
     pub fn record_partition_produce(&self, topic: &Arc<str>, partition: i32, bytes: u64) {
-        if bytes == 0 {
-            return;
-        }
-        let lbl = PartitionLabel {
-            topic: Arc::clone(topic),
-            partition,
-        };
-        self.partition_bytes_in.get_or_create(&lbl).inc_by(bytes);
-        self.track_partition_series(&lbl);
+        self.count_partition(&self.partition_bytes_in, topic, partition, bytes);
     }
 
     /// Convenience: account a partition's slice of a Fetch response.
     pub fn record_partition_fetch(&self, topic: &Arc<str>, partition: i32, bytes: u64) {
-        if bytes == 0 {
-            return;
-        }
-        let lbl = PartitionLabel {
-            topic: Arc::clone(topic),
-            partition,
-        };
-        self.partition_bytes_out.get_or_create(&lbl).inc_by(bytes);
-        self.track_partition_series(&lbl);
+        self.count_partition(&self.partition_bytes_out, topic, partition, bytes);
     }
 
     /// Account one v0/v1 → v2 up-conversion on the Produce
@@ -117,15 +103,7 @@ impl BrokerMetrics {
     /// per-partition work. No-ops on zero so we don't allocate a label
     /// entry for trivial measurements.
     pub fn record_partition_cpu_micros(&self, topic: &Arc<str>, partition: i32, micros: u64) {
-        if micros == 0 {
-            return;
-        }
-        let lbl = PartitionLabel {
-            topic: Arc::clone(topic),
-            partition,
-        };
-        self.partition_cpu_micros.get_or_create(&lbl).inc_by(micros);
-        self.track_partition_series(&lbl);
+        self.count_partition(&self.partition_cpu_micros, topic, partition, micros);
     }
 }
 

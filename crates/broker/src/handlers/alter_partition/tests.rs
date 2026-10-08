@@ -23,21 +23,21 @@ crate::test_support::context_helper!(client_id = "broker-client");
 #[tokio::test]
 async fn handle_denies_cluster_action_for_whole_request() {
     let version = alter_partition_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "replica");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        deny_all,
+        context(ctx, "replica")
+    );
     let req = request_with_topics(&broker, Vec::new());
 
     let resp = super::handle(&broker, req, version, &ctx)
         .await
         .expect("handle");
 
-    let expected = AlterPartitionResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(AlterPartitionResponse {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
         topics: Vec::new(),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
@@ -45,22 +45,22 @@ async fn handle_denies_cluster_action_for_whole_request() {
 #[tokio::test]
 async fn leader_accepts_empty_alter_partition_request() {
     let version = alter_partition_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
-    test_ctx!(ctx, "replica");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        allow_all,
+        context(ctx, "replica"),
+        controller_leader
+    );
     let req = request_with_topics(&broker, Vec::new());
 
     let resp = super::handle(&broker, req, version, &ctx)
         .await
         .expect("handle");
 
-    let expected = AlterPartitionResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(AlterPartitionResponse {
         error_code: codes::NONE,
         topics: Vec::new(),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
@@ -68,9 +68,7 @@ async fn leader_accepts_empty_alter_partition_request() {
 #[tokio::test]
 async fn handle_returns_topic_partition_response_and_commits_isr_change() {
     let version = 2;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    broker_fixture!((broker_handle, _dir, broker), allow_all, controller_leader);
     seed_partition(&broker).await;
     test_ctx!(ctx, "replica");
     let req = request_with_topics(
@@ -91,12 +89,11 @@ async fn handle_returns_topic_partition_response_and_commits_isr_change() {
         .await
         .expect("handle");
 
-    let expected = AlterPartitionResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(AlterPartitionResponse {
         error_code: codes::NONE,
-        topics: vec![RespTopicData {
+        topics: vec![tagged_wire!(RespTopicData {
             topic_id: wire_topic_id(),
-            partitions: vec![RespPartitionData {
+            partitions: vec![tagged_wire!(RespPartitionData {
                 partition_index: 0,
                 error_code: codes::NONE,
                 leader_id: 1,
@@ -104,12 +101,9 @@ async fn handle_returns_topic_partition_response_and_commits_isr_change() {
                 isr: vec![1],
                 leader_recovery_state: 0,
                 partition_epoch: 1,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+            })],
+        })],
+    });
     assert!(resp == expected);
 
     let image = broker.controller.current_image();
@@ -146,9 +140,7 @@ async fn topic_row_error_follows_version_and_topic_id() {
         (3, TopicIdKind::Unknown),
         (3, TopicIdKind::Zero),
     ];
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    broker_fixture!((broker_handle, _dir, broker), allow_all, controller_leader);
     seed_partition(&broker).await;
     test_ctx!(ctx, "replica");
 
@@ -197,7 +189,7 @@ async fn topic_row_error_follows_version_and_topic_id() {
         let partitions = if kind == TopicIdKind::Known {
             partition_epoch += 1;
             vec![
-                RespPartitionData {
+                tagged_wire!(RespPartitionData {
                     partition_index: 0,
                     error_code: codes::NONE,
                     leader_id: 1,
@@ -205,8 +197,7 @@ async fn topic_row_error_follows_version_and_topic_id() {
                     isr: vec![1],
                     leader_recovery_state: 0,
                     partition_epoch,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
+                }),
                 refused(1, codes::UNKNOWN_TOPIC_OR_PARTITION),
             ]
         } else {
@@ -218,16 +209,13 @@ async fn topic_row_error_follows_version_and_topic_id() {
         expected.push((
             version,
             kind,
-            AlterPartitionResponse {
-                throttle_time_ms: 0,
+            unthrottled_wire!(AlterPartitionResponse {
                 error_code: codes::NONE,
-                topics: vec![RespTopicData {
+                topics: vec![tagged_wire!(RespTopicData {
                     topic_id,
                     partitions,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
+                })],
+            }),
         ));
     }
     assert!(actual == expected);
@@ -241,9 +229,7 @@ async fn topic_row_error_follows_version_and_topic_id() {
 #[tokio::test]
 async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
     let version = alter_partition_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    broker_fixture!((broker_handle, _dir, broker), allow_all, controller_leader);
     seed_partition(&broker).await;
     test_ctx!(ctx, "replica");
     let current = request_with_topics(&broker, Vec::new()).broker_epoch;
@@ -269,12 +255,10 @@ async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
         let resp = super::handle(&broker, req, version, &ctx)
             .await
             .expect("handle");
-        let expected = AlterPartitionResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(AlterPartitionResponse {
             error_code: codes::STALE_BROKER_EPOCH,
             topics: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(
             resp == expected,
             "broker {broker_id} at epoch {broker_epoch}"

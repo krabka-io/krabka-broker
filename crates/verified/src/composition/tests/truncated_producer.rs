@@ -3,24 +3,9 @@ use proptest::prelude::*;
 
 use super::{
     ProducerDecision, ProducerSnapshotEntryFacts, oracle_next_producer_decision,
+    oracle_retry_matches, oracle_sequence as sequence, recovered_window_row as row,
     truncated_replay_bounds_first_retry,
 };
-
-fn sequence(value: i64) -> i32 {
-    i32::try_from(value.rem_euclid(1_i64 << 31)).unwrap()
-}
-
-fn row(base: i64, delta: i32, last_sequence: i32) -> ProducerSnapshotEntryFacts {
-    ProducerSnapshotEntryFacts {
-        producer_id: 42,
-        producer_epoch: 7,
-        last_sequence,
-        last_offset: base + i64::from(delta),
-        offset_delta: delta,
-        coordinator_epoch: -1,
-        current_txn_first_offset: -1,
-    }
-}
 
 fn check(
     ends: &[i64],
@@ -48,11 +33,9 @@ fn check(
         .rev()
         .collect();
     let first = kept.len() - window.len();
-    let match_index = window.iter().position(|row| {
-        request.0 == row.producer_epoch
-            && request.1 == sequence(i64::from(row.last_sequence) - i64::from(row.offset_delta))
-            && row.last_sequence == sequence(i64::from(request.1) + i64::from(request.2))
-    });
+    let match_index = window
+        .iter()
+        .position(|row| oracle_retry_matches(row, request));
     let decision = if let Some(index) = match_index {
         ProducerDecision::Duplicate {
             retained: if index + 1 == window.len() { 4 } else { index },

@@ -51,12 +51,9 @@ pub fn log_batch_kind(is_control: bool, key: &[u8]) -> LogBatchKind {
     }
 }
 
+open_logic! {
 /// The marker names a nonnegative producer identity, every epoch is at least
 /// the `-1` sentinel, and a pending transaction has a real producer epoch.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn marker_well_formed(
     request: TransactionMarkerRequest,
     current: TransactionMarkerPartitionState,
@@ -70,14 +67,12 @@ pub fn marker_well_formed(
             && (!current.has_pending_transaction || current.producer_epoch@ >= 0)
     }
 }
+}
 
+open_logic! {
 /// Neither the producer nor the coordinator generation of the marker is
 /// older than the partition's (`ProducerAppendInfo.checkProducerEpoch` and
 /// `appendEndTxnMarker`'s coordinator-epoch check).
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn marker_generation_current(
     request: TransactionMarkerRequest,
     current: TransactionMarkerPartitionState,
@@ -87,13 +82,11 @@ pub fn marker_generation_current(
             && request.coordinator_epoch@ >= current.coordinator_epoch@
     }
 }
+}
 
+open_logic! {
 /// The marker repeats the exact generation that already closed the
 /// producer's transaction on this partition.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn marker_completed_retry(
     request: TransactionMarkerRequest,
     current: TransactionMarkerPartitionState,
@@ -104,13 +97,11 @@ pub fn marker_completed_retry(
             && request.coordinator_epoch@ == current.coordinator_epoch@
     }
 }
+}
 
+open_logic! {
 /// Only a COMMIT that closes a pending transaction on `__consumer_offsets`
 /// publishes the transaction's offset commits.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn marker_publishes_offsets(
     request: TransactionMarkerRequest,
     current: TransactionMarkerPartitionState,
@@ -118,6 +109,7 @@ pub fn marker_publishes_offsets(
     pearlite! {
         current.has_pending_transaction && request.is_commit && request.is_offsets_partition
     }
+}
 }
 
 /// Fence a transaction marker against the partition's latest producer and
@@ -172,31 +164,25 @@ pub fn transaction_marker_materialization_decision(
     }
 }
 
+open_logic! {
 /// `snapshot` names a producer identity: its PID and epoch are nonnegative.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn is_identity(snapshot: TransactionSnapshot) -> bool {
     pearlite! { snapshot.pid@ >= 0 && snapshot.epoch@ >= 0 }
 }
+}
 
+open_logic! {
 /// `snapshot` holds the producer identity `identity`.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn has_identity(snapshot: TransactionSnapshot, identity: TransactionIdentity) -> bool {
     pearlite! { snapshot.pid == identity.pid && snapshot.epoch == identity.epoch }
 }
+}
 
+open_logic! {
 /// Two snapshots agree on producer identity and state.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn snapshot_eq(left: TransactionSnapshot, right: TransactionSnapshot) -> bool {
     pearlite! {
         left.pid == right.pid && left.epoch == right.epoch && left.state == right.state
     }
+}
 }

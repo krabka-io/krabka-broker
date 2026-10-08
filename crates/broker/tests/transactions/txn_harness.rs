@@ -13,18 +13,17 @@
 use std::time::Duration;
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::security::{ClientSecurity, SaslCredentials};
 use krabka_client_producer::{Producer, ProducerRecord};
-use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-    init_producer_id_request::InitProducerIdRequest,
-};
+use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
-use crate::support;
+use crate::{
+    support,
+    support::{client::connect_client, transactions::new_producer_request},
+};
 
 pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
     boot_single_with(|_| {}).await
@@ -79,30 +78,8 @@ async fn create_topic_with_configs(
     name: &str,
     configs: Vec<CreatableTopicConfig>,
 ) {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap)
-        .build()
-        .await
-        .unwrap();
-    let cr = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(
-        cr.topics[0].error_code == 0 || cr.topics[0].error_code == 36,
-        "create_topic {name}: error_code={}",
-        cr.topics[0].error_code
-    );
+    let client = connect_client(bootstrap, None).await;
+    crate::support::transaction_wire::create_topic(&client, name, 1, configs, "create_topic").await;
 }
 
 pub async fn init_transaction(
@@ -114,11 +91,7 @@ pub async fn init_transaction(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let response = client
-            .send(InitProducerIdRequest {
-                transactional_id: Some(transactional_id.into()),
-                transaction_timeout_ms: 60_000,
-                ..Default::default()
-            })
+            .send(new_producer_request(Some(transactional_id.into()), 60_000))
             .await
             .unwrap();
         if response.error_code == 0 {
@@ -145,8 +118,10 @@ pub fn boot_single_sasl(
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (BrokerHandle, String, TempDir)> {
     let dir = TempDir::new().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    let mut cfg = crate::support::sasl::sasl_plaintext_mechanisms(
+        dir.path().to_path_buf(),
+        vec![SaslMechanism::Plain],
+    );
     for (name, pass) in users {
         cfg.plain_credentials
             .insert((*name).to_string(), (*pass).to_string());
@@ -181,35 +156,33 @@ pub async fn create_topic_sasl(bootstrap: &str, name: &str, security: ClientSecu
         .build()
         .await
         .unwrap();
-    let cr = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(
-        cr.topics[0].error_code == 0 || cr.topics[0].error_code == 36,
-        "create_topic_sasl {name}: error_code={}",
-        cr.topics[0].error_code
-    );
+    crate::support::transaction_wire::create_topic(
+        &client,
+        name,
+        1,
+        Vec::new(),
+        "create_topic_sasl",
+    )
+    .await;
 }
 
-/// Builds a `ProducerRecord` for the given topic and string value.
-pub fn rec(topic: &str, v: &str) -> ProducerRecord {
-    ProducerRecord {
-        topic: topic.into(),
-        value: Some(Bytes::from(v.to_string())),
-        ..Default::default()
-    }
-}
+pub use crate::support::producer::string_record as rec;
 
 pub async fn send_ok(producer: &Producer, record: ProducerRecord) {
     producer.send(record).await.expect("produce acknowledged");
+}
+
+/// Bring up all three voters and the group coordinator before a transaction failover scenario.
+pub(crate) async fn registered_transaction_cluster(
+    configure: impl Fn(usize, &mut BrokerConfig),
+) -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
+    let cluster = support::start_n_node_with(3, configure)
+        .await
+        .expect("start the cluster");
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    // __consumer_offsets needs three replicas, including when a later reader outlives one broker.
+    for (handle, _, _) in &cluster {
+        handle.wait_until_group_coordinator_ready().await;
+    }
+    cluster
 }

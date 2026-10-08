@@ -1,7 +1,7 @@
 (* #"/workspace/crates/verified/src/compaction/retain_decision.rs" 87 0 94 19 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sretain_decision = "/workspace/crates/verified/src/compaction/retain_decision.rs" 101 51 101 95
 let%span sretain_decision'0 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 118 43 118 87
 let%span sretain_decision'1 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 67 10 68 38

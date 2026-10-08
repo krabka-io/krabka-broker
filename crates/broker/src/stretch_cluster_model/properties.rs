@@ -79,45 +79,45 @@ impl Model for StretchModel {
         actions.push(StretchAction::ProduceAcksAll);
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
-        match action {
-            StretchAction::SiteDown(site) => {
-                let already_impaired = state.isolated.remove(&site);
-                if state.down.contains(&site)
-                    || (!already_impaired && impaired(last) >= self.max_impaired)
-                {
-                    return None;
+    krabka_macros::model_transition!(last, action, state; {
+            match action {
+                StretchAction::SiteDown(site) => {
+                    let already_impaired = state.isolated.remove(&site);
+                    if state.down.contains(&site)
+                        || (!already_impaired && impaired(last) >= self.max_impaired)
+                    {
+                        return None;
+                    }
+                    state.down.insert(site);
                 }
-                state.down.insert(site);
-            }
-            StretchAction::SiteUp(site) => {
-                if !state.down.remove(&site) {
-                    return None;
+                StretchAction::SiteUp(site) => {
+                    if !state.down.remove(&site) {
+                        return None;
+                    }
+                    self.rejoin_isr(&mut state, site);
                 }
-                self.rejoin_isr(&mut state, site);
-            }
-            StretchAction::SitePartition(site) => {
-                if state.down.contains(&site)
-                    || state.isolated.contains(&site)
-                    || impaired(last) >= self.max_impaired
-                {
-                    return None;
+                StretchAction::SitePartition(site) => {
+                    if state.down.contains(&site)
+                        || state.isolated.contains(&site)
+                        || impaired(last) >= self.max_impaired
+                    {
+                        return None;
+                    }
+                    state.isolated.insert(site);
                 }
-                state.isolated.insert(site);
-            }
-            StretchAction::SiteHeal(site) => {
-                if !state.isolated.remove(&site) {
-                    return None;
+                StretchAction::SiteHeal(site) => {
+                    if !state.isolated.remove(&site) {
+                        return None;
+                    }
+                    self.rejoin_isr(&mut state, site);
                 }
-                self.rejoin_isr(&mut state, site);
+                StretchAction::Failover(dead) => return self.apply_failover(last, dead),
+                StretchAction::PreferredElection => return self.apply_preferred(last),
+                StretchAction::ProduceAcksAll => self.apply_produce(&mut state),
             }
-            StretchAction::Failover(dead) => return self.apply_failover(last, dead),
-            StretchAction::PreferredElection => return self.apply_preferred(last),
-            StretchAction::ProduceAcksAll => self.apply_produce(&mut state),
-        }
-        Some(state)
-    }
+            Some(state)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![

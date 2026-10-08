@@ -60,7 +60,6 @@ use crate::{
     },
     broker::Broker,
     codes,
-    error::BrokerError,
     handlers::{
         acl_wire::CLUSTER_RESOURCE_NAME,
         authorized_operations::authorized_operations_bits,
@@ -72,6 +71,29 @@ use crate::{
 };
 
 mod missing_topics;
+
+/// Named refusals and absent topics have no partitions and carry the zero id.
+fn topic_error_row(broker: &Broker, name: &str, error_code: i16) -> MetadataResponseTopic {
+    MetadataResponseTopic {
+        error_code,
+        name: Some(name.to_owned()),
+        topic_id: WireUuid::ZERO,
+        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
+        ..Default::default()
+    }
+}
+
+/// Preserve request order when collecting names absent from the current image.
+fn missing_topic_names<'a>(
+    image: &krabka_metadata::MetadataImage,
+    names: &[&'a str],
+) -> Vec<&'a str> {
+    names
+        .iter()
+        .copied()
+        .filter(|name| image.topic(name).is_none())
+        .collect()
+}
 
 #[cfg(test)]
 mod authorization_tests;
@@ -97,102 +119,101 @@ const CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS: std::ops::RangeInclusive<i16> = 8.
 /// The first version that carries `topic_authorized_operations` (KIP-430).
 const FIRST_TOPIC_AUTHORIZED_OPERATIONS_VERSION: i16 = 8;
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: MetadataRequest,
-    version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<MetadataResponse, BrokerError> {
-    let controller = broker.controller.clone();
-
-    let image = controller.current_image();
-
-    let requested = match lookup_requested_topics(&image, &req, version) {
-        Ok(requested) => requested,
-        Err(error_code) => {
-            return Ok(error_response(&req, error_code));
-        }
-    };
-
-    // KIP-112 / KIP-858 `offline_replicas` needs the fenced-broker set as well
-    // as the image; see `handlers::offline_replicas`.
-    let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
-
-    // Brokers: Kafka's `KRaftMetadataCache.getAliveBrokerNodes`. A fenced or
-    // dead broker is not listed, so a client does not dial it for a bootstrap
-    // or a metadata refresh. Each listed broker's `host:port` is the endpoint
-    // of the listener this request arrived on, and a broker with no endpoint
-    // on it is left out rather than advertised at another listener's address.
-    // A partition can still name an unlisted broker as leader until failover
-    // commits; its row says so with `-1` and an error code.
-    let listener = ctx.connection_listener_name;
-    let brokers = image
-        .brokers()
-        .filter(|registration| !unavailable.contains(&registration.node_id.0))
-        .filter_map(|registration| project_broker(registration, listener))
-        .collect();
-
-    let topics_out = build_topic_rows(
-        broker,
-        &image,
-        ctx,
-        &TopicRowInputs {
-            request: &req,
-            version,
-            requested: &requested,
-            unavailable: &unavailable,
-            listener,
-        },
-    );
-
-    // controller_id: an unfenced registered broker, not the quorum leader.
-    // See `handlers::controller_id`.
-    let controller_id =
-        crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
-
-    // KIP-430: the cluster-level field only exists on the wire for v8-10.
-    // Kafka answers 0 rather than the bit field when `Describe` on the
-    // cluster is denied, and leaves the default `i32::MIN` when the request
-    // does not ask.
-    let cluster_authorized_operations = if CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS.contains(&version)
-        && req.include_cluster_authorized_operations
+context_handler! {
+    MetadataRequest => MetadataResponse,
+    (broker, req, version, ctx),
     {
-        if cluster_allows(broker, &image, ctx, AclOperation::Describe, true) {
-            authorized_operations_bits(
-                broker.config.authorizer.as_ref(),
-                &image,
-                ctx,
-                ResourceType::Cluster,
-                CLUSTER_RESOURCE_NAME,
-            )
-        } else {
-            0
-        }
-    } else {
-        i32::MIN
-    };
+        let controller = broker.controller.clone();
 
-    let resp = MetadataResponse {
-        throttle_time_ms: 0,
-        brokers,
-        // Kafka's `Uuid.toString()` is URL-safe unpadded base64 of the 16 raw
-        // bytes, not `java.util.UUID`'s hyphenated form. See #1042.
-        cluster_id: Some(crate::cluster_id::encode(image.cluster_id())),
-        controller_id,
-        topics: topics_out,
-        cluster_authorized_operations,
-        ..Default::default()
-    };
-    tracing::debug!(
-        version,
-        req_topics = ?req.topics.as_ref().map(|ts| ts.iter().filter_map(|t| t.name.clone()).collect::<Vec<_>>()),
-        resp_brokers = ?resp.brokers.iter().map(|b| format!("{}@{}:{}", b.node_id, b.host, b.port)).collect::<Vec<_>>(),
-        resp_controller_id = resp.controller_id,
-        resp_cluster_id = ?resp.cluster_id,
-        resp_topics = ?resp.topics.iter().map(|t| format!("{}={:?}/p{}", t.name.as_deref().unwrap_or("?"), t.error_code, t.partitions.len())).collect::<Vec<_>>(),
-        "metadata response"
-    );
-    Ok(resp)
+        let image = controller.current_image();
+
+        let requested = match lookup_requested_topics(&image, &req, version) {
+            Ok(requested) => requested,
+            Err(error_code) => {
+                return Ok(error_response(&req, error_code));
+            }
+        };
+
+        // KIP-112 / KIP-858 `offline_replicas` needs the fenced-broker set as well
+        // as the image; see `handlers::offline_replicas`.
+        let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+
+        // Brokers: Kafka's `KRaftMetadataCache.getAliveBrokerNodes`. A fenced or
+        // dead broker is not listed, so a client does not dial it for a bootstrap
+        // or a metadata refresh. Each listed broker's `host:port` is the endpoint
+        // of the listener this request arrived on, and a broker with no endpoint
+        // on it is left out rather than advertised at another listener's address.
+        // A partition can still name an unlisted broker as leader until failover
+        // commits; its row says so with `-1` and an error code.
+        let listener = ctx.connection_listener_name;
+        let brokers = image
+            .brokers()
+            .filter(|registration| !unavailable.contains(&registration.node_id.0))
+            .filter_map(|registration| project_broker(registration, listener))
+            .collect();
+
+        let topics_out = build_topic_rows(
+            broker,
+            &image,
+            ctx,
+            &TopicRowInputs {
+                request: &req,
+                version,
+                requested: &requested,
+                unavailable: &unavailable,
+                listener,
+            },
+        );
+
+        // controller_id: an unfenced registered broker, not the quorum leader.
+        // See `handlers::controller_id`.
+        let controller_id =
+            crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
+
+        // KIP-430: the cluster-level field only exists on the wire for v8-10.
+        // Kafka answers 0 rather than the bit field when `Describe` on the
+        // cluster is denied, and leaves the default `i32::MIN` when the request
+        // does not ask.
+        let cluster_authorized_operations = if CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS.contains(&version)
+            && req.include_cluster_authorized_operations
+        {
+            if cluster_allows(broker, &image, ctx, AclOperation::Describe, true) {
+                authorized_operations_bits(
+                    broker.config.authorizer.as_ref(),
+                    &image,
+                    ctx,
+                    ResourceType::Cluster,
+                    CLUSTER_RESOURCE_NAME,
+                )
+            } else {
+                0
+            }
+        } else {
+            i32::MIN
+        };
+
+        let resp = MetadataResponse {
+            throttle_time_ms: 0,
+            brokers,
+            // Kafka's `Uuid.toString()` is URL-safe unpadded base64 of the 16 raw
+            // bytes, not `java.util.UUID`'s hyphenated form. See #1042.
+            cluster_id: Some(crate::cluster_id::encode(image.cluster_id())),
+            controller_id,
+            topics: topics_out,
+            cluster_authorized_operations,
+            ..Default::default()
+        };
+        tracing::debug!(
+            version,
+            req_topics = ?req.topics.as_ref().map(|ts| ts.iter().filter_map(|t| t.name.clone()).collect::<Vec<_>>()),
+            resp_brokers = ?resp.brokers.iter().map(|b| format!("{}@{}:{}", b.node_id, b.host, b.port)).collect::<Vec<_>>(),
+            resp_controller_id = resp.controller_id,
+            resp_cluster_id = ?resp.cluster_id,
+            resp_topics = ?resp.topics.iter().map(|t| format!("{}={:?}/p{}", t.name.as_deref().unwrap_or("?"), t.error_code, t.partitions.len())).collect::<Vec<_>>(),
+            "metadata response"
+        );
+        Ok(resp)
+    }
 }
 
 /// Whether the principal of `ctx` holds `operation` on the cluster.
@@ -384,11 +405,7 @@ fn build_topic_rows(
         && !requested.all;
     let mut denied_create: Vec<&str> = Vec::new();
     if auto_create {
-        let missing: Vec<&str> = described
-            .iter()
-            .copied()
-            .filter(|name| image.topic(name).is_none())
-            .collect();
+        let missing = missing_topic_names(image, &described);
         if !missing.is_empty() && !cluster_allows(broker, image, ctx, AclOperation::Create, false) {
             let create = authorize_topics(
                 authorizer,
@@ -412,11 +429,7 @@ fn build_topic_rows(
         .map(|record| success_topic_row(broker, image, inputs, record))
         .collect();
     if !requested.all {
-        let missing: Vec<&str> = described
-            .iter()
-            .copied()
-            .filter(|name| image.topic(name).is_none())
-            .collect();
+        let missing = missing_topic_names(image, &described);
         if !missing.is_empty() {
             described_rows.extend(missing_topics::missing_topic_rows(
                 broker,
@@ -451,13 +464,9 @@ fn build_topic_rows(
         });
     // Kafka never creates a topic it denies `Create` on, so the row carries
     // the zero id.
-    let denied_create_rows = denied_create.iter().map(|name| MetadataResponseTopic {
-        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-        name: Some((*name).to_owned()),
-        topic_id: WireUuid::ZERO,
-        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
-        ..Default::default()
-    });
+    let denied_create_rows = denied_create
+        .iter()
+        .map(|name| topic_error_row(broker, name, codes::TOPIC_AUTHORIZATION_FAILED));
     // An all-topics request does not disclose a topic denied `Describe`.
     let denied_describe: &[&str] = if requested.all { &[] } else { &denied_describe };
     let denied_describe_rows = denied_describe.iter().map(|name| {
@@ -688,13 +697,12 @@ mod tests {
         for (listener, host, port) in cases {
             assert!(
                 project_broker(&rec, listener)
-                    == Some(MetadataResponseBroker {
+                    == Some(tagged_wire!(MetadataResponseBroker {
                         node_id: 7,
                         host: host.to_string(),
                         port,
                         rack: Some("rack-a".to_string()),
-                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-                    }),
+                    })),
                 "{listener}"
             );
         }
@@ -739,15 +747,13 @@ mod tests {
     /// .toString()` produces for the same 16 bytes.
     #[tokio::test]
     async fn reports_cluster_id_in_kafka_base64_form() {
-        let known_cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.cluster_id = Some(known_cluster_id);
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let p = crate::test_support::principal("describer");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&p, &peer, "metadata-client");
+        known_cluster_fixture!((known_cluster_id, broker_handle, _dir, broker));
+        request_identity!(
+            (p, peer, ctx),
+            crate::test_support::principal("describer"),
+            client_id = "metadata-client",
+            address = crate::test_support::peer()
+        );
         let resp = handle(&broker, MetadataRequest::default(), 9, &ctx)
             .await
             .expect("handle");

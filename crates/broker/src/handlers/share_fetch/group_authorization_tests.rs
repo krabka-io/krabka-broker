@@ -34,7 +34,7 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
+    authorizer::AuthorizationResult,
     broker::BrokerHandle,
     codes,
     test_support::{
@@ -88,32 +88,26 @@ impl Grants {
 #[derive(Debug)]
 struct GrantsByName;
 
-impl Authorizer for GrantsByName {
-    fn authorize(
-        &self,
-        _source: &dyn AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        let Some(grants) = Grants::ALL
-            .into_iter()
-            .find(|grants| grants.principal_name() == request.principal.name)
-        else {
-            return AuthorizationResult::Allow;
-        };
-        let allowed = match (request.resource_type, request.operation) {
-            (ResourceType::Group, AclOperation::Read) => {
-                grants.group_read && request.resource_name == GROUP
-            }
-            (ResourceType::Topic, AclOperation::Read) => grants.topic_read,
-            _ => false,
-        };
-        if allowed {
-            AuthorizationResult::Allow
-        } else {
-            AuthorizationResult::Deny
+test_authorizer!(GrantsByName, (self, _source, request), {
+    let Some(grants) = Grants::ALL
+        .into_iter()
+        .find(|grants| grants.principal_name() == request.principal.name)
+    else {
+        return AuthorizationResult::Allow;
+    };
+    let allowed = match (request.resource_type, request.operation) {
+        (ResourceType::Group, AclOperation::Read) => {
+            grants.group_read && request.resource_name == GROUP
         }
+        (ResourceType::Topic, AclOperation::Read) => grants.topic_read,
+        _ => false,
+    };
+    if allowed {
+        AuthorizationResult::Allow
+    } else {
+        AuthorizationResult::Deny
     }
-}
+});
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
     start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(GrantsByName)).await
@@ -135,19 +129,41 @@ fn versions() -> [i16; 2] {
 /// What one case sent and what it got back.
 type Outcome<T> = (i16, Grants, T);
 
+/// Shared topic, share state, runtime and peer; locals remain in each test scope.
+macro_rules! authorization_fixture {
+    (($broker:ident, $dir:ident, $topic_id:ident, $shared:ident, $address:ident)) => {
+        let ($broker, $dir) = start().await;
+        let $topic_id = create_topic(&$broker, "share-authorization").await;
+        crate::test_support::initialize_share_state(
+            &$broker,
+            GROUP,
+            uuid::Uuid::from_bytes($topic_id.0),
+            0,
+        )
+        .await;
+        let $shared = $broker.broker_arc_for_test();
+        let $address = peer();
+    };
+}
+
+/// Each API's independent error model pins all fields left empty by a group denial.
+macro_rules! expected_group_denial {
+    ($response:ident) => {
+        $response {
+            throttle_time_ms: 0,
+            error_code: codes::GROUP_AUTHORIZATION_FAILED,
+            error_message: None,
+            acquisition_lock_timeout_ms: 0,
+            responses: Vec::new(),
+            node_endpoints: Vec::new(),
+            ..Default::default()
+        }
+    };
+}
+
 #[tokio::test]
 async fn share_fetch_checks_group_read_before_topic_read() {
-    let (broker, _dir) = start().await;
-    let topic_id = create_topic(&broker, "share-authorization").await;
-    crate::test_support::initialize_share_state(
-        &broker,
-        GROUP,
-        uuid::Uuid::from_bytes(topic_id.0),
-        0,
-    )
-    .await;
-    let shared = broker.broker_arc_for_test();
-    let address = peer();
+    authorization_fixture!((broker, _dir, topic_id, shared, address));
 
     let mut actual: Vec<Outcome<ShareFetchResponse>> = Vec::new();
     let mut expected: Vec<Outcome<ShareFetchResponse>> = Vec::new();
@@ -207,15 +223,7 @@ async fn share_fetch_checks_group_read_before_topic_read() {
                 }
             } else {
                 // `ShareFetchResponse.of(error, throttleTimeMs, empty, List.of(), 0)`.
-                ShareFetchResponse {
-                    throttle_time_ms: 0,
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    error_message: None,
-                    acquisition_lock_timeout_ms: 0,
-                    responses: Vec::new(),
-                    node_endpoints: Vec::new(),
-                    ..Default::default()
-                }
+                expected_group_denial!(ShareFetchResponse)
             };
             expected.push((version, grants, response));
         }
@@ -227,17 +235,7 @@ async fn share_fetch_checks_group_read_before_topic_read() {
 
 #[tokio::test]
 async fn share_acknowledge_checks_group_read_before_topic_read() {
-    let (broker, _dir) = start().await;
-    let topic_id = create_topic(&broker, "share-authorization").await;
-    crate::test_support::initialize_share_state(
-        &broker,
-        GROUP,
-        uuid::Uuid::from_bytes(topic_id.0),
-        0,
-    )
-    .await;
-    let shared = broker.broker_arc_for_test();
-    let address = peer();
+    authorization_fixture!((broker, _dir, topic_id, shared, address));
     let topic = uuid::Uuid::from_bytes(topic_id.0);
 
     let mut actual: Vec<Outcome<ShareAcknowledgeResponse>> = Vec::new();
@@ -313,15 +311,7 @@ async fn share_acknowledge_checks_group_read_before_topic_read() {
             } else {
                 // `ShareAcknowledgeRequest.getErrorResponse` sets the throttle
                 // time and the error code, and nothing else.
-                ShareAcknowledgeResponse {
-                    throttle_time_ms: 0,
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    error_message: None,
-                    acquisition_lock_timeout_ms: 0,
-                    responses: Vec::new(),
-                    node_endpoints: Vec::new(),
-                    ..Default::default()
-                }
+                expected_group_denial!(ShareAcknowledgeResponse)
             };
             expected.push((version, grants, response));
         }

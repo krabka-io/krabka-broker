@@ -53,18 +53,7 @@ mod tests {
     #[test]
     fn producer_fenced_is_invalid_producer_epoch_below_version_2() {
         // (version, error code, expected code)
-        let cases = [
-            (0, codes::PRODUCER_FENCED, codes::INVALID_PRODUCER_EPOCH),
-            (1, codes::PRODUCER_FENCED, codes::INVALID_PRODUCER_EPOCH),
-            (2, codes::PRODUCER_FENCED, codes::PRODUCER_FENCED),
-            (5, codes::PRODUCER_FENCED, codes::PRODUCER_FENCED),
-            // Another code is untouched.
-            (
-                0,
-                codes::CONCURRENT_TRANSACTIONS,
-                codes::CONCURRENT_TRANSACTIONS,
-            ),
-        ];
+        let cases = crate::txn::util::producer_fenced_cases(0);
         for (version, error_code, expected) in cases {
             let expected = EndTxnResponse {
                 throttle_time_ms: 0,

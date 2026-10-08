@@ -14,6 +14,22 @@ use crate::{
     error::TelemetryError,
 };
 
+macro_rules! exporter_method {
+    ($(#[$doc:meta])* fn $method:ident -> $exporter:ident) => {
+        $(#[$doc])*
+        pub(crate) fn $method(&self) -> Result<$exporter, TelemetryError> {
+            let builder = $exporter::builder();
+            let exporter = match self.protocol {
+                OtlpProtocol::Grpc => self.configure_exporter(builder.with_tonic()).build()?,
+                OtlpProtocol::HttpProtobuf => self
+                    .configure_exporter(builder.with_http().with_protocol(Protocol::HttpBinary))
+                    .build()?,
+            };
+            Ok(exporter)
+        }
+    };
+}
+
 impl OtlpConfig {
     fn configure_exporter<B: WithExportConfig>(&self, builder: B) -> B {
         builder
@@ -21,31 +37,15 @@ impl OtlpConfig {
             .with_timeout(self.timeout.to_std())
     }
 
-    pub(crate) fn build_exporter(&self) -> Result<SpanExporter, TelemetryError> {
-        let builder = SpanExporter::builder();
-        let exporter = match self.protocol {
-            OtlpProtocol::Grpc => self.configure_exporter(builder.with_tonic()).build()?,
-            OtlpProtocol::HttpProtobuf => self
-                .configure_exporter(builder.with_http().with_protocol(Protocol::HttpBinary))
-                .build()?,
-        };
-        Ok(exporter)
-    }
+    exporter_method!(fn build_exporter -> SpanExporter);
 
-    /// Build the OTLP **log** exporter.
-    ///
-    /// This function mirrors [`Self::build_exporter`], which builds the span
-    /// exporter. Services can thus send their `tracing` logs over OTLP to the
-    /// logs pipeline, and they do not depend on container-stdout tailing.
-    pub(crate) fn build_log_exporter(&self) -> Result<LogExporter, TelemetryError> {
-        let builder = LogExporter::builder();
-        let exporter = match self.protocol {
-            OtlpProtocol::Grpc => self.configure_exporter(builder.with_tonic()).build()?,
-            OtlpProtocol::HttpProtobuf => self
-                .configure_exporter(builder.with_http().with_protocol(Protocol::HttpBinary))
-                .build()?,
-        };
-        Ok(exporter)
+    exporter_method! {
+        /// Build the OTLP **log** exporter.
+        ///
+        /// This function mirrors [`Self::build_exporter`], which builds the span
+        /// exporter. Services can thus send their `tracing` logs over OTLP to the
+        /// logs pipeline, and they do not depend on container-stdout tailing.
+        fn build_log_exporter -> LogExporter
     }
 
     pub(crate) fn resource(&self) -> Resource {

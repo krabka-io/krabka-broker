@@ -62,7 +62,7 @@ async fn topic_throttle_config_propagates() {
     let (handle, _dir, addr) =
         start_single_broker_sasl_plaintext_with_users("admin", &[("admin", "admin-secret")]).await;
 
-    create_topic_as_admin(addr, "foo", 1, 1).await;
+    create_topic_as_admin(addr, crate::CLIENT_ID, "foo", 1, 1).await;
     wait_partition_exists(&handle, "foo", 0).await;
 
     let err = drive_incremental_alter_configs(

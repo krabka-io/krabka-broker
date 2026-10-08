@@ -9,6 +9,45 @@ use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
 
 use crate::network::auth::ConnectionAuth;
 
+/// The controller, directory and HMAC secret used by token wire fixtures.
+macro_rules! token_fixture {
+    ($directory:ident, $controller:ident, $secret:ident) => {
+        let $directory = TempDir::new().unwrap();
+        let $controller = test_controller($directory.path().into()).await;
+        let $secret = SecretBytes::new(b"k".to_vec());
+    };
+}
+
+/// Bind the refusal fixture's resources in the original test scope.
+macro_rules! refusal_token_fixture {
+    (($directory:ident, $controller:ident, $secret:ident, $live:ident, $expired:ident)) => {
+        let crate::handlers::delegation_token_test_support::RefusalFixture {
+            directory: $directory,
+            controller: $controller,
+            secret: $secret,
+            live: $live,
+            expired: $expired,
+        } = crate::handlers::delegation_token_test_support::RefusalFixture::new().await;
+    };
+}
+
+/// Seed one mutation case against the same wall-clock reading for both limits.
+macro_rules! seeded_token_fixture {
+    (($token_id:ident, $hmac:ident, $seeded_at:ident, $maximum:ident), $controller:expr, $index:expr, $expiry_delta:expr, $max_delta:expr) => {
+        let $token_id = format!("tok-{}", $index);
+        let $hmac = crate::handlers::delegation_token_test_support::hmac_for(&$token_id);
+        let $seeded_at = crate::time_util::now_ms();
+        let $maximum = $seeded_at + $max_delta;
+        crate::handlers::delegation_token_test_support::seed_token(
+            $controller,
+            &$token_id,
+            $seeded_at + $expiry_delta,
+            $maximum,
+        )
+        .await;
+    };
+}
+
 /// Kafka's default `delegation.token.expiry.time.ms`.
 pub(super) const DAY_MS: i64 = 24 * 60 * 60 * 1_000;
 
@@ -129,4 +168,33 @@ pub(super) async fn refusal_tokens(
         seed_token(controller, token_id, *expiry, now + DAY_MS).await;
     }
     (live, expired)
+}
+
+/// The expiry returned by a successful mutation lies in its caller-pinned
+/// wall-clock window, or equals the caller-pinned lifetime cap.
+pub(super) fn check_expiry_window(
+    case: &str,
+    (error_code, expiry): (i16, i64),
+    (before, after): (i64, i64),
+    expected_delta: Option<i64>,
+    maximum: i64,
+) {
+    assert!(error_code == crate::codes::NONE, "{case}");
+    match expected_delta {
+        Some(delta) => assert!(
+            (before + delta..=after + delta).contains(&expiry),
+            "{case}: {} not in [{}, {}]",
+            expiry,
+            before + delta,
+            after + delta
+        ),
+        None => assert!(expiry == maximum, "{case}"),
+    }
+}
+
+pub(super) fn stored_expiry(controller: &ControllerHandle, token_id: &str) -> Option<i64> {
+    controller
+        .current_image()
+        .delegation_token_by_id(token_id)
+        .map(|token| token.expiry_timestamp_ms)
 }

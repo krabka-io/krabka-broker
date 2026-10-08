@@ -154,37 +154,9 @@ impl OracleBroker {
     pub(crate) fn start() -> Self {
         let name = unique_container_name("krabka-apiversions-oracle");
         let out = Command::new("docker")
-            .args([
-                "run",
-                "-d",
-                "--name",
-                &name,
-                "-e",
-                "KAFKA_NODE_ID=1",
-                "-e",
-                "KAFKA_PROCESS_ROLES=broker,controller",
-                "-e",
-                "KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093",
-                "-e",
-                "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092",
-                "-e",
-                "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
-                "-e",
-                "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
-                "-e",
-                "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-                "-e",
-                "KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093",
-                "-e",
-                "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
-                "-e",
-                "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
-                "-e",
-                "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
-                "-e",
-                "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
-                ORACLE_IMAGE,
-            ])
+            .args(["run", "-d", "--name", &name])
+            .args(crate::support::kafka_single_node_env_args())
+            .args(["-e", "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk", ORACLE_IMAGE])
             .output()
             .expect("spawn docker run kafka oracle");
         assert!(
@@ -265,22 +237,12 @@ impl OracleBroker {
     }
 
     fn logs(&self) -> String {
-        let out = Command::new("docker")
-            .args(["logs", &self.name])
-            .output()
-            .expect("spawn docker logs");
-        format!(
-            "stdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        )
+        crate::support::docker_logs(&self.name)
     }
 }
 
 impl Drop for OracleBroker {
     fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "-f", &self.name])
-            .output();
+        crate::support::remove_container(&self.name);
     }
 }

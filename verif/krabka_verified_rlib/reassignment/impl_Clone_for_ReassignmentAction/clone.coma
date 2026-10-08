@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/reassignment.rs" 9 27 9 32 *)
+(* #"/workspace/crates/verified/src/reassignment.rs" 6 19 6 36 *)
 
 (* <reassignment::ReassignmentAction as std::clone::Clone> *)
 
@@ -11,7 +11,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_ReassignmentAction [#"/workspace/crates/verified/src/reassignment.rs" 9 27 9 32] (self: t_ReassignmentAction)
+let clone_ReassignmentAction [#"/workspace/crates/verified/src/reassignment.rs" 6 19 6 36] (self: t_ReassignmentAction)
   (return (x: t_ReassignmentAction)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ReassignmentAction = Any.any_l () | & self: t_ReassignmentAction = self ])

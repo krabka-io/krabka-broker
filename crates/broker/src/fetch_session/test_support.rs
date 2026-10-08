@@ -10,7 +10,10 @@ use krabka_protocol::{
 };
 use qubit_clock::ManualMonotonicClock;
 
-use super::cache::FetchSessionCache;
+use super::{
+    CachedPartitionState, FetchSessionId, FetchSessionKey, SessionDecision,
+    cache::FetchSessionCache,
+};
 
 /// Builds a cache whose LRU clock is a [`ManualMonotonicClock`] sitting at its
 /// own origin. The returned `Arc` is both the clock the cache stamps from and
@@ -59,5 +62,35 @@ pub(super) fn topic(name: &str, partitions: &[i32]) -> FetchTopic {
             })
             .collect(),
         ..Default::default()
+    }
+}
+
+pub(super) fn seed_resolved_partition(
+    cache: &FetchSessionCache,
+    topic_id: WireUuid,
+) -> FetchSessionId {
+    cache.try_allocate(
+        false,
+        false,
+        "alice".into(),
+        vec![(
+            FetchSessionKey {
+                topic_name: "t".into(),
+                topic_id,
+                partition: 0,
+            },
+            CachedPartitionState {
+                fetch_offset: 5,
+                max_bytes: 1024,
+                ..Default::default()
+            },
+        )],
+    )
+}
+
+pub(super) fn error_code(cache: &FetchSessionCache, request: &FetchRequest, version: i16) -> i16 {
+    match cache.classify(request, version) {
+        SessionDecision::Error { code } => code,
+        other => panic!("expected Error, got {other:?}"),
     }
 }

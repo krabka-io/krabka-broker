@@ -13,28 +13,9 @@ use std::collections::HashMap;
 use krabka_metadata::AclOperation;
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
 };
-
-pub(super) fn cluster_create_denied(
-    broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
-    context: &crate::handlers::RequestContext<'_>,
-) -> bool {
-    // Kafka makes this shortcut check with `logIfDenied = false`: a Deny falls
-    // back to the per-topic checks, so it is no refusal to audit.
-    broker.config.authorizer.authorize_quiet(
-        image,
-        &AuthorizationRequest {
-            principal: context.principal,
-            host: context.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::Create,
-        },
-    ) == AuthorizationResult::Deny
-}
 
 /// The `Create` decision for a set of candidate topic names: an Allow for
 /// every name when cluster `Create` covers the request, else the per-name
@@ -51,7 +32,7 @@ pub(super) fn authorize_create_topics<'a>(
     names: impl IntoIterator<Item = &'a str>,
 ) -> HashMap<&'a str, AuthorizationResult> {
     let names: Vec<&str> = names.into_iter().collect();
-    if !cluster_create_denied(broker, image, context) {
+    if !crate::handlers::cluster_shortcut_denied(broker, image, context, AclOperation::Create) {
         return names
             .into_iter()
             .map(|name| (name, AuthorizationResult::Allow))
@@ -82,16 +63,13 @@ pub(super) fn describe_configs_denied(
     context: &crate::handlers::RequestContext<'_>,
     topic: &str,
 ) -> bool {
-    // Kafka makes this check with `logIfDenied = false`: the topic exists
-    // either way, and only the disclosure is withheld.
-    broker.config.authorizer.authorize_quiet(
+    // A denial withholds disclosure without refusing the create or auditing a refusal.
+    crate::handlers::acl_denied_quiet(
+        broker.config.authorizer.as_ref(),
         image,
-        &AuthorizationRequest {
-            principal: context.principal,
-            host: context.peer,
-            resource_type: krabka_metadata::ResourceType::Topic,
-            resource_name: topic,
-            operation: AclOperation::DescribeConfigs,
-        },
-    ) == AuthorizationResult::Deny
+        context,
+        krabka_metadata::ResourceType::Topic,
+        topic,
+        AclOperation::DescribeConfigs,
+    )
 }

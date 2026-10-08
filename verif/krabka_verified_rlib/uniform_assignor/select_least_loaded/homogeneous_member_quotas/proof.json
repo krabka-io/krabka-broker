@@ -2,18 +2,15 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_homogeneous_member_quotas": {
-        "tactic": "compute_specified",
-        "children": [ { "prover": "z3", "time": 0.745 } ]
-      },
-      "vc_len_usize": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_homogeneous_member_quotas": { "prover": "z3", "time": 0.499 },
+      "vc_len_usize": { "prover": "alt-ergo", "time": 0.009 },
       "vc_new_HomogeneousMemberQuota": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.009
       },
       "vc_push_HomogeneousMemberQuota": {
         "prover": "alt-ergo",
-        "time": 0.007
+        "time": 0.016
       }
     }
   }

@@ -16,7 +16,7 @@ use krabka_metadata::{
 use super::*;
 use crate::{
     config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
-    leader_election::test_support::{img_with_partition, set_topic_configs},
+    leader_election::test_support::{expected_partition, img_with_partition, set_topic_configs},
 };
 
 /// The image of a partition `t-0` with replicas `[1, 2, 3]`, led by broker 1
@@ -47,18 +47,7 @@ fn leaderless_image(published: &str) -> MetadataImage {
 /// whole and the ELR and recovery records follow it. Any other election is the
 /// one `V1PartitionUpdate` Kafka's `PartitionChangeRecord` is.
 fn elected(leader: u64, eligible: &[u64], recovering: bool) -> Vec<MetadataRecord> {
-    let partition = PartitionRecord {
-        topic: "t".into(),
-        partition: 0,
-        leader: NodeId(leader),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(leader)],
-        leader_epoch: LeaderEpoch(6),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    };
+    let partition = expected_partition("t", leader, &[leader], LeaderEpoch(6), vec![]);
     let eligible: Vec<NodeId> = eligible.iter().copied().map(NodeId).collect();
     let recovery = recovering.then_some(LeaderRecoveryState::Recovering);
     if leader != 1 {

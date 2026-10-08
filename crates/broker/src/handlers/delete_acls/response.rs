@@ -74,7 +74,6 @@ pub(super) fn apply_submit_error<E: std::fmt::Display>(
 mod tests {
     use assert2::assert;
     use krabka_metadata::{AclOperation, PatternType};
-    use krabka_protocol::UnknownTaggedFields;
 
     use super::*;
     use crate::handlers::delete_acls::test_support::{
@@ -85,7 +84,7 @@ mod tests {
     #[test]
     fn helpers_preserve_matching_acl_and_submit_error_fields() {
         let matched = matching_acl_result(&acl("orders", "User:alice", AclOperation::Read));
-        let expected_matched = DeleteAclsMatchingAcl {
+        let expected_matched = tagged_wire!(DeleteAclsMatchingAcl {
             error_code: codes::NONE,
             error_message: None,
             resource_type: RESOURCE_TYPE_TOPIC,
@@ -95,8 +94,7 @@ mod tests {
             host: "*".into(),
             operation: OPERATION_READ,
             permission_type: PERMISSION_ALLOW,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(matched == expected_matched);
 
         let mut prefixed_acl = acl("orders-", "User:bob", AclOperation::Write);
@@ -116,18 +114,16 @@ mod tests {
         apply_submit_error(&mut results, "not controller");
 
         let expected_results = vec![
-            DeleteAclsFilterResult {
+            tagged_wire!(DeleteAclsFilterResult {
                 error_code: codes::COORDINATOR_NOT_AVAILABLE,
                 error_message: Some("submit failed: not controller".into()),
                 matching_acls: vec![matched],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            DeleteAclsFilterResult {
+            }),
+            tagged_wire!(DeleteAclsFilterResult {
                 error_code: codes::INVALID_REQUEST,
                 error_message: Some("Unknown entryFilter.".into()),
                 matching_acls: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
+            }),
         ];
         assert!(results == expected_results);
     }

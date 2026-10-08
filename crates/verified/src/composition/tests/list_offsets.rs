@@ -50,10 +50,7 @@ proptest! {
         step in 1usize..8,
         epoch in -1_i32..=i32::MAX,
     ) {
-        let offsets: Vec<_> = records.keys().copied().collect();
-        let timestamps: Vec<_> = records.values().copied().collect();
-        let entries: Vec<_> = (0..offsets.len()).step_by(step).map(|i|
-            (*timestamps[..=i].iter().max().unwrap(), offsets[i])).collect();
+        let (offsets, timestamps, entries) = indexed_timestamp_records(&records, step);
         let starts: Vec<_> = starts.iter().map(|s| base + i64::from(*s)).collect();
         let frontiers = (base, base + i64::from(u32::MAX) + 1, base + i64::from(hwm));
         let request = (replica, isolation, target);

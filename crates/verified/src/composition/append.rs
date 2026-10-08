@@ -18,7 +18,7 @@ pub(super) struct AppendFrontiers {
 /// Allocation, live append, recovery, scanning, and acknowledgement agree on
 /// one exclusive frontier. The synthetic byte extent checks coordinates only;
 /// byte validity, persistence and serialized allocation remain host obligations.
-#[ensures((match result { Some(_) => true, None => false })
+#[ensures((result != None)
     == (base@ >= 0 && delta@ >= 0 && base@ + delta@ + 1 <= i64::MAX@))]
 #[ensures(match result {
     None => true,
@@ -50,7 +50,7 @@ pub(super) fn append_frontiers_agree(base: i64, delta: i32) -> Option<AppendFron
 /// Return the start, split and end of two admitted contiguous reservations.
 /// This assumes serialized use of the returned frontier, not a lock. Failure
 /// rejects the pair; it does not roll back an already issued first reservation.
-#[ensures((match result { Some(_) => true, None => false })
+#[ensures((result != None)
     == (base@ >= 0 && first_count@ > 0 && second_count@ > 0
         && base@ + first_count@ + second_count@ <= i64::MAX@))]
 #[ensures(match result {
@@ -78,7 +78,7 @@ pub(super) fn reservations_do_not_overlap(
 /// and matching recovered/scan frontiers. No batch can reuse an offset from
 /// the prior reservation. This consumes the exported composition contracts;
 /// controller serialization, batch bytes and durable votes remain external.
-#[ensures((match result { Some(_) => true, None => false })
+#[ensures((result != None)
     == (base@ >= 0 && first_delta@ >= 0 && second_delta@ >= 0
         && base@ + first_delta@ + second_delta@ + 2 <= i64::MAX@))]
 #[ensures(match result {

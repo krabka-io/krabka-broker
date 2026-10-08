@@ -2,7 +2,10 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_local_recovery_sealed_last": { "prover": "alt-ergo", "time": 0.01 }
+      "vc_local_recovery_sealed_last": {
+        "prover": "alt-ergo",
+        "time": 0.004
+      }
     }
   }
 }

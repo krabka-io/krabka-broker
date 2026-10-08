@@ -9,10 +9,8 @@ use krabka_units::prelude::mebibytes;
 use tempfile::tempdir;
 
 use super::*;
-use crate::{
-    CleanupPolicy,
-    config::LogConfig,
-    log::test_support::{compaction_ctx, keyed_batch, test_log, tiny_segments, verbatim_from},
+use crate::log::test_support::{
+    compacting_segments, compaction_ctx, keyed_batch, set_segment_size, test_log, verbatim_from,
 };
 
 /// A leader that one compaction pass has cut holes into. Each batch sits in a
@@ -26,14 +24,7 @@ use crate::{
 /// | 5, 6, 7 | one record each      | kept                                     |
 /// | 8       | `k9`                 | active, not cleaned                      |
 fn compacted_leader(dir: &std::path::Path) -> Log {
-    let mut log = Log::open(
-        dir,
-        LogConfig {
-            cleanup_policy: CleanupPolicy::Compact,
-            ..tiny_segments()
-        },
-    )
-    .unwrap();
+    let mut log = Log::open(dir, compacting_segments()).unwrap();
     for mut batch in [
         keyed_batch(0, &[(0, b"k0", b"v0")]),
         keyed_batch(
@@ -50,9 +41,7 @@ fn compacted_leader(dir: &std::path::Path) -> Log {
     }
     // The grouping cap shares `segment.bytes` with the roll that put each
     // batch in a segment of its own, so widen it for the pass.
-    let mut roomier = log.config_snapshot();
-    roomier.segment_size = mebibytes(1);
-    log.set_config(roomier);
+    set_segment_size(&mut log, mebibytes(1));
     log.compact(&compaction_ctx()).unwrap();
     log
 }

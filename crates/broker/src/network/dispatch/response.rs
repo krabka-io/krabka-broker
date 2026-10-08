@@ -46,6 +46,19 @@ impl ThrottledResponse {
     }
 }
 
+/// Write before enforcing the window, and close on exactly the same framing failure.
+pub(super) async fn send_throttled_response<S: tokio::io::AsyncWrite + Unpin>(
+    framed: &mut tokio_util::codec::Framed<S, crate::network::codec::KafkaCodec>,
+    response: ThrottledResponse,
+) -> super::AfterResponse {
+    use futures_util::SinkExt as _;
+    if let Err(error) = framed.send(response.bytes).await {
+        tracing::warn!(%error, "framed.send error, closing");
+        return super::AfterResponse::Close;
+    }
+    super::AfterResponse::Mute(response.throttle)
+}
+
 /// The schema version and header flexibility of the response that was
 /// actually encoded.
 ///

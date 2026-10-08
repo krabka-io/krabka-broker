@@ -41,6 +41,8 @@ mod replication;
 mod request;
 mod schema_validation;
 mod share_dlq;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod traffic;
 
 pub use self::{

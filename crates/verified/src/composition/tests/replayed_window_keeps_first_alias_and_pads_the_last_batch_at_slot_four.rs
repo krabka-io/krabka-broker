@@ -37,12 +37,9 @@ proptest! {
     #[test]
     fn corrupt_snapshot_fallback_matches_latest_noncorrupt_and_io_oracle(
         snapshots in proptest::collection::vec((any::<i64>(), 0u8..=2), 0..24),
-        start in 0i64..=i64::MAX, span in 0i64..=i64::MAX,
-        local in 0i64..=i64::MAX, tail in 0i64..=i64::MAX,
+        (range, cut) in replay_range_cases(),
     ) {
-        let cut = start.saturating_add(span);
-        let range = ProducerReloadRange { log_start: start, local_start: local.min(cut),
-            log_end: cut.saturating_add(tail) };
+        let start = range.log_start;
         let offsets: Vec<_> = snapshots.iter().map(|row| row.0).collect();
         let outcomes: Vec<_> = snapshots.iter().map(|row| row.1).collect();
         let expected = snapshots.iter().filter(|(offset, outcome)|
@@ -101,13 +98,10 @@ proptest! {
     #[test]
     fn truncated_snapshot_matches_latest_survivor_and_exact_replay_oracles(
         offsets in proptest::collection::vec(any::<i64>(), 0..24),
-        start in 0i64..=i64::MAX, span in 0i64..=i64::MAX,
-        local in 0i64..=i64::MAX, tail in 0i64..=i64::MAX,
+        (range, cut) in replay_range_cases(),
     ) {
-        let cut = start.saturating_add(span);
-        let local = local.min(cut);
-        let range = ProducerReloadRange { log_start: start, local_start: local,
-            log_end: cut.saturating_add(tail) };
+        let start = range.log_start;
+        let local = range.local_start;
         let expected = offsets.iter().copied()
             .filter(|offset| start < *offset && *offset <= cut).max();
         let (selected, cursor) = truncated_snapshot_selection_bounds_replay(&offsets, range, cut).unwrap();

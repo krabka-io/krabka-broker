@@ -4,18 +4,18 @@
     "Coma": {
       "vc_epoch_and_offset_for_entries": {
         "prover": "alt-ergo",
-        "time": 0.011
+        "time": 0.008
       },
-      "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_len_EpochEntry": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_fetch_visibility": { "prover": "alt-ergo", "time": 0.02 },
+      "vc_len_EpochEntry": { "prover": "alt-ergo", "time": 0.015 },
       "vc_restore_leader_epoch_entry_valid": {
         "prover": "alt-ergo",
-        "time": 0.016
+        "time": 0.021
       },
-      "vc_truncation_frontier": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_truncation_frontier": { "prover": "alt-ergo", "time": 0.019 },
       "vc_validated_epochs_bound_truncated_fetch": {
         "prover": "z3",
-        "time": 0.022
+        "time": 0.094
       }
     }
   }

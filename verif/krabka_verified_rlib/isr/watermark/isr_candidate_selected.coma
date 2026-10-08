@@ -1,6 +1,6 @@
 (* #"/workspace/crates/verified/src/isr/watermark.rs" 94 0 94 63 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 105 28 105 33
 let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 102 26 106 17
 let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 107 23 107 62

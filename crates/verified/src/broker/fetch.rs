@@ -5,19 +5,17 @@ use super::{
     ReplicaFetchMutation,
 };
 
+open_logic! {
 /// A row answers a request this follower no longer stands behind: the epoch
 /// moved while it was in flight, the replication target changed, or the leader
 /// names a different target than the one this follower fetched from.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn replica_fetch_fenced(facts: ReplicaFetchFacts) -> bool {
     pearlite! {
         facts.request_leader_epoch@ != facts.current_leader_epoch@
             || !facts.target_matches
             || !facts.reported_target_matches
     }
+}
 }
 
 /// Fence one follower Fetch response row against its in-flight request epoch,
@@ -56,12 +54,9 @@ pub fn replica_fetch_mutation(facts: ReplicaFetchFacts) -> ReplicaFetchMutation 
     }
 }
 
+open_logic! {
 /// KIP-460's preferred election: leadership moves to the first assigned
 /// replica, and only when that replica is alive, in the ISR, and able to lead.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn preferred_change_eligible(change: PreferredLeaderChange) -> bool {
     pearlite! {
         change.preferred_replica == Some(change.new_leader)
@@ -69,6 +64,7 @@ pub fn preferred_change_eligible(change: PreferredLeaderChange) -> bool {
             && change.leader_alive
             && !change.leader_is_witness
     }
+}
 }
 
 /// Admit one preferred-leader rebalance batch only when it is nonempty, within
@@ -118,25 +114,20 @@ pub fn preferred_rebalance_admission(
     true
 }
 
+open_logic! {
 /// The lower of two offsets.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn offset_min(a: Int, b: Int) -> Int {
     pearlite! { if a <= b { a } else { b } }
 }
+}
 
+open_logic! {
 /// The exclusive upper offset one fetch may read.
 ///
 /// A follower reads to the leader's log end (Kafka's `FetchIsolation.LOG_END`).
 /// A consumer reads below the high watermark (`HIGH_WATERMARK`), below the
 /// last stable offset as well under `read_committed` (`TXN_COMMITTED`), and,
 /// on a scheduled topic, below KFC-1's delivery watermark too.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn fetch_limit_model(is_follower: bool, read_committed: bool, w: FetchWatermarks) -> Int {
     pearlite! {
         if is_follower {
@@ -147,6 +138,7 @@ pub fn fetch_limit_model(is_follower: bool, read_committed: bool, w: FetchWaterm
             offset_min(w.hw@, w.deliverable@)
         }
     }
+}
 }
 
 /// Compute Kafka's consumer/follower Fetch visibility window.

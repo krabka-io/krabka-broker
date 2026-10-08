@@ -1,21 +1,21 @@
-(* #"/workspace/crates/verified/src/timestamp.rs" 128 0 132 18 *)
+(* #"/workspace/crates/verified/src/timestamp.rs" 141 0 145 18 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 133 20 133 26
-let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 137 14 137 37
-let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 138 18 138 31
-let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 135 16 136 65
-let%span stimestamp'3 = "/workspace/crates/verified/src/timestamp.rs" 134 16 134 40
-let%span stimestamp'4 = "/workspace/crates/verified/src/timestamp.rs" 139 11 139 25
-let%span stimestamp'5 = "/workspace/crates/verified/src/timestamp.rs" 139 11 139 27
-let%span stimestamp'6 = "/workspace/crates/verified/src/timestamp.rs" 139 42 139 56
-let%span stimestamp'7 = "/workspace/crates/verified/src/timestamp.rs" 139 42 139 58
-let%span stimestamp'8 = "/workspace/crates/verified/src/timestamp.rs" 142 17 142 18
-let%span stimestamp'9 = "/workspace/crates/verified/src/timestamp.rs" 142 8 142 18
-let%span stimestamp'10 = "/workspace/crates/verified/src/timestamp.rs" 119 10 126 1
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 146 20 146 26
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 150 14 150 37
+let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 151 18 151 31
+let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 148 16 149 65
+let%span stimestamp'3 = "/workspace/crates/verified/src/timestamp.rs" 147 16 147 40
+let%span stimestamp'4 = "/workspace/crates/verified/src/timestamp.rs" 152 11 152 25
+let%span stimestamp'5 = "/workspace/crates/verified/src/timestamp.rs" 152 11 152 27
+let%span stimestamp'6 = "/workspace/crates/verified/src/timestamp.rs" 152 42 152 56
+let%span stimestamp'7 = "/workspace/crates/verified/src/timestamp.rs" 152 42 152 58
+let%span stimestamp'8 = "/workspace/crates/verified/src/timestamp.rs" 155 17 155 18
+let%span stimestamp'9 = "/workspace/crates/verified/src/timestamp.rs" 155 8 155 18
+let%span stimestamp'10 = "/workspace/crates/verified/src/timestamp.rs" 132 10 139 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -50,7 +50,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let first_timestamp_record_index [#"/workspace/crates/verified/src/timestamp.rs" 128 0 132 18]
+let first_timestamp_record_index [#"/workspace/crates/verified/src/timestamp.rs" 141 0 145 18]
   (records: Slice64.slice tup2_i64_i64) (minimum: Int64.t) (target: Int64.t) (return (x: t_Option_usize)) = (! bb0
   [ bb0 = s0 [ s0 = [ &index <- [%#stimestamp] (0: UInt64.t) ] s1 | s1 = bb1 ]
   | bb1 = bb1invariant

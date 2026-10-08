@@ -10,9 +10,7 @@ use krabka_protocol::{
     Decode, Encode,
     owned::{
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
-        add_offsets_to_txn_response::AddOffsetsToTxnResponse,
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        fetch_response::FetchResponse,
+        add_offsets_to_txn_response::AddOffsetsToTxnResponse, fetch_response::FetchResponse,
         produce_response::ProduceResponse,
     },
 };
@@ -79,20 +77,13 @@ pub async fn drive_produce_sasl(
     record_bytes: usize,
     count: usize,
 ) -> ProduceResponse {
-    let version: i16 = 11; // flexible, supports throttle_time_ms
-
-    let req = kafka_wire::produce_records(topic, record_bytes, count);
-
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass)
-        .await
-        .expect("SASL authenticate for Produce");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).expect("encode Produce");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 0, version, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("Produce round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    ProduceResponse::decode(&mut cur, version).expect("decode ProduceResponse")
+    kafka_wire::produce_sasl_with_ids(
+        addr,
+        (CLIENT_ID, CLIENT_ID),
+        (user, pass),
+        (topic, record_bytes, count),
+    )
+    .await
 }
 
 /// Drives a consumer `Fetch` request with `replica_id=-1` over SASL.
@@ -106,23 +97,7 @@ pub async fn drive_fetch_sasl(
 ) -> FetchResponse {
     let version: i16 = 12; // flexible, supports throttle_time_ms
 
-    let req = FetchRequest {
-        replica_id: -1, // consumer fetch (not inter-broker)
-        max_wait_ms: 0,
-        min_bytes: 1,
-        max_bytes: 1 << 20,
-        topics: vec![FetchTopic {
-            topic: topic.to_string(),
-            partitions: vec![FetchPartition {
-                partition: 0,
-                fetch_offset: 0,
-                partition_max_bytes: 1 << 20,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = crate::support::topics::consumer_fetch_request(topic);
 
     let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass)
         .await

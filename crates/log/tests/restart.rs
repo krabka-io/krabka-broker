@@ -1,6 +1,9 @@
 //! What a reopened log knows about the segments it did not write.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use assert2::check;
 use bytes::Bytes;
@@ -17,6 +20,26 @@ fn epoch_millis(at: SystemTime) -> i64 {
             .as_millis(),
     )
     .expect("epoch millis fit in i64")
+}
+
+fn test_clock() -> (SystemTime, i64) {
+    let now = SystemTime::now();
+    (now, epoch_millis(now))
+}
+
+/// Close the original writer before recovering its durable directory.
+fn reopened_log(dir: &Path, config: LogConfig, write: impl FnOnce(&mut Log)) -> Log {
+    let mut log = Log::open(dir, config.clone()).unwrap();
+    write(&mut log);
+    drop(log);
+    Log::open(dir, config).unwrap()
+}
+
+fn tick_without_eviction(log: &mut Log, now: SystemTime, sealed: usize) {
+    log.tick(now + Duration::from_secs(1), Offset(i64::MAX))
+        .unwrap();
+    check!(log.log_start_offset() == Offset(0));
+    check!(log.tierable_segments().len() == sealed);
 }
 
 /// A one-record batch under `key`, stamped at `ts`.
@@ -42,8 +65,7 @@ fn keyed_batch_at(key: &str, ts: i64) -> RecordBatch {
 #[test]
 fn a_compacted_segment_keeps_the_maximum_of_the_records_it_kept() {
     let dir = tempdir().unwrap();
-    let now = SystemTime::now();
-    let now_ms = epoch_millis(now);
+    let (now, now_ms) = test_clock();
     let stale_ms = now_ms - hours(2).millis_i64();
 
     let config = LogConfig {
@@ -82,11 +104,7 @@ fn a_compacted_segment_keeps_the_maximum_of_the_records_it_kept() {
     .unwrap();
     check!(log.tierable_segments().len() == 1);
 
-    log.tick(now + Duration::from_secs(1), Offset(i64::MAX))
-        .unwrap();
-
-    check!(log.log_start_offset() == Offset(0));
-    check!(log.tierable_segments().len() == 1);
+    tick_without_eviction(&mut log, now, 1);
 }
 
 #[path = "support/scheduled.rs"]
@@ -111,29 +129,21 @@ fn retention_after_a_restart_keeps_segments_inside_the_window() {
         ..LogConfig::default()
     };
 
-    let now = SystemTime::now();
-    let now_ms = epoch_millis(now);
-    {
-        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+    let (now, now_ms) = test_clock();
+    let mut log = reopened_log(dir.path(), config, |log| {
         for i in 0..5 {
             log.append(&mut batch_at(now_ms - i64::from(i))).unwrap();
         }
         check!(log.log_end_offset() == Offset(10));
         log.sync().unwrap();
-    }
-
-    let mut log = Log::open(dir.path(), config).unwrap();
+    });
     let sealed_before = log.tierable_segments().len();
     check!(
         sealed_before >= 2,
         "the fixture needs several sealed segments, got {sealed_before}"
     );
 
-    log.tick(now + Duration::from_secs(1), Offset(i64::MAX))
-        .unwrap();
-
-    check!(log.log_start_offset() == Offset(0));
-    check!(log.tierable_segments().len() == sealed_before);
+    tick_without_eviction(&mut log, now, sealed_before);
     let read = log.read(Offset(0), gibibytes(1)).unwrap();
     check!(read.start_offset == Offset(0));
     check!(read.batches.len() == 5);
@@ -161,25 +171,17 @@ fn a_reopened_segment_keeps_a_maximum_that_predates_its_newest_batch() {
         ..LogConfig::default()
     };
 
-    let now = SystemTime::now();
-    let now_ms = epoch_millis(now);
+    let (now, now_ms) = test_clock();
     let stale_ms = now_ms - hours(2).millis_i64();
-    {
-        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+    let mut log = reopened_log(dir.path(), config, |log| {
         // The newest record of the first segment is the oldest one in it.
         for ts in [now_ms, stale_ms, stale_ms, now_ms, now_ms] {
             log.append(&mut batch_at(ts)).unwrap();
         }
         log.sync().unwrap();
         check!(log.tierable_segments().len() == 1);
-    }
-
-    let mut log = Log::open(dir.path(), config).unwrap();
-    log.tick(now + Duration::from_secs(1), Offset(i64::MAX))
-        .unwrap();
-
-    check!(log.log_start_offset() == Offset(0));
-    check!(log.tierable_segments().len() == 1);
+    });
+    tick_without_eviction(&mut log, now, 1);
 }
 
 /// The same restore has to survive a log whose sparse index is coarser than
@@ -202,14 +204,12 @@ fn a_reopened_segment_reports_the_timestamp_of_its_newest_batch() {
         ..LogConfig::default()
     };
 
-    let now = SystemTime::now();
-    let now_ms = epoch_millis(now);
+    let (now, now_ms) = test_clock();
     // The oldest batch of the first segment is well outside the window; the
     // newest batch of that same segment is inside it. Retention must read the
     // newest one and keep the segment.
     let stale_ms = now_ms - days(30).millis_i64();
-    {
-        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+    let mut log = reopened_log(dir.path(), config, |log| {
         log.append(&mut batch_at(stale_ms)).unwrap();
         log.append(&mut batch_at(now_ms)).unwrap();
         // Fill past `segment_size` so the pair above ends up sealed together.
@@ -217,15 +217,9 @@ fn a_reopened_segment_reports_the_timestamp_of_its_newest_batch() {
             log.append(&mut batch_at(now_ms)).unwrap();
         }
         log.sync().unwrap();
-    }
-
-    let mut log = Log::open(dir.path(), config).unwrap();
+    });
     let sealed_before = log.tierable_segments().len();
     check!(sealed_before >= 1);
 
-    log.tick(now + Duration::from_secs(1), Offset(i64::MAX))
-        .unwrap();
-
-    check!(log.log_start_offset() == Offset(0));
-    check!(log.tierable_segments().len() == sealed_before);
+    tick_without_eviction(&mut log, now, sealed_before);
 }

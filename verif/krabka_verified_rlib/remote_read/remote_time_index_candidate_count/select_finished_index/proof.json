@@ -3,8 +3,8 @@
   "proofs": {
     "Coma": {
       "vc_elim_Some": { "prover": "alt-ergo", "time": 0.015 },
-      "vc_len_i64": { "prover": "alt-ergo", "time": 0.012 },
-      "vc_select_finished_index": { "prover": "z3", "time": 0.024 }
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_select_finished_index": { "prover": "z3", "time": 0.016 }
     }
   }
 }

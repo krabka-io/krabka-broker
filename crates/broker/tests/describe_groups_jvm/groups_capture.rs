@@ -3,7 +3,6 @@
 //! both images in turn.
 
 use assert2::assert;
-use krabka_client_core::Client;
 use krabka_protocol::owned::{
     describe_groups_request::DescribeGroupsRequest,
     describe_groups_response::{DescribeGroupsResponse, DescribedGroup},
@@ -14,15 +13,11 @@ use crate::{
     groups_docker::{ContainerGuard, docker_pull, docker_run_kafka},
     groups_fixture::{group_json, write_fixture},
     groups_setup::{prepare_classic_groups, prepare_next_gen_group, wait_for_broker},
+    support::client::connect_owned,
 };
 
 async fn describe_real_groups(groups: &[&str]) -> DescribeGroupsResponse {
-    let client = Client::builder()
-        .bootstrap(HOST_BOOTSTRAP)
-        .client_id("cap")
-        .build()
-        .await
-        .expect("client build against real kafka");
+    let client = connect_owned(HOST_BOOTSTRAP, "cap", "client build against real kafka").await;
     let response = client
         .send(DescribeGroupsRequest {
             groups: groups.iter().map(|group| (*group).to_string()).collect(),

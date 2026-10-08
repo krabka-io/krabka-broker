@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/authz.rs" 22 27 22 32 *)
+(* #"/workspace/crates/verified/src/authz.rs" 6 19 6 36 *)
 
 (* <authz::AclPatternKind as std::clone::Clone> *)
 
@@ -10,8 +10,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_AclPatternKind [#"/workspace/crates/verified/src/authz.rs" 22 27 22 32]
-  (self: t_AclPatternKind) (return (x: t_AclPatternKind)) = (! bb0
+let clone_AclPatternKind [#"/workspace/crates/verified/src/authz.rs" 6 19 6 36] (self: t_AclPatternKind)
+  (return (x: t_AclPatternKind)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_AclPatternKind = Any.any_l () | & self: t_AclPatternKind = self ])
   [ return (result: t_AclPatternKind) -> (! return {result}) ]

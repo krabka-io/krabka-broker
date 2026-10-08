@@ -9,19 +9,17 @@
 //! in-process broker, and it asserts the full operator-facing round-trip.
 
 use assert2::{assert, check};
+
+use crate::support::configs::{incremental_config, incremental_request, incremental_resource};
 mod support;
 
 use krabka_protocol::owned::{
     describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
     describe_configs_response::DescribeConfigsResponse,
-    incremental_alter_configs_request::{
-        AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-    },
     incremental_alter_configs_response::IncrementalAlterConfigsResponse,
     list_config_resources_request::ListConfigResourcesRequest,
     list_config_resources_response::ListConfigResourcesResponse,
 };
-use support::start_n_node;
 
 /// Kafka resource type id for `CLIENT_METRICS` (KIP-714).
 const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
@@ -36,15 +34,6 @@ const CONFIG_SOURCE_CLIENT_METRICS: i8 = 7;
 const CONFIG_SOURCE_DEFAULT: i8 = 5;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
-    krabka_client_core::Client::builder()
-        .bootstrap(format!("127.0.0.1:{}", addr.port()))
-        .client_id("client-metrics-config-test")
-        .build()
-        .await
-        .expect("client build")
-}
 
 fn assert_describe_response(response: &DescribeConfigsResponse) {
     assert!(
@@ -104,34 +93,29 @@ fn assert_list_response(response: &ListConfigResourcesResponse) {
 ///    "sub-a".
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_metrics_config_alter_describe_list_round_trip() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (_, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (_cluster, client) =
+        crate::support::start_n_node_client(1, "client-metrics-config-test").await;
 
     // ── Step 1: IncrementalAlterConfigs ──────────────────────────────────────
-    let alter_req = IncrementalAlterConfigsRequest {
-        resources: vec![AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_CLIENT_METRICS,
-            resource_name: "sub-a".to_string(),
-            configs: vec![
-                AlterableConfig {
-                    name: "metrics".to_string(),
-                    config_operation: CONFIG_OP_SET,
-                    value: Some("org.apache.kafka.consumer.".to_string()),
-                    ..Default::default()
-                },
-                AlterableConfig {
-                    name: "interval.ms".to_string(),
-                    config_operation: CONFIG_OP_SET,
-                    value: Some("60000".to_string()),
-                    ..Default::default()
-                },
+    let alter_req = incremental_request(
+        vec![incremental_resource(
+            RESOURCE_TYPE_CLIENT_METRICS,
+            "sub-a".to_string(),
+            vec![
+                incremental_config(
+                    "metrics".to_string(),
+                    Some("org.apache.kafka.consumer.".to_string()),
+                    CONFIG_OP_SET,
+                ),
+                incremental_config(
+                    "interval.ms".to_string(),
+                    Some("60000".to_string()),
+                    CONFIG_OP_SET,
+                ),
             ],
-            ..Default::default()
-        }],
-        validate_only: false,
-        ..Default::default()
-    };
+        )],
+        false,
+    );
 
     let alter_resp: IncrementalAlterConfigsResponse = client
         .send(alter_req)

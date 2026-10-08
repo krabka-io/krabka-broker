@@ -6,7 +6,6 @@ use std::sync::Arc;
 use assert2::check;
 use bytes::Bytes;
 use krabka_ids::Offset;
-use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
 use krabka_protocol::records::{Record, RecordBatch};
 use krabka_units::{bytes, millis};
 
@@ -16,7 +15,7 @@ use crate::{
     handlers::produce::{
         framing::PartitionPayload,
         pipeline::{PartitionInput, process_partition},
-        test_support::{encode_batch, image_with_topic},
+        test_support::{encode_batch, image_with_overrides as image_with_delivery},
     },
 };
 
@@ -33,18 +32,6 @@ const SCHEDULE_NOW_MS: i64 = 1_700_000_000_000;
 
 // The topic-config overrides one delivery-gate table row applies.
 type DeliveryOverrides = &'static [(&'static str, &'static str)];
-
-fn image_with_delivery(topic: &str, overrides: &[(&str, &str)]) -> MetadataImage {
-    let mut image = image_with_topic(topic, &[1]);
-    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: topic.into(),
-        overrides: overrides
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-            .collect(),
-    }));
-    image
-}
 
 // A one-record batch that asks to be delivered at `delivery_ms`.
 fn batch_delivered_at(delivery_ms: i64) -> RecordBatch {

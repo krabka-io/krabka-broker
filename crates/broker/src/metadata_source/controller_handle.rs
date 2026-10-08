@@ -133,19 +133,7 @@ mod tests {
     use super::*;
     use crate::metadata_source::test_support::{topic_record, wait_for_controller_leader};
 
-    async fn bind_eventually(addr: SocketAddr) -> tokio::net::TcpListener {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            match tokio::net::TcpListener::bind(addr).await {
-                Ok(listener) => return listener,
-                Err(err) if tokio::time::Instant::now() < deadline => {
-                    let _ = err;
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-                Err(err) => panic!("listener address {addr} was not released: {err}"),
-            }
-        }
-    }
+    krabka_macros::bind_retry_fixture!(bind_eventually, ::std::time::Duration::from_secs(2));
 
     #[tokio::test]
     async fn controller_handle_metadata_source_forwards_snapshot_reconfig_and_cancel() {

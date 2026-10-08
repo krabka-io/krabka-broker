@@ -29,6 +29,14 @@ fn archive_at(dir: &std::path::Path) -> ArchiveStore {
     crate::open_archive(&cli.args).expect("archive store")
 }
 
+/// A local archive and the partition identity shared by verification cases.
+fn verification_context() -> (TempDir, ArchiveStore, TopicIdPartition) {
+    let dir = TempDir::new().expect("tempdir");
+    let store = archive_at(dir.path());
+    let partition = test_partition();
+    (dir, store, partition)
+}
+
 fn write_object(root: &std::path::Path, relative: &str, bytes: &[u8]) -> ArchiveObject {
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
@@ -251,9 +259,7 @@ fn write_segment(dir: &std::path::Path, bytes: &SegmentBytes, omit: &[&str]) -> 
 
 #[tokio::test]
 async fn a_clean_segment_verifies_and_reports_its_facts() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let fixture = valid_segment_bytes();
     let segment = write_segment(dir.path(), &fixture, &[]);
 
@@ -279,41 +285,31 @@ async fn a_clean_segment_verifies_and_reports_its_facts() {
 
 #[tokio::test]
 async fn authenticated_fetch_rejects_object_replacement() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let fixture = valid_segment_bytes();
     let segment = write_segment(dir.path(), &fixture, &[]);
-    let objects = [
-        segment.log.as_ref(),
-        segment.offset_index.as_ref(),
-        segment.time_index.as_ref(),
-        segment.producer_snapshot.as_ref(),
-        segment.leader_epoch.as_ref(),
-        segment.transaction_index.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|artifact| {
-        let key = artifact.key.to_string();
-        let bytes = std::fs::read(dir.path().join(&key)).expect("read object");
-        (
-            key.clone(),
-            krabka_remote_storage::ObjectEntry {
-                suffix: artifact
-                    .key
-                    .extension()
-                    .map_or_else(String::new, |suffix| format!(".{suffix}")),
-                key,
-                size_bytes: u64::try_from(bytes.len()).unwrap(),
-                sha256: krabka_remote_storage::Sha256Digest::of(&bytes),
-                e_tag: None,
-                version_id: None,
-                create_precondition: true,
-            },
-        )
-    })
-    .collect();
+    let objects = segment
+        .artifacts()
+        .map(|artifact| {
+            let key = artifact.key.to_string();
+            let bytes = std::fs::read(dir.path().join(&key)).expect("read object");
+            (
+                key.clone(),
+                krabka_remote_storage::ObjectEntry {
+                    suffix: artifact
+                        .key
+                        .extension()
+                        .map_or_else(String::new, |suffix| format!(".{suffix}")),
+                    key,
+                    size_bytes: u64::try_from(bytes.len()).unwrap(),
+                    sha256: krabka_remote_storage::Sha256Digest::of(&bytes),
+                    e_tag: None,
+                    version_id: None,
+                    create_precondition: true,
+                },
+            )
+        })
+        .collect();
 
     let replacement = vec![0x5a; fixture.log.len()];
     std::fs::write(dir.path().join("orders-0/seg.log"), replacement).expect("replace log");
@@ -342,9 +338,7 @@ async fn missing_mandatory_artifacts_are_torn_copies_in_written_order() {
     ];
 
     for (omit, expected) in cases {
-        let dir = TempDir::new().expect("tempdir");
-        let store = archive_at(dir.path());
-        let partition = test_partition();
+        let (dir, store, partition) = verification_context();
         let fixture = valid_segment_bytes();
         let segment = write_segment(dir.path(), &fixture, omit);
 
@@ -360,9 +354,7 @@ async fn missing_mandatory_artifacts_are_torn_copies_in_written_order() {
 
 #[tokio::test]
 async fn a_flipped_crc_covered_byte_is_a_checksum_mismatch() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
     // Byte 62 sits inside the first batch's body, well past its 61-byte
@@ -384,9 +376,7 @@ async fn a_flipped_crc_covered_byte_is_a_checksum_mismatch() {
 
 #[tokio::test]
 async fn a_log_truncated_mid_batch_is_a_truncated_segment() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
     let full_len = fixture.log.len();
@@ -401,9 +391,7 @@ async fn a_log_truncated_mid_batch_is_a_truncated_segment() {
 
 #[tokio::test]
 async fn a_gap_between_crc_valid_batches_is_accepted() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
     // The first batch ends at 102, but the second starts at 104. Both batches
@@ -419,9 +407,7 @@ async fn a_gap_between_crc_valid_batches_is_accepted() {
 
 #[tokio::test]
 async fn first_batch_must_match_the_segment_base_offset() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
     fixture.log = encode_all(&[batch(101, 1000, 1000, 1)]);
@@ -435,9 +421,7 @@ async fn first_batch_must_match_the_segment_base_offset() {
 
 #[tokio::test]
 async fn a_batch_whose_exclusive_end_overflows_is_rejected() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
     fixture.base_offset = Offset(i64::MAX);
@@ -452,9 +436,7 @@ async fn a_batch_whose_exclusive_end_overflows_is_rejected() {
 
 #[tokio::test]
 async fn an_offset_index_entry_past_the_log_end_is_rejected() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
     let log_len = u32::try_from(fixture.log.len()).unwrap();
@@ -469,9 +451,7 @@ async fn an_offset_index_entry_past_the_log_end_is_rejected() {
 
 #[tokio::test]
 async fn a_non_monotonic_time_index_is_rejected() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
     fixture.time_index = time_index_bytes(&[(1_030, 3), (1_000, 0)]);
@@ -510,9 +490,7 @@ async fn sparse_indexes_require_complete_strict_bounded_entries() {
     ];
 
     for sidecar in cases {
-        let dir = TempDir::new().expect("tempdir");
-        let store = archive_at(dir.path());
-        let partition = test_partition();
+        let (dir, store, partition) = verification_context();
         let mut fixture = valid_segment_bytes();
         match sidecar {
             Sidecar::Offset(bytes) => fixture.offset_index = bytes,
@@ -548,9 +526,7 @@ async fn transaction_index_accepts_kafka_marker_order() {
     ];
 
     for (name, entries) in cases {
-        let dir = TempDir::new().expect("tempdir");
-        let store = archive_at(dir.path());
-        let partition = test_partition();
+        let (dir, store, partition) = verification_context();
         let mut fixture = valid_segment_bytes();
         fixture.transaction_index = Some(txn_index_bytes(entries));
 
@@ -562,9 +538,7 @@ async fn transaction_index_accepts_kafka_marker_order() {
 
 #[tokio::test]
 async fn a_corrupt_snapshot_crc_is_rejected() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
     let mut corrupted = fixture.snapshot.to_vec();
@@ -586,9 +560,7 @@ async fn producer_snapshots_require_legal_unique_states_in_any_order() {
     ];
 
     // The same verified bytes are safe to retry.
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
     fixture.snapshot = snapshot_bytes(&valid);
     let segment = write_segment(dir.path(), &fixture, &[]);
@@ -605,9 +577,7 @@ async fn producer_snapshots_require_legal_unique_states_in_any_order() {
         vec![(-1, 1, 3, 102, 2, 1_020, 0, -1)], // invalid producer ID
     ];
     for entries in invalid {
-        let dir = TempDir::new().expect("tempdir");
-        let store = archive_at(dir.path());
-        let partition = test_partition();
+        let (dir, store, partition) = verification_context();
         let mut fixture = valid_segment_bytes();
         fixture.snapshot = snapshot_bytes(&entries);
         let segment = write_segment(dir.path(), &fixture, &[]);
@@ -633,9 +603,7 @@ async fn malformed_leader_epoch_checkpoints_are_rejected() {
     ];
 
     for bad in cases {
-        let dir = TempDir::new().expect("tempdir");
-        let store = archive_at(dir.path());
-        let partition = test_partition();
+        let (dir, store, partition) = verification_context();
         let mut fixture = valid_segment_bytes();
         fixture.checkpoint = Bytes::from_static(bad.as_bytes());
 
@@ -652,9 +620,7 @@ async fn malformed_leader_epoch_checkpoints_are_rejected() {
 
 #[tokio::test]
 async fn every_batch_reporting_unknown_timestamp_keeps_the_sentinel() {
-    let dir = TempDir::new().expect("tempdir");
-    let store = archive_at(dir.path());
-    let partition = test_partition();
+    let (dir, store, partition) = verification_context();
     let fixture = segment_bytes(-1, -1);
 
     let segment = write_segment(dir.path(), &fixture, &[]);

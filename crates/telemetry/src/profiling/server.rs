@@ -92,6 +92,13 @@ pub async fn await_admin_exit(
     }
 }
 
+fn admin_address(default_addr: &str) -> SocketAddr {
+    let raw =
+        std::env::var("KRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
+    raw.parse()
+        .unwrap_or_else(|e| panic!("invalid KRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"))
+}
+
 /// Like [`serve_admin`], but with the bind address from the environment.
 ///
 /// This function reads `KRABKA_ADMIN_LISTEN_ADDR` and falls back to
@@ -112,11 +119,7 @@ pub async fn serve_admin_from_env(default_addr: &str) -> std::io::Result<()> {
 /// # Panics
 /// Panics if synchronized telemetry state is poisoned or validated columnar data is missing a required field.
 pub async fn serve_admin_from_env_with(default_addr: &str, extra: Router) -> std::io::Result<()> {
-    let raw =
-        std::env::var("KRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
-    let addr: SocketAddr = raw
-        .parse()
-        .unwrap_or_else(|e| panic!("invalid KRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"));
+    let addr = admin_address(default_addr);
     serve_admin(addr, extra).await
 }
 
@@ -133,11 +136,7 @@ pub async fn serve_admin_from_env_with_config(
     extra: Router,
     config: ProfilingConfig,
 ) -> Result<(), ProfilingError> {
-    let raw =
-        std::env::var("KRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
-    let addr: SocketAddr = raw
-        .parse()
-        .unwrap_or_else(|e| panic!("invalid KRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"));
+    let addr = admin_address(default_addr);
     serve_admin_with_config(addr, extra, config).await
 }
 
@@ -153,11 +152,7 @@ pub async fn spawn_admin_from_env_with_config(
     extra: Router,
     config: ProfilingConfig,
 ) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ProfilingError> {
-    let raw =
-        std::env::var("KRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
-    let addr: SocketAddr = raw
-        .parse()
-        .unwrap_or_else(|e| panic!("invalid KRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"));
+    let addr = admin_address(default_addr);
     spawn_admin_with_config(addr, extra, config).await
 }
 

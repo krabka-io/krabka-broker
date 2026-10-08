@@ -173,13 +173,12 @@ mod tests {
     fn response_helpers_preserve_topic_identity_error_and_throttle_fields() {
         let id = WireUuid([9; 16]);
         let unknown_id = delete_topic_result(None, id, codes::UNKNOWN_TOPIC_ID);
-        let expected_unknown = DeletableTopicResult {
+        let expected_unknown = tagged_wire!(DeletableTopicResult {
             name: None,
             topic_id: id,
             error_code: codes::UNKNOWN_TOPIC_ID,
             error_message: Some(UNKNOWN_TOPIC_ID_MESSAGE.into()),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        });
         assert!(unknown_id == expected_unknown);
 
         let denied = delete_topic_result(
@@ -187,21 +186,19 @@ mod tests {
             WireUuid::ZERO,
             codes::TOPIC_AUTHORIZATION_FAILED,
         );
-        let expected_denied = DeletableTopicResult {
+        let expected_denied = tagged_wire!(DeletableTopicResult {
             name: Some("secret".into()),
             topic_id: WireUuid::ZERO,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
             error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.into()),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        });
         assert!(denied == expected_denied);
 
         let resp = delete_topics_response(vec![denied], 123);
-        let expected_resp = DeleteTopicsResponse {
+        let expected_resp = tagged_wire!(DeleteTopicsResponse {
             throttle_time_ms: 123,
             responses: vec![expected_denied],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        });
         assert!(resp == expected_resp);
     }
 
@@ -210,12 +207,13 @@ mod tests {
     #[test]
     fn rows_carry_kafkas_default_messages() {
         let id = WireUuid([3; 16]);
-        let row = |code, message: Option<&str>| DeletableTopicResult {
-            name: Some("t".into()),
-            topic_id: id,
-            error_code: code,
-            error_message: message.map(str::to_string),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        let row = |code, message: Option<&str>| {
+            tagged_wire!(DeletableTopicResult {
+                name: Some("t".into()),
+                topic_id: id,
+                error_code: code,
+                error_message: message.map(str::to_string),
+            })
         };
         let actual: Vec<DeletableTopicResult> = [
             codes::NONE,

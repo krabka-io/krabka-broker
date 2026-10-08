@@ -4,10 +4,17 @@
 
 use assert2::check;
 use krabka_protocol::records::RecordBatch;
-use tempfile::tempdir;
 
 use super::replay::replay_records;
-use crate::coordinator::persistence::OffsetCommitValue;
+use crate::coordinator::{persistence::OffsetCommitValue, unified::actor::test_support::rpc};
+
+fn append_record(log: &mut krabka_log::Log, record: krabka_protocol::records::Record) {
+    let mut batch = RecordBatch {
+        records: vec![record],
+        ..RecordBatch::default()
+    };
+    log.append(&mut batch).unwrap();
+}
 
 /// `replay_records` must walk EVERY batch in the log, not the first batch
 /// only.
@@ -28,8 +35,7 @@ async fn replay_records_walks_all_batches() {
     // (topic, partition), so we can tell which batches were replayed.
     let commit_record = super::test_support::commit_record;
 
-    let dir = tempdir().unwrap();
-    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    let (_dir, mut log) = crate::coordinator::test_support::temp_log();
 
     // First batch spans TWO offsets (last_offset_delta == 1): partitions 0
     // and 1 commit at offsets 100 and 101.
@@ -81,8 +87,7 @@ fn replay_applies_only_committed_transactional_offsets() {
         ..RecordBatch::default()
     };
 
-    let dir = tempdir().unwrap();
-    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    let (_dir, mut log) = crate::coordinator::test_support::temp_log();
     log.append(&mut transactional(0, 111)).unwrap();
     log.append(&mut build_marker_batch(
         ProducerId(7),
@@ -120,14 +125,11 @@ fn replay_applies_only_committed_transactional_offsets() {
 async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
     use krabka_log::Offset;
     use krabka_protocol::records::{Attributes, Record};
-    use tokio::sync::oneshot;
 
     use super::{replay::finalize, test_support::bare_coordinator};
-    use crate::coordinator::unified::actor::GroupActorMessage;
 
     let coordinator = bare_coordinator();
-    let dir = tempdir().unwrap();
-    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    let (_dir, mut log) = crate::coordinator::test_support::temp_log();
     log.append(&mut RecordBatch {
         producer_id: 7,
         producer_epoch: 0,
@@ -165,13 +167,7 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
     // has to spawn an actor for it and hand it the marks.
     finalize(&coordinator, replayed).await;
     let handle = coordinator.find("g").expect("seeded classic actor");
-    let (reply, offsets) = oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::FetchOffsets { reply })
-        .await
-        .unwrap();
-    let offsets = offsets.await.unwrap();
+    let offsets = rpc::fetch_offsets(&handle).await;
     check!(offsets.committed.is_empty());
     check!(offsets.pending_txn == std::collections::HashSet::from([("t".to_string(), 4)]));
 }
@@ -191,13 +187,11 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
 async fn replay_seeds_every_open_transaction_past_the_actor_mailbox() {
     use std::collections::{HashMap, HashSet};
 
-    use tokio::sync::oneshot;
-
     use super::{
         replay::{PendingTxnKeys, Replayed, finalize},
         test_support::bare_coordinator_with_mailbox,
     };
-    use crate::coordinator::unified::{GroupSeed, actor::GroupActorMessage};
+    use crate::coordinator::unified::GroupSeed;
 
     const MAILBOX: usize = 2;
     const PRODUCERS: i64 = 8;
@@ -228,13 +222,7 @@ async fn replay_seeds_every_open_transaction_past_the_actor_mailbox() {
     finalize(&coordinator, replayed).await;
 
     let handle = coordinator.find("g").expect("seeded consumer actor");
-    let (reply, offsets) = oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::FetchOffsets { reply })
-        .await
-        .unwrap();
-    let offsets = offsets.await.unwrap();
+    let offsets = rpc::fetch_offsets(&handle).await;
     let expected: HashSet<(String, i32)> = (0..PRODUCERS)
         .map(|producer_id| ("t".to_string(), i32::try_from(producer_id).unwrap()))
         .collect();
@@ -275,19 +263,14 @@ fn replay_honours_offset_and_group_tombstones() {
         ..Default::default()
     };
 
-    let dir = tempdir().unwrap();
-    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    let (_dir, mut log) = crate::coordinator::test_support::temp_log();
     for record in [
         commit(0, 100),
         commit(1, 101),
         group_metadata,
         tombstone(OffsetCommitValue::encode_key("g", "t", 0).unwrap()),
     ] {
-        let mut batch = RecordBatch {
-            records: vec![record],
-            ..RecordBatch::default()
-        };
-        log.append(&mut batch).unwrap();
+        append_record(&mut log, record);
     }
 
     let replayed = replay_records(&log, &coordinator).unwrap();
@@ -334,19 +317,14 @@ async fn a_fully_reaped_group_does_not_come_back_after_replay() {
         ..Default::default()
     };
 
-    let dir = tempdir().unwrap();
-    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    let (_dir, mut log) = crate::coordinator::test_support::temp_log();
     for record in [
         super::test_support::commit_record_for_group("reaped", 0, 100),
         // The sweep's batch: the last offset, then the group itself.
         tombstone(OffsetCommitValue::encode_key("reaped", "t", 0).unwrap()),
         tombstone(GroupMetadataValue::encode_key("reaped").unwrap()),
     ] {
-        let mut batch = RecordBatch {
-            records: vec![record],
-            ..RecordBatch::default()
-        };
-        log.append(&mut batch).unwrap();
+        append_record(&mut log, record);
     }
 
     let replayed = replay_records(&log, &coordinator).unwrap();
@@ -385,8 +363,7 @@ async fn replay_keeps_the_committed_topic_id() {
         ..Default::default()
     };
 
-    let dir = tempdir().unwrap();
-    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    let (_dir, mut log) = crate::coordinator::test_support::temp_log();
     let mut batch = RecordBatch {
         last_offset_delta: 1,
         ..RecordBatch::default()

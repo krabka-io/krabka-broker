@@ -236,63 +236,39 @@ fn java_prefix(input: &str, max: usize) -> String {
     prefix
 }
 
-impl fmt::Display for ClusterId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(&encode(self.0))
-    }
+// Both identifiers use Kafka's UUID representation on disk and in JSON.
+macro_rules! kafka_uuid_traits {
+    ($($id:ident),+ $(,)?) => {$(
+        impl fmt::Display for $id {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.pad(&encode(self.0))
+            }
+        }
+
+        impl FromStr for $id {
+            type Err = KafkaUuidError;
+
+            /// Parses the Kafka form only, as Kafka's `Uuid.fromString` does.
+            fn from_str(input: &str) -> Result<Self, Self::Err> {
+                decode(input).map(Self)
+            }
+        }
+
+        impl Serialize for $id {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.collect_str(self)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $id {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                String::deserialize(deserializer)?.parse().map_err(D::Error::custom)
+            }
+        }
+    )+};
 }
 
-impl fmt::Display for DirectoryId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(&encode(self.0))
-    }
-}
-
-impl FromStr for ClusterId {
-    type Err = KafkaUuidError;
-
-    /// Parses the Kafka form only, as Kafka's `Uuid.fromString` does.
-    fn from_str(input: &str) -> Result<Self, Self::Err> {
-        decode(input).map(Self)
-    }
-}
-
-impl FromStr for DirectoryId {
-    type Err = KafkaUuidError;
-
-    /// Parses the Kafka form only, as Kafka's `Uuid.fromString` does.
-    fn from_str(input: &str) -> Result<Self, Self::Err> {
-        decode(input).map(Self)
-    }
-}
-
-impl Serialize for ClusterId {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl Serialize for DirectoryId {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for ClusterId {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(D::Error::custom)
-    }
-}
-
-impl<'de> Deserialize<'de> for DirectoryId {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(D::Error::custom)
-    }
-}
+kafka_uuid_traits!(ClusterId, DirectoryId);
 
 /// A string that is not a Kafka `Uuid`.
 ///

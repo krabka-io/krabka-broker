@@ -13,7 +13,7 @@ use assert2::{assert, check};
 use bytes::Bytes;
 use krabka_broker::codes;
 use krabka_client_core::Client;
-use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_client_producer::Producer;
 use krabka_protocol::{
     krabka::freeze::PATTERN_TYPE_LITERAL,
     owned::list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
@@ -22,7 +22,7 @@ use krabka_protocol::{
 use crate::{
     control_plane::freeze_scope,
     support,
-    wire::{CONTROL, accepted, create_topic, produce_outcome, refused},
+    wire::{CONTROL, accepted, create_topic, refused},
 };
 
 /// The `read_committed` end of one partition.
@@ -120,11 +120,12 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
         .await
         .expect("begin_transaction");
     producer
-        .send(ProducerRecord {
-            topic: "orders".into(),
-            value: Some(Bytes::from_static(b"in-flight")),
-            ..Default::default()
-        })
+        .send(crate::support::producer::producer_record(
+            "orders",
+            None,
+            None,
+            Some(Bytes::from_static(b"in-flight")),
+        ))
         .await
         .expect("the in-flight record is acknowledged");
     p.broker
@@ -138,10 +139,7 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
 
     // The freeze is live while the transaction is open: a new plain write is
     // refused, and it does not move the log.
-    check!(
-        produce_outcome(&p.broker, &p.client, "orders", frozen).await
-            == refused("literal", "orders", "cutover", 1)
-    );
+    crate::wire::check_produce!(&p.broker, &p.client, "orders", frozen => refused("literal", "orders", "cutover", 1));
 
     txn.commit()
         .await
@@ -155,7 +153,7 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
         .await;
     wait_for_stable_offset(&p.client, "orders", 2).await;
 
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&p.broker, &p.client, CONTROL, control => accepted(1));
     producer.close().await.expect("producer close");
     p.broker.shutdown().await;
 }

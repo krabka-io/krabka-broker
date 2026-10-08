@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/schema.rs" 65 27 65 32 *)
+(* #"/workspace/crates/verified/src/schema.rs" 44 19 44 36 *)
 
 (* <schema::SchemaBatchAdmission as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_SchemaBatchAdmission [#"/workspace/crates/verified/src/schema.rs" 65 27 65 32] (self: t_SchemaBatchAdmission)
+let clone_SchemaBatchAdmission [#"/workspace/crates/verified/src/schema.rs" 44 19 44 36] (self: t_SchemaBatchAdmission)
   (return (x: t_SchemaBatchAdmission)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_SchemaBatchAdmission = Any.any_l () | & self: t_SchemaBatchAdmission = self ])

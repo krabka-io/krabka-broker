@@ -165,18 +165,14 @@ fn drive<F: Future>(future: F) -> F::Output {
     }
 }
 
-/// A response body of `len` bytes.
-///
-/// The pattern is non-uniform so that nothing downstream can shortcut it, and
-/// so a compressed variant of this suite would not measure an unrealistically
-/// compressible payload.
-fn body(len: usize) -> Bytes {
-    Bytes::from(
-        (0..len)
-            .map(|b| u8::try_from(b % 251).expect("b % 251 fits in a byte"))
-            .collect::<Vec<u8>>(),
-    )
-}
+// A response body of `len` bytes.
+//
+// The pattern is non-uniform so that nothing downstream can shortcut it, and
+// so a compressed variant of this suite would not measure an unrealistically
+// compressible payload.
+krabka_macros::patterned_bytes_fixture!(body);
+
+krabka_macros::frame_prefix_fixture!(wire_frame_prefix);
 
 /// The chained-`Buf` prototype's leading segment: the codec's 4-byte frame
 /// length followed by the response header the copy path prepends.
@@ -185,13 +181,15 @@ fn body(len: usize) -> Bytes {
 /// is the handler's body, handed to the socket as its own segment.
 fn frame_prefix(body_len: usize) -> Bytes {
     let header_len = response_framing::response_header_len(API_KEY, BODY_FLEXIBLE);
-    let mut prefix = BytesMut::with_capacity(4 + header_len);
-    prefix.put_u32(u32::try_from(header_len + body_len).expect("a bench body fits in a frame"));
-    prefix.put_i32(CORRELATION_ID);
-    if response_framing::response_header_v1(API_KEY, BODY_FLEXIBLE) {
-        prefix.put_u8(0); // empty tagged fields
-    }
-    prefix.freeze()
+    wire_frame_prefix(
+        header_len,
+        CORRELATION_ID,
+        response_framing::response_header_v1(API_KEY, BODY_FLEXIBLE),
+        body_len,
+        4 + header_len,
+        "a bench body fits in a frame",
+    )
+    .freeze()
 }
 
 /// Frame one response the way the dispatch loop does and hand it to `framed`.

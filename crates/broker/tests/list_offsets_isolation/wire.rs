@@ -18,9 +18,12 @@ use krabka_broker::{BrokerHandle, codes};
 use krabka_client_core::Client;
 use krabka_client_producer::{Producer, ProducerRecord};
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-    list_offsets_response::ListOffsetsPartitionResponse,
+    list_offsets_request::ListOffsetsRequest, list_offsets_response::ListOffsetsPartitionResponse,
+};
+
+use crate::support::{
+    offsets::{list_offset_partition, single_partition_list_offsets},
+    topics::{creatable_topic, create_topic_request},
 };
 
 /// Request timestamp sentinel (-1) asking for the end of the partition.
@@ -90,16 +93,7 @@ pub(super) fn latest_row(offset: i64) -> ListOffsetsPartitionResponse {
 
 pub(super) async fn create_topic(client: &Client, name: &str) {
     let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(name, 1, 1), 5_000))
         .await
         .expect("CreateTopics");
     check!(
@@ -120,17 +114,8 @@ async fn list_offset(
         .send(ListOffsetsRequest {
             replica_id: CONSUMER_REPLICA_ID,
             isolation_level,
-            topics: vec![ListOffsetsTopic {
-                name: topic.into(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: 0,
-                    timestamp,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
             timeout_ms: 5_000,
-            ..Default::default()
+            ..single_partition_list_offsets(topic, list_offset_partition(0, timestamp))
         })
         .await
         .expect("ListOffsets");
@@ -166,11 +151,12 @@ pub(super) async fn wait_for_settled_log(broker: &BrokerHandle, topic: &str, off
 }
 
 fn record(topic: &str, value: &'static str) -> ProducerRecord {
-    ProducerRecord {
-        topic: topic.into(),
-        value: Some(Bytes::from_static(value.as_bytes())),
-        ..Default::default()
-    }
+    crate::support::producer::producer_record(
+        topic,
+        None,
+        None,
+        Some(Bytes::from_static(value.as_bytes())),
+    )
 }
 
 pub(super) async fn send_ok(producer: &Producer, topic: &str, value: &'static str) {

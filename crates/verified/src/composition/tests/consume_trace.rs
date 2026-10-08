@@ -49,16 +49,14 @@ fn rational_trace(
 proptest! {
     #[test]
     fn consuming_traces_match_a_signed_rational_ledger(
-        raw_available in any::<u64>(), debt in prop_oneof![0_u64..100_000_000, any::<u64>()],
-        burst in prop_oneof![0_u64..100_000_000, any::<u64>()], owes in any::<bool>(),
-        fraction in 0_u64..1_000_000_000, start in prop_oneof![Just(0_u64), any::<u64>()],
+        (initial, burst) in token_balance_cases(),
+        start in prop_oneof![Just(0_u64), any::<u64>()],
         rate in prop_oneof![1_u64..2_000_000_000, 1_u64..=u64::MAX],
         units in prop_oneof![1_u64..1_000_001, 1_u64..=u64::MAX],
         steps in proptest::collection::vec((
             prop_oneof![0_u64..10_000_000_000, any::<u64>()],
             prop_oneof![0_u64..100, any::<u64>()]), 0..20),
     ) {
-        let initial = if owes { (0, debt, fraction) } else { (raw_available.min(burst), 0, fraction) };
         prop_assert_eq!(metered_consumes_conserve_elapsed_credit(
             initial, start, &steps, rate, burst, units),
             rational_trace(initial, start, &steps, rate, burst, units));

@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 74 0 74 90 *)
+(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 72 0 72 90 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 77 16 77 21
-let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 69 10 72 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 75 16 75 21
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 67 10 70 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -26,7 +26,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_batch_past_offset_bound [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 74 0 74 90]
+let restore_batch_past_offset_bound [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 72 0 72 90]
   (batch_base: Int64.t) (offset_bound: t_Option_i64) (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {offset_bound = None} (! bb3) | br1 (x0: Int64.t) -> {offset_bound = Some x0} (! bb4) ]
   | bb4 = s0

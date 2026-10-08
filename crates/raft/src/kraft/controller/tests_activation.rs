@@ -439,18 +439,11 @@ fn a_refused_activation_is_a_fatal_fault() {
     engine.activation = Activation {
         bootstrap_records: vec![
             feature(METADATA_VERSION_FEATURE, LATEST_PRODUCTION_METADATA_VERSION),
-            MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                topic: "missing".into(),
-                partition: 0,
-                leader: NodeId(1),
-                replicas: vec![NodeId(1)],
-                isr: vec![NodeId(1)],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
+            MetadataRecord::V1Partition(crate::test_support::single_replica_partition(
+                "missing",
+                0,
+                NodeId(1),
+            )),
         ],
         ..Activation::default()
     };

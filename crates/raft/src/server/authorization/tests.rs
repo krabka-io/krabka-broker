@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use assert2::check;
 use bytes::{BufMut as _, Bytes, BytesMut};
-use krabka_metadata::{MetadataRecord, TopicRecord};
+use krabka_metadata::MetadataRecord;
 use krabka_protocol::{
     Decode as _, Encode as _,
     owned::{
@@ -458,12 +458,9 @@ async fn exchange(
 }
 
 fn submit_change(topic: &str) -> Bytes {
-    let records = vec![MetadataRecord::V1Topic(TopicRecord {
-        name: topic.into(),
-        topic_id: uuid::Uuid::new_v4(),
-        partitions: 1,
-        replication_factor: 1,
-    })];
+    let records = vec![MetadataRecord::V1Topic(
+        crate::test_support::single_partition_topic(topic, uuid::Uuid::new_v4()),
+    )];
     let records =
         <serde_wincode::SerdeCompat<Vec<MetadataRecord>> as wincode::Serialize>::serialize(
             &records,

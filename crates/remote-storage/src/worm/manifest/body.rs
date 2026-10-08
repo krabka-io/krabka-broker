@@ -144,7 +144,7 @@ mod tests {
         },
         worm::manifest::{
             HexBytes,
-            test_support::{KEY_ID, bare_object, located_object, sample_body},
+            test_support::{KEY_ID, bare_object, located_object, sample_body, sample_segment},
         },
     };
 
@@ -223,18 +223,8 @@ mod tests {
         check!(
             SegmentIdentity::from_metadata(&md)
                 == SegmentIdentity {
-                    topic: "orders".to_string(),
-                    topic_id: Uuid::from_u128(0x11),
-                    partition: 3,
-                    segment_id: Uuid::from_u128(0x22),
-                    start_offset: 100,
-                    end_offset: 199,
-                    max_timestamp_ms: 1_713_000_000_000,
-                    broker_id: 7,
-                    event_timestamp_ms: 1_713_000_001_000,
-                    segment_size_bytes: 4096,
-                    leader_epochs: maplit::btreemap! {0 => 100, 1 => 150},
                     txn_index_empty: true,
+                    ..sample_segment()
                 }
         );
     }

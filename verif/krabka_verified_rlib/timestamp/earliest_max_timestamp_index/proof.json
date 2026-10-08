@@ -4,9 +4,9 @@
     "Coma": {
       "vc_earliest_max_timestamp_index": {
         "prover": "alt-ergo",
-        "time": 0.094
+        "time": 0.061
       },
-      "vc_len_i64": { "prover": "alt-ergo", "time": 0.0 }
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.011 }
     }
   }
 }

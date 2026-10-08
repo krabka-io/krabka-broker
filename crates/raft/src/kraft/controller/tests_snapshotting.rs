@@ -21,6 +21,15 @@ use crate::kraft::controller::{
     },
 };
 
+async fn assert_checkpoint_pruned(ctrl: &KraftController, dir: &std::path::Path) {
+    let checkpoint = load_latest_checkpoint(dir)
+        .expect("scan checkpoints")
+        .expect("a checkpoint exists");
+    assert2::assert!(!checkpoint.is_empty());
+    let quorum = ctrl.quorum_state().await.unwrap();
+    assert2::assert!(quorum.log_start_offset > 0);
+}
+
 /// The `last_contained_log_timestamp` a checkpoint's KIP-630
 /// `SnapshotHeaderRecord` is stamped with. The header is the first control
 /// batch of the artifact, so decoding it is how a reader — the JVM
@@ -84,10 +93,9 @@ fn checkpoint_names_must_use_the_canonical_fixed_width_encoding() {
 
 #[test]
 fn ordinary_snapshot_does_not_reload_the_live_image() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&topic_record("ordinary-snapshot"), reply);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
+    let mut rx =
+        super::test_support::submit_on_engine(&mut engine, &topic_record("ordinary-snapshot"));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
 
     // Replication factor is derived from PartitionRecord on the wire. A
@@ -132,14 +140,8 @@ async fn leader_snapshots_and_prunes_at_threshold() {
     }
 
     // A checkpoint was written.
-    let cp = load_latest_checkpoint(dir.path())
-        .expect("scan checkpoints")
-        .expect("a checkpoint exists");
-    assert2::assert!(!cp.is_empty());
-
     // The log was cleaned: log-start advanced past 0.
-    let qs = ctrl.quorum_state().await.unwrap();
-    assert2::assert!(qs.log_start_offset > 0);
+    assert_checkpoint_pruned(&ctrl, dir.path()).await;
     ctrl.shutdown().await;
 }
 
@@ -176,12 +178,7 @@ async fn leader_snapshots_and_prunes_at_byte_threshold_across_many_small_commits
         }
     }
 
-    let cp = load_latest_checkpoint(dir.path())
-        .expect("scan checkpoints")
-        .expect("a checkpoint exists");
-    assert2::assert!(!cp.is_empty());
-    let qs = ctrl.quorum_state().await.unwrap();
-    assert2::assert!(qs.log_start_offset > 0);
+    assert_checkpoint_pruned(&ctrl, dir.path()).await;
     ctrl.shutdown().await;
 }
 
@@ -274,8 +271,7 @@ fn a_snapshot_roll_keeps_the_checkpoint_it_replaces_until_the_next_one() {
 
     let mut ids = Vec::new();
     for name in ["first", "second", "third"] {
-        let (reply, mut rx) = oneshot::channel();
-        engine.on_submit_change(&topic_record(name), reply);
+        let mut rx = super::test_support::submit_on_engine(&mut engine, &topic_record(name));
         assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
         engine
             .write_snapshot_and_prune()

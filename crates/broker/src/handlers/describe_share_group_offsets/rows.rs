@@ -68,6 +68,19 @@ impl ShareSummaries for SharePersister {
     }
 }
 
+/// Topics without a visible id use the same envelope, with caller-specific partition rows.
+fn unidentified_topic(
+    topic: DescribeShareGroupOffsetsRequestTopic,
+    row: impl FnMut(i32) -> DescribeShareGroupOffsetsResponsePartition,
+) -> DescribeShareGroupOffsetsResponseTopic {
+    DescribeShareGroupOffsetsResponseTopic {
+        topic_name: topic.topic_name,
+        topic_id: Uuid::default(),
+        partitions: topic.partitions.into_iter().map(row).collect(),
+        ..Default::default()
+    }
+}
+
 /// The response row of a topic the request named explicitly, but which the
 /// caller may not `Describe`, as `KafkaApis.describeShareGroupOffsetsForGroup`
 /// builds it.
@@ -79,26 +92,17 @@ impl ShareSummaries for SharePersister {
 pub(super) fn unauthorized_topic(
     topic: DescribeShareGroupOffsetsRequestTopic,
 ) -> DescribeShareGroupOffsetsResponseTopic {
-    DescribeShareGroupOffsetsResponseTopic {
-        topic_name: topic.topic_name,
-        topic_id: Uuid::default(),
-        partitions: topic
-            .partitions
-            .into_iter()
-            .map(
-                |partition_index| DescribeShareGroupOffsetsResponsePartition {
-                    partition_index,
-                    start_offset: -1,
-                    leader_epoch: DEFAULT_LEADER_EPOCH,
-                    lag: -1,
-                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_owned()),
-                    ..Default::default()
-                },
-            )
-            .collect(),
-        ..Default::default()
-    }
+    unidentified_topic(topic, |partition_index| {
+        DescribeShareGroupOffsetsResponsePartition {
+            partition_index,
+            start_offset: -1,
+            leader_epoch: DEFAULT_LEADER_EPOCH,
+            lag: -1,
+            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_owned()),
+            ..Default::default()
+        }
+    })
 }
 
 /// A topic of the request the image holds, with the partitions it named.
@@ -288,24 +292,15 @@ pub(super) async fn describe_topics(
 fn missing_topic(
     topic: DescribeShareGroupOffsetsRequestTopic,
 ) -> DescribeShareGroupOffsetsResponseTopic {
-    DescribeShareGroupOffsetsResponseTopic {
-        topic_name: topic.topic_name,
-        topic_id: Uuid::default(),
-        partitions: topic
-            .partitions
-            .into_iter()
-            .map(
-                |partition_index| DescribeShareGroupOffsetsResponsePartition {
-                    partition_index,
-                    start_offset: UNINITIALIZED_START_OFFSET,
-                    leader_epoch: DEFAULT_LEADER_EPOCH,
-                    lag: UNINITIALIZED_LAG,
-                    ..Default::default()
-                },
-            )
-            .collect(),
-        ..Default::default()
-    }
+    unidentified_topic(topic, |partition_index| {
+        DescribeShareGroupOffsetsResponsePartition {
+            partition_index,
+            start_offset: UNINITIALIZED_START_OFFSET,
+            leader_epoch: DEFAULT_LEADER_EPOCH,
+            lag: UNINITIALIZED_LAG,
+            ..Default::default()
+        }
+    })
 }
 
 /// One partition row of a topic the image holds. `end_offset` is the lookup

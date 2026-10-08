@@ -9,7 +9,7 @@ use creusot_std::prelude::*;
 
 macro_rules! floor_lookup {
     ($(#[$doc:meta])* $name:ident, $key:ty, $order:tt) => {
-        $(#[$doc])*
+                $(#[$doc])*
         #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
             ==> entries@[i].0@ $order entries@[j].0@)]
         #[ensures((exists<i: Int> 0 <= i && i < entries@.len() && entries@[i].0@ <= target@)
@@ -117,6 +117,25 @@ mod tests {
 
     use super::*;
 
+    fn offset_lookup_cases() -> impl Strategy<Value = (std::collections::BTreeSet<u32>, u32)> {
+        (
+            proptest::collection::btree_set(0u32..10_000, 0..64),
+            0u32..10_000,
+        )
+    }
+
+    fn offset_entries(rels: &std::collections::BTreeSet<u32>) -> Vec<(u32, u32)> {
+        rels.iter()
+            .enumerate()
+            .map(|(i, rel)| {
+                (
+                    *rel,
+                    u32::try_from(i).expect("btree set length is bounded to 64") * 17,
+                )
+            })
+            .collect()
+    }
+
     fn offset_floor_oracle(entries: &[(u32, u32)], target: u32) -> u32 {
         match entries.binary_search_by_key(&target, |&(rel, _)| rel) {
             Ok(i) => entries[i].1,
@@ -128,21 +147,11 @@ mod tests {
     proptest! {
         #[test]
         fn lookup_matches_binary_search_oracle(
-            rels in proptest::collection::btree_set(0u32..10_000, 0..64),
-            target in 0u32..10_000,
+            (rels, target) in offset_lookup_cases(),
         ) {
             // btree_set gives strictly-sorted unique keys, matching the
             // OffsetIndex construction invariant.
-            let entries: Vec<(u32, u32)> = rels
-                .iter()
-                .enumerate()
-                .map(|(i, r)| {
-                    (
-                        *r,
-                        u32::try_from(i).expect("btree set length is bounded to 64") * 17,
-                    )
-                })
-                .collect();
+            let entries = offset_entries(&rels);
             prop_assert_eq!(offset_index_lookup(&entries, target), offset_floor_oracle(&entries, target));
         }
 
@@ -172,19 +181,9 @@ mod tests {
 
         #[test]
         fn position_at_or_after_matches_linear_oracle(
-            rels in proptest::collection::btree_set(0u32..10_000, 0..64),
-            target in 0u32..10_000,
+            (rels, target) in offset_lookup_cases(),
         ) {
-            let entries: Vec<(u32, u32)> = rels
-                .iter()
-                .enumerate()
-                .map(|(i, rel)| {
-                    (
-                        *rel,
-                        u32::try_from(i).expect("btree set length is bounded to 64") * 17,
-                    )
-                })
-                .collect();
+            let entries = offset_entries(&rels);
             let want = entries
                 .iter()
                 .find(|&&(rel, _)| rel >= target)

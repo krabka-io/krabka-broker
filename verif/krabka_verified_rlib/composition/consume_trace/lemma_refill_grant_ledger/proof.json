@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_lemma_refill_grant_ledger": { "prover": "alt-ergo", "time": 0.009 }
+      "vc_lemma_refill_grant_ledger": { "prover": "alt-ergo", "time": 0.017 }
     }
   }
 }

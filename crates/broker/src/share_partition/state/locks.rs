@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use krabka_log::Offset;
 
-use super::{AcquisitionState, RecordState, window::give_back};
+use super::{AcquisitionState, InFlightBatch, RecordState, window::give_back};
 
 impl AcquisitionState {
     /// Renews the acquisition lock on the range `[first, last]` that `member`
@@ -33,25 +33,12 @@ impl AcquisitionState {
         now: Instant,
         lock_dur: Duration,
     ) -> Result<(), i16> {
-        if first > last {
-            return Err(crate::codes::INVALID_RECORD_STATE);
-        }
-        let Some((first, last)) = self.ack_bounds(first, last)? else {
+        let Some((first, last)) = self.split_acquired_range(member, first, last)? else {
             return Ok(());
         };
-        // The entire range must be Acquired by this member.
-        if !self.range_acquired_by(member, first, last) {
-            return Err(crate::codes::INVALID_RECORD_STATE);
-        }
-        // Carve the range out at its boundaries, then extend each covered lock.
-        self.split_at_offset(first);
-        self.split_at_offset(last + 1);
         let new_deadline = now + lock_dur;
         for b in &mut self.batches {
-            if b.first_offset < first || b.last_offset > last {
-                continue;
-            }
-            if b.state != RecordState::Acquired {
+            if !b.acquired_within(first, last) {
                 continue;
             }
             b.lock_deadline = Some(new_deadline);
@@ -67,21 +54,10 @@ impl AcquisitionState {
     /// `releaseAcquisitionLockOnTimeout` does. It marks the state dirty when
     /// something changed.
     pub fn expire_locks(&mut self, now: Instant, max_attempts: i16) {
-        let mut changed = false;
-        let (batches, mut archive) = self.runs_and_sink();
-        for b in batches {
-            if b.state == RecordState::Acquired
-                && let Some(deadline) = b.lock_deadline
-                && now >= deadline
-            {
-                give_back(b, max_attempts, &mut archive);
-                changed = true;
-            }
-        }
-        if changed {
-            self.dirty = true;
-            self.advance_spso();
-        }
+        self.release_matching(max_attempts, |batch| {
+            batch.state == RecordState::Acquired
+                && batch.lock_deadline.is_some_and(|deadline| now >= deadline)
+        });
     }
 
     /// Releases every record currently acquired by `member` back to
@@ -92,11 +68,20 @@ impl AcquisitionState {
     /// Session close and connection disconnect call this method so records do
     /// not remain locked until their timeout after the consumer is gone.
     pub fn release_member(&mut self, member: &str, max_attempts: i16) {
+        self.release_matching(max_attempts, |batch| {
+            batch.state == RecordState::Acquired && batch.acquired_by.as_deref() == Some(member)
+        });
+    }
+
+    fn release_matching(
+        &mut self,
+        max_attempts: i16,
+        mut matches: impl FnMut(&InFlightBatch) -> bool,
+    ) {
         let mut changed = false;
         let (batches, mut archive) = self.runs_and_sink();
         for batch in batches {
-            if batch.state == RecordState::Acquired && batch.acquired_by.as_deref() == Some(member)
-            {
+            if matches(batch) {
                 give_back(batch, max_attempts, &mut archive);
                 changed = true;
             }

@@ -4,10 +4,12 @@ use bytes::Bytes;
 use krabka_ids::LeaderEpoch;
 use krabka_log::SegmentExport;
 use krabka_remote_storage::{
-    LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-    RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
+    RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState,
+    RemoteStorageManager, TopicIdPartition,
 };
 use uuid::Uuid;
+
+krabka_macros::export_segment_data_fixture!(export_segment_data);
 
 pub fn archive_segment(
     storage: &impl RemoteStorageManager,
@@ -37,16 +39,9 @@ pub fn archive_segment(
     storage
         .copy_log_segment_data(
             &metadata,
-            &LogSegmentData {
-                log_segment: export.log_path.clone(),
-                offset_index: export.offset_index_path.clone(),
-                time_index: export.time_index_path.clone(),
-                transaction_index: export.transaction_index_path.clone(),
-                producer_snapshot_index: Some(export.producer_snapshot_path.clone()),
-                leader_epoch_index: Bytes::from(
-                    format!("0\n1\n0 {}\n", export.base_offset.0).into_bytes(),
-                ),
-            },
+            &export_segment_data(export, true, || {
+                Bytes::from(format!("0\n1\n0 {}\n", export.base_offset.0).into_bytes())
+            }),
         )
         .expect("archive the segment");
     metadata

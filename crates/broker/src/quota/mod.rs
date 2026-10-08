@@ -227,7 +227,7 @@ pub(crate) mod test_support {
         ]
     }
 
-    pub(super) fn image_with_quota(
+    pub(crate) fn image_with_quota(
         entity: Vec<(&str, Option<&str>)>,
         key: &str,
         value: f64,
@@ -235,7 +235,7 @@ pub(crate) mod test_support {
         image_with_quotas(vec![quota_record(entity, key, value)])
     }
 
-    pub(super) fn image_with_quotas(records: Vec<ClientQuotaRecord>) -> MetadataImage {
+    pub(crate) fn image_with_quotas(records: Vec<ClientQuotaRecord>) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         for record in records {
             image.apply(&MetadataRecord::V1ClientQuota(record));
@@ -243,7 +243,7 @@ pub(crate) mod test_support {
         image
     }
 
-    pub(super) fn quota_record(
+    pub(crate) fn quota_record(
         entity: Vec<(&str, Option<&str>)>,
         key: &str,
         value: f64,

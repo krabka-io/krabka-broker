@@ -130,6 +130,21 @@ mod tests {
         })
     }
 
+    /// Replace this serving broker's dynamic config with stable APIs enabled.
+    fn replacement_records(
+        image: &krabka_metadata::MetadataImage,
+        name: &str,
+        configs: &[(&str, &str)],
+    ) -> Result<Vec<MetadataRecord>, (i16, String)> {
+        broker_config_records(
+            &broker_resource(name, configs),
+            image,
+            SERVING,
+            &[],
+            UnstableApiVersions::Disabled,
+        )
+    }
+
     #[test]
     fn broker_full_replacement_sets_requested_and_deletes_omitted_configs() {
         let mut image = image_with_broker(1);
@@ -144,12 +159,10 @@ mod tests {
             Some("512"),
         ));
 
-        let records = broker_config_records(
-            &broker_resource("1", &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")]),
+        let records = replacement_records(
             &image,
-            SERVING,
-            &[],
-            UnstableApiVersions::Disabled,
+            "1",
+            &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")],
         )
         .expect("valid broker replacement");
 
@@ -298,13 +311,7 @@ mod tests {
             ),
         ];
         for (name, configs, want) in cases {
-            let got = broker_config_records(
-                &broker_resource(name, &configs),
-                &image,
-                SERVING,
-                &[],
-                UnstableApiVersions::Disabled,
-            );
+            let got = replacement_records(&image, name, &configs);
             let want = want.map_err(|(code, message)| (code, message.to_owned()));
             check!(got == want, "{name:?} {configs:?}");
         }
@@ -316,16 +323,11 @@ mod tests {
         for key in config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS {
             for resource_name in ["1", ""] {
                 check!(
-                    broker_config_records(
-                        &broker_resource(resource_name, &[(key, "true")]),
-                        &image,
-                        SERVING,
-                        &[],
-                        UnstableApiVersions::Disabled,
-                    ) == Err((
-                        codes::INVALID_CONFIG,
-                        format!("broker config {key} is controller-managed and read-only"),
-                    )),
+                    replacement_records(&image, resource_name, &[(key, "true")])
+                        == Err((
+                            codes::INVALID_CONFIG,
+                            format!("broker config {key} is controller-managed and read-only"),
+                        )),
                     "key {key}"
                 );
             }
@@ -346,12 +348,10 @@ mod tests {
             Some("512"),
         ));
 
-        let records = broker_config_records(
-            &broker_resource("1", &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")]),
+        let records = replacement_records(
             &image,
-            SERVING,
-            &[],
-            UnstableApiVersions::Disabled,
+            "1",
+            &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")],
         )
         .expect("valid broker replacement");
 
@@ -372,15 +372,10 @@ mod tests {
     fn broker_full_replacement_rejects_per_broker_recovery_setting() {
         let image = image_with_broker(1);
 
-        let error = broker_config_records(
-            &broker_resource(
-                "1",
-                &[(crate::config_keys::UNCLEAN_RECOVERY_STRATEGY, "Balanced")],
-            ),
+        let error = replacement_records(
             &image,
-            SERVING,
-            &[],
-            UnstableApiVersions::Disabled,
+            "1",
+            &[(crate::config_keys::UNCLEAN_RECOVERY_STRATEGY, "Balanced")],
         )
         .expect_err("per-broker recovery setting must be rejected");
 
@@ -397,13 +392,7 @@ mod tests {
             Some("2"),
         ));
 
-        let error = broker_config_records(
-            &broker_resource("", &[]),
-            &image,
-            SERVING,
-            &[],
-            UnstableApiVersions::Disabled,
-        );
+        let error = replacement_records(&image, "", &[]);
 
         assert!(
             error

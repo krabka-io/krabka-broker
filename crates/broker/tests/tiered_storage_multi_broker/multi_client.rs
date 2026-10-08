@@ -10,13 +10,13 @@
 use std::time::{Duration, Instant};
 
 use assert2::assert;
-use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-    primitives::uuid::Uuid as WireUuid,
-};
+use krabka_protocol::{owned::fetch_request::FetchRequest, primitives::uuid::Uuid as WireUuid};
 
 pub(crate) use crate::support::topic_id_for;
+use crate::support::{
+    client::connect_owned,
+    fetch::{fetch_partition, single_partition_fetch},
+};
 
 /// Fetches all records from `(topic, partition)`, starting at `start_offset`,
 /// from the broker at `bootstrap`. It retries until `expected_count` records
@@ -29,12 +29,7 @@ pub(crate) async fn fetch_all_records(
     expected_count: usize,
     deadline: Instant,
 ) -> usize {
-    let client = Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("tiered-multi-fetch-test")
-        .build()
-        .await
-        .expect("fetch client build");
+    let client = connect_owned(bootstrap, "tiered-multi-fetch-test", "fetch client build").await;
 
     // Resolve the topic id first (retry until the metadata is available from
     // the survivor — the leader election may still be settling).
@@ -57,22 +52,12 @@ pub(crate) async fn fetch_all_records(
 
     loop {
         let resp = client
-            .send(FetchRequest {
-                max_wait_ms: 1_000,
-                min_bytes: 1,
-                topics: vec![FetchTopic {
-                    topic: topic.into(),
-                    topic_id,
-                    partitions: vec![FetchPartition {
-                        partition,
-                        fetch_offset,
-                        partition_max_bytes: 2_097_152,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(single_partition_fetch(
+                topic,
+                topic_id,
+                fetch_partition(partition, fetch_offset, 2_097_152),
+                (1_000, 1, FetchRequest::default().max_bytes),
+            ))
             .await
             .expect("Fetch");
 

@@ -16,10 +16,7 @@ use krabka_protocol::owned::{
     sasl_handshake_request::SaslHandshakeRequest, sasl_handshake_response::SaslHandshakeResponse,
 };
 use krabka_security::SaslMechanism;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 
 use crate::kafka_wire;
 
@@ -31,27 +28,8 @@ use crate::kafka_wire;
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-deltok-test";
 
-/// One length-prefixed request/response exchange; see
-/// [`kafka_wire::round_trip`].
-pub(crate) async fn round_trip<S: AsyncRead + AsyncWrite + Unpin>(
-    stream: &mut S,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    flexible: bool,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        CLIENT_ID,
-        flexible,
-        body,
-    )
-    .await
-}
+// One length-prefixed request/response exchange, bound to this suite.
+crate::socket_round_trip_fixture!(pub(crate) round_trip, CLIENT_ID);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SASL handshake drivers. Both walk ApiVersions → SaslHandshake →
@@ -205,11 +183,7 @@ impl TokenScramClient {
         let auth_message = format!("{},{server_first},{without_proof}", self.client_first_bare);
         let client_key = hmac(&salted, b"Client Key");
         let signature = hmac(&Sha256::digest(&client_key), auth_message.as_bytes());
-        let proof: Vec<u8> = client_key
-            .iter()
-            .zip(&signature)
-            .map(|(k, s)| k ^ s)
-            .collect();
+        let proof = scram_client_proof(&client_key, &signature);
         Ok(format!("{without_proof},p={}", B64.encode(proof)).into_bytes())
     }
 }
@@ -240,3 +214,5 @@ pub(crate) async fn token_session(
     );
     Ok(session)
 }
+
+krabka_macros::scram_client_proof_fixture!(scram_client_proof);

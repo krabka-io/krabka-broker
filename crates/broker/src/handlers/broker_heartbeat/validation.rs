@@ -48,8 +48,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn registration_validation_rejects_unknown_and_stale_brokers() {
+    fn registered_image() -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
@@ -58,6 +57,12 @@ mod tests {
                 ..crate::test_support::broker_registration(7)
             },
         ));
+        image
+    }
+
+    #[test]
+    fn registration_validation_rejects_unknown_and_stale_brokers() {
+        let image = registered_image();
         let mut req = BrokerHeartbeatRequest {
             broker_id: -1,
             broker_epoch: 42,
@@ -75,14 +80,7 @@ mod tests {
 
     #[test]
     fn registration_validation_reports_catch_up_at_registration_offset() {
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1BrokerRegistration(
-            BrokerRegistrationRecord {
-                broker_epoch: 42,
-                host: "localhost".into(),
-                ..crate::test_support::broker_registration(7)
-            },
-        ));
+        let image = registered_image();
         let mut req = BrokerHeartbeatRequest {
             broker_id: 7,
             broker_epoch: 42,

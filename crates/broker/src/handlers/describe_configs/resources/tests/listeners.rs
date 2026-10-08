@@ -97,7 +97,7 @@ fn named(
     config_type: i8,
     default: Option<&str>,
 ) -> DescribeConfigsResourceResult {
-    DescribeConfigsResourceResult {
+    tagged_wire!(DescribeConfigsResourceResult {
         name: name.to_owned(),
         value: Some(value.to_owned()),
         read_only,
@@ -108,14 +108,13 @@ fn named(
             .collect(),
         config_type,
         documentation: None,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
+    })
 }
 
 // A key that `server.properties` does not name and that has no built-in
 // default: a null value at `DEFAULT_CONFIG`, with no synonym.
 fn unset(name: &str, config_type: i8) -> DescribeConfigsResourceResult {
-    DescribeConfigsResourceResult {
+    tagged_wire!(DescribeConfigsResourceResult {
         name: name.to_owned(),
         value: None,
         read_only: true,
@@ -124,8 +123,7 @@ fn unset(name: &str, config_type: i8) -> DescribeConfigsResourceResult {
         synonyms: Vec::new(),
         config_type,
         documentation: None,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
+    })
 }
 
 fn listeners(value: &str) -> DescribeConfigsResourceResult {
@@ -219,16 +217,13 @@ fn a_named_broker_reports_the_listener_keys_of_its_roles() {
 
     for (label, config, expected) in cases {
         let settings = static_settings(&config);
-        let described = describe_with_static(
+        let described = describe_at(
+            settings_for((RESOURCE_TYPE_BROKER, "1"), &settings),
             &MetadataImage::new(Uuid::nil()),
             RESOURCE_TYPE_BROKER,
             "1",
             Some(LISTENER_KEYS.map(str::to_owned).to_vec()),
             SYNONYMS_ONLY,
-            StaticBrokerConfigs {
-                settings: &settings,
-                ..untuned()
-            },
         );
 
         check!(described.configs == expected, "{label}");

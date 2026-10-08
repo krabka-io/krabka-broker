@@ -92,22 +92,9 @@ async fn acks_all_durability() {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let bootstrap_3 = format!("host.docker.internal:{}", client_ports[2]);
-    let consume_out = docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        &bootstrap_3,
-        "--topic",
-        TOPIC,
-        "--isolation-level",
-        "read_committed",
-        "--from-beginning",
-        "--max-messages",
-        "100",
-        "--timeout-ms",
-        "20000",
-    ]);
+    let consume_out = crate::jvm_acceptance::consume_committed_at(&bootstrap_3, TOPIC, 100);
     let stdout = String::from_utf8_lossy(&consume_out.stdout);
-    let line_count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+    let line_count = crate::support::jvm_output_lines(&consume_out).len();
     assert!(
         line_count >= 100,
         "expected at least 100 records; got {line_count}: stdout={stdout}"

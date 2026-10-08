@@ -192,3 +192,28 @@ pub async fn set_user_quota(
         })
         .await;
 }
+
+/// Alter one user's quota, retaining the caller's authentication and client id.
+///
+/// # Panics
+/// Panics if the original authentication, encoding or wire exchange fails.
+pub async fn alter_user_quota(
+    addr: SocketAddr,
+    client_id: &str,
+    admin: (&str, &str),
+    target: &str,
+    quota: (&str, f64),
+) -> Vec<(QuotaEntity, i16)> {
+    drive_alter_client_quotas_sasl(
+        addr,
+        client_id,
+        admin.0,
+        admin.1,
+        vec![(
+            vec![("user".into(), Some(target.into()))],
+            vec![(quota.0.into(), quota.1, false)],
+        )],
+        false,
+    )
+    .await
+}

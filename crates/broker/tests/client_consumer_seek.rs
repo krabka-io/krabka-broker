@@ -8,28 +8,23 @@
 
 mod support;
 
-use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
-use krabka_client_core::Client;
-use krabka_client_producer::{Producer, ProducerRecord};
-use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+
+use crate::support::{
+    client::connect_client,
+    topics::{creatable_topic, create_topic_request},
+};
 
 async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
-    let producer = Producer::builder()
-        .bootstrap(bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let producer = crate::support::producer::default_producer(bootstrap).await;
     for i in 0..n {
         producer
-            .send(ProducerRecord {
-                topic: topic.into(),
-                partition: Some(0),
-                key: Some(format!("k{i}").into()),
-                value: Some(format!("v{i}").into()),
-                headers: vec![],
-                timestamp_ms: None,
-            })
+            .send(crate::support::producer::producer_record(
+                topic,
+                Some(0),
+                Some(format!("k{i}").into()),
+                Some(format!("v{i}").into()),
+            ))
             .await
             .unwrap();
     }
@@ -38,17 +33,10 @@ async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_before_first_poll_resumes_from_sought_offset() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let (_dir, broker) = crate::support::standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
 
-    let admin = Client::builder()
-        .bootstrap(&bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(&bootstrap, None).await;
     crate::support::client::create_topic(&admin, "s", 1).await;
 
     // Offsets 0..=4 on partition 0.
@@ -87,28 +75,12 @@ async fn seek_before_first_poll_resumes_from_sought_offset() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_rejects_negative_offset() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let (_dir, broker) = crate::support::standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
 
-    let admin = Client::builder()
-        .bootstrap(&bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(&bootstrap, None).await;
     admin
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "n".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic("n", 1, 1), 5_000))
         .await
         .unwrap();
 

@@ -284,11 +284,7 @@ pub(crate) fn local_retention_pass(
         None => None,
         Some(first) => {
             let finished: Vec<(i64, i64)> = match rlmm.list_remote_log_segments(tp) {
-                Ok(list) => list
-                    .iter()
-                    .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-                    .map(|md| (md.start_offset(), md.end_offset()))
-                    .collect(),
+                Ok(list) => finished_segment_ranges(&list),
                 Err(e) => {
                     warn!(topic = %tp.topic, partition = tp.partition, error = %e,
                           "remote-log-manager: failed to list remote segments for local retention");
@@ -352,3 +348,14 @@ pub(crate) fn local_retention_pass(
 
 #[cfg(test)]
 mod tests;
+
+/// Offset ranges whose remote metadata has reached the copy-finished state.
+pub(crate) fn finished_segment_ranges(
+    segments: &[krabka_remote_storage::RemoteLogSegmentMetadata],
+) -> Vec<(i64, i64)> {
+    segments
+        .iter()
+        .filter(|metadata| metadata.state() == RemoteLogSegmentState::CopySegmentFinished)
+        .map(|metadata| (metadata.start_offset(), metadata.end_offset()))
+        .collect()
+}

@@ -36,16 +36,7 @@ pub(super) fn finish_produce_response(
     // `acks = 0`, which `request_quota_start` holds as `None`. The byte-rate
     // quota above still applies.
     let request_delay = request_quota_start.map_or_else(crate::quota::QuotaDelay::zero, |start| {
-        let elapsed_micros = u64::try_from(start.elapsed().as_micros().min(u128::from(u64::MAX)))
-            .expect("elapsed microseconds clamped to u64");
-        crate::quota::consume_request_quota(
-            image,
-            &broker.quota_buckets,
-            &context.principal.name,
-            context.client_id,
-            elapsed_micros,
-            broker.config.quota_throttle_max,
-        )
+        context.charge_request_quota(broker, image, start)
     });
     // KIP-219: the connection is muted for the larger of the two delays.
     // Resolving it through the metric records the throttle phase and the quota
@@ -102,24 +93,13 @@ mod tests {
 
     #[test]
     fn consume_producer_quota_tuple_match_overage_throttles() {
-        use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
         use krabka_units::{Time, convert::TimeExt};
 
-        let mut img = MetadataImage::new(uuid::Uuid::nil());
-        img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
-            entity: vec![
-                QuotaEntity {
-                    entity_type: "user".into(),
-                    entity_name: Some("alice".into()),
-                },
-                QuotaEntity {
-                    entity_type: "client-id".into(),
-                    entity_name: Some("app-x".into()),
-                },
-            ],
-            config_key: "producer_byte_rate".into(),
-            config_value: Some(1024.0),
-        }));
+        let img = crate::quota::test_support::image_with_quota(
+            vec![("user", Some("alice")), ("client-id", Some("app-x"))],
+            "producer_byte_rate",
+            1024.0,
+        );
         // A one-second window, so 4096 bytes at 1024 B/s is 3072 over the
         // burst rather than inside the default 11-second one.
         let buckets = crate::quota::QuotaBuckets::with_window(secs(1));

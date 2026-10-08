@@ -6,7 +6,7 @@
 
 use derive_more::{Display, From, Into};
 use krabka_audit::chain::{GENESIS_HEAD, chain_hash};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
@@ -59,32 +59,33 @@ pub struct EpochId(pub Uuid);
 /// Head of a partition's manifest hash chain.
 ///
 /// Serialises as a lowercase hex string.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug, Display)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    derive_more::Debug,
+    Display,
+    Serialize,
+    Deserialize,
+)]
 #[display("{}", hex::encode(_0))]
 #[debug("ChainHead({})", hex::encode(_0))]
-pub struct ChainHead(pub [u8; 32]);
+#[serde(transparent)]
+pub struct ChainHead(
+    #[serde(
+        serialize_with = "serialize_hex",
+        deserialize_with = "deserialize_hex32"
+    )]
+    pub [u8; 32],
+);
 
 impl ChainHead {
     /// The head before a chain writes its first manifest.
     pub const GENESIS: Self = Self(GENESIS_HEAD);
-}
-
-impl Serialize for ChainHead {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serialize_hex(&self.0, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ChainHead {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserialize_hex32(deserializer).map(Self)
-    }
 }
 
 /// Where this manifest sits in its partition's hash chain.

@@ -31,19 +31,22 @@ pub(crate) async fn next_producer_identity(
     } else {
         None
     };
-    Ok(next_producer_identity_with_fresh(txnv, pid, epoch, fresh)
-        .expect("fresh producer ID supplied at the rotation boundary"))
+    Ok(
+        next_identity_with_fresh(txnv.verified(), false, pid, epoch, fresh)
+            .expect("fresh producer ID supplied at the rotation boundary"),
+    )
 }
 
-fn next_producer_identity_with_fresh(
-    txnv: TxnVersion,
+fn next_identity_with_fresh(
+    verified: bool,
+    recovery: bool,
     pid: ProducerId,
     epoch: i16,
     fresh: Option<ProducerId>,
 ) -> Option<(ProducerId, i16)> {
     krabka_verified::transaction::next_producer_identity(
-        txnv.verified(),
-        false,
+        verified,
+        recovery,
         pid.0,
         epoch,
         fresh.map(|producer_id| producer_id.0),
@@ -65,25 +68,8 @@ pub(crate) async fn next_recovery_producer_identity(
     } else {
         None
     };
-    Ok(
-        next_recovery_producer_identity_with_fresh(pid, epoch, fresh)
-            .expect("fresh producer ID supplied at the recovery rotation boundary"),
-    )
-}
-
-fn next_recovery_producer_identity_with_fresh(
-    pid: ProducerId,
-    epoch: i16,
-    fresh: Option<ProducerId>,
-) -> Option<(ProducerId, i16)> {
-    krabka_verified::transaction::next_producer_identity(
-        true,
-        true,
-        pid.0,
-        epoch,
-        fresh.map(|producer_id| producer_id.0),
-    )
-    .map(|(producer_id, epoch)| (ProducerId(producer_id), epoch))
+    Ok(next_identity_with_fresh(true, true, pid, epoch, fresh)
+        .expect("fresh producer ID supplied at the recovery rotation boundary"))
 }
 
 pub(crate) fn client_producer_identity(entry: &TxnEntry) -> (ProducerId, i16) {
@@ -194,11 +180,8 @@ pub(crate) fn prepare_completion_identities_with_fresh(
 
     let had_recovery_identity = entry.has_staged_producer_identity();
     let (client_pid, client_epoch) = client_producer_identity(entry);
-    let (completion_pid, completion_epoch) = if had_recovery_identity {
-        next_recovery_producer_identity_with_fresh(client_pid, client_epoch, fresh)?
-    } else {
-        next_producer_identity_with_fresh(txnv, client_pid, client_epoch, fresh)?
-    };
+    let (completion_pid, completion_epoch) =
+        next_identity_with_fresh(true, had_recovery_identity, client_pid, client_epoch, fresh)?;
 
     // The transaction marker fences the identity that wrote the transaction.
     // i16::MAX is reserved for this final marker epoch. Kafka's

@@ -24,15 +24,12 @@ pub fn barrier_cut_expired(published_epoch: i64, retained_cuts: i32, held_epoch:
     held_epoch <= published_epoch - retained_cuts
 }
 
+open_logic! {
 /// How many segments the local walk may consider: every one of them, except
 /// a newest segment that is empty. That is Kafka's `deletableSegments`, which
 /// never returns a last segment of size zero (`isLastSegmentAndEmpty`), so a
 /// log never loses the segment it appends to without a record having left
 /// with it.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn local_retention_limit(segments: Seq<LocalRetentionSegment>) -> Int {
     pearlite! {
         if segments.len() > 0 && segments[segments.len() - 1].size@ == 0 {
@@ -42,7 +39,9 @@ pub fn local_retention_limit(segments: Seq<LocalRetentionSegment>) -> Int {
         }
     }
 }
+}
 
+open_logic! {
 /// The reference rule for local retention, from segment `i` onwards.
 ///
 /// Kafka's `UnifiedLog.deleteOldSegments` runs three passes over the local
@@ -64,10 +63,6 @@ pub fn local_retention_limit(segments: Seq<LocalRetentionSegment>) -> Int {
 /// negative, and then Kafka runs no size pass either.
 ///
 /// The fold stops at a blocked segment and at `limit`.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 #[variant(limit - i)]
 pub fn local_retention_model(
     segments: Seq<LocalRetentionSegment>,
@@ -87,6 +82,7 @@ pub fn local_retention_model(
             i
         }
     }
+}
 }
 
 /// Count the oldest local segments that Kafka's local retention passes
@@ -173,6 +169,7 @@ pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Opt
     len
 }
 
+open_logic! {
 /// The reference rule for remote retention, from segment `i` onwards, with
 /// `debt` bytes of `retention.bytes` breach left to reclaim.
 ///
@@ -183,10 +180,6 @@ pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Opt
 /// its size, but not below zero. Otherwise the segment goes only when the
 /// debt is positive and still covers the whole segment
 /// (`isSegmentBreachedByRetentionSize`).
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 #[variant(segments.len() - i)]
 pub fn remote_retention_model(segments: Seq<RemoteRetentionSegment>, i: Int, debt: Int) -> Int {
     pearlite! {
@@ -206,4 +199,5 @@ pub fn remote_retention_model(segments: Seq<RemoteRetentionSegment>, i: Int, deb
             i
         }
     }
+}
 }

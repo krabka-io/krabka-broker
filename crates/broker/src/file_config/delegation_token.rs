@@ -6,15 +6,12 @@
 //! in place.
 
 use krabka_units::{Time, convert::TimeExt as _};
-use schemars::JsonSchema;
-use serde::Deserialize;
 
 use super::{FileConfigError, validate::positive_i64};
 
 /// TOML shape of `[delegation_token]`. Maps to the three `delegation_token_*`
 /// fields on [`crate::BrokerConfig`].
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileDelegationTokenConfig {
     /// HMAC master key. Overridden by `KRABKA_DELEGATION_TOKEN_SECRET_KEY`
     /// when set. Bytes are wrapped in
@@ -93,9 +90,7 @@ mod tests {
 [delegation_token]
 secret_key = "abcdef"
 "#;
-            let file: FileConfig = toml::from_str(toml).unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
 
             // KIP-48 defaults: 7 days max lifetime, 1 hour sweep cadence,
             // 24 hour default renew period.
@@ -135,9 +130,7 @@ secret_key = "abcdef"
 secret_key = "abcdef"
 default_renew_period_ms = 7200000
 "#;
-            let file: FileConfig = toml::from_str(toml).unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
             assert!(
                 cfg.delegation_token_default_renew_period == hours(2),
                 "TOML default_renew_period_ms must override the default"
@@ -172,9 +165,7 @@ secret_key = "toml-loses"
     fn delegation_token_absent_when_unset_anywhere() {
         let _g = env_lock().lock().unwrap();
         temp_env::with_var_unset("KRABKA_DELEGATION_TOKEN_SECRET_KEY", || {
-            let file: FileConfig = toml::from_str("").unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse("").unwrap();
 
             // No secret key anywhere; lifetime knobs stay at their defaults
             // when no section is present.

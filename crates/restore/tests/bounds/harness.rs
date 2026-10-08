@@ -5,6 +5,9 @@
 //! points at, so the command line, the fresh target directory, and the reopen
 //! are built once here.
 
+#[path = "../support/args.rs"]
+mod cli_args;
+
 use std::path::{Path, PathBuf};
 
 use clap::Parser as _;
@@ -19,19 +22,7 @@ use tempfile::TempDir;
 /// binary and the crate's own tests use. `extra` carries the bound flags
 /// under test.
 pub(crate) fn restore_args(archive_dir: &Path, target_dir: &Path, extra: &[&str]) -> RestoreArgs {
-    let mut argv: Vec<String> = vec![
-        "krabka-restore".to_owned(),
-        "--archive-local".to_owned(),
-        archive_dir.display().to_string(),
-        "--log-dir".to_owned(),
-        target_dir.display().to_string(),
-        "--node-id".to_owned(),
-        "1".to_owned(),
-        "--standalone".to_owned(),
-        "--controller-listener".to_owned(),
-        "127.0.0.1:9093".to_owned(),
-    ];
-    argv.extend(extra.iter().map(|s| (*s).to_owned()));
+    let argv = cli_args::restore_argv(archive_dir, target_dir, "127.0.0.1:9093", extra);
     Cli::try_parse_from(argv).expect("valid command line").args
 }
 

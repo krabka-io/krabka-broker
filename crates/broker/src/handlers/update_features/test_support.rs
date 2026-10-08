@@ -87,9 +87,7 @@ pub(super) async fn call(
     version: i16,
 ) -> UpdateFeaturesResponse {
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = context(&principal, &peer);
+    request_identity!((principal, peer, ctx), principal("admin"), context);
     answer(&broker, req, version, &ctx).await
 }
 

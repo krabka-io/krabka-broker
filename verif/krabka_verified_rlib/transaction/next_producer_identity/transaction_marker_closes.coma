@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 47 0 47 92 *)
+(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 44 0 44 92 *)
 
-let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 48 4 48 70
-let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 45 10 45 88
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 45 4 45 70
+let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 42 10 42 88
 
 use creusot.prelude.Any
 
@@ -9,7 +9,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_marker_closes [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 47 0 47 92]
+let transaction_marker_closes [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 44 0 44 92]
   (is_abort: bool) (is_commit: bool) (has_pending: bool) (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {is_abort = false} (! bb1) | br1 -> {is_abort} (! bb2) ]
   | bb1 = any [ br0 -> {is_commit = false} (! bb5) | br1 -> {is_commit} (! bb2) ]

@@ -40,25 +40,12 @@ impl AcquisitionState {
         ack: AckType,
         max_attempts: i16,
     ) -> Result<(), i16> {
-        if first > last {
-            return Err(crate::codes::INVALID_RECORD_STATE);
-        }
-        let Some((first, last)) = self.ack_bounds(first, last)? else {
+        let Some((first, last)) = self.split_acquired_range(member, first, last)? else {
             return Ok(());
         };
-        // Validate the entire range is Acquired by this member.
-        if !self.range_acquired_by(member, first, last) {
-            return Err(crate::codes::INVALID_RECORD_STATE);
-        }
-        // Carve the range out at its boundaries.
-        self.split_at_offset(first);
-        self.split_at_offset(last + 1);
         let (batches, mut archive) = self.runs_and_sink();
         for b in batches {
-            if b.first_offset < first || b.last_offset > last {
-                continue;
-            }
-            if b.state != RecordState::Acquired {
+            if !b.acquired_within(first, last) {
                 continue;
             }
             let n = clamp_i32(b.len());
@@ -97,7 +84,7 @@ mod tests {
     use super::*;
     use crate::share_partition::state::{
         AcquiredRange,
-        test_support::{LOCK, t0},
+        test_support::{LOCK, acquired_state, t0},
     };
 
     #[test]
@@ -119,9 +106,7 @@ mod tests {
 
     #[test]
     fn release_redelivers_with_incremented_count() {
-        let mut s = AcquisitionState::new(Offset(0));
-        s.materialize(Offset(3), 100);
-        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
+        let mut s = acquired_state(3);
         s.acknowledge("m1", Offset(0), Offset(2), AckType::Release, 5)
             .unwrap();
         let acq2 = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
@@ -148,9 +133,7 @@ mod tests {
 
     #[test]
     fn reject_archives_and_advances_spso() {
-        let mut s = AcquisitionState::new(Offset(0));
-        s.materialize(Offset(3), 100);
-        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
+        let mut s = acquired_state(3);
         s.acknowledge("m1", Offset(0), Offset(2), AckType::Reject, 5)
             .unwrap();
         assert!(s.start_offset == 3); // archived prefix dropped
@@ -160,9 +143,7 @@ mod tests {
 
     #[test]
     fn gap_archives() {
-        let mut s = AcquisitionState::new(Offset(0));
-        s.materialize(Offset(2), 100);
-        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
+        let mut s = acquired_state(2);
         s.acknowledge("m1", Offset(0), Offset(1), AckType::Gap, 5)
             .unwrap();
         assert!(s.start_offset == 2);
@@ -174,9 +155,7 @@ mod tests {
 
     #[test]
     fn acknowledge_wrong_member_is_invalid_record_state() {
-        let mut s = AcquisitionState::new(Offset(0));
-        s.materialize(Offset(3), 100);
-        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
+        let mut s = acquired_state(3);
         let err = s.acknowledge("m2", Offset(0), Offset(2), AckType::Accept, 5);
         assert!(err == Err(crate::codes::INVALID_RECORD_STATE));
     }

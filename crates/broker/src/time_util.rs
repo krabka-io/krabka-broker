@@ -65,34 +65,20 @@ pub(crate) async fn sleep_until_opt(deadline: Option<impl Into<tokio::time::Inst
     }
 }
 
-/// Registers a deadline `delay` from now on `timer`, for the loop named
-/// `task`.
-///
-/// `None` means the timer refused the registration, and the caller must stop:
-/// the failure is already logged with `task` naming which cadence went away.
-pub(crate) fn arm(timer: &dyn Timer, delay: Duration, task: &'static str) -> Option<TimerFuture> {
-    match timer.after(delay) {
-        Ok(future) => Some(future),
-        Err(error) => {
-            tracing::error!(%error, task, "could not arm the timer; stopping the task");
-            None
-        }
-    }
-}
+krabka_macros::timer_hooks! {
+    /// Registers a deadline `delay` from now on `timer`, for the loop named
+    /// `task`.
+    ///
+    /// `None` means the timer refused the registration, and the caller must stop:
+    /// the failure is already logged with `task` naming which cadence went away.
+    pub(crate) arm("could not arm the timer; stopping the task");
 
-/// Reports whether a deadline armed by [`arm`] completed, for the loop named
-/// `task`.
-///
-/// `false` means the timer gave up on a registration it had accepted, and the
-/// caller must stop for the same reason [`arm`] returning `None` does.
-pub(crate) fn fired(outcome: Result<(), TimeError>, task: &'static str) -> bool {
-    match outcome {
-        Ok(()) => true,
-        Err(error) => {
-            tracing::error!(%error, task, "the armed timer failed; stopping the task");
-            false
-        }
-    }
+    /// Reports whether a deadline armed by [`arm`] completed, for the loop named
+    /// `task`.
+    ///
+    /// `false` means the timer gave up on a registration it had accepted, and the
+    /// caller must stop for the same reason [`arm`] returning `None` does.
+    pub(crate) fired("the armed timer failed; stopping the task");
 }
 
 /// The real-time timer a cadence loop runs on outside tests.

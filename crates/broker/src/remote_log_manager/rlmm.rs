@@ -33,18 +33,37 @@ where
     }
 }
 
+/// Publish one lifecycle transition with a fresh event timestamp.
+pub(super) async fn update_segment(
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    id: krabka_remote_storage::RemoteLogSegmentId,
+    custom_metadata: Option<krabka_remote_storage::CustomMetadata>,
+    state: krabka_remote_storage::RemoteLogSegmentState,
+    broker_id: i32,
+) -> Result<(), krabka_remote_storage::RemoteStorageError> {
+    let update = krabka_remote_storage::RemoteLogSegmentMetadataUpdate {
+        remote_log_segment_id: id,
+        event_timestamp_ms: crate::time_util::now_ms(),
+        custom_metadata,
+        state,
+        broker_id,
+    };
+    rlmm_mutate(rlmm, move |manager| {
+        manager.update_remote_log_segment_metadata(update)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use krabka_remote_storage::InmemoryRemoteLogMetadataManager;
-
     use super::*;
+    use crate::remote_log_manager::test_support as fixtures;
 
     #[tokio::test]
     async fn rlmm_mutate_runs_op_and_propagates_error() {
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let rlmm = fixtures::in_memory_metadata();
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = Arc::clone(&called);
 

@@ -1,50 +1,29 @@
-use krabka_broker::{Broker, BrokerConfig};
-use krabka_client_admin::AdminClient;
+mod support;
+
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
-use krabka_client_producer::{Producer, ProducerRecord};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lists_groups_and_committed_offsets() {
-    let dir = tempfile::TempDir::new().unwrap();
     // `ListGroups` goes to every broker of the metadata, as Kafka's
     // `KafkaAdminClient.listGroups` does, so it depends on the broker
     // advertising a real, dialable port for itself.
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let bootstrap = broker.listen_addr().to_string();
-
-    let mut admin = AdminClient::connect(std::slice::from_ref(&bootstrap))
-        .await
-        .unwrap();
+    let (_dir, _broker, bootstrap, mut admin) = crate::support::admin::standalone_admin().await;
     admin
         .create_topics(
-            &[krabka_client_admin::CreateTopicSpec {
-                name: "t1".into(),
-                partitions: 1,
-                replicas: 1,
-                configs: std::collections::BTreeMap::default(),
-                replica_assignments: std::collections::BTreeMap::new(),
-            }],
+            &[crate::support::admin::topic_spec("t1", 1, 1)],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
         .unwrap();
 
-    let producer = Producer::builder()
-        .bootstrap(&bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let producer = crate::support::producer::default_producer(&bootstrap).await;
     producer
-        .send(ProducerRecord {
-            topic: "t1".into(),
-            partition: None,
-            key: None,
-            value: Some("v".into()),
-            headers: vec![],
-            timestamp_ms: None,
-        })
+        .send(crate::support::producer::producer_record(
+            "t1",
+            None,
+            None,
+            Some("v".into()),
+        ))
         .await
         .unwrap();
     producer.flush().await.unwrap();

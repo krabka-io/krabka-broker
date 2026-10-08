@@ -1,36 +1,28 @@
 //! Classic and consumer group migration admission and durable record plans.
 
-#[cfg(creusot)]
-use std::clone::Clone;
+use creusot_std::prelude::*;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    pub enum GroupMigrationDirection {
+        Upgrade,
+        Downgrade,
+    }
 
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum GroupMigrationDirection {
-    Upgrade,
-    Downgrade,
-}
+    pub enum GroupMigrationRecordAction {
+        Write,
+        Tombstone,
+    }
 
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum GroupMigrationRecordAction {
-    Write,
-    Tombstone,
-}
-
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct GroupMigrationRecordPlan {
-    pub classic_group: GroupMigrationRecordAction,
-    pub next_gen_group: GroupMigrationRecordAction,
-    pub next_gen_target: GroupMigrationRecordAction,
-    pub member_metadata: GroupMigrationRecordAction,
-    pub target_member: GroupMigrationRecordAction,
-    pub current_member: GroupMigrationRecordAction,
-    pub member_count: usize,
+    pub struct GroupMigrationRecordPlan {
+        pub classic_group: GroupMigrationRecordAction,
+        pub next_gen_group: GroupMigrationRecordAction,
+        pub next_gen_target: GroupMigrationRecordAction,
+        pub member_metadata: GroupMigrationRecordAction,
+        pub target_member: GroupMigrationRecordAction,
+        pub current_member: GroupMigrationRecordAction,
+        pub member_count: usize,
+    }
 }
 
 /// Admit a classic-to-consumer upgrade exactly when the protocol and every

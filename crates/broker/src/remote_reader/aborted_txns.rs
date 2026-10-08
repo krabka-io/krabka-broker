@@ -74,16 +74,11 @@ impl RemoteReader {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_remote_storage::{
-        InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
-        RemoteStorageManager,
-    };
 
     use super::*;
-    use crate::remote_reader::test_support::{populated_reader, populated_reader_with_abort, tp};
+    use crate::remote_reader::test_support::{populated_reader_with_abort, tp};
 
     #[tokio::test]
     async fn aborted_transactions_returns_copied_abort() {
@@ -107,11 +102,10 @@ mod tests {
 
     #[tokio::test]
     async fn aborted_transactions_empty_when_segment_has_no_txnindex() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
         // The default harness writes no `.txnindex` for any segment.
-        let (reader, log) = populated_reader(log_dir.path(), remote_dir.path());
-        let exports = log.tierable_segments();
+        crate::remote_reader::test_support::populated_reader_fixture!(
+            log_dir, remote_dir, reader, log, exports
+        );
         let seg = &exports[0];
 
         let got = reader
@@ -126,12 +120,7 @@ mod tests {
 
     #[tokio::test]
     async fn aborted_transactions_empty_when_no_segment() {
-        let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let reader = RemoteReader::new(rsm, rlmm);
+        let (_remote_dir, reader) = crate::remote_reader::test_support::empty_reader();
         // RLMM is empty → no covering segment → empty list, not an error.
         let got = reader
             .aborted_transactions(&tp(), LeaderEpoch(0), 0, 100)

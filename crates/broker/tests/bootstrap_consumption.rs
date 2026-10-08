@@ -22,10 +22,12 @@
 
 mod kafka_wire;
 
+mod support;
+
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_broker::{Broker, BrokerConfig};
 use krabka_protocol::owned::{
     metadata_request::MetadataRequest, metadata_response::MetadataResponse,
 };
@@ -75,15 +77,10 @@ async fn bootstrap_records_provisions_scram_user() {
     .await;
 
     let mut cfg = BrokerConfig::for_tests(boot_dir.clone());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".into(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".into(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
+    cfg.listeners = vec![crate::support::listeners::loopback_listener(
+        "SASL_PLAINTEXT",
+        ListenerProtocol::SaslPlaintext,
+    )];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".into();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha512];
     cfg.bootstrap_mode = krabka_broker::BootstrapMode::Bootstrap;

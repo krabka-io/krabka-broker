@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/composition/consume_trace.rs" 135 0 141 1 *)
+(* #"/workspace/crates/verified/src/composition/consume_trace.rs" 130 0 136 1 *)
 
-let%span sconsume_trace = "/workspace/crates/verified/src/composition/consume_trace.rs" 130 11 131 55
-let%span sconsume_trace'0 = "/workspace/crates/verified/src/composition/consume_trace.rs" 132 11 132 48
-let%span sconsume_trace'1 = "/workspace/crates/verified/src/composition/consume_trace.rs" 133 10 134 67
+let%span sconsume_trace = "/workspace/crates/verified/src/composition/consume_trace.rs" 125 11 126 55
+let%span sconsume_trace'0 = "/workspace/crates/verified/src/composition/consume_trace.rs" 127 11 127 48
+let%span sconsume_trace'1 = "/workspace/crates/verified/src/composition/consume_trace.rs" 128 10 129 67
 
 use int.Int
 
@@ -24,7 +24,7 @@ constant consumed : tup2_Int_Int
 
 constant credit : int
 
-function lemma_refill_grant_ledger [#"/workspace/crates/verified/src/composition/consume_trace.rs" 135 0 141 1] (granted: int) (previous: tup2_Int_Int) (refilled: tup3_Int_Int_Int) (consumed: tup2_Int_Int) (credit: int) : ()
+function lemma_refill_grant_ledger [#"/workspace/crates/verified/src/composition/consume_trace.rs" 130 0 136 1] (granted: int) (previous: tup2_Int_Int) (refilled: tup3_Int_Int_Int) (consumed: tup2_Int_Int) (credit: int) : ()
 
 goal vc_lemma_refill_grant_ledger: ([%#sconsume_trace] refilled.f0'0 * 1000000000 + refilled.f1'0 + refilled.f2'0
     = previous.f0 * 1000000000 + previous.f1 + credit)

@@ -17,12 +17,31 @@ use krabka_units::secs;
 use super::*;
 use crate::{
     authorizer::SimpleAclAuthorizer,
+    broker::Broker,
     test_support::{
         peer, principal, start_broker_no_audit, start_broker_no_audit_with,
         start_broker_with_authorizer_no_audit,
     },
     txn::state::TxnState,
 };
+
+/// Persist the held transaction as ongoing after releasing its entry lock.
+async fn persist_ongoing(
+    coordinator: &crate::txn::coordinator::TxnCoordinator,
+    cell: &Arc<tokio::sync::Mutex<crate::txn::state::TxnEntry>>,
+    expectation: &str,
+) -> (krabka_log::ProducerId, i16) {
+    let (producer_id, producer_epoch, snapshot) = {
+        let mut entry = cell.lock().await;
+        entry.state = TxnState::Ongoing;
+        (entry.producer_id, entry.producer_epoch, entry.clone())
+    };
+    coordinator
+        .put(snapshot, crate::txn::version::TxnVersion::Verified)
+        .await
+        .expect(expectation);
+    (producer_id, producer_epoch)
+}
 
 /// Waits for the controller, and checks the cluster finalized `TV_2`, the
 /// highest `transaction.version` Kafka defines, which a self-bootstrapped
@@ -108,19 +127,29 @@ async fn check_timeout_answers(
     }
 }
 
+macro_rules! transaction_v2_broker {
+    (($handle:ident, $directory:ident, $broker:ident)) => {
+        broker_fixture!(
+            ($handle, $directory, $broker),
+            start_broker_no_audit_with(|config| {
+                config.transaction_state_num_partitions = 7;
+                config.transaction_max_timeout = secs(8);
+                config.features.transaction_two_phase_commit_enable = true;
+                config.features.unstable_api_versions =
+                    crate::api_catalog::UnstableApiVersions::Enabled;
+            })
+        );
+    };
+}
+
 #[tokio::test]
 async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
-    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
-        config.transaction_state_num_partitions = 7;
-        config.transaction_max_timeout = secs(8);
-        config.features.transaction_two_phase_commit_enable = true;
-        config.features.unstable_api_versions = crate::api_catalog::UnstableApiVersions::Enabled;
-    })
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    transaction_v2_broker!((broker_handle, _dir, broker));
+    request_identity!(
+        (principal, peer, context),
+        principal("admin"),
+        client_id = "txn-client"
+    );
     let tids = ["txn-small", "txn-above-max", "txn-2pc", "txn-zero"];
 
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
@@ -156,16 +185,12 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         .txn_coordinator
         .get(tids[2])
         .expect("2PC transaction entry");
-    let (ongoing_pid, ongoing_epoch, snapshot) = {
-        let mut entry = ongoing.lock().await;
-        entry.state = TxnState::Ongoing;
-        (entry.producer_id, entry.producer_epoch, entry.clone())
-    };
-    broker
-        .txn_coordinator
-        .put(snapshot, crate::txn::version::TxnVersion::Verified)
-        .await
-        .expect("persist ongoing 2PC transaction");
+    let (ongoing_pid, ongoing_epoch) = persist_ongoing(
+        &broker.txn_coordinator,
+        &ongoing,
+        "persist ongoing 2PC transaction",
+    )
+    .await;
 
     let recovery_request = InitProducerIdRequest {
         transactional_id: Some(tids[2].to_string()),
@@ -206,13 +231,11 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     // `EndTxn` v2 and above.
     assert!(
         fenced_end_response
-            == krabka_protocol::owned::end_txn_response::EndTxnResponse {
-                throttle_time_ms: 0,
+            == unthrottled_wire!(krabka_protocol::owned::end_txn_response::EndTxnResponse {
                 error_code: codes::PRODUCER_FENCED,
                 producer_id: -1,
                 producer_epoch: -1,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            }
+            })
     );
 
     let end_request = krabka_protocol::owned::end_txn_request::EndTxnRequest {
@@ -228,13 +251,11 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
             .expect("complete recovered transaction");
     assert!(
         end_response
-            == krabka_protocol::owned::end_txn_response::EndTxnResponse {
-                throttle_time_ms: 0,
+            == unthrottled_wire!(krabka_protocol::owned::end_txn_response::EndTxnResponse {
                 error_code: codes::NONE,
                 producer_id: second_recovery_response.producer_id,
                 producer_epoch: second_recovery_response.producer_epoch + 1,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            }
+            })
     );
 
     let retry_response =
@@ -305,9 +326,11 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
         .await;
         wait_for_transaction_version_2(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal("admin");
-        let peer = peer();
-        let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+        request_identity!(
+            (principal, peer, context),
+            principal("admin"),
+            client_id = "txn-client"
+        );
         let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
         // No FindCoordinator ran, so this broker coordinates nothing.
         let request = InitProducerIdRequest {
@@ -331,21 +354,16 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
 
 #[tokio::test]
 async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
-    let (broker_handle, _dir) = start_broker_no_audit_with(|config| {
-        config.transaction_state_num_partitions = 7;
-        config.transaction_max_timeout = secs(8);
-        config.features.transaction_two_phase_commit_enable = true;
-        config.features.unstable_api_versions = crate::api_catalog::UnstableApiVersions::Enabled;
-    })
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
+    transaction_v2_broker!((broker_handle, _dir, broker));
     wait_for_transaction_version_2(&broker_handle).await;
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
-    let principal = principal("admin");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    request_identity!(
+        (principal, peer, context),
+        principal("admin"),
+        client_id = "txn-client"
+    );
     let tid = "txn-recover-finite";
 
     let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
@@ -375,16 +393,12 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
         .txn_coordinator
         .get(tid)
         .expect("finite-timeout transaction entry");
-    let (finite_pid, finite_epoch, snapshot) = {
-        let mut entry = finite.lock().await;
-        entry.state = TxnState::Ongoing;
-        (entry.producer_id, entry.producer_epoch, entry.clone())
-    };
-    broker
-        .txn_coordinator
-        .put(snapshot, crate::txn::version::TxnVersion::Verified)
-        .await
-        .expect("persist finite ongoing transaction");
+    let (finite_pid, finite_epoch) = persist_ongoing(
+        &broker.txn_coordinator,
+        &finite,
+        "persist finite ongoing transaction",
+    )
+    .await;
 
     let recovery_request = InitProducerIdRequest {
         transactional_id: Some(tid.to_string()),
@@ -411,9 +425,11 @@ async fn the_timeout_check_runs_before_the_coordinator_check() {
         start_broker_no_audit_with(|config| config.transaction_max_timeout = secs(8)).await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_transaction_version_2(&broker_handle).await;
-    let principal = principal("admin");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    request_identity!(
+        (principal, peer, context),
+        principal("admin"),
+        client_id = "txn-client"
+    );
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
     // No FindCoordinator ran, so `__transaction_state` does not exist and this
     // broker coordinates nothing.
@@ -465,9 +481,11 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
-    let principal = principal("admin");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    request_identity!(
+        (principal, peer, context),
+        principal("admin"),
+        client_id = "txn-client"
+    );
     let tid = "txn-half-identity";
     let max = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
     let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
@@ -710,27 +728,19 @@ async fn acl_preamble_for_null_and_empty_transactional_id() {
     let mut expected = Vec::new();
     let mut actual = Vec::new();
     for case in cases {
-        let (broker_handle, _dir) = start_broker_with_authorizer_no_audit(Arc::new(
-            SimpleAclAuthorizer::new(HashSet::new()),
-        ))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        if !case.acls.is_empty() {
-            broker
-                .controller
-                .submit_change(
-                    case.acls
-                        .into_iter()
-                        .map(MetadataRecord::V1AccessControlEntry)
-                        .collect(),
-                )
-                .await
-                .expect("seed acls");
-        }
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker_with_authorizer_no_audit(Arc::new(SimpleAclAuthorizer::new(
+                HashSet::new()
+            ),))
+        );
+        crate::handlers::acl_test_support::seed_case_acls!(broker, case.acls);
 
-        let principal = principal("alice");
-        let peer = peer();
-        let context = crate::test_support::request_context(&principal, &peer, "idempotent-client");
+        request_identity!(
+            (principal, peer, context),
+            principal("alice"),
+            client_id = "idempotent-client"
+        );
         let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
         let request = InitProducerIdRequest {
             transactional_id: case.transactional_id.map(ToString::to_string),
@@ -831,9 +841,11 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
             .await
             .expect("seed acls");
 
-        let principal = principal("alice");
-        let peer = peer();
-        let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+        request_identity!(
+            (principal, peer, context),
+            principal("alice"),
+            client_id = "txn-client"
+        );
 
         let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
         let find_request =
@@ -894,9 +906,11 @@ async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
-    let principal = principal("admin");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    request_identity!(
+        (principal, peer, context),
+        principal("admin"),
+        client_id = "txn-client"
+    );
     let tid = "txn-no-block";
 
     let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;

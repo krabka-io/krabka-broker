@@ -54,16 +54,12 @@ pub(in crate::txn::handlers) async fn seed_topic(
     )];
     records.extend((0..partitions).map(|partition| {
         krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-            topic: topic.to_owned(),
-            partition,
-            leader: broker.config.node_id,
-            replicas: vec![broker.config.node_id],
-            isr: vec![broker.config.node_id],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: Vec::new(),
-            removing_replicas: Vec::new(),
             directories: vec![uuid::Uuid::nil()],
-            partition_epoch: 0,
+            ..crate::coordinator::test_support::single_replica_partition(
+                topic,
+                partition,
+                broker.config.node_id,
+            )
         })
     }));
     broker
@@ -83,9 +79,7 @@ pub(in crate::txn::handlers) async fn start_coordinator(
     authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
-        cfg.authorizer = authorizer;
-        cfg.transaction_state_num_partitions = 1;
-        cfg.transaction_state_replication_factor = 1;
+        crate::test_support::configure_single_partition_transactions(cfg, authorizer);
     })
     .await;
     let broker = handle.broker_arc_for_test();

@@ -7,14 +7,15 @@
 //! an unsupported version gets `UNSUPPORTED_VERSION` without closing the
 //! connection.
 
+mod support;
+
 use std::net::SocketAddr;
 
 use assert2::{assert, check};
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_broker::{Broker, BrokerConfig};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        api_versions_request::ApiVersionsRequest,
         api_versions_response::{ApiVersion, ApiVersionsResponse},
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_handshake_request::SaslHandshakeRequest,
@@ -27,22 +28,10 @@ use tokio::{
     net::TcpStream,
 };
 
-/// A request frame. `flexible` selects the v2 request header.
-fn frame(api_key: i16, version: i16, correlation_id: i32, flexible: bool, body: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::new();
-    frame.extend_from_slice(&api_key.to_be_bytes());
-    frame.extend_from_slice(&version.to_be_bytes());
-    frame.extend_from_slice(&correlation_id.to_be_bytes());
-    frame.extend_from_slice(&1i16.to_be_bytes());
-    frame.push(b'c');
-    if flexible {
-        frame.push(0);
-    }
-    frame.extend_from_slice(body);
-    let mut out = u32::try_from(frame.len()).unwrap().to_be_bytes().to_vec();
-    out.extend_from_slice(&frame);
-    out
-}
+use crate::support::discovery::api_versions_request_for;
+
+// A request frame; flexible selects v2, and the prefix keeps the original u32 limit.
+krabka_macros::vector_request_fixture!(frame, u32);
 
 /// Sends one request and returns the response frame after the correlation id.
 async fn round_trip(stream: &mut TcpStream, request: Vec<u8>, correlation_id: i32) -> Vec<u8> {
@@ -69,14 +58,7 @@ async fn api_versions(
     version: i16,
     correlation_id: i32,
 ) -> ApiVersionsResponse {
-    let body = encode(
-        &ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "1.0".into(),
-            ..Default::default()
-        },
-        version,
-    );
+    let body = encode(&api_versions_request_for("krabka-test", "1.0"), version);
     let response = round_trip(
         stream,
         frame(18, version, correlation_id, version >= 3, &body),
@@ -94,15 +76,11 @@ async fn start_sasl_controller() -> (krabka_broker::BrokerHandle, SocketAddr, Te
     let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
     cfg.controller_listen_addr = controller_addr;
     cfg.controller_quorum_voters = vec![(cfg.node_id, controller_addr.to_string())];
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: data_addr,
-        advertised: data_addr.to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
+    cfg.listeners = vec![crate::support::listeners::listener(
+        "SASL_PLAINTEXT",
+        data_addr,
+        ListenerProtocol::SaslPlaintext,
+    )];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.controller_listener_protocol = ListenerProtocol::SaslPlaintext;
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];

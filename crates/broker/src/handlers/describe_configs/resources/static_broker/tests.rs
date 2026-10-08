@@ -4,11 +4,15 @@
 //! metadata the registry supplies, and the request's key filter.
 
 use assert2::{assert, check};
-use krabka_protocol::{
-    UnknownTaggedFields, owned::describe_configs_response::DescribeConfigsSynonym,
-};
+use krabka_protocol::owned::describe_configs_response::DescribeConfigsSynonym;
 
-use super::{super::super::wire::CONFIG_SOURCE_DEFAULT, *};
+use super::{
+    super::{
+        super::wire::CONFIG_SOURCE_DEFAULT,
+        tests::{expected_config_entry, synonym as expected_synonym},
+    },
+    *,
+};
 
 const BOTH: EntryOptions = EntryOptions {
     include_synonyms: true,
@@ -440,30 +444,19 @@ fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
 }
 
 /// Fully pinned independent expectations, shared by each static-config case.
-fn expected_synonym(key: &str, value: &str, source: i8) -> DescribeConfigsSynonym {
-    DescribeConfigsSynonym {
-        name: key.to_owned(),
-        value: Some(value.to_owned()),
-        source,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
-}
-
 fn expected_entry(
     key: &str,
     value: &str,
     source: i8,
     synonyms: Vec<DescribeConfigsSynonym>,
 ) -> DescribeConfigsResourceResult {
-    DescribeConfigsResourceResult {
-        name: key.to_owned(),
-        value: Some(value.to_owned()),
-        read_only: true,
-        config_source: source,
-        is_sensitive: false,
+    expected_config_entry(
+        key,
+        Some(value),
+        true,
+        source,
         synonyms,
-        config_type: INT,
-        documentation: Some(doc_for(key)),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
+        INT,
+        Some(doc_for(key)),
+    )
 }

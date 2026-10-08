@@ -4,95 +4,83 @@
 //! postconditions, invariants, variants, and supporting lemmas directly beside
 //! the executable bodies.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// Offset-aware recovery mode resolved for one partition.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum FailoverRecovery {
-    None,
-    Balanced,
-    Aggressive,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Offset-aware recovery mode resolved for one partition.
+    pub enum FailoverRecovery {
+        None,
+        Balanced,
+        Aggressive,
+    }
 
-/// Safety action selected after the host classifies live ISR and replicas.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum FailoverAction {
-    ElectClean,
-    ElectFromElr,
-    /// The partition's single last-known leader comes back as an unclean
-    /// leader (Kafka's `canElectLastKnownLeader`).
-    ElectLastKnown,
-    Recover(FailoverRecovery),
-    ElectUnclean,
-    Unavailable,
-    ShrinkIsr,
-    NoChange,
-}
+    /// Safety action selected after the host classifies live ISR and replicas.
+    pub enum FailoverAction {
+        ElectClean,
+        ElectFromElr,
+        /// The partition's single last-known leader comes back as an unclean
+        /// leader (Kafka's `canElectLastKnownLeader`).
+        ElectLastKnown,
+        Recover(FailoverRecovery),
+        ElectUnclean,
+        Unavailable,
+        ShrinkIsr,
+        NoChange,
+    }
 
-/// What the live members of the partition's ISR can do once the leader is
-/// gone. Every live ISR member holds every committed record; a witness is a
-/// live member that never leads.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum LiveIsr {
-    /// No ISR member is live.
-    Empty,
-    /// Every live ISR member is a witness, so none can lead.
-    WitnessesOnly,
-    /// A live ISR member that is not a witness can lead.
-    Electable,
-}
+    /// What the live members of the partition's ISR can do once the leader is
+    /// gone. Every live ISR member holds every committed record; a witness is a
+    /// live member that never leads.
+    pub enum LiveIsr {
+        /// No ISR member is live.
+        Empty,
+        /// Every live ISR member is a witness, so none can lead.
+        WitnessesOnly,
+        /// A live ISR member that is not a witness can lead.
+        Electable,
+    }
 
-/// The out-of-ISR options, consulted only when no ISR member is live.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct OutOfIsrFacts {
-    /// A live KIP-966 eligible leader replica can lead.
-    pub has_electable_elr: bool,
-    /// Kafka's `canElectLastKnownLeader`, less the empty-ISR test that
-    /// [`LiveIsr::Empty`] already carries: the target ELR is empty, the
-    /// partition's `lastKnownElr` holds exactly one replica, and that replica
-    /// is live and can lead.
-    pub last_known_leader_electable: bool,
-    /// The topic's resolved offset-aware recovery strategy.
-    pub recovery: FailoverRecovery,
-    /// The KIP-841 out-of-ISR election is both permitted by
-    /// `unclean.leader.election.enable` and has a live replica to elect.
-    pub unclean_election_available: bool,
-}
+    /// The out-of-ISR options, consulted only when no ISR member is live.
+    pub struct OutOfIsrFacts {
+        /// A live KIP-966 eligible leader replica can lead.
+        pub has_electable_elr: bool,
+        /// Kafka's `canElectLastKnownLeader`, less the empty-ISR test that
+        /// [`LiveIsr::Empty`] already carries: the target ELR is empty, the
+        /// partition's `lastKnownElr` holds exactly one replica, and that replica
+        /// is live and can lead.
+        pub last_known_leader_electable: bool,
+        /// The topic's resolved offset-aware recovery strategy.
+        pub recovery: FailoverRecovery,
+        /// The KIP-841 out-of-ISR election is both permitted by
+        /// `unclean.leader.election.enable` and has a live replica to elect.
+        pub unclean_election_available: bool,
+    }
 
-/// What the host established about one partition before the failover
-/// decision. The kernel does not see replica sets; every field is the host's
-/// classification of them.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct FailoverFacts {
-    /// The partition's leader is the replica that went away.
-    pub leader_dead: bool,
-    /// The live ISR is smaller than the recorded ISR.
-    pub isr_shrunk: bool,
-    /// What the live ISR members can do.
-    pub live_isr: LiveIsr,
-    /// The options left when no ISR member is live.
-    pub out_of_isr: OutOfIsrFacts,
-}
+    /// What the host established about one partition before the failover
+    /// decision. The kernel does not see replica sets; every field is the host's
+    /// classification of them.
+    pub struct FailoverFacts {
+        /// The partition's leader is the replica that went away.
+        pub leader_dead: bool,
+        /// The live ISR is smaller than the recorded ISR.
+        pub isr_shrunk: bool,
+        /// What the live ISR members can do.
+        pub live_isr: LiveIsr,
+        /// The options left when no ISR member is live.
+        pub out_of_isr: OutOfIsrFacts,
+    }
 
-/// One surviving replica's log as KIP-966 unclean recovery ranks it, from its
-/// `GetReplicaLogInfo` answer.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct RecoveryCandidate {
-    /// The leader epoch of the last record the replica wrote.
-    pub last_epoch: i32,
-    /// The offset one past the replica's last record.
-    pub log_end_offset: i64,
-    /// The replica's broker id, which breaks a tie deterministically.
-    pub broker_id: u64,
+    /// One surviving replica's log as KIP-966 unclean recovery ranks it, from its
+    /// `GetReplicaLogInfo` answer.
+    pub struct RecoveryCandidate {
+        /// The leader epoch of the last record the replica wrote.
+        pub last_epoch: i32,
+        /// The offset one past the replica's last record.
+        pub log_end_offset: i64,
+        /// The replica's broker id, which breaks a tie deterministically.
+        pub broker_id: u64,
+    }
 }
 
 mod failover;
@@ -116,6 +104,27 @@ mod watermark;
 #[cfg(any(creusot, test))]
 use watermark::candidate_has_majority;
 pub use watermark::{majority_watermark, recompute_high_watermark};
+
+open_logic! {
+/// Every concrete supporting report belongs to a different node.
+pub(crate) fn supporting_nodes_distinct(supporters: Seq<(u64, i64)>) -> bool {
+    pearlite! { forall<i: Int, j: Int> 0 <= i && i < j && j < supporters.len() ==> supporters[i].0 != supporters[j].0 }
+}
+}
+
+open_logic! {
+/// Each reported supporting frontier reaches the limit and names a voter with concrete evidence.
+pub(crate) fn supporting_voter_witnesses(
+    supporters: Seq<(u64, i64)>,
+    voters: Seq<u64>,
+    limit: Int,
+    evidence: creusot_std::logic::Mapping<(Int, Int), bool>,
+) -> bool {
+    pearlite! { forall<i: Int> 0 <= i && i < supporters.len() ==> supporters[i].1@ >= limit
+    && exists<j: Int> 0 <= j && j < voters.len() && supporters[i].0 == voters[j]
+        && evidence.get((i, j)) }
+}
+}
 
 #[cfg(test)]
 mod tests;

@@ -72,10 +72,7 @@ impl ReplicatorSupervisor {
                 leader_port: wanted.endpoint.1,
                 client_id: self.client_id.clone(),
                 shutdown: token.clone(),
-                inter_broker_client: self.inter_broker_client.clone(),
-                inter_broker_listener_protocol: self.inter_broker_listener_protocol,
-                inter_broker_server_name: self.inter_broker_server_name.clone(),
-                replication: self.replication.clone(),
+                connection: self.connection_config(),
                 followed: Arc::clone(&followed),
             }));
             self.tasks.insert(
@@ -222,10 +219,7 @@ impl ReplicatorSupervisor {
             log_dirs: self.log_dirs.clone(),
             log_settings: self.log_config.clone(),
             client_id: self.client_id.clone(),
-            inter_broker_client: self.inter_broker_client.clone(),
-            inter_broker_listener_protocol: self.inter_broker_listener_protocol,
-            inter_broker_server_name: self.inter_broker_server_name.clone(),
-            replication: self.replication.clone(),
+            connection: self.connection_config(),
             throttle_state: self.throttle_state.clone(),
             controller: self.controller.clone(),
             log_dir_status: self.log_dir_status.clone(),
@@ -282,11 +276,7 @@ mod tests {
 
     #[test]
     fn replicator_config_receives_runtime_policy_and_tls_server_name() {
-        let image = image_with(&[
-            topic_record("t", 1),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2)], 7),
-            MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
-        ]);
+        let image = followed_image(1, &[0], 7);
         let (mut supervisor, _partitions, _reporter, _dir) = supervisor_fixture(image.clone());
         supervisor.replication.fetch_max = bytes(2_345_678);
         supervisor.replication.send_error_backoff = millis(37);
@@ -300,27 +290,31 @@ mod tests {
             ("leader.internal".into(), 9094),
         );
 
-        check!(config.replication.fetch_max == bytes(2_345_678));
-        check!(config.replication.send_error_backoff == millis(37));
-        check!(config.inter_broker_server_name == "broker.internal");
+        check!(config.connection.replication.fetch_max == bytes(2_345_678));
+        check!(config.connection.replication.send_error_backoff == millis(37));
+        check!(config.connection.inter_broker_server_name == "broker.internal");
         check!(config.leader_host == "leader.internal");
         check!(config.leader_port == 9094);
+    }
+
+    fn followed_image(partitions: i32, followed: &[i32], epoch: i32) -> MetadataImage {
+        let mut records = vec![topic_record("t", partitions)];
+        records.extend(followed.iter().map(|&partition| {
+            partition_record("t", partition, NodeId(1), vec![NodeId(1), NodeId(2)], epoch)
+        }));
+        records.push(MetadataRecord::V1BrokerRegistration(broker_record(NodeId(
+            1,
+        ))));
+        image_with(&records)
     }
 
     /// The point of the batching: every partition this broker follows from one
     /// leader lands on that leader's one fetcher, rather than on a task each.
     #[tokio::test]
     async fn every_partition_of_one_leader_lands_on_one_fetcher() {
-        let img = image_with(&[
-            topic_record("t", 3),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
-            partition_record("t", 1, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
-            partition_record("t", 2, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
-            MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
-        ]);
-        let (supervisor, _partitions, _reporter, _dir) = supervisor_fixture(img.clone());
-
-        supervisor.reconcile(&img).await;
+        let img = followed_image(3, &[0, 1, 2], 8);
+        let (supervisor, _partitions, _reporter, _dir) =
+            crate::replicator_supervisor::test_support::reconciled_supervisor(&img).await;
 
         check!(supervisor.tasks.len() == 1);
         check!(
@@ -341,13 +335,9 @@ mod tests {
     /// nothing left to follow is retired.
     #[tokio::test]
     async fn a_replica_on_an_offline_log_directory_is_not_followed() {
-        let img = image_with(&[
-            topic_record("t", 1),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
-            MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
-        ]);
-        let (supervisor, _partitions, _reporter, dir) = supervisor_fixture(img.clone());
-        supervisor.reconcile(&img).await;
+        let img = followed_image(1, &[0], 8);
+        let (supervisor, _partitions, _reporter, dir) =
+            crate::replicator_supervisor::test_support::reconciled_supervisor(&img).await;
         let followed_while_online = followed_keys(&supervisor, (NodeId(1), 0));
 
         supervisor
@@ -371,9 +361,8 @@ mod tests {
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(3))),
         ]);
-        let (supervisor, _partitions, _reporter, _dir) = supervisor_fixture(img.clone());
-
-        supervisor.reconcile(&img).await;
+        let (supervisor, _partitions, _reporter, _dir) =
+            crate::replicator_supervisor::test_support::reconciled_supervisor(&img).await;
 
         check!(supervisor.tasks.len() == 2);
         check!(followed_keys(&supervisor, (NodeId(1), 0)) == vec![("t".to_string(), 0)]);
@@ -433,14 +422,9 @@ mod tests {
     /// partitions ride on is not torn down.
     #[tokio::test]
     async fn a_removed_partition_leaves_the_map_and_the_fetcher_keeps_running() {
-        let two = image_with(&[
-            topic_record("t", 2),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
-            partition_record("t", 1, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
-            MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
-        ]);
-        let (supervisor, _partitions, _reporter, _dir) = supervisor_fixture(two.clone());
-        supervisor.reconcile(&two).await;
+        let two = followed_image(2, &[0, 1], 8);
+        let (supervisor, _partitions, _reporter, _dir) =
+            crate::replicator_supervisor::test_support::reconciled_supervisor(&two).await;
         let token = supervisor
             .tasks
             .get(&(NodeId(1), 0))
@@ -448,11 +432,7 @@ mod tests {
             .shutdown
             .clone();
 
-        let one = image_with(&[
-            topic_record("t", 2),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
-            MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
-        ]);
+        let one = followed_image(2, &[0], 8);
         supervisor.reconcile(&one).await;
 
         check!(followed_keys(&supervisor, (NodeId(1), 0)) == vec![("t".to_string(), 0)]);
@@ -480,11 +460,7 @@ mod tests {
     /// connection, and a connection is a fetcher.
     #[tokio::test]
     async fn a_fetcher_whose_leader_endpoint_moved_is_replaced() {
-        let img = image_with(&[
-            topic_record("t", 1),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
-            MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
-        ]);
+        let img = followed_image(1, &[0], 8);
         let (supervisor, _partitions, _reporter, _dir) = supervisor_fixture(img.clone());
         let stale = CancellationToken::new();
         supervisor.tasks.insert(
@@ -503,11 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_respawns_an_exited_fetcher() {
-        let img = image_with(&[
-            topic_record("t", 1),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
-            MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
-        ]);
+        let img = followed_image(1, &[0], 8);
         let (supervisor, _partitions, _reporter, _dir) = supervisor_fixture(img.clone());
         let stale_shutdown = CancellationToken::new();
         supervisor.tasks.insert(
@@ -552,8 +524,8 @@ mod tests {
             partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2)], 8),
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
         ]);
-        let (supervisor, _partitions, _reporter, _dir) = supervisor_fixture(before.clone());
-        supervisor.reconcile(&before).await;
+        let (supervisor, _partitions, _reporter, _dir) =
+            crate::replicator_supervisor::test_support::reconciled_supervisor(&before).await;
 
         let recreated_id = Uuid::new_v4();
         let after = image_with(&[

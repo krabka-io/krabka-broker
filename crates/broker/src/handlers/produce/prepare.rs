@@ -126,15 +126,12 @@ impl PreparedBatch {
                 let offset = batch
                     .base_offset
                     .saturating_add(i64::from(record.offset_delta));
-                invalid_timestamp_records.push(BatchIndexAndErrorMessage {
-                    batch_index: index,
-                    batch_index_error_message: Some(invalid_timestamp_message(
-                        offset,
-                        timestamp,
-                        timestamps.window(now_ms),
-                    )),
-                    ..Default::default()
-                });
+                invalid_timestamp_records.push(timestamp_error(
+                    index,
+                    offset,
+                    timestamp,
+                    timestamps.window(now_ms),
+                ));
             }
         }
         Self {
@@ -322,15 +319,12 @@ pub(super) fn prepare_batch(
                         let offset = header
                             .base_offset
                             .saturating_add(i64::from(record.offset_delta));
-                        invalid_timestamp_records.push(BatchIndexAndErrorMessage {
-                            batch_index: index,
-                            batch_index_error_message: Some(invalid_timestamp_message(
-                                offset,
-                                timestamp,
-                                timestamps.window(now_ms),
-                            )),
-                            ..Default::default()
-                        });
+                        invalid_timestamp_records.push(timestamp_error(
+                            index,
+                            offset,
+                            timestamp,
+                            timestamps.window(now_ms),
+                        ));
                     }
                 }
                 index = index.saturating_add(1);
@@ -352,6 +346,19 @@ pub(super) fn prepare_batch(
 /// The per-record message of Kafka's `LogValidator.validateTimestamp`, for one
 /// `record_errors` row: `"Timestamp {ts} of message with offset {offset} is
 /// out of range. The timestamp should be within [{low}, {high}]"`.
+fn timestamp_error(
+    index: i32,
+    offset: i64,
+    timestamp: i64,
+    window: (i64, i64),
+) -> BatchIndexAndErrorMessage {
+    BatchIndexAndErrorMessage {
+        batch_index: index,
+        batch_index_error_message: Some(invalid_timestamp_message(offset, timestamp, window)),
+        ..Default::default()
+    }
+}
+
 fn invalid_timestamp_message(offset: i64, timestamp: i64, window: (i64, i64)) -> String {
     format!(
         "Timestamp {timestamp} of message with offset {offset} is out of range. The timestamp \

@@ -189,40 +189,15 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::metadata::{
-        CustomMetadata, RemoteLogSegmentId, RemoteLogSegmentState, RemotePartitionDeleteState,
-    };
+    use crate::metadata::RemotePartitionDeleteState;
 
     fn tp() -> TopicIdPartition {
         TopicIdPartition::new(Uuid::from_u128(1), "orders", 0)
     }
 
-    fn started(id: u128, start: i64, end: i64) -> RemoteLogSegmentMetadata {
-        RemoteLogSegmentMetadata::new(
-            RemoteLogSegmentId::new(tp(), Uuid::from_u128(id)),
-            start,
-            end,
-            end,
-            1,
-            100,
-            crate::metadata::RemoteLogSegmentDetails::new(
-                2048,
-                RemoteLogSegmentState::CopySegmentStarted,
-                maplit::btreemap! {LeaderEpoch(0) => start},
-            ),
-        )
-        .unwrap()
-    }
+    krabka_macros::remote_segment_fixtures!(started, finish, crate, end);
 
-    fn finish(id: u128) -> RemoteLogSegmentMetadataUpdate {
-        RemoteLogSegmentMetadataUpdate {
-            remote_log_segment_id: RemoteLogSegmentId::new(tp(), Uuid::from_u128(id)),
-            event_timestamp_ms: 200,
-            custom_metadata: Some(CustomMetadata(vec![7])),
-            state: RemoteLogSegmentState::CopySegmentFinished,
-            broker_id: 1,
-        }
-    }
+    krabka_macros::remote_metadata_missing!(check_missing_partition, crate);
 
     krabka_macros::remote_segment_check!(check_finished_segment);
 
@@ -240,13 +215,7 @@ mod tests {
     fn query_unknown_partition_is_none_not_error() {
         let m = InmemoryRemoteLogMetadataManager::new();
         let other = TopicIdPartition::new(Uuid::from_u128(999), "nope", 0);
-        check!(
-            m.remote_log_segment_metadata(&other, LeaderEpoch(0), 0)
-                .unwrap()
-                == None
-        );
-        check!(m.highest_offset_for_epoch(&other, LeaderEpoch(0)).unwrap() == None);
-        check!(m.list_remote_log_segments(&other).unwrap().is_empty());
+        check_missing_partition(&m, &other);
     }
 
     #[test]

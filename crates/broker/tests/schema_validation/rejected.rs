@@ -9,15 +9,14 @@ use assert2::check;
 use bytes::Bytes;
 
 use crate::harness::{
-    INVALID_RECORD, KNOWN_ID, OTHER_SUBJECT_ID, UNKNOWN_ID, VALIDATED, batch_with_value,
-    batch_with_values, boot, create_topic, framed, produce, registry,
+    INVALID_RECORD, KNOWN_ID, OTHER_SUBJECT_ID, UNKNOWN_ID, VALIDATED, batch_with_values, boot,
+    create_topic, framed, produce, registry,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn records_that_fail_validation_are_rejected_and_not_appended() {
-    let registry = registry().await;
-    let (broker, client, _dir) = boot(&registry.uri()).await;
-    let id = create_topic(&broker, &client, "validated", VALIDATED).await;
+    let (_registry, broker, client, _dir, id) =
+        crate::harness::mock_topic_fixture("validated", VALIDATED).await;
 
     let cases: Vec<(&str, Bytes)> = vec![
         // No Confluent frame at all: what a `StringSerializer` writes.
@@ -34,7 +33,7 @@ async fn records_that_fail_validation_are_rejected_and_not_appended() {
     ];
 
     for (name, value) in cases {
-        let out = produce(&client, "validated", id, batch_with_value(Some(value))).await;
+        let out = crate::harness::produce_value(&client, "validated", id, Some(value)).await;
         check!(out.error_code == INVALID_RECORD, "case {name}: {out:?}");
         check!(
             !out.record_errors.is_empty(),
@@ -77,20 +76,10 @@ async fn an_unvalidated_topic_accepts_what_a_validated_one_rejects() {
 
     let unframed = Bytes::from_static(b"plain text");
 
-    let rejected = produce(
-        &client,
-        "validated",
-        validated,
-        batch_with_value(Some(unframed.clone())),
-    )
-    .await;
-    let accepted = produce(
-        &client,
-        "control",
-        control,
-        batch_with_value(Some(unframed)),
-    )
-    .await;
+    let rejected =
+        crate::harness::produce_value(&client, "validated", validated, Some(unframed.clone()))
+            .await;
+    let accepted = crate::harness::produce_value(&client, "control", control, Some(unframed)).await;
 
     check!(rejected.error_code == INVALID_RECORD, "{rejected:?}");
     check!(accepted.error_code == 0, "{accepted:?}");
@@ -102,9 +91,8 @@ async fn an_unvalidated_topic_accepts_what_a_validated_one_rejects() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_rejected_record_is_named_by_its_index_in_the_batch() {
-    let registry = registry().await;
-    let (broker, client, _dir) = boot(&registry.uri()).await;
-    let id = create_topic(&broker, &client, "validated", VALIDATED).await;
+    let (_registry, broker, client, _dir, id) =
+        crate::harness::mock_topic_fixture("validated", VALIDATED).await;
 
     // Record 0 is fine; record 1 is not. The batch is rejected whole — its own
     // CRC covers both — and the response says which record caused it.

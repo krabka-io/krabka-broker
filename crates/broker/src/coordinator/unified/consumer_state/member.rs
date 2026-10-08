@@ -84,6 +84,30 @@ pub struct MemberState {
 }
 
 impl MemberState {
+    /// A native member before subscriptions, assignments or epochs have been installed.
+    /// The caller supplies the observation time rather than reading another clock here.
+    pub(crate) fn empty(member_id: impl Into<String>, last_seen: Instant) -> Self {
+        Self {
+            member_id: member_id.into(),
+            instance_id: None,
+            rack_id: None,
+            client_id: String::new(),
+            client_host: String::new(),
+            subscribed_topic_names: HashSet::new(),
+            subscribed_topic_regex: None,
+            server_assignor: None,
+            rebalance_timeout: Duration::ZERO,
+            member_epoch: 0,
+            previous_member_epoch: 0,
+            assignment_state: MemberAssignmentState::Stable,
+            assigned_partitions: HashMap::new(),
+            partitions_pending_revocation: HashMap::new(),
+            assignment_epochs: HashMap::new(),
+            last_seen,
+            classic: None,
+        }
+    }
+
     /// `true` if this member speaks the classic protocol inside an upgraded
     /// group. Its RPCs are then `JoinGroup`, `SyncGroup`, and `Heartbeat`, not
     /// `ConsumerGroupHeartbeat`.

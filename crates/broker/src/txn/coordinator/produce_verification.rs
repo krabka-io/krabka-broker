@@ -152,14 +152,9 @@ impl TxnCoordinator {
         let Some(broker) = image.broker(leader) else {
             return Remote::Failed(codes::COORDINATOR_NOT_AVAILABLE);
         };
-        let (host, port) = broker
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.name == transport.listener_name)
-            .map_or_else(
-                || (broker.host.clone(), broker.port),
-                |endpoint| (endpoint.host.clone(), endpoint.port),
-            );
+        let (host, port) =
+            crate::broker::registered_listener_endpoint(broker, &transport.listener_name);
+        let host = host.to_owned();
         let mut topics: Vec<AddPartitionsToTxnTopic> = Vec::new();
         for partition in &check.partitions {
             match topics

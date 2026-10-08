@@ -6,10 +6,7 @@
 
 use super::{
     group_coordinator::GroupCoordinator,
-    replay_policy::{
-        ReplayMutation, ReplayRecordKind, replay_epoch_is_admissible, replay_mutation,
-        replay_write_is_admissible,
-    },
+    replay_policy::{ReplayRecordKind, replay_epoch_is_admissible, replay_write_is_admissible},
     seeds::ShareGroupSeed,
     share,
 };
@@ -48,26 +45,7 @@ impl GroupCoordinator {
         member_id: &str,
         v: share::persistence::ShareGroupMemberMetadataValue,
     ) {
-        {
-            if let Some(mut seed) = self.share_seeds.get_mut(group_id)
-                && replay_write_is_admissible(
-                    ReplayRecordKind::MemberMetadata,
-                    true,
-                    seed.members.contains_key(member_id),
-                )
-            {
-                seed.members.insert(member_id.into(), v.clone());
-            }
-        }
-        if let Some(mut cached) = self.share_seeds_cache.get_mut(group_id)
-            && replay_write_is_admissible(
-                ReplayRecordKind::MemberMetadata,
-                true,
-                cached.members.contains_key(member_id),
-            )
-        {
-            cached.members.insert(member_id.into(), v);
-        }
+        super::seeds::update_replayed_member!((self, share_seeds, share_seeds_cache, group_id, member_id, v); metadata);
     }
     pub fn replay_share_target_assignment_metadata(
         &self,
@@ -77,24 +55,16 @@ impl GroupCoordinator {
         if v.assignment_epoch < 0 {
             return;
         }
-        {
-            if let Some(mut seed) = self.share_seeds.get_mut(group_id)
-                && replay_write_is_admissible(
-                    ReplayRecordKind::TargetAssignmentMetadata,
-                    true,
-                    false,
-                )
-                && replay_epoch_is_admissible(seed.target_epoch, v.assignment_epoch)
-            {
-                seed.target_epoch = v.assignment_epoch;
+        super::seeds::update_replayed_seeds!(self, share_seeds, share_seeds_cache, group_id; (v, v);
+            |seed| replay_write_is_admissible(
+                ReplayRecordKind::TargetAssignmentMetadata,
+                true,
+                false,
+            )
+            && replay_epoch_is_admissible(seed.target_epoch, v.assignment_epoch) => |value| {
+                seed.target_epoch = value.assignment_epoch;
             }
-        }
-        if let Some(mut cached) = self.share_seeds_cache.get_mut(group_id)
-            && replay_write_is_admissible(ReplayRecordKind::TargetAssignmentMetadata, true, false)
-            && replay_epoch_is_admissible(cached.target_epoch, v.assignment_epoch)
-        {
-            cached.target_epoch = v.assignment_epoch;
-        }
+        );
     }
     pub fn replay_share_target_assignment_member(
         &self,
@@ -102,26 +72,7 @@ impl GroupCoordinator {
         member_id: &str,
         v: share::persistence::ShareGroupTargetAssignmentMemberValue,
     ) {
-        {
-            if let Some(mut seed) = self.share_seeds.get_mut(group_id)
-                && replay_write_is_admissible(
-                    ReplayRecordKind::TargetAssignmentMember,
-                    true,
-                    seed.members.contains_key(member_id),
-                )
-            {
-                seed.target_per_member.insert(member_id.into(), v.clone());
-            }
-        }
-        if let Some(mut cached) = self.share_seeds_cache.get_mut(group_id)
-            && replay_write_is_admissible(
-                ReplayRecordKind::TargetAssignmentMember,
-                true,
-                cached.members.contains_key(member_id),
-            )
-        {
-            cached.target_per_member.insert(member_id.into(), v);
-        }
+        super::seeds::update_replayed_member!((self, share_seeds, share_seeds_cache, group_id, member_id, v); target);
     }
     pub fn replay_share_current_member_assignment(
         &self,
@@ -129,38 +80,7 @@ impl GroupCoordinator {
         member_id: &str,
         v: share::persistence::ShareGroupCurrentMemberAssignmentValue,
     ) {
-        {
-            if let Some(mut seed) = self.share_seeds.get_mut(group_id)
-                && replay_write_is_admissible(
-                    ReplayRecordKind::CurrentMemberAssignment,
-                    true,
-                    seed.members.contains_key(member_id),
-                )
-                && seed
-                    .current_per_member
-                    .get(member_id)
-                    .is_none_or(|current| {
-                        replay_epoch_is_admissible(current.member_epoch, v.member_epoch)
-                    })
-            {
-                seed.current_per_member.insert(member_id.into(), v.clone());
-            }
-        }
-        if let Some(mut cached) = self.share_seeds_cache.get_mut(group_id)
-            && replay_write_is_admissible(
-                ReplayRecordKind::CurrentMemberAssignment,
-                true,
-                cached.members.contains_key(member_id),
-            )
-            && cached
-                .current_per_member
-                .get(member_id)
-                .is_none_or(|current| {
-                    replay_epoch_is_admissible(current.member_epoch, v.member_epoch)
-                })
-        {
-            cached.current_per_member.insert(member_id.into(), v);
-        }
+        super::seeds::update_replayed_member!((self, share_seeds, share_seeds_cache, group_id, member_id, v); current);
     }
 
     /// Replay a KIP-932 `ShareGroupStatePartitionMetadata` record, key v15.
@@ -173,18 +93,11 @@ impl GroupCoordinator {
         group_id: &str,
         v: share::persistence::ShareGroupStatePartitionMetadataValue,
     ) {
-        {
-            if let Some(mut seed) = self.share_seeds.get_mut(group_id)
-                && replay_write_is_admissible(ReplayRecordKind::StatePartitionMetadata, true, false)
-            {
-                seed.state_partition_metadata = v.clone();
+        super::seeds::update_replayed_seeds!(self, share_seeds, share_seeds_cache, group_id; (v.clone(), v);
+            |seed| replay_write_is_admissible(ReplayRecordKind::StatePartitionMetadata, true, false) => |value| {
+                seed.state_partition_metadata = value;
             }
-        }
-        if let Some(mut cached) = self.share_seeds_cache.get_mut(group_id)
-            && replay_write_is_admissible(ReplayRecordKind::StatePartitionMetadata, true, false)
-        {
-            cached.state_partition_metadata = v;
-        }
+        );
     }
 
     /// Read the cached `ShareGroupStatePartitionMetadata` for `group_id`.
@@ -210,22 +123,14 @@ impl GroupCoordinator {
     /// `share_seeds_cache`.
     pub fn replay_share_tombstone(&self, key: &share::persistence::ShareGroupKey) {
         use share::persistence::ShareGroupKey as K;
-        let group_id = match key {
-            K::GroupMetadata { group_id }
-            | K::MemberMetadata { group_id, .. }
-            | K::TargetAssignmentMetadata { group_id }
-            | K::TargetAssignmentMember { group_id, .. }
-            | K::CurrentMemberAssignment { group_id, .. }
-            | K::StatePartitionMetadata { group_id } => group_id.as_str(),
-        };
+        let group_id = key.group_id();
         if matches!(key, K::GroupMetadata { .. }) {
-            assert2::debug_assert!(
-                replay_mutation(ReplayRecordKind::GroupMetadata, None, true, false)
-                    == ReplayMutation::RemoveGroup
+            super::seeds::remove_replayed_group(
+                &self.share_seeds,
+                &self.share_seeds_cache,
+                &self.group_types,
+                group_id,
             );
-            self.share_seeds.remove(group_id);
-            self.share_seeds_cache.remove(group_id);
-            self.group_types.remove(group_id);
             return;
         }
         let scrub = |seed: &mut ShareGroupSeed| {
@@ -235,14 +140,12 @@ impl GroupCoordinator {
             );
         };
 
-        {
-            if let Some(mut s) = self.share_seeds.get_mut(group_id) {
-                scrub(s.value_mut());
-            }
-        }
-        if let Some(mut s) = self.share_seeds_cache.get_mut(group_id) {
-            scrub(s.value_mut());
-        }
+        super::seeds::scrub_replayed_seeds(
+            &self.share_seeds,
+            &self.share_seeds_cache,
+            group_id,
+            scrub,
+        );
     }
 }
 

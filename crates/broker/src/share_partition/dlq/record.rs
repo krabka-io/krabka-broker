@@ -192,14 +192,7 @@ mod tests {
         }
     }
 
-    fn header_value(record: &Record, key: &str) -> Option<String> {
-        record
-            .headers
-            .iter()
-            .find(|header| header.key == key)
-            .and_then(|header| header.value.as_ref())
-            .map(|value| String::from_utf8(value.to_vec()).unwrap())
-    }
+    krabka_macros::record_header_text!(header_value, strict);
 
     /// Kafka's `headers`: six headers for each offset, in that order, with the
     /// message of the cause, and no key and no value when nothing was copied.

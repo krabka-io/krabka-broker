@@ -2,13 +2,31 @@
 //! transaction decision and timeout models.
 
 use krabka_log::ProducerId;
+use krabka_verified::transaction::TransactionReaperCompletionDecision;
 
 use super::{
-    coordinator::completion::completion_for,
+    coordinator::completion::{apply_completion, completion_decision, completion_for},
     handlers::end_txn::{completion_producer_identity, prepare_server_abort_identities_with_fresh},
     state::{TxnEntry, TxnState},
     version::TxnVersion,
 };
+
+/// Drive the common begin gate and generation stamp, with an optional start-clock write.
+macro_rules! begin_transaction {
+    ($state:ident; $($start:tt)*) => {
+        let prior = st($state.state);
+        if !prior.can_transition_to(TxnState::Ongoing) {
+            return None;
+        }
+        if prior != TxnState::Ongoing {
+            $($start)*
+            $state.generation = $state.epoch;
+        }
+        $state.state = TxnState::Ongoing.to_kafka_status();
+        Some(())
+    };
+}
+pub(crate) use begin_transaction;
 
 pub struct Initialized {
     pub entry: TxnEntry,
@@ -68,4 +86,22 @@ pub fn initialize(
         fence_matches,
         reset,
     })
+}
+
+/// Complete the prepared snapshot atomically with the production completion
+/// gate and identity. Each model keeps its own finalization history and oracle.
+pub fn complete_prepared(entry: &TxnEntry, now_ms: i64) -> Option<(TxnEntry, TxnState)> {
+    let (_, complete) = completion_for(entry.state)?;
+    match completion_decision(entry, entry, (entry.state, complete)) {
+        TransactionReaperCompletionDecision::Proceed => {
+            let mut completed = entry.clone();
+            let identity = completion_producer_identity(&completed);
+            apply_completion(&mut completed, complete, identity, now_ms);
+            Some((completed, complete))
+        }
+        TransactionReaperCompletionDecision::AlreadyComplete
+        | TransactionReaperCompletionDecision::RejectMalformed
+        | TransactionReaperCompletionDecision::RejectStaleIdentity
+        | TransactionReaperCompletionDecision::RejectChangedPreparedState => None,
+    }
 }

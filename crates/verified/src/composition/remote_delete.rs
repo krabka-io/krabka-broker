@@ -8,24 +8,20 @@ use crate::retention::{
 
 type RemoteDeletion = (Vec<RemoteRetentionSegment>, usize, usize, i64);
 
+open_logic! {
 /// Every whole range in the prefix reaches the initial floor or an earlier
 /// range. This geometric predicate does not run the floor-update fold.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 fn deletion_prefix_connected(rows: Seq<(i64, i64, u64, bool)>, initial: i64, count: Int) -> bool {
     pearlite! { forall<j: Int> 0 <= j && j < count ==> rows[j].1@ < i64::MAX@
     && (rows[j].0@ <= initial@ || exists<k: Int> 0 <= k && k < j && rows[j].0@ <= rows[k].1@ + 1) }
 }
+}
 
+open_logic! {
 /// Membership in the actual completed prefix, used as a quantifier trigger.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 fn deleted_prefix_covers(rows: Seq<(i64, i64, u64, bool)>, count: Int, offset: Int) -> bool {
     pearlite! { exists<j: Int> 0 <= j && j < count && rows[j].0@ <= offset && offset <= rows[j].1@ }
+}
 }
 
 /// Appending one range preserves every offset covered by the older prefix.
@@ -47,21 +43,17 @@ fn lemma_deleted_prefix_covers_extend(rows: Seq<(i64, i64, u64, bool)>, count: I
 /// truthful metadata, real object deletion and floor publication are external.
 #[requires(current@ >= 0)]
 #[requires(match deleted_below { None => true, Some(floor) => 0 <= floor@ && floor@ <= current@ })]
-#[requires(forall<i: Int> 0 <= i && i < finished@.len() ==> 0 <= finished@[i].0@ && finished@[i].0@ <= finished@[i].1@)]
+#[requires(super::finished_ranges_valid(finished@.len(), |i: Int| (finished@[i].0, finished@[i].1)))]
 #[ensures((result.0@.len() == finished@.len() && result.1@ <= finished@.len())
     && (forall<i: Int> 0 <= i && i < finished@.len() ==> result.0@[i].size == finished@[i].2
     && result.0@[i].time_expired == finished@[i].3
     && result.0@[i].log_start_breached == match deleted_below { None => false, Some(floor) => finished@[i].1@ < floor@ }))]
-#[ensures((forall<i: Int> 0 <= i && i < result.1@ ==> result.0@[i].log_start_breached
-    || finished@[i].3 || (size_debt@ > 0 && remote_prefix_charge(result.0@, i) < size_debt@
-        && remote_prefix_charge(result.0@, i + 1) <= size_debt@))
+#[ensures((deletion_prefix_requested(result.0@, finished@, size_debt@, result.1@))
     && (deletes_allowed && result.1@ < finished@.len() ==> !result.0@[result.1@].log_start_breached
     && !finished@[result.1@].3 && (size_debt@ == 0 || remote_prefix_charge(result.0@, result.1@) >= size_debt@
         || remote_prefix_charge(result.0@, result.1@ + 1) > size_debt@))
     && (forall<n: Int> deletes_allowed && 0 <= n && n <= finished@.len()
-    && (forall<i: Int> 0 <= i && i < n ==> result.0@[i].log_start_breached || finished@[i].3
-        || (size_debt@ > 0 && remote_prefix_charge(result.0@, i) < size_debt@
-            && remote_prefix_charge(result.0@, i + 1) <= size_debt@)) ==> n <= result.1@))]
+    && (deletion_prefix_requested(result.0@, finished@, size_debt@, n)) ==> n <= result.1@))]
 #[ensures((!deletes_allowed ==> result.1@ == 0))]
 #[ensures((result.2@ <= result.1@ && result.2@ <= completed@.len())
     && (forall<i: Int> 0 <= i && i < result.2@ ==> completed@[i])
@@ -127,4 +119,17 @@ pub(super) fn completed_remote_retention_bounds_floor(
         i += 1;
     }
     (facts, planned, i, floor)
+}
+
+open_logic! {
+/// Every selected whole range is requested by at least one retention policy.
+fn deletion_prefix_requested(
+    facts: Seq<RemoteRetentionSegment>,
+    finished: Seq<(i64, i64, u64, bool)>,
+    debt: Int,
+    count: Int,
+) -> bool {
+    pearlite! { forall<i: Int> 0 <= i && i < count ==> facts[i].log_start_breached || finished[i].3
+    || (crate::retention::remote_charge_funded(debt, remote_prefix_charge(facts, i), remote_prefix_charge(facts, i + 1))) }
+}
 }

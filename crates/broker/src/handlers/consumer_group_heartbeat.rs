@@ -8,129 +8,125 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    broker::Broker,
     codes,
     coordinator::unified::{
         actor::{GroupActorMessage, GroupKindTag},
         regex_resolver::ImageTopicRegexResolver,
     },
-    error::BrokerError,
-    handlers::{ErrorResponse as _, group_read_denied, group_version_disabled},
-    task_util::{AskError, ask},
+    handlers::{ErrorResponse as _, group_version_disabled},
+    task_util::ask,
 };
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: ConsumerGroupHeartbeatRequest,
-    version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<ConsumerGroupHeartbeatResponse, BrokerError> {
-    let coordinator = broker.group_coordinator.clone();
-    // Read the offset BEFORE the image, not after: if a record commits in
-    // between, `image` may reflect it while `metadata_offset` does not. The
-    // regex resolution the actor may make from `image` is stamped with
-    // `metadata_offset`, and an offset older than its image only makes a
-    // later refresh happen once too often, never once too rarely.
-    let metadata_offset = broker.controller.current_metadata_offset();
-    let image = broker.controller.current_image();
-
-    // ── Protocol gate ───────────────────────────────────────────
-    // Kafka's `handleConsumerGroupHeartbeat` checks whether the
-    // consumer-group protocol is available BEFORE any ACL check, so a
-    // disabled protocol answers `UNSUPPORTED_VERSION` even to a caller
-    // with no ACLs on the group at all. KIP-848 / KIP-584: the next-gen
-    // protocol is gated on a finalized group.version >= 1. Below that —
-    // including UNFINALIZED, which means disabled — reject so the client
-    // falls back to the classic protocol.
-    // `isConsumerGroupProtocolEnabled` also needs `consumer` among the
-    // configured rebalance protocols, and answers the same way without it.
-    if group_version_disabled(&image) || !coordinator.config.next_gen_enabled() {
-        return Ok(reply(codes::UNSUPPORTED_VERSION, None));
-    }
-
-    // ── ACL preamble ────────────────────────────────────────────
-    // `Read` on `Group(group_id)`. On Deny → whole-response
-    // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
-    if group_read_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        &req.group_id,
-    ) {
-        return Ok(reply(codes::GROUP_AUTHORIZATION_FAILED, None));
-    }
-
-    // `Describe` on every distinct name in `subscribed_topic_names`
-    // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
-    // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
-    // `TOPIC_AUTHORIZATION_FAILED` (29); the group is never touched, so an
-    // unauthorized caller cannot learn the denied topic's id or
-    // partitions by being admitted as a member. This runs before
-    // `group_coordinator_error` -- Kafka authorizes the request before it
-    // ever reaches coordinator routing, so an unauthorized subscription
-    // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-    if crate::handlers::subscribed_names_describe_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        req.subscribed_topic_names.as_deref(),
-    ) {
-        return Ok(reply(codes::TOPIC_AUTHORIZATION_FAILED, None));
-    }
-
-    // `GroupCoordinatorService.consumerGroupHeartbeat` validates the
-    // request before it routes it to a coordinator shard.
-    if let Err(refused) = validate_request(&req, version, &coordinator.config) {
-        return Ok(*refused);
-    }
-
-    // `subscribed_topic_regex` (KIP-848 v1+): the actor resolves the
-    // group's patterns against the image read above, with this principal's
-    // `Describe` decisions, when a heartbeat needs them resolved or
-    // refreshed -- Kafka's `TopicRegexResolver.resolveRegularExpressions`
-    // with the request context of the heartbeat. A pattern that fails to
-    // compile is rejected by the actor's own
-    // `check_subscribed_topic_regex` with `INVALID_REGULAR_EXPRESSION`
-    // before any member state changes.
-    let regex_resolver = std::sync::Arc::new(ImageTopicRegexResolver::new(
-        image,
-        metadata_offset,
-        broker.config.authorizer.clone(),
-        ctx.principal.clone(),
-        *ctx.peer,
-    ));
-
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-        return Ok(reply(error_code, None));
-    }
-
-    // Kafka creates a consumer group only on a join, and answers
-    // GROUP_ID_NOT_FOUND for a missing group on any other epoch and for a
-    // share or streams group, without touching any group.
-    if let Some(message) = coordinator.consumer_group_lookup_error(&req.group_id, req.member_epoch)
+context_handler! {
+    ConsumerGroupHeartbeatRequest => ConsumerGroupHeartbeatResponse,
+    (broker, req, version, ctx),
     {
-        return Ok(reply(codes::GROUP_ID_NOT_FOUND, Some(message)));
-    }
+        let coordinator = broker.group_coordinator.clone();
+        // Read the offset BEFORE the image, not after: if a record commits in
+        // between, `image` may reflect it while `metadata_offset` does not. The
+        // regex resolution the actor may make from `image` is stamped with
+        // `metadata_offset`, and an offset older than its image only makes a
+        // later refresh happen once too often, never once too rarely.
+        let metadata_offset = broker.controller.current_metadata_offset();
+        let image = broker.controller.current_image();
 
-    // Route to the one actor for this id, spawning a consumer-kind actor if
-    // the id is brand-new. Both RPC families reach the same actor; a classic
-    // group rejects a next-gen heartbeat from inside the actor's `Heartbeat`
-    // arm (replying `GROUP_ID_NOT_FOUND`), which is where the per-group kind
-    // lock now lives.
-    let handle = coordinator.get_or_create_group(&req.group_id, GroupKindTag::Consumer);
-    let asked = ask(&handle.tx, |reply| GroupActorMessage::Heartbeat {
-        request: req,
-        client_id: ctx.client_id.unwrap_or_default().to_owned(),
-        client_host: ctx.client_host(),
-        regex_resolver,
-        reply,
-    })
-    .await;
-    Ok(match asked {
-        Ok(resp) => resp,
-        Err(AskError::Closed) => reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None),
-        Err(AskError::Dropped) => reply(codes::UNKNOWN_SERVER_ERROR, None),
-    })
+        // ── Protocol gate ───────────────────────────────────────────
+        // Kafka's `handleConsumerGroupHeartbeat` checks whether the
+        // consumer-group protocol is available BEFORE any ACL check, so a
+        // disabled protocol answers `UNSUPPORTED_VERSION` even to a caller
+        // with no ACLs on the group at all. KIP-848 / KIP-584: the next-gen
+        // protocol is gated on a finalized group.version >= 1. Below that —
+        // including UNFINALIZED, which means disabled — reject so the client
+        // falls back to the classic protocol.
+        // `isConsumerGroupProtocolEnabled` also needs `consumer` among the
+        // configured rebalance protocols, and answers the same way without it.
+
+        // ── ACL preamble ────────────────────────────────────────────
+        // `Read` on `Group(group_id)`. On Deny → whole-response
+        // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
+        if let Some(error_code) = crate::handlers::acl_gates::group_protocol_refusal(
+            !group_version_disabled(&image) && coordinator.config.next_gen_enabled(),
+            broker,
+            &image,
+            ctx,
+            &req.group_id,
+        ) {
+            return Ok(reply(error_code, None));
+        }
+
+        // `Describe` on every distinct name in `subscribed_topic_names`
+        // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
+        // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
+        // `TOPIC_AUTHORIZATION_FAILED` (29); the group is never touched, so an
+        // unauthorized caller cannot learn the denied topic's id or
+        // partitions by being admitted as a member. This runs before
+        // `group_coordinator_error` -- Kafka authorizes the request before it
+        // ever reaches coordinator routing, so an unauthorized subscription
+        // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
+        if crate::handlers::subscribed_names_describe_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            req.subscribed_topic_names.as_deref(),
+        ) {
+            return Ok(reply(codes::TOPIC_AUTHORIZATION_FAILED, None));
+        }
+
+        // `GroupCoordinatorService.consumerGroupHeartbeat` validates the
+        // request before it routes it to a coordinator shard.
+        if let Err(refused) = validate_request(&req, version, &coordinator.config) {
+            return Ok(*refused);
+        }
+
+        // `subscribed_topic_regex` (KIP-848 v1+): the actor resolves the
+        // group's patterns against the image read above, with this principal's
+        // `Describe` decisions, when a heartbeat needs them resolved or
+        // refreshed -- Kafka's `TopicRegexResolver.resolveRegularExpressions`
+        // with the request context of the heartbeat. A pattern that fails to
+        // compile is rejected by the actor's own
+        // `check_subscribed_topic_regex` with `INVALID_REGULAR_EXPRESSION`
+        // before any member state changes.
+        let regex_resolver = std::sync::Arc::new(ImageTopicRegexResolver::new(
+            image,
+            metadata_offset,
+            broker.config.authorizer.clone(),
+            ctx.principal.clone(),
+            *ctx.peer,
+        ));
+
+        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+            return Ok(reply(error_code, None));
+        }
+
+        // Kafka creates a consumer group only on a join, and answers
+        // GROUP_ID_NOT_FOUND for a missing group on any other epoch and for a
+        // share or streams group, without touching any group.
+        if let Some(message) = coordinator.consumer_group_lookup_error(&req.group_id, req.member_epoch)
+        {
+            return Ok(reply(codes::GROUP_ID_NOT_FOUND, Some(message)));
+        }
+
+        // Route to the one actor for this id, spawning a consumer-kind actor if
+        // the id is brand-new. Both RPC families reach the same actor; a classic
+        // group rejects a next-gen heartbeat from inside the actor's `Heartbeat`
+        // arm (replying `GROUP_ID_NOT_FOUND`), which is where the per-group kind
+        // lock now lives.
+        let handle = coordinator.get_or_create_group(&req.group_id, GroupKindTag::Consumer);
+        let asked = ask(&handle.tx, |reply| GroupActorMessage::Heartbeat {
+            request: req,
+            client_id: ctx.client_id.unwrap_or_default().to_owned(),
+            client_host: ctx.client_host(),
+            regex_resolver,
+            reply,
+        })
+        .await;
+        Ok(asked.unwrap_or_else(|error| {
+            reply(
+                crate::handlers::coordinator_routing::group_actor_error_code(error),
+                None,
+            )
+        }))
+    }
 }
 
 /// The early refusal: `code` carrying `message`.
@@ -237,9 +233,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        handlers::group_heartbeat_test_support::{
-            acl_authorizer, alice, describe_acl, group_read_acl, image_with_group_version,
-            set_group_version, topic_with_partitions,
+        handlers::{
+            group_heartbeat_test_support::{
+                acl_authorizer, alice, describe_acl, group_read_acl, image_with_group_version,
+                set_group_version, topic_with_partitions,
+            },
+            group_read_denied,
         },
         test_support::{peer, principal, test_ctx},
     };
@@ -453,10 +452,11 @@ mod tests {
     fn group_read_denied_yields_group_authorization_failed() {
         let authorizer = acl_authorizer();
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = peer();
-
-        let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("ANONYMOUS"),
+            client_id = "consumer-client"
+        );
 
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
 
@@ -473,9 +473,11 @@ mod tests {
     #[test]
     fn group_read_denied_allows_allow_all_authorizer() {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = principal("ANONYMOUS");
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");
+        request_identity!(
+            (principal, peer, ctx),
+            principal("ANONYMOUS"),
+            client_id = "consumer-client"
+        );
 
         assert!(!group_read_denied(
             &crate::authorizer::AllowAllAuthorizer,
@@ -543,9 +545,7 @@ mod tests {
         .await;
         let broker = broker_handle.broker_arc_for_test();
         set_group_version(&broker, 1).await;
-        let principal = principal("ANONYMOUS");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        request_identity!((principal, peer, ctx), principal("ANONYMOUS"), test_context);
 
         let resp = handle(&broker, request("identity-group"), VERSION, &ctx)
             .await
@@ -713,9 +713,12 @@ mod tests {
             .submit_change(vec![group_read_acl("g")])
             .await
             .expect("grant group Read");
-        let principal = alice();
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "c");
+        request_identity!(
+            (principal, peer, ctx),
+            alice(),
+            client_id = "c",
+            address = peer()
+        );
         let req = ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
             rebalance_timeout_ms: 30_000,
@@ -766,9 +769,12 @@ mod tests {
             .submit_change(records)
             .await
             .expect("grant ACLs and create topics");
-        let principal = alice();
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "c");
+        request_identity!(
+            (principal, peer, ctx),
+            alice(),
+            client_id = "c",
+            address = peer()
+        );
         let req = ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
             member_id: "regex-member".into(),
@@ -819,9 +825,12 @@ mod tests {
         /// Sends one heartbeat as `alice`, with `regex` only when it is the
         /// join or when the pattern changes, as the Java client does.
         async fn heartbeat(&mut self, regex: Option<&str>) {
-            let principal = alice();
-            let peer = peer();
-            let ctx = crate::test_support::request_context(&principal, &peer, "c");
+            request_identity!(
+                (principal, peer, ctx),
+                alice(),
+                client_id = "c",
+                address = peer()
+            );
             let joining = self.member_epoch == 0;
             let req = ConsumerGroupHeartbeatRequest {
                 group_id: "g".into(),
@@ -893,16 +902,24 @@ mod tests {
     /// next heartbeat of any member. A Java client sends its pattern only when
     /// it joins, so a topic created after the join reaches the member only
     /// through that refresh.
+    macro_rules! joined_regex_member {
+        (($handle:ident, $directory:ident, $broker:ident, $member:ident), $topics:expr) => {
+            let ($handle, $directory) = broker_with_described_topics($topics).await;
+            let $broker = $handle.broker_arc_for_test();
+            let mut $member = RegexMember::new($broker.clone(), "m1");
+            $member.heartbeat(Some("^orders-.*")).await;
+        };
+    }
+
     #[tokio::test]
     async fn a_topic_created_after_the_join_is_assigned_to_a_member_that_never_resends_its_pattern()
     {
         let first = uuid::Uuid::from_u128(1);
         let second = uuid::Uuid::from_u128(2);
-        let (broker_handle, _dir) = broker_with_described_topics(&[("orders-eu", first)]).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let mut member = RegexMember::new(broker.clone(), "m1");
-
-        member.heartbeat(Some("^orders-.*")).await;
+        joined_regex_member!(
+            (broker_handle, _dir, broker, member),
+            &[("orders-eu", first)]
+        );
         assert!(member.assigned == std::collections::HashSet::from([first]));
 
         let node = krabka_raft::NodeId(broker_handle.node_id());
@@ -925,12 +942,10 @@ mod tests {
     async fn revoking_describe_on_a_resolved_topic_removes_it_at_a_later_heartbeat() {
         let allowed = uuid::Uuid::from_u128(1);
         let revoked = uuid::Uuid::from_u128(2);
-        let (broker_handle, _dir) =
-            broker_with_described_topics(&[("orders-eu", allowed), ("orders-us", revoked)]).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let mut member = RegexMember::new(broker.clone(), "m1");
-
-        member.heartbeat(Some("^orders-.*")).await;
+        joined_regex_member!(
+            (broker_handle, _dir, broker, member),
+            &[("orders-eu", allowed), ("orders-us", revoked)]
+        );
         assert!(member.assigned == std::collections::HashSet::from([allowed, revoked]));
 
         broker

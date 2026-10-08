@@ -2,9 +2,9 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_min_u64": { "prover": "alt-ergo", "time": 0.007 },
-      "vc_quota_whole_request": { "prover": "cvc5", "time": 0.073 },
-      "vc_saturating_mul": { "prover": "alt-ergo", "time": 0.007 }
+      "vc_min_u64": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_quota_whole_request": { "prover": "cvc5", "time": 0.2 },
+      "vc_saturating_mul": { "prover": "alt-ergo", "time": 0.017 }
     }
   }
 }

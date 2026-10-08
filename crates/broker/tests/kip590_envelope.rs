@@ -19,9 +19,7 @@ use bytes::{BufMut as _, Bytes, BytesMut};
 use krabka_broker::{
     BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer, config::InterBrokerCredentials,
 };
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
+use krabka_metadata::AclOperation;
 use krabka_protocol::{
     Decode as _, Encode, UnknownTaggedFields,
     owned::{
@@ -30,7 +28,6 @@ use krabka_protocol::{
         api_versions_response::ApiVersionsResponse,
         create_delegation_token_request::{self, CreateDelegationTokenRequest},
         create_delegation_token_response::CreateDelegationTokenResponse,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
         envelope_request::{self, EnvelopeRequest},
         envelope_response::EnvelopeResponse,
@@ -95,6 +92,16 @@ async fn start_broker_with(
 ) -> (BrokerHandle, tempfile::TempDir) {
     support::init_tracing();
     crate::support::start_with_bound_listeners(customize).await
+}
+
+/// Let the plaintext forwarding peer pass the outer gate, preserving inner-principal authorization.
+async fn start_forwarder() -> (BrokerHandle, tempfile::TempDir) {
+    start_broker_with(|config| {
+        config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
+            std::iter::once("ANONYMOUS".to_owned()).collect(),
+        ));
+    })
+    .await
 }
 
 /// A Kafka request frame: the length prefix, the request header, and the body.
@@ -216,17 +223,10 @@ async fn send_envelope_on(
 fn embedded_create_topics(topic: &str) -> Bytes {
     let version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
     let body = encode(
-        &CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..CreatableTopic::default()
-            }],
-            timeout_ms: 5_000,
-            validate_only: false,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        },
+        &crate::support::topics::create_topic_request(
+            crate::support::topics::creatable_topic(topic, 1, 1),
+            5_000,
+        ),
         version,
     );
     // The length prefix belongs to the outer connection, not to `request_data`
@@ -259,6 +259,26 @@ fn envelope_from(
     }
 }
 
+// The expected bytes and whole refusal tuples remain explicit at each scenario.
+macro_rules! served_embedded_header {
+    ($response:ident, $expected:expr, $body:ident $(, $context:tt)?) => {
+        check!($response.error_code == 0 $(, $context)?);
+        assert!(let Some(response_data) = $response.response_data);
+        assert!(let Some((header, mut $body)) = response_data.split_at_checked(5));
+        check!(header == $expected $(, $context)?);
+    };
+}
+
+macro_rules! check_refused {
+    ($broker:expr, $topic:expr, $response:ident => $expected:expr) => {
+        check!(($response.error_code, $response.response_data) == $expected);
+        check!(
+            $broker.controller_image_for_test().topic($topic).is_none(),
+            "the embedded request must not have run"
+        );
+    };
+}
+
 /// The whole forwarding round trip: an `Envelope` carrying a `CreateTopics`
 /// reaches the controller, the topic is created, and the bytes that come back
 /// are exactly what the client would have received had it reached the
@@ -276,14 +296,7 @@ async fn a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_byt
     )
     .await;
 
-    check!(response.error_code == 0);
-    assert!(let Some(response_data) = response.response_data);
-
-    // `CreateTopics` is flexible at its maximum version, so the embedded
-    // response header is v1: the client's correlation id then one empty
-    // tagged-fields byte.
-    assert!(let Some((header, mut body)) = response_data.split_at_checked(5));
-    check!(header == [0x5A, 0x5A, 0x12, 0x34, 0x00]);
+    served_embedded_header!(response, [0x5A, 0x5A, 0x12, 0x34, 0x00], body);
 
     let version = krabka_protocol::owned::create_topics_response::MAX_VERSION;
     assert!(let Ok(created) = CreateTopicsResponse::decode(&mut body, version));
@@ -413,22 +426,11 @@ async fn envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {
 /// response header is v1: four bytes of the client's correlation id and one
 /// empty tagged-fields byte before the body.
 fn embedded_create_topics_response(response: &EnvelopeResponse) -> CreateTopicsResponse {
-    check!(response.error_code == 0, "the Envelope itself was served");
-    let data = response
-        .response_data
-        .as_ref()
-        .expect("a served Envelope carries response_data");
-    let mut body = data.get(5..).expect("embedded response header v1");
-    let decoded = CreateTopicsResponse::decode(
-        &mut body,
+    decode_embedded(
+        response,
         krabka_protocol::owned::create_topics_response::MAX_VERSION,
+        "decode the embedded CreateTopicsResponse",
     )
-    .expect("decode the embedded CreateTopicsResponse");
-    check!(
-        body.is_empty(),
-        "the embedded response consumed its own bytes"
-    );
-    decoded
 }
 
 /// A host ACL on a forwarded request must be evaluated against the client's
@@ -448,28 +450,15 @@ fn embedded_create_topics_response(response: &EnvelopeResponse) -> CreateTopicsR
 ///   launders the request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
-    let (broker, _dir) = start_broker_with(|config| {
-        // `ANONYMOUS` is the identity a plaintext controller connection
-        // carries, and `ApiKeys.ENVELOPE.clusterAction` gates the envelope on
-        // it. Making it a super-user holds that outer gate open so the inner
-        // host check is the only thing this test moves.
-        config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
-            std::iter::once("ANONYMOUS".to_owned()).collect(),
-        ));
-    })
-    .await;
+    let (broker, _dir) = start_forwarder().await;
 
     for (principal, host) in [("User:alice", "10.1.2.3"), ("User:bob", "127.0.0.1")] {
         broker
-            .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
-                resource_type: ResourceType::Cluster,
-                resource_name: "kafka-cluster".into(),
-                pattern_type: PatternType::Literal,
-                principal: principal.into(),
-                host: host.into(),
-                operation: AclOperation::Create,
-                permission_type: PermissionType::Allow,
-            }))
+            .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(
+                principal,
+                host,
+                AclOperation::Create,
+            ))
             .await
             .expect("seed host ACL");
     }
@@ -541,11 +530,7 @@ async fn an_unparseable_client_host_address_is_an_invalid_request() {
     )
     .await;
 
-    check!((response.error_code, response.response_data) == (42, None));
-    check!(
-        broker.controller_image_for_test().topic(TOPIC).is_none(),
-        "the embedded request must not have run"
-    );
+    check_refused!(broker, TOPIC, response => (42, None));
 }
 
 /// A forwarded `AllocateProducerIds` (67) is authorized against the principal
@@ -561,26 +546,14 @@ async fn an_unparseable_client_host_address_is_an_invalid_request() {
 /// 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal() {
-    let (broker, _dir) = start_broker_with(|config| {
-        // The plaintext controller connection is `ANONYMOUS`. As a super user
-        // it passes the outer `Envelope` gate, so only the embedded principal
-        // decides.
-        config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
-            std::iter::once("ANONYMOUS".to_owned()).collect(),
-        ));
-    })
-    .await;
+    let (broker, _dir) = start_forwarder().await;
     broker.wait_until_brokers_registered(1).await;
     broker
-        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
-            resource_type: ResourceType::Cluster,
-            resource_name: "kafka-cluster".into(),
-            pattern_type: PatternType::Literal,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation: AclOperation::ClusterAction,
-            permission_type: PermissionType::Allow,
-        }))
+        .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(
+            "User:alice",
+            "*",
+            AclOperation::ClusterAction,
+        ))
         .await
         .expect("seed ClusterAction ACL");
 
@@ -640,10 +613,7 @@ async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded
         )
         .await;
 
-        check!(response.error_code == 0, "{name}");
-        assert!(let Some(response_data) = response.response_data);
-        assert!(let Some((header, mut body)) = response_data.split_at_checked(5));
-        check!(header == [0x5A, 0x5A, 0x12, 0x34, 0x00], "{name}");
+        served_embedded_header!(response, [0x5A, 0x5A, 0x12, 0x34, 0x00], body, "{name}");
 
         let allocated = AllocateProducerIdsResponse::decode(
             &mut body,
@@ -688,11 +658,7 @@ async fn an_envelope_from_a_peer_without_cluster_action_is_refused() {
     )
     .await;
 
-    check!((response.error_code, response.response_data) == (31, None));
-    check!(
-        broker.controller_image_for_test().topic(TOPIC).is_none(),
-        "the embedded request must not have run"
-    );
+    check_refused!(broker, TOPIC, response => (31, None));
 }
 
 /// An embedded request at a version this broker does not serve is an
@@ -717,17 +683,10 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
         Some("adminclient-1"),
         true,
         &encode(
-            &CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: TOPIC.to_owned(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..CreatableTopic::default()
-                }],
-                timeout_ms: 5_000,
-                validate_only: false,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
+            &crate::support::topics::create_topic_request(
+                crate::support::topics::creatable_topic(TOPIC, 1, 1),
+                5_000,
+            ),
             krabka_protocol::owned::create_topics_request::MAX_VERSION,
         ),
     )
@@ -739,11 +698,7 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
     )
     .await;
 
-    check!((response.error_code, response.response_data) == (35, None));
-    check!(
-        broker.controller_image_for_test().topic(TOPIC).is_none(),
-        "the embedded request must not have run"
-    );
+    check_refused!(broker, TOPIC, response => (35, None));
 }
 
 /// `EnvelopeUtils` answers an embedded request it cannot parse in the
@@ -923,17 +878,25 @@ fn embedded_create_delegation_token() -> Bytes {
 fn embedded_create_delegation_token_response(
     response: &EnvelopeResponse,
 ) -> CreateDelegationTokenResponse {
+    decode_embedded(
+        response,
+        krabka_protocol::owned::create_delegation_token_response::MAX_VERSION,
+        "decode the embedded CreateDelegationTokenResponse",
+    )
+}
+
+fn decode_embedded<R: for<'de> krabka_protocol::Decode<'de>>(
+    response: &EnvelopeResponse,
+    version: i16,
+    context: &str,
+) -> R {
     check!(response.error_code == 0, "the Envelope itself was served");
     let data = response
         .response_data
         .as_ref()
         .expect("a served Envelope carries response_data");
     let mut body = data.get(5..).expect("embedded response header v1");
-    let decoded = CreateDelegationTokenResponse::decode(
-        &mut body,
-        krabka_protocol::owned::create_delegation_token_response::MAX_VERSION,
-    )
-    .expect("decode the embedded CreateDelegationTokenResponse");
+    let decoded = R::decode(&mut body, version).expect(context);
     check!(
         body.is_empty(),
         "the embedded response consumed its own bytes"

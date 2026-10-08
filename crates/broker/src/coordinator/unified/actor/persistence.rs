@@ -15,7 +15,6 @@ use super::{
     pending_records::PendingRecords,
 };
 use crate::coordinator::unified::{
-    GroupCoordinator,
     classic_state::ClassicGroup,
     consumer_state::{GroupState, MemberState},
     offsets_log::OffsetsLog,
@@ -122,16 +121,11 @@ pub(super) fn snapshot_pending_after_change(
         }),
         ..Default::default()
     };
-    for mid in affected_members {
-        if let Some(m) = state.members.get(mid) {
-            pending
-                .member_metadata
-                .push((mid.clone(), Some(member_metadata_value(m))));
-            pending
-                .current_per_member
-                .push((mid.clone(), Some(current_assignment_value(m))));
+    crate::coordinator::unified::persistence::snapshot_members!(pending, state, affected_members;
+        member_metadata_value, current_assignment_value; |mid, m| {
+
         }
-    }
+    );
     if target_changed {
         pending.target_metadata = Some(TargetAssignmentMetadataValue {
             assignment_epoch: state.target.epoch,
@@ -222,20 +216,12 @@ pub(super) async fn flush_classic_metadata(
     offsets_log.append(&state.group_id, batch).await
 }
 
-pub(super) async fn flush_pending(
-    state: &GroupState,
-    pending: PendingRecords,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
-    now_ms: i64,
-) -> Result<(), crate::error::BrokerError> {
-    if pending.is_empty() {
-        return Ok(());
-    }
-    let batch = pending.to_batch(&state.group_id, now_ms)?;
-    offsets_log.append(&state.group_id, batch).await?;
-    pending.apply_to_cache(coordinator, &state.group_id);
-    Ok(())
+crate::coordinator::unified::persistence::flush_pending_records! {
+    state: GroupState, pending: PendingRecords;
+    offsets_log, coordinator, now_ms;
+    group &state.group_id;
+    encode pending.to_batch(&state.group_id, now_ms);
+    cache pending.apply_to_cache(coordinator, &state.group_id);
 }
 
 #[cfg(test)]
@@ -250,22 +236,8 @@ mod tests {
 
     #[test]
     fn reconciled_snapshot_persists_every_members_assignments() {
-        let mut state = GroupState::new("g");
-        for member_id in ["m1", "m2"] {
-            state.add_or_update_member(build_member(
-                member_id,
-                &ConsumerGroupHeartbeatRequest {
-                    subscribed_topic_names: Some(vec!["t".into()]),
-                    rebalance_timeout_ms: 60_000,
-                    ..Default::default()
-                },
-                crate::coordinator::unified::ClientIdentity {
-                    id: "client",
-                    host: "host",
-                },
-                Instant::now(),
-            ));
-        }
+        let mut state =
+            super::super::test_support::subscribed_consumer_group("g", &["m1", "m2"], &["t"]);
         let topic_id = Uuid([9; 16]);
         state.group_epoch = 2;
         state.target.epoch = 2;

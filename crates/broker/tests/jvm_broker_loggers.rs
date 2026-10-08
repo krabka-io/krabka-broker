@@ -28,8 +28,6 @@
 
 mod support;
 
-use std::process::Command;
-
 use assert2::{assert, check};
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle, NodeId};
 
@@ -94,18 +92,7 @@ async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
 /// keeps a real failure legible; a request that is actually refused still
 /// fails at once.
 fn command_config() -> &'static std::path::Path {
-    static CONFIG: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
-            let dir = tempfile::tempdir().expect("tempdir for command config");
-            std::fs::write(
-                dir.path().join("admin.properties"),
-                "request.timeout.ms=120000\ndefault.api.timeout.ms=240000\n",
-            )
-            .expect("write command config");
-            dir
-        })
-        .path()
+    support::jvm_admin_config()
 }
 
 /// Run `kafka-configs.sh --entity-type broker-loggers --entity-name 1 <args>`
@@ -118,36 +105,20 @@ fn command_config() -> &'static std::path::Path {
 async fn kafka_configs(args: &[&str]) -> std::process::Output {
     let mount = format!("{}:/krabka-config", command_config().display());
     let node = NODE_ID.to_string();
-    let mut full: Vec<String> = [
-        "run",
-        "--rm",
-        "--add-host=host.docker.internal:host-gateway",
-        "-v",
-        &mount,
+    let mut full = support::jvm_admin_args(
         KAFKA_IMAGE,
+        &mount,
         "/opt/kafka/bin/kafka-configs.sh",
-        "--bootstrap-server",
         &listeners().advertised,
-        "--command-config",
-        "/krabka-config/admin.properties",
-        "--entity-type",
-        "broker-loggers",
-        "--entity-name",
-        &node,
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
+    );
+    full.extend(
+        ["--entity-type", "broker-loggers", "--entity-name", &node]
+            .into_iter()
+            .map(str::to_owned),
+    );
     full.extend(args.iter().map(|arg| (*arg).to_owned()));
     let owned_args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-    let out = tokio::task::spawn_blocking(move || {
-        Command::new("docker")
-            .args(&full)
-            .output()
-            .unwrap_or_else(|error| panic!("spawn docker run kafka-configs: {error}"))
-    })
-    .await
-    .expect("docker run task");
+    let out = support::docker_run_blocking(full, "spawn docker run kafka-configs").await;
     eprintln!(
         "KRABKA[broker-loggers] kafka-configs {owned_args:?} status={}\nstdout:\n{}\nstderr:\n{}",
         out.status,
@@ -158,11 +129,7 @@ async fn kafka_configs(args: &[&str]) -> std::process::Output {
 }
 
 fn combined(output: &std::process::Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
+    support::combined_output(output)
 }
 
 /// The whole `broker-loggers` operator loop, driven by the real 4.3.1 tool.

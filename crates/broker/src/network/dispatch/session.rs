@@ -274,25 +274,13 @@ mod tests {
         );
 
         let event = rx.try_recv().expect("the mTLS authentication row");
-        let krabka_audit::AuditEvent::Authentication { time_ms, .. } = event else {
-            panic!("expected an Authentication event, got {event:?}");
-        };
-        assert!(
-            event
-                == krabka_audit::AuditEvent::Authentication {
-                    outcome: krabka_audit::AuditOutcome::Success,
-                    mechanism: "SSL".to_string(),
-                    principal: krabka_audit::AuditPrincipal {
-                        name: "User:CN=test-client,OU=integration,O=krabka".to_string(),
-                        auth_method: "MTls".to_string(),
-                    },
-                    source: krabka_audit::AuditEndpoint {
-                        ip: "192.0.2.7".to_string(),
-                        port: 9093,
-                    },
-                    reason: None,
-                    time_ms,
-                }
+        crate::network::test_support::assert_authentication_event(
+            &event,
+            krabka_audit::AuditOutcome::Success,
+            "SSL",
+            ("User:CN=test-client,OU=integration,O=krabka", "MTls"),
+            ("192.0.2.7", 9093),
+            None,
         );
     }
 }

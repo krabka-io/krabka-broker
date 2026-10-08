@@ -43,10 +43,10 @@ pub(super) fn run(model: DpModel, label: &str, pinned_unique_states: usize) {
         "[{label}] unique bound exceeded ({})",
         checker.unique_state_count()
     );
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
+    crate::model_check::assert_pinned_count(
+        checker.unique_state_count(),
+        pinned_unique_states,
+        label,
     );
     checker.assert_properties();
 }

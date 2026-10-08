@@ -2,18 +2,19 @@
 //! this broker leads the group's `__consumer_offsets` partition, and only
 //! once the high watermark covers the write under the same leadership term.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use assert2::assert;
 use krabka_ids::{LeaderEpoch, Offset, PartitionIndex};
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataImage, NodeId};
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
 use tokio::sync::Notify;
 
 use super::{LedTerm, OFFSETS_TOPIC, OffsetsLog, ProductionOffsetsLog, await_committed, led_epoch};
 use crate::{
-    codes, error::BrokerError, metadata_source::MetadataSource,
-    partition_registry::PartitionRegistry, test_support::FakeMetadataSource,
+    codes, coordinator::test_support::read_batch_epochs as read_epochs, error::BrokerError,
+    metadata_source::MetadataSource, partition_registry::PartitionRegistry,
+    test_support::FakeMetadataSource,
 };
 
 /// This broker.
@@ -22,23 +23,10 @@ const NODE: NodeId = NodeId(1);
 /// An image whose `__consumer_offsets` has one partition, led by `leader` at
 /// `epoch`.
 fn offsets_image(leader: u64, epoch: i32) -> MetadataImage {
-    let mut image = MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: OFFSETS_TOPIC.into(),
-        topic_id: uuid::Uuid::from_u128(7),
-        partitions: 1,
-        replication_factor: 3,
-    }));
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: OFFSETS_TOPIC.into(),
-        partition: 0,
-        leader: NodeId(leader),
-        leader_epoch: LeaderEpoch(epoch),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(1), NodeId(2), NodeId(3)],
-        ..PartitionRecord::default()
-    }));
-    image
+    crate::coordinator::test_support::offsets_partition_image(
+        (0, NodeId(leader), epoch),
+        &[NodeId(1), NodeId(2), NodeId(3)],
+    )
 }
 
 /// A two-record batch as the group coordinator builds one: offset 0 and the
@@ -129,22 +117,12 @@ async fn a_write_completes_only_when_committed_under_its_term() {
             epoch: LeaderEpoch(0),
         };
 
-        let changes = {
-            let metadata = Arc::clone(&metadata);
-            let partition = Arc::clone(&partition);
-            let (moves_to, hw_later) = (case.moves_to, case.hw_later);
-            tokio::spawn(async move {
-                // intentional: the wait has to start before the changes land.
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                if let Some((leader, epoch)) = moves_to {
-                    metadata.set_image(offsets_image(leader, epoch));
-                }
-                if let Some(hw) = hw_later {
-                    partition.replica_state.lock().await.hw = Offset(hw);
-                    hw_notify.notify_waiters();
-                }
-            })
-        };
+        let changes = crate::coordinator::test_support::schedule_commit_changes!(
+            case, partition;
+            captures { let metadata = Arc::clone(&metadata); }
+            leader(leader, epoch) { metadata.set_image(offsets_image(leader, epoch)); }
+            notify { hw_notify.notify_waiters(); }
+        );
         let result = await_committed(&partition, &mut images, term, Offset(2), case.timeout).await;
         changes.await.expect("the changes land");
 
@@ -205,20 +183,6 @@ async fn an_append_writes_only_as_the_partition_leader() {
         assert!(outcome(result) == case.expected, "{}", case.what);
         assert!(logged_epochs == case.logged_epochs, "{}", case.what);
     }
-}
-
-/// The leader epoch of every batch in `log` below `end`.
-fn read_epochs(log: &krabka_log::Log, end: Offset) -> Vec<i32> {
-    let read = log
-        .read_raw(Offset(0), end, krabka_units::mebibytes(1))
-        .expect("read the log");
-    let mut cursor: &[u8] = &read.bytes;
-    let mut epochs = Vec::new();
-    while !cursor.is_empty() {
-        let batch = RecordBatch::decode(&mut cursor).expect("decode a batch");
-        epochs.push(batch.partition_leader_epoch);
-    }
-    epochs
 }
 
 #[tokio::test]

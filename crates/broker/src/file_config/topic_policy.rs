@@ -3,9 +3,6 @@
 
 use std::collections::BTreeMap;
 
-use schemars::JsonSchema;
-use serde::Deserialize;
-
 use super::{FileConfigError, validate::positive_usize};
 
 /// TOML shape of `[topic_policy]`. Maps to
@@ -27,8 +24,7 @@ use super::{FileConfigError, validate::positive_usize};
 /// `deny_unknown_fields` so a misspelled rule name is rejected at parse time
 /// rather than leaving the broker enforcing nothing where the operator wrote
 /// a rule.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileTopicPolicyConfig {
     /// Lowest replication factor `CreateTopics` may be asked for. The
     /// effective factor is checked, so a request that leaves it `-1` is

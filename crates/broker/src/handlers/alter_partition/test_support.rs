@@ -119,16 +119,13 @@ pub(super) async fn seed_partition(broker: &Broker) {
                 replication_factor: 1,
             }),
             MetadataRecord::V1Partition(PartitionRecord {
-                topic: "t".into(),
-                partition: 0,
-                leader: krabka_metadata::NodeId(1),
-                replicas: vec![krabka_metadata::NodeId(1)],
-                isr: vec![krabka_metadata::NodeId(1)],
                 leader_epoch: krabka_metadata::LeaderEpoch(5),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
+                ..crate::handlers::test_support::replicated_partition(
+                    "t",
+                    0,
+                    krabka_metadata::NodeId(1),
+                    &[krabka_metadata::NodeId(1)],
+                )
             }),
         ])
         .await

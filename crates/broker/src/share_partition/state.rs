@@ -35,7 +35,7 @@ mod persistence;
 mod window;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 /// Saturating `i64 -> i32` conversion for record counts. Offset ranges do not
 /// overflow `i32` in practice, but the counter type is `i32` to match the
@@ -119,6 +119,19 @@ struct InFlightBatch {
 impl InFlightBatch {
     fn len(&self) -> i64 {
         self.last_offset.0 - self.first_offset.0 + 1
+    }
+
+    fn acquired_within(&self, first: Offset, last: Offset) -> bool {
+        self.first_offset >= first
+            && self.last_offset <= last
+            && self.state == RecordState::Acquired
+    }
+
+    /// Complete an archive with the saturating accounting used by broker
+    /// archives and dead-letter completion. Acknowledgements count separately.
+    fn archive_terminal(&mut self, complete_count: &mut i32) {
+        *complete_count = complete_count.saturating_add(clamp_i32(self.len()));
+        self.state = RecordState::Archived;
     }
 
     /// Kafka's `SharePartition.isStateTerminal`: Acknowledged or Archived.

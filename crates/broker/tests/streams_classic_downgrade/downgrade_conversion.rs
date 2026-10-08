@@ -4,9 +4,6 @@
 
 use assert2::{assert, check};
 use krabka_broker::{Broker, BrokerConfig};
-use krabka_protocol::owned::offset_fetch_request::{
-    OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopics,
-};
 
 use crate::{
     CONVERGE_TRIES, ERR_NONE,
@@ -16,6 +13,7 @@ use crate::{
         rejoin_config, topic_id_for,
     },
     downgrade_streams_join::{streams_join_and_converge, streams_leave, topology},
+    support::offsets::{offset_fetch_group, offset_fetch_request, offset_fetch_topic},
 };
 
 /// A drained streams group with a committed offset converts to classic on a
@@ -89,19 +87,10 @@ async fn drained_streams_group_downgrades_and_preserves_offsets() {
 
     // ── Phase 3: committed offset survives the flip. ──
     let fr = classic_client
-        .send(OffsetFetchRequest {
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: "g".into(),
-                topics: Some(vec![OffsetFetchRequestTopics {
-                    name: "in".into(),
-                    topic_id,
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(offset_fetch_request(offset_fetch_group(
+            "g",
+            Some(vec![offset_fetch_topic("in", topic_id, vec![0])]),
+        )))
         .await
         .expect("OffsetFetch");
     let part = &fr.groups[0].topics[0].partitions[0];
@@ -159,9 +148,9 @@ async fn downgrade_survives_restart() {
         broker.shutdown().await;
     }
     {
-        let broker = Broker::start(rejoin_config(log_dir)).await.unwrap();
-        let bootstrap = broker.listen_addr().to_string();
-        let cc = connect(&bootstrap).await;
+        let (broker, _bootstrap, client) =
+            crate::support::client::start_client(rejoin_config(log_dir), Some("c1")).await;
+        let cc = std::sync::Arc::new(client);
         // Replay must reconstruct g4 as a classic actor from the committed
         // offset. Offset-only groups are Kafka-typeless, so they do not carry a
         // Classic type lock in `group_type_for_test`.
@@ -175,19 +164,10 @@ async fn downgrade_survives_restart() {
             "group must not replay as Streams after downgrade"
         );
         let fr = cc
-            .send(OffsetFetchRequest {
-                groups: vec![OffsetFetchRequestGroup {
-                    group_id: "g4".into(),
-                    topics: Some(vec![OffsetFetchRequestTopics {
-                        name: "in4".into(),
-                        topic_id,
-                        partition_indexes: vec![0],
-                        ..Default::default()
-                    }]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(offset_fetch_request(offset_fetch_group(
+                "g4",
+                Some(vec![offset_fetch_topic("in4", topic_id, vec![0])]),
+            )))
             .await
             .expect("OffsetFetch");
         assert!(

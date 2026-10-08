@@ -2,15 +2,28 @@
 
 use creusot_std::prelude::ensures;
 #[cfg(creusot)]
-use creusot_std::prelude::{Int, invariant};
+use creusot_std::prelude::{Int, Seq, invariant, logic};
+
+open_logic! {
+/// The complete first-match guarantee shared by direct and indexed scans.
+pub(crate) fn first_timestamp_match(
+    timestamps: Seq<i64>,
+    target: Int,
+    matched: Option<usize>,
+) -> bool {
+    pearlite! {
+        match matched {
+            Some(index) => index@ < timestamps.len()
+                && timestamps[index@]@ >= target
+                && forall<i: Int> 0 <= i && i < index@ ==> timestamps[i]@ < target,
+            None => forall<i: Int> 0 <= i && i < timestamps.len() ==> timestamps[i]@ < target,
+        }
+    }
+}
+}
 
 /// Select the first timestamp at or after `target`.
-#[ensures(match result {
-    Some(index) => index@ < timestamps@.len()
-        && timestamps@[index@]@ >= target@
-        && forall<i: Int> 0 <= i && i < index@ ==> timestamps@[i]@ < target@,
-    None => forall<i: Int> 0 <= i && i < timestamps@.len() ==> timestamps@[i]@ < target@,
-})]
+#[ensures(first_timestamp_match(timestamps@, target@, result))]
 #[must_use]
 pub fn first_timestamp_index(timestamps: &[i64], target: i64) -> Option<usize> {
     let mut index = 0usize;

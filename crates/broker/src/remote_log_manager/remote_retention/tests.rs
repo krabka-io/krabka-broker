@@ -5,8 +5,8 @@ use std::sync::Arc;
 use assert2::{assert, check};
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
-    CustomMetadata, InmemoryRemoteLogMetadataManager, LogSegmentData, RemoteLogMetadataManager,
-    RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
+    CustomMetadata, LogSegmentData, RemoteLogMetadataManager, RemoteLogSegmentId,
+    RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
 };
 use krabka_units::{bytes, hours, millis};
 use uuid::Uuid;
@@ -14,10 +14,10 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     remote_log_manager::{
-        copy_eligible,
+        test_support as fixtures,
         test_support::{
-            FakeWormArchive, TEST_COPY_TIMEOUT, archived_backends, local_backends,
-            missing_remote_reads, rolled_log, seed_finished_segments, synth_export, tier, tp,
+            FakeWormArchive, TEST_COPY_TIMEOUT, archived_backends, copy_exports, local_backends,
+            missing_remote_reads, seed_finished_segments, synth_export, tier, tp,
         },
     },
     time_util::now_ms,
@@ -26,6 +26,23 @@ use crate::{
 /// A partition whose `DeleteRecords` floor has never moved: offset 0, so no
 /// segment breaches it and the case under test is the only axis in play.
 const NO_FLOOR: Offset = Offset(0);
+
+/// Bounds for a fixture with no local bytes or leader-epoch restriction.
+fn empty_local_bounds(
+    config: &LogConfig,
+    log_start_offset: Offset,
+    deleted_below: Option<Offset>,
+    now_ms: i64,
+) -> RemoteRetentionBounds<'_> {
+    RemoteRetentionBounds {
+        log_config: config,
+        log_start_offset,
+        deleted_below,
+        now_ms,
+        local: LocalLogFootprint::EMPTY,
+        earliest_epoch: None,
+    }
+}
 
 /// An RSM that refuses every delete the way a WORM backend does, and
 /// counts how many times it was asked. Modelled on [`AlwaysFailRsm`],
@@ -216,24 +233,28 @@ fn maximum_retention_window_keeps_the_host_time_comparison() {
     );
 }
 
-#[test]
-fn remote_retention_eviction_set_time_based_picks_oldest_until_first_in_window() {
-    let segs = vec![
-        synth_remote_md(10, 0, 9, 100, 100),
-        synth_remote_md(11, 10, 19, 200, 100),
-        synth_remote_md(12, 20, 29, 9_500, 100),
-    ];
-    // now=10_000, retention=500ms → seg with max_ts < 9_500 is deletable.
-    // seg0 (100) + seg1 (200) qualify; seg2 (9_500) stops the walk.
-    let out = remote_retention_eviction_set(
+/// The canonical 500ms window at time 10,000, with an optional explicit breach.
+fn time_window_evictions(
+    segments: &[RemoteLogSegmentMetadata],
+    deleted_below: Option<Offset>,
+) -> Vec<RemoteLogSegmentMetadata> {
+    remote_retention_eviction_set(
         ArchiveMode::Mutable,
-        &segs,
+        segments,
         Some(millis(500)),
         None,
-        None,
+        deleted_below,
         10_000,
         NO_BYTES,
-    );
+    )
+}
+
+#[test]
+fn remote_retention_eviction_set_time_based_picks_oldest_until_first_in_window() {
+    let segs = retention_segments([100, 200, 9_500]);
+    // now=10_000, retention=500ms → seg with max_ts < 9_500 is deletable.
+    // seg0 (100) + seg1 (200) qualify; seg2 (9_500) stops the walk.
+    let out = time_window_evictions(&segs, None);
     assert!(out.len() == 2);
     check!(out[0].start_offset() == 0);
     check!(out[1].start_offset() == 10);
@@ -244,11 +265,7 @@ fn remote_retention_eviction_set_time_based_picks_oldest_until_first_in_window()
 /// 100-byte segments make 300 bytes in total.
 #[test]
 fn remote_retention_eviction_set_size_based_deletes_only_what_the_debt_covers() {
-    let segs = vec![
-        synth_remote_md(10, 0, 9, 100, 100),
-        synth_remote_md(11, 10, 19, 200, 100),
-        synth_remote_md(12, 20, 29, 300, 100),
-    ];
+    let segs = retention_segments([100, 200, 300]);
     let cases = [
         ("150 over deletes one, not two", Some(bytes(150)), 1),
         ("200 over deletes two", Some(bytes(100)), 2),
@@ -288,11 +305,7 @@ fn remote_retention_eviction_set_equal_size_budget_keeps_all_segments() {
 
 #[test]
 fn remote_retention_eviction_set_time_and_size_take_union_of_either() {
-    let segs = vec![
-        synth_remote_md(10, 0, 9, 100, 100),
-        synth_remote_md(11, 10, 19, 200, 100),
-        synth_remote_md(12, 20, 29, 5_000, 100),
-    ];
+    let segs = retention_segments([100, 200, 5_000]);
     // Time-window: seg0+seg1 qualify (max_ts<500). Budget very generous
     // so size-based evicts nothing. Result is the time-window prefix.
     let out = remote_retention_eviction_set(
@@ -313,11 +326,7 @@ fn remote_retention_eviction_set_time_and_size_take_union_of_either() {
 /// after it are inside it. Three 100-byte segments make 300 bytes in total.
 #[test]
 fn a_time_deletion_is_charged_against_the_size_debt() {
-    let segs = vec![
-        synth_remote_md(10, 0, 9, 100, 100),
-        synth_remote_md(11, 10, 19, 9_900, 100),
-        synth_remote_md(12, 20, 29, 9_900, 100),
-    ];
+    let segs = retention_segments([100, 9_900, 9_900]);
     let cases = [
         ("150 over: time takes 100, 50 cannot cover the next", 150, 1),
         ("200 over: time takes 100, size takes the next", 100, 2),
@@ -363,48 +372,20 @@ fn remote_retention_eviction_set_walk_stops_at_first_non_deletable() {
         synth_remote_md(12, 20, 29, 200, 100),   // also deletable by time, but
                                                  // walk stopped at seg1 already.
     ];
-    let out = remote_retention_eviction_set(
-        ArchiveMode::Mutable,
-        &segs,
-        Some(millis(500)),
-        None,
-        None,
-        10_000,
-        NO_BYTES,
-    );
+    let out = time_window_evictions(&segs, None);
     assert!(out.len() == 1);
     assert!(out[0].start_offset() == 0);
 }
 
 #[tokio::test]
 async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let remote_dir = tempfile::tempdir().unwrap();
-    let log = rolled_log(log_dir.path());
-    let exports = log.tierable_segments();
+    fixtures::rolled_log_fixture!(log_dir, remote_dir, log, exports);
     let (rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
     let pre = rlmm.list_remote_log_segments(&tp()).unwrap();
     assert!(!pre.is_empty());
 
-    let cfg = LogConfig {
-        retention: Some(millis(1)),
-        ..LogConfig::default()
-    };
     // far-future `now_ms` → every finished segment is past the window.
-    let outcome = remote_retention_pass(
-        &tp(),
-        1,
-        RemoteRetentionBounds {
-            log_config: &cfg,
-            log_start_offset: NO_FLOOR,
-            deleted_below: None,
-            now_ms: now_ms() + 1_000_000,
-            local: LocalLogFootprint::EMPTY,
-            earliest_epoch: None,
-        },
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-    )
-    .await;
+    let outcome = expire_remote_segments(ArchiveMode::Mutable, &rsm, &rlmm).await;
     assert!(outcome.deleted == exports.len());
     // Every remote copy is gone, so the global floor moves past the last of
     // them and `ListOffsets(earliest)` follows it.
@@ -434,19 +415,9 @@ async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
 
 #[tokio::test]
 async fn remote_retention_pass_noop_when_nothing_qualifies() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let remote_dir = tempfile::tempdir().unwrap();
-    let log = rolled_log(log_dir.path());
-    let exports = log.tierable_segments();
+    fixtures::rolled_log_fixture!(log_dir, remote_dir, log, exports);
     let (rsm, rlmm) = local_backends(remote_dir.path());
-    copy_eligible(
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        &tp(),
-        1,
-        LeaderEpoch(0),
-        exports.clone(),
-    )
-    .await;
+    copy_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), exports.clone()).await;
 
     let cfg = LogConfig {
         // Long retention; nothing is past the window.
@@ -458,20 +429,8 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
     // is independent of wall-clock. `rolled_log` builds batches with
     // default base_timestamp=0, so picking now=1 keeps every segment
     // inside the year-long retention window.
-    let outcome = remote_retention_pass(
-        &tp(),
-        1,
-        RemoteRetentionBounds {
-            log_config: &cfg,
-            log_start_offset: NO_FLOOR,
-            deleted_below: None,
-            now_ms: 1,
-            local: LocalLogFootprint::EMPTY,
-            earliest_epoch: None,
-        },
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-    )
-    .await;
+    let outcome =
+        empty_retention_pass(&cfg, (NO_FLOOR, None), 1, ArchiveMode::Mutable, &rsm, &rlmm).await;
     assert!(outcome == RemoteRetentionOutcome::default());
     assert!(rlmm.list_remote_log_segments(&tp()).unwrap().len() == exports.len());
 }
@@ -490,18 +449,13 @@ async fn remote_retention_pass_no_settings_and_an_unmoved_floor_evict_nothing() 
         retention_size: None,
         ..LogConfig::default()
     };
-    let outcome = remote_retention_pass(
-        &tp(),
-        1,
-        RemoteRetentionBounds {
-            log_config: &cfg,
-            log_start_offset: NO_FLOOR,
-            deleted_below: None,
-            now_ms: now_ms(),
-            local: LocalLogFootprint::EMPTY,
-            earliest_epoch: None,
-        },
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
+    let outcome = empty_retention_pass(
+        &cfg,
+        (NO_FLOOR, None),
+        now_ms(),
+        ArchiveMode::Mutable,
+        &rsm,
+        &rlmm,
     )
     .await;
     assert!(outcome == RemoteRetentionOutcome::default());
@@ -510,11 +464,7 @@ async fn remote_retention_pass_no_settings_and_an_unmoved_floor_evict_nothing() 
 
 #[test]
 fn remote_retention_eviction_set_is_empty_for_a_write_once_archive() {
-    let segs = vec![
-        synth_remote_md(10, 0, 9, 100, 100),
-        synth_remote_md(11, 10, 19, 200, 100),
-        synth_remote_md(12, 20, 29, 300, 100),
-    ];
+    let segs = retention_segments([100, 200, 300]);
     // The `mutable_len` column keeps the fixture honest: an empty result
     // under `WriteOnce` only means something if the very same inputs do
     // evict on a mutable tier.
@@ -582,7 +532,7 @@ fn remote_retention_eviction_set_is_empty_for_a_write_once_archive() {
 
 #[tokio::test]
 async fn remote_retention_pass_never_reaches_the_rsm_for_a_write_once_archive() {
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let rlmm = fixtures::in_memory_metadata();
     seed_finished_segments(&rlmm, 3);
     // `FakeWormArchive::delete_log_segment_data` panics.
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(FakeWormArchive::new());
@@ -592,18 +542,13 @@ async fn remote_retention_pass_never_reaches_the_rsm_for_a_write_once_archive() 
         ..LogConfig::default()
     };
 
-    let outcome = remote_retention_pass(
-        &tp(),
-        1,
-        RemoteRetentionBounds {
-            log_config: &cfg,
-            log_start_offset: NO_FLOOR,
-            deleted_below: None,
-            now_ms: now_ms() + 1_000_000,
-            local: LocalLogFootprint::EMPTY,
-            earliest_epoch: None,
-        },
-        &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
+    let outcome = empty_retention_pass(
+        &cfg,
+        (NO_FLOOR, None),
+        now_ms() + 1_000_000,
+        ArchiveMode::WriteOnce,
+        &rsm,
+        &rlmm,
     )
     .await;
 
@@ -626,30 +571,9 @@ async fn remote_retention_pass_reaches_a_refusing_rsm_only_on_a_mutable_tier() {
         ("write-once archive never asks", ArchiveMode::WriteOnce, 0),
     ];
     for (name, archive, expected_attempts) in cases {
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
-        seed_finished_segments(&rlmm, 3);
-        let rsm_impl = Arc::new(RefusesDeleteRsm::default());
-        let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
-        let cfg = LogConfig {
-            retention: Some(millis(1)),
-            ..LogConfig::default()
-        };
+        let (rlmm, rsm_impl, rsm) = refusing_backends();
 
-        let outcome = remote_retention_pass(
-            &tp(),
-            1,
-            RemoteRetentionBounds {
-                log_config: &cfg,
-                log_start_offset: NO_FLOOR,
-                deleted_below: None,
-                now_ms: now_ms() + 1_000_000,
-                local: LocalLogFootprint::EMPTY,
-                earliest_epoch: None,
-            },
-            &tier(archive, &rsm, &rlmm),
-        )
-        .await;
+        let outcome = expire_remote_segments(archive, &rsm, &rlmm).await;
 
         check!(outcome == RemoteRetentionOutcome::default(), "case {name}");
         check!(
@@ -674,11 +598,7 @@ async fn remote_retention_pass_reaches_a_refusing_rsm_only_on_a_mutable_tier() {
 #[test]
 fn a_segment_below_the_log_start_is_evicted_whatever_retention_says() {
     // Three ten-record segments: [0, 9], [10, 19], [20, 29].
-    let segs = vec![
-        synth_remote_md(10, 0, 9, 9_500, 100),
-        synth_remote_md(11, 10, 19, 9_500, 100),
-        synth_remote_md(12, 20, 29, 9_500, 100),
-    ];
+    let segs = retention_segments([9_500, 9_500, 9_500]);
     // now=10_000 against max_ts=9_500 keeps every segment inside a 500ms
     // window, so the time axis never fires and a non-empty result is the
     // breach axis alone.
@@ -770,23 +690,24 @@ fn a_segment_below_the_log_start_is_evicted_whatever_retention_says() {
 /// covered by the breach, so the walk does not stop short of it.
 #[test]
 fn the_breach_and_the_time_window_take_the_union_of_either() {
-    let segs = vec![
-        synth_remote_md(10, 0, 9, 9_500, 100), // in the time window; breached
-        synth_remote_md(11, 10, 19, 100, 100), // past the time window
-        synth_remote_md(12, 20, 29, 9_500, 100), // in the window, not breached
-    ];
-    let out = remote_retention_eviction_set(
-        ArchiveMode::Mutable,
-        &segs,
-        Some(millis(500)),
-        None,
-        Some(Offset(10)),
-        10_000,
-        NO_BYTES,
-    );
+    let segs = retention_segments([
+        9_500, // in the time window; breached
+        100,   // past the time window
+        9_500, // in the window, not breached
+    ]);
+    let out = time_window_evictions(&segs, Some(Offset(10)));
     assert!(out.len() == 2);
     check!(out[0].start_offset() == 0, "breached");
     check!(out[1].start_offset() == 10, "past the time window");
+}
+
+/// Archive a real rolled prefix while keeping the source log and directories alive.
+macro_rules! archived_prefix_fixture {
+    ($local:ident, $remote:ident, $log:ident, $exports:ident, $rsm:ident, $rlmm:ident) => {
+        fixtures::rolled_log_fixture!($local, $remote, $log, $exports);
+        assert!($exports.len() >= 2, "the test needs a prefix to evict");
+        let ($rsm, $rlmm) = archived_backends($remote.path(), &$exports).await;
+    };
 }
 
 /// A breach eviction frees the archive and leaves the floor where the
@@ -798,12 +719,7 @@ fn the_breach_and_the_time_window_take_the_union_of_either() {
 /// [`remote_retention_pass_evicts_old_segments_through_lifecycle`] covers.
 #[tokio::test]
 async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let remote_dir = tempfile::tempdir().unwrap();
-    let log = rolled_log(log_dir.path());
-    let exports = log.tierable_segments();
-    assert!(exports.len() >= 2, "the test needs a prefix to evict");
-    let (rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
+    archived_prefix_fixture!(log_dir, remote_dir, log, exports, rsm, rlmm);
 
     // A `DeleteRecords` floor one past the oldest copied segment, and a topic
     // that keeps its records forever: the breach is the only axis that can
@@ -815,18 +731,13 @@ async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
         ..LogConfig::default()
     };
 
-    let outcome = remote_retention_pass(
-        &tp(),
+    let outcome = empty_retention_pass(
+        &cfg,
+        (floor, Some(floor)),
         1,
-        RemoteRetentionBounds {
-            log_config: &cfg,
-            log_start_offset: floor,
-            deleted_below: Some(floor),
-            now_ms: 1,
-            local: LocalLogFootprint::EMPTY,
-            earliest_epoch: None,
-        },
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
+        ArchiveMode::Mutable,
+        &rsm,
+        &rlmm,
     )
     .await;
 
@@ -851,45 +762,18 @@ async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
 /// above a segment that is still on local disk and still readable.
 #[tokio::test]
 async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let remote_dir = tempfile::tempdir().unwrap();
-    let log = rolled_log(log_dir.path());
-    let exports = log.tierable_segments();
+    fixtures::rolled_log_fixture!(log_dir, remote_dir, log, exports);
     assert!(exports.len() >= 3, "the test needs a segment to skip over");
     let (rsm, rlmm) = local_backends(remote_dir.path());
     // Copy the first and the third segment and not the second, which is what
     // a failed copy in the middle of a tick leaves behind.
     let gapped = vec![exports[0].clone(), exports[2].clone()];
-    let copied = copy_eligible(
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        &tp(),
-        1,
-        LeaderEpoch(0),
-        gapped,
-    )
-    .await;
+    let copied = copy_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), gapped).await;
     assert!(copied == 2);
 
     // Time retention past every segment, so both finished copies are
     // deletable and the walk reaches the far side of the gap.
-    let cfg = LogConfig {
-        retention: Some(millis(1)),
-        ..LogConfig::default()
-    };
-    let outcome = remote_retention_pass(
-        &tp(),
-        1,
-        RemoteRetentionBounds {
-            log_config: &cfg,
-            log_start_offset: NO_FLOOR,
-            deleted_below: None,
-            now_ms: now_ms() + 1_000_000,
-            local: LocalLogFootprint::EMPTY,
-            earliest_epoch: None,
-        },
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-    )
-    .await;
+    let outcome = expire_remote_segments(ArchiveMode::Mutable, &rsm, &rlmm).await;
 
     check!(outcome.deleted == 2, "both copies are past the window");
     check!(
@@ -909,12 +793,7 @@ async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
 /// log reports as `None`.
 #[tokio::test]
 async fn a_floor_nobody_moved_leaves_the_archive_alone() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let remote_dir = tempfile::tempdir().unwrap();
-    let log = rolled_log(log_dir.path());
-    let exports = log.tierable_segments();
-    assert!(exports.len() >= 2, "the test needs a prefix to evict");
-    let (rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
+    archived_prefix_fixture!(log_dir, remote_dir, log, exports, rsm, rlmm);
 
     // What a restart leaves behind: a `log_start_offset` past every copied
     // segment, and nothing saying anyone deleted up to it.
@@ -924,20 +803,8 @@ async fn a_floor_nobody_moved_leaves_the_archive_alone() {
         retention_size: None,
         ..LogConfig::default()
     };
-    let outcome = remote_retention_pass(
-        &tp(),
-        1,
-        RemoteRetentionBounds {
-            log_config: &cfg,
-            log_start_offset: inferred,
-            deleted_below: None,
-            now_ms: 1,
-            local: LocalLogFootprint::EMPTY,
-            earliest_epoch: None,
-        },
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-    )
-    .await;
+    let outcome =
+        empty_retention_pass(&cfg, (inferred, None), 1, ArchiveMode::Mutable, &rsm, &rlmm).await;
 
     check!(outcome.deleted == 0, "an inferred floor deletes nothing");
     check!(outcome.log_start == None);
@@ -953,21 +820,16 @@ async fn a_floor_nobody_moved_leaves_the_archive_alone() {
 /// the next tick, and object-store spend is the only other symptom.
 #[tokio::test]
 async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    seed_finished_segments(&rlmm, 3);
-    let rsm_impl = Arc::new(RefusesDeleteRsm::default());
-    let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
+    let (rlmm, _rsm_impl, rsm) = refusing_backends();
     let metrics = crate::metrics::BrokerMetrics::new();
     let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
-    let tier = crate::remote_log_manager::RemoteTier {
-        archive: ArchiveMode::Mutable,
-        rsm: &rsm,
-        rlmm: &rlmm,
-        metrics: &metrics,
-        index_cache: &index_cache,
-        copy_timeout: TEST_COPY_TIMEOUT,
-        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-    };
+    let tier = fixtures::tier_with_resources(
+        &rsm,
+        &rlmm,
+        (&metrics, &index_cache),
+        ArchiveMode::Mutable,
+        TEST_COPY_TIMEOUT,
+    );
     let cfg = LogConfig {
         retention: Some(millis(1)),
         ..LogConfig::default()
@@ -976,22 +838,13 @@ async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
     let outcome = remote_retention_pass(
         &tp(),
         1,
-        RemoteRetentionBounds {
-            log_config: &cfg,
-            log_start_offset: NO_FLOOR,
-            deleted_below: None,
-            now_ms: now_ms() + 1_000_000,
-            local: LocalLogFootprint::EMPTY,
-            earliest_epoch: None,
-        },
+        empty_local_bounds(&cfg, NO_FLOOR, None, now_ms() + 1_000_000),
         &tier,
     )
     .await;
 
     check!(outcome.deleted == 0);
-    let topic = crate::metrics::TopicLabel {
-        topic: Arc::from(tp().topic.as_str()),
-    };
+    let topic = fixtures::orders_label();
     // The lag is what the pass decided to remove, recorded before it tried.
     check!(
         metrics
@@ -1016,4 +869,61 @@ async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
             .get()
             == 1
     );
+}
+
+async fn empty_retention_pass(
+    config: &LogConfig,
+    floors: (Offset, Option<Offset>),
+    now_ms: i64,
+    archive: ArchiveMode,
+    rsm: &Arc<dyn RemoteStorageManager>,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) -> RemoteRetentionOutcome {
+    remote_retention_pass(
+        &tp(),
+        1,
+        empty_local_bounds(config, floors.0, floors.1, now_ms),
+        &tier(archive, rsm, rlmm),
+    )
+    .await
+}
+
+fn refusing_backends() -> (
+    Arc<dyn RemoteLogMetadataManager>,
+    Arc<RefusesDeleteRsm>,
+    Arc<dyn RemoteStorageManager>,
+) {
+    let rlmm = fixtures::in_memory_metadata();
+    seed_finished_segments(&rlmm, 3);
+    let rsm_impl = Arc::new(RefusesDeleteRsm::default());
+    let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
+    (rlmm, rsm_impl, rsm)
+}
+
+fn retention_segments(timestamps: [i64; 3]) -> Vec<RemoteLogSegmentMetadata> {
+    vec![
+        synth_remote_md(10, 0, 9, timestamps[0], 100),
+        synth_remote_md(11, 10, 19, timestamps[1], 100),
+        synth_remote_md(12, 20, 29, timestamps[2], 100),
+    ]
+}
+
+async fn expire_remote_segments(
+    archive: ArchiveMode,
+    rsm: &Arc<dyn RemoteStorageManager>,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) -> RemoteRetentionOutcome {
+    let config = LogConfig {
+        retention: Some(millis(1)),
+        ..LogConfig::default()
+    };
+    empty_retention_pass(
+        &config,
+        (NO_FLOOR, None),
+        now_ms() + 1_000_000,
+        archive,
+        rsm,
+        rlmm,
+    )
+    .await
 }

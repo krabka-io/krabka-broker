@@ -1,32 +1,33 @@
-(* #"/workspace/crates/verified/src/composition/jwks_publication.rs" 105 0 111 39 *)
+(* #"/workspace/crates/verified/src/composition/jwks_publication.rs" 101 0 107 39 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span scompletion = "/workspace/crates/verified/src/oauth/completion.rs" 8 10 16 2
-let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 33 10 42 1
-let%span soauth = "/workspace/crates/verified/src/oauth.rs" 104 10 112 1
-let%span soauth'0 = "/workspace/crates/verified/src/oauth.rs" 76 8 81 67
-let%span soauth'1 = "/workspace/crates/verified/src/oauth.rs" 93 8 93 72
-let%span sjwks_publication = "/workspace/crates/verified/src/composition/jwks_publication.rs" 112 38 112 89
-let%span sjwks_publication'0 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 113 59 113 99
-let%span sjwks_publication'1 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 118 16 118 43
-let%span sjwks_publication'2 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 125 8 125 78
-let%span sjwks_publication'3 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 129 5 129 35
-let%span sjwks_publication'4 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 91 11 91 67
-let%span sjwks_publication'5 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 92 10 92 112
-let%span sjwks_publication'6 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 93 10 95 100
-let%span sjwks_publication'7 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 96 10 104 1
+let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 29 10 38 1
+let%span soauth = "/workspace/crates/verified/src/oauth.rs" 92 10 100 1
+let%span soauth'0 = "/workspace/crates/verified/src/oauth.rs" 64 8 69 67
+let%span soauth'1 = "/workspace/crates/verified/src/oauth.rs" 81 8 81 72
+let%span sjwks_publication = "/workspace/crates/verified/src/composition/jwks_publication.rs" 108 38 108 89
+let%span sjwks_publication'0 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 109 59 109 99
+let%span sjwks_publication'1 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 114 16 114 43
+let%span sjwks_publication'2 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 121 8 121 78
+let%span sjwks_publication'3 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 125 5 125 35
+let%span sjwks_publication'4 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 89 11 89 67
+let%span sjwks_publication'5 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 90 10 90 112
+let%span sjwks_publication'6 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 91 10 91 152
+let%span sjwks_publication'7 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 92 10 100 1
 let%span sjwks_publication'8 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 36 11 36 28
 let%span sjwks_publication'9 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 37 10 37 69
 let%span sjwks_publication'10 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 38 10 38 67
 let%span sjwks_publication'11 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 39 10 39 97
 let%span sjwks_publication'12 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 40 10 41 68
-let%span sjwks_publication'13 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 75 8 80 109
+let%span sjwks_publication'13 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 72 8 77 109
 let%span sjwks_publication'14 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 22 10 22 16
 let%span sjwks_publication'15 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 19 11 19 49
 let%span sjwks_publication'16 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 20 10 20 41
 let%span sjwks_publication'17 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 21 10 21 80
 let%span sjwks_publication'18 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 25 8 27 9
+let%span sjwks_publication'19 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 136 16 137 95
 let%span spublication = "/workspace/crates/verified/src/jwks/publication.rs" 7 10 7 83
 let%span spublication'0 = "/workspace/crates/verified/src/jwks/publication.rs" 8 10 13 1
 
@@ -180,14 +181,14 @@ let oauth_validation_admission (started_ms: Int64.t) (completed_ms: Int64.t) (ca
 
 constant const_MAX'0: Int64.t = (9223372036854775807: Int64.t)
 
-predicate oauth_session_admissible [#"/workspace/crates/verified/src/oauth.rs" 74 0 74 65] (facts: t_OAuthSessionFacts) =
+predicate oauth_session_admissible [#"/workspace/crates/verified/src/oauth.rs" 62 0 62 65] (facts: t_OAuthSessionFacts) =
   [%#soauth'0] facts.expiry'0 = Present
   /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms'0) (Int64.to_int facts.now_ms'0)
   /\ Int64.to_int facts.token_expires_at_ms'0 - Int64.to_int facts.now_ms'0 <= Int64.to_int const_MAX'0
   /\ (facts.cap'0 = Disabled \/ gt_log_Int (Int64.to_int facts.cap_ms'0) 0)
   /\ (facts.authentication'0 = Initial \/ facts.principal'0 = Matches)
 
-function oauth_session_lifetime [#"/workspace/crates/verified/src/oauth.rs" 91 0 91 62] (facts: t_OAuthSessionFacts) : int
+function oauth_session_lifetime [#"/workspace/crates/verified/src/oauth.rs" 79 0 79 62] (facts: t_OAuthSessionFacts) : int
  = [%#soauth'1] let token_lifetime = Int64.to_int facts.token_expires_at_ms'0
   - Int64.to_int facts.now_ms'0 in if facts.cap'0 = Enabled /\ Int64.to_int facts.cap_ms'0 < token_lifetime then
     Int64.to_int facts.cap_ms'0
@@ -205,7 +206,7 @@ let oauth_session_admission (facts: t_OAuthSessionFacts) (return (x: t_OAuthSess
       end}
     (! return {result}) ]
 
-predicate initial_session_input_valid [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 69 0 73 9] (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed: int) =
+predicate initial_session_input_valid [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 66 0 70 9] (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed: int) =
   [%#sjwks_publication'13] Int64.to_int cache.now_ms = Int64.to_int facts.now_ms'0
   /\ ge_log_Int (Int64.to_int facts.now_ms'0) 0
   /\ ge_log_Int completed (Int64.to_int facts.now_ms'0)
@@ -219,37 +220,43 @@ predicate initial_session_input_valid [#"/workspace/crates/verified/src/composit
   /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms'0) completed
   /\ facts.authentication'0 = Initial /\ facts.cap'0 = Disabled
 
+predicate publication_invalidates_credential [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 130 0 135 9] (cache: t_JwksCacheFacts) (completed: int) (published: int) (writer_unfinished: bool) =
+  [%#sjwks_publication'19] gt_log_Int published 0
+  \/ writer_unfinished /\ UInt64.t'int cache.generation_before < UInt64.t'int const_MAX - 1
+  \/ cache.expiry_enabled
+  /\ gt_log_Int (completed - Int64.to_int cache.last_successful_fetch_ms) (Int64.to_int cache.expiry_ms)
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let published_keys_bound_oauth_session [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 105 0 111 39]
+let published_keys_bound_oauth_session [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 101 0 107 39]
   (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed_ms: Int64.t) (fetches: Slice64.slice bool)
   (begin_unfinished_writer: bool) (return (x: tup2_OAuthSessionDecision_tup2_u64_u64)) =
 {[@stop_split] [@expl:published_keys_bound_oauth_session requires] [%#sjwks_publication'4] initial_session_input_valid facts cache (Int64.to_int completed_ms)}
   (! bb0
   [ bb0 = s0
     [ s0 = publication_trace [%#sjwks_publication] {cache.generation_before} {fetches}
-        (fun (_x: tup2_u64_u64) -> [ &_27 <- _x ] s1)
-    | s1 = [ &generation <- _27.f0 ] s2
-    | s2 = [ &published <- _27.f1 ] s3
+        (fun (_x: tup2_u64_u64) -> [ &_24 <- _x ] s1)
+    | s1 = [ &generation <- _24.f0 ] s2
+    | s2 = [ &published <- _24.f1 ] s3
     | s3 = any [ br0 -> {begin_unfinished_writer = false} (! bb8) | br1 -> {begin_unfinished_writer} (! bb2) ] ]
   | bb2 = s0
     [ s0 = jwks_publication_generations [%#sjwks_publication'0] {generation}
-        (fun (_x: t_Option_tup2_u64_u64) -> [ &_32 <- _x ] s1)
-    | s1 = any [ br0 -> {_32 = None} (! bb8) | br1 (x0: tup2_u64_u64) -> {_32 = Some x0} (! bb5) ] ]
+        (fun (_x: t_Option_tup2_u64_u64) -> [ &_29 <- _x ] s1)
+    | s1 = any [ br0 -> {_29 = None} (! bb8) | br1 (x0: tup2_u64_u64) -> {_29 = Some x0} (! bb5) ] ]
   | bb5 = s0
-    [ s0 = elim_Some {_32} (fun (r0: tup2_u64_u64) -> [ &writing <- r0.f0 ] s1)
+    [ s0 = elim_Some {_29} (fun (r0: tup2_u64_u64) -> [ &writing <- r0.f0 ] s1)
     | s1 = [ &generation <- writing ] s2
     | s2 = bb8 ]
   | bb8 = s0
     [ s0 = [ &trace <- { f0 = generation; f1 = published } ] s1
-    | s1 = jwks_cache_admission [%#sjwks_publication'1] {cache} (fun (_x: t_JwksCacheDecision) -> [ &_42 <- _x ] s2)
-    | s2 = any [ br0 -> {_42 = Reject} (! bb12) | br1 -> {_42 = Admit} (! bb10) ] ]
-  | bb10 = s0 [ s0 = [ &_41 <- false ] s1 | s1 = bb13 ]
-  | bb12 = s0 [ s0 = [ &_41 <- true ] s1 | s1 = bb13 ]
-  | bb13 = any [ br0 -> {_41 = false} (! bb15) | br1 -> {_41} (! bb14) ]
-  | bb14 = s0 [ s0 = [ &_46 <- Reject'0 ] s1 | s1 = [ &_ret <- { f0'0 = _46; f1'0 = trace } ] s2 | s2 = return {_ret} ]
+    | s1 = jwks_cache_admission [%#sjwks_publication'1] {cache} (fun (_x: t_JwksCacheDecision) -> [ &_39 <- _x ] s2)
+    | s2 = any [ br0 -> {_39 = Reject} (! bb12) | br1 -> {_39 = Admit} (! bb10) ] ]
+  | bb10 = s0 [ s0 = [ &_38 <- false ] s1 | s1 = bb13 ]
+  | bb12 = s0 [ s0 = [ &_38 <- true ] s1 | s1 = bb13 ]
+  | bb13 = any [ br0 -> {_38 = false} (! bb15) | br1 -> {_38} (! bb14) ]
+  | bb14 = s0 [ s0 = [ &_43 <- Reject'0 ] s1 | s1 = [ &_ret <- { f0'0 = _43; f1'0 = trace } ] s2 | s2 = return {_ret} ]
   | bb15 = s0
     [ s0 = [ &finished <- { generation_before = cache.generation_before;
                             generation_after = generation;
@@ -257,18 +264,18 @@ let published_keys_bound_oauth_session [#"/workspace/crates/verified/src/composi
                             now_ms = cache.now_ms;
                             expiry_enabled = cache.expiry_enabled;
                             expiry_ms = cache.expiry_ms } ] s1
-    | s1 = [ &_54 <- Some'0 finished ] s2
-    | s2 = oauth_validation_admission [%#sjwks_publication'2] {facts.now_ms'0} {completed_ms} {_54}
-        (fun (_x: bool) -> [ &_51 <- _x ] s3)
-    | s3 = any [ br0 -> {_51 = false} (! bb18) | br1 -> {_51} (! bb17) ] ]
+    | s1 = [ &_51 <- Some'0 finished ] s2
+    | s2 = oauth_validation_admission [%#sjwks_publication'2] {facts.now_ms'0} {completed_ms} {_51}
+        (fun (_x: bool) -> [ &_48 <- _x ] s3)
+    | s3 = any [ br0 -> {_48 = false} (! bb18) | br1 -> {_48} (! bb17) ] ]
   | bb17 = s0
     [ s0 = [ &facts <- { facts with now_ms'0 = completed_ms } ] s1
     | s1 = oauth_session_admission [%#sjwks_publication'3] {facts}
-        (fun (_x: t_OAuthSessionDecision) -> [ &_60 <- _x ] s2)
-    | s2 = [ &_ret <- { f0'0 = _60; f1'0 = trace } ] s3
+        (fun (_x: t_OAuthSessionDecision) -> [ &_57 <- _x ] s2)
+    | s2 = [ &_ret <- { f0'0 = _57; f1'0 = trace } ] s3
     | s3 = return {_ret} ]
   | bb18 = s0
-    [ s0 = [ &_57 <- Reject'0 ] s1 | s1 = [ &_ret <- { f0'0 = _57; f1'0 = trace } ] s2 | s2 = return {_ret} ] ]
+    [ s0 = [ &_54 <- Reject'0 ] s1 | s1 = [ &_ret <- { f0'0 = _54; f1'0 = trace } ] s2 | s2 = return {_ret} ] ]
   [ & _ret: tup2_OAuthSessionDecision_tup2_u64_u64 = Any.any_l ()
   | & facts: t_OAuthSessionFacts = facts
   | & cache: t_JwksCacheFacts = cache
@@ -277,28 +284,24 @@ let published_keys_bound_oauth_session [#"/workspace/crates/verified/src/composi
   | & begin_unfinished_writer: bool = begin_unfinished_writer
   | & generation: UInt64.t = Any.any_l ()
   | & published: UInt64.t = Any.any_l ()
-  | & _27: tup2_u64_u64 = Any.any_l ()
-  | & _32: t_Option_tup2_u64_u64 = Any.any_l ()
+  | & _24: tup2_u64_u64 = Any.any_l ()
+  | & _29: t_Option_tup2_u64_u64 = Any.any_l ()
   | & writing: UInt64.t = Any.any_l ()
   | & trace: tup2_u64_u64 = Any.any_l ()
-  | & _41: bool = Any.any_l ()
-  | & _42: t_JwksCacheDecision = Any.any_l ()
-  | & _46: t_OAuthSessionDecision = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & _39: t_JwksCacheDecision = Any.any_l ()
+  | & _43: t_OAuthSessionDecision = Any.any_l ()
   | & finished: t_JwksCacheFacts = Any.any_l ()
-  | & _51: bool = Any.any_l ()
-  | & _54: t_Option_JwksCacheFacts = Any.any_l ()
-  | & _57: t_OAuthSessionDecision = Any.any_l ()
-  | & _60: t_OAuthSessionDecision = Any.any_l () ])
+  | & _48: bool = Any.any_l ()
+  | & _51: t_Option_JwksCacheFacts = Any.any_l ()
+  | & _54: t_OAuthSessionDecision = Any.any_l ()
+  | & _57: t_OAuthSessionDecision = Any.any_l () ])
   [ return (result: tup2_OAuthSessionDecision_tup2_u64_u64) ->
   {[@stop_split] [@expl:published_keys_bound_oauth_session ensures] ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #0] [%#sjwks_publication'5] ge_log_Int (UInt64.t'int result.f1'0.f0) (UInt64.t'int cache.generation_before)
       /\ UInt64.t'int result.f1'0.f1 <= successful_fetches (Slice64.view fetches) (Seq.length (Slice64.view fetches)))
     /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #1] [%#sjwks_publication'6] (result.f0'0
         = Reject'0)
-      = (gt_log_Int (UInt64.t'int result.f1'0.f1) 0
-      \/ begin_unfinished_writer /\ UInt64.t'int cache.generation_before < UInt64.t'int const_MAX - 1
-      \/ cache.expiry_enabled
-      /\ gt_log_Int (Int64.to_int completed_ms
-      - Int64.to_int cache.last_successful_fetch_ms) (Int64.to_int cache.expiry_ms)))
+      = publication_invalidates_credential cache (Int64.to_int completed_ms) (UInt64.t'int result.f1'0.f1) begin_unfinished_writer)
     /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #2] [%#sjwks_publication'7] match result.f0'0 with
       | Reject'0 -> true
       | Admit'0 session_lifetime_ms effective_expires_at_ms -> result.f1'0.f0 = cache.generation_before

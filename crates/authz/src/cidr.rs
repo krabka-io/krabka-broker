@@ -260,6 +260,12 @@ mod tests {
         }
     }
 
+    fn check_membership(cidr: &Cidr, cases: &[(IpAddr, bool)]) {
+        for (ip, expected) in cases {
+            check!(cidr.contains(*ip) == *expected, "ip {ip}");
+        }
+    }
+
     #[test]
     fn contains_matches_ipv4_ranges() {
         let cidr = Cidr::parse("10.0.0.0/8").unwrap();
@@ -268,9 +274,7 @@ mod tests {
             (IpAddr::V4(Ipv4Addr::new(10, 255, 255, 255)), true),
             (IpAddr::V4(Ipv4Addr::new(11, 0, 0, 1)), false),
         ];
-        for (ip, expected) in cases {
-            check!(cidr.contains(*ip) == *expected, "ip {ip}");
-        }
+        check_membership(&cidr, cases);
     }
 
     #[test]
@@ -284,9 +288,7 @@ mod tests {
             ),
             (IpAddr::V6("2001:db9::5".parse().unwrap()), false),
         ];
-        for (ip, expected) in cases {
-            check!(cidr.contains(*ip) == *expected, "ip {ip}");
-        }
+        check_membership(&cidr, cases);
     }
 
     #[test]

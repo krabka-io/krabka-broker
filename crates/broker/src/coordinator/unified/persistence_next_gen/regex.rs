@@ -16,14 +16,11 @@
 //! expression, both non-flexible strings; see
 //! [`NextGenKey::RegularExpression`](super::NextGenKey::RegularExpression).
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::BufMut;
 
-use crate::{
-    coordinator::unified::persistence::{
-        flex::{get_string_array, put_empty_tagged_fields, put_string_array, skip_tagged_fields},
-        get_i16, get_i64,
-    },
-    error::BrokerError,
+use crate::coordinator::unified::persistence::{
+    flex::{get_string_array, put_string_array, value_codec},
+    get_i64,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,26 +34,17 @@ pub struct RegularExpressionValue {
     pub timestamp_ms: i64,
 }
 
-impl RegularExpressionValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        put_string_array(&mut buf, &self.topics);
+value_codec! {
+    RegularExpressionValue,
+    encode(&self) -> buf {
+        put_string_array(buf, &self.topics);
         buf.put_i64(self.version);
         buf.put_i64(self.timestamp_ms);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
     }
-
-    /// # Errors
-    /// Returns an error when the record is truncated or corrupt.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let topics = get_string_array(&mut buf)?;
-        let version = get_i64(&mut buf)?;
-        let timestamp_ms = get_i64(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
+    decode(buf) {
+        let topics = get_string_array(buf)?;
+        let version = get_i64(buf)?;
+        let timestamp_ms = get_i64(buf)?;
         Ok(Self {
             topics,
             version,
@@ -70,6 +58,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::coordinator::unified::test_support::wire_bytes;
 
     fn value() -> RegularExpressionValue {
         RegularExpressionValue {
@@ -81,12 +70,13 @@ mod tests {
 
     #[test]
     fn bytes_match_kafka_schema() {
-        let mut want: Vec<u8> = Vec::new();
-        want.extend_from_slice(b"\x00\x00"); // value version 0
-        want.extend_from_slice(b"\x03\x02a\x03bc"); // Topics, compact array of compact strings
-        want.extend_from_slice(&7i64.to_be_bytes()); // Version
-        want.extend_from_slice(&1_700_000_000_000i64.to_be_bytes()); // Timestamp
-        want.push(0x00); // no tagged fields
+        let want = wire_bytes(&[
+            "0000",             // value version 0
+            "030261036263",     // Topics, compact array of compact strings
+            "0000000000000007", // Version
+            "0000018bcfe56800", // Timestamp
+            "00",               // no tagged fields
+        ]);
         assert!(&value().encode()[..] == &want[..]);
     }
 

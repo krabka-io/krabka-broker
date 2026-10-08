@@ -15,6 +15,22 @@ fn key(user: &str, client_id: &str) -> EntityKey {
     ]
 }
 
+fn alice_fixture() -> (QuotaBuckets, BrokerMetrics) {
+    let buckets = QuotaBuckets::new();
+    let metrics = BrokerMetrics::new();
+    drop(buckets.get_or_create("producer_byte_rate", &key("alice", "app"), 1024.0));
+    drop(
+        metrics
+            .quota_entity_throttle_seconds_total
+            .get_or_create(&QuotaEntityLabel {
+                quota_type: QuotaType::Produce,
+                user: Some("alice".into()),
+                client_id: Some("app".into()),
+            }),
+    );
+    (buckets, metrics)
+}
+
 /// The series names a `/metrics` body carries for the per-entity throttle.
 fn throttle_series(metrics: &BrokerMetrics) -> Vec<String> {
     let mut body = String::new();
@@ -31,18 +47,7 @@ fn throttle_series(metrics: &BrokerMetrics) -> Vec<String> {
 
 #[test]
 fn an_inactive_bucket_and_its_metric_series_are_both_dropped() {
-    let buckets = QuotaBuckets::new();
-    let metrics = BrokerMetrics::new();
-    drop(buckets.get_or_create("producer_byte_rate", &key("alice", "app"), 1024.0));
-    drop(
-        metrics
-            .quota_entity_throttle_seconds_total
-            .get_or_create(&QuotaEntityLabel {
-                quota_type: QuotaType::Produce,
-                user: Some("alice".into()),
-                client_id: Some("app".into()),
-            }),
-    );
+    let (buckets, metrics) = alice_fixture();
     check!(throttle_series(&metrics).len() == 1);
 
     // Nothing has touched the bucket since it was made, so any positive age
@@ -55,18 +60,7 @@ fn an_inactive_bucket_and_its_metric_series_are_both_dropped() {
 
 #[test]
 fn a_bucket_inside_the_window_keeps_its_series() {
-    let buckets = QuotaBuckets::new();
-    let metrics = BrokerMetrics::new();
-    drop(buckets.get_or_create("producer_byte_rate", &key("alice", "app"), 1024.0));
-    drop(
-        metrics
-            .quota_entity_throttle_seconds_total
-            .get_or_create(&QuotaEntityLabel {
-                quota_type: QuotaType::Produce,
-                user: Some("alice".into()),
-                client_id: Some("app".into()),
-            }),
-    );
+    let (buckets, metrics) = alice_fixture();
 
     sweep(&buckets, &metrics, secs(3600));
 

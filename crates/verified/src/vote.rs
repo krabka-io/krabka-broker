@@ -1,25 +1,21 @@
 //! KIP-595 Vote wire and membership admission decisions.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// Whether the signed Vote fields can be converted without aliasing a Kafka
-/// sentinel to a real node or epoch.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum VoteWireDecision {
-    Reject,
-    Accept,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Whether the signed Vote fields can be converted without aliasing a Kafka
+    /// sentinel to a real node or epoch.
+    pub enum VoteWireDecision {
+        Reject,
+        Accept,
+    }
 
-/// Whether unsigned consensus fields fit Kafka's signed Vote wire fields.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum VoteEncodeDecision {
-    Reject,
-    Accept,
+    /// Whether unsigned consensus fields fit Kafka's signed Vote wire fields.
+    pub enum VoteEncodeDecision {
+        Reject,
+        Accept,
+    }
 }
 
 /// Every unsigned consensus field of a Vote fits Kafka's signed `int32` wire
@@ -102,40 +98,37 @@ pub fn vote_wire_decision(
     }
 }
 
-/// Admission shared by binding votes and pre-votes before epoch/log checks.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum VoteAdmissionDecision {
-    /// The Vote targets another voter and must be ignored without a reply.
-    IgnoreWrongTarget,
-    /// The target is local, but the local node or candidate lacks membership.
-    Deny,
-    /// The exact target and both membership requirements hold.
-    Consider,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Admission shared by binding votes and pre-votes before epoch/log checks.
+    pub enum VoteAdmissionDecision {
+        /// The Vote targets another voter and must be ignored without a reply.
+        IgnoreWrongTarget,
+        /// The target is local, but the local node or candidate lacks membership.
+        Deny,
+        /// The exact target and both membership requirements hold.
+        Consider,
+    }
 
-/// Whom one Vote request is addressed to, against this node.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct VoteTarget {
-    /// The `VoterId` the request is addressed to.
-    pub voter_id: u64,
-    /// This node's ID.
-    pub local_id: u64,
-    /// The request's `VoterDirectoryId` names this node's directory.
-    pub directory_matches: bool,
-}
+    /// Whom one Vote request is addressed to, against this node.
+    pub struct VoteTarget {
+        /// The `VoterId` the request is addressed to.
+        pub voter_id: u64,
+        /// This node's ID.
+        pub local_id: u64,
+        /// The request's `VoterDirectoryId` names this node's directory.
+        pub directory_matches: bool,
+    }
 
-/// The cluster and voter-set memberships one Vote request needs.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct VoteMembership {
-    /// The request carries no cluster ID, or this node's.
-    pub cluster_matches: bool,
-    /// This node is a voter.
-    pub local_is_voter: bool,
-    /// The candidate is a voter.
-    pub candidate_is_voter: bool,
+    /// The cluster and voter-set memberships one Vote request needs.
+    pub struct VoteMembership {
+        /// The request carries no cluster ID, or this node's.
+        pub cluster_matches: bool,
+        /// This node is a voter.
+        pub local_is_voter: bool,
+        /// The candidate is a voter.
+        pub candidate_is_voter: bool,
+    }
 }
 
 /// Classify exact recipient and membership admission. The target alone

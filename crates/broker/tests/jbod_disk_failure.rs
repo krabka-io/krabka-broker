@@ -17,7 +17,7 @@ mod kafka_wire;
 
 mod support;
 
-use std::{io, net::SocketAddr};
+use std::net::SocketAddr;
 
 use assert2::{assert, check};
 use bytes::BytesMut;
@@ -25,35 +25,26 @@ use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        assign_replicas_to_dirs_request::{
-            AssignReplicasToDirsRequest, DirectoryData as ReqDirData, PartitionData as ReqPartData,
-            TopicData as ReqTopicData,
-        },
         assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
         broker_heartbeat_request::BrokerHeartbeatRequest,
-        broker_heartbeat_response::BrokerHeartbeatResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::ProduceResponse,
+        broker_heartbeat_response::BrokerHeartbeatResponse, produce_response::ProduceResponse,
     },
     primitives::uuid::Uuid as ProtocolUuid,
-    records::{Record, RecordBatch},
 };
 use tokio::net::TcpStream;
+
+use crate::support::{
+    produce::single_partition_produce,
+    records::{batch_from_records, value_record},
+};
+
+krabka_macros::assignment_dirs_fixture!(assignment_dirs_request);
 
 const CLIENT_ID: &str = "krabka-jbod-disk-failure-test";
 const PRODUCE_VERSION: i16 = 9; // flexible, acks=1
 
-/// One length-prefixed request/response exchange on correlation id 1, with
-/// flexible headers because every API this suite sends is flexible; see
-/// [`kafka_wire::round_trip`].
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(stream, api_key, api_version, 1, CLIENT_ID, true, body).await
-}
+// Flexible headers and correlation ID 1 for every request in this suite.
+crate::flexible_round_trip_fixture!(round_trip, CLIENT_ID, 1);
 
 async fn create_topic(addr: SocketAddr, topic: &str, partitions: i32) {
     kafka_wire::create_topic_plaintext(addr, CLIENT_ID, kafka_wire::topic(topic, partitions, 1))
@@ -87,28 +78,17 @@ fn partitions_in_dir(dir: &std::path::Path, topic: &str) -> Vec<i32> {
 /// Produces one record to `(topic, partition)` and returns the per-partition
 /// `error_code` from the response.
 async fn produce_and_get_error(addr: SocketAddr, topic: &str, partition: i32) -> i16 {
-    let batch = RecordBatch {
-        records: vec![Record {
-            offset_delta: 0,
-            value: Some(bytes::Bytes::from_static(b"kip-112-test")),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let req = ProduceRequest {
-        acks: 1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: partition,
-                records: Some(batch.into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let batch = batch_from_records(vec![value_record(
+        0,
+        Some(bytes::Bytes::from_static(b"kip-112-test")),
+    )]);
+    let req = single_partition_produce(
+        topic.to_string(),
+        krabka_protocol::primitives::uuid::Uuid::default(),
+        partition,
+        Some(batch.into()),
+        (1, 5_000),
+    );
     let mut body = BytesMut::new();
     req.encode(&mut body, PRODUCE_VERSION).unwrap();
     let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -268,23 +248,8 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
     // Choose an arbitrary dir UUID to assign partition 0 on broker 1.
     let dir_uuid = uuid::Uuid::from_u128(0xCAFE_BABE);
 
-    let req = AssignReplicasToDirsRequest {
-        broker_id: 1, // for_tests default broker_id
-        broker_epoch,
-        directories: vec![ReqDirData {
-            id: ProtocolUuid(dir_uuid.into_bytes()),
-            topics: vec![ReqTopicData {
-                topic_id: ProtocolUuid(topic_uuid.into_bytes()),
-                partitions: vec![ReqPartData {
-                    partition_index: 0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    // for_tests default broker_id; assign partition 0 to the arbitrary directory.
+    let req = assignment_dirs_request(1, broker_epoch, dir_uuid, topic_uuid, &[0]);
 
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).unwrap();

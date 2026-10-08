@@ -21,7 +21,6 @@ use std::{net::SocketAddr, path::Path, time::Duration};
 use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
     RemoteStorageBackend, RlmmKind,
-    config::{InterBrokerCredentials, ListenerSpec},
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
@@ -228,10 +227,7 @@ fn broker_config(
     config.listen_addr = client_addrs[index];
     config.advertised_listener = client_addrs[index].to_string();
     config.controller_listen_addr = controller_addrs[index];
-    config.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, addr)| (NodeId(*id), addr.to_string()))
-        .collect();
+    config.controller_quorum_voters = crate::support::controller_voters(voters);
     config.bootstrap_mode = BootstrapMode::Bootstrap;
     config.auto_join = false;
     config.bootstrap_servers = vec![];
@@ -242,42 +238,29 @@ fn broker_config(
     // every principal, because any of them can end up leading the shard and
     // having to authenticate the other two.
     let node = u64::try_from(index + 1).expect("small cluster");
-    config.listeners = vec![ListenerSpec {
-        name: LISTENER.to_owned(),
-        bind_addr: client_addrs[index],
-        advertised: client_addrs[index].to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
+    config.listeners = vec![crate::support::listeners::listener(
+        LISTENER,
+        client_addrs[index],
+        ListenerProtocol::SaslPlaintext,
+    )];
     LISTENER.clone_into(&mut config.inter_broker_listener_name);
     config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    config.plain_credentials = (0..VOTERS)
-        .map(|peer| {
-            (
-                broker_principal(u64::try_from(peer + 1).expect("small cluster")),
+    config.plain_credentials =
+        support::diskless::peer_credentials(VOTERS, PASSWORD, broker_principal)
+            .chain(std::iter::once((
+                CLIENT_PRINCIPAL.to_owned(),
                 PASSWORD.to_owned(),
-            )
-        })
-        .chain(std::iter::once((
-            CLIENT_PRINCIPAL.to_owned(),
-            PASSWORD.to_owned(),
-        )))
-        .collect();
-    config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-        username: broker_principal(node),
-        password: PASSWORD.to_owned(),
-    });
-    // Distinct racks. `select_voters` returns the local node plus one broker
-    // per *unused* rack, so two brokers sharing a rack would yield a two-voter
-    // placement and the reconcile loop would refuse to run a three-voter
-    // quorum on it.
-    config.rack = Some(format!(
-        "rack-{}",
-        char::from(b'a' + u8::try_from(index).expect("small cluster"))
-    ));
-    config.diskless_wal_local_replica_count = VOTERS;
+            )))
+            .collect();
+    // Distinct racks preserve the three-voter WAL placement's AZ-loss budget.
+    support::diskless::configure_identity(
+        &mut config,
+        index,
+        node,
+        VOTERS,
+        PASSWORD,
+        broker_principal,
+    );
     // One shared object store for all three brokers: a flush written by the
     // leader has to be readable by whichever broker serves the cold read.
     config.remote_storage_backend = Some(RemoteStorageBackend::Local {

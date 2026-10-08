@@ -1,18 +1,19 @@
-(* #"/workspace/crates/verified/src/timestamp.rs" 15 0 15 78 *)
+(* #"/workspace/crates/verified/src/timestamp.rs" 28 0 28 78 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 16 20 16 26
-let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 19 14 19 40
-let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 20 18 20 34
-let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 18 16 18 81
-let%span stimestamp'3 = "/workspace/crates/verified/src/timestamp.rs" 17 16 17 43
-let%span stimestamp'4 = "/workspace/crates/verified/src/timestamp.rs" 21 11 21 28
-let%span stimestamp'5 = "/workspace/crates/verified/src/timestamp.rs" 24 17 24 18
-let%span stimestamp'6 = "/workspace/crates/verified/src/timestamp.rs" 24 8 24 18
-let%span stimestamp'7 = "/workspace/crates/verified/src/timestamp.rs" 8 10 13 1
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 29 20 29 26
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 32 14 32 40
+let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 33 18 33 34
+let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 31 16 31 81
+let%span stimestamp'3 = "/workspace/crates/verified/src/timestamp.rs" 30 16 30 43
+let%span stimestamp'4 = "/workspace/crates/verified/src/timestamp.rs" 34 11 34 28
+let%span stimestamp'5 = "/workspace/crates/verified/src/timestamp.rs" 37 17 37 18
+let%span stimestamp'6 = "/workspace/crates/verified/src/timestamp.rs" 37 8 37 18
+let%span stimestamp'7 = "/workspace/crates/verified/src/timestamp.rs" 26 10 26 61
+let%span stimestamp'8 = "/workspace/crates/verified/src/timestamp.rs" 15 8 20 9
 
 use creusot.int.UInt64
 use seq.Seq
@@ -41,11 +42,19 @@ let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
 
 type t_Option_usize = None | Some UInt64.t
 
+predicate first_timestamp_match [#"/workspace/crates/verified/src/timestamp.rs" 9 0 13 9] (timestamps: Seq.seq Int64.t) (target: int) (matched: t_Option_usize) =
+  [%#stimestamp'8] match matched with
+    | Some index -> UInt64.t'int index < Seq.length timestamps
+    /\ ge_log_Int (Int64.to_int (Seq.get timestamps (UInt64.t'int index))) target
+    /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index -> Int64.to_int (Seq.get timestamps i) < target)
+    | None -> forall i: int. 0 <= i /\ i < Seq.length timestamps -> Int64.to_int (Seq.get timestamps i) < target
+    end
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let first_timestamp_index [#"/workspace/crates/verified/src/timestamp.rs" 15 0 15 78]
+let first_timestamp_index [#"/workspace/crates/verified/src/timestamp.rs" 28 0 28 78]
   (timestamps: Slice64.slice Int64.t) (target: Int64.t) (return (x: t_Option_usize)) = (! bb0
   [ bb0 = s0 [ s0 = [ &index <- [%#stimestamp] (0: UInt64.t) ] s1 | s1 = bb1 ]
   | bb1 = bb1invariant
@@ -88,12 +97,5 @@ let first_timestamp_index [#"/workspace/crates/verified/src/timestamp.rs" 15 0 1
   | & _29: bool = Any.any_l ()
   | & variant_old_bb1: int = Any.any_l () ])
   [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:first_timestamp_index ensures] [%#stimestamp'7] match result with
-      | Some index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
-      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
-      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target
-      end}
+  {[@stop_split] [@expl:first_timestamp_index ensures] [%#stimestamp'7] first_timestamp_match (Slice64.view timestamps) (Int64.to_int target) result}
     (! return {result}) ]

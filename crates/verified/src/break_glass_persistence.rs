@@ -1,39 +1,31 @@
 //! Break-glass consumption and local-action persistence decisions.
 
-#[cfg(creusot)]
-use std::clone::Clone;
+use creusot_std::prelude::*;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// How the incoming consume relates to the committed proposal image.
+    pub enum BreakGlassProposalState {
+        Missing,
+        Stale,
+        ExactPending,
+    }
 
-/// How the incoming consume relates to the committed proposal image.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum BreakGlassProposalState {
-    Missing,
-    Stale,
-    ExactPending,
-}
+    /// Facts checked before a consumed proposal enters the metadata log.
+    pub struct BreakGlassConsumptionFacts {
+        pub proposal: BreakGlassProposalState,
+        pub consumed_at_ms: i64,
+        pub uncommitted_tail: bool,
+    }
 
-/// Facts checked before a consumed proposal enters the metadata log.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct BreakGlassConsumptionFacts {
-    pub proposal: BreakGlassProposalState,
-    pub consumed_at_ms: i64,
-    pub uncommitted_tail: bool,
-}
-
-/// Why a consumed proposal may or may not enter the metadata log.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum BreakGlassConsumptionDecision {
-    Missing,
-    Malformed,
-    Stale,
-    InFlight,
-    Append,
+    /// Why a consumed proposal may or may not enter the metadata log.
+    pub enum BreakGlassConsumptionDecision {
+        Missing,
+        Malformed,
+        Stale,
+        InFlight,
+        Append,
+    }
 }
 
 /// Admit only an exact, positive-timestamp mutation of the current pending
@@ -83,30 +75,27 @@ pub fn break_glass_consumption_decision(
     }
 }
 
-/// Durable-spend state for an action outside the metadata log.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum BreakGlassLocalSpendState {
-    Ungated,
-    MissingOrMismatched,
-    Pending,
-    Committed,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Durable-spend state for an action outside the metadata log.
+    pub enum BreakGlassLocalSpendState {
+        Ungated,
+        MissingOrMismatched,
+        Pending,
+        Committed,
+    }
 
-/// Facts checked before an action outside the metadata log may start.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct BreakGlassLocalActionFacts {
-    pub spend: BreakGlassLocalSpendState,
-    pub commit_succeeded: bool,
-}
+    /// Facts checked before an action outside the metadata log may start.
+    pub struct BreakGlassLocalActionFacts {
+        pub spend: BreakGlassLocalSpendState,
+        pub commit_succeeded: bool,
+    }
 
-/// Whether a privileged local action may start.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum BreakGlassLocalActionDecision {
-    Reject,
-    Apply,
+    /// Whether a privileged local action may start.
+    pub enum BreakGlassLocalActionDecision {
+        Reject,
+        Apply,
+    }
 }
 
 /// Permit an ungated action, a retry whose spend already committed, or an

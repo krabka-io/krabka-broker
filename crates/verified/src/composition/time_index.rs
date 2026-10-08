@@ -6,11 +6,8 @@ use super::{
     restore_index_frontier, time_index_lookup, validated_remote_and_local_time_starts_agree,
 };
 
+open_logic! {
 /// Coherent decoded records and ordered sparse rows for timestamp scans.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn sparse_timestamp_window_valid(
     offsets: Seq<u32>,
     timestamps: Seq<i64>,
@@ -18,24 +15,20 @@ pub fn sparse_timestamp_window_valid(
 ) -> bool {
     pearlite! {
         offsets.len() == timestamps.len()
-            && (forall<i: Int, j: Int> 0 <= i && i < j && j < offsets.len() ==> offsets[i]@ < offsets[j]@)
+            && (crate::sequence::strictly_increasing(offsets))
             && (forall<i: Int> 0 <= i && i < rows.len() ==> rows[i].0@ <= rows[i].1@ && rows[i].1@ < timestamps.len())
             && (forall<i: Int, j: Int> 0 <= i && i < j && j < rows.len() ==> rows[i].0@ < rows[j].0@ && rows[i].1@ <= rows[j].1@)
     }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub fn time_segment_valid(base: Int, end: Int) -> bool {
     pearlite! { 0 <= base && base <= end && end - base <= u32::MAX@ }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub fn time_cursor_matches(
     entries: Seq<(i64, u32)>,
     target: Int,
@@ -50,6 +43,7 @@ pub fn time_cursor_matches(
             && forall<j: Int> i < j && j < entries.len()
                 ==> if strict { entries[j].0@ >= target } else { entries[j].0@ > target }
     }
+}
 }
 
 /// Return actual absolute inclusive cursors and the safe strict lower start.
@@ -85,4 +79,16 @@ pub(super) fn validated_time_cursors_are_monotone(
         segment_base + i64::from(upper),
         segment_base + i64::from(scan),
     ))
+}
+
+open_logic! {
+/// Every inspected relative record offset remains within the absolute upper bound.
+pub(super) fn absolute_record_prefix_bounded(
+    offsets: Seq<u32>,
+    count: Int,
+    base: Int,
+    end: Int,
+) -> bool {
+    pearlite! { forall<i: Int> 0 <= i && i < count ==> base + offsets[i]@ <= end }
+}
 }

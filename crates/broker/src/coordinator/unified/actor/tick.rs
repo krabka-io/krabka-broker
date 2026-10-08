@@ -12,18 +12,11 @@ use super::{
     member_state::run_reconcile,
     persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
     regex_resolution::delete_unsubscribed_regexes,
-    waiters::{drain_followers_with, drain_removed_classic_waiters, maybe_complete_classic},
+    waiters::settle_removed_classic_waiters,
 };
-use crate::{
-    codes,
-    coordinator::unified::{
-        GroupCoordinator,
-        classic_state::{ClassicGroup as ClassicState, GroupState as ClassicGroupState},
-        config::NextGenConfig,
-        consumer_state::GroupState,
-        group::CoordinatorGroup,
-        offsets_log::OffsetsLog,
-    },
+use crate::coordinator::unified::{
+    GroupCoordinator, classic_state::ClassicGroup as ClassicState, config::NextGenConfig,
+    consumer_state::GroupState, group::CoordinatorGroup, offsets_log::OffsetsLog,
 };
 
 pub(super) async fn handle_actor_tick(
@@ -136,13 +129,7 @@ async fn settle_classic_removal(
             return true;
         }
     }
-    drain_removed_classic_waiters(removed, &mut parked.joiners, &mut parked.followers);
-    if previous.state == ClassicGroupState::CompletingRebalance
-        && state.state == ClassicGroupState::PreparingRebalance
-    {
-        drain_followers_with(&mut parked.followers, codes::REBALANCE_IN_PROGRESS);
-    }
-    maybe_complete_classic(state, &mut parked.joiners, &mut parked.followers);
+    settle_removed_classic_waiters(state, previous.state, removed, parked);
     true
 }
 
@@ -192,16 +179,19 @@ mod tests {
     use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
 
     use super::*;
-    use crate::coordinator::unified::{
-        actor::{
-            GroupActorMessage, GroupKindTag, RegexResolution,
-            member_state::build_member,
-            test_support::{
-                completing_classic_group, empty_metadata, last_classic_metadata, make_coordinator,
+    use crate::{
+        codes,
+        coordinator::unified::{
+            actor::{
+                GroupActorMessage, GroupKindTag, RegexResolution,
+                test_support::{
+                    completing_classic_group, empty_metadata, last_classic_metadata,
+                    make_coordinator, parked_follower, rpc, subscribed_member,
+                },
             },
+            classic_state::GroupState as ClassicGroupState,
+            offsets_log::fake::InMemoryOffsetsLog,
         },
-        classic_state::GroupState as ClassicGroupState,
-        offsets_log::fake::InMemoryOffsetsLog,
     };
 
     #[tokio::test]
@@ -213,12 +203,7 @@ mod tests {
         state.members.get_mut("m1").unwrap().session_timeout = Duration::ZERO;
         let prior_generation = state.generation_id;
         let mut parked = ParkedWaiters::default();
-        let services = ActorServices {
-            config: &coord.config,
-            metadata: coord.metadata.as_ref(),
-            offsets_log: log.as_ref(),
-            coordinator: &coord,
-        };
+        let services = super::super::test_support::actor_services(&coord, log.as_ref());
 
         check!(handle_actor_tick(&mut group, &mut parked, services).await);
         let state = group.as_classic().unwrap();
@@ -251,13 +236,9 @@ mod tests {
         // Seed a member and reconcile once so the join settles into a clean
         // (non-dirty) baseline epoch.
         let mut state = GroupState::new("g");
-        let mut m = build_member(
+        let mut m = subscribed_member(
             "m1",
-            &ConsumerGroupHeartbeatRequest {
-                subscribed_topic_names: Some(vec!["t".into()]),
-                rebalance_timeout_ms: 60_000,
-                ..Default::default()
-            },
+            &["t"],
             crate::coordinator::unified::ClientIdentity {
                 id: "client-a",
                 host: "h",
@@ -460,33 +441,29 @@ mod tests {
                          owned: Option<Vec<i32>>| {
             let handle = Arc::clone(&handle);
             async move {
-                let (reply, response) = tokio::sync::oneshot::channel();
-                handle
-                    .tx
-                    .send(GroupActorMessage::Heartbeat {
-                        request: ConsumerGroupHeartbeatRequest {
-                            group_id: "g".into(),
-                            member_id: member_id.into(),
-                            member_epoch,
-                            subscribed_topic_names: Some(vec!["t".into()]),
-                            rebalance_timeout_ms,
-                            topic_partitions: owned.map(|partitions| {
-                                vec![TopicPartitions {
-                                    topic_id: topic,
-                                    partitions,
-                                    ..Default::default()
-                                }]
-                            }),
-                            ..Default::default()
-                        },
-                        client_id: "c".into(),
-                        client_host: "h".into(),
-                        reply,
-                        regex_resolver:
-                            crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-                    })
-                    .await
-                    .unwrap();
+                let response = rpc::begin(&handle, |reply| GroupActorMessage::Heartbeat {
+                    request: ConsumerGroupHeartbeatRequest {
+                        group_id: "g".into(),
+                        member_id: member_id.into(),
+                        member_epoch,
+                        subscribed_topic_names: Some(vec!["t".into()]),
+                        rebalance_timeout_ms,
+                        topic_partitions: owned.map(|partitions| {
+                            vec![TopicPartitions {
+                                topic_id: topic,
+                                partitions,
+                                ..Default::default()
+                            }]
+                        }),
+                        ..Default::default()
+                    },
+                    client_id: "c".into(),
+                    client_host: "h".into(),
+                    reply,
+                    regex_resolver:
+                        crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
+                })
+                .await;
                 response.await.unwrap()
             }
         };
@@ -501,12 +478,7 @@ mod tests {
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let (reply, view) = tokio::sync::oneshot::channel();
-            handle
-                .tx
-                .send(GroupActorMessage::Describe { reply })
-                .await
-                .unwrap();
+            let view = rpc::begin(&handle, |reply| GroupActorMessage::Describe { reply }).await;
             let members: Vec<String> = view
                 .await
                 .unwrap()
@@ -563,12 +535,7 @@ mod tests {
             .send(GroupActorMessage::TestForceConsumerKind)
             .await
             .unwrap();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::InspectAny { reply: tx })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::InspectAny { reply: tx }).await;
         let _ = rx.await;
 
         // The actor is now parked on the re-armed session-expiry tick sleep.
@@ -613,15 +580,8 @@ mod tests {
         let mut group = completing_classic_group(&["m1", "m2"]);
         let state = group.as_classic_mut().unwrap();
         state.members.get_mut("m1").unwrap().session_timeout = Duration::ZERO;
-        let (tx, mut rx) = tokio::sync::oneshot::channel();
-        let mut parked = ParkedWaiters::default();
-        parked.followers.insert("m2".into(), tx);
-        let services = ActorServices {
-            config: &coord.config,
-            metadata: coord.metadata.as_ref(),
-            offsets_log: log.as_ref(),
-            coordinator: &coord,
-        };
+        let (mut parked, mut rx) = parked_follower("m2");
+        let services = super::super::test_support::actor_services(&coord, log.as_ref());
         let before = Instant::now();
 
         check!(handle_actor_tick(&mut group, &mut parked, services).await);
@@ -662,12 +622,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         let mut parked = ParkedWaiters::default();
         parked.joiners.insert("m1".into(), tx);
-        let services = ActorServices {
-            config: &coord.config,
-            metadata: coord.metadata.as_ref(),
-            offsets_log: log.as_ref(),
-            coordinator: &coord,
-        };
+        let services = super::super::test_support::actor_services(&coord, log.as_ref());
 
         check!(handle_actor_tick(&mut group, &mut parked, services).await);
 
@@ -679,26 +634,24 @@ mod tests {
         check!(state.pending_members.is_empty());
     }
 
+    fn group_with_synced_follower() -> CoordinatorGroup {
+        let mut group = completing_classic_group(&["m1", "m2"]);
+        let state = group.as_classic_mut().unwrap();
+        state.arm_pending_sync(Instant::now());
+        state.remove_pending_sync_member("m2");
+        group
+    }
+
     /// Kafka's `expirePendingSync`: a leader that never sent `SyncGroup` is
     /// removed when the timer fires, and the followers waiting for it are
     /// answered `REBALANCE_IN_PROGRESS` as `prepareRebalance` does.
     #[tokio::test]
     async fn pending_sync_expiry_removes_the_silent_leader_and_releases_followers() {
         let (coord, log) = make_coordinator();
-        let mut group = completing_classic_group(&["m1", "m2"]);
-        let state = group.as_classic_mut().unwrap();
-        state.arm_pending_sync(Instant::now());
         // The follower synced and waits for the leader.
-        state.remove_pending_sync_member("m2");
-        let (tx, mut rx) = tokio::sync::oneshot::channel();
-        let mut parked = ParkedWaiters::default();
-        parked.followers.insert("m2".into(), tx);
-        let services = ActorServices {
-            config: &coord.config,
-            metadata: coord.metadata.as_ref(),
-            offsets_log: log.as_ref(),
-            coordinator: &coord,
-        };
+        let mut group = group_with_synced_follower();
+        let (mut parked, mut rx) = parked_follower("m2");
+        let services = super::super::test_support::actor_services(&coord, log.as_ref());
 
         check!(handle_classic_sync_expiry(&mut group, &mut parked, services).await);
 
@@ -718,13 +671,9 @@ mod tests {
     /// the pending-sync timer alone, although the leader's session is fine.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn actor_removes_a_member_that_never_syncs_after_the_rebalance_timeout() {
-        use crate::coordinator::unified::actor::test_support::rpc;
-
         let (coord, _log) = make_coordinator();
-        let mut group = completing_classic_group(&["m1", "m2"]);
+        let mut group = group_with_synced_follower();
         let state = group.as_classic_mut().unwrap();
-        state.arm_pending_sync(Instant::now());
-        state.remove_pending_sync_member("m2");
         state.sync_deadline = Some(Instant::now() + Duration::from_millis(50));
         coord.seed_classic("g", Box::new(group));
         let handle = coord.find("g").unwrap();

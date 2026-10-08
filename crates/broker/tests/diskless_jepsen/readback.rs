@@ -18,11 +18,12 @@ use std::{
 };
 
 use assert2::assert;
-use krabka_client_core::{Client, FetchMinBytes, IsolatedFetch};
+use krabka_client_core::{FetchMinBytes, IsolatedFetch};
 
 use crate::{
     TOPIC,
     history::{AckedRecord, ledger_values},
+    support::client::connect_owned,
 };
 
 /// The image the JVM console consumer runs from.
@@ -46,12 +47,7 @@ pub(crate) async fn assert_rust_readback(bootstrap: &str, ledger: &[AckedRecord]
 }
 
 async fn consume_ledger(bootstrap: &str, expected: usize) -> Vec<(i64, Vec<u8>)> {
-    let client = Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("diskless-jepsen-consumer")
-        .build()
-        .await
-        .expect("direct fetch client");
+    let client = connect_owned(bootstrap, "diskless-jepsen-consumer", "direct fetch client").await;
     let metadata = client.refresh_metadata().await.expect("fetch metadata");
     let topic = metadata
         .topics

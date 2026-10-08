@@ -640,16 +640,22 @@ mod tests {
         }
     }
 
+    macro_rules! committed_tiered_fixture {
+        (($handle:ident, $dir:ident, $remote_dir:ident, $broker:ident, $part:ident)) => {
+            let ($handle, $dir, $remote_dir) = tiered_broker().await;
+            let $broker = $handle.broker_arc_for_test();
+            let $part = tiered_partition(&$broker, $dir.path(), false).await;
+            commit_everything(&$part).await;
+        };
+    }
+
     #[tokio::test]
     async fn a_fetch_below_the_global_log_start_never_reaches_the_remote_tier() {
         use krabka_log::Offset;
 
         use crate::codes;
 
-        let (broker_handle, dir, _remote_dir) = tiered_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let part = tiered_partition(&broker, dir.path(), false).await;
-        commit_everything(&part).await;
+        committed_tiered_fixture!((broker_handle, dir, _remote_dir, broker, part));
 
         let out_of_range = || out_of_range_at(&part, 0);
         // The floor has not moved, so offset 0 is the remote tier's to serve.
@@ -711,10 +717,7 @@ mod tests {
 
         use crate::codes;
 
-        let (broker_handle, dir, _remote_dir) = tiered_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let part = tiered_partition(&broker, dir.path(), false).await;
-        commit_everything(&part).await;
+        committed_tiered_fixture!((broker_handle, dir, _remote_dir, broker, part));
 
         let follower_at = |fetch_offset| super::PendingRead {
             is_follower_fetch: true,

@@ -9,26 +9,17 @@
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
+use krabka_broker::{BootstrapMode, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
-    add_partitions_to_txn_response::{AddPartitionsToTxnResponse, AddPartitionsToTxnResult},
-    common::{
-        add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-        add_partitions_to_txn_response::{
-            add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
-            add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
-        },
-    },
-    end_txn_request::EndTxnRequest,
-    end_txn_response::EndTxnResponse,
-    find_coordinator_request::FindCoordinatorRequest,
-    init_producer_id_request::InitProducerIdRequest,
+    end_txn_response::EndTxnResponse, find_coordinator_request::FindCoordinatorRequest,
 };
 use tempfile::TempDir;
 
-use crate::txnver_harness::{NONE, admin_client, create_topic, downgrade_transaction_version};
+use crate::{
+    support::transactions::{end_transaction_request, init_producer_request},
+    txnver_harness::{NONE, create_topic, downgrade_transaction_version},
+};
 
 /// Re-open the broker on the SAME data dir. A populated dir replays the raft
 /// log and checkpoint instead of a re-bootstrap, so the restart uses
@@ -49,13 +40,7 @@ fn rejoin_config(log_dir: std::path::PathBuf) -> BrokerConfig {
     cfg
 }
 
-/// `InitProducerId` for `tid`. It retries while the coordinator is still
-/// loading, that is, on `COORDINATOR_NOT_AVAILABLE(15)` or
-/// `NOT_COORDINATOR(16)`. Returns the assigned
-/// `(producer_id, producer_epoch)`.
-async fn init_producer_id(client: &Client, tid: &str) -> (i64, i16) {
-    // FindCoordinator locates and triggers loading of the coordinator for tid;
-    // on a single-broker cluster the coordinator load can lag broker boot.
+async fn find_ready_coordinator(client: &Client, tid: &str) {
     let fc = client
         .send(FindCoordinatorRequest {
             key: tid.into(),
@@ -69,18 +54,22 @@ async fn init_producer_id(client: &Client, tid: &str) -> (i64, i16) {
         fc.error_code == 0 || fc.coordinators.iter().all(|c| c.error_code == 0),
         "FindCoordinator: {fc:?}"
     );
+}
+
+/// `InitProducerId` for `tid`. It retries while the coordinator is still
+/// loading, that is, on `COORDINATOR_NOT_AVAILABLE(15)` or
+/// `NOT_COORDINATOR(16)`. Returns the assigned
+/// `(producer_id, producer_epoch)`.
+async fn init_producer_id(client: &Client, tid: &str) -> (i64, i16) {
+    // FindCoordinator locates and triggers loading of the coordinator for tid;
+    // on a single-broker cluster the coordinator load can lag broker boot.
+    find_ready_coordinator(client, tid).await;
 
     let mut init = None;
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
         let resp = client
-            .send(InitProducerIdRequest {
-                transactional_id: Some(tid.into()),
-                transaction_timeout_ms: 60_000,
-                producer_id: -1,
-                producer_epoch: -1,
-                ..Default::default()
-            })
+            .send(init_producer_request(Some(tid.into()), 60_000, (-1, -1)))
             .await
             .expect("InitProducerId");
         if resp.error_code == 0 {
@@ -111,45 +100,17 @@ async fn add_partition_ongoing(
     topic: &str,
     partition: i32,
 ) {
-    let added_topic = AddPartitionsToTxnTopic {
-        name: topic.into(),
-        partitions: vec![partition],
-        ..Default::default()
-    };
+    let added_topic = crate::support::transaction_wire::transaction_topic(topic, vec![partition]);
     let add = client
-        .send(AddPartitionsToTxnRequest {
-            transactions: vec![AddPartitionsToTxnTransaction {
-                transactional_id: tid.into(),
-                producer_id: pid,
-                producer_epoch: epoch,
-                verify_only: false,
-                topics: vec![added_topic.clone()],
-                ..Default::default()
-            }],
-            v3_and_below_transactional_id: tid.into(),
-            v3_and_below_producer_id: pid,
-            v3_and_below_producer_epoch: epoch,
-            v3_and_below_topics: vec![added_topic],
-            ..Default::default()
-        })
+        .send(crate::support::transaction_wire::partitions_request(
+            tid,
+            (pid, epoch),
+            false,
+            vec![added_topic],
+        ))
         .await
         .expect("AddPartitionsToTxn add");
-    let expected = AddPartitionsToTxnResponse {
-        results_by_transaction: vec![AddPartitionsToTxnResult {
-            transactional_id: tid.into(),
-            topic_results: vec![AddPartitionsToTxnTopicResult {
-                name: topic.into(),
-                results_by_partition: vec![AddPartitionsToTxnPartitionResult {
-                    partition_index: partition,
-                    partition_error_code: NONE,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let expected = crate::txnver_harness::expected_partitions(tid, topic, &[(partition, NONE)]);
     assert!(
         add == expected,
         "adding ({topic},{partition}) returned an unexpected response: {add:?}"
@@ -164,31 +125,13 @@ async fn add_partition_ongoing(
 /// `__transaction_state` record. Returns the complete `EndTxn` response.
 async fn commit_via_end_txn(client: &Client, tid: &str, pid: i64, epoch: i16) -> EndTxnResponse {
     // FindCoordinator both locates and triggers loading of the coordinator.
-    let fc = client
-        .send(FindCoordinatorRequest {
-            key: tid.into(),
-            key_type: 1, // TRANSACTION
-            coordinator_keys: vec![tid.into()],
-            ..Default::default()
-        })
-        .await
-        .expect("FindCoordinator");
-    assert!(
-        fc.error_code == 0 || fc.coordinators.iter().all(|c| c.error_code == 0),
-        "FindCoordinator: {fc:?}"
-    );
+    find_ready_coordinator(client, tid).await;
 
     // Retry while the coordinator is still loading state from disk.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let resp = client
-            .send(EndTxnRequest {
-                transactional_id: tid.into(),
-                producer_id: pid,
-                producer_epoch: epoch,
-                committed: true,
-                ..Default::default()
-            })
+            .send(end_transaction_request(tid, (pid, epoch), true))
             .await
             .expect("EndTxn");
         // 15/16: coordinator still loading — keep retrying until the deadline.
@@ -225,11 +168,11 @@ async fn assert_ongoing_txn_survives_restart(case: &RecoveryCase) {
 
     let (pid, epoch);
     {
-        let broker = Broker::start(recovery_config(log_dir.clone()))
-            .await
-            .unwrap();
-        let bootstrap = broker.listen_addr().to_string();
-        let client = admin_client(&bootstrap).await;
+        let (broker, _bootstrap, client) = crate::support::client::start_client(
+            recovery_config(log_dir.clone()),
+            Some("krabka-txnv-test"),
+        )
+        .await;
         create_topic(&client, case.topic, 1).await;
         if let Some(level) = case.downgrade_to {
             downgrade_transaction_version(&client, level).await;
@@ -244,9 +187,9 @@ async fn assert_ongoing_txn_survives_restart(case: &RecoveryCase) {
 
     // Re-boot on the same dir: triggers TxnCoordinator::recover + decode.
     {
-        let broker = Broker::start(rejoin_config(log_dir)).await.unwrap();
-        let bootstrap = broker.listen_addr().to_string();
-        let client = admin_client(&bootstrap).await;
+        let (broker, _bootstrap, client) =
+            crate::support::client::start_client(rejoin_config(log_dir), Some("krabka-txnv-test"))
+                .await;
 
         let response = commit_via_end_txn(&client, case.tid, pid, epoch).await;
         let expected = EndTxnResponse {
@@ -286,6 +229,6 @@ async fn versioned_ongoing_transactions_survive_restart_and_decode_recovery() {
     ];
 
     for case in &cases {
-        assert_ongoing_txn_survives_restart(case).await;
+        Box::pin(assert_ongoing_txn_survives_restart(case)).await;
     }
 }

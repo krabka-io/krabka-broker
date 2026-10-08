@@ -5,14 +5,13 @@
 //! This is the leader-to-follower direction of the cross-implementation goal,
 //! and it needs no KIP-853 dynamic voters.
 
-use std::{process::Command, time::Duration};
+use std::time::Duration;
 
 use assert2::check;
-use tempfile::TempDir;
 use uuid::Uuid;
 
 use crate::{
-    static_quorum_harness::{KAFKA_IMAGE, docker_rm, kafka_cluster_id_string},
+    static_quorum_harness::{docker_rm, kafka_cluster_id_string},
     support,
 };
 
@@ -30,52 +29,18 @@ async fn static_mixed_jvm_krabka_quorum() {
     eprintln!("shared cluster_id uuid={cluster_id} kafka_str={cid_str}");
 
     // ── pre-bind 3 controller ports on the host ────────────────────────────
-    let endpoints = crate::static_quorum_harness::MixedQuorum::allocate().await;
-    let [p1, p2, p3] = endpoints.ports;
-    let ([c1, c2], [_dir1, _dir2]) = endpoints.start_pair(cluster_id, None).await;
+    let ([p1, p2, p3], [c1, c2], [_dir1, _dir2]) =
+        crate::static_quorum_harness::MixedQuorum::start(cluster_id, None).await;
 
     eprintln!("both Krabka controllers started (2/3 majority should self-elect)");
 
     // ── format + start the JVM controller (id 3) ───────────────────────────
     // The JVM's controller.quorum.voters lists addresses reachable FROM the
     // container: the Krabka voters at host.docker.internal, itself on localhost.
-    let props = format!(
-        "process.roles=controller\n\
-         node.id=3\n\
-         controller.quorum.voters=1@host.docker.internal:{p1},2@host.docker.internal:{p2},3@localhost:{p3}\n\
-         controller.listener.names=CONTROLLER\n\
-         listeners=CONTROLLER://0.0.0.0:{p3}\n\
-         listener.security.protocol.map=CONTROLLER:PLAINTEXT\n\
-         log.dirs=/tmp/kraft-controller-logs\n"
-    );
-    let propdir = TempDir::new().unwrap();
-    let proppath = propdir.path().join("controller.properties");
-    std::fs::write(&proppath, props).unwrap();
+    let props = crate::static_quorum_harness::jvm_controller_properties([p1, p2, p3], "");
+    let _propdir =
+        crate::static_quorum_harness::start_jvm_controller(CONTAINER, p3, &cid_str, &props);
 
-    let entry = format!(
-        "/opt/kafka/bin/kafka-storage.sh format -t {cid_str} --config /tmp/c.properties --ignore-formatted && \
-         exec /opt/kafka/bin/kafka-server-start.sh /tmp/c.properties"
-    );
-    let status = Command::new("docker")
-        .args([
-            "run",
-            "-d",
-            "--name",
-            CONTAINER,
-            "--add-host=host.docker.internal:host-gateway",
-            "-p",
-            &format!("{p3}:{p3}"),
-            "-v",
-            &format!("{}:/tmp/c.properties", proppath.display()),
-            "--entrypoint",
-            "bash",
-            KAFKA_IMAGE,
-            "-c",
-            &entry,
-        ])
-        .status()
-        .expect("docker run JVM controller");
-    assert2::assert!(status.success(), "docker run failed");
     eprintln!("JVM controller (id 3) container started");
 
     // ── observe for ~40s ────────────────────────────────────────────────────
@@ -116,27 +81,9 @@ async fn static_mixed_jvm_krabka_quorum() {
     }
 
     // Capture JVM logs regardless of outcome — they ARE the finding.
-    let logs = Command::new("docker")
-        .args(["logs", CONTAINER])
-        .output()
-        .expect("docker logs");
-    let log_text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&logs.stdout),
-        String::from_utf8_lossy(&logs.stderr)
-    );
-    let _ = std::fs::write("/tmp/jvm_spike.log", &log_text);
+    let log_text = support::save_jvm_logs(CONTAINER, "/tmp/jvm_spike.log");
     eprintln!("==== JVM controller logs (tail) ====");
-    for line in log_text
-        .lines()
-        .rev()
-        .take(40)
-        .collect::<Vec<_>>()
-        .iter()
-        .rev()
-    {
-        eprintln!("{line}");
-    }
+    support::print_log_tail(&log_text, 40);
 
     // Krabka-side observations.
     eprintln!(

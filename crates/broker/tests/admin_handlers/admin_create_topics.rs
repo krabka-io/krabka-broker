@@ -10,11 +10,11 @@
 
 use assert2::{assert, check};
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-    describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+    create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
+    describe_configs_request::DescribeConfigsRequest,
 };
 
-use crate::{RESOURCE_TYPE_TOPIC, admin_harness::build_client, support::start_n_node};
+use crate::{RESOURCE_TYPE_TOPIC, support::configs::describe_resource};
 
 /// `ConfigSource.DYNAMIC_TOPIC_CONFIG`, the source a value the create request
 /// carried reports.
@@ -27,22 +27,19 @@ type ConfigEntry = (String, Option<String>, i8, bool, bool);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_topics_returns_the_configs_describe_configs_reports() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (_broker, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (_cluster, client) = crate::support::start_n_node_client(1, "admin-handlers-test").await;
 
     let create = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: "t-kip525".into(),
-            num_partitions: 1,
-            replication_factor: 1,
-            configs: vec![CreatableTopicConfig {
+        topics: vec![crate::support::topics::creatable_topic_with_configs(
+            "t-kip525".into(),
+            1,
+            1,
+            vec![CreatableTopicConfig {
                 name: "retention.ms".into(),
                 value: Some("60000".into()),
                 ..Default::default()
             }],
-            ..Default::default()
-        }],
+        )],
         timeout_ms: 5_000,
         ..Default::default()
     };
@@ -89,12 +86,7 @@ async fn create_topics_returns_the_configs_describe_configs_reports() {
 
     let described = client
         .send(DescribeConfigsRequest {
-            resources: vec![DescribeConfigsResource {
-                resource_type: RESOURCE_TYPE_TOPIC,
-                resource_name: "t-kip525".into(),
-                configuration_keys: None,
-                ..Default::default()
-            }],
+            resources: vec![describe_resource(RESOURCE_TYPE_TOPIC, "t-kip525", None)],
             ..Default::default()
         })
         .await

@@ -234,23 +234,8 @@ mod tests {
 
     #[test]
     fn plaintext_passthrough_short_circuits() {
-        let cfg = BrokerRaftHandshake {
-            tls_acceptor: None,
-            plain_credentials: HashMap::new(),
-            enabled_sasl_mechanisms: vec![],
-            gssapi: None,
-            oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
-            oauthbearer_jwks_cache_generation: Arc::new(AtomicU64::new(0)),
-            oauthbearer_jwks_last_successful_fetch_ms: Arc::new(AtomicI64::new(0)),
-            protocol: ListenerProtocol::Plaintext,
-            controller: Arc::new(OnceCell::new()),
-            delegation_token_secret_key: None,
-            audit_log: Arc::new(OnceCell::new()),
-            sasl_max_receive_bytes: 4096,
-            failed_authentication_delay: std::time::Duration::ZERO,
-            authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
-            principal_mapper: crate::SslPrincipalMapper::default(),
-        };
+        let cfg =
+            test_support::handshake_config(ListenerProtocol::Plaintext, vec![], HashMap::new());
         // `upgrade(TcpStream)` requires a real TCP socket, so we
         // exercise the short-circuit predicates directly here. The full
         // upgrade-path is exercised end-to-end in integration tests.

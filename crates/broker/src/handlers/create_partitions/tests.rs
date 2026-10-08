@@ -10,8 +10,10 @@ use krabka_security::Principal;
 
 use super::*;
 use crate::{
+    broker::Broker,
     handlers::create_partitions::test_support::{
-        VERSION, assn, request, seed_controller_quota, seed_topic, topic_req,
+        VERSION, assn, expected_response, expected_result, request, seed_controller_quota,
+        seed_topic, topic_req,
     },
     test_support::{DenyAll, peer, principal},
 };
@@ -32,12 +34,19 @@ async fn drive(
         .expect("handle")
 }
 
+macro_rules! seeded_partition_topic {
+    (($handle:ident, $directory:ident, $broker:ident), $topic:expr, $partitions:expr, $replication:expr) => {
+        let ($handle, $directory) =
+            start_broker(std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_topic(&$handle, $topic, $partitions, $replication).await;
+        let $broker = $handle.broker_arc_for_test();
+    };
+}
+
 #[tokio::test]
 async fn handle_denies_topic_alter_for_each_topic() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("alice");
-    let peer = peer();
+    broker_fixture!((broker_handle, _dir, broker), deny_all);
+    request_identity!((p, peer), principal("alice"));
     let req = request(
         vec![topic_req("orders", 2, None), topic_req("payments", 2, None)],
         false,
@@ -45,35 +54,18 @@ async fn handle_denies_topic_alter_for_each_topic() {
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = CreatePartitionsResponse {
-        throttle_time_ms: 0,
-        results: vec![
-            CreatePartitionsTopicResult {
-                name: "orders".into(),
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                error_message: None,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
-            CreatePartitionsTopicResult {
-                name: "payments".into(),
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                error_message: None,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
-        ],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![
+        expected_result("orders", codes::TOPIC_AUTHORIZATION_FAILED, None),
+        expected_result("payments", codes::TOPIC_AUTHORIZATION_FAILED, None),
+    ]);
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
 
 #[tokio::test]
 async fn handle_reports_unknown_topic_and_rejects_same_partition_count() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    seed_topic(&broker_handle, "stable", 2, 1).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    seeded_partition_topic!((broker_handle, _dir, broker), "stable", 2, 1);
+    request_identity!((p, peer), principal("admin"));
     let req = request(
         vec![topic_req("missing", 3, None), topic_req("stable", 2, None)],
         false,
@@ -81,24 +73,14 @@ async fn handle_reports_unknown_topic_and_rejects_same_partition_count() {
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = CreatePartitionsResponse {
-        throttle_time_ms: 0,
-        results: vec![
-            CreatePartitionsTopicResult {
-                name: "missing".into(),
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                error_message: None,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
-            CreatePartitionsTopicResult {
-                name: "stable".into(),
-                error_code: codes::INVALID_PARTITIONS,
-                error_message: Some("Topic already has 2 partition(s).".into()),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
-        ],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![
+        expected_result("missing", codes::UNKNOWN_TOPIC_OR_PARTITION, None),
+        expected_result(
+            "stable",
+            codes::INVALID_PARTITIONS,
+            Some("Topic already has 2 partition(s).".into()),
+        ),
+    ]);
     assert!(resp == expected);
     assert!(
         broker_handle
@@ -112,25 +94,13 @@ async fn handle_reports_unknown_topic_and_rejects_same_partition_count() {
 
 #[tokio::test]
 async fn validate_only_reports_success_without_adding_partitions() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    seed_topic(&broker_handle, "dry-run", 1, 1).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    seeded_partition_topic!((broker_handle, _dir, broker), "dry-run", 1, 1);
+    request_identity!((p, peer), principal("admin"));
     let req = request(vec![topic_req("dry-run", 3, None)], true);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = CreatePartitionsResponse {
-        throttle_time_ms: 0,
-        results: vec![CreatePartitionsTopicResult {
-            name: "dry-run".into(),
-            error_code: codes::NONE,
-            error_message: None,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![expected_result("dry-run", codes::NONE, None)]);
     assert!(resp == expected);
     assert!(
         broker_handle
@@ -144,11 +114,8 @@ async fn validate_only_reports_success_without_adding_partitions() {
 
 #[tokio::test]
 async fn handle_adds_new_partitions_and_preserves_response_identity() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    seed_topic(&broker_handle, "grow", 1, 1).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    seeded_partition_topic!((broker_handle, _dir, broker), "grow", 1, 1);
+    request_identity!((p, peer), principal("admin"));
     let req = request(
         vec![topic_req("grow", 3, Some(vec![assn(&[1]), assn(&[1])]))],
         false,
@@ -156,16 +123,7 @@ async fn handle_adds_new_partitions_and_preserves_response_identity() {
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = CreatePartitionsResponse {
-        throttle_time_ms: 0,
-        results: vec![CreatePartitionsTopicResult {
-            name: "grow".into(),
-            error_code: codes::NONE,
-            error_message: None,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![expected_result("grow", codes::NONE, None)]);
     assert!(resp == expected);
     assert!(
         broker_handle
@@ -223,22 +181,12 @@ async fn strict_create_partitions_rejects_after_quota_exhaustion() {
     seed_topic(&broker_handle, "metered", 2, 1).await;
     seed_controller_quota(&broker_handle, 2.0).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    request_identity!((p, peer), principal("admin"));
     let req = request(vec![topic_req("metered", 5, None)], false);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = CreatePartitionsResponse {
-        throttle_time_ms: 0,
-        results: vec![CreatePartitionsTopicResult {
-            name: "metered".into(),
-            error_code: codes::NONE,
-            error_message: None,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![expected_result("metered", codes::NONE, None)]);
     assert!(resp == expected);
 
     let rejected = drive(
@@ -314,14 +262,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
     /// One row: the fenced brokers, the witness brokers, the replica list of
     /// each new partition, and the expected error code, error message and
     /// `(leader, isr)` per new partition.
-    type Row = (
-        &'static [u64],
-        &'static [u64],
-        &'static [&'static [i32]],
-        i16,
-        Option<&'static str>,
-        Vec<(krabka_raft::NodeId, Vec<krabka_raft::NodeId>)>,
-    );
+    use crate::handlers::test_support::ManualAssignmentRow as Row;
     let n = krabka_raft::NodeId;
     let rows: [Row; 6] = [
         (
@@ -406,16 +347,11 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
 
         let resp = drive(&broker, &req, &principal("admin"), &peer()).await;
 
-        let expected = CreatePartitionsResponse {
-            throttle_time_ms: 0,
-            results: vec![CreatePartitionsTopicResult {
-                name: "grow".into(),
-                error_code,
-                error_message: error_message.map(str::to_owned),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        let expected = expected_response(vec![expected_result(
+            "grow",
+            error_code,
+            error_message.map(str::to_owned),
+        )]);
         check!(resp == expected, "fenced {fenced:?}, assignment {lists:?}");
 
         let image = broker_handle.controller_image_for_test();
@@ -511,16 +447,7 @@ async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_
             Ok(_) => (codes::NONE, None),
             Err(message) => (codes::INVALID_REPLICATION_FACTOR, Some(message.to_owned())),
         };
-        let expected = CreatePartitionsResponse {
-            throttle_time_ms: 0,
-            results: vec![CreatePartitionsTopicResult {
-                name: "grow".into(),
-                error_code,
-                error_message,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        let expected = expected_response(vec![expected_result("grow", error_code, error_message)]);
         check!(resp == expected, "{label}");
         let Ok(fenced_replicas) = outcome else {
             check!(added.is_empty(), "{label}");
@@ -530,15 +457,8 @@ async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_
         check!(added.len() == 4, "{label}");
         for record in &added {
             let replicas = &record.replicas;
-            let fenced_flags = replicas
-                .iter()
-                .map(|node| fenced.contains(&node.0))
-                .collect::<Vec<_>>();
-            let isr = replicas
-                .iter()
-                .copied()
-                .filter(|node| !fenced.contains(&node.0))
-                .collect::<Vec<_>>();
+            let (fenced_flags, isr) =
+                crate::handlers::test_support::replica_availability(replicas, fenced);
             check!(
                 replicas.len() == 2
                     && fenced_flags.iter().filter(|flag| **flag).count() == fenced_replicas
@@ -573,12 +493,7 @@ async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_
 #[tokio::test]
 async fn rows_follow_kafkas_duplicate_and_count_checks() {
     fn row(name: &str, error_code: i16, message: Option<&str>) -> CreatePartitionsTopicResult {
-        CreatePartitionsTopicResult {
-            name: name.into(),
-            error_code,
-            error_message: message.map(str::to_owned),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }
+        expected_result(name, error_code, message.map(str::to_owned))
     }
     let duplicate = || row("t", codes::INVALID_REQUEST, Some("Duplicate topic name."));
     let cases = [
@@ -645,8 +560,7 @@ async fn rows_follow_kafkas_duplicate_and_count_checks() {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic(&broker_handle, "t", 2, 1).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
+        request_identity!((p, peer), principal("admin"));
 
         let resp = drive(&broker, &request(topics, validate_only), &p, &peer).await;
         let partitions = broker_handle
@@ -654,15 +568,7 @@ async fn rows_follow_kafkas_duplicate_and_count_checks() {
             .partitions_of("t")
             .count();
         actual.push((label, resp, partitions));
-        expected.push((
-            label,
-            CreatePartitionsResponse {
-                throttle_time_ms: 0,
-                results,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
-            2,
-        ));
+        expected.push((label, expected_response(results), 2));
         broker_handle.shutdown().await;
     }
     assert!(actual == expected);

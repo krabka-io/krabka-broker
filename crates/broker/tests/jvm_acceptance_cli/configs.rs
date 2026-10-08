@@ -16,29 +16,9 @@ use crate::jvm_acceptance::{
 async fn kafka_configs_alter_round_trip() {
     const TOPIC: &str = "krabka-cfg-alter-itest";
 
-    let (_broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
+    let (_broker, _dir) = crate::jvm_acceptance::start_console_broker(TOPIC, 1).await;
 
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        1,
-        1,
-    );
-
-    docker_run_kafka_tool(&[
-        "kafka-configs",
-        "--alter",
-        "--entity-type",
-        "topics",
-        "--entity-name",
-        TOPIC,
-        "--add-config",
-        "retention.ms=60000",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+    crate::jvm_acceptance::alter_console_topic_config(TOPIC, "retention.ms=60000");
 
     let out = docker_run_kafka_tool(&[
         "kafka-configs",
@@ -71,28 +51,8 @@ async fn kafka_configs_alter_round_trip() {
 async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {
     const TOPIC: &str = "krabka-cfg-describe-all-itest";
 
-    let (_broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        1,
-        1,
-    );
-    docker_run_kafka_tool(&[
-        "kafka-configs",
-        "--alter",
-        "--entity-type",
-        "topics",
-        "--entity-name",
-        TOPIC,
-        "--add-config",
-        "retention.ms=60000",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+    let (_broker, _dir) = crate::jvm_acceptance::start_console_broker(TOPIC, 1).await;
+    crate::jvm_acceptance::alter_console_topic_config(TOPIC, "retention.ms=60000");
     // The cluster-wide default the topic will inherit.
     docker_run_kafka_tool(&[
         "kafka-configs",
@@ -174,16 +134,7 @@ async fn kafka_configs_alter_round_trips_every_registered_topic_key() {
         ("message.timestamp.before.max.ms", "3600000"),
     ];
 
-    let (_broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        1,
-        1,
-    );
+    let (_broker, _dir) = crate::jvm_acceptance::start_console_broker(TOPIC, 1).await;
 
     let added = SETTINGS
         .iter()
@@ -368,10 +319,7 @@ async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
 // `apache/kafka:4.3.1` image, against krabka and against a stock broker of that
 // release, and compares the parsed answer.
 
-use crate::{
-    config_output::{Configs, parse_describe, quota_entities},
-    oracle::{Oracle, Side},
-};
+use crate::config_output::{Configs, parse_describe, quota_entities};
 
 /// One entity type, addressed and altered the way an operator addresses it.
 ///
@@ -461,17 +409,8 @@ async fn kafka_configs_entity_types_round_trip_as_apache_kafka_does() {
     // Kafka first: a key one release calls a group config and the other does
     // not fails here, on the stock broker, rather than being read as a krabka
     // bug.
-    let oracle = tokio::task::spawn_blocking(|| Oracle::start("configs-entities"))
-        .await
-        .expect("oracle boot");
-    let oracle_side = Side::Oracle(&oracle);
-
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-    let advertised = broker0_advertised().to_owned();
-    let krabka_side = Side::Krabka {
-        bootstrap: &advertised,
-    };
+    let comparison = crate::oracle::OracleComparison::start("configs-entities").await;
+    let [oracle_side, krabka_side] = comparison.sides();
 
     for case in ENTITY_CASES {
         let mut answers: Vec<Configs> = Vec::new();
@@ -519,5 +458,5 @@ async fn kafka_configs_entity_types_round_trip_as_apache_kafka_does() {
         );
     }
 
-    broker.shutdown().await;
+    comparison.broker.shutdown().await;
 }

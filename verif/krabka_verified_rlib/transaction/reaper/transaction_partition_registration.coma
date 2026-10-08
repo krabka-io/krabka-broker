@@ -1,13 +1,14 @@
-(* #"/workspace/crates/verified/src/transaction/reaper.rs" 208 0 210 36 *)
+(* #"/workspace/crates/verified/src/transaction/reaper.rs" 190 0 192 36 *)
 
-let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 149 10 150 38
-let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 151 10 155 66
-let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 156 10 161 45
-let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 162 10 168 56
-let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 169 10 176 59
-let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 177 10 185 50
-let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 186 10 196 51
-let%span sreaper'6 = "/workspace/crates/verified/src/transaction/reaper.rs" 197 10 206 86
+let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 151 10 152 38
+let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 153 10 157 66
+let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 158 10 163 45
+let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 164 10 166 56
+let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 167 10 170 59
+let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 171 10 175 50
+let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 176 10 182 51
+let%span sreaper'6 = "/workspace/crates/verified/src/transaction/reaper.rs" 183 10 188 86
+let%span sreaper'7 = "/workspace/crates/verified/src/transaction/reaper.rs" 141 16 145 41
 
 use creusot.prelude.Any
 
@@ -42,11 +43,17 @@ type t_TransactionRegistrationDecision =
   | PersistRetry
   | PersistRegistration
 
+predicate registration_generation_ready [#"/workspace/crates/verified/src/transaction/reaper.rs" 140 0 140 77] (facts: t_TransactionRegistrationFacts) =
+  [%#sreaper'7] facts.ownership.is_coordinator
+  /\ facts.ownership.producer_id_valid
+  /\ facts.ownership.entry_exists
+  /\ facts.identity.matching.transactional_id_matches /\ not facts.identity.pending_transition
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_partition_registration [#"/workspace/crates/verified/src/transaction/reaper.rs" 208 0 210 36]
+let transaction_partition_registration [#"/workspace/crates/verified/src/transaction/reaper.rs" 190 0 192 36]
   (facts: t_TransactionRegistrationFacts) (return (x: t_TransactionRegistrationDecision)) = (! bb0
   [ bb0 = any
     [ br0 -> {facts.ownership.is_coordinator = false} (! bb1) | br1 -> {facts.ownership.is_coordinator} (! bb2) ]
@@ -97,42 +104,22 @@ let transaction_partition_registration [#"/workspace/crates/verified/src/transac
       /\ facts.ownership.entry_exists
       /\ facts.identity.matching.transactional_id_matches /\ facts.identity.pending_transition))
     /\ ([@stop_split] [@expl:transaction_partition_registration ensures #3] [%#sreaper'2] (result = RejectProducerId)
-      = (facts.ownership.is_coordinator
-      /\ facts.ownership.producer_id_valid
-      /\ facts.ownership.entry_exists
-      /\ facts.identity.matching.transactional_id_matches
-      /\ not facts.identity.pending_transition /\ not facts.identity.matching.producer_id_matches))
+      = (registration_generation_ready facts /\ not facts.identity.matching.producer_id_matches))
     /\ ([@stop_split] [@expl:transaction_partition_registration ensures #4] [%#sreaper'3] (result = RejectProducerEpoch)
-      = (facts.ownership.is_coordinator
-      /\ facts.ownership.producer_id_valid
-      /\ facts.ownership.entry_exists
-      /\ facts.identity.matching.transactional_id_matches
-      /\ not facts.identity.pending_transition
+      = (registration_generation_ready facts
       /\ facts.identity.matching.producer_id_matches /\ not facts.identity.matching.producer_epoch_matches))
     /\ ([@stop_split] [@expl:transaction_partition_registration ensures #5] [%#sreaper'4] (result = RejectState)
-      = (facts.ownership.is_coordinator
-      /\ facts.ownership.producer_id_valid
-      /\ facts.ownership.entry_exists
-      /\ facts.identity.matching.transactional_id_matches
-      /\ not facts.identity.pending_transition
+      = (registration_generation_ready facts
       /\ facts.identity.matching.producer_id_matches
       /\ facts.identity.matching.producer_epoch_matches /\ not facts.state.state_allows_registration))
     /\ ([@stop_split] [@expl:transaction_partition_registration ensures #6] [%#sreaper'5] (result = PersistRetry)
-      = (facts.ownership.is_coordinator
-      /\ facts.ownership.producer_id_valid
-      /\ facts.ownership.entry_exists
-      /\ facts.identity.matching.transactional_id_matches
-      /\ not facts.identity.pending_transition
+      = (registration_generation_ready facts
       /\ facts.identity.matching.producer_id_matches
       /\ facts.identity.matching.producer_epoch_matches
       /\ facts.state.state_allows_registration
       /\ facts.state.state_is_ongoing /\ facts.state.exact_partitions_registered))
     /\ ([@stop_split] [@expl:transaction_partition_registration ensures #7] [%#sreaper'6] (result = PersistRegistration)
-    = (facts.ownership.is_coordinator
-    /\ facts.ownership.producer_id_valid
-    /\ facts.ownership.entry_exists
-    /\ facts.identity.matching.transactional_id_matches
-    /\ not facts.identity.pending_transition
+    = (registration_generation_ready facts
     /\ facts.identity.matching.producer_id_matches
     /\ facts.identity.matching.producer_epoch_matches
     /\ facts.state.state_allows_registration

@@ -68,7 +68,7 @@ pub(crate) fn down_convert_payload_for_fetch(
     payload: &RecordsPayload,
     request_version: i16,
 ) -> Result<Option<RecordsPayload>, i16> {
-    let batches: Cow<'_, [RecordBatch]> = match payload {
+    let batches: Cow<'_, [RecordBatch]> = krabka_macros::records_payload_match! { match payload {
         RecordsPayload::V2(b) => Cow::Borrowed(b),
         RecordsPayload::Raw(bytes) => match RecordsPayload::from_bytes(bytes.clone()) {
             Ok(RecordsPayload::V2(b)) => Cow::Owned(b),
@@ -77,17 +77,8 @@ pub(crate) fn down_convert_payload_for_fetch(
         RecordsPayload::Legacy(_) => return Ok(Some(payload.clone())),
         // Unreachable: the zero-copy `FileRegions` payload is only emitted for
         // Fetch v4+, which never down-converts (down-conversion is a v0–v3 path).
-        #[cfg(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "tvos",
-            target_os = "watchos",
-            target_os = "freebsd",
-            target_os = "dragonfly",
-        ))]
         RecordsPayload::FileRegions(_) => return Err(crate::codes::CORRUPT_MESSAGE),
-    };
+    } };
 
     let mut out = BytesMut::new();
     for batch in batches.iter() {
@@ -139,6 +130,19 @@ mod tests {
     }
 
     /// Version 4 and above returns the V2 batch unchanged.
+    /// Retain the encoded payload and decoder cursor in the original test scope.
+    macro_rules! legacy_records {
+        (($result:ident, $payload:ident, $bytes:ident, $cursor:ident, $records:ident), $batch:expr, $version:expr) => {
+            let $result = down_convert_for_fetch($batch, $version).unwrap();
+            let $payload = $result.expect("should have Some payload");
+            let RecordsPayload::Legacy($bytes) = $payload else {
+                panic!("expected Legacy");
+            };
+            let mut $cursor: &[u8] = &$bytes;
+            let $records = decode_message_set(&mut $cursor, $bytes.len()).unwrap();
+        };
+    }
+
     #[test]
     fn version_gte_4_returns_v2_unchanged() {
         let batch = make_batch(CompressionType::None, vec![sample_record("k", "v")]);
@@ -206,13 +210,7 @@ mod tests {
         use krabka_records_legacy::decode_message_set;
 
         let batch = make_batch(CompressionType::None, vec![sample_record("hello", "world")]);
-        let result = down_convert_for_fetch(&batch, 3).unwrap();
-        let payload = result.expect("should have Some payload");
-        let RecordsPayload::Legacy(bytes) = payload else {
-            panic!("expected Legacy");
-        };
-        let mut cur: &[u8] = &bytes;
-        let recs = decode_message_set(&mut cur, bytes.len()).unwrap();
+        legacy_records!((result, payload, bytes, cur, recs), &batch, 3);
         assert!(recs.len() == 1);
         check!(recs[0].key.as_deref() == Some(b"hello".as_ref()));
         check!(recs[0].value.as_deref() == Some(b"world".as_ref()));
@@ -226,13 +224,7 @@ mod tests {
         let mut batch = make_batch(CompressionType::None, vec![sample_record("k", "v")]);
         batch.base_timestamp = 1_700_000_000;
         batch.records[0].timestamp_delta = 500;
-        let result = down_convert_for_fetch(&batch, 0).unwrap();
-        let payload = result.expect("should have Some payload");
-        let RecordsPayload::Legacy(bytes) = payload else {
-            panic!("expected Legacy");
-        };
-        let mut cur: &[u8] = &bytes;
-        let recs = decode_message_set(&mut cur, bytes.len()).unwrap();
+        legacy_records!((result, payload, bytes, cur, recs), &batch, 0);
         // v0 has no timestamps; all timestamps are None
         assert!(recs[0].timestamp == None, "v0 should have no timestamps");
     }

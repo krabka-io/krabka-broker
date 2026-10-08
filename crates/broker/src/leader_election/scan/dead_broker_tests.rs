@@ -13,8 +13,9 @@ use crate::{
         UNCLEAN_RECOVERY_STRATEGY,
     },
     leader_election::test_support::{
-        elected_partition, img_with_partition, mark_witnesses_in_image, one_partition_change,
-        set_cluster_default, set_topic_config, set_topic_configs,
+        elected_partition, expected_clean_election, expected_partition, failover,
+        failover_with_alive, img_with_partition, liveness_with_alive, mark_witnesses_in_image,
+        one_partition_change, set_cluster_default, set_topic_config, set_topic_configs,
     },
 };
 
@@ -22,19 +23,11 @@ use crate::{
 async fn failover_picks_alive_isr_member_when_available() {
     // Leader 1 dies, ISR {1, 2, 3}, both 2 and 3 alive — pick 2.
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
     // leader_epoch and partition_epoch must both bump on election.
-    let expected =
-        crate::leader_election::test_support::expected_clean_election(2, &[2, 3], vec![]);
+    let expected = expected_clean_election(2, &[2, 3], vec![]);
     assert!(*pr == expected);
 }
 
@@ -49,13 +42,7 @@ async fn failover_marks_exhausted_metadata_epochs_unavailable() {
         let liveness = ControllerLivenessState::new(krabka_units::secs(10));
         liveness.record_heartbeat(2).await;
 
-        let plan = compute_failover_changes(
-            &image,
-            NodeId(1),
-            &liveness,
-            &crate::metrics::BrokerMetrics::new(),
-        )
-        .await;
+        let plan = failover(&image, NodeId(1), &liveness).await;
 
         assert!(plan.changes.is_empty());
         assert!(plan.unavailable == vec![("t".to_owned(), 0)]);
@@ -67,15 +54,7 @@ async fn failover_processes_dead_replica_even_when_not_in_isr() {
     // Synthetic but valid during ISR churn: dead broker is the current
     // leader/replica, while the ISR already contains only surviving peers.
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[2, 3]);
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
 
     let pr = one_partition_change(&plan.changes);
     assert!(pr.leader == 2);
@@ -88,15 +67,7 @@ async fn failover_ignores_partition_when_dead_broker_is_unrelated() {
     // Broker 9 is neither a replica nor an ISR member. Even if some other
     // ISR member is dead, this scan must not rewrite the partition.
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = crate::leader_election::test_support::liveness_with_alive(&[1u64, 3]).await;
-
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(9),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(9), &[1u64, 3]).await;
 
     assert!(plan.changes.is_empty());
     assert!(plan.recoveries.is_empty());
@@ -108,14 +79,7 @@ async fn failover_leaves_partition_unavailable_when_unclean_disabled() {
     // `unclean.leader.election.enable=false` (the default) the
     // controller must not elect — partition stays unavailable.
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(
         plan.changes.is_empty(),
         "default-off must not emit any change, got {:?}",
@@ -131,14 +95,14 @@ async fn failover_elects_unclean_when_topic_opts_in() {
     // (broker 2) as leader with singleton ISR.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
     set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
+    let l = liveness_with_alive(&[2u64, 3]).await;
     let metrics = crate::metrics::BrokerMetrics::new();
     let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
     // Must elect the first alive replica (broker 2) with a singleton
     // ISR (KIP-841) and a bumped leader_epoch.
-    let expected = crate::leader_election::test_support::expected_clean_election(2, &[2], vec![]);
+    let expected = expected_clean_election(2, &[2], vec![]);
     assert!(*pr == expected);
     // Each unclean election bumps the counter exactly once.
     assert!(metrics.unclean_leader_elections_total.get() == 1);
@@ -150,7 +114,7 @@ async fn failover_clean_does_not_bump_unclean_counter() {
     // bump the unclean-election counter — the metric is reserved
     // for the KIP-841 data-loss footgun path.
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
+    let l = liveness_with_alive(&[2u64, 3]).await;
     let metrics = crate::metrics::BrokerMetrics::new();
     let _ = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
     assert!(metrics.unclean_leader_elections_total.get() == 0);
@@ -163,13 +127,7 @@ async fn failover_unclean_skips_when_no_alive_replica() {
     set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     // No heartbeats — nobody alive.
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover(&img, /*dead=*/ NodeId(1), &l).await;
     assert!(
         plan.changes.is_empty(),
         "no alive replica → no election, got {:?}",
@@ -183,14 +141,7 @@ async fn failover_unclean_false_string_keeps_default_safe_behavior() {
     // Explicit `false` must behave the same as unset.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
     set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "false");
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(
         plan.changes.is_empty(),
         "explicit `false` keeps safe default"
@@ -207,13 +158,7 @@ async fn failover_unclean_does_not_pick_dead_broker_itself() {
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     // Only broker 3 alive — broker 2 also dead.
     l.record_heartbeat(3).await;
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover(&img, /*dead=*/ NodeId(1), &l).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
     assert!(pr.leader == 3);
@@ -227,14 +172,7 @@ async fn failover_unclean_does_not_apply_when_isr_still_has_alive_member() {
     // fires when alive_isr is empty.)
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2]);
     set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
     assert!(pr.leader == 2);
@@ -250,30 +188,12 @@ async fn failover_shrinks_isr_for_partitions_where_dead_is_non_leader() {
     // dead member must be dropped from ISR without bumping the
     // leader_epoch (the leader isn't changing).
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = crate::leader_election::test_support::liveness_with_alive(&[1u64, 3]).await;
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(2),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(2), &[1u64, 3]).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
     // Leader unchanged; a non-leader-change must NOT bump leader_epoch
     // (stays 5) but does bump partition_epoch.
-    let expected = PartitionRecord {
-        topic: "t".into(),
-        partition: 0,
-        leader: NodeId(1),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(1), NodeId(3)],
-        leader_epoch: LeaderEpoch(5),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    };
+    let expected = expected_partition("t", 1, &[1, 3], LeaderEpoch(5), vec![]);
     assert!(*pr == expected);
 }
 
@@ -285,14 +205,7 @@ async fn failover_balanced_strategy_requests_recovery_not_immediate_change() {
     // partition to the URM via `recoveries`.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
     set_topic_config(&mut img, "t", UNCLEAN_RECOVERY_STRATEGY, "Balanced");
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(
         plan.changes.is_empty(),
         "Balanced strategy must defer to the URM, not elect immediately, got {:?}",
@@ -305,10 +218,7 @@ async fn failover_balanced_strategy_requests_recovery_not_immediate_change() {
 async fn failover_uses_cluster_default_recovery_settings() {
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
     set_cluster_default(&mut img, UNCLEAN_RECOVERY_STRATEGY, "Balanced");
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-
-    let plan =
-        compute_failover_changes(&img, NodeId(1), &l, &crate::metrics::BrokerMetrics::new()).await;
+    let plan = failover_with_alive(&img, NodeId(1), &[2u64, 3]).await;
 
     assert!(plan.changes.is_empty());
     assert!(plan.recoveries == vec![("t".to_string(), 0, RecoveryStrategy::Balanced)]);
@@ -320,10 +230,7 @@ async fn topic_none_overrides_cluster_strategy_and_uses_cluster_legacy_flag() {
     set_cluster_default(&mut img, UNCLEAN_RECOVERY_STRATEGY, "Balanced");
     set_cluster_default(&mut img, UNCLEAN_LEADER_ELECTION_ENABLE, "true");
     set_topic_config(&mut img, "t", UNCLEAN_RECOVERY_STRATEGY, "None");
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-
-    let plan =
-        compute_failover_changes(&img, NodeId(1), &l, &crate::metrics::BrokerMetrics::new()).await;
+    let plan = failover_with_alive(&img, NodeId(1), &[2u64, 3]).await;
 
     assert!(plan.recoveries.is_empty());
     let change = one_partition_change(&plan.changes);
@@ -338,14 +245,7 @@ async fn failover_strategy_none_still_uses_legacy_enable_flag() {
     // the KIP-841 behavior: blind pick of the first alive replica.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
     set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(
         plan.recoveries.is_empty(),
         "strategy None must not enqueue an offset-aware recovery",
@@ -362,18 +262,10 @@ async fn failover_scan_reads_the_witness_role_out_of_the_image() {
     // publishes it at registration.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
     mark_witnesses_in_image(&mut img, &[2]);
-    let l = crate::leader_election::test_support::liveness_with_alive(&[2u64, 3]).await;
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(1),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
-    let expected =
-        crate::leader_election::test_support::expected_clean_election(3, &[2, 3], vec![]);
+    let expected = expected_clean_election(3, &[2, 3], vec![]);
     assert!(*pr == expected);
 }
 
@@ -571,13 +463,7 @@ async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_kno
         expected_eligible.push(1);
         expected_eligible.sort_unstable();
 
-        let plan = compute_failover_changes(
-            &img,
-            /*dead=*/ NodeId(1),
-            &l,
-            &crate::metrics::BrokerMetrics::new(),
-        )
-        .await;
+        let plan = failover(&img, /*dead=*/ NodeId(1), &l).await;
 
         assert!(
             plan.changes
@@ -605,9 +491,7 @@ async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_kno
         for record in &plan.changes {
             img.apply(record);
         }
-        let again =
-            compute_failover_changes(&img, NodeId(1), &l, &crate::metrics::BrokerMetrics::new())
-                .await;
+        let again = failover(&img, NodeId(1), &l).await;
         assert!(again.changes.is_empty(), "{label}: {:?}", again.changes);
         assert!(
             crate::elr::state::is_leaderless(&img, img.partition("t", 0).expect("partition")),
@@ -624,15 +508,7 @@ async fn a_failover_that_keeps_a_leader_leaves_the_last_known_elr_empty() {
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
     crate::test_support::finalize_elr_version(&mut img);
     set_topic_config(&mut img, "t", MIN_INSYNC_REPLICAS, "3");
-    let l = crate::leader_election::test_support::liveness_with_alive(&[1u64, 2]).await;
-
-    let plan = compute_failover_changes(
-        &img,
-        /*dead=*/ NodeId(3),
-        &l,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await;
+    let plan = failover_with_alive(&img, /*dead=*/ NodeId(3), &[1u64, 2]).await;
 
     let [MetadataRecord::V1PartitionUpdate(update)] = plan.changes.as_slice() else {
         panic!("expected one partition update, got {:?}", plan.changes)

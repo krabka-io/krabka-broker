@@ -13,7 +13,7 @@ use crate::{
 /// These observed bytes and the completion flag must faithfully describe the
 /// fsynced/checkpointed replica. This does not establish actual I/O completion.
 #[requires(reference_valid(reference.0@, reference.1@, reference.2@))]
-#[ensures((match result { Some(_) => true, None => false }) ==
+#[ensures((result != None) ==
     copy_admitted(voters@, claimed, local, leader_epoch, reference.0@, *observation))]
 #[ensures(match result {
     None => true,

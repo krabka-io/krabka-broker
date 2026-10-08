@@ -17,7 +17,9 @@ use crate::coordinator::unified::{
     GroupCoordinator,
     actor::{
         GroupActorHandle, GroupActorMessage,
-        test_support::{decode_assignment, rpc, seed_and_upgrade},
+        test_support::{
+            decode_assignment, rpc, rpc::consumer_request_as_client as heartbeat, seed_and_upgrade,
+        },
     },
     config::{ConsumerGroupMigrationPolicy, NextGenConfig},
     offsets_log::fake::InMemoryOffsetsLog,
@@ -26,25 +28,6 @@ use crate::coordinator::unified::{
     streams::config::StreamsGroupConfig,
     test_support::{SwitchableMetadata, make_coord_with_metadata, proto_uuid, snapshot_of},
 };
-
-async fn heartbeat(
-    handle: &GroupActorHandle,
-    request: ConsumerGroupHeartbeatRequest,
-) -> ConsumerGroupHeartbeatResponse {
-    let (reply, response) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request,
-            client_id: "client".into(),
-            client_host: "host".into(),
-            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-            reply,
-        })
-        .await
-        .unwrap();
-    response.await.unwrap()
-}
 
 async fn metadata_update(handle: &GroupActorHandle, topics: &[&str]) {
     handle
@@ -258,12 +241,7 @@ async fn a_loaded_group_refreshes_its_metadata_at_the_first_heartbeat() {
         handle.tx.send(GroupActorMessage::Seed(seed)).await.unwrap();
         // The actor reads the metadata when it applies the seed, so wait for
         // that before the metadata changes.
-        let (reply, described) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Describe { reply })
-            .await
-            .unwrap();
+        let described = rpc::begin(&handle, |reply| GroupActorMessage::Describe { reply }).await;
         described.await.unwrap();
         if let Some(after) = after_load {
             metadata.set(after);

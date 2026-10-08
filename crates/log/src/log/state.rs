@@ -23,6 +23,17 @@ use crate::{
 };
 
 impl Log {
+    /// Empty the volatile state before a hard reset or a durable producer-state reload.
+    pub(super) fn clear_producer_and_transaction_state(&mut self) {
+        self.pending.clear();
+        self.verification_states.clear();
+        self.unreplicated.clear();
+        self.pending_stamp_ranges.clear();
+        self.coordinator_epochs.clear();
+        self.producer_state.clear();
+        self.earlier_batches.clear();
+    }
+
     /// Directory this log was opened against. The broker's intra-broker
     /// log-dir reassignment (KIP-113) reads this to find the current owning
     /// `log.dir` of a partition. The broker does not have to repeat the
@@ -227,13 +238,7 @@ impl Log {
         new_active.set_io(self.io.clone());
         self.active_txn_index = TxnIndex::open(new_active.txn_index_path())?;
         let stamp_index_path = new_active.stamp_index_path();
-        self.pending.clear(); // reset_to is a hard reset (after divergence)
-        self.verification_states.clear();
-        self.unreplicated.clear();
-        self.pending_stamp_ranges.clear();
-        self.coordinator_epochs.clear();
-        self.producer_state.clear();
-        self.earlier_batches.clear();
+        self.clear_producer_and_transaction_state();
         self.sealed_txn_indexes.clear();
         self.stamp_indexes.clear();
         self.lso = new_active.last_offset() + 1; // = new_base (empty segment)
@@ -507,7 +512,7 @@ mod tests {
 
     use super::*;
     use crate::log::test_support::{
-        sample_batch, sample_batch_with_epoch, test_log, tiny_segments,
+        append_transaction, sample_batch, sample_batch_with_epoch, test_log, tiny_segments,
     };
 
     /// A hard reset leaves the log empty at the new base, with the last stable
@@ -519,10 +524,7 @@ mod tests {
     #[test]
     fn a_reset_puts_the_stable_offset_at_the_new_base() {
         let (_dir, mut log) = test_log();
-        for _ in 0..3 {
-            let mut batch = sample_batch(2);
-            log.append(&mut batch).expect("append");
-        }
+        crate::log::test_support::append_samples(&mut log, 3, 2);
         check!(log.log_end_offset() == Offset(6));
 
         log.reset_to(Offset(50)).expect("reset");
@@ -561,14 +563,14 @@ mod tests {
     /// the marker, and three plain records follow at offsets 2 to 4.
     #[test]
     fn raising_the_log_start_past_a_marker_releases_its_transaction() {
-        use crate::log::test_support::{commit_marker, transactional_batch};
+        use crate::log::test_support::commit_marker;
 
         for (name, new_start, released) in [
             ("the start reaches the marker", 1, false),
             ("the start passes the marker", 2, true),
         ] {
             let (_dir, mut log) = test_log();
-            log.append(&mut transactional_batch(42, 0, &["a"])).unwrap();
+            append_transaction(&mut log, (42, 0), &["a"]);
             log.append(&mut commit_marker(42, 0)).unwrap();
             log.append(&mut sample_batch(3)).unwrap();
             check!(log.lso() == Offset(0), "{name}: held before the move");
@@ -612,7 +614,7 @@ mod tests {
         ];
         check!(log.epoch_checkpoint().entries() == &expected[..]);
         drop(log);
-        let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let reopened = crate::test_support::open_log(dir.path());
         check!(reopened.epoch_checkpoint().entries() == &expected[..]);
     }
 
@@ -673,15 +675,8 @@ mod tests {
         // A tiny segment cap, so appending rolls and leaves sealed segments
         // behind the active one -- with only an active segment the fold has
         // nothing to add and the accumulator is returned untouched.
-        let config = LogConfig {
-            segment_size: kibibytes(1),
-            ..LogConfig::default()
-        };
-        let mut log = Log::open(dir.path(), config).unwrap();
-        for _ in 0..40 {
-            let mut batch = sample_batch(4);
-            log.append(&mut batch).expect("append");
-        }
+        let mut log = crate::test_support::segmented_log(dir.path(), kibibytes(1));
+        crate::log::test_support::append_samples(&mut log, 40, 4);
         check!(
             !log.segments.is_empty(),
             "the appends should have rolled a segment"
@@ -714,9 +709,7 @@ mod tests {
 
     #[test]
     fn reset_to_clears_leader_epoch_checkpoint() {
-        use tempfile::TempDir;
-        let dir = TempDir::new().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, mut log) = test_log();
         // A follower that replicated real data builds an epoch history.
         log.append(&mut sample_batch_with_epoch(3, 1)).unwrap(); // epoch 1 @ 0
         log.append(&mut sample_batch_with_epoch(2, 2)).unwrap(); // epoch 2 @ 3
@@ -736,7 +729,7 @@ mod tests {
         assert2::assert!(log.epoch_checkpoint().entries() == &[][..]);
         // The cleared state must survive a reopen (a restarted broker re-reads
         // the on-disk checkpoint file).
-        let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let reopened = crate::test_support::open_log(dir.path());
         assert2::assert!(reopened.epoch_checkpoint().entries().is_empty());
     }
 
@@ -745,9 +738,7 @@ mod tests {
         // Guards against the subtly-wrong fix `truncate_from_end(new_base)`,
         // which retains an entry whose `start_offset < new_base` even though
         // the reset log holds no records below `new_base`.
-        use tempfile::TempDir;
-        let dir = TempDir::new().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
         log.append(&mut sample_batch_with_epoch(3, 1)).unwrap(); // epoch 1 @ 0
         assert2::assert!(log.epoch_checkpoint().latest_epoch() == Some(LeaderEpoch(1)));
         log.reset_to(Offset(1000)).unwrap(); // empty log starting at 1000

@@ -2,8 +2,8 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_len_tup2_u32_u32": { "prover": "alt-ergo", "time": 0.027 },
-      "vc_offset_index_lookup": { "prover": "z3", "time": 0.029 }
+      "vc_len_tup2_u32_u32": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_offset_index_lookup": { "prover": "z3", "time": 0.017 }
     }
   }
 }

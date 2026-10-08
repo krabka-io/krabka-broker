@@ -20,3 +20,45 @@ pub fn chained_record(seq: u64, prev: &[u8; 32], value: &[u8]) -> AuditRecord {
     r.push_chain_headers(seq, prev);
     r
 }
+
+pub fn seeded_spool(value: &[u8]) -> (tempfile::TempDir, AuditRecord, crate::Spool) {
+    let dir = tempfile::tempdir().unwrap();
+    let record = chained_record(0, &crate::GENESIS_HEAD, value);
+    let mut spool = crate::Spool::open(dir.path(), ROOMY_CAP).unwrap();
+    spool.append(&record).unwrap();
+    (dir, record, spool)
+}
+
+pub(crate) fn spool_with_losses(
+    cap: ByteSize,
+    count: u64,
+) -> (
+    tempfile::TempDir,
+    crate::Spool,
+    std::sync::Arc<super::PendingLosses>,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let spool = crate::Spool::open(directory.path(), cap).unwrap();
+    let losses = spool.pending_losses();
+    losses.add(count);
+    (directory, spool, losses)
+}
+
+pub(crate) fn reopen_after_losses(
+    directory: &std::path::Path,
+    spool: crate::Spool,
+    losses: std::sync::Arc<super::PendingLosses>,
+) -> crate::Spool {
+    drop(losses);
+    drop(spool);
+    crate::Spool::open(directory, ROOMY_CAP).unwrap()
+}
+
+pub fn check_empty_file(directory: &std::path::Path) {
+    assert2::check!(
+        std::fs::metadata(directory.join(super::SPOOL_FILE))
+            .unwrap()
+            .len()
+            == 0
+    );
+}

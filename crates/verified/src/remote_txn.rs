@@ -1,20 +1,18 @@
 //! Inclusive interval integrity for remote aborted-transaction indexes.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// Whether an aborted-transaction entry intersects a requested offset range.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum RemoteTxnOverlapDecision {
-    /// At least one interval is inverted.
-    Invalid,
-    /// Both intervals are valid and do not intersect.
-    Disjoint,
-    /// Both intervals are valid and intersect inclusively.
-    Overlap,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Whether an aborted-transaction entry intersects a requested offset range.
+    pub enum RemoteTxnOverlapDecision {
+        /// At least one interval is inverted.
+        Invalid,
+        /// Both intervals are valid and do not intersect.
+        Disjoint,
+        /// Both intervals are valid and intersect inclusively.
+        Overlap,
+    }
 }
 
 /// Classify the inclusive entry interval `[entry_start, entry_last]` against

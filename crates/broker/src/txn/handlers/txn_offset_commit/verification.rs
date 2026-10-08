@@ -50,6 +50,17 @@ const LAST_DEFAULT_ERROR_VERSION: i16 = 3;
 /// coordinator, so one sequence serves the verification and the append here.
 const FIRST_SEQUENCE: i32 = 0;
 
+/// The coordinator-generated transactional batch identity used by verification.
+pub(super) fn offset_batch(req: &TxnOffsetCommitRequest) -> TransactionalBatch {
+    TransactionalBatch {
+        producer_id: ProducerId(req.producer_id),
+        producer_epoch: req.producer_epoch,
+        base_sequence: FIRST_SEQUENCE,
+        is_transactional: true,
+        is_control: false,
+    }
+}
+
 /// Verify the producer of `req` with the transaction coordinator, and return
 /// the check the append to the group's offsets partition has to present, or
 /// the Kafka error code to answer every row with.
@@ -71,13 +82,7 @@ pub(super) async fn verify_producer(
         return Err(codes::NOT_COORDINATOR);
     };
     let supports_epoch_bump = version >= FIRST_ADD_PARTITION_VERSION;
-    let batch = TransactionalBatch {
-        producer_id: ProducerId(req.producer_id),
-        producer_epoch: req.producer_epoch,
-        base_sequence: FIRST_SEQUENCE,
-        is_transactional: true,
-        is_control: false,
-    };
+    let batch = offset_batch(req);
     // A producer that already has an open transaction on the partition at this
     // epoch needs no coordinator call and gets the sentinel guard. A stale
     // epoch is refused here.
@@ -92,9 +97,9 @@ pub(super) async fn verify_producer(
         )
         .await
         .map_err(|refusal| {
-            operation_code(codes::from_broker_error(&BrokerError::TransactionAppend(
-                refusal,
-            )))
+            codes::coordinator_operation_code(codes::from_broker_error(
+                &BrokerError::TransactionAppend(refusal),
+            ))
         })?;
     let check = ProducerAppendCheck { batch, guard };
     if guard == VerificationGuard::SENTINEL {
@@ -143,9 +148,9 @@ pub(super) async fn verify_producer(
 /// `INVALID_PRODUCER_EPOCH`, a top-level `CLUSTER_AUTHORIZATION_FAILED` into
 /// `INVALID_TXN_STATE`, and `TRANSACTION_ABORTABLE` into `INVALID_TXN_STATE`
 /// for a client that does not know it (below v4). The group coordinator's
-/// `handleOperationException` then maps what remains, see [`operation_code`].
+/// `handleOperationException` then maps what remains, see [`codes::coordinator_operation_code`].
 fn verification_code(code: i16, version: i16) -> i16 {
-    operation_code(match code {
+    codes::coordinator_operation_code(match code {
         codes::PRODUCER_FENCED => codes::INVALID_PRODUCER_EPOCH,
         codes::CLUSTER_AUTHORIZATION_FAILED => codes::INVALID_TXN_STATE,
         codes::TRANSACTION_ABORTABLE if version <= LAST_DEFAULT_ERROR_VERSION => {
@@ -153,23 +158,6 @@ fn verification_code(code: i16, version: i16) -> i16 {
         }
         other => other,
     })
-}
-
-/// Kafka's `CoordinatorOperationExceptionHelper.handleOperationException`:
-/// a verification that could not reach the coordinator is a retriable load
-/// (`NETWORK_EXCEPTION` becomes `COORDINATOR_LOAD_IN_PROGRESS`, which asks
-/// the client to retry without a coordinator lookup), an unavailable topic
-/// or replica set is `COORDINATOR_NOT_AVAILABLE`, and a lost leadership is
-/// `NOT_COORDINATOR`.
-fn operation_code(code: i16) -> i16 {
-    match code {
-        codes::NETWORK_EXCEPTION => codes::COORDINATOR_LOAD_IN_PROGRESS,
-        codes::UNKNOWN_TOPIC_OR_PARTITION
-        | codes::NOT_ENOUGH_REPLICAS
-        | codes::REQUEST_TIMED_OUT => codes::COORDINATOR_NOT_AVAILABLE,
-        codes::NOT_LEADER_OR_FOLLOWER | codes::KAFKA_STORAGE_ERROR => codes::NOT_COORDINATOR,
-        other => other,
-    }
 }
 
 #[cfg(test)]

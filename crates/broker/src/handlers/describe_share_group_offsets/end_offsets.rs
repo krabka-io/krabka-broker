@@ -99,14 +99,11 @@ impl NetworkLatestOffsets<'_> {
         let Some(registration) = image.broker(leader) else {
             return failed(codes::LEADER_NOT_AVAILABLE);
         };
-        let (host, port) = registration
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.name == config.inter_broker_listener_name)
-            .map_or_else(
-                || (registration.host.clone(), registration.port),
-                |endpoint| (endpoint.host.clone(), endpoint.port),
-            );
+        let (host, port) = crate::broker::registered_listener_endpoint(
+            registration,
+            &config.inter_broker_listener_name,
+        );
+        let host = host.to_owned();
         let protocol = config
             .effective_listeners()
             .iter()
@@ -276,7 +273,7 @@ pub(super) const UNKNOWN_SERVER_ERROR_MESSAGE: &str =
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord};
+    use krabka_metadata::{MetadataRecord, TopicRecord};
     use krabka_protocol::owned::list_offsets_response::{
         ListOffsetsPartitionResponse, ListOffsetsTopicResponse,
     };
@@ -362,18 +359,13 @@ mod tests {
             replication_factor: 1,
         }));
         for (partition, leader) in [(0, 1), (1, 2), (2, 1)] {
-            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-                topic: "a".into(),
-                partition,
-                leader: NodeId(leader),
-                replicas: vec![NodeId(leader)],
-                isr: vec![NodeId(leader)],
-                leader_epoch: LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }));
+            image.apply(&MetadataRecord::V1Partition(
+                crate::handlers::test_support::single_replica_partition(
+                    "a",
+                    partition,
+                    NodeId(leader),
+                ),
+            ));
         }
         let grouped = group_by_leader(&image, &[tp("a", 0), tp("a", 1), tp("a", 2), tp("a", 3)]);
         let expected = (

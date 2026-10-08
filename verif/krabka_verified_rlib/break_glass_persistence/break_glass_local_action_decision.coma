@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/break_glass_persistence.rs" 121 0 123 34 *)
+(* #"/workspace/crates/verified/src/break_glass_persistence.rs" 110 0 112 34 *)
 
-let%span sbreak_glass_persistence = "/workspace/crates/verified/src/break_glass_persistence.rs" 115 10 119 1
+let%span sbreak_glass_persistence = "/workspace/crates/verified/src/break_glass_persistence.rs" 104 10 108 1
 
 use creusot.prelude.Any
 
@@ -14,7 +14,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let break_glass_local_action_decision [#"/workspace/crates/verified/src/break_glass_persistence.rs" 121 0 123 34]
+let break_glass_local_action_decision [#"/workspace/crates/verified/src/break_glass_persistence.rs" 110 0 112 34]
   (facts: t_BreakGlassLocalActionFacts) (return (x: t_BreakGlassLocalActionDecision)) = (! bb0
   [ bb0 = any
     [ br0 -> {facts.spend = Ungated} (! bb6)

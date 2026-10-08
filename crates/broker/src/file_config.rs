@@ -45,6 +45,9 @@ mod tail;
 mod topic_policy;
 mod validate;
 
+#[cfg(test)]
+mod test_support;
+
 pub use self::{
     audit::{
         FileAuditCheckpointConfig, FileAuditConfig, FileAuditSigningConfig, FileAuditSpoolConfig,

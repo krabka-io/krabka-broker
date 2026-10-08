@@ -1,6 +1,6 @@
 (* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 116 0 119 24 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 120 10 120 30
 let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 106 10 114 1
 

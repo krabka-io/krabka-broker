@@ -1,13 +1,23 @@
-//! The response encoder that every handler ends with.
+//! Shared wire-body decoding and response encoding.
 //!
 //! It sizes the buffer from `encoded_len` before it encodes, so the encode
 //! writes into a buffer that already holds the whole response.
 
 use bytes::{Bytes, BytesMut};
-use krabka_protocol::Encode;
+use krabka_protocol::{Decode, Encode};
 
 use super::wire_types::ApiVersion;
 use crate::error::BrokerError;
+
+/// Decode one request body at the supplied version. As at the wire entry
+/// points, bytes beyond that body are left unread.
+pub(crate) fn decode_request<'a, R: Decode<'a>>(
+    bytes: &'a [u8],
+    version: ApiVersion,
+) -> Result<R, BrokerError> {
+    let mut cursor = bytes;
+    Ok(R::decode(&mut cursor, version)?)
+}
 
 pub(crate) fn encode_response<R: Encode>(
     resp: &R,
@@ -90,6 +100,14 @@ impl_error_response!(
 pub(crate) trait ErrorRow {
     fn error_code(&self) -> i16;
     fn set_error(&mut self, error_code: i16, error_message: Option<String>);
+
+    fn with_error(mut self, error_code: i16, error_message: String) -> Self
+    where
+        Self: Sized,
+    {
+        self.set_error(error_code, Some(error_message));
+        self
+    }
 }
 
 /// Stamps `error_code` and `error_message` on every row still at `NONE`, and
@@ -123,6 +141,8 @@ macro_rules! impl_error_row {
 }
 
 impl_error_row!(
+    krabka_protocol::owned::alter_configs_response::AlterConfigsResourceResponse,
+    krabka_protocol::owned::incremental_alter_configs_response::AlterConfigsResourceResponse,
     krabka_protocol::owned::alter_client_quotas_response::EntryData,
     krabka_protocol::owned::alter_partition_reassignments_response::ReassignablePartitionResponse,
     krabka_protocol::owned::alter_user_scram_credentials_response::AlterUserScramCredentialsResult,

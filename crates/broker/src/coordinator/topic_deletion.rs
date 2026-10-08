@@ -28,7 +28,6 @@
 use std::sync::Arc;
 
 use krabka_metadata::{MetadataImage, NodeId};
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -165,11 +164,7 @@ pub(crate) async fn on_topics_deleted(
     owned: impl Fn(&str) -> bool,
     topics: &[(String, uuid::Uuid)],
 ) -> Vec<(String, Vec<(String, i32)>)> {
-    let group_ids: Vec<String> = coordinator
-        .groups
-        .iter()
-        .map(|entry| entry.key().clone())
-        .collect();
+    let group_ids = coordinator.group_ids();
     let mut changed = Vec::new();
     for group_id in group_ids {
         if !owned(&group_id) {
@@ -178,19 +173,13 @@ pub(crate) async fn on_topics_deleted(
         let Some(handle) = coordinator.find(&group_id) else {
             continue;
         };
-        let (reply, deleted) = oneshot::channel();
-        if handle
-            .tx
-            .send(GroupActorMessage::DeleteTopicOffsets {
+        let Ok(deleted) =
+            crate::task_util::ask(&handle.tx, |reply| GroupActorMessage::DeleteTopicOffsets {
                 topics: topics.to_vec(),
                 reply,
             })
             .await
-            .is_err()
-        {
-            continue;
-        }
-        let Ok(deleted) = deleted.await else {
+        else {
             continue;
         };
         if !deleted.is_empty() {

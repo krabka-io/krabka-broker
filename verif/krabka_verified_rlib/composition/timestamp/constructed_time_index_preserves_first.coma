@@ -1,59 +1,66 @@
-(* #"/workspace/crates/verified/src/composition/timestamp.rs" 212 0 217 37 *)
+(* #"/workspace/crates/verified/src/composition/timestamp.rs" 200 0 205 37 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 218 39 218 49
-let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 219 16 219 22
-let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 230 14 230 30
-let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 231 14 231 24
-let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 228 16 229 79
-let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 226 16 227 79
-let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 224 16 225 45
-let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 222 16 223 84
-let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 221 16 221 90
-let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 220 16 220 57
-let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 232 33 232 40
-let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 232 13 232 20
-let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 232 22 232 29
-let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 233 21 235 9
-let%span stimestamp'13 = "/workspace/crates/verified/src/composition/timestamp.rs" 233 8 235 10
-let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 236 13 236 14
-let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 236 8 236 14
-let%span stimestamp'16 = "/workspace/crates/verified/src/composition/timestamp.rs" 238 54 238 62
-let%span stimestamp'17 = "/workspace/crates/verified/src/composition/timestamp.rs" 238 19 238 92
-let%span stimestamp'18 = "/workspace/crates/verified/src/composition/timestamp.rs" 190 11 190 46
-let%span stimestamp'19 = "/workspace/crates/verified/src/composition/timestamp.rs" 191 11 192 35
-let%span stimestamp'20 = "/workspace/crates/verified/src/composition/timestamp.rs" 193 11 194 69
-let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 195 11 196 63
-let%span stimestamp'22 = "/workspace/crates/verified/src/composition/timestamp.rs" 197 10 197 40
-let%span stimestamp'23 = "/workspace/crates/verified/src/composition/timestamp.rs" 198 10 201 93
-let%span stimestamp'24 = "/workspace/crates/verified/src/composition/timestamp.rs" 202 10 203 79
-let%span stimestamp'25 = "/workspace/crates/verified/src/composition/timestamp.rs" 204 10 206 42
-let%span stimestamp'26 = "/workspace/crates/verified/src/composition/timestamp.rs" 207 10 211 1
-let%span stimestamp'27 = "/workspace/crates/verified/src/composition/timestamp.rs" 10 11 10 46
-let%span stimestamp'28 = "/workspace/crates/verified/src/composition/timestamp.rs" 11 11 11 63
-let%span stimestamp'29 = "/workspace/crates/verified/src/composition/timestamp.rs" 12 11 13 35
-let%span stimestamp'30 = "/workspace/crates/verified/src/composition/timestamp.rs" 14 10 14 40
-let%span stimestamp'31 = "/workspace/crates/verified/src/composition/timestamp.rs" 15 10 15 78
-let%span stimestamp'32 = "/workspace/crates/verified/src/composition/timestamp.rs" 16 10 16 81
-let%span stimestamp'33 = "/workspace/crates/verified/src/composition/timestamp.rs" 17 10 18 36
-let%span stimestamp'34 = "/workspace/crates/verified/src/composition/timestamp.rs" 52 11 52 46
-let%span stimestamp'35 = "/workspace/crates/verified/src/composition/timestamp.rs" 53 11 54 35
-let%span stimestamp'36 = "/workspace/crates/verified/src/composition/timestamp.rs" 55 11 55 70
-let%span stimestamp'37 = "/workspace/crates/verified/src/composition/timestamp.rs" 56 10 60 1
-let%span stimestamp'38 = "/workspace/crates/verified/src/composition/timestamp.rs" 42 8 45 48
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 206 39 206 49
+let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 207 16 207 22
+let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 217 14 217 30
+let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 218 14 218 24
+let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 215 16 216 79
+let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 214 16 214 47
+let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 212 16 213 45
+let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 210 16 211 84
+let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 209 16 209 90
+let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 208 16 208 57
+let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 219 33 219 40
+let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 219 13 219 20
+let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 219 22 219 29
+let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 220 21 222 9
+let%span stimestamp'13 = "/workspace/crates/verified/src/composition/timestamp.rs" 220 8 222 10
+let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 223 13 223 14
+let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 223 8 223 14
+let%span stimestamp'16 = "/workspace/crates/verified/src/composition/timestamp.rs" 225 54 225 62
+let%span stimestamp'17 = "/workspace/crates/verified/src/composition/timestamp.rs" 225 19 225 92
+let%span stimestamp'18 = "/workspace/crates/verified/src/composition/timestamp.rs" 183 11 183 46
+let%span stimestamp'19 = "/workspace/crates/verified/src/composition/timestamp.rs" 184 11 184 43
+let%span stimestamp'20 = "/workspace/crates/verified/src/composition/timestamp.rs" 185 11 186 69
+let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 187 11 188 63
+let%span stimestamp'22 = "/workspace/crates/verified/src/composition/timestamp.rs" 189 10 189 40
+let%span stimestamp'23 = "/workspace/crates/verified/src/composition/timestamp.rs" 190 10 193 93
+let%span stimestamp'24 = "/workspace/crates/verified/src/composition/timestamp.rs" 194 10 195 79
+let%span stimestamp'25 = "/workspace/crates/verified/src/composition/timestamp.rs" 196 10 198 42
+let%span stimestamp'26 = "/workspace/crates/verified/src/composition/timestamp.rs" 199 10 199 63
+let%span stimestamp'27 = "/workspace/crates/verified/src/composition/timestamp.rs" 232 16 233 85
+let%span stimestamp'28 = "/workspace/crates/verified/src/composition/timestamp.rs" 21 11 21 46
+let%span stimestamp'29 = "/workspace/crates/verified/src/composition/timestamp.rs" 22 11 22 63
+let%span stimestamp'30 = "/workspace/crates/verified/src/composition/timestamp.rs" 23 11 23 43
+let%span stimestamp'31 = "/workspace/crates/verified/src/composition/timestamp.rs" 24 10 24 40
+let%span stimestamp'32 = "/workspace/crates/verified/src/composition/timestamp.rs" 25 10 25 78
+let%span stimestamp'33 = "/workspace/crates/verified/src/composition/timestamp.rs" 26 10 26 81
+let%span stimestamp'34 = "/workspace/crates/verified/src/composition/timestamp.rs" 27 10 28 36
+let%span stimestamp'35 = "/workspace/crates/verified/src/composition/timestamp.rs" 61 11 61 46
+let%span stimestamp'36 = "/workspace/crates/verified/src/composition/timestamp.rs" 62 11 62 43
+let%span stimestamp'37 = "/workspace/crates/verified/src/composition/timestamp.rs" 63 11 63 70
+let%span stimestamp'38 = "/workspace/crates/verified/src/composition/timestamp.rs" 64 10 64 61
+let%span stimestamp'39 = "/workspace/crates/verified/src/composition/timestamp.rs" 14 8 14 53
+let%span stimestamp'40 = "/workspace/crates/verified/src/timestamp.rs" 15 8 20 9
+let%span stimestamp'41 = "/workspace/crates/verified/src/composition/timestamp.rs" 52 8 53 68
+let%span stimestamp'42 = "/workspace/crates/verified/src/composition/timestamp.rs" 252 16 253 65
+let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 14 16 14 72
+let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
 
 use seq.Seq
 use creusot.int.Int64
 use creusot.int.UInt32
 use creusot.int.UInt64
 use creusot.slice.Slice64
+use map.Map
 use creusot.prelude.MutBorrow
 use creusot.prelude.Any
 use int.Int
@@ -95,25 +102,41 @@ let len_tup2_usize_usize (self_: Slice64.slice tup2_usize_usize) (return (x: UIn
     = UInt64.t'int result}
     (! return {result}) ]
 
+predicate time_rows_ordered [#"/workspace/crates/verified/src/composition/timestamp.rs" 231 0 231 70] (entries: Seq.seq tup2_i64_u32) (count: int) =
+  [%#stimestamp'27] forall left: int, right: int. 0 <= left /\ left < right /\ right < count
+    -> Int64.to_int (Seq.get entries left).f0 <= Int64.to_int (Seq.get entries right).f0
+    /\ UInt32.t'int (Seq.get entries left).f1 < UInt32.t'int (Seq.get entries right).f1
+
+type tup2_u32_u32 = { f0'1: UInt32.t; f1'1: UInt32.t }
+
+predicate pairwise_u32 [#"/workspace/crates/verified/src/sequence.rs" 20 0 20 95] (values: Seq.seq UInt32.t) (relation: Map.map tup2_u32_u32 bool) =
+  [%#ssequence'0] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length values
+    -> Map.get relation { f0'1 = Seq.get values i; f1'1 = Seq.get values j }
+
+predicate strictly_increasing_u32 [#"/workspace/crates/verified/src/sequence.rs" 13 0 13 73] (values: Seq.seq UInt32.t) =
+  [%#ssequence] pairwise_u32 values (fun (__0: tup2_u32_u32) -> let {f0'1 = left; f1'1 = right} = __0 in UInt32.t'int left
+  < UInt32.t'int right)
+
+predicate record_offsets_ordered [#"/workspace/crates/verified/src/composition/timestamp.rs" 12 0 12 63] (offsets: Seq.seq UInt32.t) =
+  [%#stimestamp'39] strictly_increasing_u32 offsets
+
 let running_maximum_index_entry (offsets: Slice64.slice UInt32.t) (timestamps: Slice64.slice Int64.t)
   (indexed: UInt64.t) (through: UInt64.t) (return (x: tup2_i64_u32)) =
-{[@stop_split] [@expl:running_maximum_index_entry requires] ([@stop_split] [@expl:running_maximum_index_entry requires #0] [%#stimestamp'27] Seq.length (Slice64.view offsets)
+{[@stop_split] [@expl:running_maximum_index_entry requires] ([@stop_split] [@expl:running_maximum_index_entry requires #0] [%#stimestamp'28] Seq.length (Slice64.view offsets)
     = Seq.length (Slice64.view timestamps))
-  /\ ([@stop_split] [@expl:running_maximum_index_entry requires #1] [%#stimestamp'28] UInt64.t'int indexed
+  /\ ([@stop_split] [@expl:running_maximum_index_entry requires #1] [%#stimestamp'29] UInt64.t'int indexed
       <= UInt64.t'int through
     /\ UInt64.t'int through < Seq.length (Slice64.view timestamps))
-  /\ ([@stop_split] [@expl:running_maximum_index_entry requires #2] [%#stimestamp'29] forall i: int, j: int. 0 <= i
-      /\ i < j /\ j < Seq.length (Slice64.view offsets)
-    -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))}
+  /\ ([@stop_split] [@expl:running_maximum_index_entry requires #2] [%#stimestamp'30] record_offsets_ordered (Slice64.view offsets))}
   any
   [ return (result: tup2_i64_u32) ->
-  {[@stop_split] [@expl:running_maximum_index_entry ensures] ([@stop_split] [@expl:running_maximum_index_entry ensures #0] [%#stimestamp'30] result.f1
+  {[@stop_split] [@expl:running_maximum_index_entry ensures] ([@stop_split] [@expl:running_maximum_index_entry ensures #0] [%#stimestamp'31] result.f1
       = Seq.get (Slice64.view offsets) (UInt64.t'int indexed))
-    /\ ([@stop_split] [@expl:running_maximum_index_entry ensures #1] [%#stimestamp'31] exists i: int. 0 <= i
+    /\ ([@stop_split] [@expl:running_maximum_index_entry ensures #1] [%#stimestamp'32] exists i: int. 0 <= i
         /\ i <= UInt64.t'int through /\ Seq.get (Slice64.view timestamps) i = result.f0)
-    /\ ([@stop_split] [@expl:running_maximum_index_entry ensures #2] [%#stimestamp'32] forall i: int. 0 <= i
+    /\ ([@stop_split] [@expl:running_maximum_index_entry ensures #2] [%#stimestamp'33] forall i: int. 0 <= i
           /\ i <= UInt64.t'int through -> Int64.to_int (Seq.get (Slice64.view timestamps) i) <= Int64.to_int result.f0)
-    /\ ([@stop_split] [@expl:running_maximum_index_entry ensures #3] [%#stimestamp'33] forall i: int. 0 <= i
+    /\ ([@stop_split] [@expl:running_maximum_index_entry ensures #3] [%#stimestamp'34] forall i: int. 0 <= i
         /\ i < Seq.length (Slice64.view offsets)
         /\ UInt32.t'int (Seq.get (Slice64.view offsets) i) <= UInt32.t'int result.f1
       -> Int64.to_int (Seq.get (Slice64.view timestamps) i) <= Int64.to_int result.f0)}
@@ -131,50 +154,48 @@ let deref_Vec_tup2_i64_u32_Global (self_: t_Vec_tup2_i64_u32_Global) (return (x:
 
 type t_Option_usize = None | Some UInt64.t
 
-predicate sparse_maxima_bound_prefix [#"/workspace/crates/verified/src/composition/timestamp.rs" 36 0 40 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) =
-  [%#stimestamp'38] (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length entries
-      -> Int64.to_int (Seq.get entries i).f0 <= Int64.to_int (Seq.get entries j).f0)
-  /\ (forall i: int, j: int. 0 <= i
+predicate sparse_rows_bound_records [#"/workspace/crates/verified/src/composition/timestamp.rs" 247 0 251 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (times: Seq.seq Int64.t) =
+  [%#stimestamp'42] forall i: int, j: int. 0 <= i
       /\ i < Seq.length entries
       /\ 0 <= j /\ j < Seq.length offsets /\ UInt32.t'int (Seq.get offsets j) < UInt32.t'int (Seq.get entries i).f1
-    -> Int64.to_int (Seq.get timestamps j) <= Int64.to_int (Seq.get entries i).f0)
+    -> Int64.to_int (Seq.get times j) <= Int64.to_int (Seq.get entries i).f0
+
+predicate sparse_maxima_bound_prefix [#"/workspace/crates/verified/src/composition/timestamp.rs" 46 0 50 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) =
+  [%#stimestamp'41] (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length entries
+      -> Int64.to_int (Seq.get entries i).f0 <= Int64.to_int (Seq.get entries j).f0)
+  /\ sparse_rows_bound_records entries offsets timestamps
+
+predicate first_timestamp_match [#"/workspace/crates/verified/src/timestamp.rs" 9 0 13 9] (timestamps: Seq.seq Int64.t) (target: int) (matched: t_Option_usize) =
+  [%#stimestamp'40] match matched with
+    | Some index -> UInt64.t'int index < Seq.length timestamps
+    /\ ge_log_Int (Int64.to_int (Seq.get timestamps (UInt64.t'int index))) target
+    /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index -> Int64.to_int (Seq.get timestamps i) < target)
+    | None -> forall i: int. 0 <= i /\ i < Seq.length timestamps -> Int64.to_int (Seq.get timestamps i) < target
+    end
 
 let indexed_timestamp_scan_finds_first (entries: Slice64.slice tup2_i64_u32) (offsets: Slice64.slice UInt32.t)
   (timestamps: Slice64.slice Int64.t) (target: Int64.t) (return (x: t_Option_usize)) =
-{[@stop_split] [@expl:indexed_timestamp_scan_finds_first requires] ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #0] [%#stimestamp'34] Seq.length (Slice64.view offsets)
+{[@stop_split] [@expl:indexed_timestamp_scan_finds_first requires] ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #0] [%#stimestamp'35] Seq.length (Slice64.view offsets)
     = Seq.length (Slice64.view timestamps))
-  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #1] [%#stimestamp'35] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view offsets)
-      -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))
-  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #2] [%#stimestamp'36] sparse_maxima_bound_prefix (Slice64.view entries) (Slice64.view offsets) (Slice64.view timestamps))}
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #1] [%#stimestamp'36] record_offsets_ordered (Slice64.view offsets))
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #2] [%#stimestamp'37] sparse_maxima_bound_prefix (Slice64.view entries) (Slice64.view offsets) (Slice64.view timestamps))}
   any
   [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:indexed_timestamp_scan_finds_first ensures] [%#stimestamp'37] match result with
-      | Some index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
-      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
-      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target
-      end}
+  {[@stop_split] [@expl:indexed_timestamp_scan_finds_first ensures] [%#stimestamp'38] first_timestamp_match (Slice64.view timestamps) (Int64.to_int target) result}
     (! return {result}) ]
 
-type tup2_Vec_tup2_i64_u32_Global_Option_usize = { f0'1: t_Vec_tup2_i64_u32_Global; f1'1: t_Option_usize }
+type tup2_Vec_tup2_i64_u32_Global_Option_usize = { f0'2: t_Vec_tup2_i64_u32_Global; f1'2: t_Option_usize }
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let constructed_time_index_preserves_first [#"/workspace/crates/verified/src/composition/timestamp.rs" 212 0 217 37]
+let constructed_time_index_preserves_first [#"/workspace/crates/verified/src/composition/timestamp.rs" 200 0 205 37]
   (offsets: Slice64.slice UInt32.t) (timestamps: Slice64.slice Int64.t) (rows: Slice64.slice tup2_usize_usize)
   (target: Int64.t) (return (x: tup2_Vec_tup2_i64_u32_Global_Option_usize)) =
 {[@stop_split] [@expl:constructed_time_index_preserves_first requires] ([@stop_split] [@expl:constructed_time_index_preserves_first requires #0] [%#stimestamp'18] Seq.length (Slice64.view offsets)
     = Seq.length (Slice64.view timestamps))
-  /\ ([@stop_split] [@expl:constructed_time_index_preserves_first requires #1] [%#stimestamp'19] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view offsets)
-      -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))
+  /\ ([@stop_split] [@expl:constructed_time_index_preserves_first requires #1] [%#stimestamp'19] record_offsets_ordered (Slice64.view offsets))
   /\ ([@stop_split] [@expl:constructed_time_index_preserves_first requires #2] [%#stimestamp'20] forall i: int. 0 <= i
         /\ i < Seq.length (Slice64.view rows)
       -> UInt64.t'int (Seq.get (Slice64.view rows) i).f0'0 <= UInt64.t'int (Seq.get (Slice64.view rows) i).f1'0
@@ -207,11 +228,7 @@ let constructed_time_index_preserves_first [#"/workspace/crates/verified/src/com
           /\ j < UInt64.t'int i /\ 0 <= k /\ k <= UInt64.t'int (Seq.get (Slice64.view rows) j).f1'0
         -> Int64.to_int (Seq.get (Slice64.view timestamps) k)
         <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global entries) j).f0}
-      {[@expl:loop invariant #4] [%#stimestamp'4] forall j: int, k: int. 0 <= j /\ j < k /\ k < UInt64.t'int i
-        -> Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global entries) j).f0
-          <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global entries) k).f0
-        /\ UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global entries) j).f1
-        < UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global entries) k).f1}
+      {[@expl:loop invariant #4] [%#stimestamp'4] time_rows_ordered (view_Vec_tup2_i64_u32_Global entries) (UInt64.t'int i)}
       {[@expl:loop invariant #5] [%#stimestamp'3] forall j: int, k: int. 0 <= j
           /\ j < UInt64.t'int i
           /\ 0 <= k
@@ -247,7 +264,7 @@ let constructed_time_index_preserves_first [#"/workspace/crates/verified/src/com
         (fun (_x: Slice64.slice tup2_i64_u32) -> [ &_82 <- _x ] s2)
     | s2 = indexed_timestamp_scan_finds_first [%#stimestamp'17] {_82} {offsets} {timestamps} {target}
         (fun (_x: t_Option_usize) -> [ &selected <- _x ] s3)
-    | s3 = [ &_ret <- { f0'1 = entries; f1'1 = selected } ] s4
+    | s3 = [ &_ret <- { f0'2 = entries; f1'2 = selected } ] s4
     | s4 = return {_ret} ] ]
   [ & _ret: tup2_Vec_tup2_i64_u32_Global_Option_usize = Any.any_l ()
   | & offsets: Slice64.slice UInt32.t = offsets
@@ -271,40 +288,33 @@ let constructed_time_index_preserves_first [#"/workspace/crates/verified/src/com
   | & _84: t_Vec_tup2_i64_u32_Global = Any.any_l ()
   | & variant_old_bb2: int = Any.any_l () ])
   [ return (result: tup2_Vec_tup2_i64_u32_Global_Option_usize) ->
-  {[@stop_split] [@expl:constructed_time_index_preserves_first ensures] ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #0] [%#stimestamp'22] Seq.length (view_Vec_tup2_i64_u32_Global result.f0'1)
+  {[@stop_split] [@expl:constructed_time_index_preserves_first ensures] ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #0] [%#stimestamp'22] Seq.length (view_Vec_tup2_i64_u32_Global result.f0'2)
       = Seq.length (Slice64.view rows))
     /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #1] [%#stimestamp'23] forall i: int. 0 <= i
           /\ i < Seq.length (Slice64.view rows)
-        -> (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f1
+        -> (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'2) i).f1
           = Seq.get (Slice64.view offsets) (UInt64.t'int (Seq.get (Slice64.view rows) i).f0'0)
         /\ (exists j: int. 0 <= j
             /\ j <= UInt64.t'int (Seq.get (Slice64.view rows) i).f1'0
-            /\ (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0 = Seq.get (Slice64.view timestamps) j)
+            /\ (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'2) i).f0 = Seq.get (Slice64.view timestamps) j)
         /\ (forall j: int. 0 <= j /\ j <= UInt64.t'int (Seq.get (Slice64.view rows) i).f1'0
           -> Int64.to_int (Seq.get (Slice64.view timestamps) j)
-          <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0))
+          <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'2) i).f0))
     /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #2] [%#stimestamp'24] forall i: int, j: int. 0
             <= i
-          /\ i < j /\ j < Seq.length (view_Vec_tup2_i64_u32_Global result.f0'1)
-        -> Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0
-          <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) j).f0
-        /\ UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f1
-        < UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) j).f1)
+          /\ i < j /\ j < Seq.length (view_Vec_tup2_i64_u32_Global result.f0'2)
+        -> Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'2) i).f0
+          <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'2) j).f0
+        /\ UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'2) i).f1
+        < UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'2) j).f1)
     /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #3] [%#stimestamp'25] forall i: int, j: int. 0
             <= i
-          /\ i < Seq.length (view_Vec_tup2_i64_u32_Global result.f0'1)
+          /\ i < Seq.length (view_Vec_tup2_i64_u32_Global result.f0'2)
           /\ 0 <= j
           /\ j < Seq.length (Slice64.view offsets)
           /\ UInt32.t'int (Seq.get (Slice64.view offsets) j)
-          <= UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f1
+          <= UInt32.t'int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'2) i).f1
         -> Int64.to_int (Seq.get (Slice64.view timestamps) j)
-        <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'1) i).f0)
-    /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #4] [%#stimestamp'26] match result.f1'1 with
-      | Some index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
-      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target)
-      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view timestamps)
-        -> Int64.to_int (Seq.get (Slice64.view timestamps) i) < Int64.to_int target
-      end)}
+        <= Int64.to_int (Seq.get (view_Vec_tup2_i64_u32_Global result.f0'2) i).f0)
+    /\ ([@stop_split] [@expl:constructed_time_index_preserves_first ensures #4] [%#stimestamp'26] first_timestamp_match (Slice64.view timestamps) (Int64.to_int target) result.f1'2)}
     (! return {result}) ]

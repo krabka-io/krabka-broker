@@ -8,17 +8,18 @@
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
-use krabka_client_core::Client;
-use krabka_client_producer::Producer;
-use krabka_protocol::owned::{
-    fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-    metadata_request::{MetadataRequest, MetadataRequestTopic},
-};
+use krabka_client_consumer::IsolationLevel;
+use krabka_protocol::owned::fetch_request::FetchRequest;
 use krabka_units::bytes;
 
-use crate::txn_harness::{
-    boot_single, create_topic, create_topic_with_segment_bytes, rec, send_ok,
+use crate::{
+    support::{
+        client::connect_client,
+        discovery::topic_metadata_request,
+        fetch::{fetch_partition, single_partition_fetch},
+        topics::metadata_topic,
+    },
+    txn_harness::{boot_single, create_topic, create_topic_with_segment_bytes, rec, send_ok},
 };
 
 /// Commits a transaction, after which a `read_committed` consumer sees all 3
@@ -28,40 +29,14 @@ async fn commit_then_read_committed_sees_records() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "t").await;
 
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("my-tid")
-        .build()
-        .await
-        .unwrap();
-    producer.init_transactions().await.unwrap();
+    let producer =
+        crate::support::producer::transactional_producer(bootstrap.clone(), "my-tid").await;
     let txn = producer.begin_transaction().await.unwrap();
-    for v in ["a", "b", "c"] {
-        drop(
-            producer
-                .enqueue(rec("t", v))
-                .await
-                .expect("record is queued"),
-        );
-    }
+    crate::support::producer::enqueue_string_values(&producer, "t", &["a", "b", "c"]).await;
     txn.commit().await.unwrap();
 
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap)
-        .group_id("g1")
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe(["t".to_string()])
-        .build()
-        .await
-        .unwrap();
-
-    let seen = crate::txn_consumer_fixture::poll_values_until(
-        &mut consumer,
-        Duration::from_secs(10),
-        |seen| seen.len() >= 3,
-    )
-    .await;
+    let (consumer, seen) =
+        crate::support::transaction_wire::committed_values(bootstrap, "g1", "t", None).await;
     assert!(seen == vec!["a", "b", "c"]);
 
     producer.close().await.unwrap();
@@ -94,13 +69,8 @@ async fn abort_then_read_committed_skips_records() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("abort-tid")
-        .build()
-        .await
-        .unwrap();
-    producer.init_transactions().await.unwrap();
+    let producer =
+        crate::support::producer::transactional_producer(bootstrap.clone(), "abort-tid").await;
     let txn = producer.begin_transaction().await.unwrap();
     // Wait for each acknowledgement: like Kafka's, the producer's abort
     // discards the batches it has not sent yet, so the records would otherwise
@@ -112,27 +82,16 @@ async fn abort_then_read_committed_skips_records() {
 
     // The next append rolls the abort marker and its transaction index into a
     // sealed segment. A lagging fetch must still receive that abort entry.
-    let later = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let later = crate::support::producer::default_producer(bootstrap.clone()).await;
     send_ok(&later, rec("ta", "after")).await;
     broker.wait_until_high_watermark("ta", 0, 5).await;
 
-    let client = Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let metadata = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some("ta".into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(topic_metadata_request(Some(vec![metadata_topic(
+            Some("ta".into()),
+            krabka_protocol::primitives::uuid::Uuid::default(),
+        )])))
         .await
         .unwrap();
     let topic_id = metadata.topics[0].topic_id;
@@ -140,21 +99,12 @@ async fn abort_then_read_committed_skips_records() {
         .send(FetchRequest {
             replica_id: -1,
             isolation_level: 1,
-            max_wait_ms: 1_000,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: "ta".into(),
+            ..single_partition_fetch(
+                "ta",
                 topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+                fetch_partition(0, 0, 1 << 20),
+                (1_000, 1, 1 << 20),
+            )
         })
         .await
         .unwrap();
@@ -168,42 +118,27 @@ async fn abort_then_read_committed_skips_records() {
     );
 
     // read_committed: must skip the three aborted records and see the later one.
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap.clone())
-        .group_id("g-abort")
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe(["ta".to_string()])
-        .build()
-        .await
-        .unwrap();
-    let mut seen = Vec::new();
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while seen.is_empty() && std::time::Instant::now() < deadline {
-        for record in consumer.poll(krabka_units::millis(200)).await.unwrap() {
-            seen.push(String::from_utf8_lossy(record.value.as_deref().unwrap_or(b"")).into_owned());
-        }
-    }
+    let (consumer, seen) = crate::support::transaction_wire::read_committed_at_least(
+        bootstrap.clone(),
+        "g-abort",
+        "ta",
+        1,
+    )
+    .await;
     assert!(seen == ["after"], "read_committed exposed aborted records");
     consumer.close().await.unwrap();
 
     // read_uncommitted: sees all 4 data records (including aborted ones).
-    let mut consumer_uc = Consumer::builder()
-        .bootstrap(bootstrap)
-        .group_id("g-abort-uc")
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadUncommitted)
-        .subscribe(["ta".to_string()])
-        .build()
-        .await
-        .unwrap();
-    let mut seen2: Vec<String> = Vec::new();
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while seen2.len() < 4 && std::time::Instant::now() < deadline {
-        for r in consumer_uc.poll(krabka_units::millis(200)).await.unwrap() {
-            seen2.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
-        }
-    }
+    let (consumer_uc, seen2) = crate::support::transaction_wire::observed_values(
+        bootstrap,
+        "g-abort-uc",
+        "ta",
+        (IsolationLevel::ReadUncommitted, None),
+        Duration::from_secs(30),
+        |seen| seen.len() >= 4,
+        None,
+    )
+    .await;
     assert!(
         seen2 == ["x", "y", "z", "after"],
         "read_uncommitted must see aborted records"
@@ -232,24 +167,12 @@ async fn interleaved_commit_and_abort() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "ti").await;
 
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("interleave-tid")
-        .build()
-        .await
-        .unwrap();
-    producer.init_transactions().await.unwrap();
+    let producer =
+        crate::support::producer::transactional_producer(bootstrap.clone(), "interleave-tid").await;
 
     // First txn: commit ["a", "b", "c"].
     let txn = producer.begin_transaction().await.unwrap();
-    for v in ["a", "b", "c"] {
-        drop(
-            producer
-                .enqueue(rec("ti", v))
-                .await
-                .expect("record is queued"),
-        );
-    }
+    crate::support::producer::enqueue_string_values(&producer, "ti", &["a", "b", "c"]).await;
     txn.commit().await.unwrap();
 
     // Second txn: abort ["X", "Y"].
@@ -263,33 +186,16 @@ async fn interleaved_commit_and_abort() {
 
     // Third txn: commit ["d", "e", "f", "g"].
     let txn = producer.begin_transaction().await.unwrap();
-    for v in ["d", "e", "f", "g"] {
-        drop(
-            producer
-                .enqueue(rec("ti", v))
-                .await
-                .expect("record is queued"),
-        );
-    }
+    crate::support::producer::enqueue_string_values(&producer, "ti", &["d", "e", "f", "g"]).await;
     txn.commit().await.unwrap();
 
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap)
-        .group_id("g-interleave")
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe(["ti".to_string()])
-        .build()
-        .await
-        .unwrap();
-
-    let mut seen: Vec<String> = Vec::new();
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while seen.len() < 7 && std::time::Instant::now() < deadline {
-        for r in consumer.poll(krabka_units::millis(200)).await.unwrap() {
-            seen.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
-        }
-    }
+    let (consumer, seen) = crate::support::transaction_wire::read_committed_at_least(
+        bootstrap,
+        "g-interleave",
+        "ti",
+        7,
+    )
+    .await;
     assert!(seen == vec!["a", "b", "c", "d", "e", "f", "g"]);
 
     producer.close().await.unwrap();

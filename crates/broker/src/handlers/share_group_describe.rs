@@ -12,10 +12,8 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    broker::Broker,
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
-    error::BrokerError,
     handlers::{
         authorized_operations::{DescribedGroupRow as _, fill_group_authorized_operations},
         consumer_group_describe::{DescribedTopics, hide_undescribable_topics},
@@ -32,101 +30,100 @@ impl DescribedTopics for DescribedGroup {
     }
 }
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: ShareGroupDescribeRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<ShareGroupDescribeResponse, BrokerError> {
-    // Kafka's `isShareGroupProtocolEnabled` gate comes before any ACL check,
-    // and `getErrorResponse` answers every requested group. Share groups are
-    // on from a finalized `share.version` of 1.
-    let image = broker.controller.current_image();
-    if !crate::features::share_groups_enabled(&image) {
-        let groups = req
-            .group_ids
-            .iter()
-            .map(|gid| DescribedGroup::error_row(gid, codes::UNSUPPORTED_VERSION, None))
-            .collect();
-        return Ok(response(groups));
-    }
+context_handler! {
+    ShareGroupDescribeRequest => ShareGroupDescribeResponse,
+    (broker, req, _version, ctx),
+    {
+        // Kafka's `isShareGroupProtocolEnabled` gate comes before any ACL check,
+        // and `getErrorResponse` answers every requested group. Share groups are
+        // on from a finalized `share.version` of 1.
+        let image = broker.controller.current_image();
+        if !crate::features::share_groups_enabled(&image) {
+            let groups = req
+                .group_ids
+                .iter()
+                .map(|gid| DescribedGroup::error_row(gid, codes::UNSUPPORTED_VERSION, None))
+                .collect();
+            return Ok(response(groups));
+        }
 
-    let authorizer = broker.config.authorizer.as_ref();
-    let coordinator = &broker.group_coordinator;
-    // Kafka adds the GROUP_AUTHORIZATION_FAILED rows first, then the
-    // coordinator results.
-    let mut groups: Vec<DescribedGroup> = Vec::new();
-    let mut invalid: Vec<DescribedGroup> = Vec::new();
-    let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
-    for gid in &req.group_ids {
-        if crate::handlers::group_describe_denied(authorizer, &image, ctx, gid) {
-            groups.push(DescribedGroup::error_row(
-                gid,
-                codes::GROUP_AUTHORIZATION_FAILED,
-                None,
-            ));
-            continue;
-        }
-        // GroupCoordinatorService.shareGroupDescribe rejects an empty id
-        // before it routes the group to a shard, and its row comes ahead of
-        // the shard results.
-        if gid.is_empty() {
-            invalid.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
-            continue;
-        }
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, gid) {
-            described.push(DescribedGroup::error_row(gid, error_code, None));
-            continue;
-        }
-        let handle = match coordinator.group_type(gid) {
-            Some(GroupType::Share) | None => coordinator.find_share(gid),
-            Some(_) => None,
-        };
-        let Some(handle) = handle else {
-            described.push(DescribedGroup::error_row(
-                gid,
-                codes::GROUP_ID_NOT_FOUND,
-                Some(crate::handlers::share_group_not_found_message(
-                    coordinator,
+        let authorizer = broker.config.authorizer.as_ref();
+        let coordinator = &broker.group_coordinator;
+        // Kafka adds the GROUP_AUTHORIZATION_FAILED rows first, then the
+        // coordinator results.
+        let mut groups: Vec<DescribedGroup> = Vec::new();
+        let mut invalid: Vec<DescribedGroup> = Vec::new();
+        let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
+        for gid in &req.group_ids {
+            if crate::handlers::group_describe_denied(authorizer, &image, ctx, gid) {
+                groups.push(DescribedGroup::error_row(
                     gid,
-                )),
-            ));
-            continue;
-        };
+                    codes::GROUP_AUTHORIZATION_FAILED,
+                    None,
+                ));
+                continue;
+            }
+            // GroupCoordinatorService.shareGroupDescribe rejects an empty id
+            // before it routes the group to a shard, and its row comes ahead of
+            // the shard results.
+            if gid.is_empty() {
+                invalid.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
+                continue;
+            }
+            if let Some(error_code) = crate::handlers::group_coordinator_error(broker, gid) {
+                described.push(DescribedGroup::error_row(gid, error_code, None));
+                continue;
+            }
+            let handle = match coordinator.group_type(gid) {
+                Some(GroupType::Share) | None => coordinator.find_share(gid),
+                Some(_) => None,
+            };
+            let Some(handle) = handle else {
+                described.push(DescribedGroup::error_row(
+                    gid,
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some(crate::handlers::share_group_not_found_message(
+                        coordinator,
+                        gid,
+                    )),
+                ));
+                continue;
+            };
 
-        let asked = ask(&handle.tx, |reply| ShareGroupActorMessage::Describe {
-            reply,
-        })
-        .await;
-        described.push(match asked {
-            Ok(view) => view.into_described_group(&image),
-            Err(AskError::Closed) => {
-                DescribedGroup::error_row(gid, codes::COORDINATOR_LOAD_IN_PROGRESS, None)
-            }
-            Err(AskError::Dropped) => {
-                DescribedGroup::error_row(gid, codes::UNKNOWN_SERVER_ERROR, None)
-            }
-        });
+            let asked = ask(&handle.tx, |reply| ShareGroupActorMessage::Describe {
+                reply,
+            })
+            .await;
+            described.push(match asked {
+                Ok(view) => view.into_described_group(&image),
+                Err(AskError::Closed) => {
+                    DescribedGroup::error_row(gid, codes::COORDINATOR_LOAD_IN_PROGRESS, None)
+                }
+                Err(AskError::Dropped) => {
+                    DescribedGroup::error_row(gid, codes::UNKNOWN_SERVER_ERROR, None)
+                }
+            });
+        }
+
+        // KIP-430: the group operations bitfield, only on opt-in and only for rows
+        // that came back clean.
+        fill_group_authorized_operations(
+            authorizer,
+            &image,
+            ctx,
+            req.include_authorized_operations,
+            &mut described,
+        );
+        groups.extend(invalid);
+        groups.extend(described);
+
+        // Clients may not see topics they cannot `Describe`: a group whose
+        // assignment names one is replaced by Kafka's TOPIC_AUTHORIZATION_FAILED
+        // row with no members.
+        hide_undescribable_topics(authorizer, &image, ctx, &mut groups);
+
+        Ok(response(groups))
     }
-
-    // KIP-430: the group operations bitfield, only on opt-in and only for rows
-    // that came back clean.
-    fill_group_authorized_operations(
-        authorizer,
-        &image,
-        ctx,
-        req.include_authorized_operations,
-        &mut described,
-    );
-    groups.extend(invalid);
-    groups.extend(described);
-
-    // Clients may not see topics they cannot `Describe`: a group whose
-    // assignment names one is replaced by Kafka's TOPIC_AUTHORIZATION_FAILED
-    // row with no members.
-    hide_undescribable_topics(authorizer, &image, ctx, &mut groups);
-
-    Ok(response(groups))
 }
 
 fn response(groups: Vec<DescribedGroup>) -> ShareGroupDescribeResponse {
@@ -146,7 +143,10 @@ mod tests {
     use krabka_protocol::owned::share_group_describe_response;
 
     use super::*;
-    use crate::test_support::{DenyAll, peer, principal, test_ctx};
+    use crate::{
+        broker::Broker,
+        test_support::{DenyAll, peer, principal, test_ctx},
+    };
 
     fn request(group_ids: &[&str]) -> ShareGroupDescribeRequest {
         ShareGroupDescribeRequest {
@@ -321,9 +321,11 @@ mod tests {
             .expect("ACLs and topics");
         seed_group(&broker, "g", &[visible]).await;
         seed_group(&broker, "h", &[visible, hidden]).await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+        request_identity!(
+            (principal, peer, ctx),
+            principal("alice"),
+            client_id = "admin-client"
+        );
         let req = ShareGroupDescribeRequest {
             group_ids: vec!["g".into(), "denied".into(), "h".into(), "missing".into()],
             include_authorized_operations: true,
@@ -386,12 +388,7 @@ mod tests {
     #[tokio::test]
     async fn handle_refuses_empty_and_foreign_group_ids() {
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
-            true,
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), share_allow_all);
         let _classic = broker.group_coordinator.get_or_create_classic("classic");
         test_ctx!(ctx, "alice");
 

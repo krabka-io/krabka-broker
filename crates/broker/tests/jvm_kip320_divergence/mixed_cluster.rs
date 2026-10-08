@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -91,22 +91,15 @@ fn krabka_mixed_config(
     cluster_id: Uuid,
     log_dir: &std::path::Path,
 ) -> BrokerConfig {
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.broker_id = i32::try_from(i + 1).unwrap();
-    cfg.node_id = krabka_broker::NodeId(u64::try_from(i + 1).unwrap());
-    cfg.listen_addr = format!("0.0.0.0:{client_port}").parse().unwrap();
-    cfg.advertised_listener = format!("{advertised_host}:{client_port}");
-    cfg.controller_listen_addr = own_controller_addr;
-    // Outside the 100 lowest ids, which Kafka reserves and the broker refuses.
-    cfg.directory_id = Uuid::from_u64_pair(1, cfg.node_id.0);
-    cfg.bootstrap_mode = BootstrapMode::Bootstrap;
-    cfg.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-        .collect();
-    cfg.auto_join = false;
-    cfg.bootstrap_servers = vec![];
-    cfg.cluster_id = Some(cluster_id);
+    let mut cfg = support::jvm_static_voter_config(
+        i,
+        format!("0.0.0.0:{client_port}").parse().unwrap(),
+        format!("{advertised_host}:{client_port}"),
+        own_controller_addr,
+        voters,
+        cluster_id,
+        log_dir,
+    );
     cfg.heartbeat_interval = krabka_units::millis(1_000);
     // Kafka's `broker.session.timeout.ms` default. The controller starts a
     // broker's session when its registration lands, and the JVM broker
@@ -131,21 +124,7 @@ fn krabka_mixed_config(
 /// would. The formatter runs in process because a Bazel test sandbox has no
 /// Cargo working tree to spawn it from.
 async fn format_at_kafka_4_0(log_dir: &std::path::Path, cluster_id: &str, node: &BrokerConfig) {
-    let argv = vec![
-        "krabka-format".to_string(),
-        "--log-dir".to_string(),
-        log_dir.to_str().unwrap().to_string(),
-        "--cluster-id".to_string(),
-        cluster_id.to_string(),
-        "--node-id".to_string(),
-        node.node_id.0.to_string(),
-        "--directory-id".to_string(),
-        node.directory_id.to_string(),
-        "--release-version".to_string(),
-        "4.0".to_string(),
-    ];
-    let code = krabka_format::run_from_args(argv).await;
-    assert2::assert!(code == 0, "krabka-format exited {code}");
+    support::format_jvm_voter(log_dir, cluster_id, node).await;
 }
 
 /// Stand up two Krabka brokers (the metadata-quorum majority + data plane) and
@@ -243,12 +222,12 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
     // but unreadable on native Linux (the CI runner included).
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        std::fs::set_permissions(propdir.path(), std::fs::Permissions::from_mode(0o755))
-            .expect("chmod server.properties directory");
-        std::fs::set_permissions(&proppath, std::fs::Permissions::from_mode(0o644))
-            .expect("chmod server.properties");
+        crate::support::chmod_for_container(
+            propdir.path(),
+            0o755,
+            "chmod server.properties directory",
+        );
+        crate::support::chmod_for_container(&proppath, 0o644, "chmod server.properties");
     }
     let entry = format!(
         "/opt/kafka/bin/kafka-storage.sh format -t {cid_str} --config /tmp/s.properties --ignore-formatted && \
@@ -298,4 +277,97 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
         _propdir: propdir,
         bootstrap_all,
     }
+}
+
+/// Advance one partition epoch while retaining its replicas and directory identities.
+pub fn single_leader_record(
+    topic: &str,
+    previous: &krabka_metadata::PartitionRecord,
+    leader: krabka_broker::NodeId,
+    epoch: krabka_metadata::LeaderEpoch,
+    partition_epoch_delta: i32,
+) -> krabka_metadata::PartitionRecord {
+    krabka_metadata::PartitionRecord {
+        topic: topic.to_string(),
+        partition: 0,
+        leader,
+        replicas: previous.replicas.clone(),
+        isr: vec![leader],
+        leader_epoch: epoch,
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        directories: previous.directories.clone(),
+        partition_epoch: previous.partition_epoch + partition_epoch_delta,
+    }
+}
+
+/// A registered mixed topology, with a uniquely named JVM container.
+pub async fn registered_mixed_cluster(
+    container_prefix: &str,
+    context: &str,
+) -> (String, MixedCluster) {
+    let container = support::unique_container_name(container_prefix);
+    let cluster = start_mixed_cluster(&container, true).await;
+    assert2::assert!(
+        cluster.wait_for_brokers(3, Duration::from_mins(2)).await,
+        "{context}"
+    );
+    (container, cluster)
+}
+
+/// Verify the committed prefix independently of the input records that seeded it.
+pub fn prefix_log_end(broker: &BrokerHandle, topic: &str, expected: i64, label: &str) -> i64 {
+    let prefix_leo = broker
+        .local_log_end_offset(topic, 0)
+        .expect("Krabka prefix log exists");
+    assert2::assert!(
+        prefix_leo == expected,
+        "expected {label}-record prefix, got LEO {prefix_leo}"
+    );
+    prefix_leo
+}
+
+/// The two independently asserted directions of the mixed-replica divergence tests.
+pub enum DivergenceDirection {
+    JvmFollower,
+    KrabkaFollower,
+}
+
+/// Register all three brokers, install the case's ISR and verify its committed prefix.
+/// Expected LEO is explicit case data, independent of the count sent to the producer.
+pub async fn prepare_divergence(
+    topic: &str,
+    direction: DivergenceDirection,
+) -> (String, MixedCluster, String, i64) {
+    let (container_prefix, join_context, required, isr_context, prefix, count, expected, label) =
+        match direction {
+            DivergenceDirection::JvmFollower => (
+                "krabka-kip320-jvm-follower-broker",
+                "JVM broker never joined the mixed cluster (only the 2 Krabka brokers registered); the cross-impl KRaft data-plane join is Linux-bound",
+                &[3][..],
+                "JVM follower never joined ISR",
+                "prefix",
+                10,
+                10,
+                "ten",
+            ),
+            DivergenceDirection::KrabkaFollower => (
+                "krabka-kip320-krabka-follower-broker",
+                "JVM broker never joined the mixed cluster; cross-impl KRaft join is Linux-bound",
+                &[1, 3][..],
+                "replicas never converged",
+                "rev",
+                8,
+                8,
+                "eight",
+            ),
+        };
+    let (container, cluster) = registered_mixed_cluster(container_prefix, join_context).await;
+    let bootstrap = cluster.bootstrap_all.clone();
+    crate::topic_admin::create_and_wait_for_isr(&bootstrap, topic, required, isr_context).await;
+    crate::docker::produce_committed_prefix(&bootstrap, topic, prefix, count);
+    // Intentional: allow the external JVM producer/follower to settle; no broker image or metric expresses this.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let leo = prefix_log_end(&cluster.krabka[0].0, topic, expected, label);
+    (container, cluster, bootstrap, leo)
 }

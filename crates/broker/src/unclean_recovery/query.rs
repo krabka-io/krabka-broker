@@ -159,38 +159,32 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn balanced_waits_for_all_then_picks_best() {
+    async fn query_fixture(slow_delay: Duration, deadline: Duration) -> Vec<ReplicaLogInfo> {
         let f1 = async { Some(info(1, 50)) };
-        let f2 = async {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+        let f2 = async move {
+            tokio::time::sleep(slow_delay).await;
             Some(info(2, 90))
         };
-        let got = gather_responses(vec![f1.boxed(), f2.boxed()], Duration::from_secs(5)).await;
+        gather_responses(vec![f1.boxed(), f2.boxed()], deadline).await
+    }
+
+    #[tokio::test]
+    async fn balanced_waits_for_all_then_picks_best() {
+        let got = query_fixture(Duration::from_millis(20), Duration::from_secs(5)).await;
         assert!(got.len() == 2);
         assert!(select_best_replica(&got) == Some(NodeId(2)));
     }
 
     #[tokio::test]
     async fn balanced_returns_partial_on_timeout() {
-        let f1 = async { Some(info(1, 50)) };
-        let f2 = async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            Some(info(2, 90))
-        };
-        let got = gather_responses(vec![f1.boxed(), f2.boxed()], Duration::from_millis(50)).await;
+        let got = query_fixture(Duration::from_secs(10), Duration::from_millis(50)).await;
         assert!(got.len() == 1, "must return what arrived before the cap");
         assert!(got[0].broker_id == krabka_audit::NodeId(1));
     }
 
     #[tokio::test]
     async fn aggressive_takes_early_responders() {
-        let f1 = async { Some(info(1, 50)) };
-        let f2 = async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            Some(info(2, 90))
-        };
-        let got = gather_responses(vec![f1.boxed(), f2.boxed()], Duration::from_millis(50)).await;
+        let got = query_fixture(Duration::from_secs(10), Duration::from_millis(50)).await;
         assert!(got == vec![info(1, 50)]);
     }
 }

@@ -32,17 +32,9 @@ fn failures(metrics: &BrokerMetrics, topic: &str, reason: CleanerFailureReason) 
 /// An image holding one live freeze entry for `scope`.
 fn image_with_freeze(scope: &str) -> MetadataImage {
     let mut image = MetadataImage::new(Uuid::from_u128(0x5150));
-    image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
-        scope: scope.to_owned(),
-        pattern_type: PatternType::Literal,
-        frozen: true,
-        reason: "DR cutover".to_owned(),
-        set_by: "User:alice".to_owned(),
-        set_at_ms: 1_770_000_000_000,
-        proposal_id: Uuid::nil(),
-        key_id: String::new(),
-        signature: Vec::new(),
-    }));
+    image.apply(&MetadataRecord::V1TopicFreeze(
+        crate::test_support::topic_freeze_record(scope, PatternType::Literal, true, "DR cutover"),
+    ));
     image
 }
 

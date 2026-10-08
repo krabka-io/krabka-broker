@@ -339,11 +339,7 @@ where
         started.elapsed(),
         None,
     );
-    if let Err(error) = framed.send(response.bytes).await {
-        tracing::warn!(%error, "framed.send error, closing");
-        return AfterResponse::Close;
-    }
-    AfterResponse::Mute(response.throttle)
+    response::send_throttled_response(framed, response).await
 }
 
 /// KIP scope check (#683): `crate::api_catalog::INTER_BROKER_ONLY_APIS` is
@@ -597,24 +593,6 @@ async fn serve_connection_stream<S>(
 
         let (_, _in_flight) = begin_request(&broker, &parsed);
 
-        if matches!(entry.kind(), crate::handlers::DispatchKind::Fetch) {
-            match dispatch_fetch(
-                &mut framed,
-                &broker,
-                &parsed,
-                &auth,
-                &peer,
-                &spec.name,
-                req_span.clone(),
-            )
-            .await
-            {
-                AfterResponse::Close => break,
-                AfterResponse::Mute(window) => mute_until = mute_deadline(window),
-            }
-            continue;
-        }
-
         let context = DispatchContext {
             broker: &broker,
             parsed: &parsed,
@@ -626,6 +604,15 @@ async fn serve_connection_stream<S>(
             client_software_name: &client_software.0,
             client_software_version: &client_software.1,
         };
+
+        if matches!(entry.kind(), crate::handlers::DispatchKind::Fetch) {
+            match dispatch_fetch(&mut framed, context, req_span.clone()).await {
+                AfterResponse::Close => break,
+                AfterResponse::Mute(window) => mute_until = mute_deadline(window),
+            }
+            continue;
+        }
+
         match send_registry_response(&mut framed, entry, context, req_span).await {
             AfterResponse::Close => break,
             AfterResponse::Mute(window) => mute_until = mute_deadline(window),

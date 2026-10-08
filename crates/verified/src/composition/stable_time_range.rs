@@ -17,31 +17,22 @@ use super::{
 /// external. This proves prefix gating only.
 #[requires(sparse_timestamp_window_valid(window.0@, window.1@, window.2@))]
 #[requires(span.0@ >= 0 && w.log_start@ >= 0 && targets.0@ <= targets.1@)]
-#[requires(forall<i: Int> 0 <= i && i < window.0@.len() ==> span.0@ + window.0@[i]@ <= i64::MAX@)]
+#[requires(super::time_index::absolute_record_prefix_bounded(window.0@, window.0@.len(), span.0@, i64::MAX@))]
 #[ensures(match result {
     Err(()) => (exists<i: Int> 0 <= i && i < starts@.len() && starts@[i]@ > w.log_end@)
         || !time_segment_valid(span.0@, span.1@)
         || exists<i: Int> 0 <= i && i < window.0@.len() && span.0@ + window.0@[i]@ > span.1@,
     Ok((lso, limit, selected)) => time_segment_valid(span.0@, span.1@)
-        && (forall<i: Int> 0 <= i && i < window.0@.len() ==> span.0@ + window.0@[i]@ <= span.1@)
-        && (forall<i: Int> 0 <= i && i < starts@.len() ==> starts@[i]@ <= w.log_end@)
-        && lso@ <= w.log_end@
-        && ((starts@.len() == 0 && lso == w.log_end)
-            || (starts@.len() > 0 && (exists<i: Int> 0 <= i && i < starts@.len() && lso == starts@[i])
-                && (forall<i: Int> 0 <= i && i < starts@.len() ==> lso@ <= starts@[i]@)))
+        && (super::time_index::absolute_record_prefix_bounded(window.0@, window.0@.len(), span.0@, span.1@))
+        && crate::transaction::first_unstable_frontier(starts@, w.log_end@, lso@)
         && limit@ == lso@.min(w.hw@).min(w.deliverable@)
-        && (forall<v: Int> v <= w.log_end@ && v <= w.hw@ && v <= w.deliverable@
-            && (forall<i: Int> 0 <= i && i < starts@.len() ==> v <= starts@[i]@) ==> v <= limit@)
+        && (crate::transaction::unstable_fetch_limit_maximal(starts@, w.log_end@, w.hw@, w.deliverable@, limit@))
         && match selected {
-            None => forall<i: Int> 0 <= i && i < window.0@.len()
-                ==> span.0@ + window.0@[i]@ < w.log_start@ || span.0@ + window.0@[i]@ >= limit@
-                    || window.1@[i]@ < targets.0@ || window.1@[i]@ > targets.1@,
+            None => timestamp_prefix_excluded(window.0@, window.1@, window.0@.len(), span.0@, w.log_start@, limit@, targets),
             Some(index) => index@ < window.0@.len() && w.log_start@ <= span.0@ + window.0@[index@]@
                 && span.0@ + window.0@[index@]@ < limit@ && targets.0@ <= window.1@[index@]@ && window.1@[index@]@ <= targets.1@
                 && (forall<i: Int> 0 <= i && i < starts@.len() ==> span.0@ + window.0@[index@]@ < starts@[i]@)
-                && forall<i: Int> 0 <= i && i < index@
-                    ==> span.0@ + window.0@[i]@ < w.log_start@ || span.0@ + window.0@[i]@ >= limit@
-                        || window.1@[i]@ < targets.0@ || window.1@[i]@ > targets.1@,
+                && timestamp_prefix_excluded(window.0@, window.1@, index@, span.0@, w.log_start@, limit@, targets),
         },
 })]
 pub(super) fn stable_time_range_preserves_first(
@@ -59,4 +50,19 @@ pub(super) fn stable_time_range_preserves_first(
         _ => None,
     };
     Ok((lso, visibility.limit_offset, selected))
+}
+
+open_logic! {
+/// No inspected record is both visible in the offset window and inside the timestamp interval.
+fn timestamp_prefix_excluded(
+    offsets: Seq<u32>,
+    timestamps: Seq<i64>,
+    count: Int,
+    base: Int,
+    floor: Int,
+    limit: Int,
+    targets: (i64, i64),
+) -> bool {
+    pearlite! { forall<i: Int> 0 <= i && i < count ==> base + offsets[i]@ < floor || base + offsets[i]@ >= limit || super::timestamp::outside_timestamp_interval(timestamps[i]@, targets) }
+}
 }

@@ -1,15 +1,18 @@
 (* #"/workspace/crates/verified/src/composition/eviction_timestamp.rs" 33 0 40 38 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
-let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
-let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span stime_index = "/workspace/crates/verified/src/composition/time_index.rs" 20 8 23 129
-let%span strim = "/workspace/crates/verified/src/composition/trim.rs" 164 11 164 61
-let%span strim'0 = "/workspace/crates/verified/src/composition/trim.rs" 165 11 165 90
-let%span strim'1 = "/workspace/crates/verified/src/composition/trim.rs" 166 10 166 33
-let%span strim'2 = "/workspace/crates/verified/src/composition/trim.rs" 167 10 167 35
-let%span strim'3 = "/workspace/crates/verified/src/composition/trim.rs" 169 4 169 33
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 14 16 14 72
+let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
+let%span stime_index = "/workspace/crates/verified/src/composition/time_index.rs" 17 8 20 129
+let%span stime_index'0 = "/workspace/crates/verified/src/composition/time_index.rs" 92 16 92 80
+let%span strim = "/workspace/crates/verified/src/composition/trim.rs" 169 11 169 61
+let%span strim'0 = "/workspace/crates/verified/src/composition/trim.rs" 170 11 170 90
+let%span strim'1 = "/workspace/crates/verified/src/composition/trim.rs" 171 10 171 33
+let%span strim'2 = "/workspace/crates/verified/src/composition/trim.rs" 172 10 172 35
+let%span strim'3 = "/workspace/crates/verified/src/composition/trim.rs" 174 4 174 33
 let%span sretained_timestamp = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 14 11 14 73
 let%span sretained_timestamp'0 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 15 11 15 38
 let%span sretained_timestamp'1 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 16 11 16 94
@@ -21,7 +24,7 @@ let%span seviction_timestamp'2 = "/workspace/crates/verified/src/composition/evi
 let%span seviction_timestamp'3 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 15 11 15 44
 let%span seviction_timestamp'4 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 16 11 17 57
 let%span seviction_timestamp'5 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 18 11 19 57
-let%span seviction_timestamp'6 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 20 11 20 94
+let%span seviction_timestamp'6 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 20 11 20 106
 let%span seviction_timestamp'7 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 21 10 21 64
 let%span seviction_timestamp'8 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 22 10 22 64
 let%span seviction_timestamp'9 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 23 10 23 108
@@ -37,6 +40,7 @@ use int.MinMax
 use seq.Seq
 use creusot.int.UInt32
 use creusot.int.UInt64
+use map.Map
 use creusot.prelude.Opaque
 use creusot.prelude.Any
 use int.Int
@@ -95,10 +99,19 @@ type tup3_ref_slice_u32_ref_slice_i64_ref_slice_tup2_usize_usize = {
 
 type t_Option_usize = None | Some UInt64.t
 
-predicate sparse_timestamp_window_valid [#"/workspace/crates/verified/src/composition/time_index.rs" 14 0 18 9] (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) (rows: Seq.seq tup2_usize_usize) =
+type tup2_u32_u32 = { f0'3: UInt32.t; f1'3: UInt32.t }
+
+predicate pairwise_u32 [#"/workspace/crates/verified/src/sequence.rs" 20 0 20 95] (values: Seq.seq UInt32.t) (relation: Map.map tup2_u32_u32 bool) =
+  [%#ssequence'0] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length values
+    -> Map.get relation { f0'3 = Seq.get values i; f1'3 = Seq.get values j }
+
+predicate strictly_increasing_u32 [#"/workspace/crates/verified/src/sequence.rs" 13 0 13 73] (values: Seq.seq UInt32.t) =
+  [%#ssequence] pairwise_u32 values (fun (__0: tup2_u32_u32) -> let {f0'3 = left; f1'3 = right} = __0 in UInt32.t'int left
+  < UInt32.t'int right)
+
+predicate sparse_timestamp_window_valid [#"/workspace/crates/verified/src/composition/time_index.rs" 11 0 15 9] (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) (rows: Seq.seq tup2_usize_usize) =
   [%#stime_index] Seq.length offsets = Seq.length timestamps
-  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length offsets
-      -> UInt32.t'int (Seq.get offsets i) < UInt32.t'int (Seq.get offsets j))
+  /\ strictly_increasing_u32 offsets
   /\ (forall i: int. 0 <= i /\ i < Seq.length rows
       -> UInt64.t'int (Seq.get rows i).f0'1 <= UInt64.t'int (Seq.get rows i).f1'1
       /\ UInt64.t'int (Seq.get rows i).f1'1 < Seq.length timestamps)
@@ -140,7 +153,7 @@ let from_i64 (small: UInt32.t) (return (x: Int64.t)) = any
     = Int64.of_int (UInt32.t'int small)}
     (! return {result}) ]
 
-type tup2_usize_bool = { f0'3: UInt64.t; f1'3: bool }
+type tup2_usize_bool = { f0'4: UInt64.t; f1'4: bool }
 
 let closure0 [#"/workspace/crates/verified/src/composition/eviction_timestamp.rs" 50 13 50 20] [@coma:extspec]
   (self: closure0) (index: UInt64.t) (return (x: tup2_usize_bool)) = bb0
@@ -155,7 +168,7 @@ let closure0 [#"/workspace/crates/verified/src/composition/eviction_timestamp.rs
     | s6 = from_i64 [%#seviction_timestamp'12] {_8} (fun (_x: Int64.t) -> [ &_7 <- _x ] s7)
     | s7 = Int64.add [%#seviction_timestamp'13] {self.c0} {_7} (fun (_x: Int64.t) -> [ &_5 <- _x ] s8)
     | s8 = [ &_4 <- Int64.lt _5 self.c2 ] s9
-    | s9 = [ &_ret <- { f0'3 = index; f1'3 = _4 } ] s10
+    | s9 = [ &_ret <- { f0'4 = index; f1'4 = _4 } ] s10
     | s10 = return {_ret} ] ]
   [ & _ret: tup2_usize_bool = Any.any_l ()
   | & self: closure0 = self
@@ -201,7 +214,10 @@ let map_usize (self_: t_Option_usize) (f: closure0) (return (x: t_Option_tup2_us
       end}
     (! return {result}) ]
 
-type tup3_i64_i64_Option_tup2_usize_bool = { f0'4: Int64.t; f1'4: Int64.t; f2'4: t_Option_tup2_usize_bool }
+type tup3_i64_i64_Option_tup2_usize_bool = { f0'5: Int64.t; f1'5: Int64.t; f2'5: t_Option_tup2_usize_bool }
+
+predicate absolute_record_prefix_bounded [#"/workspace/crates/verified/src/composition/time_index.rs" 86 0 91 9] (offsets: Seq.seq UInt32.t) (count: int) (base: int) (end': int) =
+  [%#stime_index'0] forall i: int. 0 <= i /\ i < count -> base + UInt32.t'int (Seq.get offsets i) <= end'
 
 meta "compute_max_steps" 1000000
 
@@ -222,10 +238,7 @@ let physical_eviction_routes_retained_timestamp [#"/workspace/crates/verified/sr
       <= Int64.to_int frontiers.f4
     /\ Int64.to_int frontiers.f4 <= Int64.to_int frontiers.f0
     /\ Int64.to_int frontiers.f4 + MinMax.max (Int64.to_int frontiers.f2) 0 <= Int64.to_int frontiers.f1)
-  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #4] [%#seviction_timestamp'6] forall i: int. 0
-        <= i
-      /\ i < Seq.length (Slice64.view window.f0'2)
-    -> Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) <= Int64.to_int const_MAX)}
+  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #4] [%#seviction_timestamp'6] absolute_record_prefix_bounded (Slice64.view window.f0'2) (Seq.length (Slice64.view window.f0'2)) (Int64.to_int base) (Int64.to_int const_MAX))}
   (! bb0
   [ bb0 = s0
     [ s0 = diskless_trim_reconciliation_preserves_coverage [%#seviction_timestamp] {frontiers.f0} {frontiers.f1}
@@ -237,7 +250,7 @@ let physical_eviction_routes_retained_timestamp [#"/workspace/crates/verified/sr
     | s4 = [ &_59 <- { c0 = base; c1 = window.f0'2; c2 = local } ] s5
     | s5 = map_usize [%#seviction_timestamp'1] {_54} {_59}
         (fun (_x: t_Option_tup2_usize_bool) -> [ &selected <- _x ] s6)
-    | s6 = [ &_ret <- { f0'4 = wal; f1'4 = local; f2'4 = selected } ] s7
+    | s6 = [ &_ret <- { f0'5 = wal; f1'5 = local; f2'5 = selected } ] s7
     | s7 = return {_ret} ] ]
   [ & _ret: tup3_i64_i64_Option_tup2_usize_bool = Any.any_l ()
   | & frontiers: tup5_i64_i64_i64_i64_i64 = frontiers
@@ -254,20 +267,20 @@ let physical_eviction_routes_retained_timestamp [#"/workspace/crates/verified/sr
   | & _59: closure0 = Any.any_l () ])
   [ return (result: tup3_i64_i64_Option_tup2_usize_bool) ->
   {[@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures] ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #0] [%#seviction_timestamp'7] Int64.to_int frontiers.f3
-        <= Int64.to_int result.f0'4
-      /\ Int64.to_int frontiers.f4 <= Int64.to_int result.f1'4)
-    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #1] [%#seviction_timestamp'8] Int64.to_int result.f0'4
+        <= Int64.to_int result.f0'5
+      /\ Int64.to_int frontiers.f4 <= Int64.to_int result.f1'5)
+    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #1] [%#seviction_timestamp'8] Int64.to_int result.f0'5
         <= Int64.to_int frontiers.f0
-      /\ Int64.to_int result.f1'4 <= Int64.to_int frontiers.f0)
-    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #2] [%#seviction_timestamp'9] Int64.to_int result.f0'4
+      /\ Int64.to_int result.f1'5 <= Int64.to_int frontiers.f0)
+    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #2] [%#seviction_timestamp'9] Int64.to_int result.f0'5
           + MinMax.max (Int64.to_int frontiers.f2) 0
         <= Int64.to_int frontiers.f1
-      /\ Int64.to_int result.f1'4 + MinMax.max (Int64.to_int frontiers.f2) 0 <= Int64.to_int frontiers.f1)
-    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #3] [%#seviction_timestamp'10] match result.f2'4 with
+      /\ Int64.to_int result.f1'5 + MinMax.max (Int64.to_int frontiers.f2) 0 <= Int64.to_int frontiers.f1)
+    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #3] [%#seviction_timestamp'10] match result.f2'5 with
       | None'0 -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view window.f0'2)
         -> Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) < Int64.to_int logical_floor
         \/ Int64.to_int (Seq.get (Slice64.view window.f1'2) i) < Int64.to_int target
-      | Some'0 {f0'3 = index; f1'3 = remote} -> UInt64.t'int index < Seq.length (Slice64.view window.f0'2)
+      | Some'0 {f0'4 = index; f1'4 = remote} -> UInt64.t'int index < Seq.length (Slice64.view window.f0'2)
       /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view window.f1'2) (UInt64.t'int index))) (Int64.to_int target)
       /\ Int64.to_int logical_floor
         <= Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) (UInt64.t'int index))
@@ -276,7 +289,7 @@ let physical_eviction_routes_retained_timestamp [#"/workspace/crates/verified/sr
           \/ Int64.to_int (Seq.get (Slice64.view window.f1'2) i) < Int64.to_int target)
       /\ remote
         = (Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) (UInt64.t'int index))
-        < Int64.to_int result.f1'4)
+        < Int64.to_int result.f1'5)
       /\ (remote
       -> Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) (UInt64.t'int index))
         < Int64.to_int frontiers.f0

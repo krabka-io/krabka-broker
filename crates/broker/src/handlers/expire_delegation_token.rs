@@ -114,20 +114,12 @@ pub(crate) async fn handle(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_raft::ControllerHandle;
     use tempfile::TempDir;
 
     use super::*;
     use crate::handlers::delegation_token_test_support::{
-        DAY_MS, authed, authed_with_token, hmac_for, seed_token, test_controller,
+        DAY_MS, authed, authed_with_token, stored_expiry, test_controller,
     };
-
-    fn stored_expiry(controller: &ControllerHandle, token_id: &str) -> Option<i64> {
-        controller
-            .current_image()
-            .delegation_token_by_id(token_id)
-            .map(|token| token.expiry_timestamp_ms)
-    }
 
     /// Refusals come in Kafka's order, carry Kafka's expiry, and leave the
     /// token alone. A caller that is neither owner nor renewer gets
@@ -135,13 +127,7 @@ mod tests {
     /// the expiry check.
     #[tokio::test]
     async fn refusals_follow_kafka_order() {
-        let crate::handlers::delegation_token_test_support::RefusalFixture {
-            directory: _dir,
-            controller,
-            secret,
-            live,
-            expired,
-        } = crate::handlers::delegation_token_test_support::RefusalFixture::new().await;
+        refusal_token_fixture!((_dir, controller, secret, live, expired));
 
         // (case, caller, secret configured, hmac, period, error code, expiry)
         let cases = [
@@ -283,9 +269,7 @@ mod tests {
     /// `min(max, now + period)`.
     #[tokio::test]
     async fn expires_to_kafka_deadline() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
+        token_fixture!(dir, controller, secret);
 
         // (case, caller, period, current expiry delta, max delta, expected
         //  expiry delta; `None` means the max timestamp; whether the token
@@ -351,17 +335,13 @@ mod tests {
         for (index, (case, caller, period, expiry_delta, max_delta, expected_delta, deleted)) in
             cases.into_iter().enumerate()
         {
-            let token_id = format!("tok-{index}");
-            let hmac = hmac_for(&token_id);
-            let seeded_at = now_ms();
-            let max_timestamp_ms = seeded_at + max_delta;
-            seed_token(
+            seeded_token_fixture!(
+                (token_id, hmac, seeded_at, max_timestamp_ms),
                 &controller,
-                &token_id,
-                seeded_at + expiry_delta,
-                max_timestamp_ms,
-            )
-            .await;
+                index,
+                expiry_delta,
+                max_delta
+            );
 
             let before = now_ms();
             let resp = handle(
@@ -377,17 +357,13 @@ mod tests {
             .await;
             let after = now_ms();
 
-            assert!(resp.error_code == crate::codes::NONE, "{case}");
-            match expected_delta {
-                Some(delta) => assert!(
-                    (before + delta..=after + delta).contains(&resp.expiry_timestamp_ms),
-                    "{case}: {} not in [{}, {}]",
-                    resp.expiry_timestamp_ms,
-                    before + delta,
-                    after + delta
-                ),
-                None => assert!(resp.expiry_timestamp_ms == max_timestamp_ms, "{case}"),
-            }
+            crate::handlers::delegation_token_test_support::check_expiry_window(
+                case,
+                (resp.error_code, resp.expiry_timestamp_ms),
+                (before, after),
+                expected_delta,
+                max_timestamp_ms,
+            );
             let stored = stored_expiry(&controller, &token_id);
             let want = (!deleted).then_some(resp.expiry_timestamp_ms);
             assert!(stored == want, "{case}");

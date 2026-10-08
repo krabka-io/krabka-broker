@@ -51,6 +51,7 @@ async fn ip_quota_alter_then_describe_round_trip() {
 
     let alter_resp = drive_alter_client_quotas_sasl(
         addr,
+        crate::CLIENT_ID,
         "admin",
         "admin-secret",
         vec![(
@@ -75,6 +76,7 @@ async fn ip_quota_alter_then_describe_round_trip() {
 
     let desc = drive_describe_client_quotas_sasl(
         addr,
+        crate::CLIENT_ID,
         "admin",
         "admin-secret",
         vec![("ip".into(), /*ANY*/ 2, None)],

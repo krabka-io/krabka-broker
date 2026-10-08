@@ -10,8 +10,7 @@ use std::time::Duration;
 
 use assert2::assert;
 use krabka_broker::{
-    Broker, BrokerConfig, BrokerHandle, NodeId,
-    config::{BackgroundUncleanRecovery, ListenerSpec},
+    Broker, BrokerConfig, BrokerHandle, NodeId, config::BackgroundUncleanRecovery,
     operator_keys::OperatorKeys,
 };
 use krabka_client_core::Client;
@@ -21,6 +20,7 @@ use tempfile::TempDir;
 use crate::{
     principals::{APPROVERS, USERS, principal},
     support,
+    support::client::connect_owned,
 };
 
 /// A live broker behind SASL, the operator keys it trusts, and the directory
@@ -55,6 +55,16 @@ impl Cluster {
             .expect("a minted operator key")
     }
 }
+
+/// Connect the requested principals in order before creating their shared topic.
+macro_rules! client_fixture {
+    ($cluster:ident = $boot:expr; $($client:ident => $user:expr),+; topic($owner:ident, $topic:expr, $partitions:expr)) => {
+        let $cluster = $boot.await;
+        $(let $client = $cluster.client($user).await;)+
+        $crate::topics::create_topic(&$owner, $topic, $partitions).await;
+    };
+}
+pub(super) use client_fixture;
 
 /// Mint one operator key per approver under `dir`.
 fn mint_keys(dir: &std::path::Path) -> Vec<support::OperatorKey> {
@@ -106,15 +116,10 @@ pub(super) async fn boot_with_signed_actions(actions: &[&str]) -> Cluster {
     config.operator_keys = OperatorKeys::load(&entries).expect("load the operator trust set");
     config.break_glass.approvers = APPROVERS.iter().copied().map(principal).collect();
     config.break_glass.signed_actions = actions.iter().map(|a| (*a).to_owned()).collect();
-    config.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_owned(),
-        bind_addr: "127.0.0.1:0".parse().expect("bind addr"),
-        advertised: "127.0.0.1:0".to_owned(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
+    config.listeners = vec![crate::support::listeners::loopback_listener(
+        "SASL_PLAINTEXT",
+        ListenerProtocol::SaslPlaintext,
+    )];
     "SASL_PLAINTEXT".clone_into(&mut config.inter_broker_listener_name);
     config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     for (name, password) in USERS {
@@ -137,12 +142,7 @@ pub(super) async fn boot_with_signed_actions(actions: &[&str]) -> Cluster {
 
 /// A client on a `PLAINTEXT` listener, which authenticates as `User:ANONYMOUS`.
 pub(super) async fn plain_client(bootstrap: &str) -> Client {
-    Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("break-glass-test")
-        .build()
-        .await
-        .expect("client build")
+    connect_owned(bootstrap, "break-glass-test", "client build").await
 }
 
 /// Boot an `n`-node cluster whose every node runs the two-person rule.

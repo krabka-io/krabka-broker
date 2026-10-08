@@ -1,6 +1,6 @@
 (* #"/workspace/crates/verified/src/delivery.rs" 86 0 86 82 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sdelivery = "/workspace/crates/verified/src/delivery.rs" 88 8 88 12
 let%span sdelivery'0 = "/workspace/crates/verified/src/delivery.rs" 91 27 91 28
 let%span sdelivery'1 = "/workspace/crates/verified/src/delivery.rs" 91 15 91 28

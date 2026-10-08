@@ -9,32 +9,22 @@ use std::time::Duration;
 
 use assert2::assert;
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
-    add_partitions_to_txn_response::{AddPartitionsToTxnResponse, AddPartitionsToTxnResult},
-    common::{
-        add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-        add_partitions_to_txn_response::{
-            add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
-            add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
-        },
-    },
-    find_coordinator_request::FindCoordinatorRequest,
-    init_producer_id_request::InitProducerIdRequest,
-};
+use krabka_protocol::owned::common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic;
 
-use crate::txnver_harness::{NONE, TRANSACTION_ABORTABLE, admin_client, boot_single, create_topic};
+use crate::{
+    support::{discovery::coordinator_lookup_request, transactions::init_producer_request},
+    txnver_harness::{NONE, TRANSACTION_ABORTABLE, admin_client, boot_single, create_topic},
+};
 
 const VERIFY_TID: &str = "verify-tid";
 
 async fn await_transaction_coordinator(client: &Client) -> (i64, i16) {
     let coordinator = client
-        .send(FindCoordinatorRequest {
-            key: VERIFY_TID.into(),
-            key_type: 1,
-            coordinator_keys: vec![VERIFY_TID.into()],
-            ..Default::default()
-        })
+        .send(coordinator_lookup_request(
+            VERIFY_TID,
+            1,
+            vec![VERIFY_TID.into()],
+        ))
         .await
         .expect("FindCoordinator");
     assert!(
@@ -49,13 +39,11 @@ async fn await_transaction_coordinator(client: &Client) -> (i64, i16) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let response = client
-            .send(InitProducerIdRequest {
-                transactional_id: Some(VERIFY_TID.into()),
-                transaction_timeout_ms: 60_000,
-                producer_id: -1,
-                producer_epoch: -1,
-                ..Default::default()
-            })
+            .send(init_producer_request(
+                Some(VERIFY_TID.into()),
+                60_000,
+                (-1, -1),
+            ))
             .await
             .expect("InitProducerId");
         if response.error_code == 0 {
@@ -109,39 +97,15 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
         ..Default::default()
     };
     let add = client
-        .send(AddPartitionsToTxnRequest {
-            transactions: vec![AddPartitionsToTxnTransaction {
-                transactional_id: VERIFY_TID.into(),
-                producer_id: pid,
-                producer_epoch: epoch,
-                verify_only: false,
-                topics: vec![added_topic.clone()],
-                ..Default::default()
-            }],
-            v3_and_below_transactional_id: VERIFY_TID.into(),
-            v3_and_below_producer_id: pid,
-            v3_and_below_producer_epoch: epoch,
-            v3_and_below_topics: vec![added_topic],
-            ..Default::default()
-        })
+        .send(crate::support::transaction_wire::partitions_request(
+            VERIFY_TID,
+            (pid, epoch),
+            false,
+            vec![added_topic],
+        ))
         .await
         .expect("AddPartitionsToTxn add");
-    let expected_add = AddPartitionsToTxnResponse {
-        results_by_transaction: vec![AddPartitionsToTxnResult {
-            transactional_id: VERIFY_TID.into(),
-            topic_results: vec![AddPartitionsToTxnTopicResult {
-                name: "t".into(),
-                results_by_partition: vec![AddPartitionsToTxnPartitionResult {
-                    partition_index: 0,
-                    partition_error_code: NONE,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let expected_add = crate::txnver_harness::expected_partitions(VERIFY_TID, "t", &[(0, NONE)]);
     assert!(
         add == expected_add,
         "adding (t,0) returned an unexpected response: {add:?}"
@@ -155,46 +119,19 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
         ..Default::default()
     };
     let verify = client
-        .send(AddPartitionsToTxnRequest {
-            transactions: vec![AddPartitionsToTxnTransaction {
-                transactional_id: VERIFY_TID.into(),
-                producer_id: pid,
-                producer_epoch: epoch,
-                verify_only: true,
-                topics: vec![verify_topic.clone()],
-                ..Default::default()
-            }],
-            v3_and_below_transactional_id: VERIFY_TID.into(),
-            v3_and_below_producer_id: pid,
-            v3_and_below_producer_epoch: epoch,
-            v3_and_below_topics: vec![verify_topic],
-            ..Default::default()
-        })
+        .send(crate::support::transaction_wire::partitions_request(
+            VERIFY_TID,
+            (pid, epoch),
+            true,
+            vec![verify_topic],
+        ))
         .await
         .expect("AddPartitionsToTxn verify-only");
-    let expected_verify = AddPartitionsToTxnResponse {
-        results_by_transaction: vec![AddPartitionsToTxnResult {
-            transactional_id: VERIFY_TID.into(),
-            topic_results: vec![AddPartitionsToTxnTopicResult {
-                name: "t".into(),
-                results_by_partition: vec![
-                    AddPartitionsToTxnPartitionResult {
-                        partition_index: 0,
-                        partition_error_code: NONE,
-                        ..Default::default()
-                    },
-                    AddPartitionsToTxnPartitionResult {
-                        partition_index: 1,
-                        partition_error_code: TRANSACTION_ABORTABLE,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let expected_verify = crate::txnver_harness::expected_partitions(
+        VERIFY_TID,
+        "t",
+        &[(0, NONE), (1, TRANSACTION_ABORTABLE)],
+    );
     assert!(
         verify == expected_verify,
         "verify-only response did not match the partition result table: {verify:?}"

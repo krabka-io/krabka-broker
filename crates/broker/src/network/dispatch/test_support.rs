@@ -62,11 +62,16 @@ pub(super) async fn plaintext_loop(
     )
     .await;
     let task = tokio::spawn(serve);
-    let client = TcpStream::connect(addr)
-        .await
-        .expect("connect to the serve loop");
     (
         task,
-        crate::network::codec::frame(client, DEFAULT_MAX_FRAME_BYTES),
+        connect_framed(addr, "connect to the serve loop").await,
     )
+}
+
+pub(super) async fn connect_framed(
+    addr: SocketAddr,
+    context: &str,
+) -> Framed<TcpStream, KafkaCodec> {
+    let client = TcpStream::connect(addr).await.expect(context);
+    crate::network::codec::frame(client, DEFAULT_MAX_FRAME_BYTES)
 }

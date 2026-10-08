@@ -41,13 +41,7 @@ fn identity_retry_is_accepted_while_old_data_is_fenced() {
     for epoch in [0, 7, i16::MAX - 2] {
         let mut first = recovered_window_row(8, 2, 0);
         first.producer_epoch = epoch;
-        let old: Vec<_> = (0..5)
-            .map(|i| {
-                let mut row = recovered_window_row(4 * i, 2, 0);
-                row.producer_epoch = epoch;
-                row
-            })
-            .collect();
+        let old = super::epoch_rows(5, epoch, 0);
         for request in [(i32::MAX - 1, 2), (0, 0), (-1, -1)] {
             let result = epoch_handoff_distinguishes_identity_and_data_retry(
                 19, 19, epoch, &old, first, request,
@@ -68,8 +62,7 @@ fn identity_retry_is_accepted_while_old_data_is_fenced() {
 #[test]
 fn marker_only_and_empty_windows_do_not_remove_the_partition_fence() {
     for epoch in [0, i16::MAX - 2] {
-        let mut first = recovered_window_row(i64::MAX - 1, 0, i32::MAX);
-        first.producer_epoch = epoch;
+        let first = super::maximum_epoch_row(epoch);
         for hwm in [0, i64::MAX - 1, i64::MAX] {
             let result = epoch_handoff_distinguishes_identity_and_data_retry(
                 i64::MAX,
@@ -99,11 +92,7 @@ proptest! {
         incoming_base in 0_i64..64, sequence in 0_i32..=i32::MAX,
         request in (any::<i32>(), any::<i32>()), hwm in 0_i64..=70,
     ) {
-        let old: Vec<_> = (0..count).map(|i| {
-            let mut row = recovered_window_row(4 * i64::try_from(i).unwrap(), 2, sequence);
-            row.producer_epoch = epoch;
-            row
-        }).collect();
+        let old = super::epoch_rows(count, epoch, sequence);
         let mut first = recovered_window_row(incoming_base, 2, sequence);
         first.producer_epoch = epoch;
         let result = epoch_handoff_distinguishes_identity_and_data_retry(

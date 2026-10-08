@@ -4,7 +4,7 @@
     "Coma": {
       "vc_reassignment_set_membership": {
         "prover": "alt-ergo",
-        "time": 0.011
+        "time": 0.015
       }
     }
   }

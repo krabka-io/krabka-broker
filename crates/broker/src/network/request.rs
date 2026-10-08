@@ -70,6 +70,12 @@ mod tests {
     use super::*;
     use crate::network::test_support::request_frame;
 
+    fn assert_flexible_client_body(parsed: &ParsedRequest<'_>) {
+        check!(parsed.client_id == Some("client-a"));
+        check!(parsed.body_flexible);
+        check!(parsed.body == b"body".as_slice());
+    }
+
     #[test]
     fn parse_request_non_flexible_header() {
         let frame = request_frame(3, 8, 42, Some(b"client-a"), None, b"body");
@@ -94,9 +100,7 @@ mod tests {
         check!(parsed.api_key == 18);
         check!(parsed.api_version == 3);
         check!(parsed.correlation_id == 7);
-        check!(parsed.client_id == Some("client-a"));
-        check!(parsed.body_flexible);
-        check!(parsed.body == b"body".as_slice());
+        assert_flexible_client_body(&parsed);
     }
 
     #[test]
@@ -113,9 +117,7 @@ mod tests {
         let parsed =
             parse_request(&frame, |key, version| key == 18 && version >= 3).expect("parse request");
 
-        check!(parsed.client_id == Some("client-a"));
-        check!(parsed.body_flexible);
-        check!(parsed.body == b"body".as_slice());
+        assert_flexible_client_body(&parsed);
     }
 
     #[test]

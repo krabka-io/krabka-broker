@@ -14,6 +14,19 @@ use crate::{
     worm::WormError,
 };
 
+fn object_bytes(
+    result: Result<bytes::Bytes, ObjectStoreError>,
+    metadata: &RemoteLogSegmentMetadata,
+) -> Result<Vec<u8>, RemoteStorageError> {
+    match result {
+        Ok(bytes) => Ok(bytes.to_vec()),
+        Err(ObjectStoreError::NotFound(_)) => Err(RemoteStorageError::SegmentNotFound(
+            metadata.remote_log_segment_id().clone(),
+        )),
+        Err(other) => Err(other.into()),
+    }
+}
+
 impl S3RemoteStorage {
     /// Refuses a remote read when the archive is configured write-only.
     ///
@@ -52,13 +65,7 @@ impl S3RemoteStorage {
             }
             None => GetRange::Offset(u64::from(start_position)),
         };
-        match Self::block_os(self.ops.get_range(&key, range)) {
-            Ok(bytes) => Ok(bytes.to_vec()),
-            Err(ObjectStoreError::NotFound(_)) => Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            )),
-            Err(other) => Err(other.into()),
-        }
+        object_bytes(Self::block_os(self.ops.get_range(&key, range)), metadata)
     }
 
     /// Reads one whole index object of a segment.
@@ -69,13 +76,7 @@ impl S3RemoteStorage {
     ) -> Result<Vec<u8>, RemoteStorageError> {
         self.refuse_read_when_write_only()?;
         let key = self.index_key(metadata, index_type);
-        match Self::block_os(self.ops.get(&key)) {
-            Ok(bytes) => Ok(bytes.to_vec()),
-            Err(ObjectStoreError::NotFound(_)) => Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            )),
-            Err(other) => Err(other.into()),
-        }
+        object_bytes(Self::block_os(self.ops.get(&key)), metadata)
     }
 }
 
@@ -151,18 +152,7 @@ mod tests {
         let store = rsm(None);
         let md = sample_metadata(11);
         seeded_blocking(store, md, true, move |store, md| {
-            for (index_type, want) in [
-                (IndexType::Offset, b"OFFSET-IDX".as_ref()),
-                (IndexType::Timestamp, b"TIME-IDX".as_ref()),
-                (IndexType::ProducerSnapshot, b"SNAP".as_ref()),
-                (IndexType::LeaderEpoch, b"EPOCH-BYTES".as_ref()),
-                (IndexType::Transaction, b"TXN-IDX".as_ref()),
-            ] {
-                check!(
-                    store.fetch_index(&md, index_type).unwrap() == want,
-                    "{index_type:?}"
-                );
-            }
+            crate::test_support::check_sample_indexes(&store, &md);
         })
         .await;
     }

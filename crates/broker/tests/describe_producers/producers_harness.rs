@@ -7,46 +7,31 @@
 
 use assert2::assert;
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        find_coordinator_request::FindCoordinatorRequest,
-        init_producer_id_request::InitProducerIdRequest,
-    },
-    records::{Attributes, Record, RecordBatch},
-};
+use krabka_protocol::records::{Attributes, RecordBatch};
 
-use crate::support;
 pub(crate) use crate::support::topic_id_for;
+use crate::{
+    support,
+    support::{
+        discovery::coordinator_lookup_request,
+        topics::{creatable_topic, create_topic_request},
+    },
+};
 
 pub(crate) async fn create_topic(client: &Client, name: &str, partitions: i32) {
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic(name, partitions, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0, "{name} create: {resp:?}");
 }
 
 pub(crate) async fn init_producer(p: &support::InProcess) -> (i64, i16) {
-    let init = p
-        .client
-        .send(InitProducerIdRequest {
-            // A null transactional id is what makes this an idempotent
-            // producer; Kafka rejects an empty one with INVALID_REQUEST.
-            transactional_id: None,
-            ..Default::default()
-        })
-        .await
-        .expect("InitProducerId");
+    // A null transactional id is an idempotent producer; an empty one is invalid.
+    let init = crate::support::transactions::claim_idempotent_producer(&p.client).await;
     (init.producer_id, init.producer_epoch)
 }
 
@@ -56,12 +41,11 @@ pub(crate) async fn init_transactional_producer(
 ) -> (i64, i16) {
     let coordinator = p
         .client
-        .send(FindCoordinatorRequest {
-            key: transactional_id.into(),
-            key_type: 1,
-            coordinator_keys: vec![transactional_id.into()],
-            ..Default::default()
-        })
+        .send(coordinator_lookup_request(
+            transactional_id,
+            1,
+            vec![transactional_id.into()],
+        ))
         .await
         .expect("transactional FindCoordinator");
     assert!(
@@ -76,11 +60,10 @@ pub(crate) async fn init_transactional_producer(
     loop {
         let init = p
             .client
-            .send(InitProducerIdRequest {
-                transactional_id: Some(transactional_id.into()),
-                transaction_timeout_ms: 60_000,
-                ..Default::default()
-            })
+            .send(crate::support::transactions::new_producer_request(
+                Some(transactional_id.into()),
+                60_000,
+            ))
             .await
             .expect("transactional InitProducerId");
         if init.error_code == 0 {
@@ -94,27 +77,7 @@ pub(crate) async fn init_transactional_producer(
     }
 }
 
-pub(crate) fn batch(pid: i64, epoch: i16, base_seq: i32, values: &[&str]) -> RecordBatch {
-    let n = i32::try_from(values.len()).expect("values.len fits i32");
-    let records = values
-        .iter()
-        .enumerate()
-        .map(|(i, v)| Record {
-            offset_delta: i32::try_from(i).expect("index fits i32"),
-            value: Some(bytes::Bytes::from(v.to_string())),
-            ..Default::default()
-        })
-        .collect();
-    RecordBatch {
-        producer_id: pid,
-        producer_epoch: epoch,
-        base_sequence: base_seq,
-        last_offset_delta: n - 1,
-        max_timestamp: i64::from(n),
-        records,
-        ..Default::default()
-    }
-}
+pub(crate) use crate::support::records::producer_values_batch as batch;
 
 pub(crate) fn transactional_batch(
     pid: i64,

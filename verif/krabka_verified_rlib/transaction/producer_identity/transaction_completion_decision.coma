@@ -1,6 +1,6 @@
 (* #"/workspace/crates/verified/src/transaction/producer_identity.rs" 108 0 114 34 *)
 
-let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 190 16 190 80
+let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 177 16 177 80
 let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 95 11 95 42
 let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 96 10 97 77
 let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 98 10 100 44
@@ -18,7 +18,7 @@ type t_TransactionIdentity = { pid'0: Int64.t; epoch'0: Int16.t }
 
 type t_TransactionCompletionDecision = Proceed | AlreadyComplete | RejectStaleIdentity | RejectState
 
-predicate has_identity [#"/workspace/crates/verified/src/transaction/marker.rs" 189 0 189 89] (snapshot: t_TransactionSnapshot) (identity: t_TransactionIdentity) =
+predicate has_identity [#"/workspace/crates/verified/src/transaction/marker.rs" 176 0 176 89] (snapshot: t_TransactionSnapshot) (identity: t_TransactionIdentity) =
   [%#smarker] snapshot.pid = identity.pid'0 /\ snapshot.epoch = identity.epoch'0
 
 meta "compute_max_steps" 1000000

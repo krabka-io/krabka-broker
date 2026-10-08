@@ -11,35 +11,25 @@
 //! modern v2 form.
 
 use assert2::assert;
+
+use crate::support::{
+    fetch::{fetch_partition, single_partition_fetch},
+    produce::single_partition_produce,
+    topics::{creatable_topic, create_topic_request},
+};
 mod support;
 
 use bytes::{Bytes, BytesMut};
 use krabka_ids::Offset;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
-    primitives::uuid::Uuid,
-    records::RecordsPayload,
+    owned::fetch_request::FetchRequest, primitives::uuid::Uuid, records::RecordsPayload,
 };
 use krabka_records_legacy::{Magic, ParsedRecord, encode_flat_message_set};
 
 async fn create_topic(p: &support::InProcess, name: &str) {
     let resp = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(name, 1, 1), 5_000))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0);
@@ -48,13 +38,7 @@ async fn create_topic(p: &support::InProcess, name: &str) {
 async fn topic_id_for(p: &support::InProcess, name: &str) -> Uuid {
     let resp = p
         .client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(name.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(crate::support::discovery::named_topic_metadata(name))
         .await
         .expect("Metadata");
     resp.topics
@@ -90,21 +74,13 @@ async fn produce_v1_message_set_is_upconverted_and_round_trips() {
 
     let legacy_bytes = build_v1_message_set(&[b"alpha", b"beta", b"gamma"]);
 
-    let req = ProduceRequest {
-        acks: 1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: "legacy".into(),
-            topic_id,
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(RecordsPayload::Legacy(legacy_bytes)),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = single_partition_produce(
+        "legacy",
+        topic_id,
+        0,
+        Some(RecordsPayload::Legacy(legacy_bytes)),
+        (1, 5_000),
+    );
     let resp = p.client.send(req).await.expect("Produce");
     let pr = &resp.responses[0].partition_responses[0];
     assert!(
@@ -121,21 +97,12 @@ async fn produce_v1_message_set_is_upconverted_and_round_trips() {
             .client
             .send(FetchRequest {
                 replica_id: -1,
-                max_wait_ms: 500,
-                min_bytes: 1,
-                max_bytes: 1 << 20,
-                topics: vec![FetchTopic {
-                    topic: "legacy".into(),
+                ..single_partition_fetch(
+                    "legacy",
                     topic_id,
-                    partitions: vec![FetchPartition {
-                        partition: 0,
-                        fetch_offset: 0,
-                        partition_max_bytes: 1 << 20,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
+                    fetch_partition(0, 0, 1 << 20),
+                    (500, 1, 1 << 20),
+                )
             })
             .await
             .expect("Fetch");
@@ -180,21 +147,13 @@ async fn produce_malformed_legacy_bytes_returns_invalid_record() {
     let mut garbage = vec![0u8; 100];
     garbage[8..12].copy_from_slice(&88_i32.to_be_bytes());
     garbage[16] = 0; // explicit: not v2
-    let req = ProduceRequest {
-        acks: 1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: "bad".into(),
-            topic_id,
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(RecordsPayload::Legacy(Bytes::from(garbage))),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = single_partition_produce(
+        "bad",
+        topic_id,
+        0,
+        Some(RecordsPayload::Legacy(Bytes::from(garbage))),
+        (1, 5_000),
+    );
     let resp = p.client.send(req).await.expect("Produce");
     let pr = &resp.responses[0].partition_responses[0];
     assert!(

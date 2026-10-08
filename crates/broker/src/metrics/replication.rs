@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use super::{BrokerMetrics, PartitionLabel};
+use super::BrokerMetrics;
+#[cfg(test)]
+use super::PartitionLabel;
 
 impl BrokerMetrics {
     /// Account bytes this broker received from the partition
@@ -13,15 +15,7 @@ impl BrokerMetrics {
     /// record batch, so `topic` is the replicator task's own `Arc<str>` and
     /// the label costs a refcount bump rather than an allocation.
     pub fn record_replication_in(&self, topic: &Arc<str>, partition: i32, bytes: u64) {
-        if bytes == 0 {
-            return;
-        }
-        let lbl = PartitionLabel {
-            topic: Arc::clone(topic),
-            partition,
-        };
-        self.replication_bytes_in.get_or_create(&lbl).inc_by(bytes);
-        self.track_partition_series(&lbl);
+        self.count_partition(&self.replication_bytes_in, topic, partition, bytes);
     }
 
     /// KIP-841: account one unclean leader election (an
@@ -36,15 +30,7 @@ impl BrokerMetrics {
     /// Called from the `Fetch` handler when `replica_id >= 0`, once per
     /// partition row of the response.
     pub fn record_replication_out(&self, topic: &Arc<str>, partition: i32, bytes: u64) {
-        if bytes == 0 {
-            return;
-        }
-        let lbl = PartitionLabel {
-            topic: Arc::clone(topic),
-            partition,
-        };
-        self.replication_bytes_out.get_or_create(&lbl).inc_by(bytes);
-        self.track_partition_series(&lbl);
+        self.count_partition(&self.replication_bytes_out, topic, partition, bytes);
     }
 }
 

@@ -479,9 +479,7 @@ pub(super) async fn unreadable_batch_ranges(
     if end <= start {
         return Ok(Vec::new());
     }
-    let log = part.log.clone();
-    let join = crate::blocking::spawn_blocking(move || {
-        let log = log.lock().expect("log mutex poisoned");
+    scan_log(part, "control", move |log| {
         let mut aborted = AbortedRanges::default();
         if read_committed {
             for txn in log.aborted_in_range(start, end) {
@@ -520,13 +518,9 @@ pub(super) async fn unreadable_batch_ranges(
             cursor = next;
         }
         Ok::<_, krabka_log::LogError>(ranges)
-    });
-    match join.await {
-        Ok(result) => result.map_err(BrokerError::from),
-        Err(join_err) => Err(BrokerError::Io(std::io::Error::other(format!(
-            "share-fetch control scan panicked: {join_err}"
-        )))),
-    }
+    })
+    .await?
+    .map_err(BrokerError::from)
 }
 
 /// Returns the offset ranges in `[start, end)` that KFC-1 scheduled delivery
@@ -551,14 +545,27 @@ pub(super) async fn pending_activation_ranges(
     if end <= start {
         return Ok(Vec::new());
     }
-    let log = part.log.clone();
-    let join = crate::blocking::spawn_blocking(move || {
-        let log = log.lock().expect("log mutex poisoned");
+    scan_log(part, "activation", move |log| {
         log.pending_activation_ranges(start, end - 1, now_ms)
-    });
-    join.await.map_err(|join_err| {
+    })
+    .await
+}
+
+/// Run a range scan under the log lock and retain each caller's panic label.
+async fn scan_log<T: Send + 'static>(
+    part: &crate::partition::Partition,
+    kind: &'static str,
+    read: impl FnOnce(&krabka_log::Log) -> T + Send + 'static,
+) -> Result<T, BrokerError> {
+    let log = part.log.clone();
+    crate::blocking::spawn_blocking(move || {
+        let log = log.lock().expect("log mutex poisoned");
+        read(&log)
+    })
+    .await
+    .map_err(|join_err| {
         BrokerError::Io(std::io::Error::other(format!(
-            "share-fetch activation scan panicked: {join_err}"
+            "share-fetch {kind} scan panicked: {join_err}"
         )))
     })
 }

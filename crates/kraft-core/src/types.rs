@@ -152,6 +152,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::simulation_support::voter_set as test_voter_set;
 
     /// `floor(n/2) + 1` over the voter-set sizes a cluster actually runs at.
     ///
@@ -181,14 +182,5 @@ mod tests {
             }
         );
         assert2::assert!(qs.voters.contains(NodeId(2)));
-    }
-
-    pub(crate) fn test_voter_set(ids: &[NodeId]) -> krabka_voters::VoterSet {
-        krabka_voters::VoterSet::from_voters(ids.iter().map(|&id| krabka_voters::Voter {
-            id,
-            directory_id: uuid::Uuid::nil(),
-            endpoints: Vec::new(),
-            kraft_version: krabka_voters::KRaftVersionRange::default(),
-        }))
     }
 }

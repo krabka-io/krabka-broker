@@ -90,6 +90,14 @@ fn resolved(topics: &[&str]) -> RegularExpressionValue {
     }
 }
 
+fn held_topics(state: &GroupState, member: &str) -> HashSet<Uuid> {
+    state.members[member]
+        .assigned_partitions
+        .keys()
+        .copied()
+        .collect()
+}
+
 /// A member that joins with a regex has it resolved for the group at once:
 /// its target holds the topics of the resolution, and the heartbeat writes the
 /// resolution as a `ConsumerGroupRegularExpression` record.
@@ -110,12 +118,7 @@ fn a_member_that_joins_with_a_regex_gets_the_resolved_topics_at_once() {
         step.pending.resolved_regexes == vec![("a.*".to_owned(), Some(resolved(&["a1", "a2"])))]
     );
     check!(target_topics(&state, "m1") == HashSet::from([A1, A2]));
-    let held: HashSet<Uuid> = state.members["m1"]
-        .assigned_partitions
-        .keys()
-        .copied()
-        .collect();
-    assert!(held == HashSet::from([A1, A2]));
+    assert!(held_topics(&state, "m1") == HashSet::from([A1, A2]));
 }
 
 /// Members that subscribe to the same regex share the group's resolution: the
@@ -325,12 +328,7 @@ fn a_failover_keeps_the_topics_of_a_regex_without_a_heartbeat_that_carries_the_p
     check!(step.response.error_code == 0);
     check!(resolver.calls() == 0);
     check!(target_topics(&state, "m1") == HashSet::from([A1, A2]));
-    let held: HashSet<Uuid> = state.members["m1"]
-        .assigned_partitions
-        .keys()
-        .copied()
-        .collect();
-    assert!(held == HashSet::from([A1, A2]));
+    assert!(held_topics(&state, "m1") == HashSet::from([A1, A2]));
 }
 
 /// A member that leaves takes the resolution of the regex only it used, and

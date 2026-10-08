@@ -10,10 +10,7 @@ use crate::coordinator::unified::{
     actor::{
         GroupActorMessage,
         member_state::build_member,
-        test_support::{
-            completing_classic_group, last_classic_metadata, make_coordinator,
-            make_coordinator_with_topic_policy, rpc,
-        },
+        test_support::{bidirectional_coordinator, last_classic_metadata, make_coordinator, rpc},
     },
     classic_state::GroupState as ClassicGroupState,
 };
@@ -24,8 +21,7 @@ async fn classic_leave_last_member_persists_empty_generation() {
     let (handle, prior_generation) =
         crate::coordinator::unified::actor::test_support::seed_stable_classic(&coord, &["m1"]);
     let result = rpc::classic_leave_member(&handle, "m1").await;
-    check!(result.error_code == codes::NONE);
-    check!(result.members[0].error_code == codes::NONE);
+    rpc::check_successful_classic_leave(&result);
     let view = rpc::classic_inspect(&handle).await;
     check!(view.state == ClassicGroupState::Empty);
     check!(view.generation_id == prior_generation + 1);
@@ -45,8 +41,7 @@ async fn classic_leave_with_members_remaining_does_not_commit_empty_generation()
             &["m1", "m2"],
         );
     let result = rpc::classic_leave_member(&handle, "m1").await;
-    check!(result.error_code == codes::NONE);
-    check!(result.members[0].error_code == codes::NONE);
+    rpc::check_successful_classic_leave(&result);
     let view = rpc::classic_inspect(&handle).await;
     check!(view.generation_id == prior_generation);
     check!(view.members.len() == 1);
@@ -96,10 +91,7 @@ async fn classic_delete_append_failure_keeps_group_registered() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_removes_a_hosted_member_from_an_upgraded_group() {
-    use crate::coordinator::unified::config::ConsumerGroupMigrationPolicy;
-
-    let (coord, _log) =
-        make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
+    let (coord, _log) = bidirectional_coordinator();
     let (handle, native) =
         crate::coordinator::unified::actor::test_support::seed_classic_with_native(&coord).await;
 
@@ -341,10 +333,7 @@ async fn delete_tombstones_the_keys_of_an_in_flight_transactional_commit() {
 /// no registry entry or seed behind, so no later request re-hydrates it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_answers_by_members_for_classic_and_consumer_groups() {
-    use crate::coordinator::{
-        DeleteGroupError,
-        unified::{GroupType, config::ConsumerGroupMigrationPolicy},
-    };
+    use crate::coordinator::{DeleteGroupError, unified::GroupType};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Setup {
@@ -388,8 +377,7 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
     let mut actual = Vec::with_capacity(rows.len());
     let mut expected = Vec::with_capacity(rows.len());
     for (setup, outcome) in rows {
-        let (coord, log) =
-            make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
+        let (coord, log) = bidirectional_coordinator();
         match setup {
             Setup::EmptyConsumer | Setup::ConsumerWithMember => {
                 let handle = coord.get_or_create_consumer("g");
@@ -434,24 +422,21 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_in_completing_rebalance_reopens_the_rebalance() {
     let (coord, _log) = make_coordinator();
-    let group = completing_classic_group(&["m1", "m2", "m3"]);
-    let generation = group.as_classic().unwrap().generation_id;
-    coord.seed_classic("g", Box::new(group));
-    let handle = coord.find("g").unwrap();
-    let (sync_tx, sync_rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::ClassicSync {
-            req: krabka_protocol::owned::sync_group_request::SyncGroupRequest {
-                group_id: "g".into(),
-                member_id: "m2".into(),
-                generation_id: generation,
-                ..Default::default()
-            },
-            reply: sync_tx,
-        })
-        .await
-        .unwrap();
+    let (handle, generation) =
+        crate::coordinator::unified::actor::test_support::seed_completing_classic(
+            &coord,
+            &["m1", "m2", "m3"],
+        );
+    let sync_rx = rpc::begin_classic_sync(
+        &handle,
+        krabka_protocol::owned::sync_group_request::SyncGroupRequest {
+            group_id: "g".into(),
+            member_id: "m2".into(),
+            generation_id: generation,
+            ..Default::default()
+        },
+    )
+    .await;
 
     let left = rpc::classic_leave(&handle, "m3").await;
 

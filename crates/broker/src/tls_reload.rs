@@ -99,9 +99,7 @@ mod tests {
     }
 
     fn generated_pair() -> (String, String) {
-        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-        let params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
-        let cert = params.self_signed(&key).unwrap();
+        let (cert, key) = crate::test_support::localhost_ecdsa_pair();
         (cert.pem(), key.serialize_pem())
     }
 

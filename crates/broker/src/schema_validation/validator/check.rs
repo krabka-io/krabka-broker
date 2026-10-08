@@ -219,15 +219,12 @@ impl jsonschema::Retrieve for CachedJsonSchemas {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_units::{minutes, secs};
-    use wiremock::{
-        Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
-    };
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     use super::*;
     use crate::schema_validation::validator::test_support::{
-        KNOWN_ID, framed, no_metrics, registry, validator,
+        KNOWN_ID, configured_validator, framed, no_metrics, registry, response_endpoint,
+        status_registry, validator, value_check,
     };
 
     #[tokio::test]
@@ -240,15 +237,7 @@ mod tests {
             ("truncated id", vec![0x00, 0, 0]),
         ];
         for (name, field) in cases {
-            let got = v
-                .check(
-                    "orders",
-                    Role::Value,
-                    ValidationMode::Id,
-                    &field,
-                    &no_metrics(),
-                )
-                .await;
+            let got = value_check(&v, ValidationMode::Id, &field).await;
             assert!(let Err(reason) = got, "case {name}");
             check!(reason.label() == "unframed", "case {name}: {reason}");
         }
@@ -257,22 +246,15 @@ mod tests {
     #[tokio::test]
     async fn the_frame_selects_all_four_big_endian_id_bytes() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/schemas/ids/16909060/versions"))
-            .respond_with(ResponseTemplate::new(404))
-            .expect(1)
-            .mount(&server)
-            .await;
+        response_endpoint(
+            &server,
+            "/schemas/ids/16909060/versions",
+            ResponseTemplate::new(404),
+            Some(1),
+        )
+        .await;
         let v = validator(server.uri());
-        let got = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &[0, 1, 2, 3, 4, b'x'],
-                &no_metrics(),
-            )
-            .await;
+        let got = value_check(&v, ValidationMode::Id, &[0, 1, 2, 3, 4, b'x']).await;
 
         assert!(let Err(RejectReason::UnknownId(id)) = got);
         check!(id == 0x0102_0304);
@@ -285,17 +267,7 @@ mod tests {
         // Distinct from null on the wire, and some clients write it for an
         // absent value. It cannot carry a frame, so rejecting it would reject
         // those clients for a reason unrelated to schemas.
-        check!(
-            v.check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &[],
-                &no_metrics()
-            )
-            .await
-            .is_ok()
-        );
+        check!(value_check(&v, ValidationMode::Id, &[]).await.is_ok());
     }
 
     #[tokio::test]
@@ -306,17 +278,7 @@ mod tests {
         let v = validator(server.uri());
         let field = framed(KNOWN_ID, b"anything");
 
-        check!(
-            v.check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &field,
-                &no_metrics()
-            )
-            .await
-            .is_ok()
-        );
+        check!(value_check(&v, ValidationMode::Id, &field).await.is_ok());
 
         // Same id, different topic: the subject is `other-value`, which this
         // id is not registered under.
@@ -342,17 +304,7 @@ mod tests {
         let field = framed(KNOWN_ID, b"anything");
 
         // `orders-value` is bound; `orders-key` is not.
-        check!(
-            v.check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &field,
-                &no_metrics()
-            )
-            .await
-            .is_ok()
-        );
+        check!(value_check(&v, ValidationMode::Id, &field).await.is_ok());
         let got = v
             .check(
                 "orders",
@@ -369,23 +321,25 @@ mod tests {
     #[tokio::test]
     async fn wrong_subject_is_rejected_before_the_schema_closure_is_fetched() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+        response_endpoint(
+            &server,
+            &format!("/schemas/ids/{KNOWN_ID}/versions"),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"subject": "other-value", "version": 1}
-            ])))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            ])),
+            Some(1),
+        )
+        .await;
+        response_endpoint(
+            &server,
+            &format!("/schemas/ids/{KNOWN_ID}"),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "schema": r#"{"type":"record","name":"Envelope","fields":[]}"#,
                 "references": [{"name":"Base","subject":"base","version":1}]
-            })))
-            .expect(0)
-            .mount(&server)
-            .await;
+            })),
+            Some(0),
+        )
+        .await;
 
         let result = validator(server.uri())
             .check(
@@ -413,26 +367,10 @@ mod tests {
         let field = framed(KNOWN_ID, &[0xFF; 6]);
 
         check!(
-            v.check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &field,
-                &no_metrics()
-            )
-            .await
-            .is_ok(),
+            value_check(&v, ValidationMode::Id, &field).await.is_ok(),
             "id mode decides from the header alone"
         );
-        let got = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Full,
-                &field,
-                &no_metrics(),
-            )
-            .await;
+        let got = value_check(&v, ValidationMode::Full, &field).await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "body_mismatch", "{reason}");
     }
@@ -444,15 +382,7 @@ mod tests {
         // One Avro datum of AVRO: `id = "a"`. A string is a zig-zag varint
         // length then the bytes, and 1 zig-zag encodes to 0x02.
         let field = framed(KNOWN_ID, &[0x02, b'a']);
-        let result = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Full,
-                &field,
-                &no_metrics(),
-            )
-            .await;
+        let result = value_check(&v, ValidationMode::Full, &field).await;
         check!(result.is_ok(), "{result:?}");
     }
 
@@ -465,15 +395,7 @@ mod tests {
 
         let v = validator(server.uri());
         let field = framed(KNOWN_ID, &[0x02, b'a']);
-        let result = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Full,
-                &field,
-                &no_metrics(),
-            )
-            .await;
+        let result = value_check(&v, ValidationMode::Full, &field).await;
         check!(result.is_ok(), "{result:?}");
     }
 
@@ -485,15 +407,7 @@ mod tests {
         let v = validator(server.uri());
         // One-element array, one record containing "a", then the array terminator.
         let field = framed(KNOWN_ID, &[0x02, 0x02, b'a', 0x00]);
-        let result = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Full,
-                &field,
-                &no_metrics(),
-            )
-            .await;
+        let result = value_check(&v, ValidationMode::Full, &field).await;
         check!(result.is_ok(), "{result:?}");
     }
 
@@ -501,52 +415,32 @@ mod tests {
     async fn full_mode_resolves_json_schema_references_before_validating() {
         let server = MockServer::start().await;
         super::super::test_support::schema_versions(&server, 1).await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        response_endpoint(
+            &server,
+            &format!("/schemas/ids/{KNOWN_ID}"),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "schemaType": "JSON",
                 "schema": r#"{"$id":"https://schemas.example/root.json","$ref":"base.json"}"#,
                 "references": [{"name":"base.json","subject":"order-base","version":1}]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/subjects/order-base/versions/1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            })),
+            Some(1),
+        )
+        .await;
+        response_endpoint(&server, "/subjects/order-base/versions/1", ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "subject": "order-base",
                 "version": 1,
                 "id": 7,
                 "schemaType": "JSON",
                 "schema": r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}"#
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
+            })), Some(1)).await;
 
         let v = validator(server.uri());
         let valid = framed(KNOWN_ID, br#"{"id":"a"}"#);
-        let valid_result = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Full,
-                &valid,
-                &no_metrics(),
-            )
-            .await;
+        let valid_result = value_check(&v, ValidationMode::Full, &valid).await;
         check!(valid_result.is_ok(), "{valid_result:?}");
 
         let invalid = framed(KNOWN_ID, br#"{"id":1}"#);
-        let result = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Full,
-                &invalid,
-                &no_metrics(),
-            )
-            .await;
+        let result = value_check(&v, ValidationMode::Full, &invalid).await;
         assert!(let Err(reason) = result);
         check!(reason.label() == "body_mismatch", "{reason}");
     }
@@ -555,21 +449,23 @@ mod tests {
     async fn full_mode_never_fetches_json_references_outside_the_registry_cache() {
         let server = MockServer::start().await;
         super::super::test_support::schema_versions(&server, 1).await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        response_endpoint(
+            &server,
+            &format!("/schemas/ids/{KNOWN_ID}"),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "schemaType": "JSON",
                 "schema": format!(r#"{{"$ref":"{}/outside.json"}}"#, server.uri())
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/outside.json"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-            .expect(0)
-            .mount(&server)
-            .await;
+            })),
+            Some(1),
+        )
+        .await;
+        response_endpoint(
+            &server,
+            "/outside.json",
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({})),
+            Some(0),
+        )
+        .await;
 
         let result = validator(server.uri())
             .check(
@@ -586,14 +482,10 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_registry_fails_closed_or_open_by_the_knob() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&server)
-            .await;
+        let server = status_registry(500).await;
         let field = framed(KNOWN_ID, b"anything");
 
-        let closed = SchemaValidator::new(server.uri(), false, 100, minutes(1), secs(5)).unwrap();
+        let closed = configured_validator(server.uri(), false).unwrap();
         let got = closed
             .check(
                 "orders",
@@ -606,7 +498,7 @@ mod tests {
         assert!(let Err(reason) = got);
         check!(reason.label() == "registry_unavailable", "{reason}");
 
-        let open = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
+        let open = configured_validator(server.uri(), true).unwrap();
         check!(
             open.check(
                 "orders",
@@ -623,24 +515,12 @@ mod tests {
 
     #[tokio::test]
     async fn fail_open_does_not_admit_an_id_the_registry_says_is_unregistered() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&server)
-            .await;
+        let server = status_registry(404).await;
 
         // 404 is the registry answering, not failing to answer. `fail_open`
         // governs only the second case.
-        let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
-        let got = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &framed(KNOWN_ID, b"x"),
-                &no_metrics(),
-            )
-            .await;
+        let v = configured_validator(server.uri(), true).unwrap();
+        let got = value_check(&v, ValidationMode::Id, &framed(KNOWN_ID, b"x")).await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "unknown_id", "{reason}");
     }
@@ -648,22 +528,10 @@ mod tests {
     #[tokio::test]
     async fn fail_open_rejects_permanent_registry_errors() {
         for status in [400, 401, 403, 600] {
-            let server = MockServer::start().await;
-            Mock::given(method("GET"))
-                .respond_with(ResponseTemplate::new(status))
-                .mount(&server)
-                .await;
+            let server = status_registry(status).await;
 
-            let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
-            let got = v
-                .check(
-                    "orders",
-                    Role::Value,
-                    ValidationMode::Id,
-                    &framed(KNOWN_ID, b"x"),
-                    &no_metrics(),
-                )
-                .await;
+            let v = configured_validator(server.uri(), true).unwrap();
+            let got = value_check(&v, ValidationMode::Id, &framed(KNOWN_ID, b"x")).await;
             assert!(let Err(reason) = got, "status {status}");
             check!(
                 reason.label() == "registry_unavailable",
@@ -680,16 +548,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
-        let got = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &framed(KNOWN_ID, b"x"),
-                &no_metrics(),
-            )
-            .await;
+        let v = configured_validator(server.uri(), true).unwrap();
+        let got = value_check(&v, ValidationMode::Id, &framed(KNOWN_ID, b"x")).await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "registry_unavailable", "{reason}");
     }
@@ -697,23 +557,13 @@ mod tests {
     #[tokio::test]
     async fn fail_open_admits_retryable_registry_statuses() {
         for status in [408, 429] {
-            let server = MockServer::start().await;
-            Mock::given(method("GET"))
-                .respond_with(ResponseTemplate::new(status))
-                .mount(&server)
-                .await;
+            let server = status_registry(status).await;
 
-            let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
+            let v = configured_validator(server.uri(), true).unwrap();
             check!(
-                v.check(
-                    "orders",
-                    Role::Value,
-                    ValidationMode::Id,
-                    &framed(KNOWN_ID, b"x"),
-                    &no_metrics(),
-                )
-                .await
-                .is_ok(),
+                value_check(&v, ValidationMode::Id, &framed(KNOWN_ID, b"x"))
+                    .await
+                    .is_ok(),
                 "status {status}"
             );
         }

@@ -12,11 +12,11 @@ use std::{collections::BTreeSet, time::Duration};
 
 use assert2::assert;
 use krabka_broker::BrokerHandle;
-use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_client_producer::Producer;
 use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 
 use crate::{
-    harness::{bootstrap_share_state, broker_test_permit, join, produce_n, wait_for_share_init},
+    harness::{bootstrap_share_state, produce_n},
     share_rpc::{acquired_count, share_fetch},
 };
 
@@ -56,8 +56,8 @@ async fn set_isolation_level(broker: &BrokerHandle, group: &str, level: &str) {
 /// that the broker merely deferred the records and did not lose them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_committed_skips_open_txn_then_sees_committed() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let bootstrap = broker.listen_addr().to_string();
     bootstrap_share_state(&broker, &client, "g1").await;
     set_isolation_level(&broker, "g1", READ_COMMITTED).await;
@@ -67,20 +67,15 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
     broker.wait_until_transaction_coordinator_ready().await;
 
     // Open a transaction and send 3 records WITHOUT committing: HWM=3, LSO=0.
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("share-rc-tid")
-        .build()
-        .await
-        .unwrap();
-    producer.init_transactions().await.unwrap();
+    let producer =
+        crate::support::producer::transactional_producer(bootstrap.clone(), "share-rc-tid").await;
     let txn = producer.begin_transaction().await.unwrap();
     enqueue_transaction_values(&producer).await;
     // Flush the records to the log (advances HWM) but keep the txn OPEN (LSO=0).
     producer.flush().await.unwrap();
 
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (member, _member_epoch) =
+        crate::support::share::join_consume_member(&broker, &client, tid).await;
 
     // A read_committed share fetch must acquire NOTHING: every record is past
     // the LSO (still 0). Poll a few times to be sure it never spuriously acquires.
@@ -109,12 +104,7 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
         if acquired_count(&row) > 0
             && let Some(batches) = row.records.as_ref().and_then(|r| r.as_v2())
         {
-            values = batches
-                .iter()
-                .flat_map(|b| b.records.iter())
-                .filter_map(|r| r.value.as_ref())
-                .map(|v| String::from_utf8_lossy(v).into_owned())
-                .collect();
+            values = crate::support::share::record_values(batches);
             values.sort();
             if values == vec!["a", "b", "c"] {
                 break;
@@ -142,6 +132,15 @@ struct Seen {
     values: BTreeSet<String>,
 }
 
+impl Seen {
+    fn expected(offsets: &[i64], values: &[&str]) -> Self {
+        Self {
+            acquired: offsets.iter().copied().collect(),
+            values: values.iter().map(|value| (*value).to_string()).collect(),
+        }
+    }
+}
+
 /// Kafka's `SharePartition.filterAbortedTransactionalAcquiredRecords`: under
 /// `read_committed`, a share group never acquires the data of an aborted
 /// transaction. The share consumer cannot drop it itself, because a
@@ -157,37 +156,25 @@ async fn aborted_transaction_data_is_archived_under_read_committed() {
             "read_committed, commit",
             Some(READ_COMMITTED),
             true,
-            Seen {
-                acquired: BTreeSet::from([0, 1, 2, 4]),
-                values: ["a", "b", "c", "v0"].map(String::from).into(),
-            },
+            Seen::expected(&[0, 1, 2, 4], &["a", "b", "c", "v0"]),
         ),
         (
             "read_committed, abort",
             Some(READ_COMMITTED),
             false,
-            Seen {
-                acquired: BTreeSet::from([4]),
-                values: ["v0"].map(String::from).into(),
-            },
+            Seen::expected(&[4], &["v0"]),
         ),
         (
             "read_uncommitted, abort",
             Some(READ_UNCOMMITTED),
             false,
-            Seen {
-                acquired: BTreeSet::from([0, 1, 2, 4]),
-                values: ["a", "b", "c", "v0"].map(String::from).into(),
-            },
+            Seen::expected(&[0, 1, 2, 4], &["a", "b", "c", "v0"]),
         ),
         (
             "no override reads uncommitted, abort",
             None,
             false,
-            Seen {
-                acquired: BTreeSet::from([0, 1, 2, 4]),
-                values: ["a", "b", "c", "v0"].map(String::from).into(),
-            },
+            Seen::expected(&[0, 1, 2, 4], &["a", "b", "c", "v0"]),
         ),
     ];
 
@@ -206,8 +193,8 @@ async fn aborted_transaction_data_is_archived_under_read_committed() {
 /// `isolation_level` is the group's `share.isolation.level`, or `None` for a
 /// group with no override.
 async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) -> Seen {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let bootstrap = broker.listen_addr().to_string();
     bootstrap_share_state(&broker, &client, "g1").await;
     if let Some(level) = isolation_level {
@@ -215,13 +202,9 @@ async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) ->
     }
     broker.wait_until_transaction_coordinator_ready().await;
 
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("share-aborted-tid")
-        .build()
-        .await
-        .unwrap();
-    producer.init_transactions().await.unwrap();
+    let producer =
+        crate::support::producer::transactional_producer(bootstrap.clone(), "share-aborted-tid")
+            .await;
     let txn = producer.begin_transaction().await.unwrap();
     enqueue_transaction_values(&producer).await;
     producer.flush().await.unwrap();
@@ -232,8 +215,8 @@ async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) ->
     }
     produce_n(&client, "t", tid, 0, 1).await;
 
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (member, _member_epoch) =
+        crate::support::share::join_consume_member(&broker, &client, tid).await;
 
     // The member never acknowledges, so each offset is acquired at most once
     // while its lock holds. Fetch until the plain record at offset 4 arrives.
@@ -279,11 +262,12 @@ async fn enqueue_transaction_values(producer: &Producer) {
     for v in ["a", "b", "c"] {
         drop(
             producer
-                .enqueue(ProducerRecord {
-                    topic: "t".into(),
-                    value: Some(bytes::Bytes::from(v.to_string())),
-                    ..Default::default()
-                })
+                .enqueue(crate::support::producer::producer_record(
+                    "t",
+                    None,
+                    None,
+                    Some(bytes::Bytes::from(v.to_string())),
+                ))
                 .await
                 .expect("record is queued"),
         );

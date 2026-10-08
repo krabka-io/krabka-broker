@@ -8,10 +8,14 @@
 
 use assert2::assert;
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
-use krabka_client_producer::{Producer, ProducerError};
+use krabka_client_producer::ProducerError;
 
 use crate::{
     support,
+    support::{
+        client::connect_client,
+        transactions::{init_producer_request, txn_offset_partition, txn_offset_topic},
+    },
     txn_harness::{boot_single, create_topic, init_transaction, rec, send_ok},
 };
 
@@ -43,13 +47,8 @@ async fn fenced_producer_cannot_commit() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "tf").await;
 
-    let producer_a = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("shared-tid")
-        .build()
-        .await
-        .unwrap();
-    producer_a.init_transactions().await.unwrap();
+    let producer_a =
+        crate::support::producer::transactional_producer(bootstrap.clone(), "shared-tid").await;
     let txn_a = producer_a.begin_transaction().await.unwrap();
     // Acknowledged, not just sent: the commit below must have nothing left to
     // flush, so it detects the fencing through EndTxn and nothing else.
@@ -57,13 +56,8 @@ async fn fenced_producer_cannot_commit() {
 
     // Producer B initializes with the same transactional_id — bumps epoch,
     // fences A.
-    let producer_b = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("shared-tid")
-        .build()
-        .await
-        .unwrap();
-    producer_b.init_transactions().await.unwrap();
+    let _producer_b =
+        crate::support::producer::transactional_producer(bootstrap.clone(), "shared-tid").await;
 
     // Still-live path: the first commit after the fencing learns of it from
     // the coordinator's own EndTxn answer.
@@ -108,14 +102,8 @@ struct Case {
 /// what lets a replacement producer take a transactional id over.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_producer_id_fences_a_stale_producer_identity() {
-    use krabka_protocol::owned::init_producer_id_request::InitProducerIdRequest;
-
     let (broker, bootstrap, _dir) = boot_single().await;
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
 
     let case = |name, offset, expected_error_code| Case {
         name,
@@ -155,13 +143,11 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
             // recorded last epoch, so the probe below tests staleness
             // against that epoch instead of colliding with the sentinel.
             let bump = client
-                .send(InitProducerIdRequest {
-                    transactional_id: Some(tid.clone()),
-                    transaction_timeout_ms: 60_000,
-                    producer_id,
-                    producer_epoch,
-                    ..Default::default()
-                })
+                .send(init_producer_request(
+                    Some(tid.clone()),
+                    60_000,
+                    (producer_id, producer_epoch),
+                ))
                 .await
                 .unwrap();
             assert!(bump.error_code == 0, "priming bump for {name}: {bump:?}");
@@ -175,13 +161,11 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
         };
 
         let response = client
-            .send(InitProducerIdRequest {
-                transactional_id: Some(tid.clone()),
-                transaction_timeout_ms: 60_000,
-                producer_id: request_id,
-                producer_epoch: request_epoch,
-                ..Default::default()
-            })
+            .send(init_producer_request(
+                Some(tid.clone()),
+                60_000,
+                (request_id, request_epoch),
+            ))
             .await
             .unwrap();
 
@@ -208,9 +192,7 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
 /// precise control over the metadata.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn txn_offset_commit_fences_classic_generation_and_member() {
-    use krabka_protocol::owned::txn_offset_commit_request::{
-        TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
-    };
+    use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequest;
 
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "fence-in").await;
@@ -234,11 +216,7 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
         "consumer should have a member id: {meta:?}"
     );
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let (producer_id, producer_epoch) = init_transaction(&client, "fence-tid").await;
     // The client negotiates v6 (KIP-1319), which names the topic by id only.
     let topic_id = support::topic_id_for(&client, "fence-in").await;
@@ -250,16 +228,11 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
         producer_epoch,
         generation_id_or_member_epoch: generation_id,
         member_id: member_id.into(),
-        topics: vec![TxnOffsetCommitRequestTopic {
-            name: "fence-in".into(),
+        topics: vec![txn_offset_topic(
+            "fence-in",
             topic_id,
-            partitions: vec![TxnOffsetCommitRequestPartition {
-                partition_index: 0,
-                committed_offset: 1,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
+            vec![txn_offset_partition(0, 1)],
+        )],
         ..Default::default()
     };
 
@@ -305,34 +278,22 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
 /// `StaleMemberEpochException` through as `STALE_MEMBER_EPOCH` (KIP-1319).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn txn_offset_commit_fences_next_gen_member_epoch() {
-    use krabka_protocol::owned::{
-        consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-        txn_offset_commit_request::{
-            TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
-        },
-    };
+    use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequest;
 
     let (broker, bootstrap, _dir) = crate::txn_harness::boot_single_trunk().await;
     create_topic(&bootstrap, "ng-in").await;
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let (producer_id, producer_epoch) = init_transaction(&client, "ng-tid").await;
     let topic_id = support::topic_id_for(&client, "ng-in").await;
 
     // Establish a next-gen group member; after the first heartbeat the member
     // is at epoch 1.
-    let mut hb = ConsumerGroupHeartbeatRequest {
-        group_id: "ng-g".into(),
-        member_id: uuid::Uuid::new_v4().to_string(),
-        member_epoch: 0,
-        topic_partitions: Some(vec![]),
-        rebalance_timeout_ms: 60_000,
-        ..Default::default()
-    };
+    let mut hb = crate::support::consumer_groups::joining_consumer(
+        "ng-g",
+        uuid::Uuid::new_v4().to_string(),
+        60_000,
+    );
     hb.subscribed_topic_names = Some(vec!["ng-in".into()]);
     let hb_resp = client.send(hb).await.unwrap();
     assert!(hb_resp.error_code == 0, "heartbeat failed: {hb_resp:?}");
@@ -350,16 +311,11 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
         producer_epoch,
         generation_id_or_member_epoch: epoch_val, // carries the member epoch for next-gen groups
         member_id: member_id.clone(),
-        topics: vec![TxnOffsetCommitRequestTopic {
-            name: "ng-in".into(),
+        topics: vec![txn_offset_topic(
+            "ng-in",
             topic_id,
-            partitions: vec![TxnOffsetCommitRequestPartition {
-                partition_index: 0,
-                committed_offset: 1,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
+            vec![txn_offset_partition(0, 1)],
+        )],
         ..Default::default()
     };
 

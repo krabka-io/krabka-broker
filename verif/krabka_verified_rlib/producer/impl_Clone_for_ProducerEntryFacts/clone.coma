@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/producer.rs" 18 27 18 32 *)
+(* #"/workspace/crates/verified/src/producer.rs" 6 19 6 36 *)
 
 (* <producer::ProducerEntryFacts as std::clone::Clone> *)
 
@@ -12,8 +12,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_ProducerEntryFacts [#"/workspace/crates/verified/src/producer.rs" 18 27 18 32]
-  (self: t_ProducerEntryFacts) (return (x: t_ProducerEntryFacts)) = (! bb0
+let clone_ProducerEntryFacts [#"/workspace/crates/verified/src/producer.rs" 6 19 6 36] (self: t_ProducerEntryFacts)
+  (return (x: t_ProducerEntryFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ProducerEntryFacts = Any.any_l () | & self: t_ProducerEntryFacts = self ])
   [ return (result: t_ProducerEntryFacts) -> (! return {result}) ]

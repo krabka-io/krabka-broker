@@ -252,14 +252,7 @@ impl LagPoller {
         let broker = image
             .broker(leader)
             .ok_or_else(|| format!("unknown leader broker {leader}"))?;
-        let endpoint = broker
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.name == self.listener_name);
-        let (host, port) = endpoint.map_or_else(
-            || (broker.host.as_str(), broker.port),
-            |endpoint| (endpoint.host.as_str(), endpoint.port),
-        );
+        let (host, port) = crate::broker::registered_listener_endpoint(broker, &self.listener_name);
         let Some((request, names)) = probe_request(image, partitions) else {
             return Ok(HashMap::new());
         };

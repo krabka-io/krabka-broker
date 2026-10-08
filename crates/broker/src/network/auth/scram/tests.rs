@@ -32,6 +32,8 @@ use crate::{
     test_support::FakeMetadataSource,
 };
 
+krabka_macros::scram_client_proof_fixture!(scram_client_proof);
+
 const USER_PASSWORD: &str = "user-password";
 /// The broker's `delegation.token.secret.key` in these tests.
 const TOKEN_SECRET_KEY: &[u8] = b"token-secret-key";
@@ -96,11 +98,7 @@ impl KafkaScramClient {
         let client_key = self.hmac(&salted, b"Client Key");
         let stored_key = self.hash(&client_key);
         let signature = self.hmac(&stored_key, auth_message.as_bytes());
-        let proof: Vec<u8> = client_key
-            .iter()
-            .zip(&signature)
-            .map(|(k, s)| k ^ s)
-            .collect();
+        let proof = scram_client_proof(&client_key, &signature);
         format!("{without_proof},p={}", B64.encode(proof)).into_bytes()
     }
 
@@ -473,10 +471,7 @@ fn tokenauth_extension_selects_the_credential_store() {
 /// A token session carries the token expiry from round 1 to round 2.
 #[test]
 fn token_round_one_threads_the_token_expiry() {
-    let expiry = crate::time_util::now_ms() + 60_000;
-    let source = FakeMetadataSource::builder()
-        .records(&[token("tok", expiry)])
-        .build();
+    let (expiry, source) = active_token_source();
     let mut auth = ConnectionAuth::Negotiating {
         mechanism: SaslMechanism::ScramSha512,
         exchange: SaslExchange::ScramPending,
@@ -530,10 +525,7 @@ fn token_round_one_threads_the_token_expiry() {
 /// key fails the proof.
 #[test]
 fn token_password_is_recomputed_from_the_secret_key() {
-    let expiry = crate::time_util::now_ms() + 60_000;
-    let source = FakeMetadataSource::builder()
-        .records(&[token("tok", expiry)])
-        .build();
+    let (_expiry, source) = active_token_source();
     let secret = token_secret();
     for mechanism in [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512] {
         // (case, broker secret key, key the client's HMAC came from, expected)
@@ -631,4 +623,12 @@ fn sasl_name_decoding_matches_scram_formatter() {
             "{sasl_name}"
         );
     }
+}
+
+fn active_token_source() -> (i64, FakeMetadataSource) {
+    let expiry = crate::time_util::now_ms() + 60_000;
+    let source = FakeMetadataSource::builder()
+        .records(&[token("tok", expiry)])
+        .build();
+    (expiry, source)
 }

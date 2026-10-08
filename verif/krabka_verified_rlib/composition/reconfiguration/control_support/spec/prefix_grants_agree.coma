@@ -1,19 +1,20 @@
-(* #"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 67 0 77 1 *)
+(* #"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 76 0 86 1 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 66 10 66 15
-let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 59 11 59 77
-let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 60 11 61 80
-let%span sspec'2 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 62 11 63 54
-let%span sspec'3 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 64 10 65 62
-let%span sspec'4 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 12 16 12 70
-let%span sspec'5 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 49 16 53 5
-let%span sspec'6 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 70 10 70 15
-let%span sspec'7 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 79 16 86 5
-let%span sspec'8 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 32 10 32 15
-let%span sspec'9 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 42 16 51 5
+let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 75 10 75 15
+let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 69 11 69 77
+let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 70 11 71 80
+let%span sspec'2 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 72 11 72 59
+let%span sspec'3 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 73 10 74 62
+let%span sspec'4 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 149 16 149 113
+let%span sspec'5 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 82 10 82 15
+let%span sspec'6 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 91 16 98 5
+let%span sspec'7 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 25 10 25 15
+let%span sspec'8 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 35 16 44 5
+let%span sspec'9 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 33 16 33 70
+let%span sspec'10 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 63 16 67 5
 
 use creusot.int.UInt64
 use seq.Seq
@@ -30,21 +31,25 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 11 0 11 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
-  [%#sspec'4] exists i: int. 0 <= i /\ i < count /\ Seq.get nodes i = node
+predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 32 0 32 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
+  [%#sspec'9] exists i: int. 0 <= i /\ i < count /\ Seq.get nodes i = node
 
-predicate expected_member [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 42 0 48 9] (nodes: Seq.seq UInt64.t) (count: int) (kind: t_VoterChangeKind) (target: UInt64.t) (node: UInt64.t) =
-  [%#sspec'5] match kind with
+predicate expected_member [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 56 0 62 9] (nodes: Seq.seq UInt64.t) (count: int) (kind: t_VoterChangeKind) (target: UInt64.t) (node: UInt64.t) =
+  [%#sspec'10] match kind with
     | Add -> has_node nodes count node \/ node = target
     | Remove -> has_node nodes count node /\ node <> target
     | Update | FinalizeKraftVersion -> has_node nodes count node
     end
 
-function grant_count [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 71 0 78 8] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (node: UInt64.t) (new: bool) (count: int) : int
+predicate membership_matches_change [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 143 0 148 9] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (kind: t_VoterChangeKind) (node: UInt64.t) =
+  [%#sspec'4] forall id: UInt64.t. has_node next (Seq.length next) id
+    = expected_member old' (Seq.length old') kind node id
+
+function grant_count [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 83 0 90 8] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (node: UInt64.t) (new: bool) (count: int) : int
 
 axiom grant_count_def:
   forall old': Seq.seq UInt64.t, next: Seq.seq UInt64.t, votes: Seq.seq tup2_bool_bool, node: UInt64.t, new: bool, count: int [grant_count old' next votes node new count]. grant_count old' next votes node new count
-    = ([%#sspec'7] if count <= 0 then
+    = ([%#sspec'6] if count <= 0 then
       0
     else
       grant_count old' next votes node new (count - 1)
@@ -64,11 +69,11 @@ axiom grant_count_def:
       )
     )
 
-function prefix_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 33 0 41 8] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (kind: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : int
+function prefix_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 26 0 34 8] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (kind: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : int
 
 axiom prefix_count_def:
   forall old': Seq.seq UInt64.t, reports: Seq.seq tup2_i64_i64, kind: t_VoterChangeKind, node: UInt64.t, end': int, new: bool, count: int [prefix_count old' reports kind node end' new count]. prefix_count old' reports kind node end' new count
-    = ([%#sspec'9] if count <= 0 then
+    = ([%#sspec'8] if count <= 0 then
       0
     else
       prefix_count old' reports kind node end' new (count - 1)
@@ -125,15 +130,14 @@ constant new : bool
 
 constant count : int
 
-function prefix_grants_agree [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 67 0 77 1] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (reports: Seq.seq tup2_i64_i64) (kind: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : ()
+function prefix_grants_agree [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 76 0 86 1] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (reports: Seq.seq tup2_i64_i64) (kind: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : ()
 
 goal vc_prefix_grants_agree: ([%#sspec'0] 0 <= count
     /\ count <= Seq.length votes /\ Seq.length votes = Seq.length reports)
   -> ([%#sspec'1] forall i: int. 0 <= i /\ i < Seq.length votes
       -> (Seq.get votes i).f0 = ge_log_Int (Int64.to_int (Seq.get reports i).f0'0) end'
       /\ (Seq.get votes i).f1 = ge_log_Int (Int64.to_int (Seq.get reports i).f1'0) end')
-  -> ([%#sspec'2] forall id: UInt64.t. has_node next (Seq.length next) id
-      = expected_member old' (Seq.length old') kind node id)
+  -> ([%#sspec'2] membership_matches_change old' next kind node)
   -> (if gt_log_Int count 0 then
     (([@stop_split] [@expl:prefix_grants_agree requires] ([@stop_split] [@expl:prefix_grants_agree requires #0] [%#sspec'0] 0
             <= count - 1
@@ -142,8 +146,7 @@ goal vc_prefix_grants_agree: ([%#sspec'0] 0 <= count
               /\ i < Seq.length votes
             -> (Seq.get votes i).f0 = ge_log_Int (Int64.to_int (Seq.get reports i).f0'0) end'
             /\ (Seq.get votes i).f1 = ge_log_Int (Int64.to_int (Seq.get reports i).f1'0) end')
-        /\ ([@stop_split] [@expl:prefix_grants_agree requires #2] [%#sspec'2] forall id: UInt64.t. has_node next (Seq.length next) id
-          = expected_member old' (Seq.length old') kind node id))
+        /\ ([@stop_split] [@expl:prefix_grants_agree requires #2] [%#sspec'2] membership_matches_change old' next kind node))
       /\ ([@expl:variant decreases] well_founded_relation_Int ([%#sspec] count) ([%#sspec] count - 1)))
     /\ (([@stop_split] [@expl:prefix_grants_agree ensures] [%#sspec'3] grant_count old' next votes node new (count - 1)
       = prefix_count old' reports kind node end' new (count - 1))

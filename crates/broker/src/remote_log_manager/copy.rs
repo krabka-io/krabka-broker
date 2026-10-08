@@ -383,10 +383,11 @@ mod tests {
     use crate::{
         metrics::BrokerMetrics,
         remote_log_manager::{
-            ArchiveMode,
+            ArchiveMode, test_support as fixtures,
             test_support::{
-                FakeWormArchive, archived_backends, local_backends, missing_remote_reads,
-                rolled_log, stuck_started_segment, synth_export, tier, tier_with_metrics, tp,
+                FakeWormArchive, archived_backends, copy_exports, local_backends,
+                missing_remote_reads, stuck_started_segment, synth_export, three_exports, tier,
+                tier_with_metrics, tp,
             },
         },
     };
@@ -395,24 +396,29 @@ mod tests {
     /// two copy-lag gauges. An operator whose object store starts refusing
     /// writes learns about it from these; before them, a stalled tier was
     /// visible only as consumer lag and a filling disk.
+    macro_rules! accepting_copy_fixture {
+        ($rsm:ident, $rlmm:ident, $metrics:ident, $tier:ident, $unstable:expr) => {
+            let ($rsm, $rlmm) = accepting_backends(None);
+            let $metrics = BrokerMetrics::new();
+            let $tier = tier_with_metrics(&$rsm, &$rlmm, &$metrics, $unstable);
+        };
+    }
+
     #[tokio::test]
     async fn a_copy_round_records_its_requests_bytes_and_lag() {
-        let (rsm, rlmm) = accepting_backends(None);
-        let metrics = BrokerMetrics::new();
-        let tier = tier_with_metrics(
-            &rsm,
-            &rlmm,
-            &metrics,
-            crate::api_catalog::UnstableApiVersions::Disabled,
+        accepting_copy_fixture!(
+            rsm,
+            rlmm,
+            metrics,
+            tier,
+            crate::api_catalog::UnstableApiVersions::Disabled
         );
-        let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
+        let exports = fixtures::two_exports();
 
-        let copied = copy_eligible(&tier, &tp(), 1, LeaderEpoch(0), exports).await;
+        let copied = copy_exports(&tier, exports).await;
 
         check!(copied == 2);
-        let topic = crate::metrics::TopicLabel {
-            topic: std::sync::Arc::from(tp().topic.as_str()),
-        };
+        let topic = fixtures::orders_label();
         check!(
             metrics
                 .remote_copy_requests_total
@@ -447,19 +453,14 @@ mod tests {
             (30, 3),
             (i64::MAX, 3),
         ] {
-            let (rsm, rlmm) = accepting_backends(None);
-            let metrics = BrokerMetrics::new();
-            let tier = tier_with_metrics(
-                &rsm,
-                &rlmm,
-                &metrics,
-                crate::api_catalog::UnstableApiVersions::Disabled,
+            accepting_copy_fixture!(
+                rsm,
+                rlmm,
+                metrics,
+                tier,
+                crate::api_catalog::UnstableApiVersions::Disabled
             );
-            let exports = vec![
-                synth_export(0, 9, 100, 64),
-                synth_export(10, 19, 200, 64),
-                synth_export(20, 29, 300, 64),
-            ];
+            let exports = three_exports();
 
             let copied = copy_eligible_below(
                 &tier,
@@ -476,9 +477,7 @@ mod tests {
                 rlmm.list_remote_log_segments(&tp()).unwrap().len() == want,
                 "last stable offset {last_stable_offset}: the tier's listing"
             );
-            let topic = crate::metrics::TopicLabel {
-                topic: std::sync::Arc::from(tp().topic.as_str()),
-            };
+            let topic = fixtures::orders_label();
             check!(
                 metrics.remote_copy_lag_segments.get_or_create(&topic).get() == 3,
                 "last stable offset {last_stable_offset}: the lag counts every uncopied segment"
@@ -525,19 +524,14 @@ mod tests {
             ("a size lag nothing has reached", 10_000, 193, 0),
             ("either check is enough", 700, 10_000, 3),
         ] {
-            let (rsm, rlmm) = accepting_backends(None);
-            let metrics = BrokerMetrics::new();
-            let tier = tier_with_metrics(
-                &rsm,
-                &rlmm,
-                &metrics,
-                crate::api_catalog::UnstableApiVersions::Enabled,
+            accepting_copy_fixture!(
+                rsm,
+                rlmm,
+                metrics,
+                tier,
+                crate::api_catalog::UnstableApiVersions::Enabled
             );
-            let exports = vec![
-                synth_export(0, 9, 100, 64),
-                synth_export(10, 19, 200, 64),
-                synth_export(20, 29, 300, 64),
-            ];
+            let exports = three_exports();
             let delay = CopyDelay::resolve(RemoteCopyLag { ms, bytes }, &unlimited, 1000, 64);
 
             let copied = copy_eligible_delayed(
@@ -550,9 +544,7 @@ mod tests {
             .await;
 
             check!(copied == want, "{label}");
-            let topic = crate::metrics::TopicLabel {
-                topic: std::sync::Arc::from(tp().topic.as_str()),
-            };
+            let topic = fixtures::orders_label();
             check!(
                 metrics.remote_copy_lag_segments.get_or_create(&topic).get() == 3,
                 "{label}: a held segment is still lag"
@@ -616,8 +608,7 @@ mod tests {
     #[tokio::test]
     async fn a_refused_copy_counts_an_error_and_no_bytes() {
         let rsm: Arc<dyn RemoteStorageManager> = Arc::new(RefusingRsm);
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let rlmm = fixtures::in_memory_metadata();
         let metrics = BrokerMetrics::new();
         let tier = tier_with_metrics(
             &rsm,
@@ -626,19 +617,10 @@ mod tests {
             crate::api_catalog::UnstableApiVersions::Disabled,
         );
 
-        let copied = copy_eligible(
-            &tier,
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            vec![synth_export(0, 9, 100, 64)],
-        )
-        .await;
+        let copied = copy_exports(&tier, vec![synth_export(0, 9, 100, 64)]).await;
 
         check!(copied == 0);
-        let topic = crate::metrics::TopicLabel {
-            topic: std::sync::Arc::from(tp().topic.as_str()),
-        };
+        let topic = fixtures::orders_label();
         check!(
             metrics
                 .remote_copy_requests_total
@@ -664,13 +646,7 @@ mod tests {
                 "the backend refused the copy",
             )))
         }
-        missing_remote_reads!();
-        fn delete_log_segment_data(
-            &self,
-            _metadata: &RemoteLogSegmentMetadata,
-        ) -> Result<(), RemoteStorageError> {
-            Ok(())
-        }
+        missing_remote_reads!(delete_ok);
     }
 
     /// An RSM whose copy always succeeds, handing back `receipt` verbatim,
@@ -688,13 +664,7 @@ mod tests {
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
             Ok(self.receipt.clone())
         }
-        missing_remote_reads!();
-        fn delete_log_segment_data(
-            &self,
-            _metadata: &RemoteLogSegmentMetadata,
-        ) -> Result<(), RemoteStorageError> {
-            Ok(())
-        }
+        missing_remote_reads!(delete_ok);
     }
 
     /// Fresh metadata and a backend that returns the chosen successful-copy receipt.
@@ -729,10 +699,7 @@ mod tests {
 
     #[tokio::test]
     async fn copies_all_sealed_segments_and_records_finished() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let log = rolled_log(log_dir.path());
-        let exports = log.tierable_segments();
+        fixtures::rolled_log_fixture!(log_dir, remote_dir, log, exports);
         assert!(exports.len() >= 2, "test needs multiple sealed segments");
 
         let (rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
@@ -762,31 +729,14 @@ mod tests {
 
     #[tokio::test]
     async fn re_running_is_idempotent() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let log = rolled_log(log_dir.path());
-        let exports = log.tierable_segments();
+        fixtures::rolled_log_fixture!(log_dir, remote_dir, log, exports);
 
         let (rsm, rlmm) = local_backends(remote_dir.path());
 
-        let first = copy_eligible(
-            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            exports.clone(),
-        )
-        .await;
+        let first = copy_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), exports.clone()).await;
         assert!(first == exports.len());
         // Second pass: everything is already known → nothing re-copied.
-        let second = copy_eligible(
-            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            exports.clone(),
-        )
-        .await;
+        let second = copy_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), exports.clone()).await;
         assert!(second == 0);
         assert!(rlmm.list_remote_log_segments(&tp()).unwrap().len() == exports.len());
     }
@@ -795,14 +745,7 @@ mod tests {
     async fn empty_exports_copies_nothing() {
         let remote_dir = tempfile::tempdir().unwrap();
         let (rsm, rlmm) = local_backends(remote_dir.path());
-        let copied = copy_eligible(
-            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            Vec::new(),
-        )
-        .await;
+        let copied = copy_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), Vec::new()).await;
         assert!(copied == 0);
         assert!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
     }
@@ -813,22 +756,17 @@ mod tests {
         let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm {
             receipt: Some(receipt.clone()),
         });
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let rlmm = fixtures::in_memory_metadata();
 
-        let copied = copy_eligible(
+        let copied = copy_exports(
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
             vec![synth_export(0, 9, 100, 64)],
         )
         .await;
 
         check!(copied == 1);
-        let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
-        check!(listed.len() == 1);
-        check!(listed[0].state() == RemoteLogSegmentState::CopySegmentFinished);
+        let listed =
+            fixtures::check_one_segment_state(&rlmm, RemoteLogSegmentState::CopySegmentFinished);
         check!(listed[0].custom_metadata() == Some(&receipt));
     }
 
@@ -836,22 +774,10 @@ mod tests {
     async fn copy_eligible_chains_consecutive_segments() {
         let archive = Arc::new(FakeWormArchive::new());
         let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let exports = vec![
-            synth_export(0, 9, 100, 64),
-            synth_export(10, 19, 200, 64),
-            synth_export(20, 29, 300, 64),
-        ];
+        let rlmm = fixtures::in_memory_metadata();
+        let exports = three_exports();
 
-        let copied = copy_eligible(
-            &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            exports,
-        )
-        .await;
+        let copied = copy_exports(&tier(ArchiveMode::WriteOnce, &rsm, &rlmm), exports).await;
 
         check!(copied == 3);
         check!(archive.archived_segments() == 3);
@@ -870,8 +796,7 @@ mod tests {
 
     #[tokio::test]
     async fn copy_eligible_finishes_the_last_sequence_then_stops() {
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let rlmm = fixtures::in_memory_metadata();
         let segment_id = RemoteLogSegmentId::new(tp(), Uuid::from_u128(0xdead));
         let started = RemoteLogSegmentMetadata::new(
             segment_id.clone(),
@@ -906,18 +831,8 @@ mod tests {
 
         let archive = Arc::new(FakeWormArchive::new());
         let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
-        let copied = copy_eligible(
-            &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            vec![
-                synth_export(0, 9, 100, 64),
-                synth_export(10, 19, 200, 64),
-                synth_export(20, 29, 300, 64),
-            ],
-        )
-        .await;
+        let copied =
+            copy_exports(&tier(ArchiveMode::WriteOnce, &rsm, &rlmm), three_exports()).await;
 
         check!(copied == 1);
         check!(archive.archived_segments() == 1);
@@ -928,15 +843,11 @@ mod tests {
 
     #[tokio::test]
     async fn copy_eligible_resumes_the_chain_from_the_rlmm_after_a_restart() {
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let rlmm = fixtures::in_memory_metadata();
         let first_rsm: Arc<dyn RemoteStorageManager> = Arc::new(FakeWormArchive::new());
-        let copied = copy_eligible(
+        let copied = copy_exports(
             &tier(ArchiveMode::WriteOnce, &first_rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)],
+            fixtures::two_exports(),
         )
         .await;
         check!(copied == 2);
@@ -945,16 +856,9 @@ mod tests {
         // A restart: a brand-new backend and a brand-new copy pass, sharing
         // only the metadata manager. The chain continues from the receipts.
         let second_rsm: Arc<dyn RemoteStorageManager> = Arc::new(FakeWormArchive::new());
-        let copied = copy_eligible(
+        let copied = copy_exports(
             &tier(ArchiveMode::WriteOnce, &second_rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            vec![
-                synth_export(0, 9, 100, 64),
-                synth_export(10, 19, 200, 64),
-                synth_export(20, 29, 300, 64),
-            ],
+            three_exports(),
         )
         .await;
 
@@ -971,14 +875,9 @@ mod tests {
     async fn copy_eligible_starts_a_new_epoch_when_the_rlmm_is_empty() {
         let mut genesis = Vec::new();
         for _ in 0..2 {
-            let rsm: Arc<dyn RemoteStorageManager> = Arc::new(FakeWormArchive::new());
-            let rlmm: Arc<dyn RemoteLogMetadataManager> =
-                Arc::new(InmemoryRemoteLogMetadataManager::new());
-            let copied = copy_eligible(
+            let (rsm, rlmm) = fixtures::write_once_backends();
+            let copied = copy_exports(
                 &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
-                &tp(),
-                1,
-                LeaderEpoch(0),
                 vec![synth_export(0, 9, 100, 64)],
             )
             .await;
@@ -1034,13 +933,10 @@ mod tests {
 
     /// Every finished range the metadata manager holds for `tp()`, ascending.
     fn finished_ranges(rlmm: &Arc<dyn RemoteLogMetadataManager>) -> Vec<(i64, i64)> {
-        let mut ranges: Vec<(i64, i64)> = rlmm
-            .list_remote_log_segments(&tp())
-            .unwrap()
-            .iter()
-            .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-            .map(|md| (md.start_offset(), md.end_offset()))
-            .collect();
+        let mut ranges: Vec<(i64, i64)> =
+            crate::remote_log_manager::local_retention::finished_segment_ranges(
+                &rlmm.list_remote_log_segments(&tp()).unwrap(),
+            );
         ranges.sort_unstable();
         ranges
     }
@@ -1168,9 +1064,19 @@ mod tests {
         // Only the segment holding offsets the tier lacks is copied, and it is
         // copied whole: skipping it because it starts under the watermark
         // would leave 200..=249 in no remote segment at all.
+        check_copy_coverage(copied, &rlmm, &[(0, 99), (100, 199), (150, 249)], 249);
+    }
+
+    /// Check the completed copy against the caller's independent range and coverage oracle.
+    fn check_copy_coverage(
+        copied: usize,
+        rlmm: &Arc<dyn RemoteLogMetadataManager>,
+        expected_ranges: &[(i64, i64)],
+        expected_end: i64,
+    ) {
         check!(copied == 1);
-        check!(finished_ranges(&rlmm) == vec![(0, 99), (100, 199), (150, 249)]);
-        check!(remote_covered_through(&finished_ranges(&rlmm), 0) == Some(249));
+        check!(finished_ranges(rlmm) == expected_ranges);
+        check!(remote_covered_through(&finished_ranges(rlmm), 0) == Some(expected_end));
     }
 
     /// A tick that finds a hole fills the hole and leaves what sits above it
@@ -1183,11 +1089,8 @@ mod tests {
         finished_segment(&rlmm, 0xb1, 0, 99, LeaderEpoch(0));
         finished_segment(&rlmm, 0xb2, 200, 299, LeaderEpoch(0));
 
-        let copied = copy_eligible(
+        let copied = copy_exports(
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
             vec![
                 synth_export(0, 99, 100, 64),
                 synth_export(100, 199, 200, 64),
@@ -1196,9 +1099,7 @@ mod tests {
         )
         .await;
 
-        check!(copied == 1);
-        check!(finished_ranges(&rlmm) == vec![(0, 99), (100, 199), (200, 299)]);
-        check!(remote_covered_through(&finished_ranges(&rlmm), 0) == Some(299));
+        check_copy_coverage(copied, &rlmm, &[(0, 99), (100, 199), (200, 299)], 299);
     }
 
     /// The copy-lag gauges read off the same coverage. Before this, a segment
@@ -1207,8 +1108,7 @@ mod tests {
     #[tokio::test]
     async fn copy_lag_counts_the_segments_the_tier_does_not_hold_whole() {
         let rsm: Arc<dyn RemoteStorageManager> = Arc::new(RefusingRsm);
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let rlmm = fixtures::in_memory_metadata();
         finished_segment(&rlmm, 0xc1, 0, 99, LeaderEpoch(0));
         let metrics = BrokerMetrics::new();
         let tier = tier_with_metrics(
@@ -1235,9 +1135,7 @@ mod tests {
         .await;
 
         check!(copied == 0);
-        let topic = crate::metrics::TopicLabel {
-            topic: std::sync::Arc::from(tp().topic.as_str()),
-        };
+        let topic = fixtures::orders_label();
         check!(metrics.remote_copy_lag_segments.get_or_create(&topic).get() == 2);
         check!(metrics.remote_copy_lag_bytes.get_or_create(&topic).get() == 48);
         check!(metrics.remote_copy_errors_total.get_or_create(&topic).get() == 2);
@@ -1258,15 +1156,11 @@ mod tests {
             ),
         ];
         for (name, archive, rsm) in cases {
-            let rlmm: Arc<dyn RemoteLogMetadataManager> =
-                Arc::new(InmemoryRemoteLogMetadataManager::new());
+            let rlmm = fixtures::in_memory_metadata();
             let abandoned = stuck_started_segment(&rlmm, 0x57c, 0);
 
-            let copied = copy_eligible(
+            let copied = copy_exports(
                 &tier(archive, &rsm, &rlmm),
-                &tp(),
-                1,
-                LeaderEpoch(0),
                 vec![synth_export(0, 9, 100, 64)],
             )
             .await;

@@ -7,9 +7,9 @@
 //! not rf=2 replication. The test's own doc comment explains why the stronger
 //! assertion is not reliable on this network topology.
 
-use assert2::assert;
-
-use crate::jvm_acceptance::{KAFKA_IMAGE, nc_check_connectivity, start_two_sasl_brokers};
+use crate::jvm_acceptance::{
+    ADMIN, ADMIN_PASS, KAFKA_IMAGE, nc_check_connectivity, start_two_sasl_brokers,
+};
 
 /// JVM-driven 2-broker test for the `SASL_PLAINTEXT` inter-broker
 /// listener. Both brokers boot with the same shared `admin` credential and
@@ -47,8 +47,6 @@ use crate::jvm_acceptance::{KAFKA_IMAGE, nc_check_connectivity, start_two_sasl_b
 #[ignore = "requires Docker"]
 async fn jvm_inter_broker_replication_authed() {
     const TOPIC: &str = "krabka-jvm-inter-broker-itest";
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
 
     let (broker0, broker1, _dir0, _dir1) = start_two_sasl_brokers(ADMIN, ADMIN_PASS).await;
     nc_check_connectivity();
@@ -86,10 +84,7 @@ async fn jvm_inter_broker_replication_authed() {
     // Produce 50 records via `kafka-console-producer`. The metadata
     // response steers the producer to whichever broker leads partition 0.
 
-    let payload: String = (0..50)
-        .map(|i| format!("rec-{i}\n"))
-        .collect::<Vec<_>>()
-        .concat();
+    let payload = crate::jvm_acceptance::numbered_payload("rec", 50);
     let producer_out = crate::jvm_acceptance::produce_console(
         KAFKA_IMAGE,
         &[&mount],
@@ -97,12 +92,7 @@ async fn jvm_inter_broker_replication_authed() {
         false,
         payload.as_bytes(),
     );
-    assert!(
-        producer_out.status.success(),
-        "producer failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&producer_out.stdout),
-        String::from_utf8_lossy(&producer_out.stderr)
-    );
+    crate::jvm_acceptance::assert_console_produced(&producer_out);
 
     // Verify the leader has 50 records on disk. We don't know in advance
     // which broker leads partition 0 (raft picks one), so wait for whichever

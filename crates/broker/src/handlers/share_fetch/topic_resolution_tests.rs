@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     owned::{
         share_fetch_request::{
@@ -25,15 +24,10 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{
-        AclSource, AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer,
-    },
+    authorizer::{AllowAllAuthorizer, Authorizer},
     broker::BrokerHandle,
     codes,
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context,
-        start_broker_no_audit_with,
-    },
+    test_support::start_broker_no_audit_with,
 };
 
 /// An id that no topic in these tests has.
@@ -42,35 +36,7 @@ const UNKNOWN_ID: WireUuid = WireUuid([0x0b; 16]);
 /// The acquisition lock timeout of the test broker's share-group config.
 const LOCK_TIMEOUT_MS: i32 = 30_000;
 
-/// Denies `Read` on every topic and allows everything else, so that topic
-/// creation still works and only the per-topic gate refuses.
-#[derive(Debug)]
-struct DenyTopicRead;
-
-impl Authorizer for DenyTopicRead {
-    fn authorize(
-        &self,
-        _source: &dyn AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        if request.resource_type == ResourceType::Topic && request.operation == AclOperation::Read {
-            AuthorizationResult::Deny
-        } else {
-            AuthorizationResult::Allow
-        }
-    }
-}
-
-/// The topic id that one request row carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TopicRef {
-    /// The id of a topic that exists.
-    Known,
-    /// A non-zero id that no topic has.
-    Unknown,
-    /// The zero id.
-    Zero,
-}
+use crate::handlers::test_support::{DenyTopicRead, TopicIdRef as TopicRef};
 
 /// One row of a table: the request version, the topic id, and the error code
 /// that Kafka puts on the partition row.
@@ -133,21 +99,7 @@ async fn share_fetch(
     version: i16,
     request: &ShareFetchRequest,
 ) -> ShareFetchResponse {
-    let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let request_bytes = encode_request(request, version);
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
-        version,
-        &request_bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle share fetch");
-    decode_response(&response, version)
+    crate::handlers::test_support::share_fetch_wire(broker, version, request).await
 }
 
 /// The empty record set, as a client decodes it. Kafka's
@@ -228,15 +180,12 @@ fn cases(known: i16) -> Vec<Case> {
 
 #[tokio::test]
 async fn partition_row_error_follows_topic_id() {
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
-    let known = create_topic(&broker, "share-resolution").await;
-    crate::test_support::initialize_share_state(
-        &broker,
-        "resolution-group",
-        uuid::Uuid::from_bytes(known.0),
-        0,
-    )
-    .await;
+    initialized_share_topic!(
+        (broker, _dir, known),
+        start(Arc::new(AllowAllAuthorizer)),
+        "share-resolution",
+        "resolution-group"
+    );
 
     let (actual, expected) = drive(&broker, known, &cases(codes::NONE)).await;
 
@@ -249,15 +198,12 @@ async fn partition_row_error_follows_topic_id() {
 /// 100 for an id that does not resolve.
 #[tokio::test]
 async fn unresolved_id_answers_before_topic_authorization() {
-    let (broker, _dir) = start(Arc::new(DenyTopicRead)).await;
-    let known = create_topic(&broker, "share-resolution").await;
-    crate::test_support::initialize_share_state(
-        &broker,
-        "resolution-group",
-        uuid::Uuid::from_bytes(known.0),
-        0,
-    )
-    .await;
+    initialized_share_topic!(
+        (broker, _dir, known),
+        start(Arc::new(DenyTopicRead)),
+        "share-resolution",
+        "resolution-group"
+    );
 
     let (actual, expected) = drive(&broker, known, &cases(codes::TOPIC_AUTHORIZATION_FAILED)).await;
 

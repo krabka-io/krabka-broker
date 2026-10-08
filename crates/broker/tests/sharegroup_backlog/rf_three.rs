@@ -13,11 +13,9 @@ use std::{sync::Arc, time::Duration};
 use assert2::assert;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::metrics::ShareGroupLabel;
-use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        fetch_response::FetchResponse,
+        fetch_request::FetchPartition, fetch_response::FetchResponse,
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
     },
     primitives::uuid::Uuid as WireUuid,
@@ -26,6 +24,10 @@ use krabka_protocol::{
 use crate::{
     harness::{TOPIC, create_topic, scrape, test_lock},
     support,
+    support::{
+        client::connect_client,
+        fetch::{fetch_partition, single_partition_fetch},
+    },
 };
 
 const OFFSETS_TOPIC: &str = "__consumer_offsets";
@@ -109,12 +111,11 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 
     let admin = Arc::new(
-        Client::builder()
-            .bootstrap(cluster[0].0.listen_addr().to_string())
-            .client_id("backlog-rf3-admin")
-            .build()
-            .await
-            .unwrap(),
+        connect_client(
+            cluster[0].0.listen_addr().to_string(),
+            Some("backlog-rf3-admin"),
+        )
+        .await,
     );
     create_topic(&admin, 1, 3).await;
     for (broker, _, _) in &cluster {
@@ -204,12 +205,11 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         .unwrap();
     let group_id = group_for_partition(offsets_partition, offsets_partitions);
     let coordinator_client = Arc::new(
-        Client::builder()
-            .bootstrap(cluster[coordinator_index].0.listen_addr().to_string())
-            .client_id("backlog-rf3-coordinator")
-            .build()
-            .await
-            .unwrap(),
+        connect_client(
+            cluster[coordinator_index].0.listen_addr().to_string(),
+            Some("backlog-rf3-coordinator"),
+        )
+        .await,
     );
     support::find_coordinator(
         &coordinator_client,
@@ -314,31 +314,21 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             == Some(5)
     );
 
-    let data_client = Client::builder()
-        .bootstrap(cluster[data_leader_index].0.listen_addr().to_string())
-        .client_id("backlog-rf3-data")
-        .build()
-        .await
-        .unwrap();
+    let data_client = connect_client(
+        cluster[data_leader_index].0.listen_addr().to_string(),
+        Some("backlog-rf3-data"),
+    )
+    .await;
     let fetched: FetchResponse = data_client
-        .send(FetchRequest {
-            max_wait_ms: 0,
-            min_bytes: 0,
-            max_bytes: 0,
-            topics: vec![FetchTopic {
-                topic: TOPIC.into(),
-                topic_id: WireUuid(*topic_id.as_bytes()),
-                partitions: vec![FetchPartition {
-                    partition: data_partition,
-                    current_leader_epoch: leader_epoch.0,
-                    fetch_offset: i64::MAX,
-                    partition_max_bytes: 0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_fetch(
+            TOPIC,
+            WireUuid(*topic_id.as_bytes()),
+            FetchPartition {
+                current_leader_epoch: leader_epoch.0,
+                ..fetch_partition(data_partition, i64::MAX, 0)
+            },
+            (0, 0, 0),
+        ))
         .await
         .unwrap();
     let partition = &fetched.responses[0].partitions[0];
@@ -386,7 +376,5 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         }
     }
 
-    for (broker, _, _) in cluster {
-        broker.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

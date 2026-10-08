@@ -8,14 +8,10 @@
 use krabka_metadata::AclEntry;
 use krabka_protocol::owned::create_acls_request::{AclCreation, CreateAclsRequest};
 
-use crate::broker::BrokerHandle;
-
+pub(super) use crate::handlers::acl_test_support::{
+    OPERATION_READ, OPERATION_WRITE, PATTERN_TYPE_LITERAL, PERMISSION_ALLOW, RESOURCE_TYPE_TOPIC,
+};
 pub(super) const VERSION: i16 = 3;
-const RESOURCE_TYPE_TOPIC: i8 = 2;
-const PATTERN_TYPE_LITERAL: i8 = 3;
-pub(super) const OPERATION_READ: i8 = 3;
-pub(super) const OPERATION_WRITE: i8 = 4;
-const PERMISSION_ALLOW: i8 = 3;
 
 pub(super) fn creation(resource_name: &str, principal: &str, operation: i8) -> AclCreation {
     AclCreation {
@@ -39,13 +35,7 @@ pub(super) fn request(creations: Vec<AclCreation>) -> CreateAclsRequest {
 
 crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 
-pub(super) fn all_acls(handle: &BrokerHandle) -> Vec<krabka_metadata::AclEntry> {
-    handle
-        .controller_image_for_test()
-        .all_acls()
-        .cloned()
-        .collect()
-}
+pub(super) use crate::handlers::acl_test_support::all_acls;
 
 /// Validates `c` with CIDR ACL hosts supported, which is what every test not
 /// about the CIDR gate wants.
@@ -58,14 +48,4 @@ pub(super) fn validate(c: &AclCreation) -> Result<AclEntry, (i16, String)> {
     )
 }
 
-/// An authorizer an operator actually configured, which lets the `admin` test
-/// principal through as a super user.
-///
-/// The ACL RPCs answer `SECURITY_DISABLED` under the default
-/// `AllowAllAuthorizer`, so every case about the creating path needs a broker
-/// that has an authorizer at all.
-pub(super) fn configured_authorizer() -> std::sync::Arc<dyn crate::authorizer::Authorizer> {
-    std::sync::Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
-        std::iter::once("admin".to_owned()).collect(),
-    ))
-}
+pub(super) use crate::handlers::acl_test_support::configured_authorizer;

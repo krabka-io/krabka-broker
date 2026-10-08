@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_clone_OpaCacheAdmission": { "prover": "alt-ergo", "time": 0.028 }
+      "vc_clone_OpaCacheAdmission": { "prover": "alt-ergo", "time": 0.012 }
     }
   }
 }

@@ -147,13 +147,7 @@ impl RemoteLogMetadataCache {
         let map = self.epoch_to_offset_to_id.get(&leader_epoch)?;
         let (_start, id) = map.range(..=offset).next_back()?;
         let md = self.id_to_metadata.get(id)?;
-        let epochs = md.segment_leader_epochs();
-        let epoch_start = epochs.get(&leader_epoch).copied();
-        let next_epoch_start = epochs
-            .iter()
-            .filter(|(epoch, _)| **epoch > leader_epoch)
-            .map(|(_, start)| *start)
-            .min();
+        let (epoch_start, next_epoch_start) = md.epoch_bounds(leader_epoch);
         if remote_read_relative_offset(
             md.start_offset(),
             md.end_offset(),

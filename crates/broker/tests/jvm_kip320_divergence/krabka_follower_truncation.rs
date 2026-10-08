@@ -7,16 +7,12 @@
 
 use std::time::{Duration, Instant};
 
-use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionRecord};
+use krabka_metadata::{LeaderEpoch, MetadataRecord};
 
 use crate::{
-    docker::{
-        KAFKA_IMAGE, docker_run_kafka_tool_with_image, produce_lines_via_jvm, set_container_paused,
-    },
+    docker::{produce_lines_via_jvm, set_container_paused},
     dump_log::{dump_log_in_container, max_offset_in_dump},
-    mixed_cluster::start_mixed_cluster,
-    support,
-    topic_admin::{LEADER_WAIT, create_mixed_topic, described_isr, wait_for_described_leader},
+    topic_admin::{LEADER_WAIT, wait_for_described_leader},
 };
 
 /// Step 2 of Task 11, reverse direction. A Krabka follower replicates from a
@@ -29,66 +25,17 @@ use crate::{
 #[ignore = "requires Docker + a published controller/data port; Linux-bound"]
 async fn kip320_krabka_follower_truncates_from_jvm_leader() {
     const TOPIC: &str = "krabka-kip320-krabka-follower";
-    let container = support::unique_container_name("krabka-kip320-krabka-follower-broker");
-
-    let cluster = start_mixed_cluster(&container, true).await;
-    let c1 = &cluster.krabka[0].0;
-    let bootstrap_all = cluster.bootstrap_all.clone();
-
-    // 0. Gate on the JVM broker registering (see scenario 2); RF=3 needs all
-    //    three brokers in the cluster view. Linux-bound.
-    assert2::assert!(
-        cluster.wait_for_brokers(3, Duration::from_mins(2)).await,
-        "JVM broker never joined the mixed cluster; cross-impl KRaft join is Linux-bound"
-    );
-
-    // 1. Create the topic and wait for replicas to converge across all three
-    //    brokers.
-    create_mixed_topic(&bootstrap_all, TOPIC).await;
-
-    let deadline = Instant::now() + Duration::from_mins(2);
-    loop {
-        let desc = docker_run_kafka_tool_with_image(
-            KAFKA_IMAGE,
-            &[
-                "kafka-topics",
-                "--describe",
-                "--topic",
-                TOPIC,
-                "--bootstrap-server",
-                &bootstrap_all,
-            ],
-        );
-        let s = String::from_utf8_lossy(&desc.stdout);
-        let isr = described_isr(&s);
-        if isr.contains(&1) && isr.contains(&3) {
-            break;
-        }
-        assert2::assert!(Instant::now() <= deadline, "replicas never converged: {s}");
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-
-    // 2. Produce a committed prefix via the JVM producer (acks=all) so the
-    //    Krabka follower shares it.
-    produce_lines_via_jvm(
-        &bootstrap_all,
+    let (container, cluster, bootstrap_all, prefix_leo) = crate::mixed_cluster::prepare_divergence(
         TOPIC,
-        &(0..8).map(|i| format!("rev-{i}")).collect::<Vec<_>>(),
-    );
-    // intentional: let the EXTERNAL JVM producer/replication settle so the
-    // Krabka follower shares the prefix; no Krabka image/metric signal for it.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+        crate::mixed_cluster::DivergenceDirection::KrabkaFollower,
+    )
+    .await;
+    let c1 = &cluster.krabka[0].0;
 
     // 3. Park replication behind a phantom leader before appending the
     //    Krabka-only suffix. This makes the divergent state deterministic:
     //    neither the JVM replica nor broker 2 can copy the forged records.
-    let prefix_leo = c1
-        .local_log_end_offset(TOPIC, 0)
-        .expect("Krabka prefix log exists");
-    assert2::assert!(
-        prefix_leo == 8,
-        "expected eight-record prefix, got LEO {prefix_leo}"
-    );
+
     c1.wait_until_partition_present(TOPIC, 0).await;
     let partition = c1
         .partition_record_for_test(TOPIC, 0)
@@ -100,18 +47,15 @@ async fn kip320_krabka_follower_truncates_from_jvm_leader() {
     // metadata is still propagating, making its authoritative prefix longer.
     set_container_paused(&container, true);
 
-    c1.submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-        topic: TOPIC.to_string(),
-        partition: 0,
-        leader: krabka_broker::NodeId(99),
-        replicas: partition.replicas.clone(),
-        isr: vec![krabka_broker::NodeId(99)],
-        leader_epoch: parked_epoch,
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: partition.directories.clone(),
-        partition_epoch: partition.partition_epoch + 1,
-    }))
+    c1.submit_metadata_record_for_test(MetadataRecord::V1Partition(
+        crate::mixed_cluster::single_leader_record(
+            TOPIC,
+            &partition,
+            krabka_broker::NodeId(99),
+            parked_epoch,
+            1,
+        ),
+    ))
     .await
     .expect("park reverse-direction replicas behind phantom leader");
     c1.wait_until_local_partition_target(TOPIC, 0, krabka_broker::NodeId(99), parked_epoch)
@@ -132,18 +76,15 @@ async fn kip320_krabka_follower_truncates_from_jvm_leader() {
     // 4. Promote the JVM replica at the next epoch. Its log still ends at the
     //    shared prefix, so the Krabka follower must truncate before fetching.
     let jvm_epoch = LeaderEpoch(parked_epoch.0 + 1);
-    c1.submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-        topic: TOPIC.to_string(),
-        partition: 0,
-        leader: krabka_broker::NodeId(3),
-        replicas: partition.replicas.clone(),
-        isr: vec![krabka_broker::NodeId(3)],
-        leader_epoch: jvm_epoch,
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: partition.directories.clone(),
-        partition_epoch: partition.partition_epoch + 2,
-    }))
+    c1.submit_metadata_record_for_test(MetadataRecord::V1Partition(
+        crate::mixed_cluster::single_leader_record(
+            TOPIC,
+            &partition,
+            krabka_broker::NodeId(3),
+            jvm_epoch,
+            2,
+        ),
+    ))
     .await
     .expect("promote JVM broker for reverse-direction recovery");
 

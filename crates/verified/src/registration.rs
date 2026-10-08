@@ -1,28 +1,24 @@
 //! Broker heartbeat admission decisions.
 
-#[cfg(creusot)]
-use std::clone::Clone;
+use creusot_std::prelude::*;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
-
-/// How one broker heartbeat relates to the broker's registration.
-///
-/// Fencing and shutdown are not decided here: the controller's heartbeat
-/// state machine derives them from the current broker state, as Kafka's
-/// `BrokerHeartbeatManager.calculateNextBrokerState` does.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum BrokerHeartbeatDecision {
-    /// No registration exists for the broker id.
-    Missing,
-    /// The heartbeat carries another broker epoch.
-    Stale,
-    /// The heartbeat carries the registered epoch. The broker has caught up
-    /// once its metadata offset reaches its registration record, whose offset
-    /// is the broker epoch.
-    Current { caught_up: bool },
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// How one broker heartbeat relates to the broker's registration.
+    ///
+    /// Fencing and shutdown are not decided here: the controller's heartbeat
+    /// state machine derives them from the current broker state, as Kafka's
+    /// `BrokerHeartbeatManager.calculateNextBrokerState` does.
+    pub enum BrokerHeartbeatDecision {
+        /// No registration exists for the broker id.
+        Missing,
+        /// The heartbeat carries another broker epoch.
+        Stale,
+        /// The heartbeat carries the registered epoch. The broker has caught up
+        /// once its metadata offset reaches its registration record, whose offset
+        /// is the broker epoch.
+        Current { caught_up: bool },
+    }
 }
 
 /// Fence an absent or stale registration, as Kafka's

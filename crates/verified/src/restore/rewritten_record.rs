@@ -7,6 +7,7 @@ use super::{
 #[cfg(creusot)]
 use super::{kafka_record_timestamp, restore_record_placeable};
 
+open_logic! {
 /// Kafka's legal producer identities (`RecordBatch.NO_PRODUCER_ID`,
 /// `NO_PRODUCER_EPOCH`, `NO_SEQUENCE` are all `-1`).
 ///
@@ -16,10 +17,6 @@ use super::{kafka_record_timestamp, restore_record_placeable};
 /// transactional control batch with a nonnegative producer and epoch and the
 /// `-1` sequence (`EndTransactionMarker` batches carry no sequence). A
 /// non-transactional control batch carries the non-idempotent sentinels.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn legal_producer(producer: RestoreProducer) -> bool {
     pearlite! {
         if producer.control {
@@ -36,12 +33,10 @@ pub fn legal_producer(producer: RestoreProducer) -> bool {
         }
     }
 }
+}
 
+open_logic! {
 /// Every identity field at its `-1` sentinel and no transactional bit.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn non_idempotent_producer(producer: RestoreProducer) -> bool {
     pearlite! {
         !producer.transactional
@@ -50,17 +45,15 @@ pub fn non_idempotent_producer(producer: RestoreProducer) -> bool {
             && producer.base_sequence@ == -1
     }
 }
+}
 
+open_logic! {
 /// A batch header's offset layout is legal: nonnegative base, span and
 /// record count, an exclusive end that fits `i64`, and for a control batch
 /// Kafka's single-offset span holding at most its one marker. A control batch
 /// may hold zero records because Kafka's `LogCleaner` (and krabka's
 /// compaction) keeps a producer's last batch as an empty header
 /// (`BatchRetention.RETAIN_EMPTY`) once the marker record itself is discarded.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn legal_header(layout: RestoreLayout, control: bool) -> bool {
     pearlite! {
         layout.base_offset@ >= 0
@@ -69,6 +62,7 @@ pub fn legal_header(layout: RestoreLayout, control: bool) -> bool {
             && (control ==> layout.last_offset_delta@ == 0 && layout.records_count@ <= 1)
             && layout.base_offset@ + layout.last_offset_delta@ + 1 <= i64::MAX@
     }
+}
 }
 
 /// Admit a batch header synthesized or re-encoded by restore and return its
@@ -115,15 +109,12 @@ pub fn restore_rewritten_batch_header(
         .checked_add(1)
 }
 
+open_logic! {
 /// One retained record is legal in a rewritten batch: it is placeable, its
 /// offset delta strictly follows the previous retained record's, and its
 /// Kafka timestamp does not exceed the preserved archived `max_timestamp`.
 /// The bound may be loose when the record that set it was filtered out;
 /// under `LogAppendTime` it holds with equality.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn restore_rewrite_record_legal(
     previous_offset_delta: Option<i32>,
     frame: RestoreBatchFrame,
@@ -137,6 +128,7 @@ pub fn restore_rewrite_record_legal(
             }
             && kafka_record_timestamp(frame, record) <= frame.max_timestamp@
     }
+}
 }
 
 /// Validate one retained record against the synthesized header and return its

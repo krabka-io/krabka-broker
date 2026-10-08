@@ -1,25 +1,25 @@
-(* #"/workspace/crates/verified/src/broker/fetch.rs" 90 0 93 9 *)
+(* #"/workspace/crates/verified/src/broker/fetch.rs" 86 0 89 9 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 95 16 95 29
-let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 96 16 96 17
-let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 97 15 97 20
-let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 99 20 99 27
-let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 102 14 102 37
-let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 103 18 103 31
-let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 101 16 101 94
-let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 100 16 100 40
-let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 104 21 104 35
-let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 107 20 107 25
-let%span sfetch'9 = "/workspace/crates/verified/src/broker/fetch.rs" 116 17 116 18
-let%span sfetch'10 = "/workspace/crates/verified/src/broker/fetch.rs" 116 8 116 18
-let%span sfetch'11 = "/workspace/crates/verified/src/broker/fetch.rs" 114 19 114 24
-let%span sfetch'12 = "/workspace/crates/verified/src/broker/fetch.rs" 118 4 118 8
-let%span sfetch'13 = "/workspace/crates/verified/src/broker/fetch.rs" 83 10 88 1
-let%span sfetch'14 = "/workspace/crates/verified/src/broker/fetch.rs" 67 8 70 40
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 91 16 91 29
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 92 16 92 17
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 93 15 93 20
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 95 20 95 27
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 98 14 98 37
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 99 18 99 31
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 97 16 97 94
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 96 16 96 40
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 100 21 100 35
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 103 20 103 25
+let%span sfetch'9 = "/workspace/crates/verified/src/broker/fetch.rs" 112 17 112 18
+let%span sfetch'10 = "/workspace/crates/verified/src/broker/fetch.rs" 112 8 112 18
+let%span sfetch'11 = "/workspace/crates/verified/src/broker/fetch.rs" 110 19 110 24
+let%span sfetch'12 = "/workspace/crates/verified/src/broker/fetch.rs" 114 4 114 8
+let%span sfetch'13 = "/workspace/crates/verified/src/broker/fetch.rs" 79 10 84 1
+let%span sfetch'14 = "/workspace/crates/verified/src/broker/fetch.rs" 62 8 65 40
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
@@ -54,7 +54,7 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-predicate preferred_change_eligible [#"/workspace/crates/verified/src/broker/fetch.rs" 65 0 65 71] (change: t_PreferredLeaderChange) =
+predicate preferred_change_eligible [#"/workspace/crates/verified/src/broker/fetch.rs" 60 0 60 71] (change: t_PreferredLeaderChange) =
   [%#sfetch'14] change.preferred_replica = Some (change.new_leader)
   /\ change.leader_in_isr /\ change.leader_alive /\ not change.leader_is_witness
 
@@ -70,7 +70,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let preferred_rebalance_admission [#"/workspace/crates/verified/src/broker/fetch.rs" 90 0 93 9]
+let preferred_rebalance_admission [#"/workspace/crates/verified/src/broker/fetch.rs" 86 0 89 9]
   (changes: Slice64.slice t_PreferredLeaderChange) (max_changes: UInt64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = len_PreferredLeaderChange [%#sfetch] {changes} (fun (_x: UInt64.t) -> [ &count <- _x ] s1)

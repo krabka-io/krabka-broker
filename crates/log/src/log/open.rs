@@ -19,8 +19,7 @@ use tracing::instrument;
 use super::{
     Log,
     control::{
-        ABORT_CONTROL_TYPE, COMMIT_CONTROL_TYPE, ControlBatchKind, control_batch_kind,
-        parse_control_marker_coordinator_epoch, parse_control_marker_type,
+        ControlBatchKind, control_batch_kind, marker_coordinator_epoch, transaction_marker_flags,
     },
 };
 use crate::{
@@ -272,13 +271,7 @@ impl Log {
     /// copied to remote storage with its matching producer state, and a
     /// snapshot is taken at the log end once the replay is done.
     pub(super) fn rebuild_producer_and_transaction_state(&mut self) -> Result<(), LogError> {
-        self.pending.clear();
-        self.verification_states.clear();
-        self.unreplicated.clear();
-        self.pending_stamp_ranges.clear();
-        self.coordinator_epochs.clear();
-        self.producer_state.clear();
-        self.earlier_batches.clear();
+        self.clear_producer_and_transaction_state();
         let end = self.log_end_offset();
         let range = self.producer_reload_range(end);
         let snapshot = producer_snapshot::reload(&self.dir, range)?;
@@ -375,13 +368,7 @@ impl Log {
         }
         self.update_owned_producer_entry(batch)?;
         if batch.attributes.is_control_batch() {
-            let marker_type = batch
-                .records
-                .first()
-                .and_then(|record| record.key.as_deref())
-                .and_then(parse_control_marker_type);
-            let is_abort = marker_type == Some(ABORT_CONTROL_TYPE);
-            let is_commit = marker_type == Some(COMMIT_CONTROL_TYPE);
+            let (is_abort, is_commit) = transaction_marker_flags(batch);
             if krabka_verified::transaction_marker_closes(
                 is_abort,
                 is_commit,
@@ -394,11 +381,7 @@ impl Log {
                 );
             }
             if (is_abort || is_commit)
-                && let Some(epoch) = batch
-                    .records
-                    .first()
-                    .and_then(|record| record.value.as_deref())
-                    .and_then(parse_control_marker_coordinator_epoch)
+                && let Some(epoch) = marker_coordinator_epoch(batch)
             {
                 self.coordinator_epochs.insert(producer_id, epoch);
             }
@@ -494,20 +477,12 @@ impl Log {
             }
             entry.producer_epoch = batch.producer_epoch;
             entry.timestamp = batch.max_timestamp;
-            let marker_type = batch
-                .records
-                .first()
-                .and_then(|record| record.key.as_deref())
-                .and_then(parse_control_marker_type);
-            if matches!(marker_type, Some(ABORT_CONTROL_TYPE | COMMIT_CONTROL_TYPE)) {
+            let (is_abort, is_commit) = transaction_marker_flags(batch);
+            if is_abort || is_commit {
                 entry.current_txn_first_offset = None;
             }
-            if matches!(marker_type, Some(ABORT_CONTROL_TYPE | COMMIT_CONTROL_TYPE))
-                && let Some(epoch) = batch
-                    .records
-                    .first()
-                    .and_then(|record| record.value.as_deref())
-                    .and_then(parse_control_marker_coordinator_epoch)
+            if (is_abort || is_commit)
+                && let Some(epoch) = marker_coordinator_epoch(batch)
             {
                 entry.coordinator_epoch = epoch;
             }

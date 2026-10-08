@@ -171,6 +171,29 @@ fn next_member(
     next_after(unfilled, None)
 }
 
+/// Revoke excess holders in their original member order, then update the caller's indices.
+macro_rules! revoke_overshared_partitions {
+    ($by_partition:ident, $sharing:ident;
+        |$member:ident, $partition:ident| $remove:expr; { $($revoked:tt)* }) => {
+        for (&$partition, holders) in &mut $by_partition {
+            let mut count = holders.len();
+            if count <= $sharing {
+                continue;
+            }
+            for $member in holders.clone() {
+                if $remove {
+                    count -= 1;
+                    holders.remove(&$member);
+                    $($revoked)*
+                }
+                if count <= $sharing {
+                    break;
+                }
+            }
+        }
+    };
+}
+
 /// Kafka's `SimpleHomogeneousAssignmentBuilder.build`.
 fn homogeneous(
     subscribed: &BTreeSet<TopicKey>,
@@ -227,21 +250,10 @@ fn homogeneous(
     }
 
     // revokeOversharedPartitions.
-    for (&tp, holders) in &mut by_partition {
-        let mut count = holders.len();
-        if count <= sharing {
-            continue;
-        }
-        for member in holders.clone() {
-            if remove_partition(&mut assignment[member], tp) {
-                count -= 1;
-                holders.remove(&member);
-                by_member[member].remove(&tp);
-                unfilled.insert(member);
-            }
-            if count <= sharing {
-                break;
-            }
+    revoke_overshared_partitions! {
+        by_partition, sharing; |member, tp| remove_partition(&mut assignment[member], tp); {
+            by_member[member].remove(&tp);
+            unfilled.insert(member);
         }
     }
 
@@ -249,35 +261,11 @@ fn homogeneous(
     for &tp in &targets {
         by_partition.entry(tp).or_default();
     }
-    let mut cursor: Option<usize> = None;
-    let mut assigned_this_pass = false;
-    for (&tp, holders) in &by_partition {
-        if unfilled.is_empty() {
-            break;
-        }
-        let mut to_make = sharing.saturating_sub(holders.len());
-        while to_make > 0 {
-            let Some(member) = next_member(&unfilled, cursor, &mut assigned_this_pass) else {
-                break;
-            };
-            cursor = Some(member);
-            // Kafka checks the holders as they stood before this loop and
-            // never adds the member it just assigned, so a member that comes
-            // round again takes the same partition twice: the insert is a
-            // no-op but the count still drops, and the partition ends up
-            // shared by fewer members than `sharing`.
-            if holders.contains(&member) {
-                continue;
-            }
-            assignment[member].entry(tp.0).or_default().insert(tp.1);
-            by_member[member].insert(tp);
-            to_make -= 1;
-            assigned_this_pass = true;
-            if by_member[member].len() >= desired[member] {
-                unfilled.remove(&member);
-            }
-        }
-    }
+    assign_remaining(&by_partition, sharing, &mut unfilled, |member, tp| {
+        assignment[member].entry(tp.0).or_default().insert(tp.1);
+        by_member[member].insert(tp);
+        by_member[member].len() >= desired[member]
+    });
     assignment
 }
 
@@ -333,21 +321,10 @@ fn heterogeneous(
         }
 
         // revokeOversharedPartitions.
-        for (&p, holders) in &mut by_partition {
-            let mut count = holders.len();
-            if count <= sharing {
-                continue;
-            }
-            for member in holders.clone() {
-                if remove_partition(&mut assignment[member], (topic, p)) {
-                    count -= 1;
-                    holders.remove(&member);
-                    if let Some(held) = by_member.get_mut(&member) {
-                        held.remove(&p);
-                    }
-                }
-                if count <= sharing {
-                    break;
+        revoke_overshared_partitions! {
+            by_partition, sharing; |member, p| remove_partition(&mut assignment[member], (topic, p)); {
+                if let Some(held) = by_member.get_mut(&member) {
+                    held.remove(&p);
                 }
             }
         }
@@ -365,34 +342,49 @@ fn heterogeneous(
             .copied()
             .filter(|&m| held(&by_member, m) < desired[m])
             .collect();
-        let mut cursor: Option<usize> = None;
-        let mut assigned_this_pass = false;
-        for (&p, holders) in &by_partition {
-            if unfilled.is_empty() {
+        assign_remaining(&by_partition, sharing, &mut unfilled, |member, p| {
+            assignment[member].entry(topic).or_default().insert(p);
+            by_member.entry(member).or_default().insert(p);
+            held(&by_member, member) >= desired[member]
+        });
+    }
+    assignment
+}
+
+/// Fill undershared partitions in Kafka's member order. `assign` returns whether
+/// the member reached its desired count.
+fn assign_remaining<P: Copy>(
+    by_partition: &BTreeMap<P, BTreeSet<usize>>,
+    sharing: usize,
+    unfilled: &mut BTreeSet<usize>,
+    mut assign: impl FnMut(usize, P) -> bool,
+) {
+    let mut cursor = None;
+    let mut assigned_this_pass = false;
+    for (&partition, holders) in by_partition {
+        if unfilled.is_empty() {
+            break;
+        }
+        let mut to_make = sharing.saturating_sub(holders.len());
+        while to_make > 0 {
+            let Some(member) = next_member(unfilled, cursor, &mut assigned_this_pass) else {
                 break;
+            };
+            cursor = Some(member);
+            // Kafka checks the original holders and never adds the member it
+            // just assigned. A repeat insertion is a no-op, but the count
+            // still drops, so fewer members can hold it than `sharing`.
+            if holders.contains(&member) {
+                continue;
             }
-            let mut to_make = sharing.saturating_sub(holders.len());
-            while to_make > 0 {
-                let Some(member) = next_member(&unfilled, cursor, &mut assigned_this_pass) else {
-                    break;
-                };
-                cursor = Some(member);
-                // As in `homogeneous`, Kafka never adds the member it just
-                // assigned to the holders, so the count drops on a repeat.
-                if holders.contains(&member) {
-                    continue;
-                }
-                assignment[member].entry(topic).or_default().insert(p);
-                by_member.entry(member).or_default().insert(p);
-                to_make -= 1;
-                assigned_this_pass = true;
-                if held(&by_member, member) >= desired[member] {
-                    unfilled.remove(&member);
-                }
+            let filled = assign(member, partition);
+            to_make -= 1;
+            assigned_this_pass = true;
+            if filled {
+                unfilled.remove(&member);
             }
         }
     }
-    assignment
 }
 
 /// Removes `tp` from `assignment`, and says whether it was there.

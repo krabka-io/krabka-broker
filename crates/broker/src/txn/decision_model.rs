@@ -73,12 +73,10 @@
 use std::collections::BTreeSet;
 
 use krabka_log::ProducerId;
-use krabka_verified::transaction::TransactionReaperCompletionDecision;
-use stateright::{Checker, Model, Property};
+use stateright::Model;
 
 use super::{
     super::{
-        coordinator::completion::{apply_completion, completion_decision, completion_for},
         handlers::end_txn::{
             completion_producer_identity, prepare_completion_identities_with_fresh,
         },
@@ -87,7 +85,12 @@ use super::{
     },
     CompletionDecision, decide_end_txn_completion, decide_phase1_transition,
 };
-use crate::{model_check::run_bfs, txn::decision_model_support::initialize};
+use crate::{
+    coordinator::unified::actor::reconciliation_model_support::{
+        model_properties, pinned_model_runner,
+    },
+    txn::decision_model_support::{begin_transaction, complete_prepared, initialize},
+};
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 60;
@@ -232,15 +235,7 @@ impl TxnModel {
     }
 
     fn begin(s: &mut TxnProj) -> Option<()> {
-        let prior = st(s.state);
-        if !prior.can_transition_to(TxnState::Ongoing) {
-            return None;
-        }
-        if prior != TxnState::Ongoing {
-            s.generation = s.epoch;
-        }
-        s.state = TxnState::Ongoing.to_kafka_status();
-        Some(())
+        begin_transaction! { s;  }
     }
 
     fn end_txn_phase1(s: &mut TxnProj, committed: bool) -> Option<()> {
@@ -309,24 +304,10 @@ impl TxnModel {
     }
 
     fn complete(s: &mut TxnProj) -> Option<()> {
-        let entry = rebuild(s);
-        let (_, complete) = completion_for(entry.state)?;
-        // The model's completion runs atomically, so the prepared snapshot is
-        // the live entry.
-        match completion_decision(&entry, &entry, (entry.state, complete)) {
-            TransactionReaperCompletionDecision::Proceed => {
-                let mut completed = entry.clone();
-                let identity = completion_producer_identity(&completed);
-                apply_completion(&mut completed, complete, identity, 1);
-                finalize(s, s.generation, complete);
-                project(s, &completed);
-                Some(())
-            }
-            TransactionReaperCompletionDecision::AlreadyComplete
-            | TransactionReaperCompletionDecision::RejectMalformed
-            | TransactionReaperCompletionDecision::RejectStaleIdentity
-            | TransactionReaperCompletionDecision::RejectChangedPreparedState => None,
-        }
+        let (completed, complete) = complete_prepared(&rebuild(s), 1)?;
+        finalize(s, s.generation, complete);
+        project(s, &completed);
+        Some(())
     }
 }
 
@@ -360,8 +341,7 @@ impl Model for TxnModel {
         ]);
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
+    krabka_macros::model_transition! { last, action, s; {
         match action {
             TxnAction::Init => self.init(&mut s)?,
             TxnAction::BeginTxn => Self::begin(&mut s)?,
@@ -376,52 +356,51 @@ impl Model for TxnModel {
             s.violations.insert(Violation::EpochRegressed);
         }
         Some(s)
-    }
+    }}
 
-    fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            // HEADLINE: a fenced or overtaken EndTxn never writes Complete*.
-            Property::always("fenced_end_txn_never_finalizes", |_, s: &TxnProj| {
-                !s.violations.contains(&Violation::FencedEndTxnFinalized)
-            }),
-            // HEADLINE: each generation finalizes at most once, so it is never
-            // both committed and aborted.
-            Property::always("finalized_at_most_once", |_, s: &TxnProj| {
-                s.finalized
-                    .windows(2)
-                    .all(|pair| pair[0].generation != pair[1].generation)
-            }),
-            // HEADLINE: InitProducerId answers CONCURRENT_TRANSACTIONS to a
-            // prepared transaction instead of moving it.
-            Property::always("init_never_overwrites_prepared", |_, s: &TxnProj| {
-                !s.violations.contains(&Violation::InitOverwrotePrepared)
-            }),
-            // The fence of an `Ongoing` transaction raises the epoch once and
-            // stamps what Kafka does at the cluster's version.
-            Property::always("fence_matches_kafka", |_, s: &TxnProj| {
-                !s.violations.contains(&Violation::FenceDiverged)
-            }),
-            // Phase 3 rejects only an entry that moved underneath it.
-            Property::always("reject_is_justified", |_, s: &TxnProj| {
-                !s.violations.contains(&Violation::UnjustifiedReject)
-            }),
-            Property::always("epoch_never_regresses", |_, s: &TxnProj| {
-                !s.violations.contains(&Violation::EpochRegressed)
-            }),
-            // Non-vacuity: an EndTxn commit and an InitProducerId fence-abort
-            // both finalize.
-            Property::sometimes("can_commit", |_, s: &TxnProj| {
-                s.finalized.iter().any(|f| f.committed)
-            }),
-            Property::sometimes("can_abort", |_, s: &TxnProj| {
-                s.finalized.iter().any(|f| !f.committed)
-            }),
-            // Non-vacuity: the entry's epoch moves past a pending EndTxn's
-            // prepared epoch while it waits for Phase 3 -- the zombie window.
-            Property::sometimes("fence_in_window", |_, s: &TxnProj| {
-                s.pending.is_some_and(|p| p.expected_epoch < s.epoch)
-            }),
-        ]
+    model_properties! {
+        @method TxnProj;
+        // HEADLINE: a fenced or overtaken EndTxn never writes Complete*.
+        always "fenced_end_txn_never_finalizes" => |s| {
+            !s.violations.contains(&Violation::FencedEndTxnFinalized)
+        },
+        // HEADLINE: each generation finalizes at most once, so it is never
+        // both committed and aborted.
+        always "finalized_at_most_once" => |s| {
+            s.finalized
+                .windows(2)
+                .all(|pair| pair[0].generation != pair[1].generation)
+        },
+        // HEADLINE: InitProducerId answers CONCURRENT_TRANSACTIONS to a
+        // prepared transaction instead of moving it.
+        always "init_never_overwrites_prepared" => |s| {
+            !s.violations.contains(&Violation::InitOverwrotePrepared)
+        },
+        // The fence of an `Ongoing` transaction raises the epoch once and
+        // stamps what Kafka does at the cluster's version.
+        always "fence_matches_kafka" => |s| {
+            !s.violations.contains(&Violation::FenceDiverged)
+        },
+        // Phase 3 rejects only an entry that moved underneath it.
+        always "reject_is_justified" => |s| {
+            !s.violations.contains(&Violation::UnjustifiedReject)
+        },
+        always "epoch_never_regresses" => |s| {
+            !s.violations.contains(&Violation::EpochRegressed)
+        },
+        // Non-vacuity: an EndTxn commit and an InitProducerId fence-abort
+        // both finalize.
+        sometimes "can_commit" => |s| {
+            s.finalized.iter().any(|f| f.committed)
+        },
+        sometimes "can_abort" => |s| {
+            s.finalized.iter().any(|f| !f.committed)
+        },
+        // Non-vacuity: the entry's epoch moves past a pending EndTxn's
+        // prepared epoch while it waits for Phase 3 -- the zombie window.
+        sometimes "fence_in_window" => |s| {
+            s.pending.is_some_and(|p| p.expected_epoch < s.epoch)
+        },
     }
 
     fn within_boundary(&self, state: &Self::State) -> bool {
@@ -429,14 +408,8 @@ impl Model for TxnModel {
     }
 }
 
-fn run(model: TxnModel, label: &str, pinned_unique_states: usize) {
-    let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
-    checker.assert_properties();
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
+pinned_model_runner! {
+    fn run(TxnModel); MAX_DEPTH, MAX_STATES; properties_first
 }
 
 #[test]

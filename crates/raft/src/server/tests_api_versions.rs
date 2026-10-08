@@ -10,38 +10,21 @@ use krabka_protocol::{
     Decode, Encode,
     owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    ConnectionContext, ListenerApiVersions, handle_conn, test_support::single_voter_engine,
+    ConnectionContext, ListenerApiVersions, handle_conn,
+    test_support::{read_frame, single_voter_engine},
 };
 use crate::{AllowAllGrants, ControllerApiVersions as _};
+
+krabka_macros::vector_request_fixture!(request_frame, i32);
 
 /// A request frame with a v1 header (below v3) or a v2 header (v3 and above,
 /// and every version the listener does not serve above that).
 fn api_versions_frame(version: i16, correlation_id: i32, body: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::new();
-    frame.extend_from_slice(&18i16.to_be_bytes());
-    frame.extend_from_slice(&version.to_be_bytes());
-    frame.extend_from_slice(&correlation_id.to_be_bytes());
-    frame.extend_from_slice(&1i16.to_be_bytes());
-    frame.push(b'c');
-    if version >= 3 {
-        frame.push(0);
-    }
-    frame.extend_from_slice(body);
-    let mut out = i32::try_from(frame.len()).unwrap().to_be_bytes().to_vec();
-    out.extend_from_slice(&frame);
-    out
-}
-
-async fn read_frame(stream: &mut tokio::io::DuplexStream) -> Vec<u8> {
-    let mut len = [0u8; 4];
-    stream.read_exact(&mut len).await.expect("response length");
-    let mut frame = vec![0u8; usize::try_from(i32::from_be_bytes(len)).unwrap()];
-    stream.read_exact(&mut frame).await.expect("response frame");
-    frame
+    request_frame(18, version, correlation_id, version >= 3, body)
 }
 
 fn request_body(version: i16, name: &str) -> Vec<u8> {
@@ -56,6 +39,20 @@ fn request_body(version: i16, name: &str) -> Vec<u8> {
     body.to_vec()
 }
 
+type ApiVersionCase = (i16, Vec<u8>, i16, i16, bool);
+
+fn api_version_cases(version_five: ApiVersionCase) -> [ApiVersionCase; 7] {
+    [
+        (6, vec![0xff], 0, 35, false),
+        (i16::MAX, vec![], 0, 35, false),
+        (3, request_body(3, ""), 3, 42, false),
+        (4, request_body(4, "a b"), 4, 42, false),
+        version_five,
+        (4, request_body(4, "krabka"), 4, 0, true),
+        (0, vec![], 0, 0, true),
+    ]
+}
+
 /// One row per request, all on one connection, in order. Each row checks the
 /// error code and the table size of the answer, and that the answer is the
 /// one the handshake gives before authentication.
@@ -66,24 +63,8 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
     // the answer lists the full table). With unstable api versions disabled
     // the listener serves Kafka 4.3.1's v0-v4, so v5 is answered the way that
     // release answers it.
-    let strict_rows = vec![
-        (6, vec![0xff], 0, 35, false),
-        (i16::MAX, vec![], 0, 35, false),
-        (3, request_body(3, ""), 3, 42, false),
-        (4, request_body(4, "a b"), 4, 42, false),
-        (5, request_body(5, "krabka"), 0, 35, false),
-        (4, request_body(4, "krabka"), 4, 0, true),
-        (0, vec![], 0, 0, true),
-    ];
-    let trunk_rows = vec![
-        (6, vec![0xff], 0, 35, false),
-        (i16::MAX, vec![], 0, 35, false),
-        (3, request_body(3, ""), 3, 42, false),
-        (4, request_body(4, "a b"), 4, 42, false),
-        (5, request_body(5, "krabka"), 5, 0, true),
-        (4, request_body(4, "krabka"), 4, 0, true),
-        (0, vec![], 0, 0, true),
-    ];
+    let strict_rows = api_version_cases((5, request_body(5, "krabka"), 0, 35, false));
+    let trunk_rows = api_version_cases((5, request_body(5, "krabka"), 5, 0, true));
     for (api_versions, served_max, rows) in [(Disabled, 4, strict_rows), (Enabled, 5, trunk_rows)] {
         let unstable = super::Unstable { api_versions };
         let (engine, _dir) = single_voter_engine();

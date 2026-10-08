@@ -28,7 +28,7 @@ pub fn stamp_ranges_valid(bases: &[i64], lasts: &[i64]) -> bool {
     }
     let mut index = 0usize;
     #[invariant(index@ <= bases@.len())]
-    #[invariant(bases@.len() == lasts@.len())]
+    #[invariant(stamp_range_arrays_parallel(bases@, lasts@))]
     #[invariant(forall<i: Int> 0 <= i && i < index@ ==> bases@[i]@ <= lasts@[i]@)]
     #[invariant(forall<i: Int> 1 <= i && i < index@ ==> lasts@[i - 1]@ < bases@[i]@)]
     #[variant(bases@.len() - index@)]
@@ -64,7 +64,7 @@ pub fn stamp_range_insertion_index(
     }
     let mut index = 0usize;
     #[invariant(index@ <= bases@.len())]
-    #[invariant(bases@.len() == lasts@.len())]
+    #[invariant(stamp_range_arrays_parallel(bases@, lasts@))]
     #[invariant(forall<i: Int> 0 <= i && i < index@ ==> lasts@[i]@ < new_base@)]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
@@ -80,15 +80,13 @@ pub fn stamp_range_insertion_index(
 }
 
 /// Find the first range with both exact inclusive boundaries.
-#[requires(bases@.len() == lasts@.len())]
+#[requires(stamp_range_arrays_parallel(bases@, lasts@))]
 #[ensures(match result {
     Some(index) => index@ < bases@.len()
         && bases@[index@]@ == target_base@
         && lasts@[index@]@ == target_last@
-        && (forall<i: Int> 0 <= i && i < index@ ==>
-            bases@[i]@ != target_base@ || lasts@[i]@ != target_last@),
-    None => forall<i: Int> 0 <= i && i < bases@.len() ==>
-        bases@[i]@ != target_base@ || lasts@[i]@ != target_last@,
+        && (no_exact_stamp_range(bases@, lasts@, index@, target_base@, target_last@)),
+    None => no_exact_stamp_range(bases@, lasts@, bases@.len(), target_base@, target_last@),
 })]
 #[must_use]
 pub fn exact_stamp_range_index(
@@ -99,9 +97,8 @@ pub fn exact_stamp_range_index(
 ) -> Option<usize> {
     let mut index = 0usize;
     #[invariant(index@ <= bases@.len())]
-    #[invariant(bases@.len() == lasts@.len())]
-    #[invariant(forall<i: Int> 0 <= i && i < index@ ==>
-        bases@[i]@ != target_base@ || lasts@[i]@ != target_last@)]
+    #[invariant(stamp_range_arrays_parallel(bases@, lasts@))]
+    #[invariant(no_exact_stamp_range(bases@, lasts@, index@, target_base@, target_last@))]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
         if bases[index] == target_base && lasts[index] == target_last {
@@ -113,22 +110,19 @@ pub fn exact_stamp_range_index(
 }
 
 /// Find the first inclusive range that covers `offset`.
-#[requires(bases@.len() == lasts@.len())]
+#[requires(stamp_range_arrays_parallel(bases@, lasts@))]
 #[ensures(match result {
     Some(index) => index@ < bases@.len()
         && bases@[index@]@ <= offset@ && offset@ <= lasts@[index@]@
-        && (forall<i: Int> 0 <= i && i < index@ ==>
-            offset@ < bases@[i]@ || lasts@[i]@ < offset@),
-    None => forall<i: Int> 0 <= i && i < bases@.len() ==>
-        offset@ < bases@[i]@ || lasts@[i]@ < offset@,
+        && (no_covering_stamp_range(bases@, lasts@, index@, offset@)),
+    None => no_covering_stamp_range(bases@, lasts@, bases@.len(), offset@),
 })]
 #[must_use]
 pub fn covering_stamp_range_index(bases: &[i64], lasts: &[i64], offset: i64) -> Option<usize> {
     let mut index = 0usize;
     #[invariant(index@ <= bases@.len())]
-    #[invariant(bases@.len() == lasts@.len())]
-    #[invariant(forall<i: Int> 0 <= i && i < index@ ==>
-        offset@ < bases@[i]@ || lasts@[i]@ < offset@)]
+    #[invariant(stamp_range_arrays_parallel(bases@, lasts@))]
+    #[invariant(no_covering_stamp_range(bases@, lasts@, index@, offset@))]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
         if bases[index] <= offset && offset <= lasts[index] {
@@ -137,6 +131,33 @@ pub fn covering_stamp_range_index(bases: &[i64], lasts: &[i64], offset: i64) -> 
         index += 1;
     }
     None
+}
+
+open_logic! {
+/// Every listed stamp range has one inclusive end.
+fn stamp_range_arrays_parallel(bases: Seq<i64>, lasts: Seq<i64>) -> bool {
+    pearlite! { bases.len() == lasts.len() }
+}
+}
+
+open_logic! {
+/// The scanned prefix contains no range with these exact inclusive boundaries.
+fn no_exact_stamp_range(
+    bases: Seq<i64>,
+    lasts: Seq<i64>,
+    count: Int,
+    base: Int,
+    last: Int,
+) -> bool {
+    pearlite! { forall<i: Int> 0 <= i && i < count ==> bases[i]@ != base || lasts[i]@ != last }
+}
+}
+
+open_logic! {
+/// The scanned prefix contains no inclusive range covering this offset.
+fn no_covering_stamp_range(bases: Seq<i64>, lasts: Seq<i64>, count: Int, offset: Int) -> bool {
+    pearlite! { forall<i: Int> 0 <= i && i < count ==> offset < bases[i]@ || lasts[i]@ < offset }
+}
 }
 
 #[cfg(test)]

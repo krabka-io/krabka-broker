@@ -8,7 +8,7 @@
 //! survives (lines 2163-2165), and merges the coordinator's answer onto the
 //! surviving rows only (line 2185).
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use assert2::check;
 use krabka_log::ProducerId;
@@ -22,7 +22,7 @@ use krabka_protocol::owned::{
 
 use super::integration_tests::{log_holds_key, open_transaction_for_group, seed_topic_a, topic};
 use crate::{
-    authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
+    authorizer::AuthorizationResult,
     codes,
     coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group},
     test_support::{
@@ -39,22 +39,16 @@ const DENIED: &str = "denied";
 #[derive(Debug)]
 struct DenyOneTopic;
 
-impl Authorizer for DenyOneTopic {
-    fn authorize(
-        &self,
-        _source: &dyn AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        if request.resource_type == ResourceType::Topic
-            && request.operation == AclOperation::Read
-            && request.resource_name == DENIED
-        {
-            AuthorizationResult::Deny
-        } else {
-            AuthorizationResult::Allow
-        }
+krabka_macros::test_authorizer! { DenyOneTopic, request; {
+    if request.resource_type == ResourceType::Topic
+        && request.operation == AclOperation::Read
+        && request.resource_name == DENIED
+    {
+        AuthorizationResult::Deny
+    } else {
+        AuthorizationResult::Allow
     }
-}
+}}
 
 /// Who the request says it is on the group side.
 #[derive(Clone, Copy)]
@@ -141,10 +135,7 @@ async fn lead_group_elsewhere(handle: &crate::broker::BrokerHandle, group_id: &s
 /// transaction coordinator has loaded it, so [`stage_producer_identity`] can
 /// append to it.
 async fn bootstrap_transaction_state(handle: &crate::broker::BrokerHandle) {
-    handle.wait_until_controller_leader().await;
-    handle.wait_until_brokers_registered(1).await;
-    handle.wait_until_transaction_coordinator_ready().await;
-    handle.wait_until_group_coordinator_ready().await;
+    super::integration_tests::wait_for_coordinators(handle).await;
 }
 
 /// Gives `transactional_id` a durable entry with a staged producer identity,
@@ -177,9 +168,7 @@ async fn stage_producer_identity(
 #[tokio::test]
 async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
     let (handle, _dir) = start_broker_no_audit_with(|cfg| {
-        cfg.authorizer = Arc::new(DenyOneTopic);
-        cfg.transaction_state_num_partitions = 1;
-        cfg.transaction_state_replication_factor = 1;
+        crate::test_support::configure_single_partition_transactions(cfg, Arc::new(DenyOneTopic));
     })
     .await;
     let broker = handle.broker_arc_for_test();
@@ -338,18 +327,14 @@ async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
             case.name
         );
 
-        let appended: HashSet<(&str, i32)> = case.appended.iter().copied().collect();
-        for req_topic in &case.topics {
-            for part in &req_topic.partitions {
-                let key = (req_topic.name.as_str(), part.partition_index);
-                check!(
-                    log_holds_key(&broker, &group_id, key.0, key.1) == appended.contains(&key),
-                    "{}: log holds {:?}",
-                    case.name,
-                    key
-                );
-            }
-        }
+        super::test_support::check_appended_keys(&case.topics, &case.appended, |key, expected| {
+            check!(
+                log_holds_key(&broker, &group_id, key.0, key.1) == expected,
+                "{}: log holds {:?}",
+                case.name,
+                key
+            );
+        });
     }
 
     handle.shutdown().await;

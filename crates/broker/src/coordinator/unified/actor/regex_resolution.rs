@@ -290,7 +290,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::coordinator::unified::consumer_state::test_support::member;
+    use crate::coordinator::unified::consumer_state::test_support::resolved_regex as resolution;
 
     /// A resolver that answers from a table of what each pattern selects, and
     /// counts its calls.
@@ -342,22 +342,10 @@ mod tests {
     }
 
     fn group(subscriptions: &[(&str, Option<&str>)]) -> GroupState {
-        let mut group = GroupState::new("g");
-        for (member_id, regex) in subscriptions {
-            let mut m = member(member_id);
-            m.subscribed_topic_regex = regex.map(str::to_owned);
-            group.add_or_update_member(m);
-        }
+        let mut group =
+            crate::coordinator::unified::consumer_state::test_support::regex_group(subscriptions);
         group.dirty = false;
         group
-    }
-
-    fn resolution(topics: &[&str], version: i64, timestamp_ms: i64) -> ResolvedRegularExpression {
-        ResolvedRegularExpression {
-            topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
-            version,
-            timestamp_ms,
-        }
     }
 
     fn run(

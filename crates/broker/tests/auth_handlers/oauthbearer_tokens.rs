@@ -16,8 +16,8 @@ use ring::{
 use tokio::net::TcpStream;
 
 use crate::oauthbearer::{
-    now_unix_secs, oauthbearer_authenticate, oauthbearer_handshake, oauthbearer_initial,
-    start_oauthbearer_broker, unsecured_jws,
+    now_unix_secs, oauthbearer_authenticate, oauthbearer_initial, start_oauthbearer_broker,
+    unsecured_jws,
 };
 
 /// Happy path: a valid unsecured token authenticates in a single round.
@@ -26,33 +26,23 @@ use crate::oauthbearer::{
 /// that the broker accepted the principal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_oauthbearer_happy_path() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_oauthbearer_broker(
-        log_dir.path(),
+    let (_log_dir, handle, addr) = crate::oauthbearer::oauthbearer_fixture(
         krabka_security::OAuthBearerValidator::default(),
+        None,
     )
     .await;
-    let addr = handle.listen_addr();
 
     let result: Result<(), io::Error> = async {
-        let mut stream = TcpStream::connect(addr).await?;
-        let mut corr = 1;
-        oauthbearer_handshake(&mut stream, &mut corr).await?;
+        let (mut stream, mut corr) = crate::oauthbearer::oauthbearer_session_start(addr).await?;
 
         let token = unsecured_jws("svc-account", now_unix_secs() + 3600);
-        let auth =
-            oauthbearer_authenticate(&mut stream, &mut corr, oauthbearer_initial(&token)).await?;
-        if auth.error_code != 0 {
-            return Err(io::Error::other(format!(
-                "authenticate failed: code={} msg={:?}",
-                auth.error_code, auth.error_message
-            )));
-        }
-        if !auth.auth_bytes.is_empty() {
-            return Err(io::Error::other(
-                "unexpected challenge — token was rejected",
-            ));
-        }
+        authenticate_success(
+            &mut stream,
+            &mut corr,
+            &token,
+            "unexpected challenge — token was rejected",
+        )
+        .await?;
 
         crate::harness::metadata_probe(&mut stream, corr).await
     }
@@ -80,9 +70,7 @@ async fn sasl_oauthbearer_invalid_token_two_round_failure() {
     let addr = handle.listen_addr();
 
     let result: Result<(), io::Error> = async {
-        let mut stream = TcpStream::connect(addr).await?;
-        let mut corr = 1;
-        oauthbearer_handshake(&mut stream, &mut corr).await?;
+        let (mut stream, mut corr) = crate::oauthbearer::oauthbearer_session_start(addr).await?;
 
         // Expired token (exp an hour in the past, zero skew).
         let token = unsecured_jws("admin", now_unix_secs() - 3600);
@@ -141,31 +129,24 @@ fn signed_validator(jwks_json: &str) -> krabka_security::OAuthBearerValidator {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_oauthbearer_signed_token_happy_path() {
     let (kp, jwks) = es256_key("k1");
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_oauthbearer_broker(log_dir.path(), signed_validator(&jwks)).await;
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) =
+        crate::oauthbearer::oauthbearer_fixture(signed_validator(&jwks), None).await;
 
     let result: Result<(), io::Error> = async {
-        let mut stream = TcpStream::connect(addr).await?;
-        let mut corr = 1;
-        oauthbearer_handshake(&mut stream, &mut corr).await?;
+        let (mut stream, mut corr) = crate::oauthbearer::oauthbearer_session_start(addr).await?;
 
         let claims = format!(
             "{{\"sub\":\"svc-account\",\"exp\":{}}}",
             now_unix_secs() + 3600
         );
         let token = es256_token(&kp, "k1", &claims);
-        let auth =
-            oauthbearer_authenticate(&mut stream, &mut corr, oauthbearer_initial(&token)).await?;
-        if auth.error_code != 0 {
-            return Err(io::Error::other(format!(
-                "authenticate failed: code={} msg={:?}",
-                auth.error_code, auth.error_message
-            )));
-        }
-        if !auth.auth_bytes.is_empty() {
-            return Err(io::Error::other("signed success round must be empty"));
-        }
+        authenticate_success(
+            &mut stream,
+            &mut corr,
+            &token,
+            "signed success round must be empty",
+        )
+        .await?;
 
         // Post-auth Metadata proves the connection survived authentication.
         crate::harness::metadata_probe(&mut stream, corr).await
@@ -186,14 +167,11 @@ async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure() {
     // JWKS advertises key A's public key; the token is signed by key B.
     let (_kp_a, jwks_a) = es256_key("k1");
     let (kp_b, _jwks_b) = es256_key("k1");
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_oauthbearer_broker(log_dir.path(), signed_validator(&jwks_a)).await;
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) =
+        crate::oauthbearer::oauthbearer_fixture(signed_validator(&jwks_a), None).await;
 
     let result: Result<(), io::Error> = async {
-        let mut stream = TcpStream::connect(addr).await?;
-        let mut corr = 1;
-        oauthbearer_handshake(&mut stream, &mut corr).await?;
+        let (mut stream, mut corr) = crate::oauthbearer::oauthbearer_session_start(addr).await?;
 
         let claims = format!("{{\"sub\":\"admin\",\"exp\":{}}}", now_unix_secs() + 3600);
         let token = es256_token(&kp_b, "k1", &claims);
@@ -221,5 +199,24 @@ async fn expect_invalid_token(
     // The client's `\x01` dummy → SASL_AUTHENTICATION_FAILED (58).
     let round2 = oauthbearer_authenticate(stream, corr, bytes::Bytes::from_static(&[1u8])).await?;
     assert!(round2.error_code == 58, "round 2 must fail the connection");
+    Ok(())
+}
+
+async fn authenticate_success(
+    stream: &mut TcpStream,
+    corr: &mut i32,
+    token: &str,
+    unexpected_challenge: &str,
+) -> Result<(), io::Error> {
+    let auth = oauthbearer_authenticate(stream, corr, oauthbearer_initial(token)).await?;
+    if auth.error_code != 0 {
+        return Err(io::Error::other(format!(
+            "authenticate failed: code={} msg={:?}",
+            auth.error_code, auth.error_message,
+        )));
+    }
+    if !auth.auth_bytes.is_empty() {
+        return Err(io::Error::other(unexpected_challenge.to_owned()));
+    }
     Ok(())
 }

@@ -104,19 +104,15 @@ pub(super) async fn controller_registration(
     }
 }
 
+krabka_macros::registration_feature_projection!(
+    registration_features,
+    ::krabka_protocol::owned::controller_registration_request::Feature
+);
+
 fn decode_controller_features(
     request: &ControllerRegistrationRequest,
 ) -> Result<BTreeMap<String, (i16, i16)>, String> {
-    let features: BTreeMap<_, _> = request
-        .features
-        .iter()
-        .map(|feature| {
-            (
-                feature.name.clone(),
-                (feature.min_supported_version, feature.max_supported_version),
-            )
-        })
-        .collect();
+    let features = registration_features(&request.features);
     if features
         .iter()
         .any(|(name, (min, max))| name.is_empty() || min > max)

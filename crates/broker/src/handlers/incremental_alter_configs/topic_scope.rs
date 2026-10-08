@@ -369,14 +369,12 @@ mod tests {
 
             let result = topic_config_record(&make_topic_resource("orders", ops), &img);
 
-            check!(result.is_ok() == want_ok, "{label}");
-            if let Err((code, message)) = result {
-                check!(code == codes::INVALID_CONFIG, "{label}");
-                check!(
-                    message.contains(config_keys::DISKLESS),
-                    "{label}: {message}"
-                );
-            }
+            crate::handlers::test_support::check_config_result(
+                result,
+                want_ok,
+                label,
+                config_keys::DISKLESS,
+            );
         }
     }
 
@@ -496,10 +494,7 @@ mod tests {
         let record = |pairs: &[(&str, &str)]| {
             Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: "orders".into(),
-                overrides: pairs
-                    .iter()
-                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                    .collect(),
+                overrides: crate::test_support::string_pairs(pairs),
             }))
         };
         let cases = [

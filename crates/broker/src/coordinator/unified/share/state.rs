@@ -6,12 +6,10 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use krabka_protocol::primitives::uuid::Uuid;
-
-use super::super::expired_member_ids;
 
 /// One member of a share group.
 #[derive(Debug, Clone)]
@@ -129,21 +127,7 @@ impl ShareGroupState {
         }
     }
 
-    /// Kafka's `GroupMetadataManager.canComputeNextTargetAssignment`, negated:
-    /// `true` while the assignment `interval` holds the next target
-    /// assignment back at `now`.
-    ///
-    /// The next assignment computes at once when there is no previous one or
-    /// its time is unknown, and when the interval is zero, which is Kafka's
-    /// escape hatch for a wall clock that stepped back. Otherwise it waits
-    /// until the interval has elapsed since the last one.
-    #[must_use]
-    pub(crate) fn assignment_delayed(&self, interval: Duration, now: Instant) -> bool {
-        !interval.is_zero()
-            && self
-                .assignment_timestamp
-                .is_some_and(|computed| now < computed + interval)
-    }
+    crate::coordinator::unified::member_helpers::assignment_delay_method!();
 
     /// Records that the persister initialized `tp`, as Kafka's
     /// `initializeShareGroupState` moves it from initializing to initialized.
@@ -170,13 +154,7 @@ impl ShareGroupState {
         topic_names.retain(|topic_id, _| live.contains(topic_id));
     }
 
-    pub fn bump_epoch(&mut self) -> bool {
-        let Some(group_epoch) = crate::metadata_epoch::next_i32(self.group_epoch) else {
-            return false;
-        };
-        self.group_epoch = group_epoch;
-        true
-    }
+    crate::coordinator::unified::member_helpers::bump_group_epoch!(self;);
 
     pub fn add_or_update_member(&mut self, m: ShareMemberState) {
         self.members.insert(m.member_id.clone(), m);
@@ -218,20 +196,9 @@ impl ShareGroupState {
         }
     }
 
-    /// Remove members whose `last_seen` is older than `session_timeout`, and
-    /// return the evicted member ids.
-    pub fn evict_expired(&mut self, now: Instant, session_timeout: Duration) -> Vec<String> {
-        let expired = expired_member_ids(
-            self.members
-                .iter()
-                .map(|(id, member)| (id.as_str(), member.last_seen)),
-            now,
-            session_timeout,
-        );
-        for id in &expired {
-            self.remove_member(id);
-        }
-        expired
+    crate::coordinator::unified::member_helpers::evict_expired! {
+        /// Remove members whose `last_seen` is older than `session_timeout`, and
+        /// return the evicted member ids.
     }
 
     /// Install a freshly computed target assignment stamped with the current

@@ -16,12 +16,14 @@ use krabka_protocol::owned::{
     alter_partition_reassignments_request::{
         AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
     },
-    delete_records_request::{DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic},
     elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
     unregister_broker_request::UnregisterBrokerRequest,
 };
 
-use crate::topics::delete_topic;
+use crate::{
+    support::offsets::{delete_records_partition, delete_records_request, delete_records_topic},
+    topics::delete_topic,
+};
 
 /// The one broker id a single-node cluster registers.
 pub(super) const BROKER_ID: i32 = 1;
@@ -134,19 +136,13 @@ async fn cancel_reassignment(client: &Client, topic: &str) -> i16 {
 /// `DeleteRecords` at offset zero on partition 0 of `topic`.
 async fn trim_records(client: &Client, topic: &str) -> i16 {
     let response = client
-        .send(DeleteRecordsRequest {
-            topics: vec![DeleteRecordsTopic {
-                name: topic.to_owned(),
-                partitions: vec![DeleteRecordsPartition {
-                    partition_index: 0,
-                    offset: 0,
-                    ..DeleteRecordsPartition::default()
-                }],
-                ..DeleteRecordsTopic::default()
-            }],
-            timeout_ms: 10_000,
-            ..DeleteRecordsRequest::default()
-        })
+        .send(delete_records_request(
+            vec![delete_records_topic(
+                topic.to_owned(),
+                vec![delete_records_partition(0, 0)],
+            )],
+            10_000,
+        ))
         .await
         .expect("DeleteRecords");
     response

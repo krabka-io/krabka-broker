@@ -61,8 +61,21 @@ pub fn voter_reconfiguration_decision(
     }
 }
 
+// Add and Remove both publish only the successor voter-set record.
+macro_rules! admit_voter_set_change {
+    ($version:expr; { $($count:tt)+ }) => {
+        VoterReconfigurationDecision::Admit(VoterReconfigurationPlan {
+            $($count)+,
+            next_kraft_version: $version,
+            write_voters: true,
+            write_kraft_version: false,
+            preflight_only: false,
+        })
+    };
+}
+
 /// `AddVoterHandler`: version, duplicate id, `ApiVersions` range, catch-up.
-#[cfg_attr(creusot, requires(voters.voter_count@ > 0 && voters.kraft_version@ <= 1))]
+#[cfg_attr(creusot, requires(decision_voter_set_valid(voters)))]
 #[cfg_attr(creusot, ensures(match result {
     VoterReconfigurationDecision::Admit(plan) =>
         voters.kraft_version@ == 1
@@ -105,19 +118,13 @@ fn add_decision(voters: CurrentVoterSet, target: TargetVoter) -> VoterReconfigur
     let Some(next_voter_count) = voters.voter_count.checked_add(1) else {
         return VoterReconfigurationDecision::InvalidVersionTransition;
     };
-    VoterReconfigurationDecision::Admit(VoterReconfigurationPlan {
-        next_voter_count,
-        next_kraft_version: voters.kraft_version,
-        write_voters: true,
-        write_kraft_version: false,
-        preflight_only: false,
-    })
+    admit_voter_set_change!(voters.kraft_version; { next_voter_count })
 }
 
 /// `RemoveVoterHandler`: version, then whether `VoterSet.removeVoter`
 /// returns a new set; an absent id, a different stored key, and the last
 /// voter are all its `VOTER_NOT_FOUND`.
-#[cfg_attr(creusot, requires(voters.voter_count@ > 0 && voters.kraft_version@ <= 1))]
+#[cfg_attr(creusot, requires(decision_voter_set_valid(voters)))]
 #[cfg_attr(creusot, ensures(match result {
     VoterReconfigurationDecision::Admit(plan) =>
         voters.kraft_version@ == 1
@@ -137,17 +144,11 @@ fn remove_decision(voters: CurrentVoterSet, target: TargetVoter) -> VoterReconfi
     {
         return VoterReconfigurationDecision::VoterNotFound;
     }
-    VoterReconfigurationDecision::Admit(VoterReconfigurationPlan {
-        next_voter_count: voters.voter_count - 1,
-        next_kraft_version: voters.kraft_version,
-        write_voters: true,
-        write_kraft_version: false,
-        preflight_only: false,
-    })
+    admit_voter_set_change!(voters.kraft_version; { next_voter_count: voters.voter_count - 1 })
 }
 
 /// `UpdateVoterHandler`: `ApiVersions` range, then the voter lookup.
-#[cfg_attr(creusot, requires(voters.voter_count@ > 0 && voters.kraft_version@ <= 1))]
+#[cfg_attr(creusot, requires(decision_voter_set_valid(voters)))]
 #[cfg_attr(creusot, ensures(match result {
     VoterReconfigurationDecision::Admit(plan) =>
         target.version_compatible
@@ -215,4 +216,11 @@ fn finalize_decision(
         write_kraft_version: true,
         preflight_only: false,
     })
+}
+
+open_logic! {
+/// Decision helpers receive a nonempty set using a supported KRaft version.
+fn decision_voter_set_valid(voters: CurrentVoterSet) -> bool {
+    pearlite! { voters.voter_count@ > 0 && voters.kraft_version@ <= 1 }
+}
 }

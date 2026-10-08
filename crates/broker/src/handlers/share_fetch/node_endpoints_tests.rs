@@ -18,7 +18,6 @@ use krabka_metadata::{
 };
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         share_acknowledge_request::{
             AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
             ShareAcknowledgeRequest,
@@ -66,16 +65,13 @@ async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {
         .await
         .expect("client build");
     let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "local".to_string(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(crate::handlers::test_support::configured_topic_request(
+            "local",
+            &[],
+            1,
+            1,
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
@@ -93,16 +89,8 @@ async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {
 fn partition(topic: &str, partition: i32, leader: i32, epoch: i32) -> MetadataRecord {
     let leader = NodeId(u64::try_from(leader).expect("a node id"));
     MetadataRecord::V1Partition(PartitionRecord {
-        topic: topic.to_string(),
-        partition,
-        leader,
-        replicas: vec![leader],
-        isr: vec![leader],
         leader_epoch: LeaderEpoch(epoch),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 0,
+        ..crate::handlers::test_support::replicated_partition(topic, partition, leader, &[leader])
     })
 }
 
@@ -201,20 +189,8 @@ async fn share_fetch_sends_the_endpoint_of_each_remote_leader_once() {
         ..Default::default()
     };
     let version = share_fetch_response::MAX_VERSION;
-    let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
-        version,
-        &encode_request(&request, version),
-        &ctx,
-    )
-    .await
-    .expect("handle share fetch");
-    let response: ShareFetchResponse = decode_response(&response, version);
+    let response =
+        crate::handlers::test_support::share_fetch_wire(&broker, version, &request).await;
 
     let expected = ShareFetchResponse {
         acquisition_lock_timeout_ms: 30_000,
@@ -261,9 +237,11 @@ async fn share_acknowledge_on_a_remote_leader_answers_unknown_partition_without_
     let local = create_local_topic(&broker).await;
     seed_remote_leaders(&broker).await;
     let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("share-consumer"),
+        client_id = "share-client"
+    );
     shared
         .share_partition_leaders
         .update_fetch_session(

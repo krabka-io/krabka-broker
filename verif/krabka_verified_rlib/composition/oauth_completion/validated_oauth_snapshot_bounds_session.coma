@@ -1,7 +1,7 @@
 (* #"/workspace/crates/verified/src/composition/oauth_completion.rs" 70 0 74 25 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span scompletion = "/workspace/crates/verified/src/oauth/completion.rs" 8 10 16 2
 let%span soauth_completion = "/workspace/crates/verified/src/composition/oauth_completion.rs" 76 20 76 43
 let%span soauth_completion'0 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 87 8 87 77
@@ -10,10 +10,10 @@ let%span soauth_completion'2 = "/workspace/crates/verified/src/composition/oauth
 let%span soauth_completion'3 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 46 10 54 1
 let%span soauth_completion'4 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 55 10 69 1
 let%span soauth_completion'5 = "/workspace/crates/verified/src/composition/oauth_completion.rs" 25 8 34 9
-let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 33 10 42 1
-let%span soauth = "/workspace/crates/verified/src/oauth.rs" 104 10 112 1
-let%span soauth'0 = "/workspace/crates/verified/src/oauth.rs" 76 8 81 67
-let%span soauth'1 = "/workspace/crates/verified/src/oauth.rs" 93 8 93 72
+let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 29 10 38 1
+let%span soauth = "/workspace/crates/verified/src/oauth.rs" 92 10 100 1
+let%span soauth'0 = "/workspace/crates/verified/src/oauth.rs" 64 8 69 67
+let%span soauth'1 = "/workspace/crates/verified/src/oauth.rs" 81 8 81 72
 
 use creusot.int.UInt64
 use creusot.int.Int64
@@ -101,14 +101,14 @@ let oauth_validation_admission (started_ms: Int64.t) (completed_ms: Int64.t) (ca
 
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
-predicate oauth_session_admissible [#"/workspace/crates/verified/src/oauth.rs" 74 0 74 65] (facts: t_OAuthSessionFacts) =
+predicate oauth_session_admissible [#"/workspace/crates/verified/src/oauth.rs" 62 0 62 65] (facts: t_OAuthSessionFacts) =
   [%#soauth'0] facts.expiry'0 = Present
   /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms'0) (Int64.to_int facts.now_ms'0)
   /\ Int64.to_int facts.token_expires_at_ms'0 - Int64.to_int facts.now_ms'0 <= Int64.to_int const_MAX
   /\ (facts.cap'0 = Disabled \/ gt_log_Int (Int64.to_int facts.cap_ms'0) 0)
   /\ (facts.authentication'0 = Initial \/ facts.principal'0 = Matches)
 
-function oauth_session_lifetime [#"/workspace/crates/verified/src/oauth.rs" 91 0 91 62] (facts: t_OAuthSessionFacts) : int
+function oauth_session_lifetime [#"/workspace/crates/verified/src/oauth.rs" 79 0 79 62] (facts: t_OAuthSessionFacts) : int
  = [%#soauth'1] let token_lifetime = Int64.to_int facts.token_expires_at_ms'0
   - Int64.to_int facts.now_ms'0 in if facts.cap'0 = Enabled /\ Int64.to_int facts.cap_ms'0 < token_lifetime then
     Int64.to_int facts.cap_ms'0

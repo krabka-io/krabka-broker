@@ -10,15 +10,11 @@
 
 use std::net::SocketAddr;
 
-use krabka_broker::{
-    BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, config::ListenerSpec,
-};
-use krabka_log::LogConfig;
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 use crate::{
-    jvm_acceptance::plain_jaas,
     support,
     vocabulary::{SASL_LISTENER, approver_set},
 };
@@ -59,23 +55,14 @@ pub(super) async fn start_jvm_broker(adjust: impl FnOnce(&mut BrokerConfig)) -> 
         .parse()
         .expect("an allocated controller address");
 
-    let mut config = BrokerConfig {
-        broker_id: 1,
-        listen_addr: listen,
-        advertised_listener: listeners.advertised.clone(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: NodeId(1),
-        controller_listen_addr: controller,
-        controller_quorum_voters: vec![(NodeId(1), controller.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: BootstrapMode::Bootstrap,
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
+    let mut config = support::jvm_broker_config(
+        1,
+        listen,
+        controller,
+        &listeners.advertised,
+        dir.path().to_path_buf(),
+        &[(1, controller)],
+    );
     adjust(&mut config);
 
     // `Broker::start` waits for a metadata leader before it returns, so the
@@ -130,10 +117,5 @@ pub(super) fn gate_on(config: &mut BrokerConfig) {
 
 /// The JVM client properties for one PLAIN operator.
 pub(super) fn sasl_props(user: &str, pass: &str) -> String {
-    format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(user, pass)
-    )
+    crate::jvm_acceptance::plain_client_properties(user, pass)
 }

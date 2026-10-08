@@ -218,22 +218,22 @@ impl Model for BreakGlassModel {
         actions.push(Step::Consume);
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
-        match action {
-            Step::Approve(principal) => self.settle(&mut state, principal, false),
-            Step::Withdraw(principal) => self.settle(&mut state, principal, true),
-            Step::Expire => state.now_ms = (state.now_ms + 1).min(EXPIRES_AT),
-            Step::Consume => self.consume(&mut state),
-        }
-        // Headline safety, per transition. It fires the moment an interleaving
-        // spends one approval twice, rather than at the end of the run.
-        assert2::assert!(
-            state.consumes <= 1,
-            "a proposal was consumed twice after {action:?}: {state:?}"
-        );
-        Some(state)
-    }
+    krabka_macros::model_transition!(last, action, state; {
+            match action {
+                Step::Approve(principal) => self.settle(&mut state, principal, false),
+                Step::Withdraw(principal) => self.settle(&mut state, principal, true),
+                Step::Expire => state.now_ms = (state.now_ms + 1).min(EXPIRES_AT),
+                Step::Consume => self.consume(&mut state),
+            }
+            // Headline safety, per transition. It fires the moment an interleaving
+            // spends one approval twice, rather than at the end of the run.
+            assert2::assert!(
+                state.consumes <= 1,
+                "a proposal was consumed twice after {action:?}: {state:?}"
+            );
+            Some(state)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
@@ -276,11 +276,15 @@ impl Model for BreakGlassModel {
     }
 }
 
-fn config(approvers: &[&str], required_approvals: usize) -> BreakGlassConfig {
+pub(super) fn config(
+    approvers: &[&str],
+    required_approvals: usize,
+    expires_at: i64,
+) -> BreakGlassConfig {
     BreakGlassConfig {
         approvers: approvers.iter().map(|name| (*name).to_owned()).collect(),
         required_approvals,
-        proposal_ttl: millis(u32::try_from(EXPIRES_AT).expect("a small logical expiry")),
+        proposal_ttl: millis(u32::try_from(expires_at).expect("a small logical expiry")),
         signed_actions: Vec::new(),
         ..BreakGlassConfig::default()
     }
@@ -292,10 +296,10 @@ fn run(model: BreakGlassModel, label: &str, pinned_unique_states: usize) {
         checker.unique_state_count() < MAX_UNIQUE_STATES,
         "[{label}] unique-state bound exceeded"
     );
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
+    crate::model_check::assert_pinned_count(
+        checker.unique_state_count(),
+        pinned_unique_states,
+        label,
     );
     checker.assert_properties();
 }
@@ -306,7 +310,7 @@ fn two_approvals_of_three_approvers() {
     // `User:alice` proposed, so neither can supply an approval.
     run(
         BreakGlassModel {
-            config: config(&["User:alice", "User:bob", "User:carol"], 2),
+            config: config(&["User:alice", "User:bob", "User:carol"], 2, EXPIRES_AT),
             principals: vec!["User:alice", "User:bob", "User:carol", "User:mallory"],
         },
         "two_approvals_of_three_approvers",
@@ -320,7 +324,11 @@ fn three_approvals_of_four_approvers() {
     // a consume can succeed.
     run(
         BreakGlassModel {
-            config: config(&["User:alice", "User:bob", "User:carol", "User:dave"], 3),
+            config: config(
+                &["User:alice", "User:bob", "User:carol", "User:dave"],
+                3,
+                EXPIRES_AT,
+            ),
             principals: vec!["User:alice", "User:bob", "User:carol", "User:dave"],
         },
         "three_approvals_of_four_approvers",

@@ -79,21 +79,11 @@ pub(super) fn topic_with_partitions(
     partitions: i32,
     node: krabka_raft::NodeId,
 ) -> Vec<MetadataRecord> {
-    let replicas = vec![node];
     let mut records = vec![topic_record(name, topic_id, partitions)];
     records.extend((0..partitions).map(|partition| {
-        MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-            topic: name.into(),
-            partition,
-            leader: node,
-            replicas: replicas.clone(),
-            isr: replicas.clone(),
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        })
+        MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
+            name, partition, node,
+        ))
     }));
     records
 }
@@ -106,9 +96,12 @@ pub(super) fn alice() -> krabka_security::Principal {
 /// Kafka's explicit-name Describe check, shared by consumer and share heartbeats.
 pub(super) fn subscribed_names_describe_denied_table() {
     let authorizer = acl_authorizer();
-    let principal = alice();
-    let peer = crate::test_support::peer();
-    let ctx = crate::test_support::request_context(&principal, &peer, "c");
+    request_identity!(
+        (principal, peer, ctx),
+        alice(),
+        client_id = "c",
+        address = crate::test_support::peer()
+    );
     for (label, granted, names, expected_denied) in [
         ("no subscription", &[][..], None, false),
         ("empty subscription", &[][..], Some(&[][..]), false),
@@ -162,6 +155,17 @@ pub(super) fn streams_request(
     group_id: &str,
     member_id: &str,
 ) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
+    streams_request_with_topology(group_id, member_id, "in", Vec::new())
+}
+
+pub(super) fn streams_request_with_topology(
+    group_id: &str,
+    member_id: &str,
+    source_topic: &str,
+    state_changelog_topics: Vec<
+        krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo,
+    >,
+) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
     use krabka_protocol::owned::streams_group_heartbeat_request::{
         StreamsGroupHeartbeatRequest, Subtopology, Topology,
     };
@@ -177,7 +181,8 @@ pub(super) fn streams_request(
             epoch: 1,
             subtopologies: vec![Subtopology {
                 subtopology_id: "0".into(),
-                source_topics: vec!["in".into()],
+                source_topics: vec![source_topic.into()],
+                state_changelog_topics,
                 ..Default::default()
             }],
             ..Default::default()

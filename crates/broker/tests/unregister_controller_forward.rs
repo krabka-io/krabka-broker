@@ -13,10 +13,10 @@ use krabka_metadata::{
 use krabka_protocol::owned::{
     unregister_controller_request::UnregisterControllerRequest,
     unregister_controller_response::UnregisterControllerResponse,
-    update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+    update_features_request::UpdateFeaturesRequest,
 };
 
-use crate::support::start_n_node_with;
+use crate::support::{client::connect_owned, configs::feature_update, start_n_node_with};
 
 /// Kafka trunk's `CONTROLLER_ID_NOT_REGISTERED`.
 const CONTROLLER_ID_NOT_REGISTERED: i16 = 136;
@@ -62,20 +62,19 @@ async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
         .iter()
         .find(|(_, cfg, _)| i64::from(cfg.broker_id) != i64::try_from(leader.0).unwrap())
         .expect("the follower");
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(format!("127.0.0.1:{}", follower_cfg.listen_addr.port()))
-        .client_id("kafka-cluster")
-        .build()
-        .await
-        .expect("client build");
+    let client = connect_owned(
+        format!("127.0.0.1:{}", follower_cfg.listen_addr.port()),
+        "kafka-cluster",
+        "client build",
+    )
+    .await;
     let upgraded = client
         .send(UpdateFeaturesRequest {
-            feature_updates: vec![FeatureUpdateKey {
-                feature: "metadata.version".into(),
-                max_version_level: CONTROLLER_UNREGISTRATION_MIN_LEVEL,
-                upgrade_type: 1,
-                ..Default::default()
-            }],
+            feature_updates: vec![feature_update(
+                "metadata.version",
+                CONTROLLER_UNREGISTRATION_MIN_LEVEL,
+                1,
+            )],
             ..Default::default()
         })
         .await
@@ -116,7 +115,5 @@ async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
             .controller(MetadataNodeId(7))
             .is_none()
     );
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

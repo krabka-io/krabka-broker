@@ -9,7 +9,7 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use krabka_protocol::primitives::uuid::Uuid;
@@ -17,9 +17,7 @@ use krabka_protocol::primitives::uuid::Uuid;
 use super::{TargetAssignment, member::MemberState, regex::ResolvedRegularExpression};
 use crate::{
     codes,
-    coordinator::unified::{
-        actor::CommitFence, expired_member_ids, persistence_next_gen::MemberAssignmentState,
-    },
+    coordinator::unified::{actor::CommitFence, persistence_next_gen::MemberAssignmentState},
 };
 
 /// The first `OffsetCommit` version that a member of the consumer protocol
@@ -77,35 +75,14 @@ impl GroupState {
         }
     }
 
-    /// Kafka's `GroupMetadataManager.canComputeNextTargetAssignment`, negated:
-    /// `true` while the assignment `interval` holds the next target
-    /// assignment back at `now`.
-    ///
-    /// The next assignment computes at once when there is no previous one or
-    /// its time is unknown, and when the interval is zero, which is Kafka's
-    /// escape hatch for a wall clock that stepped back. Otherwise it waits
-    /// until the interval has elapsed since the last one.
-    #[must_use]
-    pub(crate) fn assignment_delayed(&self, interval: Duration, now: Instant) -> bool {
-        !interval.is_zero()
-            && self
-                .assignment_timestamp
-                .is_some_and(|computed| now < computed + interval)
-    }
+    crate::coordinator::unified::member_helpers::assignment_delay_method!();
 
     /// Records that a target assignment calculation finished at `now`.
     pub(crate) fn record_assignment(&mut self, now: Instant) {
         self.assignment_timestamp = Some(now);
     }
 
-    pub fn bump_epoch(&mut self) -> bool {
-        let Some(group_epoch) = crate::metadata_epoch::next_i32(self.group_epoch) else {
-            return false;
-        };
-        self.group_epoch = group_epoch;
-        self.dirty = true;
-        true
-    }
+    crate::coordinator::unified::member_helpers::bump_group_epoch!(self; self.dirty = true;);
 
     /// Kafka's `ConsumerGroup.validateOffsetCommit`, with the per-partition
     /// validator of `createAssignmentEpochValidator` (KIP-1251) run over
@@ -261,19 +238,7 @@ impl GroupState {
         self.metadata_refresh_requested = false;
     }
 
-    pub fn evict_expired(&mut self, now: Instant, session_timeout: Duration) -> Vec<String> {
-        let evicted = expired_member_ids(
-            self.members
-                .iter()
-                .map(|(id, member)| (id.as_str(), member.last_seen)),
-            now,
-            session_timeout,
-        );
-        for id in &evicted {
-            self.remove_member(id);
-        }
-        evicted
-    }
+    crate::coordinator::unified::member_helpers::evict_expired!();
 
     /// Arms or cancels the rebalance timeout of `member_id` after a
     /// reconciliation, as Kafka's `GroupMetadataManager.maybeReconcile` does.
@@ -449,6 +414,8 @@ impl GroupState {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use assert2::assert;
 
     use super::*;
@@ -813,14 +780,10 @@ mod tests {
         let mut g = GroupState::new("g");
         let topics = Topics(vec![("t", T)]);
         g.add_or_update_member(subscribed_member("m1", &["t"]));
-        let epochs = |g: &GroupState| -> Vec<(i32, i32)> {
-            let mut v: Vec<(i32, i32)> = g.members["m1"]
-                .assignment_epochs
-                .get(&T)
-                .map(|e| e.iter().map(|(&p, &e)| (p, e)).collect())
-                .unwrap_or_default();
-            v.sort_unstable();
-            v
+        let epochs = |g: &GroupState| {
+            crate::coordinator::test_support::sorted_epoch_pairs(
+                g.members["m1"].assignment_epochs.get(&T),
+            )
         };
         let mut steps = Vec::new();
 

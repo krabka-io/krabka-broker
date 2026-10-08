@@ -51,43 +51,57 @@ struct Progress<'a> {
     batches: &'a [StateBatch],
 }
 
+/// Each state operation holds the active term through its validation and append,
+/// then answers only after the original commit boundary.
+macro_rules! state_operation {
+    ($(#[$doc:meta])* $name:ident($this:ident, $image:ident, $group:ident, $topic_id:ident, $partition:ident;
+        $($arg:ident: $arg_type:ty),* $(,)?) -> $answer:ty; $active:ident => $result:expr) => {
+        $(#[$doc])*
+        pub(crate) async fn $name(
+            &$this,
+            $image: &MetadataImage,
+            $group: &str,
+            $topic_id: uuid::Uuid,
+            $partition: i32,
+            $($arg: $arg_type,)*
+        ) -> Result<$answer, ShareStateError> {
+            let state_partition = $this.state_partition_for($group, &$topic_id, $partition);
+            let $active = $this
+                .active(state_partition)
+                .await
+                .map_err(ShareStateError::inactive)?;
+            let result = $result;
+            $this.answer($active, result).await
+        }
+    };
+}
+
 impl ShareCoordinator {
-    /// Serves an `InitializeShareGroupState` partition, as Kafka's
-    /// `ShareCoordinatorShard.initializeState` does.
-    ///
-    /// The checks run in Kafka's order (`maybeGetInitializeStateError`): a
-    /// negative partition, a stored state epoch above the request, and a
-    /// topic partition that `image` does not hold. A state epoch of `-1` is
-    /// "not supplied" and skips the fence, as in Kafka 4.3.1. Any request
-    /// writes a `ShareSnapshot` with the next snapshot epoch (`0` for a new
-    /// key), leader epoch `0`, no batches, and a delivery complete count of
-    /// `-1` for an uninitialized start offset and `0` otherwise.
-    ///
-    /// With `ShareCoordinatorConfig::trunk_rules`, a negative state epoch is
-    /// `INVALID_REQUEST`, and a request that repeats the stored state epoch
-    /// and start offset is a no-op.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ShareStateError::Refused`] when a check fails, and
-    /// [`ShareStateError::Operation`] when this broker is not the active
-    /// coordinator of the key, the append fails, or the records of the
-    /// partition do not commit.
-    pub(crate) async fn initialize(
-        &self,
-        image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-        state_epoch: StateEpoch,
-        start_offset: Offset,
-    ) -> Result<(), ShareStateError> {
-        let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let active = self
-            .active(state_partition)
-            .await
-            .map_err(ShareStateError::inactive)?;
-        let result = self
+    state_operation! {
+        /// Serves an `InitializeShareGroupState` partition, as Kafka's
+        /// `ShareCoordinatorShard.initializeState` does.
+        ///
+        /// The checks run in Kafka's order (`maybeGetInitializeStateError`): a
+        /// negative partition, a stored state epoch above the request, and a
+        /// topic partition that `image` does not hold. A state epoch of `-1` is
+        /// "not supplied" and skips the fence, as in Kafka 4.3.1. Any request
+        /// writes a `ShareSnapshot` with the next snapshot epoch (`0` for a new
+        /// key), leader epoch `0`, no batches, and a delivery complete count of
+        /// `-1` for an uninitialized start offset and `0` otherwise.
+        ///
+        /// With `ShareCoordinatorConfig::trunk_rules`, a negative state epoch is
+        /// `INVALID_REQUEST`, and a request that repeats the stored state epoch
+        /// and start offset is a no-op.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`ShareStateError::Refused`] when a check fails, and
+        /// [`ShareStateError::Operation`] when this broker is not the active
+        /// coordinator of the key, the append fails, or the records of the
+        /// partition do not commit.
+        initialize(self, image, group, topic_id, partition; state_epoch: StateEpoch,
+        start_offset: Offset,) -> ();
+        active => self
             .initialize_in_term(
                 active.term,
                 image,
@@ -95,8 +109,7 @@ impl ShareCoordinator {
                 state_epoch,
                 start_offset,
             )
-            .await;
-        self.answer(active, result).await
+            .await
     }
 
     /// The body of [`ShareCoordinator::initialize`], under the read guard of
@@ -189,41 +202,29 @@ impl ShareCoordinator {
         Ok(())
     }
 
-    /// Applies a `WriteShareGroupState` partition, as Kafka's
-    /// `ShareCoordinatorShard.writeState` does.
-    ///
-    /// The checks run in Kafka's order (`maybeGetWriteStateError`): a
-    /// negative partition, an uninitialized key, a recorded leader epoch or
-    /// state epoch above the request, and a topic partition that `image` does
-    /// not hold. A leader epoch or state epoch of `-1` is "not supplied" and
-    /// skips its fence, as in Kafka 4.3.1; with
-    /// `ShareCoordinatorConfig::trunk_rules`, a negative one is
-    /// `INVALID_REQUEST`. The record is the one `generateShareStateRecord`
-    /// picks: see [`ShareCoordinator::share_state_record`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ShareStateError::Refused`] when a check fails, and
-    /// [`ShareStateError::Operation`] when this broker is not the active
-    /// coordinator of the key, the append fails, or the records of the
-    /// partition do not commit.
-    pub(crate) async fn write(
-        &self,
-        image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-        request: ShareWrite,
-    ) -> Result<(), ShareStateError> {
-        let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let active = self
-            .active(state_partition)
-            .await
-            .map_err(ShareStateError::inactive)?;
-        let result = self
+    state_operation! {
+        /// Applies a `WriteShareGroupState` partition, as Kafka's
+        /// `ShareCoordinatorShard.writeState` does.
+        ///
+        /// The checks run in Kafka's order (`maybeGetWriteStateError`): a
+        /// negative partition, an uninitialized key, a recorded leader epoch or
+        /// state epoch above the request, and a topic partition that `image` does
+        /// not hold. A leader epoch or state epoch of `-1` is "not supplied" and
+        /// skips its fence, as in Kafka 4.3.1; with
+        /// `ShareCoordinatorConfig::trunk_rules`, a negative one is
+        /// `INVALID_REQUEST`. The record is the one `generateShareStateRecord`
+        /// picks: see [`ShareCoordinator::share_state_record`].
+        ///
+        /// # Errors
+        ///
+        /// Returns [`ShareStateError::Refused`] when a check fails, and
+        /// [`ShareStateError::Operation`] when this broker is not the active
+        /// coordinator of the key, the append fails, or the records of the
+        /// partition do not commit.
+        write(self, image, group, topic_id, partition; request: ShareWrite,) -> ();
+        active => self
             .write_in_term(active.term, image, group, topic_id, partition, request)
-            .await;
-        self.answer(active, result).await
+            .await
     }
 
     /// The body of [`ShareCoordinator::write`], under the read guard of
@@ -282,40 +283,28 @@ impl ShareCoordinator {
             .await
     }
 
-    /// Serves a `ReadShareGroupState` partition, as Kafka's
-    /// `ShareCoordinatorShard.readStateAndMaybeUpdateLeaderEpoch` does.
-    ///
-    /// The checks run in Kafka's order (`maybeGetReadStateError`): a negative
-    /// partition, an uninitialized key, a recorded leader epoch above the
-    /// request, and a topic partition that `image` does not hold. A leader
-    /// epoch of `-1` is "not supplied": it skips the fence and answers the
-    /// stored state with no record, as in Kafka 4.3.1. With
-    /// `ShareCoordinatorConfig::trunk_rules`, a negative leader epoch is
-    /// `INVALID_REQUEST`. When `leader_epoch` differs from the recorded
-    /// leader epoch, the method appends the record of a write with the new
-    /// leader epoch and the stored progress before it answers. A later write
-    /// from a share-partition leader with an older epoch is then fenced.
-    ///
-    /// # Errors
-    ///
-    /// As [`ShareCoordinator::write`].
-    pub(crate) async fn read(
-        &self,
-        image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-        leader_epoch: LeaderEpoch,
-    ) -> Result<SharePartitionState, ShareStateError> {
-        let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let active = self
-            .active(state_partition)
-            .await
-            .map_err(ShareStateError::inactive)?;
-        let result = self
+    state_operation! {
+        /// Serves a `ReadShareGroupState` partition, as Kafka's
+        /// `ShareCoordinatorShard.readStateAndMaybeUpdateLeaderEpoch` does.
+        ///
+        /// The checks run in Kafka's order (`maybeGetReadStateError`): a negative
+        /// partition, an uninitialized key, a recorded leader epoch above the
+        /// request, and a topic partition that `image` does not hold. A leader
+        /// epoch of `-1` is "not supplied": it skips the fence and answers the
+        /// stored state with no record, as in Kafka 4.3.1. With
+        /// `ShareCoordinatorConfig::trunk_rules`, a negative leader epoch is
+        /// `INVALID_REQUEST`. When `leader_epoch` differs from the recorded
+        /// leader epoch, the method appends the record of a write with the new
+        /// leader epoch and the stored progress before it answers. A later write
+        /// from a share-partition leader with an older epoch is then fenced.
+        ///
+        /// # Errors
+        ///
+        /// As [`ShareCoordinator::write`].
+        read(self, image, group, topic_id, partition; leader_epoch: LeaderEpoch,) -> SharePartitionState;
+        active => self
             .read_in_term(active.term, image, group, topic_id, partition, leader_epoch)
-            .await;
-        self.answer(active, result).await
+            .await
     }
 
     /// The body of [`ShareCoordinator::read`], under the read guard of
@@ -578,70 +567,48 @@ impl ShareCoordinator {
         ))
     }
 
-    /// Serves a `ReadShareGroupStateSummary` partition, as Kafka's
-    /// `ShareCoordinatorShard.readStateSummary` does.
-    ///
-    /// The checks run in Kafka's order: the state partition must be active,
-    /// then `maybeGetReadStateSummaryError` refuses a negative partition and
-    /// a topic partition that `image` does not hold. A key with no state
-    /// answers `Ok(None)`.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error of the refused partition, or
-    /// [`ShareStateError::Operation`] when the records of the partition do
-    /// not commit.
-    pub(crate) async fn read_summary_checked(
-        &self,
-        image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-    ) -> Result<Option<ShareStateSummary>, ShareStateError> {
-        let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let active = self
-            .active(state_partition)
-            .await
-            .map_err(ShareStateError::inactive)?;
-        let result = if partition < 0 {
+    state_operation! {
+        /// Serves a `ReadShareGroupStateSummary` partition, as Kafka's
+        /// `ShareCoordinatorShard.readStateSummary` does.
+        ///
+        /// The checks run in Kafka's order: the state partition must be active,
+        /// then `maybeGetReadStateSummaryError` refuses a negative partition and
+        /// a topic partition that `image` does not hold. A key with no state
+        /// answers `Ok(None)`.
+        ///
+        /// # Errors
+        ///
+        /// Returns the error of the refused partition, or
+        /// [`ShareStateError::Operation`] when the records of the partition do
+        /// not commit.
+        read_summary_checked(self, image, group, topic_id, partition; ) -> Option<ShareStateSummary>;
+        active => if partition < 0 {
             Err(invalid_request(message::NEGATIVE_PARTITION_ID))
         } else {
             match check_topic_partition(image, topic_id, partition) {
                 Ok(()) => Ok(self.summary(group, topic_id, partition).await),
                 Err(error) => Err(error),
             }
-        };
-        self.answer(active, result).await
+        }
     }
 
-    /// Serves a `DeleteShareGroupState` partition, as Kafka's
-    /// `ShareCoordinatorShard.deleteState` does.
-    ///
-    /// The checks run in Kafka's order (`maybeGetDeleteStateError`): a
-    /// negative partition, then a topic partition that `image` does not hold.
-    /// A key with no state is not an error, and nothing is appended for it.
-    /// Otherwise the method writes a tombstone with the snapshot key and
-    /// drops the in-memory entry.
-    ///
-    /// # Errors
-    ///
-    /// As [`ShareCoordinator::initialize`].
-    pub(crate) async fn delete(
-        &self,
-        image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-    ) -> Result<(), ShareStateError> {
-        let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let active = self
-            .active(state_partition)
-            .await
-            .map_err(ShareStateError::inactive)?;
-        let result = self
+    state_operation! {
+        /// Serves a `DeleteShareGroupState` partition, as Kafka's
+        /// `ShareCoordinatorShard.deleteState` does.
+        ///
+        /// The checks run in Kafka's order (`maybeGetDeleteStateError`): a
+        /// negative partition, then a topic partition that `image` does not hold.
+        /// A key with no state is not an error, and nothing is appended for it.
+        /// Otherwise the method writes a tombstone with the snapshot key and
+        /// drops the in-memory entry.
+        ///
+        /// # Errors
+        ///
+        /// As [`ShareCoordinator::initialize`].
+        delete(self, image, group, topic_id, partition; ) -> ();
+        active => self
             .delete_in_term(active.term, image, group, topic_id, partition)
-            .await;
-        self.answer(active, result).await
+            .await
     }
 
     /// The body of [`ShareCoordinator::delete`], under the read guard of

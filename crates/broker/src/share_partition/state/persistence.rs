@@ -153,9 +153,12 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::share_partition::state::{
-        AckType, AcquiredRange,
-        test_support::{LOCK, t0},
+    use crate::{
+        share_coordinator::coordinator::test_support::state_batch as persisted,
+        share_partition::state::{
+            AckType, AcquiredRange,
+            test_support::{LOCK, t0},
+        },
     };
 
     #[test]
@@ -167,15 +170,7 @@ mod tests {
         check!(start == 0);
         check!(dcc == 0); // nothing terminal yet
         // Acquired persists as Available(0) but retains its delivery_count.
-        check!(
-            batches
-                == vec![StateBatch {
-                    first_offset: Offset(0),
-                    last_offset: Offset(4),
-                    delivery_state: DS_AVAILABLE,
-                    delivery_count: 1
-                }]
-        );
+        check!(batches == vec![persisted(0, 4, DS_AVAILABLE, 1)]);
     }
 
     #[test]
@@ -205,15 +200,6 @@ mod tests {
                 delivery_count: 1
             }]
         );
-    }
-
-    fn persisted(first: i64, last: i64, delivery_state: i8, delivery_count: i16) -> StateBatch {
-        StateBatch {
-            first_offset: Offset(first),
-            last_offset: Offset(last),
-            delivery_state,
-            delivery_count,
-        }
     }
 
     /// Five records, `[0]` acquired alone and `[1,4]` acquired together by

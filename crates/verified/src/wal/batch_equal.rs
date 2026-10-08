@@ -81,10 +81,8 @@ pub fn exact_wal_batch_range(bases: &[i64], lasts: &[i64], start: i64, target: i
     expected == target
 }
 
+open_logic! {
 // cargo-mutants: #[cfg(creusot)] mathematical layout; not compiled at runtime.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn wal_batch_layout(bases: Seq<i64>, lasts: Seq<i64>, start: Int, target: Int) -> bool {
     pearlite! {
         bases.len() == lasts.len() && if start == target {
@@ -97,10 +95,11 @@ pub fn wal_batch_layout(bases: Seq<i64>, lasts: Seq<i64>, start: Int, target: In
         }
     }
 }
+}
 
 /// Whole batches may cover an interior logical floor. They must still form
 /// an exact physical prefix ending at `target`; the first batch contains `start`.
-#[cfg_attr(creusot, ensures((match result { None => false, Some(_) => true }) == (
+#[cfg_attr(creusot, ensures((result != None) == (
     0 <= start@ && start@ <= target@ && bases@.len() == lasts@.len()
     && if start == target { bases@.len() == 0 } else {
         bases@.len() > 0 && 0 <= bases@[0]@ && bases@[0]@ <= start@ && start@ <= lasts@[0]@

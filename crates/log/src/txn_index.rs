@@ -20,7 +20,7 @@ use zerocopy::{
     byteorder::{I16, I64},
 };
 
-use crate::error::LogError;
+use crate::{error::LogError, index::open_index};
 
 const ENTRY_BYTES: usize = 34;
 
@@ -70,51 +70,51 @@ pub struct TxnIndex {
 }
 
 impl TxnIndex {
-    /// Open or recover a `.txnindex` file at the given path. This method
-    /// reads the entire file into memory at startup. An empty file or a
-    /// missing file is acceptable and means zero aborted transactions.
-    #[instrument(
-        level = "debug",
-        skip_all,
-        fields(path = %path.display(), entries = tracing::field::Empty),
-        err,
-    )]
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
-    pub fn open(path: PathBuf) -> Result<Self, LogError> {
-        let mut entries = Vec::new();
-        let bytes = crate::index::read_sidecar(&path, ENTRY_BYTES, "txnindex")?;
-        let raws = <[AbortedTxnRaw]>::ref_from_bytes(&bytes)
-            .expect("length is a multiple of ENTRY_BYTES and AbortedTxnRaw is Unaligned");
-        entries.reserve(raws.len());
-        for raw in raws {
-            if raw.version.get() != SUPPORTED_VERSION {
-                return Err(LogError::Corrupt(format!(
-                    "txnindex {} contains an unsupported record version {}",
-                    path.display(),
-                    raw.version.get(),
-                )));
-            }
-            let entry = AbortedTxn {
-                start_offset: Offset(raw.first_offset.get()),
-                last_offset: Offset(raw.last_offset.get()),
-                producer_id: ProducerId(raw.producer_id.get()),
-                last_stable_offset: Offset(raw.last_stable_offset.get()),
-            };
-            if !Self::entry_valid(entry) {
-                return Err(LogError::Corrupt(format!(
-                    "txnindex {} contains an invalid aborted interval",
-                    path.display()
-                )));
-            }
-            if !entries.contains(&entry) {
-                entries.push(entry);
-            }
+    open_index! {
+        /// Open or recover a `.txnindex` file at the given path. This method
+        /// reads the entire file into memory at startup. An empty file or a
+        /// missing file is acceptable and means zero aborted transactions.
+        /// # Errors
+        /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+        /// # Panics
+        /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
+        pub fn open(path: PathBuf) -> Result<Self, LogError> {
+            let entries = crate::index::read_sidecar::<AbortedTxnRaw, _>(
+                &path,
+                "txnindex",
+                "length is a multiple of ENTRY_BYTES and AbortedTxnRaw is Unaligned",
+                |raws| {
+                    let mut entries = Vec::with_capacity(raws.len());
+                    for raw in raws {
+                        if raw.version.get() != SUPPORTED_VERSION {
+                            return Err(LogError::Corrupt(format!(
+                                "txnindex {} contains an unsupported record version {}",
+                                path.display(),
+                                raw.version.get(),
+                            )));
+                        }
+                        let entry = AbortedTxn {
+                            start_offset: Offset(raw.first_offset.get()),
+                            last_offset: Offset(raw.last_offset.get()),
+                            producer_id: ProducerId(raw.producer_id.get()),
+                            last_stable_offset: Offset(raw.last_stable_offset.get()),
+                        };
+                        if !Self::entry_valid(entry) {
+                            return Err(LogError::Corrupt(format!(
+                                "txnindex {} contains an invalid aborted interval",
+                                path.display()
+                            )));
+                        }
+                        if !entries.contains(&entry) {
+                            entries.push(entry);
+                        }
+                    }
+                    Ok(entries)
+                },
+            )?;
+            tracing::Span::current().record("entries", entries.len());
+            Ok(Self { path, entries })
         }
-        tracing::Span::current().record("entries", entries.len());
-        Ok(Self { path, entries })
     }
 
     /// Append one aborted-txn entry.
@@ -156,21 +156,12 @@ impl TxnIndex {
     /// Returns an I/O error if the transaction-index sidecar cannot be
     /// rewritten or synchronized.
     pub fn truncate_from(&mut self, offset: Offset) -> Result<(), LogError> {
-        let entries: Vec<_> = self
-            .entries
-            .iter()
-            .copied()
-            .filter(|entry| entry.last_offset < offset)
-            .collect();
-        if entries.len() == self.entries.len() {
+        let Some(entries) =
+            crate::index::changed_entries(&self.entries, |entry| entry.last_offset < offset)
+        else {
             return Ok(());
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.path)
-            .map_err(LogError::Io)?;
+        };
+        let mut file = crate::index::rewrite_sidecar_file(&self.path)?;
         for entry in &entries {
             let raw = AbortedTxnRaw::new(*entry);
             file.write_all(raw.as_bytes()).map_err(LogError::Io)?;
@@ -217,6 +208,16 @@ mod tests {
 
     use super::*;
 
+    fn populated_index(name: &str, entries: &[AbortedTxn]) -> (TempDir, PathBuf, TxnIndex) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(name);
+        let mut index = TxnIndex::open(path.clone()).unwrap();
+        for &entry in entries {
+            index.append(entry).unwrap();
+        }
+        (dir, path, index)
+    }
+
     fn write_entry(path: &std::path::Path, entry: AbortedTxn) {
         let raw = AbortedTxnRaw::new(entry);
         std::fs::write(path, raw.as_bytes()).unwrap();
@@ -227,16 +228,8 @@ mod tests {
     /// `last_offset`, and `last_stable_offset`, each a big-endian i64.
     #[test]
     fn append_writes_the_exact_kafka_wire_layout() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.txnindex");
-        let entry = AbortedTxn {
-            start_offset: Offset(5),
-            last_offset: Offset(9),
-            producer_id: ProducerId(1000),
-            last_stable_offset: Offset(10),
-        };
-        let mut index = TxnIndex::open(path.clone()).unwrap();
-        index.append(entry).unwrap();
+        let entry = crate::test_support::aborted_txn(1000, 5, 9, 10);
+        let (_dir, path, _index) = populated_index("00.txnindex", &[entry]);
 
         let bytes = std::fs::read(&path).unwrap();
         let mut expected = Vec::new();
@@ -256,24 +249,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("00.txnindex");
         let entries = [
-            AbortedTxn {
-                start_offset: Offset(0),
-                last_offset: Offset(3),
-                producer_id: ProducerId(1000),
-                last_stable_offset: Offset(4),
-            },
-            AbortedTxn {
-                start_offset: Offset(4),
-                last_offset: Offset(6),
-                producer_id: ProducerId(2000),
-                last_stable_offset: Offset(7),
-            },
-            AbortedTxn {
-                start_offset: Offset(8),
-                last_offset: Offset(10),
-                producer_id: ProducerId(3000),
-                last_stable_offset: Offset(11),
-            },
+            crate::test_support::aborted_txn(1000, 0, 3, 4),
+            crate::test_support::aborted_txn(2000, 4, 6, 7),
+            crate::test_support::aborted_txn(3000, 8, 10, 11),
         ];
         let mut index = TxnIndex::open(path.clone()).unwrap();
         for entry in entries {
@@ -310,16 +288,10 @@ mod tests {
     /// records it was never sent.
     #[test]
     fn an_aborted_txn_starting_at_the_range_end_is_outside_it() {
-        let dir = TempDir::new().unwrap();
-        let mut index = TxnIndex::open(dir.path().join("00000000000000000000.txnindex")).unwrap();
-        index
-            .append(AbortedTxn {
-                start_offset: Offset(10),
-                last_offset: Offset(20),
-                producer_id: ProducerId(1),
-                last_stable_offset: Offset(21),
-            })
-            .unwrap();
+        let (_dir, _path, index) = populated_index(
+            "00000000000000000000.txnindex",
+            &[crate::test_support::aborted_txn(1, 10, 20, 21)],
+        );
 
         let found =
             |start: i64, end: i64| index.aborted_in_range(Offset(start), Offset(end)).count();
@@ -343,18 +315,8 @@ mod tests {
         let path = dir.path().join("00.txnindex");
         let mut index = TxnIndex::open(path).unwrap();
         for entry in [
-            AbortedTxn {
-                start_offset: Offset(8),
-                last_offset: Offset(7),
-                producer_id: ProducerId(1),
-                last_stable_offset: Offset(8),
-            },
-            AbortedTxn {
-                start_offset: Offset(7),
-                last_offset: Offset(8),
-                producer_id: ProducerId(-1),
-                last_stable_offset: Offset(9),
-            },
+            crate::test_support::aborted_txn(1, 8, 7, 8),
+            crate::test_support::aborted_txn(-1, 7, 8, 9),
         ] {
             assert2::assert!(let LogError::InvalidArgument(_) = index.append(entry).unwrap_err());
         }
@@ -365,23 +327,10 @@ mod tests {
         assert2::assert!(let LogError::Corrupt(_) = TxnIndex::open(partial).unwrap_err());
 
         for (name, entry) in [
-            (
-                "inverted",
-                AbortedTxn {
-                    start_offset: Offset(8),
-                    last_offset: Offset(7),
-                    producer_id: ProducerId(1),
-                    last_stable_offset: Offset(8),
-                },
-            ),
+            ("inverted", crate::test_support::aborted_txn(1, 8, 7, 8)),
             (
                 "negative-producer",
-                AbortedTxn {
-                    start_offset: Offset(7),
-                    last_offset: Offset(8),
-                    producer_id: ProducerId(-1),
-                    last_stable_offset: Offset(9),
-                },
+                crate::test_support::aborted_txn(-1, 7, 8, 9),
             ),
         ] {
             let path = dir.path().join(format!("{name}.txnindex"));
@@ -392,16 +341,8 @@ mod tests {
 
     #[test]
     fn exact_aborted_interval_retry_is_idempotent() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.txnindex");
-        let entry = AbortedTxn {
-            start_offset: Offset(5),
-            last_offset: Offset(7),
-            producer_id: ProducerId(1000),
-            last_stable_offset: Offset(8),
-        };
-        let mut index = TxnIndex::open(path.clone()).unwrap();
-        index.append(entry).unwrap();
+        let entry = crate::test_support::aborted_txn(1000, 5, 7, 8);
+        let (_dir, path, mut index) = populated_index("00.txnindex", &[entry]);
         index.append(entry).unwrap();
         assert2::assert!(index.entries() == [entry]);
 
@@ -414,27 +355,14 @@ mod tests {
 
     #[test]
     fn mutation_io_failures_leave_the_in_memory_index_unchanged() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.txnindex");
-        let original = AbortedTxn {
-            start_offset: Offset(5),
-            last_offset: Offset(7),
-            producer_id: ProducerId(1000),
-            last_stable_offset: Offset(8),
-        };
-        let mut index = TxnIndex::open(path.clone()).unwrap();
-        index.append(original).unwrap();
+        let original = crate::test_support::aborted_txn(1000, 5, 7, 8);
+        let (_dir, path, mut index) = populated_index("00.txnindex", &[original]);
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
 
         assert2::assert!(
             let LogError::Io(_) = index
-                .append(AbortedTxn {
-                    start_offset: Offset(10),
-                    last_offset: Offset(12),
-                    producer_id: ProducerId(1000),
-                    last_stable_offset: Offset(13),
-                })
+                .append(crate::test_support::aborted_txn(1000, 10, 12, 13))
                 .unwrap_err()
         );
         assert2::assert!(index.entries() == [original]);
@@ -444,16 +372,10 @@ mod tests {
 
     #[test]
     fn empty_or_inverted_fetch_range_matches_no_aborted_interval() {
-        let dir = TempDir::new().unwrap();
-        let mut index = TxnIndex::open(dir.path().join("00.txnindex")).unwrap();
-        index
-            .append(AbortedTxn {
-                start_offset: Offset(10),
-                last_offset: Offset(20),
-                producer_id: ProducerId(1),
-                last_stable_offset: Offset(21),
-            })
-            .unwrap();
+        let (_dir, _path, index) = populated_index(
+            "00.txnindex",
+            &[crate::test_support::aborted_txn(1, 10, 20, 21)],
+        );
         assert2::assert!(index.aborted_in_range(Offset(10), Offset(10)).count() == 0);
         assert2::assert!(index.aborted_in_range(Offset(20), Offset(10)).count() == 0);
     }
@@ -463,20 +385,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("00.txnindex");
         let mut idx = TxnIndex::open(path.clone()).unwrap();
-        idx.append(AbortedTxn {
-            start_offset: Offset(5),
-            last_offset: Offset(7),
-            producer_id: ProducerId(1000),
-            last_stable_offset: Offset(8),
-        })
-        .unwrap();
-        idx.append(AbortedTxn {
-            start_offset: Offset(10),
-            last_offset: Offset(12),
-            producer_id: ProducerId(1000),
-            last_stable_offset: Offset(13),
-        })
-        .unwrap();
+        idx.append(crate::test_support::aborted_txn(1000, 5, 7, 8))
+            .unwrap();
+        idx.append(crate::test_support::aborted_txn(1000, 10, 12, 13))
+            .unwrap();
 
         let idx2 = TxnIndex::open(path).unwrap();
         assert2::assert!(
@@ -531,20 +443,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("00.txnindex");
         let mut idx = TxnIndex::open(path).unwrap();
-        idx.append(AbortedTxn {
-            start_offset: Offset(0),
-            last_offset: Offset(4),
-            producer_id: ProducerId(1),
-            last_stable_offset: Offset(5),
-        })
-        .unwrap();
-        idx.append(AbortedTxn {
-            start_offset: Offset(10),
-            last_offset: Offset(14),
-            producer_id: ProducerId(2),
-            last_stable_offset: Offset(15),
-        })
-        .unwrap();
+        idx.append(crate::test_support::aborted_txn(1, 0, 4, 5))
+            .unwrap();
+        idx.append(crate::test_support::aborted_txn(2, 10, 14, 15))
+            .unwrap();
 
         let in_3_to_12 = idx
             .aborted_in_range(Offset(3), Offset(12))
@@ -557,18 +459,8 @@ mod tests {
         assert2::assert!(
             in_3_to_12
                 == vec![
-                    AbortedTxn {
-                        start_offset: Offset(0),
-                        last_offset: Offset(4),
-                        producer_id: ProducerId(1),
-                        last_stable_offset: Offset(5),
-                    },
-                    AbortedTxn {
-                        start_offset: Offset(10),
-                        last_offset: Offset(14),
-                        producer_id: ProducerId(2),
-                        last_stable_offset: Offset(15),
-                    },
+                    crate::test_support::aborted_txn(1, 0, 4, 5),
+                    crate::test_support::aborted_txn(2, 10, 14, 15),
                 ]
         );
         assert2::assert!(in_5_to_9 == Vec::new());

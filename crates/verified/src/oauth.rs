@@ -1,66 +1,54 @@
 //! OAuth session-lifetime and reauthentication admission.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::ensures;
 #[cfg(creusot)]
 use creusot_std::prelude::{DeepModel, Int, logic};
 
-/// Whether token validation supplied an absolute expiry.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum OAuthExpiryPresence {
-    Missing,
-    Present,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Whether token validation supplied an absolute expiry.
+    pub enum OAuthExpiryPresence {
+        Missing,
+        Present,
+    }
 
-/// Whether the broker applies a maximum session lifetime.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum OAuthSessionCap {
-    Disabled,
-    Enabled,
-}
+    /// Whether the broker applies a maximum session lifetime.
+    pub enum OAuthSessionCap {
+        Disabled,
+        Enabled,
+    }
 
-/// Authentication phase being admitted.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum OAuthAuthenticationKind {
-    Initial,
-    Reauthentication,
-}
+    /// Authentication phase being admitted.
+    pub enum OAuthAuthenticationKind {
+        Initial,
+        Reauthentication,
+    }
 
-/// Relationship between the prior and validated principals.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum OAuthPrincipalMatch {
-    Matches,
-    Differs,
-}
+    /// Relationship between the prior and validated principals.
+    pub enum OAuthPrincipalMatch {
+        Matches,
+        Differs,
+    }
 
-/// Inputs that bind a validated token to one broker session.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct OAuthSessionFacts {
-    pub expiry: OAuthExpiryPresence,
-    pub token_expires_at_ms: i64,
-    pub now_ms: i64,
-    pub cap: OAuthSessionCap,
-    pub cap_ms: i64,
-    pub authentication: OAuthAuthenticationKind,
-    pub principal: OAuthPrincipalMatch,
-}
+    /// Inputs that bind a validated token to one broker session.
+    pub struct OAuthSessionFacts {
+        pub expiry: OAuthExpiryPresence,
+        pub token_expires_at_ms: i64,
+        pub now_ms: i64,
+        pub cap: OAuthSessionCap,
+        pub cap_ms: i64,
+        pub authentication: OAuthAuthenticationKind,
+        pub principal: OAuthPrincipalMatch,
+    }
 
-/// Session state selected after token validation.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum OAuthSessionDecision {
-    Reject,
-    Admit {
-        session_lifetime_ms: i64,
-        effective_expires_at_ms: i64,
-    },
+    /// Session state selected after token validation.
+    pub enum OAuthSessionDecision {
+        Reject,
+        Admit {
+            session_lifetime_ms: i64,
+            effective_expires_at_ms: i64,
+        },
+    }
 }
 
 /// Whether a validated token may bind a session: it carries an expiry

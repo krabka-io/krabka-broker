@@ -526,7 +526,7 @@ mod tests {
     }
 
     use crate::{
-        authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+        authorizer::AuthorizationResult,
         broker::Broker,
         handlers::RequestContext,
         test_support::peer,
@@ -540,19 +540,13 @@ mod tests {
     #[derive(Debug)]
     struct TopicReadOnly;
 
-    impl Authorizer for TopicReadOnly {
-        fn authorize(
-            &self,
-            _source: &dyn crate::authorizer::AclSource,
-            request: &AuthorizationRequest<'_>,
-        ) -> AuthorizationResult {
-            if request.operation == AclOperation::Read {
-                AuthorizationResult::Allow
-            } else {
-                AuthorizationResult::Deny
-            }
+    test_authorizer!(TopicReadOnly, (self, _source, request), {
+        if request.operation == AclOperation::Read {
+            AuthorizationResult::Allow
+        } else {
+            AuthorizationResult::Deny
         }
-    }
+    });
 
     /// Start a broker holding one routable diskless-WAL shard, so a KIP-595
     /// Fetch addressed at it takes the routed branch of [`super::handle`].
@@ -608,6 +602,57 @@ mod tests {
         (broker_handle, topic_id)
     }
 
+    /// Keep the WAL broker, directory and request context in their original scopes.
+    macro_rules! wal_fixture {
+        (($directory:ident, $handle:ident, $topic_id:ident, $broker:ident), ($principal:ident, $peer:ident, $listener:ident, $context:ident)) => {
+            wal_fixture!(@broker ($directory, $handle, $topic_id, $broker));
+            wal_fixture!(@identity ($principal, $peer));
+            let $listener = $broker.config.inter_broker_listener_name.clone();
+            wal_fixture!(@context ($principal, $peer, $context), &$listener);
+        };
+        (($directory:ident, $handle:ident, $topic_id:ident, $broker:ident), ($principal:ident, $peer:ident, $context:ident), $listener:expr) => {
+            wal_fixture!(@broker ($directory, $handle, $topic_id, $broker));
+            wal_fixture!(@identity ($principal, $peer));
+            wal_fixture!(@context ($principal, $peer, $context), $listener);
+        };
+        (@broker ($directory:ident, $handle:ident, $topic_id:ident, $broker:ident)) => {
+            let $directory = tempfile::tempdir().expect("tempdir");
+            let ($handle, $topic_id) = broker_with_routable_wal_shard($directory.path()).await;
+            let $broker = $handle.broker_arc_for_test();
+        };
+        (@identity ($principal:ident, $peer:ident)) => {
+            let $principal = wal_peer_principal();
+            let $peer = peer();
+        };
+        (@context ($principal:ident, $peer:ident, $context:ident), $listener:expr) => {
+            let $context = RequestContext::new(&$principal, &$peer, "wal-fetch", "test", false, $listener);
+        };
+    }
+
+    async fn routed_wal_response(
+        broker: &Broker,
+        topic_id: uuid::Uuid,
+        version: i16,
+        context: &RequestContext<'_>,
+        expectation: &str,
+    ) -> (krabka_protocol::owned::fetch_response::FetchResponse, i16) {
+        let request = fetch_request(
+            QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
+            krabka_raft::NodeId(2),
+            0,
+            -1,
+            0,
+            krabka_units::mebibytes(1),
+        );
+        let mut encoded = BytesMut::new();
+        request
+            .encode(&mut encoded, version)
+            .expect("encode WAL fetch");
+        super::handle(broker, version, 1, &encoded, context)
+            .await
+            .expect(expectation)
+    }
+
     /// The peer principal a routed WAL fetch authenticates as.
     fn wal_peer_principal() -> Principal {
         crate::test_support::sasl_principal("broker-2")
@@ -615,31 +660,14 @@ mod tests {
 
     #[tokio::test]
     async fn handle_routes_discriminated_wal_fetch_on_broker_listener() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (broker_handle, topic_id) = broker_with_routable_wal_shard(dir.path()).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let principal = wal_peer_principal();
-        let peer = peer();
-        let listener = broker.config.inter_broker_listener_name.clone();
-        let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, &listener);
+        wal_fixture!(
+            (dir, broker_handle, topic_id, broker),
+            (principal, peer, listener, context)
+        );
 
         for version in [KIP_595_FETCH_VERSION, 18] {
-            let request = fetch_request(
-                QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
-                krabka_raft::NodeId(2),
-                0,
-                -1,
-                0,
-                krabka_units::mebibytes(1),
-            );
-            let mut encoded = BytesMut::new();
-            request
-                .encode(&mut encoded, version)
-                .expect("encode WAL fetch");
             let (response, response_version) =
-                super::handle(&broker, version, 1, &encoded, &context)
-                    .await
-                    .expect("route WAL fetch");
+                routed_wal_response(&broker, topic_id, version, &context, "route WAL fetch").await;
 
             assert!(response_version == version);
             let partition = &response.responses[0].partitions[0];
@@ -674,29 +702,18 @@ mod tests {
     /// indistinguishable there from the fetches the handler refused.
     #[tokio::test]
     async fn routed_wal_fetch_observes_all_three_phases() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (broker_handle, topic_id) = broker_with_routable_wal_shard(dir.path()).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let principal = wal_peer_principal();
-        let peer = peer();
-        let listener = broker.config.inter_broker_listener_name.clone();
-        let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, &listener);
-        let request = fetch_request(
-            QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
-            krabka_raft::NodeId(2),
-            0,
-            -1,
-            0,
-            krabka_units::mebibytes(1),
+        wal_fixture!(
+            (dir, broker_handle, topic_id, broker),
+            (principal, peer, listener, context)
         );
-        let mut encoded = BytesMut::new();
-        request
-            .encode(&mut encoded, KIP_595_FETCH_VERSION)
-            .expect("encode WAL fetch");
-
-        let (response, _) = super::handle(&broker, KIP_595_FETCH_VERSION, 1, &encoded, &context)
-            .await
-            .expect("route WAL fetch");
+        let (response, _) = routed_wal_response(
+            &broker,
+            topic_id,
+            KIP_595_FETCH_VERSION,
+            &context,
+            "route WAL fetch",
+        )
+        .await;
         assert!(response.error_code == crate::codes::NONE);
 
         let mut rendered = String::new();
@@ -744,8 +761,10 @@ mod tests {
         request
             .encode(&mut encoded, KIP_595_FETCH_VERSION)
             .expect("encode WAL fetch");
-        let principal = crate::test_support::sasl_principal("broker-2");
-        let peer = peer();
+        request_identity!(
+            (principal, peer),
+            crate::test_support::sasl_principal("broker-2")
+        );
         let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "");
 
         let (response, _) = super::handle(&broker, KIP_595_FETCH_VERSION, 1, &encoded, &context)
@@ -763,29 +782,20 @@ mod tests {
     /// `broker-2` and read another voter's WAL shard.
     #[tokio::test]
     async fn wal_fetch_on_a_client_listener_is_refused() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (broker_handle, topic_id) = broker_with_routable_wal_shard(dir.path()).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let principal = wal_peer_principal();
-        let peer = peer();
-        let context =
-            RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "EXTERNAL");
-        let request = fetch_request(
-            QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
-            krabka_raft::NodeId(2),
-            0,
-            -1,
-            0,
-            krabka_units::mebibytes(1),
+        wal_fixture!(
+            (dir, broker_handle, topic_id, broker),
+            (principal, peer, context),
+            "EXTERNAL"
         );
-        let mut encoded = BytesMut::new();
-        request
-            .encode(&mut encoded, KIP_595_FETCH_VERSION)
-            .expect("encode WAL fetch");
 
-        let (response, _) = super::handle(&broker, KIP_595_FETCH_VERSION, 1, &encoded, &context)
-            .await
-            .expect("refuse WAL fetch");
+        let (response, _) = routed_wal_response(
+            &broker,
+            topic_id,
+            KIP_595_FETCH_VERSION,
+            &context,
+            "refuse WAL fetch",
+        )
+        .await;
 
         assert!(response.error_code == crate::codes::CLUSTER_AUTHORIZATION_FAILED);
         assert!(response.responses.is_empty());

@@ -4,28 +4,28 @@
     "Coma": {
       "vc_branch_Result_tup2_u32_Option_u32_unit": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.022
       },
-      "vc_deref_Vec_i64_Global": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_deref_Vec_i64_Global": { "prover": "alt-ergo", "time": 0.019 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.02 },
       "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_first_timestamp_index": { "prover": "alt-ergo", "time": 0.009 },
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_first_timestamp_index": { "prover": "alt-ergo", "time": 0.023 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.019 },
       "vc_from_residual_Result_tup3_u32_Option_u32_Option_usize_unit": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.009
       },
-      "vc_from_unit": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_from_unit": { "prover": "alt-ergo", "time": 0.014 },
       "vc_indexed_offset_scan_preserves_first_batch": {
         "prover": "z3",
-        "time": 0.219
+        "time": 0.481
       },
-      "vc_len_tup2_u32_u32": { "prover": "alt-ergo", "time": 0.009 },
-      "vc_new_i64": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_push_i64": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_len_tup2_u32_u32": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_new_i64": { "prover": "alt-ergo", "time": 0.019 },
+      "vc_push_i64": { "prover": "alt-ergo", "time": 0.02 },
       "vc_validated_index_bounds_lookup": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.02
       }
     }
   }

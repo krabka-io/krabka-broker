@@ -23,10 +23,7 @@ use super::{remote_prefix_charge, remote_retention_model};
 })]
 #[ensures(result@ <= segments@.len())]
 #[ensures(!deletes_allowed ==> result@ == 0)]
-#[ensures(forall<i: Int> 0 <= i && i < result@ ==> segments@[i].log_start_breached
-    || segments@[i].time_expired || (size_debt@ > 0
-        && remote_prefix_charge(segments@, i) < size_debt@
-        && remote_prefix_charge(segments@, i + 1) <= size_debt@))]
+#[ensures(retention_prefix_funded(segments@, size_debt@, result@))]
 #[ensures(deletes_allowed && result@ < segments@.len()
     ==> !segments@[result@].log_start_breached && !segments@[result@].time_expired
         && (size_debt@ == 0 || remote_prefix_charge(segments@, result@) >= size_debt@
@@ -47,10 +44,7 @@ pub fn remote_retention_prefix(
     #[invariant(debt@ == if remote_prefix_charge(segments@, len@) <= size_debt@ {
         size_debt@ - remote_prefix_charge(segments@, len@)
     } else { 0 })]
-    #[invariant(forall<i: Int> 0 <= i && i < len@ ==> segments@[i].log_start_breached
-        || segments@[i].time_expired || (size_debt@ > 0
-            && remote_prefix_charge(segments@, i) < size_debt@
-            && remote_prefix_charge(segments@, i + 1) <= size_debt@))]
+    #[invariant(retention_prefix_funded(segments@, size_debt@, len@))]
     #[invariant(remote_retention_model(segments@, len@, debt@)
         == remote_retention_model(segments@, 0, size_debt@))]
     #[variant(segments@.len() - len@)]
@@ -86,4 +80,12 @@ pub fn retention_delete_target(last_offset: Option<i64>) -> Option<i64> {
         Some(last) if last < i64::MAX => Some(last + 1),
         Some(_) | None => None,
     }
+}
+
+open_logic! {
+/// Each deleted row breaches the floor or time policy, or fits the charged size debt.
+fn retention_prefix_funded(segments: Seq<RemoteRetentionSegment>, debt: Int, count: Int) -> bool {
+    pearlite! { forall<i: Int> 0 <= i && i < count ==> segments[i].log_start_breached
+    || segments[i].time_expired || (super::remote_charge_funded(debt, remote_prefix_charge(segments, i), remote_prefix_charge(segments, i + 1))) }
+}
 }

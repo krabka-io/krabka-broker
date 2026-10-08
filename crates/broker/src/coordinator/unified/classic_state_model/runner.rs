@@ -6,7 +6,10 @@
 use stateright::Checker;
 
 use super::config::ClassicModel;
-use crate::model_check::run_bfs;
+use crate::{
+    coordinator::unified::actor::reconciliation_model_support::pinned_model_runner,
+    model_check::run_bfs,
+};
 
 // Exhaustiveness is bounded on UNIQUE states (memory-proportional); the BFS's
 // generated count runs several times the unique count here (high branching:
@@ -28,17 +31,16 @@ const MAX_DEPTH: usize = 80;
 pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 3_853;
 pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 482_874;
 
-pub(super) fn run(model: ClassicModel, label: &str, pinned_unique_states: usize) {
-    let checker = run_bfs(model, label, MAX_DEPTH, TARGET_STATE_COUNT);
-    assert2::assert!(
-        checker.unique_state_count() < MAX_UNIQUE_STATES,
-        "[{label}] unique-state bound exceeded ({})",
-        checker.unique_state_count()
-    );
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
-    checker.assert_properties();
+pinned_model_runner! {
+    @checked
+    pub(super) fn run(ClassicModel);
+    run_bfs, crate::model_check::assert_pinned_count;
+    MAX_DEPTH, TARGET_STATE_COUNT; properties_last;
+    |checker, label| {
+        assert2::assert!(
+            checker.unique_state_count() < MAX_UNIQUE_STATES,
+            "[{label}] unique-state bound exceeded ({})",
+            checker.unique_state_count()
+        );
+    }
 }

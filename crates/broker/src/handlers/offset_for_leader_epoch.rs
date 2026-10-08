@@ -265,8 +265,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
-        test_support::{peer, principal, request_context, start_broker_with_authorizer_no_audit},
+        authorizer::AuthorizationResult,
+        test_support::{peer, principal, start_broker_with_authorizer_no_audit},
     };
 
     const VERSION: i16 = offset_for_leader_epoch_response::MAX_VERSION;
@@ -281,31 +281,21 @@ mod tests {
         payments_describe: bool,
     }
 
-    impl Authorizer for TestAuthorizer {
-        fn authorize(
-            &self,
-            _source: &dyn crate::authorizer::AclSource,
-            req: &AuthorizationRequest<'_>,
-        ) -> AuthorizationResult {
-            let allow = match (req.resource_type, req.operation) {
-                (ResourceType::Cluster, AclOperation::ClusterAction) => self.cluster_action,
-                (ResourceType::Topic, AclOperation::Describe) if req.resource_name == "orders" => {
-                    true
-                }
-                (ResourceType::Topic, AclOperation::Describe)
-                    if req.resource_name == "payments" =>
-                {
-                    self.payments_describe
-                }
-                _ => false,
-            };
-            if allow {
-                AuthorizationResult::Allow
-            } else {
-                AuthorizationResult::Deny
+    test_authorizer!(TestAuthorizer, (self, _source, req), {
+        let allow = match (req.resource_type, req.operation) {
+            (ResourceType::Cluster, AclOperation::ClusterAction) => self.cluster_action,
+            (ResourceType::Topic, AclOperation::Describe) if req.resource_name == "orders" => true,
+            (ResourceType::Topic, AclOperation::Describe) if req.resource_name == "payments" => {
+                self.payments_describe
             }
+            _ => false,
+        };
+        if allow {
+            AuthorizationResult::Allow
+        } else {
+            AuthorizationResult::Deny
         }
-    }
+    });
 
     fn request() -> OffsetForLeaderEpochRequest {
         OffsetForLeaderEpochRequest {
@@ -409,12 +399,16 @@ mod tests {
                 cluster_action,
                 payments_describe,
             });
-            let (broker_handle, _dir) = start_broker_with_authorizer_no_audit(authorizer).await;
-            let broker = broker_handle.broker_arc_for_test();
+            broker_fixture!(
+                (broker_handle, _dir, broker),
+                start_broker_with_authorizer_no_audit(authorizer)
+            );
 
-            let p = principal("follower");
-            let peer = peer();
-            let ctx = request_context(&p, &peer, "follower-client");
+            request_identity!(
+                (p, peer, ctx),
+                principal("follower"),
+                client_id = "follower-client"
+            );
             let resp = handle(&broker, &request(), VERSION, &ctx);
 
             let expected = OffsetForLeaderEpochResponse {
@@ -564,9 +558,12 @@ mod tests {
         request: &OffsetForLeaderEpochRequest,
     ) -> EpochEndOffset {
         let shared = broker_handle.broker_arc_for_test();
-        let user = crate::test_support::principal("client");
-        let address = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&user, &address, "ofle-client");
+        request_identity!(
+            (user, address, ctx),
+            crate::test_support::principal("client"),
+            client_id = "ofle-client",
+            address = crate::test_support::peer()
+        );
         let decoded = handle(&shared, request, version, &ctx);
         decoded
             .topics
@@ -722,10 +719,10 @@ mod tests {
     /// first.
     #[tokio::test]
     async fn hosting_outcomes_are_decided_before_the_epoch_fence() {
-        use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
-
-        let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
-        let shared = broker.broker_arc_for_test();
+        broker_fixture!(
+            (broker, _dir, shared),
+            crate::test_support::start_broker_no_audit()
+        );
 
         let offline = seeded_topic(&broker, "ofle-offline", 1, 1, 3).await;
         shared
@@ -733,30 +730,15 @@ mod tests {
             .mark_offline(&offline.log_dir.load(), "test: EIO");
 
         // Node 1 is not a replica of this partition, so it never hosts it.
-        broker
-            .submit_metadata_record_for_test(MetadataRecord::V1Topic(TopicRecord {
-                name: "ofle-moved".into(),
-                topic_id: uuid::Uuid::from_u128(9),
-                partitions: 1,
-                replication_factor: 2,
-            }))
-            .await
-            .expect("submit topic record");
-        broker
-            .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-                topic: "ofle-moved".into(),
-                partition: 0,
-                leader: krabka_audit::NodeId(2),
-                replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-                isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-                leader_epoch: krabka_metadata::LeaderEpoch(3),
-                adding_replicas: Vec::new(),
-                removing_replicas: Vec::new(),
-                directories: vec![uuid::Uuid::nil(); 2],
-                partition_epoch: 0,
-            }))
-            .await
-            .expect("submit partition record");
+        crate::handlers::test_support::seed_partition_replicas(
+            &broker,
+            "ofle-moved",
+            uuid::Uuid::from_u128(9),
+            krabka_audit::NodeId(2),
+            &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+            3,
+        )
+        .await;
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             while shared
                 .controller

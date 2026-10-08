@@ -7,7 +7,6 @@ use assert2::{assert, check};
 use krabka_metadata::{AclEntry, AclOperation, MetadataRecord, PatternType, ResourceType};
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         delete_topics_request::DeleteTopicsRequest,
         delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
     },
@@ -66,60 +65,49 @@ fn row(name: Option<&str>, topic_id: WireUuid, error_code: i16) -> DeletableTopi
 
 #[tokio::test]
 async fn handle_denied_topic_returns_authorization_failure() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("alice");
-    let peer = peer();
+    broker_fixture!((broker_handle, _dir, broker), deny_all);
+    request_identity!((p, peer), principal("alice"));
     let req = request(vec![named_state("secret")]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = DeleteTopicsResponse {
-        throttle_time_ms: 0,
-        responses: vec![DeletableTopicResult {
+    let expected = unthrottled_wire!(DeleteTopicsResponse {
+        responses: vec![tagged_wire!(DeletableTopicResult {
             name: Some("secret".into()),
             topic_id: WireUuid::ZERO,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
             error_message: Some("Topic authorization failed.".into()),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
 
 #[tokio::test]
 async fn handle_unknown_name_and_id_preserve_error_rows() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
+    request_identity!((p, peer), principal("admin"));
     let bogus_id = WireUuid([8; 16]);
     let req = request(vec![named_state("missing"), id_state(bogus_id)]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = DeleteTopicsResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(DeleteTopicsResponse {
         responses: vec![
-            DeletableTopicResult {
+            tagged_wire!(DeletableTopicResult {
                 name: None,
                 topic_id: bogus_id,
                 error_code: codes::UNKNOWN_TOPIC_ID,
                 error_message: Some("This server does not host this topic ID.".into()),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
-            DeletableTopicResult {
+            }),
+            tagged_wire!(DeletableTopicResult {
                 name: Some("missing".into()),
                 topic_id: WireUuid::ZERO,
                 error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
                 error_message: Some("This server does not host this topic-partition.".into()),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
+            }),
         ],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
@@ -136,8 +124,7 @@ async fn delete_doomed(break_glass: BreakGlassConfig) -> (DeletableTopicResult, 
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
+    request_identity!((principal, peer), principal("admin"));
     seed_topic(&broker, &principal, &peer, DOOMED).await;
     let topic_id = WireUuid(
         broker
@@ -166,7 +153,7 @@ async fn delete_doomed(break_glass: BreakGlassConfig) -> (DeletableTopicResult, 
 async fn the_wire_handler_refuses_a_deletion_that_no_proposal_covers() {
     let (refused, topic_id, exists) = delete_doomed(gated_config()).await;
 
-    let expected = DeletableTopicResult {
+    let expected = tagged_wire!(DeletableTopicResult {
         name: Some(DOOMED.to_owned()),
         topic_id,
         error_code: codes::POLICY_VIOLATION,
@@ -174,8 +161,7 @@ async fn the_wire_handler_refuses_a_deletion_that_no_proposal_covers() {
             "break-glass refused delete_topic on doomed: no approved proposal covers the request"
                 .to_owned(),
         ),
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+    });
     assert!((refused, exists) == (expected, true));
 }
 
@@ -235,15 +221,15 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
             .into_bytes(),
     );
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    request_identity!((p, peer), principal("admin"));
 
-    let invalid = |name: Option<&str>, id, message: &str| DeletableTopicResult {
-        name: name.map(str::to_string),
-        topic_id: id,
-        error_code: codes::INVALID_REQUEST,
-        error_message: Some(message.to_string()),
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+    let invalid = |name: Option<&str>, id, message: &str| {
+        tagged_wire!(DeletableTopicResult {
+            name: name.map(str::to_string),
+            topic_id: id,
+            error_code: codes::INVALID_REQUEST,
+            error_message: Some(message.to_string()),
+        })
     };
     let both = krabka_protocol::owned::delete_topics_request::DeleteTopicState {
         name: Some(TOPIC.into()),
@@ -302,11 +288,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
         actual.push((label, resp, still_there));
         expected.push((
             label,
-            DeleteTopicsResponse {
-                throttle_time_ms: 0,
-                responses,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
+            unthrottled_wire!(DeleteTopicsResponse { responses }),
             true,
         ));
     }
@@ -321,16 +303,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 /// cluster-`Delete` shortcut test below, which needs topics that already
 /// exist before it authorizes their deletion.
 async fn seed_topic(broker: &Broker, principal: &Principal, peer: &SocketAddr, name: &str) {
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_owned(),
-            num_partitions: 1,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    let req = crate::handlers::test_support::configured_topic_request(name, &[], 1, 1, 5_000);
     let ctx = test_context(principal, peer);
     let resp = crate::handlers::create_topics::handle(broker, req, CREATE_VERSION, &ctx)
         .await
@@ -415,14 +388,8 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
     ];
 
     for (label, case) in cases {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
-                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-            )))
-            .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
+        broker_fixture!((broker_handle, _dir, broker), controller_peer_acls);
+        request_identity!((p, peer), principal("alice"));
 
         // Setup: grant alice cluster-wide Create so the fixture topics can
         // be seeded, then create them. The Create ACL plays no part in the
@@ -478,11 +445,9 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
                 )
             }
         };
-        let expected = DeleteTopicsResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(DeleteTopicsResponse {
             responses: vec![expected_row("a"), expected_row("app-x")],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        });
         check!(resp == expected, "case: {label}");
 
         // Kafka checks cluster `Delete` with `logIfDenied = false`, since a
@@ -599,14 +564,8 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
     for case in cases {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
-                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-            )))
-            .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
+        broker_fixture!((broker_handle, _dir, broker), controller_peer_acls);
+        request_identity!((p, peer), principal("alice"));
         let cluster_create = alice_acl(
             ResourceType::Cluster,
             crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
@@ -627,18 +586,7 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
                 .topic_id
                 .into_bytes(),
         );
-        if !case.acls.is_empty() {
-            broker
-                .controller
-                .submit_change(
-                    case.acls
-                        .into_iter()
-                        .map(MetadataRecord::V1AccessControlEntry)
-                        .collect(),
-                )
-                .await
-                .expect("seed acls");
-        }
+        crate::handlers::acl_test_support::seed_case_acls!(broker, case.acls);
 
         let mut rows: Vec<_> = case.names.iter().map(|name| named_state(name)).collect();
         if case.by_id {
@@ -660,11 +608,7 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
         actual.push((case.label, resp, still_there));
         expected.push((
             case.label,
-            sorted(DeleteTopicsResponse {
-                throttle_time_ms: 0,
-                responses,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            }),
+            sorted(unthrottled_wire!(DeleteTopicsResponse { responses })),
             !case.deleted,
         ));
         broker_handle.shutdown().await;
@@ -697,8 +641,7 @@ async fn delete_topic_enable_false_refuses_every_row() {
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
+        request_identity!((p, peer), principal("admin"));
         seed_topic(&broker, &p, &peer, TOPIC).await;
         let topic_id = WireUuid(
             broker
@@ -732,7 +675,7 @@ async fn delete_topic_enable_false_refuses_every_row() {
 
         // A deleted topic's v6 row carries its id; a refused row carries the
         // zero id the name row was sent with, and v2 carries no id at all.
-        let row = DeletableTopicResult {
+        let row = tagged_wire!(DeletableTopicResult {
             name: Some(TOPIC.into()),
             topic_id: if error_code == codes::NONE {
                 topic_id
@@ -741,15 +684,12 @@ async fn delete_topic_enable_false_refuses_every_row() {
             },
             error_code,
             error_message: None,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        });
         expected.push((
             (enabled, version),
-            DeleteTopicsResponse {
-                throttle_time_ms: 0,
+            unthrottled_wire!(DeleteTopicsResponse {
                 responses: vec![row],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
+            }),
             exists,
         ));
         broker_handle.shutdown().await;

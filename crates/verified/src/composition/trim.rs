@@ -6,17 +6,15 @@ use super::{
     diskless_trim_decision, producer_snapshot_latest_index, producer_snapshot_replay_start,
 };
 
+open_logic! {
 /// The durable stores have coherent frontiers within the trim visibility bounds.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn trim_store_frontiers_valid(facts: DeleteRecordsTrimFacts, wal: Int, local: Int) -> bool {
     pearlite! {
         0 <= wal && wal <= facts.high_watermark@ && wal <= facts.log_end@
             && 0 <= local && local <= facts.high_watermark@ && local <= facts.log_end@
             && (facts.has_delivery_watermark ==> wal <= facts.delivery_watermark@ && local <= facts.delivery_watermark@)
     }
+}
 }
 
 /// Fold completed durable steps, including arbitrary pauses/failed attempts.
@@ -72,26 +70,39 @@ pub(super) fn trim_steps_converge(
     (wal, local)
 }
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub fn trim_well_formed(facts: DeleteRecordsTrimFacts) -> bool {
     pearlite! { facts.requested@ >= -1 && facts.current_start@ >= 0
     && facts.current_start@ <= facts.high_watermark@ && facts.high_watermark@ <= facts.log_end@
     && (!facts.has_delivery_watermark || facts.current_start@ <= facts.delivery_watermark@) }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
+/// Exact admission reason carried by every fallible trim composition.
+pub(super) fn trim_rejection(
+    facts: DeleteRecordsTrimFacts,
+    error: DeleteRecordsTrimDecision,
+) -> bool {
+    pearlite! {
+        match error {
+            DeleteRecordsTrimDecision::RejectMalformed => !trim_well_formed(facts),
+            DeleteRecordsTrimDecision::RejectOutOfRange => trim_well_formed(facts)
+                && facts.requested@ != -1 && facts.requested@ > facts.high_watermark@,
+            _ => false,
+        }
+    }
+}
+}
+
+open_logic! {
 pub fn trim_frontier(facts: DeleteRecordsTrimFacts) -> Int {
     pearlite! {
         let resolved = if facts.requested@ == -1 { facts.high_watermark@ } else { facts.requested@ };
         let bounded = if facts.has_delivery_watermark { resolved.min(facts.delivery_watermark@) } else { resolved };
         bounded.max(facts.current_start@)
     }
+}
 }
 
 /// Admit logical deletion, complete reconciliation and return its actual floor,
@@ -102,11 +113,7 @@ pub fn trim_frontier(facts: DeleteRecordsTrimFacts) -> Int {
 #[requires(0 <= local_start@ && local_start@ <= facts.high_watermark@ && local_start@ <= facts.log_end@)]
 #[requires(facts.has_delivery_watermark ==> wal_start@ <= facts.delivery_watermark@ && local_start@ <= facts.delivery_watermark@)]
 #[ensures(match result {
-    Err(error) => match error {
-        DeleteRecordsTrimDecision::RejectMalformed => !trim_well_formed(facts),
-        DeleteRecordsTrimDecision::RejectOutOfRange => trim_well_formed(facts) && facts.requested@ != -1 && facts.requested@ > facts.high_watermark@,
-        _ => false,
-    },
+    Err(error) => trim_rejection(facts, error),
     Ok((floor, selected, cursor)) => trim_well_formed(facts)
         && (facts.requested@ == -1 || facts.requested@ <= facts.high_watermark@)
         && floor@ == trim_frontier(facts).max(wal_start@).max(local_start@)
@@ -114,12 +121,10 @@ pub fn trim_frontier(facts: DeleteRecordsTrimFacts) -> Int {
         && floor@ <= facts.high_watermark@
         && (!facts.has_delivery_watermark || floor@ <= facts.delivery_watermark@)
         && match selected {
-            None => cursor == floor && forall<i: Int> 0 <= i && i < snapshots@.len()
-                ==> !(floor@ < snapshots@[i]@ && snapshots@[i]@ <= facts.log_end@),
+            None => trim_has_no_snapshot(snapshots@, floor, facts.log_end, cursor),
             Some(index) => index@ < snapshots@.len() && floor@ < snapshots@[index@]@ && snapshots@[index@]@ <= facts.log_end@
                 && cursor == snapshots@[index@]
-                && forall<i: Int> 0 <= i && i < snapshots@.len() && floor@ < snapshots@[i]@ && snapshots@[i]@ <= facts.log_end@
-                    ==> snapshots@[i]@ <= snapshots@[index@]@,
+                && latest_retained_snapshot(snapshots@, floor@, facts.log_end@, snapshots@[index@]@),
         },
 })]
 pub(super) fn admitted_trim_bounds_reload_and_retry(
@@ -192,4 +197,25 @@ pub(super) fn diskless_trim_reconciliation_preserves_coverage(
         return (wal_start, local_start);
     }
     trim_steps_converge(plan.target, wal_start, local_start, applied)
+}
+
+open_logic! {
+/// The floor is the replay cursor exactly when the retained window has no snapshot.
+pub(super) fn trim_has_no_snapshot(snapshots: Seq<i64>, floor: i64, end: i64, cursor: i64) -> bool {
+    pearlite! { cursor == floor && forall<i: Int> 0 <= i && i < snapshots.len()
+    ==> !(floor@ < snapshots[i]@ && snapshots[i]@ <= end@) }
+}
+}
+
+open_logic! {
+/// No snapshot in the retained window lies above the selected replay frontier.
+pub(super) fn latest_retained_snapshot(
+    snapshots: Seq<i64>,
+    floor: Int,
+    end: Int,
+    selected: Int,
+) -> bool {
+    pearlite! { forall<i: Int> 0 <= i && i < snapshots.len() && floor < snapshots[i]@ && snapshots[i]@ <= end
+    ==> snapshots[i]@ <= selected }
+}
 }

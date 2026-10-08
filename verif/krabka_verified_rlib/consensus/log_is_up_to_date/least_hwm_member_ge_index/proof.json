@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_least_hwm_member_ge_index": { "prover": "alt-ergo", "time": 0.031 }
+      "vc_least_hwm_member_ge_index": { "prover": "alt-ergo", "time": 0.059 }
     }
   }
 }

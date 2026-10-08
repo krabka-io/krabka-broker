@@ -49,6 +49,16 @@ fn catalog_sorted_by_key() -> Vec<ApiVersion> {
     apis
 }
 
+/// Decode the stock broker's table, retaining its container until the case ends.
+fn kafka_advertised_table() -> (OracleBroker, Vec<ApiVersion>) {
+    let oracle = OracleBroker::start();
+    let output = oracle.api_versions();
+    eprintln!("KRABKA[test] {ORACLE_IMAGE} api-versions:\n{output}");
+    let kafka =
+        advertised(&parse_single_broker(&output).unwrap_or_else(|e| panic!("{e}\n{output}")));
+    (oracle, kafka)
+}
+
 /// The API keys one advertised table names.
 fn key_set(apis: &[ApiVersion]) -> BTreeSet<i16> {
     apis.iter().map(|api| api.api_key).collect()
@@ -93,11 +103,7 @@ async fn krabka_advertises_exactly_the_api_catalog() {
 async fn divergence_from_real_kafka_matches_the_expectation() {
     let krabka = krabka_advertised_table().await;
 
-    let oracle = OracleBroker::start();
-    let output = oracle.api_versions();
-    eprintln!("KRABKA[test] {ORACLE_IMAGE} api-versions:\n{output}");
-    let kafka =
-        advertised(&parse_single_broker(&output).unwrap_or_else(|e| panic!("{e}\n{output}")));
+    let (_oracle, kafka) = kafka_advertised_table();
 
     let observed = DivergenceReport::build(ORACLE_IMAGE, &krabka, &kafka);
     // Every key on either side has a canonical name in krabka-protocol's
@@ -144,11 +150,7 @@ async fn divergence_from_real_kafka_matches_the_expectation() {
 async fn the_client_listener_prints_the_same_api_key_set_as_kafka() {
     let krabka = krabka_advertised_table().await;
 
-    let oracle = OracleBroker::start();
-    let output = oracle.api_versions();
-    eprintln!("KRABKA[test] {ORACLE_IMAGE} api-versions:\n{output}");
-    let kafka =
-        advertised(&parse_single_broker(&output).unwrap_or_else(|e| panic!("{e}\n{output}")));
+    let (_oracle, kafka) = kafka_advertised_table();
 
     let ours = key_set(&krabka);
     let theirs = key_set(&kafka);

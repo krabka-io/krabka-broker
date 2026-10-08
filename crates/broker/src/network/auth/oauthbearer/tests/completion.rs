@@ -3,6 +3,7 @@ use std::sync::Arc;
 use assert2::assert;
 
 use super::*;
+use crate::network::auth::AuthenticatedSnapshot;
 
 #[derive(Debug)]
 struct CompletingIntrospection {

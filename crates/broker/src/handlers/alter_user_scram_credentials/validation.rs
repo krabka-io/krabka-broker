@@ -302,9 +302,7 @@ mod tests {
 
     #[tokio::test]
     async fn process_deletion_rejects_missing_credentials() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         let mut records = Vec::new();
 
         let r = process_deletion(&broker, deletion("alice"), true, &mut records);
@@ -325,9 +323,7 @@ mod tests {
 
     #[tokio::test]
     async fn process_deletion_rejects_unauthorized_users() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         let mut records = Vec::new();
 
         let r = process_deletion(&broker, deletion("alice"), false, &mut records);
@@ -343,9 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn process_deletion_rejects_unknown_mechanism_with_unsupported_sasl_mechanism() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         let mut records = Vec::new();
         let mut deletion = deletion("alice");
         deletion.mechanism = 99;
@@ -382,11 +376,12 @@ mod tests {
     }
 
     async fn check_empty_username(req: AlterUserScramCredentialsRequest) {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
-        test_ctx!(ctx, "admin");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "admin"),
+            controller_leader
+        );
         let resp = answer(&broker, req, &ctx).await;
         let expected =
             crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![

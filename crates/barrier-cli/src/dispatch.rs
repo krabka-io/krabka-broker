@@ -17,38 +17,26 @@ use crate::{
     verify,
 };
 
-/// Run the tool from an argv-style iterator, returning its exit code.
-///
-/// `0` means the broker accepted the request. `1` means it refused one, and the
-/// reason is on stderr. `2` means the broker could not be reached, so nothing
-/// is known about the outcome. `3` means a cut does not match the log.
-///
-/// # Panics
-///
-/// Panics if `argv` does not parse, which for a caller passing a literal
-/// argument list is a bug in that list rather than a runtime condition.
-pub async fn run_from_args<I, T>(argv: I) -> i32
-where
-    I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
-{
-    run(Cli::parse_from(argv)).await
-}
+krabka_macros::parsed_cli_entrypoint!({
+    /// Run the tool from an argv-style iterator, returning its exit code.
+    ///
+    /// `0` means the broker accepted the request. `1` means it refused one, and the
+    /// reason is on stderr. `2` means the broker could not be reached, so nothing
+    /// is known about the outcome. `3` means a cut does not match the log.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `argv` does not parse, which for a caller passing a literal
+    /// argument list is a bug in that list rather than a runtime condition.
+});
 
 /// Run one parsed command.
 pub async fn run(cli: Cli) -> i32 {
-    let client = match krabka_client_core::Client::builder()
-        .bootstrap(&cli.bootstrap_server)
-        .client_id("krabka-barrier")
-        .build()
-        .await
-    {
-        Ok(client) => client,
-        Err(error) => {
-            eprintln!("cannot reach {}: {error}", cli.bootstrap_server);
-            return EXIT_UNREACHABLE;
-        }
-    };
+    let client = krabka_macros::connect_cli_client!(
+        &cli.bootstrap_server,
+        "krabka-barrier",
+        EXIT_UNREACHABLE
+    );
     dispatch(&client, cli.command).await
 }
 

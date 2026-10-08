@@ -14,6 +14,7 @@ use krabka_protocol::{
 
 use super::*;
 use crate::{
+    broker::Broker,
     codes,
     test_support::{peer, start_broker_with_authorizer as start_broker, test_ctx},
 };
@@ -47,10 +48,11 @@ crate::test_support::context_helper!(client_id = "broker-heartbeat-test");
 /// it gets the heartbeat answer.
 #[tokio::test]
 async fn every_heartbeat_needs_cluster_action() {
-    let (broker_handle, _dir) =
-        start_broker(Arc::new(crate::test_support::GrantsInPrincipalName)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(Arc::new(crate::test_support::GrantsInPrincipalName)),
+        controller_leader
+    );
     let peer = peer();
     let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
     let broker_epoch = broker
@@ -82,10 +84,12 @@ async fn every_heartbeat_needs_cluster_action() {
 
 #[tokio::test]
 async fn handle_leader_success_preserves_response_shape() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
-    test_ctx!(ctx, "ANONYMOUS");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        allow_all,
+        context(ctx, "ANONYMOUS"),
+        controller_leader
+    );
     let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
     let image = broker.controller.current_image();
     let broker_epoch = image
@@ -97,14 +101,12 @@ async fn handle_leader_success_preserves_response_shape() {
         .await
         .expect("BrokerHeartbeat handler");
 
-    let expected = BrokerHeartbeatResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(BrokerHeartbeatResponse {
         error_code: codes::NONE,
         is_caught_up: true,
         is_fenced: false,
         should_shut_down: false,
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected, "{resp:?}");
 
     broker_handle.shutdown().await;
@@ -157,9 +159,7 @@ impl Cluster {
     async fn start() -> Self {
         use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord};
 
-        let (handle, dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
+        broker_fixture!((handle, dir, broker), allow_all, controller_leader);
         let partition = |index: i32, leader: u64, isr: &[u64]| {
             MetadataRecord::V1Partition(PartitionRecord {
                 topic: "t".into(),
@@ -458,16 +458,15 @@ async fn an_unfencing_broker_takes_back_a_partition_with_no_leader() {
     crate::test_support::finalize_elr_version_on(&cluster.broker).await;
     let epoch_2 = cluster.epoch(2);
     let no_leader = PartitionRecord {
-        topic: "t".into(),
-        partition: 1,
-        leader: NodeId(2),
-        replicas: vec![NodeId(2), NodeId(3)],
         isr: vec![NodeId(2)],
         leader_epoch: LeaderEpoch(4),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
         directories: vec![uuid::Uuid::nil(); 2],
-        partition_epoch: 0,
+        ..crate::handlers::test_support::replicated_partition(
+            "t",
+            1,
+            NodeId(2),
+            &[NodeId(2), NodeId(3)],
+        )
     };
     cluster
         .broker

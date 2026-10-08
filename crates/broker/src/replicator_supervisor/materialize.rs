@@ -30,13 +30,7 @@ pub(crate) struct MaterializePartitionConfig<'a> {
     pub log_config: &'a LogConfig,
     pub log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
     pub producer_state: &'a Arc<crate::producer_state::ProducerState>,
-    pub max_produce_group: usize,
-    pub partition_writer_queue_depth: usize,
-    pub diskless_wal_local_replica_count: usize,
-    pub diskless: bool,
-    pub hot_tail: Option<Arc<crate::diskless::hot_tail::HotTailCache>>,
-    pub wal_shards: Option<Arc<crate::wal::quorum::registry::WalShardRegistry>>,
-    pub sequencer: Option<Arc<dyn crate::wal::OffsetSequencer>>,
+    pub runtime: crate::partition::PartitionRuntimeConfig,
 }
 
 pub(crate) fn materialize_partition(config: MaterializePartitionConfig<'_>) -> Result<(), String> {
@@ -56,13 +50,7 @@ pub(super) fn materialize_partition_with_replication_target(
         log_config,
         log_dir_status,
         producer_state,
-        max_produce_group,
-        partition_writer_queue_depth,
-        diskless_wal_local_replica_count,
-        diskless,
-        hot_tail,
-        wal_shards,
-        sequencer,
+        runtime,
     } = config;
     // `materialize_if_vacant` runs `build` under the per-key write lock —
     // only one thread can be inside it for a given key at a time,
@@ -95,13 +83,15 @@ pub(super) fn materialize_partition_with_replication_target(
             |log_dir| crate::log_dir::partition_dir(log_dir, topic, partition),
         );
         std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
-        let open_config = crate::diskless::recovery::open_config(log_config, diskless);
+        let open_config = crate::diskless::recovery::open_config(log_config, runtime.diskless);
         let mut log = Log::open(&dir, open_config).map_err(|e| format!("Log::open: {e}"))?;
         if let Some(stamp_source) = partitions.stamp_source() {
             log.set_stamp_source(stamp_source)
                 .map_err(|e| format!("set stamp source: {e}"))?;
         }
-        if diskless && let (Some(topic_id), Some(registry)) = (topic_id, wal_shards.as_ref()) {
+        if runtime.diskless
+            && let (Some(topic_id), Some(registry)) = (topic_id, runtime.wal_shards.as_ref())
+        {
             let shard = crate::wal::quorum::registry::ShardId {
                 topic_id,
                 partition: PartitionIndex(partition),
@@ -139,13 +129,7 @@ pub(super) fn materialize_partition_with_replication_target(
             log,
             log_dir_status: log_dir_status.clone(),
             producer_state: producer_state.clone(),
-            max_produce_group,
-            partition_writer_queue_depth,
-            diskless_wal_local_replica_count,
-            diskless,
-            hot_tail,
-            wal_shards,
-            sequencer,
+            runtime,
         };
         let partition = match initial_target {
             Some(target) => {
@@ -187,13 +171,13 @@ mod tests {
         log_dir: &std::path::Path,
         topic: &str,
     ) {
-        materialize_partition(MaterializeFixture::default().config(
+        MaterializeFixture::default().materialize(
             partitions,
             topic,
             &[log_dir.to_path_buf()],
             &LogConfig::default(),
-        ))
-        .expect("materialize partition");
+            "materialize partition",
+        );
     }
 
     fn append_one(partition: &crate::partition::Partition) -> krabka_log::Offset {
@@ -214,34 +198,11 @@ mod tests {
 
     #[tokio::test]
     async fn materialize_partition_helper_supports_isr_install() {
-        use krabka_log::LogConfig;
-        use tempfile::tempdir;
-
-        let dir = tempdir().expect("tempdir");
-        let partitions = Arc::new(PartitionRegistry::new());
-        materialize_partition(MaterializeFixture::default().config(
-            &partitions,
-            "t",
-            &[dir.path().to_path_buf()],
-            &LogConfig::default(),
-        ))
-        .expect("materialize");
+        let (_dir, partitions) =
+            crate::replicator_supervisor::test_support::materialized_partition();
         let part = partitions.get("t", PartitionIndex(0)).expect("part");
         // Mirror what reconcile does for leader partitions.
-        part.install_isr(
-            &[
-                krabka_audit::NodeId(1),
-                krabka_audit::NodeId(2),
-                krabka_audit::NodeId(3),
-            ],
-            &[
-                krabka_audit::NodeId(1),
-                krabka_audit::NodeId(2),
-                krabka_audit::NodeId(3),
-            ],
-            krabka_audit::NodeId(1),
-        )
-        .await;
+        crate::partition::test_support::install_three_replica_isr(&part).await;
         let st = part.replica_state.lock().await;
         assert!(st.isr.len() == 3);
     }
@@ -392,9 +353,11 @@ mod tests {
 
         materialize_partition(MaterializePartitionConfig {
             topic_id: Some(topic_id),
-            diskless: true,
-            hot_tail: Some(hot_tail),
-            wal_shards: Some(wal_shards.clone()),
+            runtime: crate::partition::PartitionRuntimeConfig::new(
+                (1_024, 64, 3),
+                true,
+                (Some(hot_tail), Some(wal_shards.clone()), None),
+            ),
             ..MaterializeFixture::default().config(
                 &partitions,
                 "diskless",

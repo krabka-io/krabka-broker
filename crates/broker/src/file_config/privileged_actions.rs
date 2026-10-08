@@ -6,8 +6,6 @@
 //! provisioned once for both the freeze path and the break-glass path.
 
 use krabka_units::Time;
-use schemars::JsonSchema;
-use serde::Deserialize;
 
 use super::{
     FileConfigError,
@@ -25,8 +23,7 @@ use crate::{
 /// ignored `principal` typo would leave a key bound to nobody, and the
 /// principal binding is what stops one operator's key signing in another
 /// operator's name.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileOperatorKey {
     /// Stable identifier that a signed freeze record or break-glass approval
     /// names. Must be unique across the array.
@@ -59,8 +56,7 @@ impl From<&FileOperatorKey> for OperatorKeyEntry {
 /// `require_signature` is rejected at parse time rather than leaving the
 /// broker on the opposite policy to the one the operator wrote.
 #[krabka_macros::human_units]
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileFreezeConfig {
     /// Ceiling on live freeze registry entries. Default
     /// [`crate::config::DEFAULT_FREEZE_MAX_ENTRIES`]. Must be at least 1.
@@ -86,8 +82,7 @@ pub struct FileFreezeConfig {
 /// each a written choice and are distinct from omitting the key.
 /// `deny_unknown_fields` so a misspelled key is rejected at parse time.
 #[krabka_macros::human_units]
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileBreakGlassConfig {
     /// Principals that may approve a proposal. Omitted leaves the
     /// `BrokerConfig` value, which is empty.

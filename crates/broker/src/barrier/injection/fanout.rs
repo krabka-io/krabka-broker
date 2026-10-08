@@ -261,6 +261,28 @@ mod tests {
             .await
     }
 
+    macro_rules! remote_fixture {
+        ($registry:ident, $controller:ident, $metrics:ident, $config:ident = $configuration:expr) => {
+            let $registry = PartitionRegistry::new();
+            let $controller = source(&topic_records("orders", 1, NodeId(2)));
+            let $metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
+            let $config = $configuration;
+        };
+    }
+
+    fn placements(
+        targets: &[crate::barrier::state::TargetPartition],
+        offset: Offset,
+    ) -> Vec<MarkerPlacement> {
+        targets
+            .iter()
+            .map(|target| MarkerPlacement {
+                target: target.clone(),
+                offset,
+            })
+            .collect()
+    }
+
     #[tokio::test]
     async fn a_local_fan_out_marks_every_partition_and_returns_its_offset() {
         let dir = tempdir().expect("tempdir");
@@ -309,10 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_remote_partition_goes_through_the_transport_seam() {
-        let registry = PartitionRegistry::new();
-        let controller = source(&topic_records("orders", 1, NodeId(2)));
-        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
-        let config = fast_config();
+        remote_fixture!(registry, controller, metrics, config = fast_config());
 
         let mut remote = MockRemoteMarkerWriter::new();
         remote
@@ -320,13 +339,7 @@ mod tests {
             .times(1)
             .returning(|leader, _marker, targets| {
                 assert!(leader == NodeId(2));
-                Ok(targets
-                    .iter()
-                    .map(|target| MarkerPlacement {
-                        target: target.clone(),
-                        offset: Offset(77),
-                    })
-                    .collect())
+                Ok(placements(targets, Offset(77)))
             });
         let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
 
@@ -337,10 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_remote_placements_do_not_enter_the_cut() {
-        let registry = PartitionRegistry::new();
-        let controller = source(&topic_records("orders", 1, NodeId(2)));
-        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
-        let config = fast_config();
+        remote_fixture!(registry, controller, metrics, config = fast_config());
 
         let mut remote = MockRemoteMarkerWriter::new();
         remote
@@ -371,15 +381,17 @@ mod tests {
 
     #[tokio::test]
     async fn the_fan_out_retries_a_leader_that_failed_once() {
-        let registry = PartitionRegistry::new();
-        let controller = source(&topic_records("orders", 1, NodeId(2)));
-        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
-        let config = BarrierConfig {
-            injection_timeout: secs(30),
-            retry_backoff: millis(1),
-            retry_backoff_max: millis(1),
-            ..BarrierConfig::default()
-        };
+        remote_fixture!(
+            registry,
+            controller,
+            metrics,
+            config = BarrierConfig {
+                injection_timeout: secs(30),
+                retry_backoff: millis(1),
+                retry_backoff_max: millis(1),
+                ..BarrierConfig::default()
+            }
+        );
 
         let mut remote = MockRemoteMarkerWriter::new();
         let mut calls = 0;
@@ -391,13 +403,7 @@ mod tests {
                 if calls == 1 {
                     return Err(BrokerError::Replication("leader is mid-election".into()));
                 }
-                Ok(targets
-                    .iter()
-                    .map(|target| MarkerPlacement {
-                        target: target.clone(),
-                        offset: Offset(12),
-                    })
-                    .collect())
+                Ok(placements(targets, Offset(12)))
             });
         let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
 
@@ -408,10 +414,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_deadline_that_runs_out_returns_what_it_placed() {
-        let registry = PartitionRegistry::new();
-        let controller = source(&topic_records("orders", 1, NodeId(2)));
-        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
-        let config = fast_config();
+        remote_fixture!(registry, controller, metrics, config = fast_config());
 
         let mut remote = MockRemoteMarkerWriter::new();
         remote

@@ -37,7 +37,7 @@ use crate::{
     codes,
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     partition::Partition,
-    test_support::{encode_request, peer, principal, request_context, start_broker_no_audit_with},
+    test_support::{encode_request, peer, principal, start_broker_no_audit_with},
 };
 
 /// The node id of the follower.
@@ -110,24 +110,19 @@ fn batch(value: &'static [u8]) -> RecordBatch {
 async fn partition(broker: &BrokerHandle, topic: &str, topic_id: u128) -> Arc<Partition> {
     crate::handlers::test_support::seed_replicated_topic(broker, topic, topic_id, 1).await;
 
-    let shared = broker.broker_arc_for_test();
-    let partition = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let Some(partition) = shared.partitions.get(topic, krabka_ids::PartitionIndex(0))
-                && partition
-                    .replica_state
-                    .lock()
-                    .await
-                    .isr
-                    .contains(&krabka_raft::NodeId(FOLLOWER))
-            {
-                return partition;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the broker leads the partition with node 2 in the ISR");
+    wait_for_local_partition!(
+        (shared, partition),
+        broker,
+        topic,
+        partition,
+        partition
+            .replica_state
+            .lock()
+            .await
+            .isr
+            .contains(&krabka_raft::NodeId(FOLLOWER)),
+        "the broker leads the partition with node 2 in the ISR"
+    );
 
     for value in [&b"first"[..], &b"second"[..]] {
         partition
@@ -177,9 +172,11 @@ fn request(topic: &str, case: Case) -> FetchRequest {
 
 async fn fetch(broker: &BrokerHandle, request: &FetchRequest) -> FetchResponse {
     let shared = broker.broker_arc_for_test();
-    let user = principal("replicator");
-    let address = peer();
-    let ctx = request_context(&user, &address, "fetch-follower");
+    request_identity!(
+        (user, address, ctx),
+        principal("replicator"),
+        client_id = "fetch-follower"
+    );
     let request_bytes = encode_request(request, VERSION);
     let (response, response_version) = handle(&shared, VERSION, 7, &request_bytes, &ctx)
         .await
@@ -272,37 +269,41 @@ async fn a_follower_learns_the_high_watermark_it_moved_one_fetch_later() {
     ];
 
     let (broker, _dir) = start().await;
-    let mut actual = Vec::new();
-    let mut want = Vec::new();
-    for (index, case) in (0_u128..).zip(cases) {
-        let label = format!("{case:?}");
-        let name = format!("follower-watermark-{index}");
-        let partition = partition(&broker, &name, index + 1).await;
+    topic_case_outcomes!(
+        (actual, want),
+        (index, case, label, name),
+        "follower-watermark",
+        cases,
+        {
+            let partition = partition(&broker, &name, index + 1).await;
 
-        let appender = (case.answer == Answer::Wake)
-            .then(|| tokio::spawn(append_after_the_position(Arc::clone(&partition))));
-        let response = tokio::time::timeout(
-            Duration::from_secs(5),
-            fetch(&broker, &request(&name, case)),
-        )
-        .await
-        .expect("the fetch is answered");
-        if let Some(appender) = appender {
-            appender.await.expect("append task");
+            let appender = (case.answer == Answer::Wake)
+                .then(|| tokio::spawn(append_after_the_position(Arc::clone(&partition))));
+            let response = tokio::time::timeout(
+                Duration::from_secs(5),
+                fetch(&broker, &request(&name, case)),
+            )
+            .await
+            .expect("the fetch is answered");
+            if let Some(appender) = appender {
+                appender.await.expect("append task");
+            }
+
+            let records = match case.answer {
+                Answer::FirstRead | Answer::Expiry => RecordsPayload::Legacy(Bytes::new()),
+                Answer::FirstReadWithRecords => {
+                    RecordsPayload::V2(vec![stored_batch(&partition, 1)])
+                }
+                Answer::Wake => RecordsPayload::V2(vec![stored_batch(&partition, LOG_END)]),
+            };
+            actual.push(Outcome {
+                case: label.clone(),
+                response,
+                high_watermark: partition.high_watermark().await,
+            });
+            want.push(expected(case, label, &name, records));
         }
-
-        let records = match case.answer {
-            Answer::FirstRead | Answer::Expiry => RecordsPayload::Legacy(Bytes::new()),
-            Answer::FirstReadWithRecords => RecordsPayload::V2(vec![stored_batch(&partition, 1)]),
-            Answer::Wake => RecordsPayload::V2(vec![stored_batch(&partition, LOG_END)]),
-        };
-        actual.push(Outcome {
-            case: label.clone(),
-            response,
-            high_watermark: partition.high_watermark().await,
-        });
-        want.push(expected(case, label, &name, records));
-    }
+    );
     broker.shutdown().await;
 
     assert!(actual == want);

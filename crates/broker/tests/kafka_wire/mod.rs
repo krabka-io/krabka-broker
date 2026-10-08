@@ -26,7 +26,7 @@ pub mod quotas;
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -34,7 +34,7 @@ use krabka_protocol::{
         api_versions_response::ApiVersionsResponse,
         elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
         elect_leaders_response::ElectLeadersResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_request::ProduceRequest,
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
         sasl_handshake_request::SaslHandshakeRequest,
@@ -43,9 +43,12 @@ use krabka_protocol::{
     records::{Record, RecordBatch},
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
+pub use topics::creatable_topic as topic;
+
+use crate::support::{produce, topics, wire as frames};
 
 /// The `ApiVersions` API key, whose response header is v0 at every version.
 const API_VERSIONS_KEY: i16 = 18;
@@ -121,26 +124,17 @@ pub async fn round_trip_with<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut frame = BytesMut::with_capacity(16 + client_id.len() + body.len());
-    frame.put_i16(api_key);
-    frame.put_i16(api_version);
-    frame.put_i32(corr_id);
-    frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits in i16"));
-    frame.put_slice(client_id.as_bytes());
-    if flexibility.request {
-        frame.put_u8(0); // empty header tagged-fields byte
-    }
-    frame.put_slice(body);
+    let frame = frames::request_frame(
+        (api_key, api_version, corr_id, flexibility.request),
+        client_id,
+        body,
+        Some(16 + client_id.len() + body.len()),
+        Some("client_id fits in i16"),
+    );
 
-    stream
-        .write_u32(u32::try_from(frame.len()).expect("frame fits in u32"))
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
+    frames::write_frame(stream, &frame, Some("frame fits in u32")).await?;
 
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
+    let resp = frames::read_frame(stream).await?;
 
     let mut cur = &resp[..];
     if cur.len() < 4 {
@@ -180,6 +174,62 @@ pub async fn sasl_plain_authenticate(
     Ok(stream)
 }
 
+/// Send a flexible request on a new PLAIN connection, retaining named codec errors.
+///
+/// # Errors
+/// Returns authentication, framing, or codec errors from the exchange.
+pub async fn request_as_plain<Q, R>(
+    addr: SocketAddr,
+    client_id: &str,
+    (user, password): (&str, &[u8]),
+    request: &Q,
+    (api_key, version): (i16, i16),
+    operation: &str,
+) -> io::Result<R>
+where
+    Q: Encode,
+    R: for<'de> Decode<'de>,
+{
+    let mut stream = sasl_plain_authenticate(addr, client_id, user, password).await?;
+    let mut body = BytesMut::new();
+    request
+        .encode(&mut body, version)
+        .map_err(|e| io::Error::other(format!("{operation} encode: {e}")))?;
+    let response = round_trip(&mut stream, api_key, version, 4, client_id, true, &body).await?;
+    R::decode(&mut &response[..], version)
+        .map_err(|e| io::Error::other(format!("{operation} decode: {e}")))
+}
+
+/// Create one topic as the admin fixture, checking the entire response's cardinality.
+///
+/// # Panics
+/// Panics if authentication or creation fails, or the response has no unique topic row.
+pub async fn create_topic_as_super_user(
+    addr: SocketAddr,
+    client_id: &str,
+    name: &str,
+    partitions: i32,
+) {
+    let request = topics::create_topic_request(topic(name.to_string(), partitions, 1), 5_000);
+    let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
+        request_as_plain(
+            addr,
+            client_id,
+            ("admin", b"admin-secret"),
+            &request,
+            (19, 7),
+            "CreateTopics",
+        )
+        .await
+        .expect("CreateTopics as super-user must round-trip");
+    assert!(response.topics.len() == 1, "one topic in response");
+    assert!(
+        response.topics[0].error_code == 0,
+        "CreateTopics({name}) must succeed: {:?}",
+        response.topics[0].error_message
+    );
+}
+
 /// Authenticates an open connection with SASL/PLAIN: `ApiVersions` v0, then
 /// `SaslHandshake` v1 for `PLAIN`, then `SaslAuthenticate` v2 carrying
 /// `\0user\0password`, on correlation ids 1, 2 and 3.
@@ -197,24 +247,20 @@ pub async fn sasl_plain_authenticate_on<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut av_body = BytesMut::new();
-    ApiVersionsRequest::default()
-        .encode(&mut av_body, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
+    let av_body = encode_named(&ApiVersionsRequest::default(), 0, "ApiVersions")?;
     let av_resp = round_trip(stream, API_VERSIONS_KEY, 0, 1, client_id, false, &av_body).await?;
-    ApiVersionsResponse::decode(&mut &av_resp[..], 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
+    decode_named::<ApiVersionsResponse>(&av_resp, 0, "ApiVersions")?;
 
-    let mut sh_body = BytesMut::new();
-    SaslHandshakeRequest {
-        mechanism: "PLAIN".to_string(),
-        ..Default::default()
-    }
-    .encode(&mut sh_body, 1)
-    .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
+    let sh_body = encode_named(
+        &SaslHandshakeRequest {
+            mechanism: "PLAIN".to_string(),
+            ..Default::default()
+        },
+        1,
+        "SaslHandshake",
+    )?;
     let sh_resp = round_trip(stream, 17, 1, 2, client_id, false, &sh_body).await?;
-    let sh_resp = SaslHandshakeResponse::decode(&mut &sh_resp[..], 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
+    let sh_resp = decode_named::<SaslHandshakeResponse>(&sh_resp, 1, "SaslHandshake")?;
     if sh_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SaslHandshake failed: error_code={}",
@@ -223,16 +269,16 @@ where
     }
 
     let payload = crate::kafka_wire::plain_payload(user, password);
-    let mut auth_body = BytesMut::new();
-    SaslAuthenticateRequest {
-        auth_bytes: payload,
-        ..Default::default()
-    }
-    .encode(&mut auth_body, 2)
-    .map_err(|e| io::Error::other(format!("SaslAuthenticate encode: {e}")))?;
+    let auth_body = encode_named(
+        &SaslAuthenticateRequest {
+            auth_bytes: payload,
+            ..Default::default()
+        },
+        2,
+        "SaslAuthenticate",
+    )?;
     let auth_resp = round_trip(stream, 36, 2, 3, client_id, true, &auth_body).await?;
-    let auth_resp = SaslAuthenticateResponse::decode(&mut &auth_resp[..], 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate decode: {e}")))?;
+    let auth_resp = decode_named::<SaslAuthenticateResponse>(&auth_resp, 2, "SaslAuthenticate")?;
     if auth_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SaslAuthenticate failed: error_code={} message={:?}",
@@ -240,6 +286,31 @@ where
         )));
     }
     Ok(())
+}
+
+/// Encode a typed body with the caller's original operation-labelled error.
+///
+/// # Errors
+/// Returns the codec failure with its operation and encoding phase.
+pub fn encode_named<Q: Encode>(request: &Q, version: i16, operation: &str) -> io::Result<Bytes> {
+    let mut body = BytesMut::new();
+    request
+        .encode(&mut body, version)
+        .map_err(|error| io::Error::other(format!("{operation} encode: {error}")))?;
+    Ok(body.freeze())
+}
+
+/// Decode a typed body with its original operation-labelled error.
+///
+/// # Errors
+/// Returns the codec failure with its operation and decoding phase.
+pub fn decode_named<R: for<'de> Decode<'de>>(
+    mut body: &[u8],
+    version: i16,
+    operation: &str,
+) -> io::Result<R> {
+    R::decode(&mut body, version)
+        .map_err(|error| io::Error::other(format!("{operation} decode: {error}")))
 }
 
 /// Encode, exchange and decode a typed request using the caller's exact wire version.
@@ -268,6 +339,41 @@ where
     R::decode(&mut &bytes[..], version).map_err(io::Error::other)
 }
 
+/// Send one typed raw request on a fresh connection, retaining its encoded body length.
+///
+/// # Panics
+/// Panics on encoding, connection, framing or response-decoding failure, as the raw fixtures do.
+pub async fn request_once<Q, R>(
+    addr: SocketAddr,
+    request: &Q,
+    api: (i16, i16),
+    client_id: &str,
+    header: (i32, bool),
+) -> (usize, R)
+where
+    Q: Encode,
+    R: for<'de> Decode<'de>,
+{
+    let (api_key, version) = api;
+    let (correlation_id, flexible) = header;
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).unwrap();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let response = round_trip(
+        &mut stream,
+        api_key,
+        version,
+        correlation_id,
+        client_id,
+        flexible,
+        &body,
+    )
+    .await
+    .unwrap();
+    let response = R::decode(&mut &response[..], version).unwrap();
+    (body.len(), response)
+}
+
 /// PLAIN's empty authorization id followed by the user and password.
 pub fn plain_payload(user: &str, password: &[u8]) -> Bytes {
     let mut payload = Vec::with_capacity(2 + user.len() + password.len());
@@ -278,20 +384,6 @@ pub fn plain_payload(user: &str, password: &[u8]) -> Bytes {
     Bytes::from(payload)
 }
 
-/// A topic with automatic placement and the requested partition geometry.
-pub fn topic(
-    name: &str,
-    partitions: i32,
-    replication_factor: i16,
-) -> krabka_protocol::owned::create_topics_request::CreatableTopic {
-    krabka_protocol::owned::create_topics_request::CreatableTopic {
-        name: name.to_string(),
-        num_partitions: partitions,
-        replication_factor,
-        ..Default::default()
-    }
-}
-
 /// Create exactly one topic on an open connection, checking the whole response row's status.
 pub async fn create_topic_on(
     stream: &mut TcpStream,
@@ -299,11 +391,7 @@ pub async fn create_topic_on(
     topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
 ) {
     let name = topic.name.clone();
-    let request = krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
-        topics: vec![topic],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    let request = topics::create_topic_request(topic, 5_000);
     let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
         exchange(stream, &request, 19, 7, 1, client_id, true)
             .await
@@ -349,35 +437,10 @@ pub async fn sasl_scram_authenticate_on(
     .await?;
 
     // ── 2. SaslHandshake v1 (non-flexible).
-    let sh_resp: SaslHandshakeResponse = exchange(
-        stream,
-        &SaslHandshakeRequest {
-            mechanism: mechanism.wire_name().to_string(),
-            ..Default::default()
-        },
-        17,
-        1,
-        2,
-        client_id,
-        false,
-    )
-    .await?;
-    if sh_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslHandshake failed: error_code={}",
-            sh_resp.error_code
-        )));
-    }
+    sasl_handshake_on(stream, client_id, 2, mechanism.wire_name()).await?;
 
     // ── 3. SCRAM client-first → server-first.
-    let client = krabka_security::ScramClientExchange::new(
-        user.to_string(),
-        password.as_bytes().to_vec(),
-        mechanism,
-    );
-    let (client_first, client) = client
-        .client_first()
-        .map_err(|e| io::Error::other(format!("scram client_first: {e:?}")))?;
+    let (client_first, client) = krabka_macros::scram_client_first!(user, password, mechanism)?;
     let scram_first_response =
         sasl_authenticate_on(stream, client_id, 3, Bytes::from(client_first)).await?;
     if scram_first_response.error_code != 0 {
@@ -406,6 +469,38 @@ pub async fn sasl_scram_authenticate_on(
         .verify_server_final(&scram_final_response.auth_bytes)
         .map_err(|e| io::Error::other(format!("server-final verify: {e:?}")))?;
 
+    Ok(())
+}
+
+/// A successful v1 handshake on an existing SASL session.
+pub async fn sasl_handshake_on<S>(
+    stream: &mut S,
+    client_id: &str,
+    corr_id: i32,
+    mechanism: &str,
+) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let response: SaslHandshakeResponse = exchange(
+        stream,
+        &SaslHandshakeRequest {
+            mechanism: mechanism.to_string(),
+            ..Default::default()
+        },
+        17,
+        1,
+        corr_id,
+        client_id,
+        false,
+    )
+    .await?;
+    if response.error_code != 0 {
+        return Err(io::Error::other(format!(
+            "SaslHandshake failed: error_code={}",
+            response.error_code
+        )));
+    }
     Ok(())
 }
 
@@ -442,25 +537,7 @@ pub async fn sasl_plain_reauthenticate_on(
     password: &[u8],
 ) -> Result<SaslAuthenticateResponse, io::Error> {
     *corr += 1;
-    let sh_resp: SaslHandshakeResponse = exchange(
-        stream,
-        &SaslHandshakeRequest {
-            mechanism: "PLAIN".to_string(),
-            ..Default::default()
-        },
-        17,
-        1,
-        *corr,
-        client_id,
-        false,
-    )
-    .await?;
-    if sh_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslHandshake failed: error_code={}",
-            sh_resp.error_code
-        )));
-    }
+    sasl_handshake_on(stream, client_id, *corr, "PLAIN").await?;
 
     let payload = plain_payload(user, password);
     *corr += 1;
@@ -482,57 +559,42 @@ pub fn produce_records(
         })
         .collect();
 
-    ProduceRequest {
-        acks: 1,
-        timeout_ms: 30_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(
-                    RecordBatch {
-                        last_offset_delta: i32::try_from(count - 1).unwrap(),
-                        records,
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
+    produce::single_partition_produce(
+        topic.to_string(),
+        krabka_protocol::primitives::uuid::Uuid::default(),
+        0,
+        Some(
+            RecordBatch {
+                last_offset_delta: i32::try_from(count - 1).unwrap(),
+                records,
                 ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+            }
+            .into(),
+        ),
+        (1, 30_000),
+    )
 }
 
 /// Build an all-ISR Produce request with one record.
 pub fn single_record_produce_request(topic: &str, partition: i32, value: &[u8]) -> ProduceRequest {
-    ProduceRequest {
-        transactional_id: None,
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: partition,
-                records: Some(
-                    RecordBatch {
-                        last_offset_delta: 0,
-                        records: vec![Record {
-                            offset_delta: 0,
-                            value: Some(bytes::Bytes::copy_from_slice(value)),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
+    produce::single_partition_produce(
+        topic.to_string(),
+        krabka_protocol::primitives::uuid::Uuid::default(),
+        partition,
+        Some(
+            RecordBatch {
+                last_offset_delta: 0,
+                records: vec![Record {
+                    offset_delta: 0,
+                    value: Some(bytes::Bytes::copy_from_slice(value)),
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+            }
+            .into(),
+        ),
+        (-1, 5_000),
+    )
 }
 
 pub async fn elect_leaders(
@@ -562,16 +624,7 @@ pub async fn elect_leaders(
         resp.error_code
     );
 
-    resp.replica_election_results
-        .into_iter()
-        .find(|r| r.topic == topic)
-        .map(|r| {
-            r.partition_result
-                .into_iter()
-                .map(|p| (p.partition_id, p.error_code))
-                .collect()
-        })
-        .unwrap_or_default()
+    crate::support::admin::election_partition_errors(resp, topic)
 }
 
 pub async fn create_topic_plaintext(
@@ -581,4 +634,97 @@ pub async fn create_topic_plaintext(
 ) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     create_topic_on(&mut stream, client_id, topic).await;
+}
+
+/// Create an automatically placed topic as the native admin fixture principal.
+pub async fn create_topic_as_admin(
+    addr: SocketAddr,
+    client_id: &str,
+    name: &str,
+    partitions: i32,
+    replication_factor: i16,
+) {
+    create_topic_sasl(
+        addr,
+        client_id,
+        ("admin", b"admin-secret"),
+        topic(name, partitions, replication_factor),
+    )
+    .await;
+}
+
+/// Create a topic on a fresh plaintext connection with the original connect diagnostic.
+///
+/// # Panics
+/// Panics if the connection fails or the topic creation is rejected.
+pub async fn create_topic_on_fresh_connection(
+    addr: SocketAddr,
+    client_id: &str,
+    topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
+) {
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    create_topic_on(&mut stream, client_id, topic).await;
+}
+
+/// Create an automatically placed topic over plaintext.
+pub async fn create_automatic_topic_plaintext(
+    addr: SocketAddr,
+    client_id: &str,
+    name: &str,
+    partitions: i32,
+    replication_factor: i16,
+) {
+    create_topic_on_fresh_connection(addr, client_id, topic(name, partitions, replication_factor))
+        .await;
+}
+
+/// Create one partition with an explicit ordered assignment over plaintext.
+pub async fn create_assigned_topic_plaintext(
+    addr: SocketAddr,
+    client_id: &str,
+    name: &str,
+    replicas: &[i32],
+) {
+    create_topic_on_fresh_connection(addr, client_id, crate::support::topic_on(name, &[replicas]))
+        .await;
+}
+
+/// Elect named partitions over a new plaintext connection and retain the top-level oracle.
+///
+/// # Panics
+/// Panics if the connection, election round-trip or top-level election check fails.
+pub async fn elect_leaders_plaintext(
+    addr: SocketAddr,
+    client_id: &str,
+    topic: &str,
+    partitions: Vec<i32>,
+    election_type: i8,
+) -> Vec<(i32, i16)> {
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    elect_leaders(&mut stream, client_id, topic, partitions, election_type).await
+}
+
+/// Authenticate with one client id and send Produce v11 with the requested wire id.
+///
+/// # Panics
+/// Panics if record construction, SASL authentication, encoding or the wire exchange fails.
+pub async fn produce_sasl_with_ids(
+    addr: SocketAddr,
+    client_ids: (&str, &str),
+    credentials: (&str, &[u8]),
+    records: (&str, usize, usize),
+) -> krabka_protocol::owned::produce_response::ProduceResponse {
+    const VERSION: i16 = 11;
+    let req = produce_records(records.0, records.1, records.2);
+    let mut stream = sasl_plain_authenticate(addr, client_ids.0, credentials.0, credentials.1)
+        .await
+        .expect("SASL authenticate for Produce");
+    let mut body = BytesMut::new();
+    req.encode(&mut body, VERSION).expect("encode Produce");
+    let resp_bytes = round_trip(&mut stream, 0, VERSION, 1, client_ids.1, true, &body)
+        .await
+        .expect("Produce round-trip");
+    let mut cur: &[u8] = &resp_bytes;
+    krabka_protocol::owned::produce_response::ProduceResponse::decode(&mut cur, VERSION)
+        .expect("decode ProduceResponse")
 }

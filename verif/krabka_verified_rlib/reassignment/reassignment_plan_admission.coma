@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/reassignment.rs" 52 0 56 9 *)
+(* #"/workspace/crates/verified/src/reassignment.rs" 48 0 52 9 *)
 
-let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 63 12 63 49
-let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 65 12 65 68
-let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 60 4 66 9
-let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 42 10 50 1
+let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 59 12 59 49
+let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 61 12 61 68
+let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 56 4 62 9
+let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 38 10 46 1
 
 use creusot.prelude.Any
 
@@ -15,7 +15,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reassignment_plan_admission [#"/workspace/crates/verified/src/reassignment.rs" 52 0 56 9]
+let reassignment_plan_admission [#"/workspace/crates/verified/src/reassignment.rs" 48 0 52 9]
   (mode: tup3_bool_bool_bool) (start: tup2_bool_bool) (readiness: tup2_bool_bool) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &is_cancel <- mode.f0 ] s1

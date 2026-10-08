@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_frontier_reaches": { "prover": "alt-ergo", "time": 0.003 }
+      "vc_frontier_reaches": { "prover": "alt-ergo", "time": 0.009 }
     }
   }
 }

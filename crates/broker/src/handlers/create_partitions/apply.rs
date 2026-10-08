@@ -3,10 +3,10 @@
 //! Local replicas open through [`crate::handlers::partition_materialization`],
 //! which installs the same initial leader and ISR that these records name.
 
-use krabka_metadata::{MetadataRecord, PartitionRecord};
+use krabka_metadata::MetadataRecord;
 use krabka_raft::NodeId;
 
-use crate::handlers::create_topics::{INITIAL_LEADER_EPOCH, InitialLeadership};
+use crate::handlers::create_topics::InitialLeadership;
 
 pub(super) fn partition_records(
     topic: &str,
@@ -19,20 +19,7 @@ pub(super) fn partition_records(
     indices
         .iter()
         .zip(assignments.iter().zip(leaderships))
-        .map(|(index, (replicas, leadership))| {
-            MetadataRecord::V1Partition(PartitionRecord {
-                topic: topic.to_string(),
-                partition: *index,
-                leader: leadership.leader,
-                replicas: replicas.clone(),
-                isr: leadership.isr.clone(),
-                leader_epoch: krabka_metadata::LeaderEpoch(INITIAL_LEADER_EPOCH),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            })
-        })
+        .map(|(index, (replicas, leadership))| leadership.partition_record(topic, *index, replicas))
         .collect()
 }
 

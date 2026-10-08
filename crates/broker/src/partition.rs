@@ -66,6 +66,60 @@ pub(crate) use self::{
 /// shows which `i64`s in signatures are offsets and not timestamps or counts.
 pub type LogOffset = i64;
 
+/// Writer sizing and diskless services shared by startup and first-touch materialization.
+pub(crate) struct PartitionRuntimeConfig {
+    pub max_produce_group: usize,
+    pub partition_writer_queue_depth: usize,
+    pub diskless_wal_local_replica_count: usize,
+    pub diskless: bool,
+    pub hot_tail: Option<Arc<crate::diskless::hot_tail::HotTailCache>>,
+    pub wal_shards: Option<Arc<crate::wal::quorum::registry::WalShardRegistry>>,
+    pub sequencer: Option<Arc<dyn crate::wal::OffsetSequencer>>,
+}
+
+type PartitionWalServices = (
+    Option<Arc<crate::diskless::hot_tail::HotTailCache>>,
+    Option<Arc<crate::wal::quorum::registry::WalShardRegistry>>,
+    Option<Arc<dyn crate::wal::OffsetSequencer>>,
+);
+
+impl PartitionRuntimeConfig {
+    pub(crate) fn new(
+        writer_sizes: (usize, usize, usize),
+        diskless: bool,
+        services: PartitionWalServices,
+    ) -> Self {
+        let (max_produce_group, partition_writer_queue_depth, diskless_wal_local_replica_count) =
+            writer_sizes;
+        let (hot_tail, wal_shards, sequencer) = services;
+        Self {
+            max_produce_group,
+            partition_writer_queue_depth,
+            diskless_wal_local_replica_count,
+            diskless,
+            hot_tail,
+            wal_shards,
+            sequencer,
+        }
+    }
+
+    pub(crate) fn from_broker(
+        config: &crate::config::BrokerConfig,
+        diskless: bool,
+        services: PartitionWalServices,
+    ) -> Self {
+        Self::new(
+            (
+                config.max_produce_group,
+                config.partition_writer_queue_depth,
+                config.diskless_wal_local_replica_count,
+            ),
+            diskless,
+            services,
+        )
+    }
+}
+
 /// Runtime handle for a single partition.
 ///
 /// Cheap to clone. `log`, `writer_tx`, and `append_notify` are all `Arc`-ish,
@@ -125,7 +179,73 @@ pub struct Partition {
     pub(crate) writer_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
+/// New partitions begin with no transaction-marker resolutions owed to group actors.
+pub(crate) fn empty_marker_materialization() -> Arc<tokio::sync::Mutex<OwedMarkerResolutions>> {
+    Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::default()))
+}
+
 impl Partition {
+    /// The complete checkpoint history, without changing the test's independent expected rows.
+    #[cfg(test)]
+    pub(crate) fn epoch_history(&self) -> Vec<(i32, i64)> {
+        test_support::epoch_history(&self.log.lock().unwrap())
+    }
+
+    /// A disk-backed fixture with the ordinary eight-slot writer channel and zeroed leader state.
+    /// The caller opens the log and selects the exact writer entry point; the writer and partition
+    /// share the delivery handles whose mirror the writer refreshes.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub(crate) fn writer_fixture(
+        topic: &str,
+        log: Arc<Mutex<Log>>,
+        log_dir: Arc<ArcSwap<PathBuf>>,
+        spawn: impl FnOnce(
+            (String, PartitionIndex),
+            (Arc<Mutex<Log>>, Arc<ArcSwap<PathBuf>>),
+            mpsc::Receiver<WriterMessage>,
+            (
+                Arc<Notify>,
+                Arc<tokio::sync::Mutex<ReplicaState>>,
+                Arc<Notify>,
+                DeliveryHandles,
+            ),
+        ) -> JoinHandle<()>,
+    ) -> Self {
+        let (writer_tx, rx) = mpsc::channel::<WriterMessage>(8);
+        let append_notify = Arc::new(Notify::new());
+        let replica_state = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
+        let hw_advance_notify = Arc::new(Notify::new());
+        let delivery = DeliveryHandles::new();
+        let writer = spawn(
+            (topic.to_string(), PartitionIndex(0)),
+            (log.clone(), log_dir.clone()),
+            rx,
+            (
+                append_notify.clone(),
+                replica_state.clone(),
+                hw_advance_notify.clone(),
+                delivery.clone(),
+            ),
+        );
+        Self {
+            topic: topic.to_string(),
+            index: PartitionIndex(0),
+            log_dir,
+            log,
+            writer_tx,
+            marker_materialization: empty_marker_materialization(),
+            append_notify,
+            replica_state,
+            hw_advance_notify,
+            current_leader: Arc::new(AtomicU64::new(0)),
+            current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery,
+            replication_target: initial_replication_target(None),
+            diskless: false,
+            writer_handle: Arc::new(Mutex::new(Some(writer))),
+        }
+    }
+
     /// Next offset the underlying [`Log`] will assign. Cheap: takes the
     /// `Arc<Mutex<Log>>` briefly. Replicators call this before each Fetch
     /// to compute `fetch_offset`.

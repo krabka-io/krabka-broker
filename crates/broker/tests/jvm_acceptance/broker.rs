@@ -10,10 +10,42 @@ use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
 
 use super::ports::{broker0_advertised, broker0_listen, controller_addr_0};
 
+pub(crate) type HostBroker = (krabka_broker::BrokerHandle, tempfile::TempDir);
+
+/// Single-node JVM listener configuration on the caller's log directory.
+pub(crate) fn host_broker_config(dir: &Path, client_context: &str) -> BrokerConfig {
+    let listen = broker0_listen().parse().expect(client_context);
+    let controller = controller_addr_0().parse().expect("allocated addr");
+    crate::support::jvm_broker_config(
+        1,
+        listen,
+        controller,
+        broker0_advertised(),
+        dir.to_path_buf(),
+        &[(1, controller)],
+    )
+}
+
+/// A plain broker and one topic created by the stock JVM admin client.
+pub(crate) async fn start_console_broker(topic: &str, partitions: i32) -> HostBroker {
+    let fixture = start_host_broker().await;
+    super::docker::nc_check_connectivity();
+    super::docker::create_console_topic(super::docker::KAFKA_IMAGE, &[], topic, partitions, 1);
+    fixture
+}
+
+/// The console fixture with legacy protocol versions enabled.
+pub(crate) async fn start_legacy_console_broker(topic: &str) -> HostBroker {
+    let fixture = start_legacy_host_broker().await;
+    super::docker::nc_check_connectivity();
+    super::docker::create_console_topic(super::docker::KAFKA_IMAGE, &[], topic, 1, 1);
+    fixture
+}
+
 /// Spawn the broker on `broker0_listen()`. The advertised listener is
 /// an allocated port. Inside the cp-kafka containers, the test
 /// adds a hosts entry that points that name at the bridge gateway.
-pub(crate) async fn start_host_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_host_broker() -> HostBroker {
     start_host_broker_with(|_| {}).await
 }
 
@@ -21,7 +53,7 @@ pub(crate) async fn start_host_broker() -> (krabka_broker::BrokerHandle, tempfil
 /// (`[runtime] legacy_request_versions_enable`). The pre-4.0 clients of the
 /// legacy suite send the Fetch, `ListOffsets` and Produce versions Kafka 4.x
 /// refuses, which strict 4.3.1 mode refuses too.
-pub(crate) async fn start_legacy_host_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_legacy_host_broker() -> HostBroker {
     start_host_broker_with(|config| {
         config.features.legacy_request_versions =
             krabka_broker::api_catalog::LegacyRequestVersions::Enabled;
@@ -35,9 +67,7 @@ pub(crate) async fn start_legacy_host_broker() -> (krabka_broker::BrokerHandle, 
 /// hostable here: the defaults ask for 50 partitions at replication factor 3,
 /// which one node cannot satisfy, so the partition a key hashes to may never
 /// open.
-pub(crate) async fn start_host_broker_with(
-    adjust: impl FnOnce(&mut BrokerConfig),
-) -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_host_broker_with(adjust: impl FnOnce(&mut BrokerConfig)) -> HostBroker {
     let dir = tempfile::tempdir().expect("tempdir");
     let handle = start_host_broker_in_with(dir.path(), adjust).await;
     (handle, dir)
@@ -59,19 +89,9 @@ async fn start_host_broker_in_with(
     adjust: impl FnOnce(&mut BrokerConfig),
 ) -> krabka_broker::BrokerHandle {
     crate::support::init_jvm_tracing("krabka_broker=debug,info");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
     let mut config = BrokerConfig {
         bootstrap_mode: bootstrap_mode(dir),
-        ..crate::support::jvm_broker_config(
-            1,
-            listen_addr,
-            controller_addr,
-            broker0_advertised(),
-            dir.to_path_buf(),
-            &[(1, controller_addr)],
-        )
+        ..host_broker_config(dir, "static addr")
     };
     adjust(&mut config);
     let handle = Broker::start(config).await.expect("start broker");
@@ -109,20 +129,19 @@ pub(crate) async fn start_host_broker_jbod() -> (
     crate::support::init_jvm_tracing("krabka_broker=debug,info");
     let primary = tempfile::tempdir().expect("tempdir");
     let extra = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
         extra_log_dirs: vec![extra.path().to_path_buf()],
-        ..crate::support::jvm_broker_config(
-            1,
-            listen_addr,
-            controller_addr,
-            broker0_advertised(),
-            primary.path().to_path_buf(),
-            &[(1, controller_addr)],
-        )
+        ..host_broker_config(primary.path(), "static addr")
     };
     let handle = Broker::start(config).await.expect("start broker");
     (handle, primary, extra)
+}
+
+/// Create a group by producing and committing one record through the JVM console clients.
+pub(crate) async fn start_console_group(topic: &str, group: &str, partitions: i32) -> HostBroker {
+    let broker = start_console_broker(topic, partitions).await;
+    let _ =
+        super::docker::produce_console(super::docker::KAFKA_IMAGE, &[], topic, false, b"alpha\n");
+    super::docker::consume_console_group(topic, group, 1, 10_000);
+    broker
 }

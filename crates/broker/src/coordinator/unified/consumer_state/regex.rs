@@ -191,25 +191,9 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::consumer_state::test_support::member;
-
-    fn resolved(topics: &[&str], version: i64, timestamp_ms: i64) -> ResolvedRegularExpression {
-        ResolvedRegularExpression {
-            topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
-            version,
-            timestamp_ms,
-        }
-    }
-
-    fn group_with_regexes(subscriptions: &[(&str, Option<&str>)]) -> GroupState {
-        let mut group = GroupState::new("g");
-        for (member_id, regex) in subscriptions {
-            let mut m = member(member_id);
-            m.subscribed_topic_regex = regex.map(str::to_owned);
-            group.add_or_update_member(m);
-        }
-        group
-    }
+    use crate::coordinator::unified::consumer_state::test_support::{
+        regex_group as group_with_regexes, resolved_regex as resolved,
+    };
 
     #[test]
     fn subscriptions_are_counted_per_regex() {

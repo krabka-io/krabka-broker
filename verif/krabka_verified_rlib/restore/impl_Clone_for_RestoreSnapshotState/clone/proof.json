@@ -4,7 +4,7 @@
     "Coma": {
       "vc_clone_RestoreSnapshotState": {
         "prover": "alt-ergo",
-        "time": 0.007
+        "time": 0.014
       }
     }
   }

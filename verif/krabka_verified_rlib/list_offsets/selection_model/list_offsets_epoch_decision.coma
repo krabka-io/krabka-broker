@@ -1,7 +1,7 @@
 (* #"/workspace/crates/verified/src/list_offsets/selection_model.rs" 48 0 51 29 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 52 23 52 24
 let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 54 33 54 35
 let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 41 10 41 87

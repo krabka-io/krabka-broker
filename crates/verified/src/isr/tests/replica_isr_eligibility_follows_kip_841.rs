@@ -151,8 +151,5 @@ fn isr_candidates_follow_kafkas_shrink_and_expand_rules() {
     ] {
         assert2::check!(isr_candidate_selected(facts) == expected, "{label}");
     }
-    assert2::check!(!isr_proposal_changed(0, 0));
-    assert2::check!(isr_proposal_changed(1, 0));
-    assert2::check!(isr_proposal_changed(0, 1));
-    assert2::check!(isr_proposal_changed(usize::MAX, usize::MAX));
+    check_proposal_changes();
 }

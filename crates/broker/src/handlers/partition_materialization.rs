@@ -51,17 +51,20 @@ impl PartitionMaterialization<'_> {
                 log_config: &broker.config.log_config,
                 log_dir_status: &broker.log_dir_status,
                 producer_state: &broker.producer_state,
-                max_produce_group: broker.config.max_produce_group,
-                partition_writer_queue_depth: broker.config.partition_writer_queue_depth,
-                diskless_wal_local_replica_count: broker.config.diskless_wal_local_replica_count,
-                diskless: self.diskless,
-                hot_tail: Some(broker.hot_tail.clone()),
-                wal_shards: Some(broker.wal_shards.clone()),
-                sequencer: self.diskless.then(|| {
-                    std::sync::Arc::new(crate::wal::ControllerSequencer::new(
-                        broker.controller.clone(),
-                    )) as std::sync::Arc<dyn crate::wal::OffsetSequencer>
-                }),
+                runtime: crate::partition::PartitionRuntimeConfig::from_broker(
+                    &broker.config,
+                    self.diskless,
+                    (
+                        Some(broker.hot_tail.clone()),
+                        Some(broker.wal_shards.clone()),
+                        self.diskless.then(|| {
+                            std::sync::Arc::new(crate::wal::ControllerSequencer::new(
+                                broker.controller.clone(),
+                            ))
+                                as std::sync::Arc<dyn crate::wal::OffsetSequencer>
+                        }),
+                    ),
+                ),
             }) {
                 tracing::error!(topic, partition = index, error = %error,
                     "{operation}: materialize after quorum commit failed");

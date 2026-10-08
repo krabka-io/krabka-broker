@@ -32,6 +32,27 @@ pub const ABORT_CONTROL_TYPE: i16 = 0;
 /// Control-record type of Kafka's COMMIT end marker.
 pub const COMMIT_CONTROL_TYPE: i16 = 1;
 
+/// Whether the first control key closes a transaction as an abort or commit.
+pub(super) fn transaction_marker_flags(batch: &RecordBatch) -> (bool, bool) {
+    let marker = batch
+        .records
+        .first()
+        .and_then(|record| record.key.as_deref())
+        .and_then(parse_control_marker_type);
+    (
+        marker == Some(ABORT_CONTROL_TYPE),
+        marker == Some(COMMIT_CONTROL_TYPE),
+    )
+}
+
+pub(super) fn marker_coordinator_epoch(batch: &RecordBatch) -> Option<i32> {
+    batch
+        .records
+        .first()
+        .and_then(|record| record.value.as_deref())
+        .and_then(parse_control_marker_coordinator_epoch)
+}
+
 /// What the log does with one control batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlBatchKind {
@@ -106,18 +127,16 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::LogConfig,
         log::{
             Log,
             test_support::{
                 PartitionState, abort_marker, barrier_marker, barrier_marker_from_producer,
-                commit_marker, compaction_ctx, keyed_batch, partition_state, sample_batch,
-                test_log, tiny_segments, transactional_batch,
+                commit_marker, compact_test_log, compaction_ctx, keyed_batch, partition_state,
+                sample_batch, test_log, transactional_batch,
             },
         },
         producer_snapshot::ProducerSnapshotEntry,
         segment::Segment,
-        txn_index::AbortedTxn,
     };
 
     /// An end marker's coordinator epoch is bytes 2..6 of its value, and a
@@ -169,6 +188,12 @@ mod tests {
         }
     }
 
+    fn append_open_barrier_transaction(log: &mut Log) {
+        let mut data = transactional_batch(1000, 2, &["a", "b"]);
+        data.base_sequence = 0;
+        log.append(&mut data).unwrap(); // offsets 0 and 1
+    }
+
     // ---- barrier-marker tests ----
 
     /// A barrier marker changes no transaction state and no producer state
@@ -186,15 +211,9 @@ mod tests {
                 barrier_marker_from_producer("nightly", 7, 1000, 2),
             ),
         ] {
-            let (_dir, mut log) = test_log();
-            log.set_stamp_source(std::sync::Arc::new(
-                crate::stamp_source::MonotonicStampSource::new(40, 1),
-            ))
-            .unwrap();
+            let (_dir, mut log) = crate::log::test_support::stamped_test_log(40, 1);
 
-            let mut data = transactional_batch(1000, 2, &["a", "b"]);
-            data.base_sequence = 0;
-            log.append(&mut data).unwrap(); // offsets 0 and 1
+            append_open_barrier_transaction(&mut log);
             let before = partition_state(&log, &[1000, -1]);
 
             log.append(&mut barrier).unwrap(); // offset 2
@@ -262,24 +281,13 @@ mod tests {
             (
                 "abort",
                 abort_marker(1000, 2),
-                vec![AbortedTxn {
-                    start_offset: Offset(0),
-                    last_offset: Offset(3),
-                    producer_id: ProducerId(1000),
-                    last_stable_offset: Offset(4),
-                }],
+                vec![crate::test_support::aborted_txn(1000, 0, 3, 4)],
                 vec![None, None, None, None],
             ),
         ] {
-            let (_dir, mut log) = test_log();
-            log.set_stamp_source(std::sync::Arc::new(
-                crate::stamp_source::MonotonicStampSource::new(40, 1),
-            ))
-            .unwrap();
+            let (_dir, mut log) = crate::log::test_support::stamped_test_log(40, 1);
 
-            let mut data = transactional_batch(1000, 2, &["a", "b"]);
-            data.base_sequence = 0;
-            log.append(&mut data).unwrap(); // offsets 0 and 1
+            append_open_barrier_transaction(&mut log);
             log.append(&mut barrier_marker("nightly", 9)).unwrap(); // offset 2
             check!(
                 log.lso() == Offset(0),
@@ -312,7 +320,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let ids = [1000, 2000, 3000, -1];
         let before = {
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let mut log = crate::test_support::open_log(dir.path());
             log.append(&mut barrier_marker("nightly", 1)).unwrap(); // 0
 
             let mut committed = transactional_batch(1000, 2, &["a"]);
@@ -342,7 +350,7 @@ mod tests {
         // transaction of producer 1000 still holds the LSO at its first offset.
         check!(before.lso == Offset(1));
 
-        let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut reopened = crate::test_support::open_log(dir.path());
         check!(partition_state(&reopened, &ids) == before);
         check!(reopened.log_end_offset() == Offset(10));
         // Once the high watermark passes both markers, the open transaction of
@@ -358,22 +366,16 @@ mod tests {
     fn a_barrier_marker_keeps_stamp_ranges_across_a_restart() {
         let dir = tempdir().unwrap();
         {
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-            let mut data = transactional_batch(1000, 2, &["a", "b"]);
-            data.base_sequence = 0;
-            log.append(&mut data).unwrap(); // offsets 0 and 1
+            let mut log = crate::test_support::open_log(dir.path());
+            append_open_barrier_transaction(&mut log);
             // A marker that carries the open transaction's producer id clears
             // no stamp range, on the append path or on the recovery path.
             log.append(&mut barrier_marker_from_producer("nightly", 5, 1000, 2))
                 .unwrap(); // offset 2
         }
 
-        let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
-        reopened
-            .set_stamp_source(std::sync::Arc::new(
-                crate::stamp_source::MonotonicStampSource::new(40, 1),
-            ))
-            .unwrap();
+        let mut reopened = crate::test_support::open_log(dir.path());
+        crate::log::test_support::install_stamps(&mut reopened, 40, 1);
         check!(reopened.lso() == Offset(0));
 
         reopened.append(&mut commit_marker(1000, 2)).unwrap(); // offset 3
@@ -390,12 +392,7 @@ mod tests {
     /// the dedup map.
     #[test]
     fn compaction_keeps_barrier_markers_and_never_indexes_their_key() {
-        let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            ..tiny_segments()
-        };
-        let mut log = Log::open(dir.path(), cfg).unwrap();
+        let (_dir, mut log) = compact_test_log();
         log.append(&mut keyed_batch(0, &[(0, b"k1", b"v0")]))
             .unwrap(); // 0
         log.append(&mut barrier_marker("nightly", 1)).unwrap(); // 1

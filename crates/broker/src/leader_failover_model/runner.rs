@@ -5,7 +5,6 @@
 //! exhaustive: a search that hit either cap proves nothing, and the two must
 //! be tuned together.
 
-use assert2::assert;
 use stateright::Checker;
 
 use super::{failover_state::FailoverModel, recovery_state::RecoveryModel};
@@ -51,20 +50,20 @@ pub(super) const PINNED_UNIQUE_STATES_WITNESS_ELR_UNCLEAN: usize = 532;
 
 pub(super) fn run_failover(model: FailoverModel, label: &str, pinned_unique_states: usize) {
     let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
+    crate::model_check::assert_pinned_count(
+        checker.unique_state_count(),
+        pinned_unique_states,
+        label,
     );
     checker.assert_properties();
 }
 
 pub(super) fn run_recovery(model: RecoveryModel, label: &str, pinned_unique_states: usize) {
     let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
+    crate::model_check::assert_pinned_count(
+        checker.unique_state_count(),
+        pinned_unique_states,
+        label,
     );
     checker.assert_properties();
 }

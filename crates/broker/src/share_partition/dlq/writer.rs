@@ -330,14 +330,8 @@ impl ProduceTransport for InterBrokerProduce {
         let broker = image
             .broker(node)
             .ok_or_else(|| format!("node {node} is not in the metadata image"))?;
-        let (host, port) = broker
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.name == self.listener.name)
-            .map_or_else(
-                || (broker.host.clone(), broker.port),
-                |endpoint| (endpoint.host.clone(), endpoint.port),
-            );
+        let (host, port) = crate::broker::registered_listener_endpoint(broker, &self.listener.name);
+        let host = host.to_owned();
         let connection = self
             .connections
             .get(node, || async {
@@ -856,23 +850,10 @@ mod tests {
             .collect()
     }
 
+    krabka_macros::share_dlq_meters! {
     /// What the meters of `group` count: the records written, the attempts to
     /// produce, and the writes that failed.
-    fn meters(metrics: &BrokerMetrics, group: &str) -> (u64, u64, u64) {
-        let label = crate::metrics::ShareGroupIdLabel {
-            group_id: group.to_owned(),
-        };
-        (
-            metrics.share_group_dlq_records.get_or_create(&label).get(),
-            metrics
-                .share_group_dlq_produce_requests
-                .get_or_create(&label)
-                .get(),
-            metrics
-                .share_group_dlq_failed_produce_requests
-                .get_or_create(&label)
-                .get(),
-        )
+        meters, BrokerMetrics, crate::metrics::ShareGroupIdLabel
     }
 
     /// Two writes for the same leader go out in one request, and each write

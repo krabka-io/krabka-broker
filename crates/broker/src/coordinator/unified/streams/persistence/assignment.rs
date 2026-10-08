@@ -23,15 +23,15 @@
 
 use std::collections::BTreeMap;
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::BufMut;
 use krabka_protocol::ProtocolError;
 
 use super::codec::{decode_task_map, encode_task_map};
 use crate::{
     coordinator::unified::{
         persistence::{
-            flex::{get_i8, put_empty_tagged_fields, skip_tagged_fields},
-            get_i16, get_i32,
+            flex::{get_i8, value_codec},
+            get_i32,
         },
         streams::state::StreamsMemberAssignmentState,
     },
@@ -95,25 +95,17 @@ pub struct StreamsGroupTargetAssignmentMemberValue {
     pub warmup: BTreeMap<String, Vec<i32>>,
 }
 
-impl StreamsGroupTargetAssignmentMemberValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        encode_task_map(&mut buf, &self.active);
-        encode_task_map(&mut buf, &self.standby);
-        encode_task_map(&mut buf, &self.warmup);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
+value_codec! {
+    StreamsGroupTargetAssignmentMemberValue,
+    encode(&self) -> buf {
+        encode_task_map(buf, &self.active);
+        encode_task_map(buf, &self.standby);
+        encode_task_map(buf, &self.warmup);
     }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let active = decode_task_map(&mut buf)?;
-        let standby = decode_task_map(&mut buf)?;
-        let warmup = decode_task_map(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
+    decode(buf) {
+        let active = decode_task_map(buf)?;
+        let standby = decode_task_map(buf)?;
+        let warmup = decode_task_map(buf)?;
         Ok(Self {
             active,
             standby,
@@ -139,37 +131,29 @@ pub struct StreamsGroupCurrentMemberAssignmentValue {
     pub warmup_pending_revocation: BTreeMap<String, Vec<i32>>,
 }
 
-impl StreamsGroupCurrentMemberAssignmentValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
+value_codec! {
+    StreamsGroupCurrentMemberAssignmentValue,
+    encode(&self) -> buf {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(self.state as i8);
-        encode_task_map(&mut buf, &self.active);
-        encode_task_map(&mut buf, &self.standby);
-        encode_task_map(&mut buf, &self.warmup);
-        encode_task_map(&mut buf, &self.active_pending_revocation);
-        encode_task_map(&mut buf, &self.standby_pending_revocation);
-        encode_task_map(&mut buf, &self.warmup_pending_revocation);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
+        encode_task_map(buf, &self.active);
+        encode_task_map(buf, &self.standby);
+        encode_task_map(buf, &self.warmup);
+        encode_task_map(buf, &self.active_pending_revocation);
+        encode_task_map(buf, &self.standby_pending_revocation);
+        encode_task_map(buf, &self.warmup_pending_revocation);
     }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let member_epoch = get_i32(&mut buf)?;
-        let previous_member_epoch = get_i32(&mut buf)?;
-        let state = StreamsMemberWireState::from_i8(get_i8(&mut buf)?)?;
-        let active = decode_task_map(&mut buf)?;
-        let standby = decode_task_map(&mut buf)?;
-        let warmup = decode_task_map(&mut buf)?;
-        let active_pending_revocation = decode_task_map(&mut buf)?;
-        let standby_pending_revocation = decode_task_map(&mut buf)?;
-        let warmup_pending_revocation = decode_task_map(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
+    decode(buf) {
+        let member_epoch = get_i32(buf)?;
+        let previous_member_epoch = get_i32(buf)?;
+        let state = StreamsMemberWireState::from_i8(get_i8(buf)?)?;
+        let active = decode_task_map(buf)?;
+        let standby = decode_task_map(buf)?;
+        let warmup = decode_task_map(buf)?;
+        let active_pending_revocation = decode_task_map(buf)?;
+        let standby_pending_revocation = decode_task_map(buf)?;
+        let warmup_pending_revocation = decode_task_map(buf)?;
         Ok(Self {
             member_epoch,
             previous_member_epoch,
@@ -189,10 +173,13 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::{
-        KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT, KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER,
-        StreamsGroupKey, encode_current_member_assignment_key, encode_target_assignment_member_key,
-        parse_streams_key, test_support::peek_version,
+    use crate::coordinator::unified::{
+        streams::persistence::{
+            KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT, KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER,
+            StreamsGroupKey, encode_current_member_assignment_key,
+            encode_target_assignment_member_key, parse_streams_key,
+        },
+        test_support::{peek_version, wire_bytes},
     };
 
     #[test]
@@ -204,15 +191,15 @@ mod tests {
             standby: BTreeMap::new(),
             warmup: BTreeMap::new(),
         };
-        let mut want: Vec<u8> = vec![0x00, 0x00];
-        want.push(0x02); // one ActiveTasks entry
-        want.extend_from_slice(b"\x020"); // SubtopologyId "0"
-        want.push(0x02); // one partition
-        want.extend_from_slice(&1i32.to_be_bytes());
-        want.push(0x00); // TaskIds tagged fields
-        want.push(0x01); // empty StandbyTasks
-        want.push(0x01); // empty WarmupTasks
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "0000", "02",   // one ActiveTasks entry
+            "0230", // SubtopologyId "0"
+            "02",   // one partition
+            "00000001", "00", // TaskIds tagged fields
+            "01", // empty StandbyTasks
+            "01", // empty WarmupTasks
+            "00", // message tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 
@@ -250,12 +237,14 @@ mod tests {
             state: StreamsMemberWireState::UnrevokedTasks,
             ..Default::default()
         };
-        let mut want: Vec<u8> = vec![0x00, 0x00];
-        want.extend_from_slice(&5i32.to_be_bytes());
-        want.extend_from_slice(&4i32.to_be_bytes());
-        want.push(0x02); // streams MemberState.UNREVOKED_TASKS
-        want.extend_from_slice(&[0x01; 6]); // six empty task lists
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "0000",
+            "00000005",
+            "00000004",
+            "02",           // streams MemberState.UNREVOKED_TASKS
+            "010101010101", // six empty task lists
+            "00",           // message tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 

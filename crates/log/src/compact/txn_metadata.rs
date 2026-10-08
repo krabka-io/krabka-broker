@@ -199,16 +199,20 @@ mod tests {
         meta.take_cleaned_index()
     }
 
+    fn aborted_steps(mut prefix: Vec<Step>) -> Vec<Step> {
+        prefix.extend([
+            Step::Data(data(1, 7, true), true),
+            Step::Control(control_batch(2, 7, ABORT), false),
+        ]);
+        prefix
+    }
+
     #[test]
     fn a_batch_of_an_aborted_transaction_is_discardable_and_holds_its_marker() {
         let kept = run(
             vec![aborted(7, 1, 2)],
-            vec![
-                // Before the transaction's first offset: committed data.
-                Step::Data(data(0, 7, true), false),
-                Step::Data(data(1, 7, true), true),
-                Step::Control(control_batch(2, 7, ABORT), false),
-            ],
+            // Before the transaction's first offset: committed data.
+            aborted_steps(vec![Step::Data(data(0, 7, true), false)]),
         );
         assert2::assert!(kept == vec![aborted(7, 1, 2)]);
     }
@@ -274,10 +278,7 @@ mod tests {
     fn an_aborted_transaction_added_twice_is_tracked_once() {
         let kept = run(
             vec![aborted(7, 1, 2), aborted(7, 1, 2)],
-            vec![
-                Step::Data(data(1, 7, true), true),
-                Step::Control(control_batch(2, 7, ABORT), false),
-            ],
+            aborted_steps(vec![]),
         );
         assert2::assert!(kept == vec![aborted(7, 1, 2)]);
     }

@@ -3,14 +3,16 @@ use assert2::assert;
 use super::*;
 use crate::retention::RemoteRetentionSegment;
 
-fn oracle(
+fn check_plan(
     current: i64,
     published: Option<i64>,
     allowed: bool,
     rows: &[(i64, i64, u64, bool)],
     debt: u64,
     outcomes: &[bool],
-) -> (Vec<RemoteRetentionSegment>, usize, usize, i64) {
+) {
+    let actual =
+        completed_remote_retention_bounds_floor(current, published, allowed, rows, debt, outcomes);
     let facts: Vec<_> = rows
         .iter()
         .map(|&(_, end, size, expired)| RemoteRetentionSegment {
@@ -61,21 +63,7 @@ fn oracle(
         .map(|row| row.1 + 1)
         .max()
         .map_or(current, |end| current.max(end));
-    (facts, planned, done, floor)
-}
-
-fn check_plan(
-    current: i64,
-    published: Option<i64>,
-    allowed: bool,
-    rows: &[(i64, i64, u64, bool)],
-    debt: u64,
-    outcomes: &[bool],
-) {
-    assert!(
-        completed_remote_retention_bounds_floor(current, published, allowed, rows, debt, outcomes)
-            == oracle(current, published, allowed, rows, debt, outcomes)
-    );
+    assert!(actual == (facts, planned, done, floor));
 }
 
 proptest! {

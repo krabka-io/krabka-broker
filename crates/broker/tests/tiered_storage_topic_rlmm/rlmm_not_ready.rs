@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use assert2::assert;
 use krabka_broker::RlmmKind;
-use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 
 use crate::{
     rlmm_cluster::{await_tiered_config, build_client, start_configured_topic_rlmm},
@@ -47,25 +46,12 @@ async fn copy_task_skips_tiering_while_rlmm_not_ready_case() {
     .await;
     let client = build_client(&broker).await;
 
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: crate::topic_fixture::tiered_configs(Some("1024")),
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics failed: {:?}",
-        resp.topics[0].error_message
-    );
+    crate::topic_fixture::create_configured_topic(
+        &client,
+        TOPIC,
+        crate::topic_fixture::tiered_configs(Some("1024")),
+    )
+    .await;
 
     // Wait for the tiered config to propagate into the partition's LogConfig
     // (same gate as the loopback round-trip test).

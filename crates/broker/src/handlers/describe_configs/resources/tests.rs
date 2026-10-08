@@ -7,11 +7,8 @@ use krabka_metadata::{
     BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
     TopicConfigRecord,
 };
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::describe_configs_response::{
-        DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
-    },
+use krabka_protocol::owned::describe_configs_response::{
+    DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
 };
 use uuid::Uuid;
 
@@ -97,10 +94,10 @@ fn with_topic(image: &MetadataImage, resource_type: i8, name: &str) -> MetadataI
     image
 }
 
-/// Describe one resource, served by `serving_node`, against a process that
-/// named none of its static broker keys and runs every logger at `info`.
+/// Describe one resource with the supplied node and static settings,
+/// while every logger runs at `info`.
 fn describe_at(
-    serving_node: krabka_metadata::NodeId,
+    (serving_node, static_broker): (krabka_metadata::NodeId, StaticBrokerConfigs<'_>),
     image: &MetadataImage,
     resource_type: i8,
     resource_name: &str,
@@ -110,15 +107,10 @@ fn describe_at(
     let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
     describe_one(
         image,
-        &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
-            resource_type,
-            resource_name: resource_name.to_owned(),
-            configuration_keys,
-            ..Default::default()
-        },
+        &resource_request(resource_type, resource_name, configuration_keys),
         ServingBroker {
             node: serving_node,
-            static_broker: untuned(),
+            static_broker,
             loggers: BrokerLoggers {
                 node_id: 1,
                 levels: &levels,
@@ -127,6 +119,33 @@ fn describe_at(
         },
         300_000,
         options,
+    )
+}
+
+/// The request and static settings are input fixtures; expected entry chains stay independent.
+fn resource_request(
+    resource_type: i8,
+    resource_name: &str,
+    configuration_keys: Option<Vec<String>>,
+) -> krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+    krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+        resource_type,
+        resource_name: resource_name.to_owned(),
+        configuration_keys,
+        ..Default::default()
+    }
+}
+
+fn settings_for<'a>(
+    (resource_type, resource_name): (i8, &str),
+    settings: &'a std::collections::BTreeMap<&'static str, String>,
+) -> (krabka_metadata::NodeId, StaticBrokerConfigs<'a>) {
+    (
+        serving_node_for(resource_type, resource_name),
+        StaticBrokerConfigs {
+            settings,
+            ..untuned()
+        },
     )
 }
 
@@ -145,7 +164,7 @@ fn describe(
     // missing or invalid name drive [`describe_at`] directly.
     let image = &with_topic(image, resource_type, resource_name);
     describe_at(
-        serving_node_for(resource_type, resource_name),
+        (serving_node_for(resource_type, resource_name), untuned()),
         image,
         resource_type,
         resource_name,
@@ -166,49 +185,11 @@ fn describe_with_loggers(
 ) -> DescribeConfigsResult {
     describe_one(
         image,
-        &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
-            resource_type,
-            resource_name: resource_name.to_owned(),
-            configuration_keys,
-            ..Default::default()
-        },
+        &resource_request(resource_type, resource_name, configuration_keys),
         ServingBroker {
             node: serving_node_for(resource_type, resource_name),
             static_broker: untuned(),
             loggers,
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
-        },
-        300_000,
-        options,
-    )
-}
-
-/// Describe one resource against a process that named some of its static
-/// broker keys.
-fn describe_with_static(
-    image: &MetadataImage,
-    resource_type: i8,
-    resource_name: &str,
-    configuration_keys: Option<Vec<String>>,
-    options: EntryOptions,
-    static_broker: StaticBrokerConfigs<'_>,
-) -> DescribeConfigsResult {
-    let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
-    describe_one(
-        image,
-        &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
-            resource_type,
-            resource_name: resource_name.to_owned(),
-            configuration_keys,
-            ..Default::default()
-        },
-        ServingBroker {
-            node: serving_node_for(resource_type, resource_name),
-            static_broker,
-            loggers: BrokerLoggers {
-                node_id: 1,
-                levels: &levels,
-            },
             unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
@@ -286,13 +267,33 @@ pub(super) fn entry_named<'a>(
         .unwrap_or_else(|| panic!("no `{name}` entry in {:?}", result.configs))
 }
 
-fn synonym(name: &str, value: &str, source: i8) -> DescribeConfigsSynonym {
-    DescribeConfigsSynonym {
+type ExpectedSynonymChain = (Option<String>, i8, Vec<DescribeConfigsSynonym>);
+
+fn expected_default_chain(key: &str, default: &str) -> ExpectedSynonymChain {
+    (
+        Some(default.to_owned()),
+        CONFIG_SOURCE_DEFAULT,
+        vec![synonym(key, default, CONFIG_SOURCE_DEFAULT)],
+    )
+}
+
+fn expected_named_static_chain(key: &str, value: &str, default: &str) -> ExpectedSynonymChain {
+    (
+        Some(value.to_owned()),
+        CONFIG_SOURCE_STATIC_BROKER,
+        vec![
+            synonym(key, value, CONFIG_SOURCE_STATIC_BROKER),
+            synonym(key, default, CONFIG_SOURCE_DEFAULT),
+        ],
+    )
+}
+
+pub(super) fn synonym(name: &str, value: &str, source: i8) -> DescribeConfigsSynonym {
+    tagged_wire!(DescribeConfigsSynonym {
         name: name.to_owned(),
         value: Some(value.to_owned()),
         source,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
+    })
 }
 
 fn image_with_broker_config(
@@ -353,7 +354,7 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
 
     assert!(
         result
-            == DescribeConfigsResult {
+            == tagged_wire!(DescribeConfigsResult {
                 error_code: crate::codes::NONE,
                 error_message: None,
                 resource_type: RESOURCE_TYPE_TOPIC,
@@ -361,28 +362,25 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
                 configs: vec![
                     // Set nowhere, so the key reports its default beneath
                     // the broker synonym Kafka names, `log.cleanup.policy`.
-                    DescribeConfigsResourceResult {
-                        name: config_keys::CLEANUP_POLICY.to_owned(),
-                        value: Some("delete".to_owned()),
-                        read_only: false,
-                        config_source: CONFIG_SOURCE_DEFAULT,
-                        is_sensitive: false,
-                        synonyms: vec![synonym(
+                    expected_config_entry(
+                        config_keys::CLEANUP_POLICY,
+                        Some("delete"),
+                        false,
+                        CONFIG_SOURCE_DEFAULT,
+                        vec![synonym(
                             "log.cleanup.policy",
                             "delete",
                             CONFIG_SOURCE_DEFAULT
                         )],
-                        config_type: ConfigType::List.wire(),
-                        documentation: Some(policy.doc.to_owned()),
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    },
-                    DescribeConfigsResourceResult {
-                        name: config_keys::RETENTION_MS.to_owned(),
-                        value: Some("60000".to_owned()),
-                        read_only: false,
-                        config_source: CONFIG_SOURCE_DYNAMIC_TOPIC,
-                        is_sensitive: false,
-                        synonyms: vec![
+                        ConfigType::List.wire(),
+                        Some(policy.doc.to_owned())
+                    ),
+                    expected_config_entry(
+                        config_keys::RETENTION_MS,
+                        Some("60000"),
+                        false,
+                        CONFIG_SOURCE_DYNAMIC_TOPIC,
+                        vec![
                             synonym(
                                 config_keys::RETENTION_MS,
                                 "60000",
@@ -390,19 +388,17 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
                             ),
                             synonym("log.retention.hours", "168", CONFIG_SOURCE_DEFAULT),
                         ],
-                        config_type: ConfigType::Long.wire(),
-                        documentation: Some(retention.doc.to_owned()),
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    },
+                        ConfigType::Long.wire(),
+                        Some(retention.doc.to_owned())
+                    ),
                     // Not set on the topic, so the cluster default wins and
                     // the built-in default sits below it.
-                    DescribeConfigsResourceResult {
-                        name: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_owned(),
-                        value: Some("true".to_owned()),
-                        read_only: false,
-                        config_source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
-                        is_sensitive: false,
-                        synonyms: vec![
+                    expected_config_entry(
+                        config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
+                        Some("true"),
+                        false,
+                        CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                        vec![
                             synonym(
                                 config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
                                 "true",
@@ -414,13 +410,11 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
                                 CONFIG_SOURCE_DEFAULT
                             ),
                         ],
-                        config_type: ConfigType::Boolean.wire(),
-                        documentation: Some(unclean.doc.to_owned()),
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    },
+                        ConfigType::Boolean.wire(),
+                        Some(unclean.doc.to_owned())
+                    ),
                 ],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
+            })
     );
 }
 
@@ -580,26 +574,24 @@ fn the_fixed_data_path_key_is_read_only_and_typed() {
 
     assert!(
         result.configs
-            == vec![DescribeConfigsResourceResult {
-                name: config_keys::DISKLESS.to_owned(),
-                value: Some("true".to_owned()),
-                read_only: true,
-                config_source: CONFIG_SOURCE_DYNAMIC_TOPIC,
-                is_sensitive: false,
-                synonyms: vec![synonym(
+            == vec![expected_config_entry(
+                config_keys::DISKLESS,
+                Some("true"),
+                true,
+                CONFIG_SOURCE_DYNAMIC_TOPIC,
+                vec![synonym(
                     config_keys::DISKLESS,
                     "true",
                     CONFIG_SOURCE_DYNAMIC_TOPIC
                 )],
-                config_type: ConfigType::Boolean.wire(),
-                documentation: Some(
+                ConfigType::Boolean.wire(),
+                Some(
                     registry::lookup(ConfigScope::Topic, config_keys::DISKLESS)
                         .expect("krabka.diskless")
                         .doc
                         .to_owned()
-                ),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }]
+                )
+            )]
     );
 }
 
@@ -629,13 +621,12 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
     assert!(
         result.configs
             == vec![
-                DescribeConfigsResourceResult {
-                    name: crate::throttle::LEADER_THROTTLED_RATE_KEY.to_owned(),
-                    value: Some("1024".to_owned()),
-                    read_only: false,
-                    config_source: CONFIG_SOURCE_DYNAMIC_BROKER,
-                    is_sensitive: false,
-                    synonyms: vec![
+                expected_config_entry(
+                    crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                    Some("1024"),
+                    false,
+                    CONFIG_SOURCE_DYNAMIC_BROKER,
+                    vec![
                         synonym(
                             crate::throttle::LEADER_THROTTLED_RATE_KEY,
                             "1024",
@@ -647,8 +638,8 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
                             CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER
                         ),
                     ],
-                    config_type: ConfigType::Long.wire(),
-                    documentation: Some(
+                    ConfigType::Long.wire(),
+                    Some(
                         registry::lookup(
                             ConfigScope::Broker,
                             crate::throttle::LEADER_THROTTLED_RATE_KEY
@@ -656,25 +647,22 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
                         .expect("leader.replication.throttled.rate")
                         .doc
                         .to_owned()
-                    ),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: NODE_ID.to_owned(),
-                    value: Some("2".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_STATIC_BROKER,
-                    is_sensitive: false,
-                    synonyms: vec![synonym(NODE_ID, "2", CONFIG_SOURCE_STATIC_BROKER)],
-                    config_type: ConfigType::Int.wire(),
-                    documentation: Some(
+                    )
+                ),
+                expected_config_entry(
+                    NODE_ID,
+                    Some("2"),
+                    true,
+                    CONFIG_SOURCE_STATIC_BROKER,
+                    vec![synonym(NODE_ID, "2", CONFIG_SOURCE_STATIC_BROKER)],
+                    ConfigType::Int.wire(),
+                    Some(
                         registry::lookup(ConfigScope::Broker, NODE_ID)
                             .expect("node.id")
                             .doc
                             .to_owned()
-                    ),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
+                    )
+                ),
             ]
     );
 }
@@ -693,19 +681,18 @@ fn the_cluster_default_resource_reports_the_defaults_and_no_node_id() {
 
     assert!(
         result.configs
-            == vec![DescribeConfigsResourceResult {
-                name: crate::throttle::LEADER_THROTTLED_RATE_KEY.to_owned(),
-                value: Some("1024".to_owned()),
-                read_only: false,
-                config_source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
-                is_sensitive: false,
-                synonyms: vec![synonym(
+            == vec![expected_config_entry(
+                crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                Some("1024"),
+                false,
+                CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                vec![synonym(
                     crate::throttle::LEADER_THROTTLED_RATE_KEY,
                     "1024",
                     CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER
                 )],
-                config_type: ConfigType::Long.wire(),
-                documentation: Some(
+                ConfigType::Long.wire(),
+                Some(
                     registry::lookup(
                         ConfigScope::Broker,
                         crate::throttle::LEADER_THROTTLED_RATE_KEY
@@ -713,9 +700,8 @@ fn the_cluster_default_resource_reports_the_defaults_and_no_node_id() {
                     .expect("leader.replication.throttled.rate")
                     .doc
                     .to_owned()
-                ),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }]
+                )
+            )]
     );
 }
 
@@ -735,19 +721,15 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_node_id() {
 
     assert!(
         result.configs
-            == vec![DescribeConfigsResourceResult {
-                name: NODE_ID.to_owned(),
-                value: Some("7".to_owned()),
-                read_only: true,
-                config_source: CONFIG_SOURCE_STATIC_BROKER,
-                is_sensitive: false,
-                // The request asked for neither, so the entry carries
-                // neither, even though the registry has both.
-                synonyms: Vec::new(),
-                config_type: ConfigType::Int.wire(),
-                documentation: None,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }]
+            == vec![expected_config_entry(
+                NODE_ID,
+                Some("7"),
+                true,
+                CONFIG_SOURCE_STATIC_BROKER,
+                Vec::new(),
+                ConfigType::Int.wire(),
+                None
+            )]
     );
 }
 
@@ -771,120 +753,63 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
 
     assert!(
         static_view(&result)
-            == vec![
-                DescribeConfigsResourceResult {
-                    name: config_keys::AUTO_CREATE_TOPICS_ENABLE.to_owned(),
-                    value: Some("true".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Boolean.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
-                    value: Some("600000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Long.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::DEFAULT_REPLICATION_FACTOR.to_owned(),
-                    value: Some("1".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Int.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::DELETE_TOPIC_ENABLE.to_owned(),
-                    value: Some("true".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Boolean.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: NODE_ID.to_owned(),
-                    value: Some("7".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_STATIC_BROKER,
-                    is_sensitive: false,
-                    // The request asked for neither, so the entry carries
-                    // neither, even though the registry has both.
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Int.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::NUM_PARTITIONS.to_owned(),
-                    value: Some("1".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Int.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_owned(),
-                    value: Some("600000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Long.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
-                    value: Some("10080".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Int.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS.to_owned(),
-                    value: Some("3600000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Int.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                    value: Some("604800000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: ConfigType::Int.wire(),
-                    documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-            ]
+            == expected_plain_configs(&[
+                (
+                    config_keys::AUTO_CREATE_TOPICS_ENABLE,
+                    "true",
+                    CONFIG_SOURCE_DEFAULT,
+                    ConfigType::Boolean
+                ),
+                (
+                    config_keys::CONNECTIONS_MAX_IDLE_MS,
+                    "600000",
+                    CONFIG_SOURCE_DEFAULT,
+                    ConfigType::Long
+                ),
+                (
+                    config_keys::DEFAULT_REPLICATION_FACTOR,
+                    "1",
+                    CONFIG_SOURCE_DEFAULT,
+                    ConfigType::Int
+                ),
+                (
+                    config_keys::DELETE_TOPIC_ENABLE,
+                    "true",
+                    CONFIG_SOURCE_DEFAULT,
+                    ConfigType::Boolean
+                ),
+                (NODE_ID, "7", CONFIG_SOURCE_STATIC_BROKER, ConfigType::Int),
+                (
+                    config_keys::NUM_PARTITIONS,
+                    "1",
+                    CONFIG_SOURCE_DEFAULT,
+                    ConfigType::Int
+                ),
+                (
+                    config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                    "600000",
+                    CONFIG_SOURCE_DEFAULT,
+                    ConfigType::Long
+                ),
+                (
+                    config_keys::OFFSETS_RETENTION_MINUTES,
+                    "10080",
+                    CONFIG_SOURCE_DEFAULT,
+                    ConfigType::Int
+                ),
+                (
+                    config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                    "3600000",
+                    CONFIG_SOURCE_DEFAULT,
+                    ConfigType::Int
+                ),
+                (
+                    config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                    "604800000",
+                    CONFIG_SOURCE_DEFAULT,
+                    ConfigType::Int
+                )
+            ])
     );
 }
 
@@ -1103,7 +1028,7 @@ fn a_broker_resource_that_names_another_node_is_refused() {
     );
 
     let result = describe_at(
-        krabka_metadata::NodeId(1),
+        (krabka_metadata::NodeId(1), untuned()),
         &image,
         RESOURCE_TYPE_BROKER,
         "2",
@@ -1113,7 +1038,7 @@ fn a_broker_resource_that_names_another_node_is_refused() {
 
     assert!(
         result
-            == DescribeConfigsResult {
+            == tagged_wire!(DescribeConfigsResult {
                 error_code: crate::codes::INVALID_REQUEST,
                 error_message: Some(
                     "Unexpected broker id, expected 1 or empty string, but received 2".to_owned()
@@ -1121,8 +1046,7 @@ fn a_broker_resource_that_names_another_node_is_refused() {
                 resource_type: RESOURCE_TYPE_BROKER,
                 resource_name: "2".to_owned(),
                 configs: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
+            })
     );
 }
 
@@ -1136,7 +1060,7 @@ fn the_cluster_default_broker_resource_is_served_by_any_node() {
     );
 
     let result = describe_at(
-        krabka_metadata::NodeId(9),
+        (krabka_metadata::NodeId(9), untuned()),
         &image,
         RESOURCE_TYPE_BROKER,
         "",
@@ -1207,7 +1131,7 @@ fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
     ];
     for (resource_type, name, error_code, message) in cases {
         let result = describe_at(
-            krabka_metadata::NodeId(1),
+            (krabka_metadata::NodeId(1), untuned()),
             &image,
             resource_type,
             name,
@@ -1216,19 +1140,18 @@ fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
         );
         check!(
             result
-                == DescribeConfigsResult {
+                == tagged_wire!(DescribeConfigsResult {
                     error_code,
                     error_message: message.map(str::to_owned),
                     resource_type,
                     resource_name: name.to_owned(),
                     configs: Vec::new(),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
+                }),
             "{resource_type} {name:?}"
         );
     }
     let found = describe_at(
-        krabka_metadata::NodeId(1),
+        (krabka_metadata::NodeId(1), untuned()),
         &image,
         RESOURCE_TYPE_TOPIC,
         "orders",
@@ -1321,16 +1244,13 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
     // A running broker states the streams assignor it runs, which Kafka's
     // `GroupConfig` has no default for.
     let settings = static_settings(&crate::config::BrokerConfig::default());
-    let group = describe_with_static(
+    let group = describe_at(
+        settings_for((RESOURCE_TYPE_GROUP, "streams-1"), &settings),
         &image,
         RESOURCE_TYPE_GROUP,
         "streams-1",
         None,
         EVERYTHING,
-        StaticBrokerConfigs {
-            settings: &settings,
-            ..untuned()
-        },
     );
     let subscription = describe(
         &image,
@@ -1363,11 +1283,7 @@ fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
     let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
     let group = describe_one(
         &image,
-        &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
-            resource_type: RESOURCE_TYPE_GROUP,
-            resource_name: "streams-1".to_owned(),
-            ..Default::default()
-        },
+        &resource_request(RESOURCE_TYPE_GROUP, "streams-1", None),
         ServingBroker {
             node: krabka_metadata::NodeId(1),
             static_broker: untuned(),
@@ -1422,11 +1338,7 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
     let names = |resource_type: i8, resource_name: &str, unstable| -> Vec<String> {
         describe_one(
             &image,
-            &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
-                resource_type,
-                resource_name: resource_name.to_owned(),
-                ..Default::default()
-            },
+            &resource_request(resource_type, resource_name, None),
             ServingBroker {
                 node: krabka_metadata::NodeId(1),
                 static_broker: untuned(),
@@ -1481,14 +1393,13 @@ fn an_unhandled_resource_type_is_refused() {
 
     assert!(
         result
-            == DescribeConfigsResult {
+            == tagged_wire!(DescribeConfigsResult {
                 error_code: crate::codes::INVALID_REQUEST,
                 error_message: Some("Unsupported resource type: 99".to_owned()),
                 resource_type: 99,
                 resource_name: "whatever".to_owned(),
                 configs: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
+            })
     );
 }
 
@@ -1516,19 +1427,18 @@ fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
     assert!(
         result.configs
             == vec![
-                DescribeConfigsResourceResult {
-                    name: config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_owned(),
-                    value: Some("600000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: vec![synonym(
+                expected_config_entry(
+                    config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                    Some("600000"),
+                    true,
+                    CONFIG_SOURCE_DEFAULT,
+                    vec![synonym(
                         config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
                         "600000",
                         CONFIG_SOURCE_DEFAULT
                     )],
-                    config_type: ConfigType::Long.wire(),
-                    documentation: Some(
+                    ConfigType::Long.wire(),
+                    Some(
                         registry::lookup(
                             ConfigScope::Broker,
                             config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS
@@ -1536,22 +1446,20 @@ fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
                         .expect("offsets.retention.check.interval.ms")
                         .doc
                         .to_owned()
-                    ),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
-                    value: Some("10080".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: vec![synonym(
+                    )
+                ),
+                expected_config_entry(
+                    config_keys::OFFSETS_RETENTION_MINUTES,
+                    Some("10080"),
+                    true,
+                    CONFIG_SOURCE_DEFAULT,
+                    vec![synonym(
                         config_keys::OFFSETS_RETENTION_MINUTES,
                         "10080",
                         CONFIG_SOURCE_DEFAULT
                     )],
-                    config_type: ConfigType::Int.wire(),
-                    documentation: Some(
+                    ConfigType::Int.wire(),
+                    Some(
                         registry::lookup(
                             ConfigScope::Broker,
                             config_keys::OFFSETS_RETENTION_MINUTES
@@ -1559,9 +1467,8 @@ fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
                         .expect("offsets.retention.minutes")
                         .doc
                         .to_owned()
-                    ),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
+                    )
+                ),
             ]
     );
 }
@@ -1573,28 +1480,30 @@ fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
 /// these configs dynamically`.
 #[test]
 fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
-    let result = describe_with_static(
+    let result = describe_at(
+        (
+            serving_node_for(RESOURCE_TYPE_BROKER, "1"),
+            StaticBrokerConfigs {
+                offsets_retention: Some(krabka_units::minutes(60)),
+                offsets_retention_check_interval: None,
+                ..untuned()
+            },
+        ),
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
         "1",
         Some(vec![config_keys::OFFSETS_RETENTION_MINUTES.to_owned()]),
         EVERYTHING,
-        StaticBrokerConfigs {
-            offsets_retention: Some(krabka_units::minutes(60)),
-            offsets_retention_check_interval: None,
-            ..untuned()
-        },
     );
 
     assert!(
         result.configs
-            == vec![DescribeConfigsResourceResult {
-                name: config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
-                value: Some("60".to_owned()),
-                read_only: true,
-                config_source: CONFIG_SOURCE_STATIC_BROKER,
-                is_sensitive: false,
-                synonyms: vec![
+            == vec![expected_config_entry(
+                config_keys::OFFSETS_RETENTION_MINUTES,
+                Some("60"),
+                true,
+                CONFIG_SOURCE_STATIC_BROKER,
+                vec![
                     synonym(
                         config_keys::OFFSETS_RETENTION_MINUTES,
                         "60",
@@ -1606,15 +1515,14 @@ fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
                         CONFIG_SOURCE_DEFAULT
                     ),
                 ],
-                config_type: ConfigType::Int.wire(),
-                documentation: Some(
+                ConfigType::Int.wire(),
+                Some(
                     registry::lookup(ConfigScope::Broker, config_keys::OFFSETS_RETENTION_MINUTES)
                         .expect("offsets.retention.minutes")
                         .doc
                         .to_owned()
-                ),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }]
+                )
+            )]
     );
 }
 
@@ -1630,13 +1538,13 @@ fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
 #[test]
 fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
     let described = |static_broker| {
-        describe_with_static(
+        describe_at(
+            (serving_node_for(RESOURCE_TYPE_BROKER, "1"), static_broker),
             &MetadataImage::new(Uuid::nil()),
             RESOURCE_TYPE_BROKER,
             "1",
             Some(vec![config_keys::OFFSETS_RETENTION_MINUTES.to_owned()]),
             EVERYTHING,
-            static_broker,
         )
         .configs
     };
@@ -1645,21 +1553,21 @@ fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
         "10080",
         CONFIG_SOURCE_DEFAULT,
     );
-    let entry = |config_source, synonyms| DescribeConfigsResourceResult {
-        name: config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
-        value: Some("10080".to_owned()),
-        read_only: true,
-        config_source,
-        is_sensitive: false,
-        synonyms,
-        config_type: ConfigType::Int.wire(),
-        documentation: Some(
-            registry::lookup(ConfigScope::Broker, config_keys::OFFSETS_RETENTION_MINUTES)
-                .expect("offsets.retention.minutes")
-                .doc
-                .to_owned(),
-        ),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
+    let entry = |config_source, synonyms| {
+        expected_config_entry(
+            config_keys::OFFSETS_RETENTION_MINUTES,
+            Some("10080"),
+            true,
+            config_source,
+            synonyms,
+            ConfigType::Int.wire(),
+            Some(
+                registry::lookup(ConfigScope::Broker, config_keys::OFFSETS_RETENTION_MINUTES)
+                    .expect("offsets.retention.minutes")
+                    .doc
+                    .to_owned(),
+            ),
+        )
     };
 
     check!(
@@ -1728,17 +1636,15 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
     );
     assert!(
         *entry_named(&result, config_keys::CONNECTIONS_MAX_IDLE_MS)
-            == DescribeConfigsResourceResult {
-                name: config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
-                value: Some("600000".to_owned()),
-                read_only: true,
-                config_source: CONFIG_SOURCE_DEFAULT,
-                is_sensitive: false,
-                synonyms: Vec::new(),
-                config_type: ConfigType::Long.wire(),
-                documentation: None,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
+            == expected_config_entry(
+                config_keys::CONNECTIONS_MAX_IDLE_MS,
+                Some("600000"),
+                true,
+                CONFIG_SOURCE_DEFAULT,
+                Vec::new(),
+                ConfigType::Long.wire(),
+                None
+            )
     );
 }
 
@@ -1750,7 +1656,15 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
     let listener_key = "listener.name.external.connections.max.idle.ms";
     let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
 
-    let result = describe_with_static(
+    let result = describe_at(
+        (
+            serving_node_for(RESOURCE_TYPE_BROKER, "7"),
+            StaticBrokerConfigs {
+                connections_max_idle: Some(krabka_units::secs(30)),
+                connections_max_idle_overrides: &overrides,
+                ..untuned()
+            },
+        ),
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
         "7",
@@ -1759,11 +1673,6 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
             listener_key.to_owned(),
         ]),
         EVERYTHING,
-        StaticBrokerConfigs {
-            connections_max_idle: Some(krabka_units::secs(30)),
-            connections_max_idle_overrides: &overrides,
-            ..untuned()
-        },
     );
 
     let broker_wide_static = synonym(
@@ -1779,32 +1688,28 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
     assert!(
         result.configs
             == vec![
-                DescribeConfigsResourceResult {
-                    name: config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
-                    value: Some("30000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_STATIC_BROKER,
-                    is_sensitive: false,
-                    synonyms: vec![broker_wide_static.clone(), broker_wide_default.clone()],
-                    config_type: ConfigType::Long.wire(),
-                    documentation: Some(idle_documentation()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: listener_key.to_owned(),
-                    value: Some("5000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_STATIC_BROKER,
-                    is_sensitive: false,
-                    synonyms: vec![
+                expected_config_entry(
+                    config_keys::CONNECTIONS_MAX_IDLE_MS,
+                    Some("30000"),
+                    true,
+                    CONFIG_SOURCE_STATIC_BROKER,
+                    vec![broker_wide_static.clone(), broker_wide_default.clone()],
+                    ConfigType::Long.wire(),
+                    Some(idle_documentation())
+                ),
+                expected_config_entry(
+                    listener_key,
+                    Some("5000"),
+                    true,
+                    CONFIG_SOURCE_STATIC_BROKER,
+                    vec![
                         synonym(listener_key, "5000", CONFIG_SOURCE_STATIC_BROKER),
                         broker_wide_static,
                         broker_wide_default,
                     ],
-                    config_type: ConfigType::Long.wire(),
-                    documentation: Some(idle_documentation()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
+                    ConfigType::Long.wire(),
+                    Some(idle_documentation())
+                ),
             ]
     );
 }
@@ -1816,17 +1721,20 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
 fn the_cluster_default_resource_reports_no_idle_window() {
     let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
 
-    let result = describe_with_static(
+    let result = describe_at(
+        (
+            serving_node_for(RESOURCE_TYPE_BROKER, ""),
+            StaticBrokerConfigs {
+                connections_max_idle: Some(krabka_units::secs(30)),
+                connections_max_idle_overrides: &overrides,
+                ..untuned()
+            },
+        ),
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
         "",
         None,
         EVERYTHING,
-        StaticBrokerConfigs {
-            connections_max_idle: Some(krabka_units::secs(30)),
-            connections_max_idle_overrides: &overrides,
-            ..untuned()
-        },
     );
 
     assert!(result.configs == Vec::new());
@@ -1843,10 +1751,7 @@ fn image_with_topic(overrides: &[(&str, &str)], cluster: &[(&str, &str)]) -> Met
     }));
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: "t".into(),
-        overrides: overrides
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect(),
+        overrides: crate::test_support::string_pairs(overrides),
     }));
     image
 }
@@ -2115,16 +2020,13 @@ fn a_named_broker_reports_the_static_values_it_holds() {
         "message.max.bytes" => "2097152".to_owned(),
         "broker.rack" => "rack-1".to_owned(),
     };
-    let result = describe_with_static(
+    let result = describe_at(
+        settings_for((RESOURCE_TYPE_BROKER, "1"), &settings),
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
         "1",
         None,
         EVERYTHING,
-        StaticBrokerConfigs {
-            settings: &settings,
-            ..untuned()
-        },
     );
 
     let entry = entry_named(&result, "log.dirs");
@@ -2174,23 +2076,8 @@ fn a_named_broker_reports_the_static_values_it_holds() {
 fn a_named_broker_reports_an_authentication_limit_the_operator_named() {
     let sasl = "sasl.server.max.receive.size";
     let delay = "connection.failed.authentication.delay.ms";
-    let default_only = |key: &str, default: &str| {
-        (
-            Some(default.to_owned()),
-            CONFIG_SOURCE_DEFAULT,
-            vec![synonym(key, default, CONFIG_SOURCE_DEFAULT)],
-        )
-    };
-    let named = |key: &str, value: &str, default: &str| {
-        (
-            Some(value.to_owned()),
-            CONFIG_SOURCE_STATIC_BROKER,
-            vec![
-                synonym(key, value, CONFIG_SOURCE_STATIC_BROKER),
-                synonym(key, default, CONFIG_SOURCE_DEFAULT),
-            ],
-        )
-    };
+    let default_only = expected_default_chain;
+    let named = expected_named_static_chain;
     for (label, source, want_sasl, want_delay) in [
         (
             "neither named",
@@ -2218,16 +2105,13 @@ fn a_named_broker_reports_an_authentication_limit_the_operator_named() {
         let mut config = crate::config::BrokerConfig::default();
         file.apply_to(&mut config).expect("apply runtime config");
         let settings = static_settings(&config);
-        let result = describe_with_static(
+        let result = describe_at(
+            settings_for((RESOURCE_TYPE_BROKER, "1"), &settings),
             &MetadataImage::new(Uuid::nil()),
             RESOURCE_TYPE_BROKER,
             "1",
             Some(vec![sasl.to_owned(), delay.to_owned()]),
             EVERYTHING,
-            StaticBrokerConfigs {
-                settings: &settings,
-                ..untuned()
-            },
         );
 
         for (key, want) in [(sasl, want_sasl), (delay, want_delay)] {
@@ -2268,16 +2152,13 @@ fn a_topic_reports_the_static_synonyms_the_broker_was_started_with() {
             "segment.bytes".to_string() => "1048576".to_string(),
         },
     }));
-    let result = describe_with_static(
+    let result = describe_at(
+        settings_for((RESOURCE_TYPE_TOPIC, "orders"), &settings),
         &with_topic(&image, RESOURCE_TYPE_TOPIC, "orders"),
         RESOURCE_TYPE_TOPIC,
         "orders",
         None,
         EVERYTHING,
-        StaticBrokerConfigs {
-            settings: &settings,
-            ..untuned()
-        },
     );
 
     let chain = |key: &str| {
@@ -2400,16 +2281,13 @@ fn a_topic_and_a_named_broker_report_the_log_roll_ms_the_node_runs() {
         file.apply_to(&mut config).expect("apply");
         let settings = static_settings(&config);
         let chain = |resource_type, name: &str, key: &str| {
-            let result = describe_with_static(
+            let result = describe_at(
+                settings_for((resource_type, name), &settings),
                 &with_topic(&image, resource_type, name),
                 resource_type,
                 name,
                 None,
                 EVERYTHING,
-                StaticBrokerConfigs {
-                    settings: &settings,
-                    ..untuned()
-                },
             );
             let entry = entry_named(&result, key);
             (
@@ -2487,7 +2365,7 @@ fn a_topic_reports_the_computing_nodes_own_min_insync_replicas() {
         ),
     ] {
         let described = describe_at(
-            node,
+            (node, untuned()),
             &image,
             RESOURCE_TYPE_TOPIC,
             "orders",
@@ -2552,16 +2430,13 @@ fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
         },
     ));
     let described = |resource_type, name: &str| {
-        describe_with_static(
+        describe_at(
+            settings_for((resource_type, name), &settings),
             &with_topic(&image, resource_type, name),
             resource_type,
             name,
             None,
             EVERYTHING,
-            StaticBrokerConfigs {
-                settings: &settings,
-                ..untuned()
-            },
         )
     };
     let group = described(RESOURCE_TYPE_GROUP, "g");
@@ -2574,23 +2449,8 @@ fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
             entry.synonyms.clone(),
         )
     };
-    let named = |key: &str, value: &str, default: &str| {
-        (
-            Some(value.to_owned()),
-            CONFIG_SOURCE_STATIC_BROKER,
-            vec![
-                synonym(key, value, CONFIG_SOURCE_STATIC_BROKER),
-                synonym(key, default, CONFIG_SOURCE_DEFAULT),
-            ],
-        )
-    };
-    let untouched = |key: &str, default: &str| {
-        (
-            Some(default.to_owned()),
-            CONFIG_SOURCE_DEFAULT,
-            vec![synonym(key, default, CONFIG_SOURCE_DEFAULT)],
-        )
-    };
+    let named = expected_named_static_chain;
+    let untouched = expected_default_chain;
 
     // A group's own key, over the broker synonym that the coordinator's
     // settings state.
@@ -2843,16 +2703,13 @@ fn a_named_broker_reports_the_static_layer_of_the_partition_verification_key() {
             }));
         }
 
-        let described = describe_with_static(
+        let described = describe_at(
+            settings_for((RESOURCE_TYPE_BROKER, "1"), &settings),
             &image,
             RESOURCE_TYPE_BROKER,
             "1",
             Some(vec![KEY.to_owned()]),
             EVERYTHING,
-            StaticBrokerConfigs {
-                settings: &settings,
-                ..untuned()
-            },
         );
 
         let entry = entry_named(&described, KEY);
@@ -2870,3 +2727,44 @@ fn a_named_broker_reports_the_static_layer_of_the_partition_verification_key() {
 }
 
 mod listeners;
+
+/// Independent wire expectations: callers pin each value, source, type,
+/// synonym chain and documentation separately from production entry shaping.
+pub(super) fn expected_config_entry(
+    name: &str,
+    value: Option<&str>,
+    read_only: bool,
+    source: i8,
+    synonyms: Vec<DescribeConfigsSynonym>,
+    config_type: i8,
+    documentation: Option<String>,
+) -> DescribeConfigsResourceResult {
+    tagged_wire!(DescribeConfigsResourceResult {
+        name: name.to_owned(),
+        value: value.map(str::to_owned),
+        read_only,
+        config_source: source,
+        is_sensitive: false,
+        synonyms,
+        config_type,
+        documentation,
+    })
+}
+
+fn expected_plain_configs(
+    rows: &[(&str, &str, i8, ConfigType)],
+) -> Vec<DescribeConfigsResourceResult> {
+    rows.iter()
+        .map(|&(name, value, source, kind)| {
+            expected_config_entry(
+                name,
+                Some(value),
+                true,
+                source,
+                Vec::new(),
+                kind.wire(),
+                None,
+            )
+        })
+        .collect()
+}

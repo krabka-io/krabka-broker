@@ -260,7 +260,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::diskless::flusher::test_support::test_partition;
+    use crate::diskless::flusher::test_support::{
+        orders_partition, test_index_log, test_partition,
+    };
 
     #[test]
     fn flush_index_has_one_range_per_batch() {
@@ -297,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn flusher_writes_object_and_publishes_index() {
         let dir = tempdir().unwrap();
-        let handle = test_partition(dir.path(), "orders", 0, true, NodeId(1));
+        let handle = orders_partition(dir.path());
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
         let index = DisklessIndexLog::start(event_log).await.unwrap();
@@ -331,12 +333,8 @@ mod tests {
     #[tokio::test]
     async fn leadership_loss_does_not_recreate_shard_metrics() {
         let dir = tempdir().unwrap();
-        let handle = test_partition(dir.path(), "orders", 0, true, NodeId(1));
-        let index = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
+        let handle = orders_partition(dir.path());
+        let index = test_index_log().await;
         let metrics = crate::metrics::BrokerMetrics::new();
         let topic_id = Uuid::from_u128(11);
         let checks = AtomicUsize::new(0);
@@ -371,9 +369,7 @@ mod tests {
         .await
         .unwrap();
 
-        let mut body = String::new();
-        let registry = metrics.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
+        crate::metrics::test_support::render_registry!(metrics, body, registry; unwrap());
         assert!(!body.contains(&topic_id.to_string()));
     }
 
@@ -386,12 +382,8 @@ mod tests {
         std::fs::remove_dir(&store_root).unwrap();
         std::fs::write(&store_root, b"not a directory").unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(store);
-        let handle = test_partition(dir.path(), "orders", 0, true, NodeId(1));
-        let index = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
+        let handle = orders_partition(dir.path());
+        let index = test_index_log().await;
         let metrics = crate::metrics::BrokerMetrics::new();
 
         let error = flush_once(
@@ -412,16 +404,14 @@ mod tests {
         .expect_err("the object-store root became a file");
         assert!(error.to_string().contains("diskless wal put"));
 
-        let mut body = String::new();
-        let registry = metrics.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
+        crate::metrics::test_support::render_registry!(metrics, body, registry; unwrap());
         assert!(body.contains("krabka_broker_diskless_wal_flush_failures_total 1"));
     }
 
     #[tokio::test]
     async fn flusher_skips_noop_trim_when_writer_is_stopped() {
         let dir = tempdir().unwrap();
-        let handle = test_partition(dir.path(), "orders", 0, true, NodeId(1));
+        let handle = orders_partition(dir.path());
         let writer = handle
             .writer_handle
             .lock()
@@ -432,11 +422,7 @@ mod tests {
         assert!(writer.await.unwrap_err().is_cancelled());
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let index = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
+        let index = test_index_log().await;
         let cache = index.cache();
         let topic_id = Uuid::from_u128(11);
         let record = flush_once(
@@ -501,14 +487,10 @@ mod tests {
     #[tokio::test]
     async fn combined_object_stops_after_size_budget() {
         let dir = tempdir().unwrap();
-        let first = test_partition(dir.path(), "orders", 0, true, NodeId(1));
+        let first = orders_partition(dir.path());
         let second = test_partition(dir.path(), "orders", 1, true, NodeId(1));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let index = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
+        let index = test_index_log().await;
         let cache = index.cache();
         let config = FlushConfig {
             max_size: ByteSize::from_bytes(1),

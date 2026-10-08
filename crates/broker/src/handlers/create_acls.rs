@@ -38,7 +38,7 @@ use self::{
     validate::{HostCheck, has_filter_only_element, has_unknown_element, validate},
 };
 use super::acl_wire::{MAX_ACL_RECORDS_PER_REQUEST, NO_AUTHORIZER_EXCEPTION_MESSAGE};
-use crate::{broker::Broker, codes};
+use crate::codes;
 
 /// The message Kafka's controller gives the `PolicyViolationException` that
 /// `EventHandlerExceptionInfo` makes of a `BoundedListTooLongException`.
@@ -91,131 +91,130 @@ fn count_new_acls(image: &MetadataImage, to_submit: &[(usize, MetadataRecord)]) 
     new.len()
 }
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: CreateAclsRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<CreateAclsResponse, crate::error::BrokerError> {
-    // Kafka's `CreateAclsRequest.validate` refuses a wire `UNKNOWN` element
-    // while it parses the request, before authorization, and the socket
-    // server closes the connection with no response. A handler error closes
-    // the connection the same way.
-    if has_unknown_element(&req.creations) {
-        return Err(crate::error::BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("CreatableAcls contain unknown elements"),
-        ));
-    }
-
-    let image = broker.controller.current_image();
-
-    // Whole-request cluster-alter gate.
-    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        let results = req
-            .creations
-            .iter()
-            .map(|_| acl_error_result(codes::CLUSTER_AUTHORIZATION_FAILED, "create-acls denied"))
-            .collect();
-        return Ok(create_acls_response(results));
-    }
-
-    // No authorizer: refuse every creation rather than durably storing
-    // bindings that no decision point will ever read. Kafka builds this
-    // response from `CreateAclsRequest.getErrorResponse` with a
-    // `SecurityDisabledException`, which stamps the same code and message on
-    // one result per creation.
-    if !broker.config.authorizer.is_configured() {
-        let results = req
-            .creations
-            .iter()
-            .map(|_| acl_error_result(codes::SECURITY_DISABLED, NO_AUTHORIZER_EXCEPTION_MESSAGE))
-            .collect();
-        return Ok(create_acls_response(results));
-    }
-
-    // An `ANY` or `MATCH` element fails Kafka's binding construction for the
-    // whole request; see `has_filter_only_element`.
-    if has_filter_only_element(&req.creations) {
-        let results = req
-            .creations
-            .iter()
-            .map(|_| AclCreationResult {
-                error_code: codes::UNKNOWN_SERVER_ERROR,
-                error_message: None,
-                ..Default::default()
-            })
-            .collect();
-        return Ok(create_acls_response(results));
-    }
-
-    // Kafka 4.3.1 has no host check: any host is stored as text. Trunk's
-    // `validateHostPattern` (empty host, KIP-1276 CIDR ranges) applies only
-    // under `unstable.feature.versions.enable`.
-    //
-    // KIP-1276: whether a `/`-bearing host may be a CIDR range, computed once
-    // per request rather than per binding, the way
-    // `AclControlManager.createAcls` resolves `metadataVersion.isCidrAclSupported()`
-    // a single time and passes it into `validateNewAcl` for every creation.
-    // `require_feature` is deliberately not used here: it passes any
-    // unfinalized metadata.version, whereas `cidr_hosts_supported` compares
-    // the bootstrap level, 4.3-IV0, against the CIDR floor.
-    let host_check = if broker.config.features.unstable_feature_versions
-        == krabka_raft::UnstableFeatureVersions::Enabled
+context_handler! {
+    CreateAclsRequest => CreateAclsResponse,
+    (broker, req, _version, ctx),
     {
-        HostCheck::Trunk {
-            cidr_hosts_supported: crate::features::cidr_hosts_supported(&image),
+        // Kafka's `CreateAclsRequest.validate` refuses a wire `UNKNOWN` element
+        // while it parses the request, before authorization, and the socket
+        // server closes the connection with no response. A handler error closes
+        // the connection the same way.
+        if has_unknown_element(&req.creations) {
+            return Err(crate::error::BrokerError::Protocol(
+                krabka_protocol::ProtocolError::InvalidValue("CreatableAcls contain unknown elements"),
+            ));
         }
-    } else {
-        HostCheck::Unchecked
-    };
 
-    let mut results: Vec<AclCreationResult> = Vec::with_capacity(req.creations.len());
-    let mut to_submit: Vec<(usize, MetadataRecord)> = Vec::with_capacity(req.creations.len());
+        let image = broker.controller.current_image();
 
-    for c in &req.creations {
-        match validate(c, host_check) {
-            Ok(entry) => {
-                let idx = results.len();
-                results.push(acl_success_result());
-                to_submit.push((idx, MetadataRecord::V1AccessControlEntry(entry)));
+        // Whole-request cluster-alter gate.
+        if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+            let results = req
+                .creations
+                .iter()
+                .map(|_| acl_error_result(codes::CLUSTER_AUTHORIZATION_FAILED, "create-acls denied"))
+                .collect();
+            return Ok(create_acls_response(results));
+        }
+
+        // No authorizer: refuse every creation rather than durably storing
+        // bindings that no decision point will ever read. Kafka builds this
+        // response from `CreateAclsRequest.getErrorResponse` with a
+        // `SecurityDisabledException`, which stamps the same code and message on
+        // one result per creation.
+        if !broker.config.authorizer.is_configured() {
+            let results = req
+                .creations
+                .iter()
+                .map(|_| acl_error_result(codes::SECURITY_DISABLED, NO_AUTHORIZER_EXCEPTION_MESSAGE))
+                .collect();
+            return Ok(create_acls_response(results));
+        }
+
+        // An `ANY` or `MATCH` element fails Kafka's binding construction for the
+        // whole request; see `has_filter_only_element`.
+        if has_filter_only_element(&req.creations) {
+            let results = req
+                .creations
+                .iter()
+                .map(|_| AclCreationResult {
+                    error_code: codes::UNKNOWN_SERVER_ERROR,
+                    error_message: None,
+                    ..Default::default()
+                })
+                .collect();
+            return Ok(create_acls_response(results));
+        }
+
+        // Kafka 4.3.1 has no host check: any host is stored as text. Trunk's
+        // `validateHostPattern` (empty host, KIP-1276 CIDR ranges) applies only
+        // under `unstable.feature.versions.enable`.
+        //
+        // KIP-1276: whether a `/`-bearing host may be a CIDR range, computed once
+        // per request rather than per binding, the way
+        // `AclControlManager.createAcls` resolves `metadataVersion.isCidrAclSupported()`
+        // a single time and passes it into `validateNewAcl` for every creation.
+        // `require_feature` is deliberately not used here: it passes any
+        // unfinalized metadata.version, whereas `cidr_hosts_supported` compares
+        // the bootstrap level, 4.3-IV0, against the CIDR floor.
+        let host_check = if broker.config.features.unstable_feature_versions
+            == krabka_raft::UnstableFeatureVersions::Enabled
+        {
+            HostCheck::Trunk {
+                cidr_hosts_supported: crate::features::cidr_hosts_supported(&image),
             }
-            Err((code, msg)) => {
-                results.push(acl_error_result(code, msg));
+        } else {
+            HostCheck::Unchecked
+        };
+
+        let mut results: Vec<AclCreationResult> = Vec::with_capacity(req.creations.len());
+        let mut to_submit: Vec<(usize, MetadataRecord)> = Vec::with_capacity(req.creations.len());
+
+        for c in &req.creations {
+            match validate(c, host_check) {
+                Ok(entry) => {
+                    let idx = results.len();
+                    results.push(acl_success_result());
+                    to_submit.push((idx, MetadataRecord::V1AccessControlEntry(entry)));
+                }
+                Err((code, msg)) => {
+                    results.push(acl_error_result(code, msg));
+                }
             }
         }
-    }
 
-    // `AclControlManager.createAcls` collects the records of the ACLs that are
-    // new into a `BoundedList` of 10,000. It does not catch the overflow, so
-    // the controller answers every binding, valid or not, with
-    // `PolicyViolationException`.
-    if to_submit.len() > MAX_ACL_RECORDS_PER_REQUEST
-        && count_new_acls(&image, &to_submit) > MAX_ACL_RECORDS_PER_REQUEST
-    {
-        let results = req
-            .creations
-            .iter()
-            .map(|_| acl_error_result(codes::POLICY_VIOLATION, EXCESSIVE_BATCH_MESSAGE))
-            .collect();
-        return Ok(create_acls_response(results));
-    }
-
-    if !to_submit.is_empty() {
-        let records: Vec<MetadataRecord> = to_submit.iter().map(|(_, r)| r.clone()).collect();
-        if let Err(e) = broker.controller.submit_change(records).await {
-            tracing::warn!(error = %e, "create-acls submit failed");
-            apply_submit_error(&mut results, &to_submit, &e);
+        // `AclControlManager.createAcls` collects the records of the ACLs that are
+        // new into a `BoundedList` of 10,000. It does not catch the overflow, so
+        // the controller answers every binding, valid or not, with
+        // `PolicyViolationException`.
+        if to_submit.len() > MAX_ACL_RECORDS_PER_REQUEST
+            && count_new_acls(&image, &to_submit) > MAX_ACL_RECORDS_PER_REQUEST
+        {
+            let results = req
+                .creations
+                .iter()
+                .map(|_| acl_error_result(codes::POLICY_VIOLATION, EXCESSIVE_BATCH_MESSAGE))
+                .collect();
+            return Ok(create_acls_response(results));
         }
+
+        if !to_submit.is_empty() {
+            let records: Vec<MetadataRecord> = to_submit.iter().map(|(_, r)| r.clone()).collect();
+            if let Err(e) = broker.controller.submit_change(records).await {
+                tracing::warn!(error = %e, "create-acls submit failed");
+                apply_submit_error(&mut results, &to_submit, &e);
+            }
+        }
+
+        // Audit: emit one AdminOperation record for successfully-created ACLs.
+        // `to_submit` carries (result_idx, record) for every creation that passed
+        // validation; entries whose result slot still has error_code == 0 were committed.
+        audit_created_acls(
+            broker.audit_log.as_ref(),
+            ctx,
+            created_acl_resources(&req, &results, &to_submit),
+        );
+
+        Ok(create_acls_response(results))
     }
-
-    // Audit: emit one AdminOperation record for successfully-created ACLs.
-    // `to_submit` carries (result_idx, record) for every creation that passed
-    // validation; entries whose result slot still has error_code == 0 were committed.
-    audit_created_acls(
-        broker.audit_log.as_ref(),
-        ctx,
-        created_acl_resources(&req, &results, &to_submit),
-    );
-
-    Ok(create_acls_response(results))
 }

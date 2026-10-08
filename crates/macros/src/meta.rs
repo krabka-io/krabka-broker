@@ -2,7 +2,7 @@
 
 use moxy::{
     ast::{Field, ItemStruct, List, ParseError, Token, Type},
-    token::{Ident, Spanner, TokenStream},
+    token::{Ident, Span, Spanner, TokenStream, TokenTree},
 };
 
 /// The named fields of a struct, or an error naming the derive.
@@ -74,7 +74,6 @@ pub(crate) fn item_body(
     macro_name: &str,
     is_kind: fn(&moxy::token::TokenTree) -> bool,
 ) -> Result<(Vec<moxy::token::TokenTree>, usize), ParseError> {
-    use moxy::token::Span;
     let tokens: Vec<_> = item.into_iter().collect();
     let body = tokens
         .iter()
@@ -99,4 +98,67 @@ pub(crate) fn named_body(
     macro_name: &str,
 ) -> Result<(Vec<moxy::token::TokenTree>, usize), ParseError> {
     item_body(item, macro_name, moxy::token::TokenTree::is_keyword_struct)
+}
+
+/// Require a nonempty token argument without changing its tokens or error span.
+pub(crate) fn required_tokens(
+    tokens: TokenStream,
+    message: &str,
+) -> Result<TokenStream, ParseError> {
+    if tokens.is_empty() {
+        Err(ParseError::new(Span::call_site(), message))
+    } else {
+        Ok(tokens)
+    }
+}
+
+/// Read one of the two explicit modes accepted by a field-group attribute.
+pub(crate) fn mode(
+    tokens: TokenStream,
+    modes: [&'static str; 2],
+) -> Result<&'static str, ParseError> {
+    let tokens: Vec<_> = tokens.into_iter().collect();
+    if let [TokenTree::Ident(name)] = tokens.as_slice()
+        && let Some(mode) = modes.into_iter().find(|mode| name == *mode)
+    {
+        return Ok(mode);
+    }
+    Err(ParseError::new(
+        Span::call_site(),
+        format!("expected `{}` or `{}`", modes[0], modes[1]),
+    ))
+}
+
+/// Wrap generated members in the declaration's original generics and where clause.
+pub(crate) fn impl_block(
+    item: ItemStruct,
+    trait_prefix: &TokenStream,
+    members: &TokenStream,
+) -> TokenStream {
+    let ident = item.ident;
+    let (impl_generics, type_generics, where_clause) = item.generics.split();
+    moxy::template! {
+        impl {{ impl_generics }} {{ trait_prefix }} {{ ident }} {{ type_generics }} {{ where_clause }} {
+            {{ members }}
+        }
+    }
+}
+
+/// Split nonempty top-level token arguments, preserving grouped expressions.
+pub(crate) fn arguments(input: TokenStream, count: usize) -> Result<Vec<TokenStream>, ParseError> {
+    let mut arguments = vec![TokenStream::new()];
+    for token in input {
+        if token.is_punct_comma() {
+            arguments.push(TokenStream::new());
+        } else {
+            arguments.last_mut().expect("one argument").extend([token]);
+        }
+    }
+    if arguments.len() != count || arguments.iter().any(TokenStream::is_empty) {
+        return Err(ParseError::new(
+            Span::call_site(),
+            format!("expected {count} nonempty comma-separated arguments"),
+        ));
+    }
+    Ok(arguments)
 }

@@ -295,12 +295,17 @@ mod tests {
         entry
     }
 
-    #[test]
-    fn a_signature_that_the_local_key_makes_verifies_locally() {
+    fn signed_fixture() -> (TempDir, OperatorKeys, DescribedTopicFreeze) {
         let dir = TempDir::new().expect("tempdir");
         let (signer, public) = fresh_signer("alice-yubi");
         let keys = trust_set(&dir, "alice-yubi", ALICE, &public);
         let entry = signed_entry(&signer, "alice-yubi", "orders");
+        (dir, keys, entry)
+    }
+
+    #[test]
+    fn a_signature_that_the_local_key_makes_verifies_locally() {
+        let (_dir, keys, entry) = signed_fixture();
 
         let outcome = verify_registry(CLUSTER, &keys, std::slice::from_ref(&entry));
 
@@ -384,10 +389,7 @@ mod tests {
     /// one cluster does not verify in another.
     #[test]
     fn a_signature_made_for_another_cluster_does_not_verify() {
-        let dir = TempDir::new().expect("tempdir");
-        let (signer, public) = fresh_signer("alice-yubi");
-        let keys = trust_set(&dir, "alice-yubi", ALICE, &public);
-        let entry = signed_entry(&signer, "alice-yubi", "orders");
+        let (_dir, keys, entry) = signed_fixture();
 
         let outcome = verify_registry("another-cluster", &keys, &[entry]);
 

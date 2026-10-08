@@ -29,7 +29,7 @@ use krabka_metadata::{
 };
 use krabka_protocol::{
     owned::{
-        describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+        describe_configs_request::DescribeConfigsRequest,
         describe_configs_response::{
             DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
         },
@@ -38,6 +38,8 @@ use krabka_protocol::{
 };
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+
+use crate::support::{client::connect_owned, configs::describe_resource};
 
 mod support;
 
@@ -254,20 +256,14 @@ fn seeding(batches: &[Batch]) -> Seeding {
 /// client listener at `broker`, as `kafka-configs --describe --entity-type
 /// brokers --entity-default` sends it, with the synonyms.
 async fn describe_cluster_min_insync_replicas(broker: SocketAddr) -> DescribeConfigsResult {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.to_string())
-        .client_id("bootstrap-activation-test")
-        .build()
-        .await
-        .expect("client");
+    let client = connect_owned(broker.to_string(), "bootstrap-activation-test", "client").await;
     let response = client
         .send(DescribeConfigsRequest {
-            resources: vec![DescribeConfigsResource {
-                resource_type: RESOURCE_TYPE_BROKER,
-                resource_name: String::new(),
-                configuration_keys: Some(vec![MIN_INSYNC_REPLICAS.to_owned()]),
-                ..Default::default()
-            }],
+            resources: vec![describe_resource(
+                RESOURCE_TYPE_BROKER,
+                String::new(),
+                Some(vec![MIN_INSYNC_REPLICAS.to_owned()]),
+            )],
             include_synonyms: true,
             include_documentation: false,
             ..Default::default()

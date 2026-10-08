@@ -10,16 +10,18 @@
 use assert2::{assert, check};
 use krabka_broker::topic_policy::TopicPolicy;
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    incremental_alter_configs_request::{
-        AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-    },
+    create_topics_request::CreateTopicsRequest,
+    incremental_alter_configs_request::IncrementalAlterConfigsRequest,
 };
 
 use crate::{
     RESOURCE_TYPE_TOPIC,
     admin_harness::{build_client, create_topic_helper},
-    support::start_n_node_with,
+    support::{
+        configs::{incremental_config, incremental_request, incremental_resource},
+        start_n_node_with,
+        topics::{creatable_topic, create_topic_request},
+    },
 };
 
 /// `POLICY_VIOLATION` in the Kafka error table.
@@ -29,16 +31,7 @@ const POLICY_VIOLATION: i16 = 44;
 const CONFIG_OP_SET: i8 = 0;
 
 fn create_request(name: &str, replication_factor: i16) -> CreateTopicsRequest {
-    CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.into(),
-            num_partitions: 1,
-            replication_factor,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    }
+    create_topic_request(creatable_topic(name, 1, replication_factor), 5_000)
 }
 
 /// A replication factor under the policy floor is refused with 44 and a
@@ -192,19 +185,16 @@ async fn altering_a_topic_to_a_forbidden_config_is_a_policy_violation() {
 }
 
 fn alter_request(topic: &str, value: &str) -> IncrementalAlterConfigsRequest {
-    IncrementalAlterConfigsRequest {
-        resources: vec![AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_TOPIC,
-            resource_name: topic.into(),
-            configs: vec![AlterableConfig {
-                name: "unclean.leader.election.enable".into(),
-                config_operation: CONFIG_OP_SET,
-                value: Some(value.into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        validate_only: false,
-        ..Default::default()
-    }
+    incremental_request(
+        vec![incremental_resource(
+            RESOURCE_TYPE_TOPIC,
+            topic,
+            vec![incremental_config(
+                "unclean.leader.election.enable",
+                Some(value.into()),
+                CONFIG_OP_SET,
+            )],
+        )],
+        false,
+    )
 }

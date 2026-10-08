@@ -1,11 +1,11 @@
 (* #"/workspace/crates/verified/src/composition/append.rs" 101 0 105 47 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
 let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 106 21 106 22
 let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 106 41 106 42
 let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 111 8 111 30
@@ -68,10 +68,8 @@ constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 let reservations_do_not_overlap (base: Int64.t) (first_count: Int64.t) (second_count: Int64.t)
   (return (x: t_Option_tup3_i64_i64_i64)) = any
   [ return (result: t_Option_tup3_i64_i64_i64) ->
-  {[@stop_split] [@expl:reservations_do_not_overlap ensures] ([@stop_split] [@expl:reservations_do_not_overlap ensures #0] [%#sappend'16] match result with
-          | Some'0 _ -> true
-          | None'0 -> false
-          end
+  {[@stop_split] [@expl:reservations_do_not_overlap ensures] ([@stop_split] [@expl:reservations_do_not_overlap ensures #0] [%#sappend'16] (result
+        <> None'0)
       = (ge_log_Int (Int64.to_int base) 0
       /\ gt_log_Int (Int64.to_int first_count) 0
       /\ gt_log_Int (Int64.to_int second_count) 0
@@ -151,10 +149,8 @@ type t_Option_AppendFrontiers = None'2 | Some'2 t_AppendFrontiers
 
 let append_frontiers_agree (base: Int64.t) (delta: Int32.t) (return (x: t_Option_AppendFrontiers)) = any
   [ return (result: t_Option_AppendFrontiers) ->
-  {[@stop_split] [@expl:append_frontiers_agree ensures] ([@stop_split] [@expl:append_frontiers_agree ensures #0] [%#sappend'18] match result with
-          | Some'2 _ -> true
-          | None'2 -> false
-          end
+  {[@stop_split] [@expl:append_frontiers_agree ensures] ([@stop_split] [@expl:append_frontiers_agree ensures #0] [%#sappend'18] (result
+        <> None'2)
       = (ge_log_Int (Int64.to_int base) 0
       /\ ge_log_Int (Int32.to_int delta) 0 /\ Int64.to_int base + Int32.to_int delta + 1 <= Int64.to_int const_MAX))
     /\ ([@stop_split] [@expl:append_frontiers_agree ensures #1] [%#sappend'19] match result with
@@ -307,10 +303,8 @@ let reserved_pair_preserves_recovery_and_ack_order [#"/workspace/crates/verified
   | & val''1: t_AppendFrontiers = Any.any_l ()
   | & _61: tup2_AppendFrontiers_AppendFrontiers = Any.any_l () ])
   [ return (result: t_Option_tup2_AppendFrontiers_AppendFrontiers) ->
-  {[@stop_split] [@expl:reserved_pair_preserves_recovery_and_ack_order ensures] ([@stop_split] [@expl:reserved_pair_preserves_recovery_and_ack_order ensures #0] [%#sappend'14] match result with
-          | Some _ -> true
-          | None -> false
-          end
+  {[@stop_split] [@expl:reserved_pair_preserves_recovery_and_ack_order ensures] ([@stop_split] [@expl:reserved_pair_preserves_recovery_and_ack_order ensures #0] [%#sappend'14] (result
+        <> None)
       = (ge_log_Int (Int64.to_int base) 0
       /\ ge_log_Int (Int32.to_int first_delta) 0
       /\ ge_log_Int (Int32.to_int second_delta) 0

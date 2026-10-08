@@ -20,27 +20,11 @@ use crate::jvm_acceptance::{
 async fn console_consumer_with_group_round_trip() {
     const TOPIC: &str = "krabka-broker-grp-itest";
 
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-
-    // 1. Create the topic.
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        1,
-        1,
-    );
+    let (broker, _dir) = crate::jvm_acceptance::start_console_broker(TOPIC, 1).await;
 
     // 2. Produce records via kafka-console-producer over stdin.
 
-    let producer_out =
-        crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"x\ny\nz\n");
-    assert!(
-        producer_out.status.success(),
-        "producer failed: {}",
-        String::from_utf8_lossy(&producer_out.stderr)
-    );
+    crate::jvm_acceptance::produce_console_checked(KAFKA_IMAGE, TOPIC, b"x\ny\nz\n");
 
     // 3. Consume WITHOUT --partition. The default `console-consumer`
     //    group will JoinGroup → SyncGroup → Heartbeat → Fetch through
@@ -60,9 +44,7 @@ async fn console_consumer_with_group_round_trip() {
         "20000",
     ]);
     let s = String::from_utf8_lossy(&consumer_out.stdout);
-    for needle in ["x", "y", "z"] {
-        assert!(s.contains(needle), "consumer didn't emit {needle}: {s:?}");
-    }
+    crate::jvm_acceptance::assert_console_values(&s, &["x", "y", "z"], "consumer didn't emit");
 
     broker.shutdown().await;
 }
@@ -81,26 +63,11 @@ async fn console_consumer_with_static_membership() {
     const GROUP: &str = "krabka-static-grp";
     const INSTANCE: &str = "client-static-1";
 
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        1,
-        1,
-    );
+    let (broker, _dir) = crate::jvm_acceptance::start_console_broker(TOPIC, 1).await;
 
     // Produce three records.
 
-    let producer_out =
-        crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"a\nb\nc\n");
-    assert!(
-        producer_out.status.success(),
-        "producer failed: {}",
-        String::from_utf8_lossy(&producer_out.stderr)
-    );
+    crate::jvm_acceptance::produce_console_checked(KAFKA_IMAGE, TOPIC, b"a\nb\nc\n");
 
     // Consume with `group.instance.id` set. The JVM consumer sends this
     // as `group_instance_id` in JoinGroup v5+ / SyncGroup v3+ / Heartbeat
@@ -123,21 +90,12 @@ async fn console_consumer_with_static_membership() {
         "20000",
     ]);
     let s = String::from_utf8_lossy(&consumer_out.stdout);
-    for needle in ["a", "b", "c"] {
-        assert!(s.contains(needle), "consumer didn't emit {needle}: {s:?}");
-    }
+    crate::jvm_acceptance::assert_console_values(&s, &["a", "b", "c"], "consumer didn't emit");
 
     // `kafka-consumer-groups --describe` exercises the broker's
     // DescribeGroups path. The output should mention the instance id so
     // operators can correlate static slots back to pods.
-    let desc_out = docker_run_kafka_tool(&[
-        "kafka-consumer-groups",
-        "--describe",
-        "--group",
-        GROUP,
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+    let desc_out = crate::jvm_acceptance::describe_console_group(GROUP);
     let s = String::from_utf8_lossy(&desc_out.stdout);
     assert!(s.contains(TOPIC), "describe missing topic {TOPIC}: {s}");
 
@@ -177,18 +135,7 @@ async fn cooperative_sticky_kafka_console_consumer() {
 
     // 2. Produce 3 records via stdin.
 
-    let producer_out = crate::jvm_acceptance::produce_console(
-        KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        false,
-        b"alpha\nbravo\ncharlie\n",
-    );
-    assert!(
-        producer_out.status.success(),
-        "producer failed: {}",
-        String::from_utf8_lossy(&producer_out.stderr)
-    );
+    crate::jvm_acceptance::produce_console_checked(KAFKA_IMAGE, TOPIC, b"alpha\nbravo\ncharlie\n");
 
     // 3. Consume via kafka-console-consumer with CooperativeStickyAssignor.
     //    Use cp-kafka:7.5.0 (Kafka 3.5) — cooperative-sticky in 2.7 had

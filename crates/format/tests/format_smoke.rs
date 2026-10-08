@@ -31,6 +31,33 @@ fn offset_zero_checkpoint(dir: &tempfile::TempDir) -> std::path::PathBuf {
         .join("00000000000000000000-0000000000.checkpoint")
 }
 
+fn check_static_records(records: &[MetadataRecord]) {
+    assert2::assert!(records.iter().all(|record| !matches!(
+        record,
+        MetadataRecord::V1KRaftVersion(_) | MetadataRecord::V1Voters(_)
+    )));
+}
+
+fn check_dynamic_checkpoint(dir: &tempfile::TempDir, records: &[MetadataRecord]) {
+    check_static_records(records);
+    assert2::assert!(std::fs::metadata(offset_zero_checkpoint(dir)).is_ok_and(|m| m.len() > 0));
+}
+
+fn check_refused_cases(cases: &[Vec<&str>], expected: i32) {
+    for args in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let out = run_format(&dir, args);
+        assert2::assert!(!out.status.success());
+        assert2::assert!(out.status.code() == Some(expected));
+    }
+}
+
+fn formatted_directory_id(dir: &tempfile::TempDir, args: &[&str]) -> uuid::Uuid {
+    let out = run_format(dir, args);
+    assert2::assert!(out.status.success());
+    krabka_broker::bootstrap::read_directory_id(dir.path()).expect("formatted directory id")
+}
+
 #[test]
 fn format_with_add_scram_writes_credential_record() {
     let dir = tempfile::tempdir().unwrap();
@@ -70,10 +97,7 @@ fn format_with_add_scram_writes_credential_record() {
             ])
     );
     assert2::assert!(records.len() == features.len() + 1);
-    assert2::assert!(records.iter().all(|record| !matches!(
-        record,
-        MetadataRecord::V1KRaftVersion(_) | MetadataRecord::V1Voters(_)
-    )));
+    check_static_records(&records);
     assert2::assert!(!offset_zero_checkpoint(&dir).exists());
 }
 
@@ -101,17 +125,13 @@ fn no_initial_controllers_writes_offset_zero_checkpoint() {
 
     let records = bootstrap_records(&dir);
     assert2::assert!(!records.is_empty());
-    assert2::assert!(records.iter().all(|record| !matches!(
-        record,
-        MetadataRecord::V1KRaftVersion(_) | MetadataRecord::V1Voters(_)
-    )));
-    assert2::assert!(std::fs::metadata(offset_zero_checkpoint(&dir)).is_ok_and(|m| m.len() > 0));
+    check_dynamic_checkpoint(&dir, &records);
 }
 
 #[test]
 fn standalone_writes_offset_zero_checkpoint_for_local_voter() {
     let dir = tempfile::tempdir().unwrap();
-    let out = run_format(
+    let directory_id = formatted_directory_id(
         &dir,
         &[
             "--standalone",
@@ -121,24 +141,16 @@ fn standalone_writes_offset_zero_checkpoint_for_local_voter() {
             "controller.example:9093",
         ],
     );
-    assert2::assert!(out.status.success());
-
-    let directory_id =
-        krabka_broker::bootstrap::read_directory_id(dir.path()).expect("formatted directory id");
     let records = bootstrap_records(&dir);
     assert2::assert!(!directory_id.is_nil());
-    assert2::assert!(records.iter().all(|record| !matches!(
-        record,
-        MetadataRecord::V1KRaftVersion(_) | MetadataRecord::V1Voters(_)
-    )));
-    assert2::assert!(std::fs::metadata(offset_zero_checkpoint(&dir)).is_ok_and(|m| m.len() > 0));
+    check_dynamic_checkpoint(&dir, &records);
 }
 
 #[test]
 fn initial_controllers_persists_the_local_listed_directory_id() {
     let dir = tempfile::tempdir().unwrap();
     let local_directory_id = "00000000-0000-0000-0000-000000000003";
-    let out = run_format(
+    let directory_id = formatted_directory_id(
         &dir,
         &[
             "--node-id",
@@ -149,92 +161,78 @@ fn initial_controllers_persists_the_local_listed_directory_id() {
             ),
         ],
     );
-    assert2::assert!(out.status.success());
-
-    let directory_id =
-        krabka_broker::bootstrap::read_directory_id(dir.path()).expect("formatted directory id");
     assert2::assert!(directory_id.to_string() == local_directory_id);
     let records = bootstrap_records(&dir);
-    assert2::assert!(records.iter().all(|record| !matches!(
-        record,
-        MetadataRecord::V1KRaftVersion(_) | MetadataRecord::V1Voters(_)
-    )));
-    assert2::assert!(std::fs::metadata(offset_zero_checkpoint(&dir)).is_ok_and(|m| m.len() > 0));
+    check_dynamic_checkpoint(&dir, &records);
 }
 
 #[test]
 fn initial_controllers_rejects_ambiguous_or_missing_local_identity() {
-    for args in [
-        vec![
-            "--node-id",
-            "3",
-            "--initial-controllers",
-            "2@two.example:9093:00000000-0000-0000-0000-000000000002",
+    check_refused_cases(
+        &[
+            vec![
+                "--node-id",
+                "3",
+                "--initial-controllers",
+                "2@two.example:9093:00000000-0000-0000-0000-000000000002",
+            ],
+            vec![
+                "--node-id",
+                "2",
+                "--initial-controllers",
+                "2@two.example:9093:00000000-0000-0000-0000-000000000002,2@other.example:9093:00000000-0000-0000-0000-000000000003",
+            ],
+            vec![
+                "--node-id",
+                "2",
+                "--initial-controllers",
+                "2@two.example:9093:00000000-0000-0000-0000-000000000002,3@three.example:9093:00000000-0000-0000-0000-000000000002",
+            ],
         ],
-        vec![
-            "--node-id",
-            "2",
-            "--initial-controllers",
-            "2@two.example:9093:00000000-0000-0000-0000-000000000002,2@other.example:9093:00000000-0000-0000-0000-000000000003",
-        ],
-        vec![
-            "--node-id",
-            "2",
-            "--initial-controllers",
-            "2@two.example:9093:00000000-0000-0000-0000-000000000002,3@three.example:9093:00000000-0000-0000-0000-000000000002",
-        ],
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let out = run_format(&dir, &args);
-        assert2::assert!(!out.status.success());
-        assert2::assert!(out.status.code() == Some(4));
-    }
+        4,
+    );
 }
 
 #[test]
 fn dynamic_modes_are_mutually_exclusive() {
-    for args in [
-        vec!["--node-id", "1", "--standalone", "--no-initial-controllers"],
-        vec![
-            "--node-id",
-            "1",
-            "--initial-controllers",
-            "1@one.example:9093:00000000-0000-0000-0000-000000000001",
-            "--no-initial-controllers",
+    check_refused_cases(
+        &[
+            vec!["--node-id", "1", "--standalone", "--no-initial-controllers"],
+            vec![
+                "--node-id",
+                "1",
+                "--initial-controllers",
+                "1@one.example:9093:00000000-0000-0000-0000-000000000001",
+                "--no-initial-controllers",
+            ],
+            vec![
+                "--node-id",
+                "1",
+                "--standalone",
+                "--initial-controllers",
+                "1@one.example:9093:00000000-0000-0000-0000-000000000001",
+            ],
         ],
-        vec![
-            "--node-id",
-            "1",
-            "--standalone",
-            "--initial-controllers",
-            "1@one.example:9093:00000000-0000-0000-0000-000000000001",
-        ],
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let out = run_format(&dir, &args);
-        assert2::assert!(!out.status.success());
-        assert2::assert!(out.status.code() == Some(2));
-    }
+        2,
+    );
 }
 
 #[test]
 fn kraft_version_must_match_the_selected_format_mode() {
-    for args in [
-        vec![
-            "--node-id",
-            "1",
-            "--no-initial-controllers",
-            "--feature",
-            "kraft.version=0",
+    check_refused_cases(
+        &[
+            vec![
+                "--node-id",
+                "1",
+                "--no-initial-controllers",
+                "--feature",
+                "kraft.version=0",
+            ],
+            vec!["--node-id", "1", "--feature", "kraft.version=1"],
+            vec!["--node-id", "1", "--feature", "kraft.version=2"],
         ],
-        vec!["--node-id", "1", "--feature", "kraft.version=1"],
-        vec!["--node-id", "1", "--feature", "kraft.version=2"],
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let out = run_format(&dir, &args);
-        assert2::assert!(!out.status.success());
-        assert2::assert!(out.status.code() == Some(5));
-    }
+        5,
+    );
 
     let static_dir = tempfile::tempdir().unwrap();
     let out = run_format(

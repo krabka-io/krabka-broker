@@ -7,21 +7,25 @@ use assert2::{assert, check};
 use krabka_broker::{NodeId, codes};
 use krabka_protocol::{
     owned::{
-        delete_records_request::{
-            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
-        },
         delete_records_response::DeleteRecordsPartitionResult,
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        fetch_request::{FetchPartition, FetchRequest},
         fetch_response::PartitionData,
-        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+        list_offsets_request::ListOffsetsRequest,
         list_offsets_response::ListOffsetsPartitionResponse,
     },
     primitives::uuid::Uuid,
 };
 
 use crate::{
-    admin_harness::{build_client, create_topic_helper},
-    support::{self, start_n_node},
+    admin_harness::create_topic_helper,
+    support::{
+        self,
+        fetch::fetch_topic_row,
+        offsets::{
+            delete_records_partition, delete_records_request, delete_records_topic,
+            list_offset_partition, single_partition_list_offsets,
+        },
+    },
 };
 
 /// Request timestamp sentinel (-2) asking where the log starts. Kafka's
@@ -33,9 +37,8 @@ const EARLIEST_TIMESTAMP: i64 = -2;
 /// `log_start_offset` moves forward.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_records_trims_log_start() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (broker, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (cluster, client) = crate::support::start_n_node_client(1, "admin-handlers-test").await;
+    let broker = &cluster[0].0;
 
     create_topic_helper(&client, "t-dr", 1).await;
 
@@ -182,19 +185,13 @@ async fn trim(
     offset: i64,
 ) -> DeleteRecordsPartitionResult {
     let mut resp = client
-        .send(DeleteRecordsRequest {
-            topics: vec![DeleteRecordsTopic {
-                name: topic.into(),
-                partitions: vec![DeleteRecordsPartition {
-                    partition_index: 0,
-                    offset,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(delete_records_request(
+            vec![delete_records_topic(
+                topic,
+                vec![delete_records_partition(0, offset)],
+            )],
+            5_000,
+        ))
         .await
         .expect("delete_records");
     resp.topics.remove(0).partitions.remove(0)
@@ -231,13 +228,7 @@ async fn trimmed_view(
         earliest_offset: earliest.offset,
         fetch_error_code: fetched.error_code,
         fetch_log_start_offset: fetched.log_start_offset,
-        fetched_records: fetched
-            .records
-            .as_ref()
-            .and_then(krabka_protocol::records::RecordsPayload::as_v2)
-            .map_or(0, |batches| {
-                batches.iter().map(|batch| batch.records.len()).sum()
-            }),
+        fetched_records: crate::support::records::record_count(fetched.records.as_ref()),
     }
 }
 
@@ -250,17 +241,8 @@ async fn list_earliest(
     let mut resp = client
         .send(ListOffsetsRequest {
             replica_id: -1,
-            topics: vec![ListOffsetsTopic {
-                name: topic.into(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: 0,
-                    timestamp: EARLIEST_TIMESTAMP,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
             timeout_ms: 5_000,
-            ..Default::default()
+            ..single_partition_list_offsets(topic, list_offset_partition(0, EARLIEST_TIMESTAMP))
         })
         .await
         .expect("ListOffsets");
@@ -281,17 +263,16 @@ async fn fetch_from(
             max_wait_ms: 0,
             min_bytes: 1,
             max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: topic.into(),
+            topics: vec![fetch_topic_row(
+                topic,
                 topic_id,
-                partitions: vec![FetchPartition {
+                vec![FetchPartition {
                     partition: 0,
                     fetch_offset,
                     partition_max_bytes: 1 << 20,
                     ..Default::default()
                 }],
-                ..Default::default()
-            }],
+            )],
             ..Default::default()
         })
         .await

@@ -21,9 +21,8 @@ impl Session {
     async fn start(mechanism: SaslMechanism, max_reauth: krabka_units::Time) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let broker = match mechanism {
-            SaslMechanism::Plain => plain::start_plain_reauth_broker(dir.path(), max_reauth).await,
-            SaslMechanism::ScramSha512 => {
-                scram::start_scram_reauth_broker(dir.path(), max_reauth).await
+            SaslMechanism::Plain | SaslMechanism::ScramSha512 => {
+                harness::start_reauth_broker(dir.path(), max_reauth, mechanism).await
             }
             _ => panic!("unsupported fixture mechanism"),
         };
@@ -103,11 +102,7 @@ pub async fn capped_session_closes(mechanism: SaslMechanism) {
 }
 
 pub async fn same_principal_reopens(mechanism: SaslMechanism) {
-    let mut session = Session::start(mechanism, krabka_units::secs(30)).await;
-    session
-        .authenticate("alice")
-        .await
-        .expect("initial authenticate");
+    let mut session = Session::authenticated(mechanism).await;
     let reauth = session
         .authenticate("alice")
         .await
@@ -127,11 +122,7 @@ pub async fn same_principal_reopens(mechanism: SaslMechanism) {
 }
 
 pub async fn different_principal_closes(mechanism: SaslMechanism) {
-    let mut session = Session::start(mechanism, krabka_units::secs(30)).await;
-    session
-        .authenticate("alice")
-        .await
-        .expect("initial authenticate");
+    let mut session = Session::authenticated(mechanism).await;
     let reauth = session
         .authenticate("bob")
         .await
@@ -182,4 +173,15 @@ pub async fn repeated_expired_reauth(
         check!(!response.brokers.is_empty(), "round {round}");
     }
     session.broker.shutdown().await;
+}
+
+impl Session {
+    async fn authenticated(mechanism: SaslMechanism) -> Self {
+        let mut session = Self::start(mechanism, krabka_units::secs(30)).await;
+        session
+            .authenticate("alice")
+            .await
+            .expect("initial authenticate");
+        session
+    }
 }

@@ -87,21 +87,16 @@ mod tests {
 
     use assert2::assert;
     use krabka_ids::LeaderEpoch;
-    use krabka_remote_storage::{
-        InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
-        RemoteLogSegmentMetadataUpdate, RemoteStorageManager,
-    };
+    use krabka_remote_storage::{RemoteLogMetadataManager, RemoteLogSegmentMetadataUpdate};
     use uuid::Uuid;
 
     use super::*;
-    use crate::remote_reader::test_support::{NotReadyRlmm, populated_reader, tp};
+    use crate::remote_reader::test_support::tp;
 
     fn reader_with_metadata() -> (RemoteReader, tempfile::TempDir) {
         let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) =
+            crate::remote_log_manager::test_support::local_backends(remote_dir.path());
         (RemoteReader::new(rsm, rlmm), remote_dir)
     }
 
@@ -230,10 +225,9 @@ mod tests {
 
     #[tokio::test]
     async fn earliest_offset_returns_lowest_finished_start() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let (reader, log) = populated_reader(log_dir.path(), remote_dir.path());
-        let exports = log.tierable_segments();
+        crate::remote_reader::test_support::populated_reader_fixture!(
+            log_dir, remote_dir, reader, log, exports
+        );
         // Unwrap the log-layer `Offset` into this test's `i64` world at the seam.
         let expected = exports.iter().map(|e| e.base_offset.0).min().unwrap();
         let got = reader.earliest_offset(&tp()).await.unwrap();
@@ -243,19 +237,17 @@ mod tests {
     #[tokio::test]
     async fn earliest_offset_returns_none_when_no_finished_segments() {
         let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) =
+            crate::remote_log_manager::test_support::local_backends(remote_dir.path());
         let reader = RemoteReader::new(rsm, rlmm);
         assert!(reader.earliest_offset(&tp()).await.unwrap() == None);
     }
 
     #[tokio::test]
     async fn latest_tiered_offset_uses_highest_finished_segment_and_its_epoch() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let (reader, log) = populated_reader(log_dir.path(), remote_dir.path());
+        crate::remote_reader::test_support::populated_reader_fixture!(
+            log_dir, remote_dir, reader, log
+        );
         let expected = log
             .tierable_segments()
             .iter()
@@ -299,11 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn earliest_offset_propagates_not_ready() {
-        let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(NotReadyRlmm);
-        let reader = RemoteReader::new(rsm, rlmm);
+        let (_remote_dir, reader) = crate::remote_reader::test_support::not_ready_reader();
         let err = reader.earliest_offset(&tp()).await.unwrap_err();
         assert!(matches!(err, RemoteStorageError::NotReady { .. }));
         let err = reader.latest_tiered_offset(&tp()).await.unwrap_err();
@@ -344,6 +332,8 @@ mod tests {
         }
     }
 
+    krabka_macros::remote_started_segment!(synthetic_started_segment, krabka_remote_storage);
+
     #[tokio::test(flavor = "multi_thread")]
     async fn list_path_observes_not_ready_and_unassigned_from_real_manager() {
         use krabka_remote_storage_topic::{
@@ -381,20 +371,7 @@ mod tests {
                 .reconcile_assignment(&(0..n).collect::<Vec<_>>())
                 .await;
             let id = krabka_remote_storage::RemoteLogSegmentId::new(owned.clone(), Uuid::new_v4());
-            let md = RemoteLogSegmentMetadata::new(
-                id.clone(),
-                0,
-                99,
-                100,
-                1,
-                100,
-                krabka_remote_storage::RemoteLogSegmentDetails::new(
-                    2048,
-                    RemoteLogSegmentState::CopySegmentStarted,
-                    maplit::btreemap! {LeaderEpoch(0) => 0},
-                ),
-            )
-            .unwrap();
+            let md = synthetic_started_segment(id.clone(), 0, 99, 100);
             let w2 = writer.clone();
             let md2 = md.clone();
             tokio::task::spawn_blocking(move || {
@@ -429,11 +406,8 @@ mod tests {
         )
         .unwrap();
 
-        let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> = m.clone();
-        let reader = RemoteReader::new(rsm, rlmm);
+        let (_remote_dir, reader) =
+            crate::remote_reader::test_support::reader_with_metadata(|| m.clone());
 
         // Unowned partition (never assigned) → the list path treats it as a
         // genuine miss: empty, not an error.

@@ -1,11 +1,15 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
-use super::restored_aborts::{abort_intersects_fetch, restored_abort_index_valid};
+use super::restored_aborts::{
+    restored_abort_index_valid, wire_abort_from_source, wire_aborts_cover_source,
+};
 use super::{
     FetchWatermarks, RestoreAbortedTxn, RestoreSegmentExtent, committed_fetch_excludes_unstable,
     restored_abort_sources_cover_committed_fetch, truncation_frontier,
 };
+#[cfg(creusot)]
+use crate::transaction::pending_starts_bound_fetch;
 
 type StableAbortFetch = (i64, i64, Vec<(i64, i64)>);
 
@@ -21,27 +25,16 @@ type StableAbortFetch = (i64, i64, Vec<(i64, i64)>);
     Some((lso, limit, rows)) => restored_abort_index_valid(remote@, owners.0)
         && restored_abort_index_valid(local@, owners.1)
         && lso@ <= w.log_end@
-        && (forall<i: Int> 0 <= i && i < starts@.len()
-            ==> starts@[i]@ <= w.log_end@ && lso@ <= starts@[i]@ && limit@ <= starts@[i]@)
+        && (pending_starts_bound_fetch(starts@, w.log_end@, lso@, limit@))
         && ((starts@.len() == 0 && lso@ == w.log_end@)
             || (exists<i: Int> 0 <= i && i < starts@.len() && lso@ == starts@[i]@))
         && limit@ == lso@.min(w.hw@).min(w.deliverable@).min(cut@)
-        && (forall<i: Int, j: Int> 0 <= i && i < j && j < rows@.len() ==> rows@[i] != rows@[j])
+        && (crate::sequence::distinct(rows@))
         && (forall<i: Int> 0 <= i && i < rows@.len() ==>
-            (exists<j: Int> 0 <= j && j < remote@.len()
-                && rows@[i] == (remote@[j].producer_id, remote@[j].start_offset)
-                && abort_intersects_fetch(remote@[j], from@, limit@))
-            || (exists<j: Int> 0 <= j && j < local@.len()
-                && rows@[i] == (local@[j].producer_id, local@[j].start_offset)
-                && abort_intersects_fetch(local@[j], from@, limit@)))
-        && (forall<i: Int> 0 <= i && i < remote@.len()
-            && abort_intersects_fetch(remote@[i], from@, limit@)
-            ==> exists<j: Int> 0 <= j && j < rows@.len()
-                && rows@[j] == (remote@[i].producer_id, remote@[i].start_offset))
-        && (forall<i: Int> 0 <= i && i < local@.len()
-            && abort_intersects_fetch(local@[i], from@, limit@)
-            ==> exists<j: Int> 0 <= j && j < rows@.len()
-                && rows@[j] == (local@[i].producer_id, local@[i].start_offset)),
+            wire_abort_from_source(remote@, rows@[i], from@, limit@)
+            || wire_abort_from_source(local@, rows@[i], from@, limit@))
+        && wire_aborts_cover_source(remote@, rows@, from@, limit@)
+        && wire_aborts_cover_source(local@, rows@, from@, limit@),
 })]
 #[ensures(match result {
     None => true,

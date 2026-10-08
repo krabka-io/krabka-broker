@@ -6,12 +6,18 @@ use std::sync::atomic::Ordering;
 
 use assert2::{assert, check};
 
-use super::*;
-use crate::coordinator::unified::{
-    GroupCoordinator, actor::MetadataProvider, config::NextGenConfig,
-    offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-    share::config::ShareGroupConfig, streams::config::KEY_NUM_STANDBY_REPLICAS,
+use super::{
+    test_support::{
+        coordinator_with_log, describe, heartbeat_result_at, make_coordinator, member_request,
+        response_tasks, undelayed,
+    },
+    *,
 };
+use crate::coordinator::unified::{
+    offsets_log::fake::InMemoryOffsetsLog, streams::config::KEY_NUM_STANDBY_REPLICAS,
+};
+
+krabka_macros::single_replica_partition_fixture!(partition_record);
 
 #[test]
 fn persisted_group_config_overrides_actor_defaults() {
@@ -31,50 +37,10 @@ fn persisted_group_config_overrides_actor_defaults() {
     assert!(unaffected == StreamsGroupConfig::default());
 }
 
-/// The default config with no initial rebalance delay and no assignment
-/// interval, so that every change assigns at once.
-fn undelayed() -> StreamsGroupConfig {
-    StreamsGroupConfig {
-        initial_rebalance_delay: std::time::Duration::ZERO,
-        assignment_interval: std::time::Duration::ZERO,
-        ..StreamsGroupConfig::default()
-    }
-}
-
-#[derive(Debug)]
-struct EmptyMetadata;
-impl MetadataProvider for EmptyMetadata {
-    fn snapshot(&self) -> ReconcileInput {
-        ReconcileInput::default()
-    }
-}
-
-/// Builds a coordinator with no connected `MetadataSource`, so reconcile
-/// falls through to `NotReady`, and with a fake offsets log.
-fn make_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
-    let log = Arc::new(InMemoryOffsetsLog::default());
-    let metadata: Arc<dyn MetadataProvider> = Arc::new(EmptyMetadata);
-    let coord = Arc::new(GroupCoordinator::new(
-        NextGenConfig::default(),
-        ShareGroupConfig::default(),
-        metadata,
-        log.clone(),
-        undelayed(),
-    ));
-    (coord, log)
-}
-
 /// The member ids that the group holds, sorted.
 async fn describe_member_ids(handle: &StreamsGroupActorHandle) -> Vec<String> {
-    let (tx, rx) = oneshot::channel();
-    handle
-        .tx
-        .send(StreamsGroupActorMessage::Describe { reply: tx })
+    let mut ids: Vec<String> = describe(handle)
         .await
-        .unwrap();
-    let mut ids: Vec<String> = rx
-        .await
-        .unwrap()
         .members
         .into_iter()
         .map(|member| member.member_id)
@@ -95,26 +61,6 @@ async fn heartbeat_result(
     .await
 }
 
-async fn heartbeat_result_at(
-    handle: &StreamsGroupActorHandle,
-    req: StreamsGroupHeartbeatRequest,
-    version: i16,
-) -> StreamsHeartbeatResult {
-    let (tx, rx) = oneshot::channel();
-    handle
-        .tx
-        .send(StreamsGroupActorMessage::Heartbeat {
-            request: Box::new(req),
-            version,
-            client_id: "client".into(),
-            client_host: "/127.0.0.1".into(),
-            reply: tx,
-        })
-        .await
-        .unwrap();
-    rx.await.unwrap()
-}
-
 async fn heartbeat(
     handle: &StreamsGroupActorHandle,
     req: StreamsGroupHeartbeatRequest,
@@ -126,16 +72,7 @@ async fn heartbeat(
 async fn first_join_advances_epoch_not_ready() {
     let (coord, _log) = make_coordinator();
     let handle = coord.get_or_create_streams("g");
-    let resp = heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            ..Default::default()
-        },
-    )
-    .await;
+    let resp = heartbeat(&handle, member_request("m1", 0)).await;
     check!(resp.error_code == codes::NONE);
     check!(resp.member_id == "m1");
     // No metadata source / no topology → NotReady, empty assignment, but the
@@ -151,28 +88,10 @@ async fn first_join_advances_epoch_not_ready() {
 async fn second_heartbeat_at_right_epoch_accepted() {
     let (coord, _log) = make_coordinator();
     let handle = coord.get_or_create_streams("g");
-    let join = heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            ..Default::default()
-        },
-    )
-    .await;
+    let join = heartbeat(&handle, member_request("m1", 0)).await;
     assert!(join.error_code == codes::NONE);
     let epoch = join.member_epoch;
-    let resp = heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: epoch,
-            ..Default::default()
-        },
-    )
-    .await;
+    let resp = heartbeat(&handle, member_request("m1", epoch)).await;
     assert!(resp.error_code == codes::NONE);
     assert!(resp.member_epoch == epoch);
 }
@@ -180,33 +99,19 @@ async fn second_heartbeat_at_right_epoch_accepted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn member_limit_rejects_only_new_members() {
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let metadata: Arc<dyn MetadataProvider> = Arc::new(EmptyMetadata);
-    let coord = Arc::new(GroupCoordinator::new(
-        NextGenConfig::default(),
-        ShareGroupConfig::default(),
-        metadata,
-        log,
+    let coord = coordinator_with_log(
         StreamsGroupConfig {
             max_size: 1,
             ..undelayed()
         },
-    ));
+        log,
+    );
     let handle = coord.get_or_create_streams("g");
-    let request = |member_id: &str, member_epoch| StreamsGroupHeartbeatRequest {
-        group_id: "g".into(),
-        member_id: member_id.into(),
-        member_epoch,
-        ..Default::default()
-    };
-
-    crate::coordinator::unified::test_support::assert_single_member_limit(|id, epoch| {
-        let request = request(id, epoch);
-        let handle = Arc::clone(&handle);
-        async move {
-            let response = heartbeat(&handle, request).await;
-            (response.error_code, response.member_epoch)
-        }
-    })
+    crate::coordinator::unified::test_support::assert_single_member_limit(
+        &handle,
+        member_request,
+        heartbeat,
+    )
     .await;
 }
 
@@ -221,24 +126,16 @@ async fn a_known_member_that_rejoins_a_full_group_is_refused_by_4_3_1_only() {
         (Disabled, codes::GROUP_MAX_SIZE_REACHED),
         (Enabled, codes::NONE),
     ] {
-        let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig::default(),
-            ShareGroupConfig::default(),
-            Arc::new(EmptyMetadata),
-            Arc::new(InMemoryOffsetsLog::default()),
+        let coord = coordinator_with_log(
             StreamsGroupConfig {
                 max_size: 1,
                 unstable_api_versions: unstable,
                 ..undelayed()
             },
-        ));
+            Arc::new(InMemoryOffsetsLog::default()),
+        );
         let handle = coord.get_or_create_streams("g");
-        let join = StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            ..Default::default()
-        };
+        let join = member_request("m1", 0);
 
         let joined = heartbeat(&handle, join.clone()).await;
         let rejoined = heartbeat(&handle, join).await;
@@ -359,16 +256,7 @@ async fn member_epoch_rule_matches_kafka() {
 async fn leave_of_an_unknown_member_is_refused_and_writes_nothing() {
     let (coord, log) = make_coordinator();
     let handle = coord.get_or_create_streams("g");
-    let joined = heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            ..Default::default()
-        },
-    )
-    .await;
+    let joined = heartbeat(&handle, member_request("m1", 0)).await;
     check!(joined.error_code == codes::NONE);
     let before = log.batches().await;
 
@@ -396,27 +284,9 @@ async fn leave_of_an_unknown_member_is_refused_and_writes_nothing() {
 async fn fenced_epoch_is_rejected() {
     let (coord, _log) = make_coordinator();
     let handle = coord.get_or_create_streams("g");
-    let join = heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            ..Default::default()
-        },
-    )
-    .await;
+    let join = heartbeat(&handle, member_request("m1", 0)).await;
     assert!(join.member_epoch == 2);
-    let resp = heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 99,
-            ..Default::default()
-        },
-    )
-    .await;
+    let resp = heartbeat(&handle, member_request("m1", 99)).await;
     assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
 }
 
@@ -427,26 +297,9 @@ async fn fenced_epoch_is_rejected() {
 /// up again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
-    let uncommitted =
-        |code| Some(crate::error::BrokerError::CoordinatorWriteUncommitted { partition: 0, code });
-    let cases = [
-        (
-            "the partition writer is gone",
-            None,
-            codes::COORDINATOR_LOAD_IN_PROGRESS,
-        ),
-        (
-            "the leadership moved before the write committed",
-            uncommitted(codes::NOT_COORDINATOR),
-            codes::NOT_COORDINATOR,
-        ),
-        (
-            "the write did not commit in time",
-            uncommitted(codes::COORDINATOR_NOT_AVAILABLE),
-            codes::COORDINATOR_NOT_AVAILABLE,
-        ),
-    ];
-    for (what, failure, expected) in cases {
+    for (what, failure, expected) in
+        crate::coordinator::unified::test_support::heartbeat_write_failures()
+    {
         let (coord, log) = make_coordinator();
         let handle = coord.get_or_create_streams("g");
         match failure {
@@ -456,16 +309,7 @@ async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
             None => log.fail_next.store(true, Ordering::SeqCst),
         }
 
-        let response = heartbeat(
-            &handle,
-            StreamsGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-                member_epoch: 0,
-                ..Default::default()
-            },
-        )
-        .await;
+        let response = heartbeat(&handle, member_request("m1", 0)).await;
 
         check!(
             response == super::response::error_resp(expected, None),
@@ -504,13 +348,7 @@ async fn leave_removes_member() {
     .await;
     assert!(resp.error_code == codes::NONE);
     assert!(resp.member_epoch == -1);
-    let batches = log.batches().await;
-    assert!(batches.len() == pre_leave + 1);
-    let leave_batch = &batches[batches.len() - 1];
-    assert!(
-        leave_batch.records.iter().any(|r| r.value.is_none()),
-        "leave batch must contain at least one tombstone"
-    );
+    crate::coordinator::unified::test_support::assert_next_tombstone_batch(&log, pre_leave).await;
 }
 
 /// A heartbeat applies the member fields that it carries, a rejoin at epoch 0
@@ -587,9 +425,7 @@ fn image_of(
     broker_rack: Option<&str>,
     topics: &[(&str, u8, i32)],
 ) -> krabka_metadata::MetadataImage {
-    use krabka_metadata::{
-        BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord,
-    };
+    use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, TopicRecord};
 
     let broker = krabka_audit::NodeId(1);
     let mut records = vec![MetadataRecord::V1BrokerRegistration(
@@ -606,18 +442,9 @@ fn image_of(
             replication_factor: 1,
         }));
         for partition in 0..partitions {
-            records.push(MetadataRecord::V1Partition(PartitionRecord {
-                topic: name.into(),
-                partition,
-                leader: broker,
-                replicas: vec![broker],
-                isr: vec![broker],
-                leader_epoch: LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }));
+            records.push(MetadataRecord::V1Partition(partition_record(
+                name, partition, broker,
+            )));
         }
     }
     krabka_metadata::MetadataImage::from_records(uuid::Uuid::nil(), &records)
@@ -660,9 +487,7 @@ fn one_subtopology(
 /// compares the whole response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() {
-    use krabka_protocol::owned::common::streams_group_heartbeat_response::{
-        status::Status, task_ids::TaskIds,
-    };
+    use krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status;
 
     use crate::{
         coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
@@ -807,25 +632,8 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         )
         .await;
 
-        let tasks = |partitions: Vec<i32>| {
-            if partitions.is_empty() {
-                vec![]
-            } else {
-                vec![TaskIds {
-                    subtopology_id: "0".into(),
-                    partitions,
-                    ..Default::default()
-                }]
-            }
-        };
-        let expected = StreamsGroupHeartbeatResponse {
-            member_id: "m1".into(),
-            status: row.status,
-            standby_tasks: row.active.as_ref().map(|_| vec![]),
-            warmup_tasks: row.active.as_ref().map(|_| vec![]),
-            active_tasks: row.active.map(tasks),
-            ..super::response::base_resp(codes::NONE, row.epoch, &undelayed())
-        };
+        let expected =
+            super::test_support::expected_active_response("m1", row.epoch, row.status, row.active);
         check!(resp == expected, "{}", row.name);
     }
 }
@@ -925,16 +733,7 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
         FakeMetadataSource::builder().image(image()).build(),
     ));
     after.update_streams_cache("g", seed);
-    let result = heartbeat_result(
-        &after.get_or_create_streams("g"),
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 2,
-            ..Default::default()
-        },
-    )
-    .await;
+    let result = heartbeat_result(&after.get_or_create_streams("g"), member_request("m1", 2)).await;
 
     check!(
         result.creatable_topics
@@ -969,10 +768,7 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
 /// the loaded member revokes both of its tasks instead.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() {
-    use krabka_protocol::owned::common::{
-        streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds,
-        streams_group_heartbeat_response::task_ids::TaskIds,
-    };
+    use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds;
 
     use crate::test_support::FakeMetadataSource;
 
@@ -1014,25 +810,7 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
         ..Default::default()
     };
     let expected = |member_id: &str, epoch, active: Option<Vec<i32>>| {
-        let tasks = |partitions: Vec<i32>| {
-            if partitions.is_empty() {
-                vec![]
-            } else {
-                vec![TaskIds {
-                    subtopology_id: "0".into(),
-                    partitions,
-                    ..Default::default()
-                }]
-            }
-        };
-        StreamsGroupHeartbeatResponse {
-            member_id: member_id.into(),
-            status: Some(vec![]),
-            standby_tasks: active.as_ref().map(|_| vec![]),
-            warmup_tasks: active.as_ref().map(|_| vec![]),
-            active_tasks: active.map(tasks),
-            ..super::response::base_resp(codes::NONE, epoch, &undelayed())
-        }
+        super::test_support::expected_active_response(member_id, epoch, Some(vec![]), active)
     };
 
     let (before, _log) = make_coordinator();
@@ -1241,7 +1019,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
     use std::collections::HashMap;
 
     use krabka_protocol::owned::{
-        common::streams_group_heartbeat_response::{status::Status, task_ids::TaskIds},
+        common::streams_group_heartbeat_response::status::Status,
         streams_group_heartbeat_request::{Subtopology, Topology},
     };
 
@@ -1405,9 +1183,10 @@ async fn the_heartbeat_status_list_follows_kafka() {
             last = Some(resp);
         }
 
-        let expected = StreamsGroupHeartbeatResponse {
-            member_id: row.member.into(),
-            status: Some(
+        let expected = super::test_support::expected_active_response(
+            row.member,
+            row.epoch,
+            Some(
                 row.status
                     .iter()
                     .map(|(status_code, detail)| Status {
@@ -1417,21 +1196,8 @@ async fn the_heartbeat_status_list_follows_kafka() {
                     })
                     .collect(),
             ),
-            standby_tasks: row.active.as_ref().map(|_| vec![]),
-            warmup_tasks: row.active.as_ref().map(|_| vec![]),
-            active_tasks: row.active.map(|partitions| {
-                if partitions.is_empty() {
-                    vec![]
-                } else {
-                    vec![TaskIds {
-                        subtopology_id: "0".into(),
-                        partitions,
-                        ..Default::default()
-                    }]
-                }
-            }),
-            ..super::response::base_resp(codes::NONE, row.epoch, &undelayed())
-        };
+            row.active,
+        );
         check!(last == Some(expected), "{}", row.name);
     }
 }
@@ -1580,16 +1346,13 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
                 .image(image_of(None, &[("in", 1, partitions)]))
                 .build(),
         );
-        let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig::default(),
-            ShareGroupConfig::default(),
-            Arc::new(EmptyMetadata),
-            Arc::new(InMemoryOffsetsLog::default()),
+        let coord = coordinator_with_log(
             StreamsGroupConfig {
                 max_size,
                 ..undelayed()
             },
-        ));
+            Arc::new(InMemoryOffsetsLog::default()),
+        );
         coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
         let mut epochs: HashMap<&str, i32> = HashMap::new();
@@ -1812,15 +1575,8 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
             resp == super::response::error_resp(codes::INVALID_REQUEST, Some(message.into())),
             "{name}"
         );
-        let (tx, rx) = oneshot::channel();
-        handle
-            .tx
-            .send(StreamsGroupActorMessage::Describe { reply: tx })
+        let members: Vec<String> = describe(&handle)
             .await
-            .unwrap();
-        let members: Vec<String> = rx
-            .await
-            .unwrap()
             .members
             .into_iter()
             .map(|m| m.member_id)
@@ -1961,13 +1717,7 @@ async fn a_static_member_follows_kafka_static_membership() {
                 .image(image_of(None, &[("in", 1, 1)]))
                 .build(),
         );
-        let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig::default(),
-            ShareGroupConfig::default(),
-            Arc::new(EmptyMetadata),
-            Arc::new(InMemoryOffsetsLog::default()),
-            config.clone(),
-        ));
+        let coord = coordinator_with_log(config.clone(), Arc::new(InMemoryOffsetsLog::default()));
         coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
         check!(
@@ -1981,15 +1731,8 @@ async fn a_static_member_follows_kafka_static_membership() {
         }
 
         check!(last == Some(expected), "{name}");
-        let (tx, rx) = oneshot::channel();
-        handle
-            .tx
-            .send(StreamsGroupActorMessage::Describe { reply: tx })
+        let mut described: Vec<(String, i32, Vec<i32>)> = describe(&handle)
             .await
-            .unwrap();
-        let mut described: Vec<(String, i32, Vec<i32>)> = rx
-            .await
-            .unwrap()
             .members
             .into_iter()
             .map(|member| {
@@ -2193,17 +1936,13 @@ async fn a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1
 
     for row in rows {
         let log = Arc::new(InMemoryOffsetsLog::default());
-        let metadata: Arc<dyn MetadataProvider> = Arc::new(EmptyMetadata);
-        let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig::default(),
-            ShareGroupConfig::default(),
-            metadata,
-            log,
+        let coord = coordinator_with_log(
             StreamsGroupConfig {
                 rack_aware_assignment_tags: row.tags.iter().map(|tag| (*tag).to_owned()).collect(),
                 ..undelayed()
             },
-        ));
+            log,
+        );
         coord.set_metadata_source(Arc::new(
             FakeMetadataSource::builder()
                 .image(image_of(None, &[("in", 1, 1)]))
@@ -2500,17 +2239,14 @@ async fn assignment_waits_for_the_initial_delay_and_the_interval() {
     ];
 
     for (name, delay_ms, interval_ms, steps) in rows {
-        let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig::default(),
-            ShareGroupConfig::default(),
-            Arc::new(EmptyMetadata),
-            Arc::new(InMemoryOffsetsLog::default()),
+        let coord = coordinator_with_log(
             StreamsGroupConfig {
                 initial_rebalance_delay: Duration::from_millis(delay_ms),
                 assignment_interval: Duration::from_millis(interval_ms),
                 ..StreamsGroupConfig::default()
             },
-        ));
+            Arc::new(InMemoryOffsetsLog::default()),
+        );
         let handle = coord.get_or_create_streams("g");
         for (member_id, member_epoch, advance_ms, want_epoch, want_delay) in steps {
             tokio::time::sleep(Duration::from_millis(advance_ms)).await;
@@ -2556,22 +2292,11 @@ fn accepted_tasks(
     member_epoch: i32,
     tasks: Option<&[i32]>,
 ) -> StreamsGroupHeartbeatResponse {
-    use krabka_protocol::owned::common::streams_group_heartbeat_response::task_ids::TaskIds;
     let config = undelayed();
     StreamsGroupHeartbeatResponse {
         member_id: member_id.into(),
         status: Some(vec![]),
-        active_tasks: tasks.map(|partitions| {
-            if partitions.is_empty() {
-                vec![]
-            } else {
-                vec![TaskIds {
-                    subtopology_id: "0".into(),
-                    partitions: partitions.to_vec(),
-                    ..Default::default()
-                }]
-            }
-        }),
+        active_tasks: tasks.map(|partitions| response_tasks(partitions.to_vec())),
         standby_tasks: tasks.map(|_| vec![]),
         warmup_tasks: tasks.map(|_| vec![]),
         ..super::response::base_resp(codes::NONE, member_epoch, &config)

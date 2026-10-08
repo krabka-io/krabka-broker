@@ -131,16 +131,10 @@ pub(super) async fn list_one_at_epoch(
 #[derive(Debug)]
 pub(super) struct DenyNamed(pub(super) std::collections::HashSet<&'static str>);
 
-impl crate::authorizer::Authorizer for DenyNamed {
-    fn authorize(
-        &self,
-        _source: &dyn krabka_authz::AclSource,
-        req: &crate::authorizer::AuthorizationRequest<'_>,
-    ) -> crate::authorizer::AuthorizationResult {
-        if self.0.contains(req.resource_name) {
-            crate::authorizer::AuthorizationResult::Deny
-        } else {
-            crate::authorizer::AuthorizationResult::Allow
-        }
+test_authorizer!(DenyNamed, (self, _source, req), {
+    if self.0.contains(req.resource_name) {
+        crate::authorizer::AuthorizationResult::Deny
+    } else {
+        crate::authorizer::AuthorizationResult::Allow
     }
-}
+});

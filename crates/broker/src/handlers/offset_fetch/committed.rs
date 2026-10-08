@@ -13,11 +13,13 @@
 //! decides between the two per partition and must see one consistent snapshot
 //! of both.
 
+use krabka_protocol::owned::offset_fetch_response as wire;
+
 use crate::{
     broker::Broker,
     coordinator::unified::{
         actor::GroupActorMessage,
-        group::{GroupOffsets, OffsetFetchMember},
+        group::{GroupOffsets, OffsetEntry, OffsetFetchMember},
     },
     task_util::ask,
 };
@@ -49,3 +51,50 @@ pub(super) async fn fetch_offsets(
     .await
     .unwrap_or_else(|_| Ok(GroupOffsets::default()))
 }
+
+/// Build the topic-name ordered fetch-all view using either wire row shape.
+pub(super) fn committed_topics<T>(
+    offsets: &GroupOffsets,
+    mut row: impl FnMut(&str, i32) -> T,
+) -> std::collections::BTreeMap<&str, Vec<T>> {
+    let mut by_topic = std::collections::BTreeMap::<&str, Vec<T>>::new();
+    for (topic, partition) in offsets.committed.keys() {
+        by_topic
+            .entry(topic.as_str())
+            .or_default()
+            .push(row(topic, *partition));
+    }
+    by_topic
+}
+
+/// The two wire shapes carry identical committed and invalid-offset fields.
+/// Missing rows carry offset/epoch -1 and an empty metadata string, never null,
+/// as Kafka's offset manager and topic-authorization refusals both require.
+macro_rules! partition_rows {
+    ($($row:ident => ($missing:ident, $stable:ident)),+ $(,)?) => {
+        $(pub(super) fn $missing(partition_index: i32, error_code: i16) -> wire::$row {
+            wire::$row {
+                partition_index,
+                committed_offset: -1,
+                committed_leader_epoch: -1,
+                metadata: Some(String::new()),
+                error_code,
+                ..Default::default()
+            }
+        }
+        pub(super) fn $stable(partition_index: i32, entry: &OffsetEntry) -> wire::$row {
+            wire::$row {
+                partition_index,
+                committed_offset: entry.offset.0,
+                committed_leader_epoch: entry.leader_epoch,
+                metadata: Some(entry.metadata.clone()),
+                error_code: crate::codes::NONE,
+                ..Default::default()
+            }
+        })+
+    };
+}
+partition_rows!(
+    OffsetFetchResponsePartition => (missing_legacy_row, stable_legacy_row),
+    OffsetFetchResponsePartitions => (missing_group_row, stable_group_row),
+);

@@ -99,12 +99,7 @@ fn site_of(brokers: &[(u64, Option<&str>)], node_id: NodeId) -> String {
 /// The sites of one replica list, sorted, so the caller can compare the
 /// spread without depending on the replica order.
 fn sites_of(brokers: &[(u64, Option<&str>)], replicas: &[NodeId]) -> Vec<String> {
-    let mut sites = replicas
-        .iter()
-        .map(|node_id| site_of(brokers, *node_id))
-        .collect::<Vec<_>>();
-    sites.sort();
-    sites
+    crate::handlers::test_support::sorted_replica_sites(replicas, |node| site_of(brokers, node))
 }
 
 fn broker_views(
@@ -343,6 +338,24 @@ fn a_fenced_broker_is_out_of_controlled_shutdown() {
         /// replication factor 3, or the `CreateTopics` refusal.
         created: Result<(Vec<NodeId>, Vec<NodeId>), String>,
     }
+    impl Case {
+        fn fenced_last_resort(
+            what: &'static str,
+            registration_fenced: bool,
+            registry_unavailable: &'static [u64],
+        ) -> Self {
+            Self {
+                what,
+                registration_fenced,
+                registry_unavailable,
+                views: vec![(NodeId(1), false), (NodeId(2), false), (NodeId(3), true)],
+                created: Ok((
+                    vec![NodeId(1), NodeId(2), NodeId(3)],
+                    vec![NodeId(1), NodeId(2)],
+                )),
+            }
+        }
+    }
     let cases = [
         Case {
             what: "still in controlled shutdown",
@@ -356,26 +369,12 @@ fn a_fenced_broker_is_out_of_controlled_shutdown() {
                     .to_owned(),
             ),
         },
-        Case {
-            what: "stopped after its controlled shutdown",
-            registration_fenced: true,
-            registry_unavailable: &[],
-            views: vec![(NodeId(1), false), (NodeId(2), false), (NodeId(3), true)],
-            created: Ok((
-                vec![NodeId(1), NodeId(2), NodeId(3)],
-                vec![NodeId(1), NodeId(2)],
-            )),
-        },
-        Case {
-            what: "session expired on the controller before the fence is replicated",
-            registration_fenced: false,
-            registry_unavailable: &[3],
-            views: vec![(NodeId(1), false), (NodeId(2), false), (NodeId(3), true)],
-            created: Ok((
-                vec![NodeId(1), NodeId(2), NodeId(3)],
-                vec![NodeId(1), NodeId(2)],
-            )),
-        },
+        Case::fenced_last_resort("stopped after its controlled shutdown", true, &[]),
+        Case::fenced_last_resort(
+            "session expired on the controller before the fence is replicated",
+            false,
+            &[3],
+        ),
     ];
     for case in cases {
         let mut image = stretch_image(&[(1, None), (2, None), (3, None)], &[], None);

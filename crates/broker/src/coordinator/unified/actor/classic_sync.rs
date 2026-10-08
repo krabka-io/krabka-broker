@@ -177,59 +177,28 @@ mod tests {
     use super::*;
     use crate::coordinator::unified::{
         actor::{
-            DescribeMember, GroupActorHandle, GroupActorMessage,
+            GroupActorMessage,
             test_support::{
-                completing_classic_group, decode_assignment, last_classic_metadata,
-                make_coordinator, make_coordinator_with_topic_policy, rpc, seed_and_upgrade,
+                decode_assignment, last_classic_metadata, make_coordinator, rpc, seed_and_upgrade,
+                upgrade_and_rejoin_classic, upgrade_coordinator,
             },
         },
         classic_state::GroupState as ClassicGroupState,
     };
 
-    /// The live `Describe` view of one member.
-    async fn describe_member(handle: &GroupActorHandle, member_id: &str) -> DescribeMember {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
-            .await
-            .unwrap();
-        rx.await
-            .unwrap()
-            .members
-            .into_iter()
-            .find(|m| m.member_id == member_id)
-            .expect("member in the describe view")
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_leader_sync_persists_complete_stable_snapshot() {
-        use krabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment;
-
         let (coord, log) = make_coordinator();
-        let group = completing_classic_group(&["m1", "m2"]);
-        let generation = group.as_classic().unwrap().generation_id;
-        coord.seed_classic("g", Box::new(group));
-        let handle = coord.find("g").unwrap();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicSync {
-                req: SyncGroupRequest {
-                    group_id: "g".into(),
-                    generation_id: generation,
-                    member_id: "m1".into(),
-                    assignments: vec![SyncGroupRequestAssignment {
-                        member_id: "m1".into(),
-                        assignment: Bytes::from_static(b"assignment"),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
-                reply: tx,
-            })
-            .await
-            .unwrap();
+        let (handle, generation) =
+            crate::coordinator::unified::actor::test_support::seed_completing_classic(
+                &coord,
+                &["m1", "m2"],
+            );
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicSync {
+            req: rpc::assignment_sync_request(generation, "m1", Bytes::from_static(b"assignment")),
+            reply: tx,
+        })
+        .await;
 
         check!(rx.await.unwrap().error_code == codes::NONE);
         let persisted = last_classic_metadata(&log).await;
@@ -258,36 +227,22 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_sync_append_failure_rolls_back_and_can_retry() {
-        use krabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment;
-
         let (coord, log) = make_coordinator();
-        let group = completing_classic_group(&["m1"]);
-        let generation = group.as_classic().unwrap().generation_id;
-        coord.seed_classic("g", Box::new(group));
-        let handle = coord.find("g").unwrap();
+        let (handle, generation) =
+            crate::coordinator::unified::actor::test_support::seed_completing_classic(
+                &coord,
+                &["m1"],
+            );
         log.fail_next
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        let request = SyncGroupRequest {
-            group_id: "g".into(),
-            generation_id: generation,
-            member_id: "m1".into(),
-            assignments: vec![SyncGroupRequestAssignment {
-                member_id: "m1".into(),
-                assignment: Bytes::from_static(b"assignment"),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let request =
+            rpc::assignment_sync_request(generation, "m1", Bytes::from_static(b"assignment"));
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicSync {
-                req: request.clone(),
-                reply: tx,
-            })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicSync {
+            req: request.clone(),
+            reply: tx,
+        })
+        .await;
         let failure = rx.await.unwrap();
         check!(
             failure
@@ -301,15 +256,11 @@ mod tests {
         check!(view.members[0].assignment.is_none());
         check!(log.batches().await.is_empty());
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicSync {
-                req: request,
-                reply: tx,
-            })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicSync {
+            req: request,
+            reply: tx,
+        })
+        .await;
         check!(rx.await.unwrap().error_code == codes::NONE);
         check!(log.batches().await.len() == 1);
     }
@@ -319,11 +270,7 @@ mod tests {
         // `Upgrade` policy: the native member's leave in `seed_and_upgrade`
         // must NOT downgrade the group back to classic — this test exercises
         // serving a hosted classic member from the consumer-kind reconciler.
-        let (coord, _log) = make_coordinator_with_topic_policy(
-            "t",
-            2,
-            crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
-        );
+        let (coord, _log) = upgrade_coordinator();
         let handle = seed_and_upgrade(&coord, "t").await;
 
         // 1. Heartbeat: the upgrade gave m-classic a target that differs from
@@ -337,7 +284,7 @@ mod tests {
         //    success as a follower, with no leader and no member list, at the
         //    member epoch.
         let join = rpc::classic_join(&handle, "m-classic", "t").await;
-        let member = describe_member(&handle, "m-classic").await;
+        let member = rpc::describe_member(&handle, "m-classic").await;
         check!(
             join == crate::coordinator::unified::actor::JoinResult {
                 error_code: codes::NONE,
@@ -378,14 +325,9 @@ mod tests {
     /// still holds — the KIP-848 safety property `reconcile_member` documents.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn native_member_sync_group_is_rejected_and_changes_no_assignment() {
-        let (coord, _log) = make_coordinator_with_topic_policy(
-            "t",
-            2,
-            crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
-        );
-        let handle = seed_and_upgrade(&coord, "t").await;
+        let (coord, _log) = upgrade_coordinator();
         // The hosted classic member syncs, so it holds both partitions of "t".
-        let join = rpc::classic_join(&handle, "m-classic", "t").await;
+        let (handle, join) = upgrade_and_rejoin_classic(&coord).await;
         assert!(
             rpc::classic_sync(&handle, "m-classic", join.generation_id)
                 .await
@@ -399,18 +341,18 @@ mod tests {
         let native = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
         assert!(native.error_code == codes::NONE);
         let native_id = native.member_id.expect("native member id");
-        let before = describe_member(&handle, &native_id).await;
-        let classic_before = describe_member(&handle, "m-classic").await;
+        let before = rpc::describe_member(&handle, &native_id).await;
+        let classic_before = rpc::describe_member(&handle, "m-classic").await;
 
         let sync = rpc::classic_sync(&handle, &native_id, join.generation_id).await;
 
         check!(sync.error_code == codes::UNKNOWN_MEMBER_ID);
         check!(sync.assignment.is_empty());
-        let after = describe_member(&handle, &native_id).await;
+        let after = rpc::describe_member(&handle, &native_id).await;
         check!(after.assigned_partitions == before.assigned_partitions);
         check!(!after.is_classic);
         // Nor did the rejected sync move anything between the two members.
-        let classic_after = describe_member(&handle, "m-classic").await;
+        let classic_after = rpc::describe_member(&handle, "m-classic").await;
         check!(classic_after.assigned_partitions == classic_before.assigned_partitions);
     }
 
@@ -420,13 +362,8 @@ mod tests {
     /// member last synced — no krabka-private field in the k5 record.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn failover_keeps_a_synced_hosted_classic_member_in_sync() {
-        let (coord, _log) = make_coordinator_with_topic_policy(
-            "t",
-            2,
-            crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
-        );
-        let handle = seed_and_upgrade(&coord, "t").await;
-        let join = rpc::classic_join(&handle, "m-classic", "t").await;
+        let (coord, _log) = upgrade_coordinator();
+        let (handle, join) = upgrade_and_rejoin_classic(&coord).await;
         let sync = rpc::classic_sync(&handle, "m-classic", join.generation_id).await;
         assert!(sync.error_code == codes::NONE);
 
@@ -435,11 +372,7 @@ mod tests {
         let seed = coord
             .cached_seed("g")
             .expect("records for the synced group");
-        let (failover, _failover_log) = make_coordinator_with_topic_policy(
-            "t",
-            2,
-            crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
-        );
+        let (failover, _failover_log) = upgrade_coordinator();
         let restored = failover.get_or_create_consumer("g");
         restored
             .tx
@@ -465,14 +398,9 @@ mod tests {
     /// partition the member never took ownership of for its next owner.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn hosted_classic_sync_append_failure_rolls_back_and_can_retry() {
-        let (coord, log) = make_coordinator_with_topic_policy(
-            "t",
-            2,
-            crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
-        );
-        let handle = seed_and_upgrade(&coord, "t").await;
-        let join = rpc::classic_join(&handle, "m-classic", "t").await;
-        let before = describe_member(&handle, "m-classic").await;
+        let (coord, log) = upgrade_coordinator();
+        let (handle, join) = upgrade_and_rejoin_classic(&coord).await;
+        let before = rpc::describe_member(&handle, "m-classic").await;
         let batches_before = log.batches().await.len();
 
         log.fail_next
@@ -480,7 +408,7 @@ mod tests {
         let failed = rpc::classic_sync(&handle, "m-classic", join.generation_id).await;
 
         check!(failed.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
-        let after = describe_member(&handle, "m-classic").await;
+        let after = rpc::describe_member(&handle, "m-classic").await;
         check!(after.assigned_partitions == before.assigned_partitions);
         check!(log.batches().await.len() == batches_before);
         check!(

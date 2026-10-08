@@ -74,12 +74,10 @@ pub(super) fn metadata_topic_record(
     topic: &str,
     topic_id: u128,
 ) -> krabka_metadata::MetadataRecord {
-    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-        name: topic.to_string(),
-        topic_id: uuid::Uuid::from_u128(topic_id),
-        partitions: 1,
-        replication_factor: 1,
-    })
+    krabka_metadata::MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+        topic,
+        uuid::Uuid::from_u128(topic_id),
+    ))
 }
 
 pub(super) fn metadata_partition_record(

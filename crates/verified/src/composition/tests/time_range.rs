@@ -39,13 +39,10 @@ pub(super) fn check_cursors(entries: &[(i64, u32)], base: i64, end: i64, lower: 
 }
 
 fn check_range(window: SparseTimestampWindow<'_>, bounds: (i64, i64, i64), targets: (i64, i64)) {
-    let (offsets, times, rows) = window;
+    let (offsets, times, _) = window;
     let (base, end, floor) = bounds;
     let (lower, upper) = targets;
-    let entries: Vec<_> = rows
-        .iter()
-        .map(|&(indexed, through)| (*times[..=through].iter().max().unwrap(), offsets[indexed]))
-        .collect();
+    let entries: Vec<_> = prefix_maxima(window);
     check_cursors(&entries, base, end, lower, upper);
     let expected = cursor_oracle(&entries, base, end, lower, upper).and_then(|(lo, hi, scan)| {
         if offsets.iter().any(|&offset| base + i64::from(offset) > end) {
@@ -81,9 +78,7 @@ proptest! {
         a in any::<i64>(), b in any::<i64>(), step in 1usize..8,
     ) {
         let floor = base + i64::from(floor);
-        let offsets: Vec<_> = records.keys().copied().collect();
-        let times: Vec<_> = records.values().copied().collect();
-        let rows: Vec<_> = (0..offsets.len()).step_by(step).map(|i| (i, i)).collect();
+        let (offsets, times, rows) = timestamp_records(&records, step, 0);
         check_range((&offsets, &times, &rows), (base, base + i64::from(width), floor), (a.min(b), a.max(b)));
         check_range((&offsets, &times, &rows), (base, base + i64::from(u32::MAX), floor), (a.min(b), a.max(b)));
     }

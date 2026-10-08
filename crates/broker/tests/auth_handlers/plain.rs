@@ -28,11 +28,7 @@ use crate::harness::{alice_password, round_trip, wrong_scram_password};
 /// SASL yet.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_plain_happy_path() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = crate::harness::alice_plain_config(log_dir.path().to_path_buf(), alice_password());
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) = crate::harness::start_alice_plain(alice_password()).await;
     let result = drive_sasl_plain_session(addr, "alice", alice_password().as_bytes()).await;
     handle.shutdown().await;
     result.expect("SASL/PLAIN session must succeed end-to-end");
@@ -98,11 +94,7 @@ async fn scrape_metrics(addr: SocketAddr) -> String {
 /// connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_plain_wrong_password_closes_connection() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = crate::harness::alice_plain_config(log_dir.path().to_path_buf(), alice_password());
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) = crate::harness::start_alice_plain(alice_password()).await;
     let result = drive_sasl_plain_session(addr, "alice", wrong_scram_password().as_bytes()).await;
     handle.shutdown().await;
     assert!(
@@ -160,23 +152,6 @@ pub async fn plain_authenticate(
     .await
 }
 
-/// A `SASL_PLAINTEXT` broker serving PLAIN for alice and bob, with the KIP-368
-/// re-authentication window set to `max_reauth` and the idle window switched
-/// off, so the only deadline these tests can observe is the one under test.
-pub async fn start_plain_reauth_broker(
-    log_dir: &std::path::Path,
-    max_reauth: krabka_units::Time,
-) -> krabka_broker::BrokerHandle {
-    let mut cfg = crate::harness::reauth_config(log_dir, max_reauth);
-
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    cfg.plain_credentials
-        .insert("alice".to_string(), alice_password());
-    cfg.plain_credentials
-        .insert("bob".to_string(), alice_password());
-    Broker::start(cfg).await.expect("broker must start")
-}
-
 /// KIP-368: with `connections.max.reauth.ms` set, a PLAIN session reports the
 /// window as `session_lifetime_ms`, and a data-plane request that arrives after
 /// it elapses without an in-band re-authentication closes the connection.
@@ -206,16 +181,17 @@ async fn plain_in_band_reauth_with_different_principal_closes() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plain_authenticate_without_handshake_closes_the_connection() {
     let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_plain_reauth_broker(log_dir.path(), krabka_units::secs(30)).await;
+    let handle = crate::harness::start_reauth_broker(
+        log_dir.path(),
+        krabka_units::secs(30),
+        SaslMechanism::Plain,
+    )
+    .await;
     let addr = handle.listen_addr();
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut payload = vec![0];
-    payload.extend_from_slice(b"alice");
-    payload.push(0);
-    payload.extend_from_slice(alice_password().as_bytes());
     let auth_req = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(payload),
+        auth_bytes: crate::kafka_wire::plain_payload("alice", alice_password().as_bytes()),
         ..Default::default()
     };
     let mut auth_body = BytesMut::new();

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/scram.rs" 28 27 28 32 *)
+(* #"/workspace/crates/verified/src/scram.rs" 6 19 6 36 *)
 
 (* <scram::ScramAlterationFacts as std::clone::Clone> *)
 
@@ -25,7 +25,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_ScramAlterationFacts [#"/workspace/crates/verified/src/scram.rs" 28 27 28 32] (self: t_ScramAlterationFacts)
+let clone_ScramAlterationFacts [#"/workspace/crates/verified/src/scram.rs" 6 19 6 36] (self: t_ScramAlterationFacts)
   (return (x: t_ScramAlterationFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ScramAlterationFacts = Any.any_l () | & self: t_ScramAlterationFacts = self ])

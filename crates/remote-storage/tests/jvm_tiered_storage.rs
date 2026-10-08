@@ -19,12 +19,14 @@ use krabka_ids::LeaderEpoch;
 use krabka_log::{Log, LogConfig, Offset};
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
 use krabka_remote_storage::{
-    LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
-    RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
+    LocalTieredStorage, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+    RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
 };
 use krabka_units::prelude::bytes;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
+
+krabka_macros::export_segment_data_fixture!(export_segment_data);
 
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 const KAFKA_STORAGE_TEST_JAR: &str = concat!(
@@ -308,14 +310,7 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
     storage
         .copy_log_segment_data(
             &metadata,
-            &LogSegmentData {
-                log_segment: export.log_path.clone(),
-                offset_index: export.offset_index_path.clone(),
-                time_index: export.time_index_path.clone(),
-                transaction_index: export.transaction_index_path.clone(),
-                producer_snapshot_index: Some(export.producer_snapshot_path.clone()),
-                leader_epoch_index: Bytes::from_static(b"0\n1\n0 0\n"),
-            },
+            &export_segment_data(&export, true, || Bytes::from_static(b"0\n1\n0 0\n")),
         )
         .expect("Krabka local-tier copy");
 

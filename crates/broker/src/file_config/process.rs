@@ -5,14 +5,10 @@
 //! table is all-or-nothing: a half-written profile would let the broker start
 //! with a site layout no other node agrees on.
 
-use schemars::JsonSchema;
-use serde::Deserialize;
-
 use super::FileConfigError;
 
 /// `[process]` TOML section — `KRaft` `process.roles`.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileProcessConfig {
     /// Role strings: `"controller"`, `"broker"`, `"witness"`
     /// (case-insensitive). Empty or absent leaves the `BrokerConfig` default
@@ -27,8 +23,7 @@ pub struct FileProcessConfig {
 /// The table is all-or-nothing. When it is present, all three fields must
 /// be, because a half-built profile would let the broker start with a site
 /// layout that no node agrees on.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileStretchConfig {
     /// The three site names. Each one is a `rack` value that some node of
     /// the cluster reports.
@@ -70,7 +65,7 @@ fn missing_stretch_field(name: &str) -> FileConfigError {
 mod tests {
     use assert2::assert;
 
-    use crate::file_config::{FileConfig, FileConfigError};
+    use crate::file_config::FileConfigError;
 
     #[test]
     fn process_roles_controller_only_from_toml() {
@@ -78,9 +73,7 @@ mod tests {
             [process]
             roles = ["controller"]
         "#;
-        let fc: FileConfig = toml::from_str(toml).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = crate::file_config::test_support::configured(toml, "parse").expect("apply");
         assert!(cfg.roles == vec![crate::config::NodeRole::Controller]);
     }
     #[test]
@@ -89,9 +82,7 @@ mod tests {
             [process]
             roles = ["broker", "controller"]
         "#;
-        let fc: FileConfig = toml::from_str(toml).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = crate::file_config::test_support::configured(toml, "parse").expect("apply");
         assert!(
             cfg.roles
                 == vec![
@@ -106,9 +97,7 @@ mod tests {
             [process]
             roles = ["broker", "controller", "witness"]
         "#;
-        let fc: FileConfig = toml::from_str(toml).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = crate::file_config::test_support::configured(toml, "parse").expect("apply");
         assert!(
             cfg.roles
                 == vec![
@@ -125,9 +114,7 @@ mod tests {
             [process]
             roles = ["BROKER", "Controller", "WiTnEsS"]
         "#;
-        let fc: FileConfig = toml::from_str(toml).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = crate::file_config::test_support::configured(toml, "parse").expect("apply");
         assert!(
             cfg.roles
                 == vec![
@@ -147,9 +134,7 @@ mod tests {
             witness_site = "dc-w"
             preferred_leader_site = "dc-a"
         "#;
-        let fc: FileConfig = toml::from_str(toml).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = crate::file_config::test_support::configured(toml, "parse").expect("apply");
         assert!(
             cfg.stretch
                 == Some(crate::config::StretchProfile {
@@ -161,9 +146,7 @@ mod tests {
     }
     #[test]
     fn absent_stretch_table_leaves_no_profile() {
-        let fc: FileConfig = toml::from_str("").expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = crate::file_config::test_support::configured("", "parse").expect("apply");
         assert!(cfg.stretch == None);
     }
     #[test]
@@ -194,10 +177,7 @@ mod tests {
                 "stretch.preferred_leader_site",
             ),
         ] {
-            let fc: FileConfig = toml::from_str(toml).expect("parse");
-            let mut cfg = crate::config::BrokerConfig::default();
-            let error = fc
-                .apply_to(&mut cfg)
+            let error = crate::file_config::test_support::configured(toml, "parse")
                 .expect_err("a half-built stretch profile is rejected");
             assert!(matches!(error, FileConfigError::InvalidConfig(_)));
             assert!(
@@ -212,16 +192,13 @@ mod tests {
             [process]
             roles = ["wizard"]
         "#;
-        let fc: FileConfig = toml::from_str(toml).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        let err = fc.apply_to(&mut cfg).expect_err("unknown role rejected");
+        let err = crate::file_config::test_support::configured(toml, "parse")
+            .expect_err("unknown role rejected");
         assert!(matches!(err, FileConfigError::InvalidConfig(_)));
     }
     #[test]
     fn process_section_absent_leaves_default_roles() {
-        let fc: FileConfig = toml::from_str("").expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = crate::file_config::test_support::configured("", "parse").expect("apply");
         assert!(
             cfg.roles
                 == vec![

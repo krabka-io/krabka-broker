@@ -15,11 +15,12 @@ use assert2::{assert, check};
 use krabka_broker::{BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    find_coordinator_request::FindCoordinatorRequest,
     share_group_heartbeat_request::ShareGroupHeartbeatRequest,
     share_group_heartbeat_response::ShareGroupHeartbeatResponse,
 };
 use tempfile::TempDir;
+
+use crate::support::{client::connect_owned, discovery::coordinator_lookup_request};
 
 mod support;
 
@@ -38,27 +39,19 @@ type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 /// them on lag, and the controller does not fence the broker, for longer
 /// than any test here runs.
 async fn start_three() -> Cluster {
-    let cluster = support::start_n_node_with(3, |_, config| {
-        *config = config.clone().with_internal_topics_for(3);
+    support::fixed_internal_isr_cluster(|config| {
         config.offsets_topic_num_partitions = 1;
-        config.share_coordinator.state_topic_num_partitions = 1;
-        config.replica_lag_time_max = krabka_units::secs(30);
-        config.isr_scan_interval = krabka_units::hours(1);
-        config.heartbeat_timeout = krabka_units::minutes(10);
     })
     .await
-    .expect("start the cluster");
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    cluster
 }
 
 async fn client(handle: &BrokerHandle) -> Client {
-    Client::builder()
-        .bootstrap(handle.listen_addr().to_string())
-        .client_id("share-coordinator-move")
-        .build()
-        .await
-        .expect("client")
+    connect_owned(
+        handle.listen_addr().to_string(),
+        "share-coordinator-move",
+        "client",
+    )
+    .await
 }
 
 /// Look `GROUP` up until a broker other than `excluded` answers as its
@@ -67,12 +60,11 @@ async fn coordinator_of(client: &Client, excluded: Option<u64>) -> u64 {
     let deadline = Instant::now() + SETTLE;
     loop {
         let found = client
-            .send(FindCoordinatorRequest {
-                key: GROUP.into(),
-                key_type: KEY_TYPE_GROUP,
-                coordinator_keys: vec![GROUP.into()],
-                ..Default::default()
-            })
+            .send(coordinator_lookup_request(
+                GROUP,
+                KEY_TYPE_GROUP,
+                vec![GROUP.into()],
+            ))
             .await
             .expect("FindCoordinator");
         if let [row] = found.coordinators.as_slice()
@@ -153,9 +145,7 @@ async fn a_join_that_does_not_commit_is_not_answered() {
             }
     );
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }
 
@@ -192,8 +182,6 @@ async fn a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {
     check!(resumed.member_id.as_deref() == Some("member-1"));
     check!(resumed.member_epoch >= joined.member_epoch);
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }

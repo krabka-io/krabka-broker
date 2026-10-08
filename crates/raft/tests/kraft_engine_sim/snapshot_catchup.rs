@@ -48,6 +48,35 @@ fn start_snapshot_pair(
         .collect()
 }
 
+fn fetch_from_zero(epoch: u32) -> bytes::Bytes {
+    wire::PeerRequest::Fetch {
+        cluster_id: None,
+        max_wait_ms: 0,
+        high_watermark: -1,
+        from: NodeId(3),
+        current_leader_epoch: i32::try_from(epoch).unwrap(),
+        fetch_epoch: 0,
+        fetch_offset: 0,
+        replica_directory_id: uuid::Uuid::nil(),
+    }
+    .encode()
+}
+
+async fn submit_burst(net: &SimNet, leader: NodeId, count: usize, prefix: &str, first_id: u128) {
+    for i in 0..count {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            net.get(leader).unwrap().submit_change(vec![topic_record(
+                &format!("{prefix}{i}"),
+                first_id + i as u128,
+            )]),
+        )
+        .await
+        .expect("burst submit did not hang")
+        .expect("burst submit ok");
+    }
+}
+
 /// The `.checkpoint` artifacts a node currently holds, by file name. The
 /// checkpoint directory is also the metadata log's own segment directory, so
 /// the extension filter is what separates checkpoints from `.log` / `.index`.
@@ -83,8 +112,7 @@ fn checkpoint_names(dir: &std::path::Path) -> BTreeSet<String> {
 ///    converge to the leader's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lagging_follower_catches_up_via_snapshot() {
-    let net = SimNet::new();
-    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(500);
     // Snapshot after every 5 committed records past the last checkpoint.
     let interval = 5u64;
@@ -92,21 +120,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
     // Start only TWO voters (leader + one follower): that is a majority of three,
     // so submits commit while the third node stays down. Staggered timeouts so
     // node 1 reliably wins. Node 3 is the lagging node, started later.
-    let timeouts = STAGGERED_TIMEOUTS;
-    let mut dirs: HashMap<NodeId, tempfile::TempDir> = HashMap::new();
-    for &id in &[NodeId(1), NodeId(2)] {
-        let idx = usize::try_from(id.0 - 1).unwrap();
-        let (ctrl, dir) = build_engine_with_snapshot_interval(
-            id,
-            &ids, // full voter set: the quorum is three even though one is down
-            cid,
-            timeouts[idx],
-            &net,
-            interval,
-        );
-        net.register(id, ctrl);
-        dirs.insert(id, dir);
-    }
+    let mut dirs = start_snapshot_pair(&net, &ids, cid, interval);
 
     // The two live voters elect a leader among themselves (two of three is a
     // majority). The lagging node 3 is down, so only poll the live pair.
@@ -116,17 +130,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
     // Commit MORE than `interval` distinct topics so the leader snapshots and
     // prunes at least once. Distinct names make the image grow per record.
     let burst = usize::try_from(interval).unwrap() * 3; // comfortably past the threshold
-    for i in 0..burst {
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            net.get(leader)
-                .unwrap()
-                .submit_change(vec![topic_record(&format!("t{i}"), 1000 + i as u128)]),
-        )
-        .await
-        .expect("burst submit did not hang")
-        .expect("burst submit ok");
-    }
+    submit_burst(&net, leader, burst, "t", 1000).await;
 
     // The leader must have snapshotted and pruned: its log_start advanced past 0.
     // Poll briefly — the prune happens on the apply that crosses the threshold,
@@ -150,8 +154,14 @@ async fn lagging_follower_catches_up_via_snapshot() {
     // Now bring the lagging node 3 up on a FRESH empty tempdir: its LEO is 0,
     // far below the leader's pruned log_start, so it can ONLY catch up by
     // fetching the snapshot.
-    let (lag_ctrl, lag_dir) =
-        build_engine_with_snapshot_interval(NodeId(3), &ids, cid, timeouts[2], &net, interval);
+    let (lag_ctrl, lag_dir) = build_engine_with_snapshot_interval(
+        NodeId(3),
+        &ids,
+        cid,
+        STAGGERED_TIMEOUTS[2],
+        &net,
+        interval,
+    );
     net.register(NodeId(3), lag_ctrl);
     dirs.insert(NodeId(3), lag_dir);
 
@@ -171,11 +181,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
     let lag_snap = lag.quorum_snapshot();
     assert2::assert!(lag_snap.log_start_offset > 0);
 
-    for &id in &ids {
-        if let Some(c) = net.get(id) {
-            c.shutdown().await;
-        }
-    }
+    crate::harness::shutdown_nodes(&net, &ids).await;
 }
 
 /// Every voter snapshots and prunes on its own (#364): a follower that never
@@ -188,8 +194,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
 /// the follower's own serve path from election/discovery timing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_leader() {
-    let net = SimNet::new();
-    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(501);
     let interval = 5u64;
 
@@ -201,17 +206,7 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
     let follower = NodeId(2);
 
     let burst = usize::try_from(interval).unwrap() * 3;
-    for i in 0..burst {
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            net.get(leader)
-                .unwrap()
-                .submit_change(vec![topic_record(&format!("f{i}"), 2000 + i as u128)]),
-        )
-        .await
-        .expect("burst submit did not hang")
-        .expect("burst submit ok");
-    }
+    submit_burst(&net, leader, burst, "f", 2000).await;
 
     // The follower must have pruned on its own — the direct fix for #364:
     // `maybe_snapshot_and_prune` no longer gates on `is_leader()`, so a
@@ -236,17 +231,7 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
     // FOLLOWER, not the leader, for records from offset 0, below the
     // follower's own pruned log_start. Only a leader serves a Fetch, so the
     // follower answers `buildEmptyFetchResponse(NOT_LEADER_OR_FOLLOWER)`.
-    let fetch_req = wire::PeerRequest::Fetch {
-        cluster_id: None,
-        max_wait_ms: 0,
-        high_watermark: -1,
-        from: NodeId(3),
-        current_leader_epoch: i32::try_from(epoch).unwrap(),
-        fetch_epoch: 0,
-        fetch_offset: 0,
-        replica_directory_id: uuid::Uuid::nil(),
-    }
-    .encode();
+    let fetch_req = fetch_from_zero(epoch);
     let fetch_resp_body = net
         .send(follower, api_key::FETCH, fetch_req)
         .await
@@ -329,8 +314,7 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
 /// exact rather than a race.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpoint() {
-    let net = SimNet::new();
-    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(502);
     let interval = 5u64;
 
@@ -364,17 +348,7 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
 
     // The lagging peer asks for records from 0, below the leader's pruned
     // log start, and is pointed at that checkpoint.
-    let fetch = wire::PeerRequest::Fetch {
-        cluster_id: None,
-        max_wait_ms: 0,
-        high_watermark: -1,
-        from: NodeId(3),
-        current_leader_epoch: i32::try_from(epoch).unwrap(),
-        fetch_epoch: 0,
-        fetch_offset: 0,
-        replica_directory_id: uuid::Uuid::nil(),
-    }
-    .encode();
+    let fetch = fetch_from_zero(epoch);
     let body = net
         .send(leader, api_key::FETCH, fetch)
         .await

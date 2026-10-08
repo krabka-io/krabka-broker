@@ -1,87 +1,73 @@
 //! End-to-end `ListOffsets` request and visibility decisions.
 
 #[cfg(creusot)]
-use std::clone::Clone;
-
-#[cfg(creusot)]
 use creusot_std::prelude::{DeepModel, logic};
 
-/// The meaning of one `ListOffsets` request timestamp at its wire version.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ListOffsetsKind {
-    Unsupported,
-    Earliest,
-    Latest,
-    MaxTimestamp,
-    EarliestLocal,
-    LatestTiered,
-    EarliestPendingUpload,
-    Timestamp,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// The meaning of one `ListOffsets` request timestamp at its wire version.
+    pub enum ListOffsetsKind {
+        Unsupported,
+        Earliest,
+        Latest,
+        MaxTimestamp,
+        EarliestLocal,
+        LatestTiered,
+        EarliestPendingUpload,
+        Timestamp,
+    }
 
-/// KIP-320 leader-epoch admission for one partition row.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ListOffsetsEpochDecision {
-    RejectMalformed,
-    Proceed,
-    Fenced,
-    Unknown,
-}
+    /// KIP-320 leader-epoch admission for one partition row.
+    pub enum ListOffsetsEpochDecision {
+        RejectMalformed,
+        Proceed,
+        Fenced,
+        Unknown,
+    }
 
-/// The offsets that select one request's isolation bound.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct ListOffsetsBoundFacts {
-    pub replica_id: i32,
-    pub isolation_level: i8,
-    pub log_end: i64,
-    pub high_watermark: i64,
-    pub last_stable: i64,
-}
+    /// The offsets that select one request's isolation bound.
+    pub struct ListOffsetsBoundFacts {
+        pub replica_id: i32,
+        pub isolation_level: i8,
+        pub log_end: i64,
+        pub high_watermark: i64,
+        pub last_stable: i64,
+    }
 
-/// A valid last-fetchable offset, or a fail-closed malformed-state result.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ListOffsetsBoundDecision {
-    RejectMalformed,
-    Bound { offset: i64 },
-}
+    /// A valid last-fetchable offset, or a fail-closed malformed-state result.
+    pub enum ListOffsetsBoundDecision {
+        RejectMalformed,
+        Bound { offset: i64 },
+    }
 
-/// Local and optional cold-tier candidates for the `EARLIEST` sentinel.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct ListOffsetsEarliestFacts {
-    pub local: i64,
-    pub has_remote: bool,
-    pub remote: i64,
-    pub has_diskless: bool,
-    pub diskless: i64,
-}
+    /// Local and optional cold-tier candidates for the `EARLIEST` sentinel.
+    pub struct ListOffsetsEarliestFacts {
+        pub local: i64,
+        pub has_remote: bool,
+        pub remote: i64,
+        pub has_diskless: bool,
+        pub diskless: i64,
+    }
 
-/// One tier-specific candidate before the final visibility clamp.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct ListOffsetsSelectionFacts {
-    pub kind: ListOffsetsKind,
-    pub candidate_offset: i64,
-    pub candidate_timestamp: i64,
-    pub candidate_epoch: i32,
-    pub last_fetchable: i64,
-}
+    /// One tier-specific candidate before the final visibility clamp.
+    pub struct ListOffsetsSelectionFacts {
+        pub kind: ListOffsetsKind,
+        pub candidate_offset: i64,
+        pub candidate_timestamp: i64,
+        pub candidate_epoch: i32,
+        pub last_fetchable: i64,
+    }
 
-/// The final visible partition-row value.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ListOffsetsSelectionDecision {
-    RejectMalformed,
-    Unknown,
-    Resolved {
-        offset: i64,
-        timestamp: i64,
-        leader_epoch: i32,
-    },
+    /// The final visible partition-row value.
+    pub enum ListOffsetsSelectionDecision {
+        RejectMalformed,
+        Unknown,
+        Resolved {
+            offset: i64,
+            timestamp: i64,
+            leader_epoch: i32,
+        },
+    }
 }
 
 mod selection_model;

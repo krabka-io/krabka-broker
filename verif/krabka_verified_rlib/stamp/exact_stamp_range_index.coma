@@ -1,21 +1,23 @@
-(* #"/workspace/crates/verified/src/stamp.rs" 94 0 99 18 *)
+(* #"/workspace/crates/verified/src/stamp.rs" 92 0 97 18 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sstamp = "/workspace/crates/verified/src/stamp.rs" 100 20 100 26
-let%span sstamp'0 = "/workspace/crates/verified/src/stamp.rs" 105 14 105 35
-let%span sstamp'1 = "/workspace/crates/verified/src/stamp.rs" 106 18 106 29
-let%span sstamp'2 = "/workspace/crates/verified/src/stamp.rs" 103 16 104 64
-let%span sstamp'3 = "/workspace/crates/verified/src/stamp.rs" 102 16 102 44
-let%span sstamp'4 = "/workspace/crates/verified/src/stamp.rs" 101 16 101 38
-let%span sstamp'5 = "/workspace/crates/verified/src/stamp.rs" 107 11 107 23
-let%span sstamp'6 = "/workspace/crates/verified/src/stamp.rs" 107 42 107 54
-let%span sstamp'7 = "/workspace/crates/verified/src/stamp.rs" 110 17 110 18
-let%span sstamp'8 = "/workspace/crates/verified/src/stamp.rs" 110 8 110 18
-let%span sstamp'9 = "/workspace/crates/verified/src/stamp.rs" 83 11 83 39
-let%span sstamp'10 = "/workspace/crates/verified/src/stamp.rs" 84 10 92 1
+let%span sstamp = "/workspace/crates/verified/src/stamp.rs" 98 20 98 26
+let%span sstamp'0 = "/workspace/crates/verified/src/stamp.rs" 102 14 102 35
+let%span sstamp'1 = "/workspace/crates/verified/src/stamp.rs" 103 18 103 29
+let%span sstamp'2 = "/workspace/crates/verified/src/stamp.rs" 101 16 101 88
+let%span sstamp'3 = "/workspace/crates/verified/src/stamp.rs" 100 16 100 59
+let%span sstamp'4 = "/workspace/crates/verified/src/stamp.rs" 99 16 99 38
+let%span sstamp'5 = "/workspace/crates/verified/src/stamp.rs" 104 11 104 23
+let%span sstamp'6 = "/workspace/crates/verified/src/stamp.rs" 104 42 104 54
+let%span sstamp'7 = "/workspace/crates/verified/src/stamp.rs" 107 17 107 18
+let%span sstamp'8 = "/workspace/crates/verified/src/stamp.rs" 107 8 107 18
+let%span sstamp'9 = "/workspace/crates/verified/src/stamp.rs" 83 11 83 54
+let%span sstamp'10 = "/workspace/crates/verified/src/stamp.rs" 84 10 90 1
+let%span sstamp'11 = "/workspace/crates/verified/src/stamp.rs" 152 16 152 93
+let%span sstamp'12 = "/workspace/crates/verified/src/stamp.rs" 139 16 139 42
 
 use creusot.int.UInt64
 use seq.Seq
@@ -42,16 +44,22 @@ let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
     = UInt64.t'int result}
     (! return {result}) ]
 
+predicate no_exact_stamp_range [#"/workspace/crates/verified/src/stamp.rs" 145 0 151 9] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (count: int) (base: int) (last: int) =
+  [%#sstamp'11] forall i: int. 0 <= i /\ i < count
+    -> Int64.to_int (Seq.get bases i) <> base \/ Int64.to_int (Seq.get lasts i) <> last
+
+predicate stamp_range_arrays_parallel [#"/workspace/crates/verified/src/stamp.rs" 138 0 138 72] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) =
+  [%#sstamp'12] Seq.length bases = Seq.length lasts
+
 type t_Option_usize = None | Some UInt64.t
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let exact_stamp_range_index [#"/workspace/crates/verified/src/stamp.rs" 94 0 99 18] (bases: Slice64.slice Int64.t)
+let exact_stamp_range_index [#"/workspace/crates/verified/src/stamp.rs" 92 0 97 18] (bases: Slice64.slice Int64.t)
   (lasts: Slice64.slice Int64.t) (target_base: Int64.t) (target_last: Int64.t) (return (x: t_Option_usize)) =
-{[@stop_split] [@expl:exact_stamp_range_index requires] [%#sstamp'9] Seq.length (Slice64.view bases)
-  = Seq.length (Slice64.view lasts)}
+{[@stop_split] [@expl:exact_stamp_range_index requires] [%#sstamp'9] stamp_range_arrays_parallel (Slice64.view bases) (Slice64.view lasts)}
   (! bb0
   [ bb0 = s0 [ s0 = [ &index <- [%#sstamp] (0: UInt64.t) ] s1 | s1 = bb1 ]
   | bb1 = bb1invariant
@@ -60,10 +68,8 @@ let exact_stamp_range_index [#"/workspace/crates/verified/src/stamp.rs" 94 0 99 
       - UInt64.t'int index)}
       bb1invariant
     | bb1invariant = {[@expl:loop invariant #0] [%#sstamp'4] UInt64.t'int index <= Seq.length (Slice64.view bases)}
-      {[@expl:loop invariant #1] [%#sstamp'3] Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)}
-      {[@expl:loop invariant #2] [%#sstamp'2] forall i: int. 0 <= i /\ i < UInt64.t'int index
-        -> Int64.to_int (Seq.get (Slice64.view bases) i) <> Int64.to_int target_base
-        \/ Int64.to_int (Seq.get (Slice64.view lasts) i) <> Int64.to_int target_last}
+      {[@expl:loop invariant #1] [%#sstamp'3] stamp_range_arrays_parallel (Slice64.view bases) (Slice64.view lasts)}
+      {[@expl:loop invariant #2] [%#sstamp'2] no_exact_stamp_range (Slice64.view bases) (Slice64.view lasts) (UInt64.t'int index) (Int64.to_int target_base) (Int64.to_int target_last)}
       (! [ &variant_old_bb1 <- [%#sstamp'0] Seq.length (Slice64.view bases) - UInt64.t'int index ] s0)
       [ s0 = len_i64 [%#sstamp'1] {bases} (fun (_x: UInt64.t) -> [ &_34 <- _x ] s1)
       | s1 = [ &_32 <- UInt64.lt index _34 ] s2
@@ -113,11 +119,7 @@ let exact_stamp_range_index [#"/workspace/crates/verified/src/stamp.rs" 94 0 99 
       | Some index -> UInt64.t'int index < Seq.length (Slice64.view bases)
       /\ Int64.to_int (Seq.get (Slice64.view bases) (UInt64.t'int index)) = Int64.to_int target_base
       /\ Int64.to_int (Seq.get (Slice64.view lasts) (UInt64.t'int index)) = Int64.to_int target_last
-      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
-        -> Int64.to_int (Seq.get (Slice64.view bases) i) <> Int64.to_int target_base
-        \/ Int64.to_int (Seq.get (Slice64.view lasts) i) <> Int64.to_int target_last)
-      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view bases)
-        -> Int64.to_int (Seq.get (Slice64.view bases) i) <> Int64.to_int target_base
-        \/ Int64.to_int (Seq.get (Slice64.view lasts) i) <> Int64.to_int target_last
+      /\ no_exact_stamp_range (Slice64.view bases) (Slice64.view lasts) (UInt64.t'int index) (Int64.to_int target_base) (Int64.to_int target_last)
+      | None -> no_exact_stamp_range (Slice64.view bases) (Slice64.view lasts) (Seq.length (Slice64.view bases)) (Int64.to_int target_base) (Int64.to_int target_last)
       end}
     (! return {result}) ]

@@ -65,6 +65,7 @@ pub mod kraft;
 mod network;
 pub mod reconfig;
 pub mod voter_requests;
+mod voter_wire;
 /// The deterministic `KRaft` failure-scenario simulator with trace recording,
 /// re-exported from the leaf [`krabka_kraft_core::sim`] module. `krabka-docgen`
 /// runs [`scenarios::scenarios`] in-process to render the failure-scenario
@@ -73,6 +74,8 @@ pub mod voter_requests;
 pub use krabka_kraft_core::sim as scenarios;
 mod server;
 mod snapshot;
+#[cfg(test)]
+mod test_support;
 mod types;
 mod wire;
 

@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 70 0 74 18 *)
+(* #"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 71 0 84 1 *)
 
-let%span sremote_time_index_candidate_count = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 75 50 75 55
-let%span sremote_time_index_candidate_count'0 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 75 4 75 56
-let%span sremote_time_index_candidate_count'1 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 67 11 67 75
-let%span sremote_time_index_candidate_count'2 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 68 10 68 85
-let%span sremote_time_index_candidate_count'3 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 28 11 28 75
-let%span sremote_time_index_candidate_count'4 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 29 10 29 86
-let%span sremote_time_index_candidate_count'5 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 16 8 24 9
+let%span sremote_time_index_candidate_count = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 82 50 82 55
+let%span sremote_time_index_candidate_count'0 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 82 4 82 56
+let%span sremote_time_index_candidate_count'1 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 32 19 32 87
+let%span sremote_time_index_candidate_count'2 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 33 18 33 99
+let%span sremote_time_index_candidate_count'3 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 32 19 32 87
+let%span sremote_time_index_candidate_count'4 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 33 18 33 99
+let%span sremote_time_index_candidate_count'5 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 13 8 21 9
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -17,7 +17,7 @@ use int.Int
 
 type t_Option_usize = None | Some UInt64.t
 
-predicate finished_selection [#"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 7 0 14 9] (starts: Seq.seq Int64.t) (ends: Seq.seq Int64.t) (finished: Seq.seq bool) (best: t_Option_usize) (count: int) (latest: bool) =
+predicate finished_selection [#"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 4 0 11 9] (starts: Seq.seq Int64.t) (ends: Seq.seq Int64.t) (finished: Seq.seq bool) (best: t_Option_usize) (count: int) (latest: bool) =
   [%#sremote_time_index_candidate_count'5] match best with
     | Some best'0 -> UInt64.t'int best'0 < count
     /\ Seq.get finished (UInt64.t'int best'0)
@@ -51,7 +51,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let tiered_earliest_finished_index [#"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 70 0 74 18]
+let tiered_earliest_finished_index [#"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 71 0 84 1]
   (starts: Slice64.slice Int64.t) (ends: Slice64.slice Int64.t) (finished: Slice64.slice bool)
   (return (x: t_Option_usize)) =
 {[@stop_split] [@expl:tiered_earliest_finished_index requires] [%#sremote_time_index_candidate_count'1] Seq.length (Slice64.view starts)

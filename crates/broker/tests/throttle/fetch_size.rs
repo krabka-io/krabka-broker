@@ -32,7 +32,7 @@ async fn replica_fetch_bytes(list: impl FnOnce(u64) -> String, follower_in_isr: 
 
     // Create topic rf=1 so this broker is always the leader, then assign
     // replica 2 as a follower so its fetch is served.
-    create_topic_plaintext(addr, "bar", 1, 1).await;
+    create_topic_plaintext(addr, crate::CLIENT_ID, "bar", 1, 1).await;
     wait_partition_exists(&handle, "bar", 0).await;
     if follower_in_isr {
         add_follower_in_isr(&handle, "bar", 2).await;
@@ -125,7 +125,7 @@ async fn unthrottled_partition_unaffected() {
     let (handle, _dir, addr) = start_single_broker_plaintext().await;
 
     // Create topic rf=1.
-    create_topic_plaintext(addr, "baz", 1, 1).await;
+    create_topic_plaintext(addr, crate::CLIENT_ID, "baz", 1, 1).await;
     wait_partition_exists(&handle, "baz", 0).await;
     add_follower(&handle, "baz", 2).await;
 

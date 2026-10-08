@@ -19,15 +19,15 @@ use super::{
     member_state::run_reconcile,
     persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
     retention::append_tombstones,
-    waiters::{drain_followers_with, drain_removed_classic_waiters, maybe_complete_classic},
+    waiters::settle_removed_classic_waiters,
 };
 use crate::{
     codes,
     coordinator::{
         DeleteGroupError,
         unified::{
-            classic_ops, classic_state::GroupState as ClassicGroupState,
-            consumer_state::GroupState, group::CoordinatorGroup, offsets_log::OffsetsLog,
+            classic_ops, consumer_state::GroupState, group::CoordinatorGroup,
+            offsets_log::OffsetsLog,
         },
     },
     error::BrokerError,
@@ -71,15 +71,7 @@ pub(super) async fn handle_classic_leave_message(
                 return Err(codes::COORDINATOR_LOAD_IN_PROGRESS);
             }
         }
-        drain_removed_classic_waiters(&removed, &mut parked.joiners, &mut parked.followers);
-        // Kafka's `prepareRebalance` from `CompletingRebalance` answers every
-        // member that waits in `SyncGroup` with `REBALANCE_IN_PROGRESS`.
-        if previous.state == ClassicGroupState::CompletingRebalance
-            && state.state == ClassicGroupState::PreparingRebalance
-        {
-            drain_followers_with(&mut parked.followers, codes::REBALANCE_IN_PROGRESS);
-        }
-        maybe_complete_classic(state, &mut parked.joiners, &mut parked.followers);
+        settle_removed_classic_waiters(state, previous.state, &removed, parked);
         return Ok(responses);
     }
 
@@ -95,11 +87,8 @@ pub(super) async fn handle_classic_leave_message(
     }
     run_reconcile(state, services.config, services.metadata);
     let mut pending = snapshot_pending_after_change(state, &[], true);
-    for member_id in &removed {
-        pending.member_metadata.push((member_id.clone(), None));
-        pending.target_per_member.push((member_id.clone(), None));
-        pending.current_per_member.push((member_id.clone(), None));
-    }
+    crate::coordinator::unified::persistence::tombstone_members!(pending, &removed);
+
     flush_pending(
         state,
         pending,

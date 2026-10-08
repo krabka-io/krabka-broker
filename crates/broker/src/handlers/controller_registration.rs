@@ -5,7 +5,7 @@
 //! set after it registers), refuses a `metadata.version` below 3.7-IV0 (level
 //! 15) with `UNSUPPORTED_VERSION`, and writes `zkMigrationReady` false.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use krabka_metadata::{BrokerEndpoint, ControllerRegistrationRecord, MetadataRecord, NodeId};
 use krabka_protocol::owned::{
@@ -13,144 +13,114 @@ use krabka_protocol::owned::{
     controller_registration_response::ControllerRegistrationResponse,
 };
 use krabka_raft::RaftError;
-use krabka_security::ListenerProtocol;
 
-use crate::{
-    broker::Broker,
-    codes,
-    error::BrokerError,
-    handlers::{RequestContext, forward_to_controller::is_active_controller},
-};
+use crate::{codes, handlers::forward_to_controller::is_active_controller};
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: ControllerRegistrationRequest,
-    _version: i16,
-    ctx: &RequestContext<'_>,
-) -> Result<ControllerRegistrationResponse, BrokerError> {
-    let image = broker.controller.current_image();
-    if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return Ok(response(
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            Some("cluster action denied".into()),
-        ));
-    }
-    if !is_active_controller(broker) {
-        return Ok(response(codes::NOT_CONTROLLER, None));
-    }
-    // Kafka's `MetadataVersion.isControllerRegistrationSupported`. Before the
-    // bootstrap records commit there is no finalized level, and Kafka's
-    // `metadataVersionOrThrow` refuses the registration as well: a record
-    // written now could precede a bootstrap level that does not support it.
-    if image
-        .finalized_metadata_version()
-        .is_none_or(|level| level < krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL)
+context_handler! {
+    ControllerRegistrationRequest => ControllerRegistrationResponse,
+    (broker, req, _version, ctx),
     {
-        return Ok(response(
-            codes::UNSUPPORTED_VERSION,
-            Some(
-                "The current MetadataVersion is too old to support controller registrations."
-                    .into(),
-            ),
-        ));
-    }
-
-    let node_id = match u64::try_from(req.controller_id) {
-        Ok(id) => NodeId(id),
-        Err(_) => {
+        let image = broker.controller.current_image();
+        if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
             return Ok(response(
-                codes::INVALID_REGISTRATION,
-                Some("controller id must be non-negative".into()),
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                Some("cluster action denied".into()),
             ));
         }
-    };
-
-    let endpoints = match decode_listeners(&req.listeners) {
-        Ok(endpoints) => endpoints,
-        Err(message) => return Ok(response(codes::INVALID_REGISTRATION, Some(message))),
-    };
-    let features = req
-        .features
-        .into_iter()
-        .map(|feature| {
-            (
-                feature.name,
-                (feature.min_supported_version, feature.max_supported_version),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    if features
-        .iter()
-        .any(|(name, (min, max))| name.is_empty() || min > max)
-    {
-        return Ok(response(
-            codes::INVALID_REGISTRATION,
-            Some("invalid controller feature range".into()),
-        ));
-    }
-
-    let record = ControllerRegistrationRecord {
-        node_id,
-        incarnation_id: uuid::Uuid::from_bytes(req.incarnation_id.0),
-        // ZooKeeper migration is gone. Kafka writes false whatever the request
-        // says.
-        zk_migration_ready: false,
-        endpoints,
-        features,
-    };
-    if image.controller(node_id) == Some(&record) {
-        return Ok(success());
-    }
-    Ok(
-        match broker
-            .controller
-            .submit_change(vec![MetadataRecord::V1ControllerRegistration(record)])
-            .await
+        if !is_active_controller(broker) {
+            return Ok(response(codes::NOT_CONTROLLER, None));
+        }
+        // Kafka's `MetadataVersion.isControllerRegistrationSupported`. Before the
+        // bootstrap records commit there is no finalized level, and Kafka's
+        // `metadataVersionOrThrow` refuses the registration as well: a record
+        // written now could precede a bootstrap level that does not support it.
+        if image
+            .finalized_metadata_version()
+            .is_none_or(|level| level < krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL)
         {
-            Ok(_) => success(),
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                response(codes::NOT_CONTROLLER, None)
+            return Ok(response(
+                codes::UNSUPPORTED_VERSION,
+                Some(
+                    "The current MetadataVersion is too old to support controller registrations."
+                        .into(),
+                ),
+            ));
+        }
+
+        let node_id = match u64::try_from(req.controller_id) {
+            Ok(id) => NodeId(id),
+            Err(_) => {
+                return Ok(response(
+                    codes::INVALID_REGISTRATION,
+                    Some("controller id must be non-negative".into()),
+                ));
             }
-            Err(RaftError::Metadata(error)) => {
-                response(codes::INVALID_REGISTRATION, Some(error.to_string()))
-            }
-            Err(error) => response(codes::UNKNOWN_SERVER_ERROR, Some(error.to_string())),
-        },
-    )
+        };
+
+        let endpoints = match decode_listeners(&req.listeners) {
+            Ok(endpoints) => endpoints,
+            Err(message) => return Ok(response(codes::INVALID_REGISTRATION, Some(message))),
+        };
+        let features = req
+            .features
+            .into_iter()
+            .map(|feature| {
+                (
+                    feature.name,
+                    (feature.min_supported_version, feature.max_supported_version),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        if features
+            .iter()
+            .any(|(name, (min, max))| name.is_empty() || min > max)
+        {
+            return Ok(response(
+                codes::INVALID_REGISTRATION,
+                Some("invalid controller feature range".into()),
+            ));
+        }
+
+        let record = ControllerRegistrationRecord {
+            node_id,
+            incarnation_id: uuid::Uuid::from_bytes(req.incarnation_id.0),
+            // ZooKeeper migration is gone. Kafka writes false whatever the request
+            // says.
+            zk_migration_ready: false,
+            endpoints,
+            features,
+        };
+        if image.controller(node_id) == Some(&record) {
+            return Ok(success());
+        }
+        Ok(
+            match broker
+                .controller
+                .submit_change(vec![MetadataRecord::V1ControllerRegistration(record)])
+                .await
+            {
+                Ok(_) => success(),
+                Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
+                    response(codes::NOT_CONTROLLER, None)
+                }
+                Err(RaftError::Metadata(error)) => {
+                    response(codes::INVALID_REGISTRATION, Some(error.to_string()))
+                }
+                Err(error) => response(codes::UNKNOWN_SERVER_ERROR, Some(error.to_string())),
+            },
+        )
+    }
 }
 
 fn decode_listeners(
     listeners: &[krabka_protocol::owned::controller_registration_request::Listener],
 ) -> Result<Vec<BrokerEndpoint>, String> {
-    if listeners.is_empty() {
-        return Err("controller registration has no listeners".into());
-    }
-    let mut names = HashSet::with_capacity(listeners.len());
-    listeners
-        .iter()
-        .map(|listener| {
-            if listener.name.is_empty()
-                || listener.host.is_empty()
-                || listener.port == 0
-                || !names.insert(listener.name.clone())
-            {
-                return Err("invalid or duplicate controller listener".into());
-            }
-            let protocol = match listener.security_protocol {
-                0 => ListenerProtocol::Plaintext,
-                1 => ListenerProtocol::Ssl,
-                2 => ListenerProtocol::SaslPlaintext,
-                3 => ListenerProtocol::SaslSsl,
-                _ => return Err("unknown controller listener security protocol".into()),
-            };
-            Ok(BrokerEndpoint {
-                name: listener.name.clone(),
-                host: listener.host.clone(),
-                port: listener.port,
-                protocol,
-            })
-        })
-        .collect()
+    crate::handlers::registration_listeners::decode!(
+        listeners,
+        "controller registration has no listeners".into(),
+        "invalid or duplicate controller listener".into(),
+        "unknown controller listener security protocol".into()
+    )
 }
 
 /// A registration the controller accepted.
@@ -174,6 +144,7 @@ fn response(error_code: i16, error_message: Option<String>) -> ControllerRegistr
 #[cfg(test)]
 mod tests {
     use krabka_protocol::owned::controller_registration_request::Listener;
+    use krabka_security::ListenerProtocol;
 
     use super::*;
 
@@ -198,11 +169,12 @@ mod tests {
     async fn a_controller_that_is_not_a_voter_registers() {
         use std::{net::SocketAddr, sync::Arc};
 
-        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer(Arc::new(
-            crate::authorizer::AllowAllAuthorizer,
-        ))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            crate::test_support::start_broker_with_authorizer(Arc::new(
+                crate::authorizer::AllowAllAuthorizer,
+            ))
+        );
         let principal = crate::test_support::principal("controller");
         let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
         let ctx = test_context(&principal, &peer);
@@ -228,12 +200,10 @@ mod tests {
 
         assert2::check!(
             answer
-                == ControllerRegistrationResponse {
-                    throttle_time_ms: 0,
+                == unthrottled_wire!(ControllerRegistrationResponse {
                     error_code: 0,
                     error_message: Some(String::new()),
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-                }
+                })
         );
         assert2::check!(
             broker

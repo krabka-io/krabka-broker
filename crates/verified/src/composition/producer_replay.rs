@@ -5,6 +5,11 @@ use super::{
     decrement_sequence, increment_sequence, local_append_coordinates, produce_durability_frontier,
     producer_decision, producer_snapshot_entry_valid,
 };
+#[cfg(creusot)]
+use crate::producer_snapshot::{
+    nonduplicate_snapshot_decision, recovered_batch_coordinates, retained_producer_row,
+    snapshot_sequence_matches,
+};
 
 /// A valid snapshot's retained data batch reconstructs its sequence and
 /// physical span, answers retries with the original acknowledgement frontier,
@@ -12,7 +17,7 @@ use super::{
 /// The host must load this entry for the request's PID, without a replayed
 /// tail, into Kafka's five-slot ring (four empty earlier slots, then the last
 /// batch). Duplicate classification is sequence based; it does not compare bytes.
-#[ensures((match result { Some(_) => true, None => false }) ==
+#[ensures((result != None) ==
     (snapshot@ >= 0 && entry.producer_id@ >= 0 && entry.producer_epoch@ >= 0
         && entry.coordinator_epoch@ >= -1 && entry.last_sequence@ >= 0
         && entry.offset_delta@ >= 0 && entry.offset_delta@ <= entry.last_offset@
@@ -91,40 +96,25 @@ pub(super) fn reloaded_snapshot_preserves_last_batch_retry(
 /// and faithful row projection are host obligations, not proved here.
 #[requires(0 < rows@.len() && rows@.len() <= 5)]
 #[requires(forall<i: Int> 0 <= i && i < rows@.len()
-    ==> crate::producer_snapshot::snapshot_entry_valid_model(end@, rows@[i])
-        && rows@[i].last_offset@ >= 0
-        && rows@[i].producer_id == rows@[0].producer_id
+    ==> retained_producer_row(end@, rows@[i], rows@[0].producer_id)
         && rows@[i].producer_epoch == rows@[0].producer_epoch)]
 #[ensures((match result.0 { ProducerDecision::Duplicate { .. } => true, _ => false }) ==
     (request.0 == rows@[0].producer_epoch && exists<i: Int> 0 <= i && i < rows@.len()
-        && request.1@ == crate::producer::sequence_modulo_2_31(
-            rows@[i].last_sequence@ - rows@[i].offset_delta@)
-        && rows@[i].last_sequence@ == crate::producer::sequence_modulo_2_31(request.1@ + request.2@)))]
+        && snapshot_sequence_matches(rows@[i], request.1@, request.2@)))]
 #[ensures(match result {
     (ProducerDecision::Duplicate { retained: slot }, Some((index, base, frontier))) =>
         index@ < rows@.len() && slot@ == if index@ + 1 == rows@.len() { 4 } else { index@ }
-        && base@ == rows@[index@].last_offset@ - rows@[index@].offset_delta@
-        && frontier@ == rows@[index@].last_offset@ + 1
-        && 0 <= base@ && base@ < frontier@ && frontier@ <= end@
-        && request.1@ == crate::producer::sequence_modulo_2_31(
-            rows@[index@].last_sequence@ - rows@[index@].offset_delta@)
-        && rows@[index@].last_sequence@ == crate::producer::sequence_modulo_2_31(request.1@ + request.2@)
+        && recovered_batch_coordinates(rows@[index@], base@, frontier@, end@)
+        && snapshot_sequence_matches(rows@[index@], request.1@, request.2@)
         && forall<i: Int> 0 <= i && i < index@ ==>
-            !(request.1@ == crate::producer::sequence_modulo_2_31(
-                rows@[i].last_sequence@ - rows@[i].offset_delta@)
-                && rows@[i].last_sequence@ == crate::producer::sequence_modulo_2_31(request.1@ + request.2@)),
+            !(snapshot_sequence_matches(rows@[i], request.1@, request.2@)),
     (ProducerDecision::Duplicate { .. }, None) => false,
     (_, None) => true,
     (_, Some(_)) => false,
 })]
 #[ensures(match result.0 {
     ProducerDecision::Duplicate { .. } => true,
-    _ => result.0 == if request.0@ < rows@[0].producer_epoch@ { ProducerDecision::Fenced }
-        else if request.0@ > rows@[0].producer_epoch@ {
-            if request.1@ == 0 { ProducerDecision::Append } else { ProducerDecision::OutOfOrder }
-        } else if request.1@ == crate::producer::sequence_modulo_2_31(
-            rows@[rows@.len() - 1].last_sequence@ + 1) { ProducerDecision::Append }
-        else { ProducerDecision::OutOfOrder },
+    _ => result.0 == nonduplicate_snapshot_decision(request.0@, rows@[0].producer_epoch@, request.1@, rows@[rows@.len() - 1].last_sequence@),
 })]
 pub(super) fn replayed_window_preserves_first_retry_coordinates(
     end: i64,
@@ -146,9 +136,7 @@ pub(super) fn replayed_window_preserves_first_retry_coordinates(
         None => retained@[slot] == None,
         Some((index, base, frontier)) => index@ < i@
             && slot == if index@ + 1 == rows@.len() { 4 } else { index@ }
-            && base@ == rows@[index@].last_offset@ - rows@[index@].offset_delta@
-            && frontier@ == rows@[index@].last_offset@ + 1
-            && 0 <= base@ && base@ < frontier@ && frontier@ <= end@
+            && recovered_batch_coordinates(rows@[index@], base@, frontier@, end@)
             && match retained@[slot] {
                 Some(range) => range.base_sequence@ == crate::producer::sequence_modulo_2_31(
                     rows@[index@].last_sequence@ - rows@[index@].offset_delta@)

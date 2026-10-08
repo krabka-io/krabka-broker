@@ -7,13 +7,16 @@
 //! is covered in `epoch_diverge_follower`.
 
 use assert2::{assert, check};
-use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
-    produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-};
+use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, ReplicaState};
 
-use crate::epoch_harness::{boot_single, create_topic, record, topic_id_for};
+use crate::{
+    epoch_harness::{boot_single, create_topic, record, topic_id_for},
+    support::{
+        client::connect_client,
+        fetch::{fetch_partition, single_partition_fetch},
+        produce::single_partition_produce,
+    },
+};
 
 /// KIP-320 leader side. A Fetch from an assigned follower that
 /// advertises a stale `last_fetched_epoch` whose epoch ends *before* the
@@ -38,11 +41,7 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
     let (broker, bootstrap, dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "diverge").await;
 
-    let client = Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "diverge").await;
 
     // Helper: produce one single-record batch, stamped with whatever leader
@@ -51,21 +50,13 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
         let client = &client;
         async move {
             client
-                .send(ProduceRequest {
-                    acks: 1,
-                    timeout_ms: 5_000,
-                    topic_data: vec![TopicProduceData {
-                        name: "diverge".into(),
-                        topic_id,
-                        partition_data: vec![PartitionProduceData {
-                            index: 0,
-                            records: Some(record(value).into()),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                })
+                .send(single_partition_produce(
+                    "diverge",
+                    topic_id,
+                    0,
+                    Some(record(value).into()),
+                    (1, 5_000),
+                ))
                 .await
                 .expect("produce");
         }
@@ -124,22 +115,15 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
                 replica_id: 7,
                 ..Default::default()
             },
-            max_wait_ms: 100,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: "diverge".into(),
+            ..single_partition_fetch(
+                "diverge",
                 topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: n,
+                FetchPartition {
                     last_fetched_epoch: e0,
-                    partition_max_bytes: 1 << 20,
-                    ..FetchPartition::default()
-                }],
-                ..FetchTopic::default()
-            }],
-            ..FetchRequest::default()
+                    ..fetch_partition(0, n, 1 << 20)
+                },
+                (100, 1, 1 << 20),
+            )
         })
         .await
         .expect("fetch");

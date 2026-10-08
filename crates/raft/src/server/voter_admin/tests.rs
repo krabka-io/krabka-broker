@@ -3,9 +3,12 @@
 
 use assert2::check;
 use krabka_protocol::{
-    Decode,
+    Decode, Encode,
     owned::{
-        add_raft_voter_request::AddRaftVoterRequest, add_raft_voter_response::AddRaftVoterResponse,
+        add_raft_voter_request::AddRaftVoterRequest,
+        add_raft_voter_response::AddRaftVoterResponse,
+        remove_raft_voter_request::{self, RemoveRaftVoterRequest},
+        remove_raft_voter_response::RemoveRaftVoterResponse,
     },
 };
 
@@ -61,6 +64,20 @@ async fn add_response(
     decoded::<AddRaftVoterResponse>(&response, version)
 }
 
+async fn remove_response(
+    request: &RemoveRaftVoterRequest,
+    version: i16,
+    engine: &KraftController,
+    context: &str,
+) -> RemoveRaftVoterResponse {
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode request");
+    let bytes = remove_raft_voter_response(version, &body.freeze(), engine)
+        .await
+        .expect(context);
+    decoded::<RemoveRaftVoterResponse>(&bytes, version)
+}
+
 /// A reconfiguration request is refused before it reaches the quorum when
 /// it names the wrong cluster, a negative voter, or a zero directory id,
 /// each with the code `KafkaRaftClient.handleRemoveVoterRequest` answers.
@@ -69,14 +86,6 @@ async fn add_response(
 /// zero directory id in particular names no real incarnation.
 #[tokio::test]
 async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
-    use krabka_protocol::{
-        Encode as _,
-        owned::{
-            remove_raft_voter_request::{self, RemoveRaftVoterRequest},
-            remove_raft_voter_response::RemoveRaftVoterResponse,
-        },
-    };
-
     const INVALID_REQUEST: i16 = 42;
     let version = remove_raft_voter_request::MAX_VERSION;
     let (engine, _dir) = single_voter_engine();
@@ -134,12 +143,8 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
             voter_directory_id,
             ..Default::default()
         };
-        let mut body = BytesMut::new();
-        request.encode(&mut body, version).expect("encode request");
-        let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
-            .await
-            .expect("a refusal is still a response");
-        let response = decoded::<RemoveRaftVoterResponse>(&bytes, version);
+        let response =
+            remove_response(&request, version, &engine, "a refusal is still a response").await;
         check!(response == expected, "{what}");
     }
 
@@ -151,12 +156,7 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         voter_directory_id: real_directory,
         ..Default::default()
     };
-    let mut body = BytesMut::new();
-    request.encode(&mut body, version).expect("encode request");
-    let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
-        .await
-        .expect("response");
-    let response = decoded::<RemoveRaftVoterResponse>(&bytes, version);
+    let response = remove_response(&request, version, &engine, "response").await;
     check!(
         response.error_code != INVALID_REQUEST,
         "a well-formed request reaches the quorum, got {}",
@@ -170,12 +170,7 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         voter_directory_id: real_directory,
         ..Default::default()
     };
-    let mut body = BytesMut::new();
-    request.encode(&mut body, version).expect("encode request");
-    let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
-        .await
-        .expect("response");
-    let response = decoded::<RemoveRaftVoterResponse>(&bytes, version);
+    let response = remove_response(&request, version, &engine, "response").await;
     check!(
         response.error_code != INVALID_REQUEST,
         "voter_id 0 reaches the quorum, got {}",

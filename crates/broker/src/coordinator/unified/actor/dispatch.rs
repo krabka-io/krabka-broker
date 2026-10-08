@@ -288,7 +288,7 @@ mod tests {
     use krabka_log::Offset;
 
     use super::*;
-    use crate::coordinator::unified::actor::test_support::make_coordinator;
+    use crate::coordinator::unified::actor::test_support::{make_coordinator, rpc};
 
     /// Kafka's `GroupMetadataManager.onUnloaded` answers every awaiting
     /// `JoinGroup` of a `PreparingRebalance` group, under the member's own id,
@@ -304,7 +304,7 @@ mod tests {
 
         use crate::coordinator::unified::actor::{
             JoinResult, SyncResult,
-            test_support::{completing_classic_group, rpc, subscription_blob},
+            test_support::{rpc, subscription_blob},
         };
 
         // A member that waits in `JoinGroup`, behind the initial delay.
@@ -312,37 +312,27 @@ mod tests {
         let handle = coord.get_or_create_classic("g");
         coord.mark_classic("g");
         let member_id = rpc::classic_join(&handle, "", "t").await.member_id;
-        let (join_tx, join_rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicJoin {
-                req: JoinGroupRequest {
-                    group_id: "g".into(),
-                    member_id: member_id.clone(),
-                    protocol_type: "consumer".into(),
-                    protocols: vec![JoinGroupRequestProtocol {
-                        name: "range".into(),
-                        metadata: subscription_blob(&["t"]),
-                        ..Default::default()
-                    }],
-                    session_timeout_ms: 30_000,
-                    rebalance_timeout_ms: 60_000,
+        let join_rx = rpc::begin(&handle, |join_tx| GroupActorMessage::ClassicJoin {
+            req: JoinGroupRequest {
+                group_id: "g".into(),
+                member_id: member_id.clone(),
+                protocol_type: "consumer".into(),
+                protocols: vec![JoinGroupRequestProtocol {
+                    name: "range".into(),
+                    metadata: subscription_blob(&["t"]),
                     ..Default::default()
-                },
-                version: 4,
-                client_id: "client-a".into(),
-                client_host: "127.0.0.1".into(),
-                reply: join_tx,
-            })
-            .await
-            .unwrap();
-        let (ack, acked) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Shutdown(ack))
-            .await
-            .unwrap();
-        acked.await.unwrap();
+                }],
+                session_timeout_ms: 30_000,
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            },
+            version: 4,
+            client_id: "client-a".into(),
+            client_host: "127.0.0.1".into(),
+            reply: join_tx,
+        })
+        .await;
+        rpc::shutdown(&handle).await;
         assert!(
             join_rx.await.unwrap()
                 == JoinResult {
@@ -354,31 +344,22 @@ mod tests {
 
         // A follower that waits in `SyncGroup` for the leader.
         let (coord, _log) = make_coordinator();
-        let group = completing_classic_group(&["m1", "m2"]);
-        let generation = group.as_classic().unwrap().generation_id;
-        coord.seed_classic("g", Box::new(group));
-        let handle = coord.find("g").unwrap();
-        let (sync_tx, sync_rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicSync {
-                req: SyncGroupRequest {
-                    group_id: "g".into(),
-                    generation_id: generation,
-                    member_id: "m2".into(),
-                    ..Default::default()
-                },
-                reply: sync_tx,
-            })
-            .await
-            .unwrap();
-        let (ack, acked) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Shutdown(ack))
-            .await
-            .unwrap();
-        acked.await.unwrap();
+        let (handle, generation) =
+            crate::coordinator::unified::actor::test_support::seed_completing_classic(
+                &coord,
+                &["m1", "m2"],
+            );
+        let sync_rx = rpc::begin_classic_sync(
+            &handle,
+            SyncGroupRequest {
+                group_id: "g".into(),
+                generation_id: generation,
+                member_id: "m2".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+        rpc::shutdown(&handle).await;
         assert!(
             sync_rx.await.unwrap()
                 == SyncResult {
@@ -390,23 +371,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_seed_hydrates_group_and_blocks_delete_when_nonempty() {
-        use std::time::Duration;
-
         use crate::coordinator::unified::{
-            classic_state::{ClassicGroup as ClassicState, Member, OffsetEntry},
+            classic_state::{ClassicGroup as ClassicState, OffsetEntry},
             group::{CoordinatorGroup, GroupKind},
         };
         let (coord, _log) = make_coordinator();
 
         let mut cs = ClassicState::new("g");
-        cs.add_member(Member::new(
-            "m1",
-            "client",
-            "127.0.0.1",
-            Duration::from_secs(30),
-            Duration::from_mins(1),
-            vec![("range".into(), bytes::Bytes::new())],
-        ));
+        cs.add_member(crate::coordinator::unified::actor::test_support::classic_member("m1"));
         let group = Box::new(CoordinatorGroup::seeded(
             "g",
             GroupKind::Classic(cs),
@@ -427,12 +399,7 @@ mod tests {
 
         // Seeded committed offsets and member are visible.
         let handle = coord.find("g").expect("seeded actor");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::FetchOffsets { reply: tx })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::FetchOffsets { reply: tx }).await;
         assert!(
             rx.await
                 .unwrap()

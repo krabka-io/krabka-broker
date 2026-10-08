@@ -8,19 +8,14 @@
 use std::{io, net::SocketAddr};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_authenticate_response::SaslAuthenticateResponse,
-        sasl_handshake_request::SaslHandshakeRequest,
-        sasl_handshake_response::SaslHandshakeResponse,
-    },
+use krabka_broker::{Broker, BrokerHandle};
+use krabka_protocol::owned::{
+    api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+    sasl_authenticate_request::SaslAuthenticateRequest,
+    sasl_authenticate_response::SaslAuthenticateResponse,
+    sasl_handshake_request::SaslHandshakeRequest, sasl_handshake_response::SaslHandshakeResponse,
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
 use crate::harness::round_trip;
@@ -58,23 +53,7 @@ pub fn start_oauthbearer_broker(
     log_dir: &std::path::Path,
     validator: krabka_security::OAuthBearerValidator,
 ) -> impl std::future::Future<Output = krabka_broker::BrokerHandle> {
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        // This helper exercises only the client-listener validator. Dedicated
-        // multi-broker tests cover outbound OAUTHBEARER on the controller and
-        // inter-broker paths.
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer];
-    cfg.oauthbearer_validator = validator;
-    Box::pin(async move { Broker::start(cfg).await.expect("broker must start") })
+    start_oauthbearer_broker_with_cap(log_dir, validator, None)
 }
 
 /// Same as [`start_oauthbearer_broker`], but with the listener's KIP-368
@@ -89,8 +68,10 @@ pub fn start_oauthbearer_broker_with_cap(
     validator: krabka_security::OAuthBearerValidator,
     max_reauth: Option<krabka_units::Time>,
 ) -> impl std::future::Future<Output = krabka_broker::BrokerHandle> {
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer];
+    let mut cfg = crate::support::sasl::sasl_plaintext_mechanisms(
+        log_dir.to_path_buf(),
+        vec![SaslMechanism::OAuthBearer],
+    );
     cfg.oauthbearer_validator = validator;
     cfg.connections_max_reauth = max_reauth;
     Box::pin(async move { Broker::start(cfg).await.expect("broker must start") })
@@ -105,29 +86,20 @@ pub async fn oauthbearer_handshake(
     corr: &mut i32,
 ) -> Result<(), io::Error> {
     let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req
-        .encode(&mut av_body, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
+    let av_body = crate::kafka_wire::encode_named(&av_req, 0, "ApiVersions")?;
     let av = round_trip(stream, 18, 0, *corr, false, &av_body).await?;
     *corr += 1;
-    let mut cur: &[u8] = &av;
-    ApiVersionsResponse::decode(&mut cur, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
+    crate::kafka_wire::decode_named::<ApiVersionsResponse>(&av, 0, "ApiVersions")?;
 
     let sh_req = SaslHandshakeRequest {
         mechanism: "OAUTHBEARER".to_string(),
         ..Default::default()
     };
-    let mut sh_body = BytesMut::new();
-    sh_req
-        .encode(&mut sh_body, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
+    let sh_body = crate::kafka_wire::encode_named(&sh_req, 1, "SaslHandshake")?;
     let sh = round_trip(stream, 17, 1, *corr, false, &sh_body).await?;
     *corr += 1;
-    let mut cur: &[u8] = &sh;
-    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
+    let sh_resp =
+        crate::kafka_wire::decode_named::<SaslHandshakeResponse>(&sh, 1, "SaslHandshake")?;
     if sh_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SaslHandshake failed: error_code={}",
@@ -151,14 +123,10 @@ pub async fn oauthbearer_authenticate(
         auth_bytes,
         ..Default::default()
     };
-    let mut body = BytesMut::new();
-    req.encode(&mut body, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate encode: {e}")))?;
+    let body = crate::kafka_wire::encode_named(&req, 2, "SaslAuthenticate")?;
     let resp_bytes = round_trip(stream, 36, 2, *corr, true, &body).await?;
     *corr += 1;
-    let mut cur: &[u8] = &resp_bytes;
-    SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate decode: {e}")))
+    crate::kafka_wire::decode_named::<SaslAuthenticateResponse>(&resp_bytes, 2, "SaslAuthenticate")
 }
 
 /// Build an unsecured-JWS validator with zero clock skew and the default
@@ -189,9 +157,7 @@ pub async fn drive_sasl_oauthbearer_session_open(
     addr: SocketAddr,
     bearer_token: &str,
 ) -> Result<(TcpStream, i64), io::Error> {
-    let mut stream = TcpStream::connect(addr).await?;
-    let mut corr = 1;
-    oauthbearer_handshake(&mut stream, &mut corr).await?;
+    let (mut stream, mut corr) = oauthbearer_session_start(addr).await?;
     let auth =
         oauthbearer_authenticate(&mut stream, &mut corr, oauthbearer_initial(bearer_token)).await?;
     if auth.error_code != 0 {
@@ -220,14 +186,13 @@ pub async fn drive_inband_reauth(stream: &mut TcpStream, new_token: &str) -> Res
         mechanism: "OAUTHBEARER".to_string(),
         ..Default::default()
     };
-    let mut handshake_body = BytesMut::new();
-    handshake_request
-        .encode(&mut handshake_body, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
+    let handshake_body = crate::kafka_wire::encode_named(&handshake_request, 1, "SaslHandshake")?;
     let handshake_response_bytes = round_trip(stream, 17, 1, 100, false, &handshake_body).await?;
-    let mut cur: &[u8] = &handshake_response_bytes;
-    let handshake_response = SaslHandshakeResponse::decode(&mut cur, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
+    let handshake_response = crate::kafka_wire::decode_named::<SaslHandshakeResponse>(
+        &handshake_response_bytes,
+        1,
+        "SaslHandshake",
+    )?;
     if handshake_response.error_code != 0 {
         return Err(io::Error::other(format!(
             "in-band SaslHandshake error_code={}",
@@ -239,15 +204,15 @@ pub async fn drive_inband_reauth(stream: &mut TcpStream, new_token: &str) -> Res
         auth_bytes: oauthbearer_initial(new_token),
         ..Default::default()
     };
-    let mut authenticate_body = BytesMut::new();
-    authenticate_request
-        .encode(&mut authenticate_body, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate encode: {e}")))?;
+    let authenticate_body =
+        crate::kafka_wire::encode_named(&authenticate_request, 2, "SaslAuthenticate")?;
     let authenticate_response_bytes =
         round_trip(stream, 36, 2, 101, true, &authenticate_body).await?;
-    let mut cur: &[u8] = &authenticate_response_bytes;
-    let authenticate_response = SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate decode: {e}")))?;
+    let authenticate_response = crate::kafka_wire::decode_named::<SaslAuthenticateResponse>(
+        &authenticate_response_bytes,
+        2,
+        "SaslAuthenticate",
+    )?;
     if authenticate_response.error_code != 0 {
         return Err(io::Error::other(format!(
             "in-band SaslAuthenticate error_code={} message={:?}",
@@ -255,4 +220,23 @@ pub async fn drive_inband_reauth(stream: &mut TcpStream, new_token: &str) -> Res
         )));
     }
     Ok(())
+}
+
+/// Start the bearer-only broker while keeping its log directory alive.
+pub async fn oauthbearer_fixture(
+    validator: krabka_security::OAuthBearerValidator,
+    cap: Option<krabka_units::Time>,
+) -> (tempfile::TempDir, BrokerHandle, SocketAddr) {
+    let dir = tempfile::tempdir().unwrap();
+    let broker = start_oauthbearer_broker_with_cap(dir.path(), validator, cap).await;
+    let addr = broker.listen_addr();
+    (dir, broker, addr)
+}
+
+/// Open the pre-authentication rounds without consuming a bearer token.
+pub async fn oauthbearer_session_start(addr: SocketAddr) -> Result<(TcpStream, i32), io::Error> {
+    let mut stream = TcpStream::connect(addr).await?;
+    let mut corr = 1;
+    oauthbearer_handshake(&mut stream, &mut corr).await?;
+    Ok((stream, corr))
 }

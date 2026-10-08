@@ -106,36 +106,45 @@ pub(super) fn resolve_leadership(
     Ok(partition)
 }
 
+pub(super) fn resolve_for_broker(
+    broker: &crate::broker::Broker,
+    topic: &str,
+    partition: i32,
+    replica_id: i32,
+    current_leader_epoch: i32,
+) -> Result<Arc<crate::partition::Partition>, i16> {
+    resolve_leadership(
+        topic,
+        partition,
+        replica_id,
+        current_leader_epoch,
+        LeadershipContext {
+            partitions: &broker.partitions,
+            log_dir_status: &broker.log_dir_status,
+            image: &broker.controller.current_image(),
+            node_id: broker.config.node_id,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+    use krabka_metadata::MetadataImage;
     use uuid::Uuid;
 
     use super::*;
     use crate::log_dir_status::LogDirRegistry;
 
     fn image_with_topic(topic: &str, leader: u64) -> MetadataImage {
-        let mut img = MetadataImage::new(Uuid::nil());
-        img.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: topic.into(),
-            topic_id: Uuid::nil(),
-            partitions: 1,
-            replication_factor: 2,
-        }));
-        img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: topic.into(),
-            partition: 0,
-            leader: krabka_audit::NodeId(leader),
-            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
-        img
+        crate::test_support::topic_partition_image(topic, 2, || {
+            crate::handlers::test_support::replicated_partition(
+                topic,
+                0,
+                krabka_audit::NodeId(leader),
+                &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            )
+        })
     }
 
     fn local_partition(dir: &std::path::Path) -> Arc<Partition> {
@@ -144,28 +153,27 @@ mod tests {
             krabka_log::LogConfig::default(),
         )
         .expect("open log");
-        crate::broker::spawn_partition(
-            "orders".into(),
-            krabka_ids::PartitionIndex(0),
-            dir.to_path_buf(),
-            log,
-            LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        )
+        crate::test_support::spawn_standalone_partition(dir, "orders", 0, log, false)
+    }
+
+    /// Keep the borrowed context and its log-directory registry in each caller's scope.
+    macro_rules! partition_context {
+        (($status:ident, $context:ident), $partitions:expr, $image:expr) => {
+            let $status = LogDirRegistry::default();
+            let $context = LeadershipContext {
+                partitions: $partitions,
+                log_dir_status: &$status,
+                image: $image,
+                node_id: krabka_audit::NodeId(1),
+            };
+        };
     }
 
     #[test]
     fn image_without_the_partition_is_always_unknown_topic_or_partition() {
         let empty = MetadataImage::new(Uuid::nil());
         let partitions = PartitionRegistry::new();
-        let log_dir_status = LogDirRegistry::default();
-        let ctx = LeadershipContext {
-            partitions: &partitions,
-            log_dir_status: &log_dir_status,
-            image: &empty,
-            node_id: krabka_audit::NodeId(1),
-        };
+        partition_context!((log_dir_status, ctx), &partitions, &empty);
         for replica_id in [-1, -2, 3] {
             let got = resolve_leadership("orders", 0, replica_id, -1, ctx);
             assert!(
@@ -179,13 +187,7 @@ mod tests {
     async fn known_partition_not_held_locally_reflects_the_image_leader_unless_debugging() {
         let image = image_with_topic("orders", 2);
         let partitions = PartitionRegistry::new();
-        let log_dir_status = LogDirRegistry::default();
-        let ctx = LeadershipContext {
-            partitions: &partitions,
-            log_dir_status: &log_dir_status,
-            image: &image,
-            node_id: krabka_audit::NodeId(1),
-        };
+        partition_context!((log_dir_status, ctx), &partitions, &image);
 
         for (replica_id, want) in [
             (-1, Err(codes::NOT_LEADER_OR_FOLLOWER)),
@@ -210,13 +212,7 @@ mod tests {
             krabka_ids::PartitionIndex(0),
             local_partition(dir.path()),
         );
-        let log_dir_status = LogDirRegistry::default();
-        let ctx = LeadershipContext {
-            partitions: &partitions,
-            log_dir_status: &log_dir_status,
-            image: &image,
-            node_id: krabka_audit::NodeId(1),
-        };
+        partition_context!((log_dir_status, ctx), &partitions, &image);
 
         let refused = resolve_leadership("orders", 0, -1, -1, ctx).map(|_| ());
         assert!(refused == Err(codes::NOT_LEADER_OR_FOLLOWER));
@@ -237,13 +233,7 @@ mod tests {
             krabka_ids::PartitionIndex(0),
             partition.clone(),
         );
-        let log_dir_status = LogDirRegistry::default();
-        let ctx = LeadershipContext {
-            partitions: &partitions,
-            log_dir_status: &log_dir_status,
-            image: &image,
-            node_id: krabka_audit::NodeId(1),
-        };
+        partition_context!((log_dir_status, ctx), &partitions, &image);
         let resolved = resolve_leadership("orders", 0, -1, -1, ctx);
         assert!(resolved.is_ok());
 
@@ -268,13 +258,7 @@ mod tests {
             krabka_ids::PartitionIndex(0),
             partition.clone(),
         );
-        let log_dir_status = LogDirRegistry::default();
-        let ctx = LeadershipContext {
-            partitions: &partitions,
-            log_dir_status: &log_dir_status,
-            image: &image,
-            node_id: krabka_audit::NodeId(1),
-        };
+        partition_context!((log_dir_status, ctx), &partitions, &image);
 
         let got = resolve_leadership("orders", 0, -1, -1, ctx).map(|_| ());
         assert!(got == Err(codes::NOT_LEADER_OR_FOLLOWER));
@@ -300,13 +284,7 @@ mod tests {
             krabka_ids::PartitionIndex(0),
             partition.clone(),
         );
-        let log_dir_status = LogDirRegistry::default();
-        let ctx = LeadershipContext {
-            partitions: &partitions,
-            log_dir_status: &log_dir_status,
-            image: &image,
-            node_id: krabka_audit::NodeId(1),
-        };
+        partition_context!((log_dir_status, ctx), &partitions, &image);
 
         let stale = resolve_leadership("orders", 0, -1, 2, ctx).map(|_| ());
         assert!(stale == Err(codes::FENCED_LEADER_EPOCH));

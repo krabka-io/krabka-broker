@@ -245,37 +245,12 @@ impl Log {
             batch.last_offset_delta,
             base_offset,
         )?;
-        let (
-            segment_size,
-            segment_roll_interval,
-            segment_index_size,
-            index_interval,
-            flush_on_append,
-        ) = {
-            let cfg = self.config.read().unwrap();
-            (
-                cfg.segment_size,
-                cfg.segment_roll_interval,
-                cfg.segment_index_size,
-                cfg.index_interval,
-                cfg.flush_on_append,
-            )
-        };
-        // Same append-time roll check as the owned path (`Log::should_roll_
-        // for_incoming`), against this replicated batch's own bytes and
-        // timestamp, so a follower rolls its segments at the same boundaries
-        // the leader did.
-        let incoming_size =
-            ByteSize::from_bytes(u64::try_from(batch.bytes.len()).unwrap_or(u64::MAX));
-        if self.should_roll_for_incoming(
-            incoming_size,
+        // The follower uses the same append-time policy and roll check as the
+        // owned path, against this replicated batch's bytes and timestamp.
+        let (index_interval, flush_on_append) = self.roll_for_append(
+            || ByteSize::from_bytes(u64::try_from(batch.bytes.len()).unwrap_or(u64::MAX)),
             batch.max_timestamp,
-            segment_size,
-            segment_roll_interval,
-            segment_index_size,
-        ) {
-            self.roll_active_segment()?;
-        }
+        )?;
 
         let result = (|| {
             let active = self
@@ -322,11 +297,7 @@ impl Log {
             Ok(())
         })();
 
-        if let Err(error) = result {
-            self.rollback_failed_append(base_offset)?;
-            return Err(error);
-        }
-        Ok(())
+        self.complete_append_state(result, base_offset)
     }
 }
 

@@ -11,7 +11,7 @@
 //! protocol, the handle, and the `tokio::select!` loop — while each request
 //! path and each persistence concern lives in its own submodule.
 
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 
 use krabka_protocol::owned::{
     share_group_heartbeat_request::ShareGroupHeartbeatRequest,
@@ -118,19 +118,12 @@ impl ShareGroupActorHandle {
     }
 }
 
-/// The settings `group_id` runs with: the `share.*` overrides of its group
-/// config in the current metadata image over the broker's `config`. A
-/// coordinator with no metadata source runs every group with the broker
-/// values.
-fn effective_config<'a>(
-    config: &'a ShareGroupConfig,
-    coordinator: &super::super::GroupCoordinator,
-    group_id: &str,
-) -> Cow<'a, ShareGroupConfig> {
-    match coordinator.metadata_source() {
-        Some(source) => config.for_group(source.current_image().group_config(group_id)),
-        None => Cow::Borrowed(config),
-    }
+crate::coordinator::unified::config::effective_group_config! {
+    /// The settings `group_id` runs with: the `share.*` overrides of its group
+    /// config in the current metadata image over the broker's `config`. A
+    /// coordinator with no metadata source runs every group with the broker
+    /// values.
+    fn effective_config(ShareGroupConfig);
 }
 
 async fn actor_loop(

@@ -175,8 +175,7 @@ fn write_all_verbatim(segment: &mut Segment, interval: ByteSize) {
 fn the_append_paths_write_the_indexes_kafka_dump_log_verifies() {
     let expected_time_entries = vec![(102, 2), (201, 5), (300, 7)];
     for (label, verbatim) in [("encoding append", false), ("verbatim append", true)] {
-        let dir = tempdir().unwrap();
-        let mut segment = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (dir, mut segment) = crate::segment::test_support::test_segment();
         if verbatim {
             write_all_verbatim(&mut segment, DENSE_INDEX);
         } else {
@@ -203,8 +202,7 @@ fn the_append_paths_write_the_indexes_kafka_dump_log_verifies() {
 /// add up to the interval, and what it takes still verifies.
 #[test]
 fn a_sparse_index_still_verifies() {
-    let dir = tempdir().unwrap();
-    let mut segment = Segment::create(dir.path(), Offset(0)).unwrap();
+    let (dir, mut segment) = crate::segment::test_support::test_segment();
     write_all_encoded(&mut segment, bytes(200));
 
     let entries = offset_entries(dir.path(), 0).len();
@@ -297,8 +295,7 @@ fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
 /// segment keeps is the one of the batches that survived.
 #[test]
 fn appends_after_a_truncation_keep_the_indexes_verifying() {
-    let dir = tempdir().unwrap();
-    let mut segment = Segment::create(dir.path(), Offset(0)).unwrap();
+    let (dir, mut segment) = crate::segment::test_support::test_segment();
     write_all_encoded(&mut segment, DENSE_INDEX);
 
     // Keep the batches ending at 2, 3 and 5.
@@ -324,8 +321,7 @@ fn appends_after_a_truncation_keep_the_indexes_verifying() {
 /// record in the middle of that batch.
 #[test]
 fn a_timestamp_search_finds_the_record_inside_the_batch_that_set_the_maximum() {
-    let dir = tempdir().unwrap();
-    let mut segment = Segment::create(dir.path(), Offset(0)).unwrap();
+    let (_dir, mut segment) = crate::segment::test_support::test_segment();
     write_all_encoded(&mut segment, DENSE_INDEX);
 
     // Batch (4, 2 records, 200): records at offsets 4 and 5 with timestamps

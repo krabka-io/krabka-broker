@@ -144,7 +144,7 @@ impl SharePartitionLeaderManager {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Instant};
+    use std::sync::Arc;
 
     use assert2::assert;
     use async_trait::async_trait;
@@ -153,10 +153,14 @@ mod tests {
     use super::{MAX_CONCURRENT_DEAD_LETTER_WRITES, coalesce};
     use crate::{
         codes,
+        share_coordinator::coordinator::test_support::state_batch,
         share_partition::{
             dlq::{DlqError, DlqRequest, DlqSink, test_support::RecordingDlq},
-            manager::test_support::{LOCK, manager_with_dlq},
-            state::{AckType, AcquisitionState, DlqCause, DlqRange, RecordState},
+            manager::test_support::manager_with_dlq,
+            state::{
+                AckType, AcquisitionState, DlqCause, RecordState,
+                test_support::{acquire_window, dlq_range as range},
+            },
         },
     };
 
@@ -194,18 +198,36 @@ mod tests {
         let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
         {
             let mut state = cell.lock().await;
-            state.set_dlq_enabled(true);
-            state.materialize(Offset(records), 100);
-            let _ = state.acquire("m1", 100, Offset(i64::MAX), Instant::now(), LOCK, 5);
+            acquire_window(&mut state, records, 100, true);
         }
         cell
     }
 
-    /// Waits until `done` holds of the cell's states, or fails the test.
-    async fn wait_for(
+    /// A sink, manager and acquired cell with no additional retained ownership.
+    async fn acquired_manager<D: DlqSink + Default + 'static>(
+        records: i64,
+    ) -> (
+        Arc<D>,
+        Arc<super::SharePartitionLeaderManager>,
+        uuid::Uuid,
+        Arc<tokio::sync::Mutex<AcquisitionState>>,
+    ) {
+        let dlq = Arc::new(D::default());
+        let mgr = manager_with_dlq(dlq.clone());
+        let tid = uuid::Uuid::from_bytes([61; 16]);
+        let cell = acquired_cell(&mgr, tid, records).await;
+        (dlq, mgr, tid, cell)
+    }
+
+    /// Dispatches the durable ranges, then waits for `done` or fails the test.
+    async fn dispatch_and_wait(
+        mgr: &super::SharePartitionLeaderManager,
+        key: &super::LeaderKey,
         cell: &Arc<tokio::sync::Mutex<AcquisitionState>>,
+        ranges: Vec<crate::share_partition::state::DlqRange>,
         done: impl Fn(&[(i64, RecordState)]) -> bool,
     ) -> Vec<(i64, RecordState)> {
+        mgr.dispatch_dead_letters(key, cell, ranges);
         tokio::time::timeout(std::time::Duration::from_secs(60), async {
             loop {
                 let states = cell.lock().await.record_states();
@@ -236,10 +258,7 @@ mod tests {
     /// and a failed write of `Archiving` rolls the reject back.
     #[tokio::test(start_paused = true)]
     async fn the_write_starts_only_once_archiving_is_durable() {
-        let dlq = Arc::new(RecordingDlq::default());
-        let mgr = manager_with_dlq(dlq.clone());
-        let tid = uuid::Uuid::from_bytes([61; 16]);
-        let cell = acquired_cell(&mgr, tid, 2).await;
+        let (dlq, mgr, tid, cell) = acquired_manager::<RecordingDlq>(2).await;
 
         // The test manager's persister cannot write, so the reject rolls back.
         let mut state = cell.lock().await;
@@ -268,10 +287,7 @@ mod tests {
     /// its cause and delivery count, then archived and the SPSO moves on.
     #[tokio::test(start_paused = true)]
     async fn a_dispatched_run_is_written_then_archived() {
-        let dlq = Arc::new(RecordingDlq::default());
-        let mgr = manager_with_dlq(dlq.clone());
-        let tid = uuid::Uuid::from_bytes([61; 16]);
-        let cell = acquired_cell(&mgr, tid, 3).await;
+        let (dlq, mgr, tid, cell) = acquired_manager::<RecordingDlq>(3).await;
         let key = ("g1".to_owned(), tid, 0);
         let ranges = {
             let mut state = cell.lock().await;
@@ -281,8 +297,7 @@ mod tests {
             state.take_pending_dlq()
         };
 
-        mgr.dispatch_dead_letters(&key, &cell, ranges);
-        let states = wait_for(&cell, |states| states.len() == 1).await;
+        let states = dispatch_and_wait(&mgr, &key, &cell, ranges, |states| states.len() == 1).await;
 
         assert!(
             (states, dlq.requests(), cell.lock().await.start_offset)
@@ -292,15 +307,6 @@ mod tests {
                     Offset(2),
                 )
         );
-    }
-
-    fn range(first: i64, last: i64, delivery_count: i16, cause: Option<DlqCause>) -> DlqRange {
-        DlqRange {
-            first: Offset(first),
-            last: Offset(last),
-            delivery_count,
-            cause,
-        }
     }
 
     /// Only neighbours join, and only when a record of the result would get
@@ -356,10 +362,7 @@ mod tests {
     /// write, and one dead-letter record for each offset still comes out.
     #[tokio::test(start_paused = true)]
     async fn neighbouring_rejects_are_written_together_and_archived() {
-        let dlq = Arc::new(RecordingDlq::default());
-        let mgr = manager_with_dlq(dlq.clone());
-        let tid = uuid::Uuid::from_bytes([61; 16]);
-        let cell = acquired_cell(&mgr, tid, 4).await;
+        let (dlq, mgr, tid, cell) = acquired_manager::<RecordingDlq>(4).await;
         let key = ("g1".to_owned(), tid, 0);
         let ranges = {
             let mut state = cell.lock().await;
@@ -371,8 +374,7 @@ mod tests {
             state.take_pending_dlq()
         };
 
-        mgr.dispatch_dead_letters(&key, &cell, ranges);
-        let states = wait_for(&cell, |states| states.len() == 1).await;
+        let states = dispatch_and_wait(&mgr, &key, &cell, ranges, |states| states.len() == 1).await;
 
         assert!(
             (states, dlq.requests())
@@ -388,10 +390,7 @@ mod tests {
     /// rate cannot open a write for each run while the queue is slow.
     #[tokio::test(start_paused = true)]
     async fn writes_run_side_by_side_up_to_the_broker_limit() {
-        let dlq = Arc::new(GaugeDlq::default());
-        let mgr = manager_with_dlq(dlq.clone());
-        let tid = uuid::Uuid::from_bytes([61; 16]);
-        let cell = acquired_cell(&mgr, tid, 40).await;
+        let (dlq, mgr, tid, cell) = acquired_manager::<GaugeDlq>(40).await;
         let key = ("g1".to_owned(), tid, 0);
         // Every other record, so no two runs are neighbours.
         let ranges = {
@@ -442,25 +441,14 @@ mod tests {
                 1,
                 1,
                 &[
-                    crate::share_coordinator::persistence::StateBatch {
-                        first_offset: Offset(0),
-                        last_offset: Offset(0),
-                        delivery_state: crate::share_partition::state::DS_ARCHIVING,
-                        delivery_count: 5,
-                    },
-                    crate::share_coordinator::persistence::StateBatch {
-                        first_offset: Offset(1),
-                        last_offset: Offset(1),
-                        delivery_state: crate::share_partition::state::DS_ARCHIVING,
-                        delivery_count: 2,
-                    },
+                    state_batch(0, 0, crate::share_partition::state::DS_ARCHIVING, 5),
+                    state_batch(1, 1, crate::share_partition::state::DS_ARCHIVING, 2),
                 ],
             );
             state.take_pending_dlq()
         };
 
-        mgr.dispatch_dead_letters(&key, &cell, ranges);
-        let states = wait_for(&cell, <[_]>::is_empty).await;
+        let states = dispatch_and_wait(&mgr, &key, &cell, ranges, <[_]>::is_empty).await;
         let mut written = dlq.requests();
         written.sort_by_key(|request| request.first.0);
 

@@ -55,16 +55,14 @@ fn image_with(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
         replication_factor: 2,
     }));
     image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: TOPIC.to_owned(),
-        partition: 0,
-        leader: NodeId(1),
-        replicas: vec![NodeId(1), NodeId(2)],
         isr: vec![NodeId(1)],
         leader_epoch: LeaderEpoch(5),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 0,
+        ..crate::handlers::test_support::replicated_partition(
+            TOPIC,
+            0,
+            NodeId(1),
+            &[NodeId(1), NodeId(2)],
+        )
     }));
     for proposal in proposals {
         image.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
@@ -76,16 +74,15 @@ fn image_with(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
 /// is in the ISR and dead, broker 2 is alive and out of it.
 fn elected() -> PartitionRecord {
     PartitionRecord {
-        topic: TOPIC.to_owned(),
-        partition: 0,
-        leader: NodeId(2),
-        replicas: vec![NodeId(1), NodeId(2)],
         isr: vec![NodeId(2)],
         leader_epoch: LeaderEpoch(6),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
         partition_epoch: 1,
+        ..crate::handlers::test_support::replicated_partition(
+            TOPIC,
+            0,
+            NodeId(2),
+            &[NodeId(1), NodeId(2)],
+        )
     }
 }
 
@@ -379,18 +376,11 @@ async fn seed_preferred_topic(broker: &Broker) {
         replication_factor: 1,
     })];
     records.extend((0..3).map(|partition| {
-        MetadataRecord::V1Partition(PartitionRecord {
-            topic: TOPIC.to_owned(),
+        MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
+            TOPIC,
             partition,
-            leader: NodeId(1),
-            replicas: vec![NodeId(1)],
-            isr: vec![NodeId(1)],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        })
+            NodeId(1),
+        ))
     }));
     broker
         .controller

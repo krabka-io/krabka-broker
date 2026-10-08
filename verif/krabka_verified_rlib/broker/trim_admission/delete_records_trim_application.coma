@@ -1,7 +1,7 @@
 (* #"/workspace/crates/verified/src/broker/trim_admission.rs" 128 0 132 33 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span strim_admission = "/workspace/crates/verified/src/broker/trim_admission.rs" 133 19 133 20
 let%span strim_admission'0 = "/workspace/crates/verified/src/broker/trim_admission.rs" 133 36 133 37
 let%span strim_admission'1 = "/workspace/crates/verified/src/broker/trim_admission.rs" 133 55 133 56

@@ -4,9 +4,9 @@
     "Coma": {
       "vc_earliest_timestamp_candidate": {
         "prover": "alt-ergo",
-        "time": 0.027
+        "time": 0.043
       },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.006 }
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 }
     }
   }
 }

@@ -12,37 +12,22 @@
 mod support;
 
 use assert2::{assert, check};
-use krabka_protocol::owned::describe_quorum_request::{
-    DescribeQuorumRequest, PartitionData, TopicData,
-};
 
-use crate::support::start_n_node_with_retry;
+use crate::support::{client::connect_owned, start_n_node_with_retry};
 
 /// Kafka's `NOT_LEADER_OR_FOLLOWER`.
 const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 
 async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
-    krabka_client_core::Client::builder()
-        .bootstrap(format!("127.0.0.1:{}", addr.port()))
-        .client_id("describe-quorum-no-leader-test")
-        .build()
-        .await
-        .expect("client build")
+    connect_owned(
+        format!("127.0.0.1:{}", addr.port()),
+        "describe-quorum-no-leader-test",
+        "client build",
+    )
+    .await
 }
 
-fn describe_quorum_request() -> DescribeQuorumRequest {
-    DescribeQuorumRequest {
-        topics: vec![TopicData {
-            topic_name: "__cluster_metadata".into(),
-            partitions: vec![PartitionData {
-                partition_index: 0,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
-}
+use crate::support::quorum::metadata_quorum_request as describe_quorum_request;
 
 /// A follower whose leader hint just went dead answers `DescribeQuorum` with
 /// a typed `NOT_LEADER_OR_FOLLOWER` instead of closing the connection: the
@@ -92,7 +77,5 @@ async fn a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing
          hint is dead, not a dropped connection; got {follower_resp:?}"
     );
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

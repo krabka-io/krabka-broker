@@ -30,8 +30,7 @@ fn delayed_callbacks_cannot_replace_coordinates_with_a_same_sequence_alias() {
 #[test]
 fn zero_callbacks_and_maximum_frontier_preserve_the_new_batch_retry() {
     for epoch in [0, i16::MAX - 2] {
-        let mut first = recovered_window_row(i64::MAX - 1, 0, i32::MAX);
-        first.producer_epoch = epoch;
+        let first = super::maximum_epoch_row(epoch);
         let delayed = [first; 6];
         for callbacks in [&[][..], &delayed[..]] {
             for hwm in [i64::MAX - 1, i64::MAX] {
@@ -66,11 +65,7 @@ proptest! {
     ) {
         let mut first = recovered_window_row(first_base, delta, sequence);
         first.producer_epoch = epoch;
-        let old: Vec<_> = (0..old_count).map(|i| {
-            let mut row = recovered_window_row(4 * i64::try_from(i).unwrap(), 2, sequence);
-            row.producer_epoch = epoch;
-            row
-        }).collect();
+        let old = super::epoch_rows(old_count, epoch, sequence);
         let delayed: Vec<_> = raw.into_iter().map(|(base, delta, sequence, value)| {
             let mut row = recovered_window_row(base, delta, sequence);
             row.producer_epoch = i16::try_from(u32::from(value) % (u32::try_from(epoch).unwrap() + 1)).unwrap();

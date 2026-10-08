@@ -23,10 +23,15 @@ fn counting_fetch(
     }
 }
 
+fn test_cache(budget: u64) -> (tempfile::TempDir, RemoteIndexCache) {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let cache = RemoteIndexCache::new(directory.path(), budget).expect("cache");
+    (directory, cache)
+}
+
 #[test]
 fn second_lookup_of_the_same_index_is_served_without_a_fetch() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cache = RemoteIndexCache::new(dir.path(), 1 << 20).expect("cache");
+    let (_dir, cache) = test_cache(1 << 20);
     let segment = Uuid::new_v4();
     let calls = Arc::new(AtomicUsize::new(0));
 
@@ -55,8 +60,7 @@ fn second_lookup_of_the_same_index_is_served_without_a_fetch() {
 
 #[test]
 fn the_two_index_types_of_one_segment_are_separate_entries() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cache = RemoteIndexCache::new(dir.path(), 1 << 20).expect("cache");
+    let (_dir, cache) = test_cache(1 << 20);
     let segment = Uuid::new_v4();
     let calls = Arc::new(AtomicUsize::new(0));
 
@@ -73,9 +77,8 @@ fn the_two_index_types_of_one_segment_are_separate_entries() {
 
 #[test]
 fn the_byte_budget_evicts_the_least_recently_used_entry() {
-    let dir = tempfile::tempdir().expect("tempdir");
     // Room for exactly two 40-byte entries.
-    let cache = RemoteIndexCache::new(dir.path(), 80).expect("cache");
+    let (_dir, cache) = test_cache(80);
     let calls = Arc::new(AtomicUsize::new(0));
     let (first, second, third) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
 
@@ -110,8 +113,7 @@ fn the_byte_budget_evicts_the_least_recently_used_entry() {
 
 #[test]
 fn an_entry_larger_than_the_whole_budget_is_returned_but_not_stored() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cache = RemoteIndexCache::new(dir.path(), 16).expect("cache");
+    let (_dir, cache) = test_cache(16);
     let calls = Arc::new(AtomicUsize::new(0));
     let segment = Uuid::new_v4();
 
@@ -129,8 +131,7 @@ fn an_entry_larger_than_the_whole_budget_is_returned_but_not_stored() {
 
 #[test]
 fn removing_a_segment_releases_every_index_it_held() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cache = RemoteIndexCache::new(dir.path(), 1 << 20).expect("cache");
+    let (dir, cache) = test_cache(1 << 20);
     let segment = Uuid::new_v4();
     let calls = Arc::new(AtomicUsize::new(0));
     for index_type in [
@@ -182,8 +183,7 @@ fn a_disabled_cache_fetches_every_time_and_writes_nothing() {
 
 #[test]
 fn a_fetch_failure_is_returned_and_leaves_the_cache_empty() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cache = RemoteIndexCache::new(dir.path(), 1 << 20).expect("cache");
+    let (_dir, cache) = test_cache(1 << 20);
 
     let result = cache.get_or_fetch(Uuid::new_v4(), IndexType::Offset, || {
         Err(RemoteStorageError::Io(std::io::Error::other("boom")))

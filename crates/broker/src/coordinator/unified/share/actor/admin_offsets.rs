@@ -43,6 +43,19 @@ pub enum DeleteTopicOutcome {
     Failed(i16),
 }
 
+/// Check group emptiness before resolving the installed persister.
+fn empty_group_persister<'a>(
+    state: &ShareGroupState,
+    coordinator: &'a GroupCoordinator,
+) -> Result<&'a std::sync::Arc<crate::share_coordinator::persister_client::SharePersister>, i16> {
+    if !state.members.is_empty() {
+        return Err(codes::NON_EMPTY_GROUP);
+    }
+    coordinator
+        .share_persister()
+        .ok_or(codes::COORDINATOR_NOT_AVAILABLE)
+}
+
 /// Applies an `AlterShareGroupOffsets` batch, as Kafka's
 /// `GroupMetadataManager.alterShareGroupOffsets` does for an already-created,
 /// empty share group: bump the group epoch once for the whole batch, persist
@@ -65,12 +78,7 @@ pub(crate) async fn reset_offsets(
     coordinator: &GroupCoordinator,
     requests: Vec<ResetPartition>,
 ) -> Result<Vec<i16>, i16> {
-    if !state.members.is_empty() {
-        return Err(codes::NON_EMPTY_GROUP);
-    }
-    let Some(persister) = coordinator.share_persister() else {
-        return Err(codes::COORDINATOR_NOT_AVAILABLE);
-    };
+    let persister = empty_group_persister(state, coordinator)?;
     if requests.is_empty() {
         return Ok(Vec::new());
     }
@@ -224,12 +232,7 @@ pub(crate) async fn delete_offsets(
     coordinator: &GroupCoordinator,
     requests: Vec<DeleteTopic>,
 ) -> Result<Vec<DeleteTopicOutcome>, i16> {
-    if !state.members.is_empty() {
-        return Err(codes::NON_EMPTY_GROUP);
-    }
-    let Some(persister) = coordinator.share_persister() else {
-        return Err(codes::COORDINATOR_NOT_AVAILABLE);
-    };
+    let persister = empty_group_persister(state, coordinator)?;
 
     let mut results = Vec::with_capacity(requests.len());
     for request in requests {

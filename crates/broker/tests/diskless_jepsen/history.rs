@@ -31,7 +31,7 @@ use std::{
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_client_producer::{Acks, Producer, ProducerRecord};
+use krabka_client_producer::{Acks, Producer};
 use stateright::semantics::{ConsistencyTester, LinearizabilityTester, SequentialSpec};
 
 use crate::{APPENDERS, RECORDS_PER_APPENDER, TOPIC};
@@ -124,12 +124,12 @@ async fn produce_appender(
         let value = format!("appender-{appender}-record-{sequence}").into_bytes();
         let invoke_order = clock.fetch_add(1, Ordering::SeqCst);
         let metadata = producer
-            .send(ProducerRecord {
-                topic: TOPIC.into(),
-                partition: Some(0),
-                value: Some(Bytes::copy_from_slice(&value)),
-                ..Default::default()
-            })
+            .send(crate::support::producer::producer_record(
+                TOPIC,
+                Some(0),
+                None,
+                Some(Bytes::copy_from_slice(&value)),
+            ))
             .await
             .expect("acks=all record");
         let return_order = clock.fetch_add(1, Ordering::SeqCst);

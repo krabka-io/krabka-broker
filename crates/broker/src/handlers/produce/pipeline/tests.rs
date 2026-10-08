@@ -127,22 +127,20 @@ mod internal_topic;
 fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> {
     let mut img = image_with_topic("orders", &[2, 3]);
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "orders".into(),
-        partition: 0,
-        leader: krabka_audit::NodeId(2),
-        replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-        isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
         leader_epoch: krabka_metadata::LeaderEpoch(17),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
         partition_epoch: 1,
+        ..crate::handlers::test_support::replicated_partition(
+            "orders",
+            0,
+            krabka_audit::NodeId(2),
+            &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+        )
     }));
     Arc::new(img)
 }
 
 fn non_leader_row() -> PartitionProduceResponse {
-    PartitionProduceResponse {
+    tagged_wire!(PartitionProduceResponse {
         index: 0,
         error_code: crate::codes::NOT_LEADER_OR_FOLLOWER,
         base_offset: -1,
@@ -150,11 +148,9 @@ fn non_leader_row() -> PartitionProduceResponse {
         log_start_offset: -1,
         record_errors: vec![],
         error_message: None,
-        current_leader: LeaderIdAndEpoch {
+        current_leader: tagged_wire!(LeaderIdAndEpoch {
             leader_id: 2,
             leader_epoch: 17,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        },
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    }
+        }),
+    })
 }

@@ -203,20 +203,7 @@ mod tests {
             name: "n".into(),
             version: "0".into(),
         };
-        let authn = AuditEvent::Authentication {
-            outcome: AuditOutcome::Failure,
-            mechanism: "SASL/PLAIN".into(),
-            principal: AuditPrincipal {
-                name: "alice".into(),
-                auth_method: "SaslPlain".into(),
-            },
-            source: AuditEndpoint {
-                ip: "10.0.0.1".into(),
-                port: 1,
-            },
-            reason: None,
-            time_ms: 0,
-        };
+        let authn = crate::test_support::authentication(1, None, 0);
         let r = AuditRecord::from_event(&authn, &product);
         check!(
             (hdr(&r, "principal"), hdr(&r, "status"))

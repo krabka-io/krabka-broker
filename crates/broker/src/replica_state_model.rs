@@ -218,37 +218,37 @@ impl Model for IsrModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
-        match action {
-            IsrAction::LeaderAppend => {
-                if state.leader_leo >= self.max_offset {
-                    return None;
+    krabka_macros::model_transition!(last, action, state; {
+            match action {
+                IsrAction::LeaderAppend => {
+                    if state.leader_leo >= self.max_offset {
+                        return None;
+                    }
+                    state.leader_leo += 1;
+                    state.rs.recompute_hw_for_leader_append(state.leader_leo);
                 }
-                state.leader_leo += 1;
-                state.rs.recompute_hw_for_leader_append(state.leader_leo);
+                IsrAction::FollowerFetch { follower, leo } => {
+                    state
+                        .rs
+                        .update_follower_leo(follower, leo, state.leader_leo, self.t0);
+                }
+                IsrAction::InstallIsr { isr } => {
+                    state
+                        .rs
+                        .install_isr(&isr, &self.replicas, self.leader(), self.t0);
+                }
             }
-            IsrAction::FollowerFetch { follower, leo } => {
-                state
-                    .rs
-                    .update_follower_leo(follower, leo, state.leader_leo, self.t0);
-            }
-            IsrAction::InstallIsr { isr } => {
-                state
-                    .rs
-                    .install_isr(&isr, &self.replicas, self.leader(), self.t0);
-            }
-        }
-        // Transition invariant (kept out of the fingerprinted state): the
-        // high-watermark never regresses.
-        assert2::assert!(
-            state.rs.hw >= last.rs.hw,
-            "HWM regressed: {} -> {}",
-            last.rs.hw,
-            state.rs.hw
-        );
-        Some(state)
-    }
+            // Transition invariant (kept out of the fingerprinted state): the
+            // high-watermark never regresses.
+            assert2::assert!(
+                state.rs.hw >= last.rs.hw,
+                "HWM regressed: {} -> {}",
+                last.rs.hw,
+                state.rs.hw
+            );
+            Some(state)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
@@ -304,10 +304,10 @@ impl Model for IsrModel {
 /// that the cap or the depth did not truncate it, and that all properties hold.
 fn run(model: IsrModel, label: &str, pinned_unique_states: usize) {
     let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
+    crate::model_check::assert_pinned_count(
+        checker.unique_state_count(),
+        pinned_unique_states,
+        label,
     );
     checker.assert_properties();
 }

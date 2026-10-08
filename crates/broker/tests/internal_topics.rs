@@ -28,16 +28,18 @@
 //! first two. Krabka has a share coordinator, so it follows the 4.x answer.
 
 use assert2::{assert, check};
+
+use crate::support::{
+    client::connect_owned, discovery::topic_metadata_request, topics::creatable_topic,
+};
 mod support;
 
 use krabka_broker::{Broker, BrokerConfig};
-use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        create_topics_request::CreateTopicsRequest,
         describe_topic_partitions_request::DescribeTopicPartitionsRequest,
         describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
-        metadata_request::MetadataRequest,
         metadata_response::MetadataResponseTopic,
     },
     primitives::uuid::Uuid as WireUuid,
@@ -87,12 +89,7 @@ async fn create_every_topic(p: &support::InProcess) {
         .send(CreateTopicsRequest {
             topics: TOPICS
                 .iter()
-                .map(|(name, _)| CreatableTopic {
-                    name: (*name).into(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..Default::default()
-                })
+                .map(|(name, _)| creatable_topic(*name, 1, 1))
                 .collect(),
             timeout_ms: 10_000,
             ..Default::default()
@@ -130,10 +127,7 @@ async fn metadata_marks_every_broker_owned_topic_internal() {
 
     let resp = p
         .client
-        .send(MetadataRequest {
-            topics: None,
-            ..Default::default()
-        })
+        .send(topic_metadata_request(None))
         .await
         .expect("Metadata");
 
@@ -175,10 +169,7 @@ async fn describe_topic_partitions_agrees_with_metadata() {
 
     let metadata = p
         .client
-        .send(MetadataRequest {
-            topics: None,
-            ..Default::default()
-        })
+        .send(topic_metadata_request(None))
         .await
         .expect("Metadata");
     let described = p
@@ -239,19 +230,16 @@ async fn a_renamed_audit_topic_is_the_internal_one() {
     let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
     config.audit_topic = RENAMED.to_string();
     let broker = Broker::start(config).await.expect("broker start");
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("krabka-broker-test-renamed-audit")
-        .build()
-        .await
-        .expect("client build");
+    let client = connect_owned(
+        broker.listen_addr().to_string(),
+        "krabka-broker-test-renamed-audit",
+        "client build",
+    )
+    .await;
 
     broker.wait_until_partition_present(RENAMED, 0).await;
     let resp = client
-        .send(MetadataRequest {
-            topics: None,
-            ..Default::default()
-        })
+        .send(topic_metadata_request(None))
         .await
         .expect("Metadata");
 

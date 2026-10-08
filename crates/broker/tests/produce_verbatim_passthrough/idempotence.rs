@@ -7,7 +7,10 @@
 
 use assert2::{assert, check};
 
-use crate::harness::{boot, create_topic, idempotent_lz4_batch, produce_one, topic_id_for};
+use crate::{
+    harness::{boot, create_topic, idempotent_lz4_batch, produce_one, topic_id_for},
+    support::client::connect_client,
+};
 
 /// Idempotent-producer dedup runs on the HEADER fields that the verbatim path
 /// exposes: pid, epoch, `base_sequence`, and `last_offset_delta`. Two appends
@@ -20,11 +23,7 @@ async fn idempotent_dedup_over_verbatim_path() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "idem").await;
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "idem").await;
 
     // seq 0..=2 (3 records) → base offset 0.
@@ -70,11 +69,7 @@ async fn idempotent_sequence_rollover_over_verbatim_path() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "idem-rollover").await;
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap, None).await;
     let topic_id = topic_id_for(&client, "idem-rollover").await;
 
     // This batch spans MAX-1, MAX, 0. Kafka sequences wrap modulo 2^31.

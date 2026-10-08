@@ -11,7 +11,10 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{abort_marker, commit_marker, compaction_ctx, keyed_batch, tiny_segments},
+    log::test_support::{
+        abort_marker, commit_marker, compacting_segments, compaction_ctx, keyed_batch,
+        set_segment_size,
+    },
     txn_index::AbortedTxn,
 };
 
@@ -28,10 +31,7 @@ fn transactional_keyed(pid: i64, sequence: i32, key: &[u8], value: &[u8]) -> Rec
 /// A compacted log with one batch per sealed segment, and a final append that
 /// stays in the active segment.
 fn log_with_a_batch_per_segment(dir: &std::path::Path, batches: Vec<RecordBatch>) -> Log {
-    let cfg = LogConfig {
-        cleanup_policy: crate::CleanupPolicy::Compact,
-        ..tiny_segments()
-    };
+    let cfg = compacting_segments();
     let mut log = Log::open(dir, cfg).unwrap();
     for mut batch in batches {
         log.append(&mut batch).unwrap();
@@ -39,9 +39,7 @@ fn log_with_a_batch_per_segment(dir: &std::path::Path, batches: Vec<RecordBatch>
     let mut tail = keyed_batch(0, &[(0, b"tail", b"t")]);
     log.append(&mut tail).unwrap();
     // The pass groups by `segment.bytes`; widen it so this pass merges them.
-    let mut roomier = log.config_snapshot();
-    roomier.segment_size = mebibytes(1);
-    log.set_config(roomier);
+    set_segment_size(&mut log, mebibytes(1));
     log
 }
 
@@ -82,6 +80,20 @@ fn index_of_the_fixture(log: &Log) -> Vec<AbortedTxn> {
     index
 }
 
+/// A committed value followed by a newer aborted write under the same key.
+fn committed_then_aborted(dir: &std::path::Path) -> Log {
+    log_with_a_batch_per_segment(
+        dir,
+        vec![
+            transactional_keyed(1000, 0, b"k", b"committed"), // 0
+            commit_marker(1000, 0),                           // 1
+            transactional_keyed(2000, 0, b"k", b"aborted"),   // 2
+            abort_marker(2000, 0),                            // 3
+            keyed_batch(0, &[(0, b"after", b"a")]),           // 4
+        ],
+    )
+}
+
 /// A read-committed consumer of a compacted, transactional topic must keep the
 /// last committed value of a key whose newest write was aborted. Key `k` is
 /// committed at offset 0 and written again inside a transaction that aborts.
@@ -91,16 +103,7 @@ fn index_of_the_fixture(log: &Log) -> Vec<AbortedTxn> {
 #[test]
 fn a_committed_value_survives_a_newer_aborted_write() {
     let dir = tempdir().unwrap();
-    let mut log = log_with_a_batch_per_segment(
-        dir.path(),
-        vec![
-            transactional_keyed(1000, 0, b"k", b"committed"), // 0
-            commit_marker(1000, 0),                           // 1
-            transactional_keyed(2000, 0, b"k", b"aborted"),   // 2
-            abort_marker(2000, 0),                            // 3
-            keyed_batch(0, &[(0, b"after", b"a")]),           // 4
-        ],
-    );
+    let mut log = committed_then_aborted(dir.path());
     let index_before = index_of_the_fixture(&log);
 
     log.compact(&compaction_ctx()).unwrap();
@@ -147,16 +150,7 @@ fn an_abort_marker_and_its_index_entry_age_out_once_the_aborted_data_is_gone() {
     let passes = [compaction_ctx(), compaction_ctx(), horizon_passed];
     for (name, expired, want) in cases {
         let dir = tempdir().unwrap();
-        let mut log = log_with_a_batch_per_segment(
-            dir.path(),
-            vec![
-                transactional_keyed(1000, 0, b"k", b"committed"),
-                commit_marker(1000, 0),
-                transactional_keyed(2000, 0, b"k", b"aborted"),
-                abort_marker(2000, 0),
-                keyed_batch(0, &[(0, b"after", b"a")]),
-            ],
-        );
+        let mut log = committed_then_aborted(dir.path());
         let index_before = index_of_the_fixture(&log);
         if expired {
             log.remove_expired_producers(EXPIRATION_MS, EXPIRATION_MS);

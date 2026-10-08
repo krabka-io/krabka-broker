@@ -10,6 +10,7 @@ use krabka_protocol::{
     primitives::uuid::Uuid,
 };
 
+use super::records::member_metadata_value;
 use crate::{
     codes,
     coordinator::unified::share::{assignor::ShareGroupAssignor, state::ShareGroupState},
@@ -115,14 +116,18 @@ pub(super) fn build_describe(state: &ShareGroupState) -> ShareDescribeView {
         members: state
             .members
             .values()
-            .map(|m| ShareDescribeMember {
-                member_id: m.member_id.clone(),
-                member_epoch: m.member_epoch,
-                rack_id: m.rack_id.clone(),
-                client_id: m.client_id.clone(),
-                client_host: m.client_host.clone(),
-                subscribed_topic_names: m.subscribed_topic_names.iter().cloned().collect(),
-                assigned_partitions: m.assigned_partitions.clone(),
+            .map(|m| {
+                let member_id = m.member_id.clone();
+                let metadata = member_metadata_value(m);
+                ShareDescribeMember {
+                    member_id,
+                    member_epoch: m.member_epoch,
+                    rack_id: metadata.rack_id,
+                    client_id: metadata.client_id,
+                    client_host: metadata.client_host,
+                    subscribed_topic_names: metadata.subscribed_topic_names,
+                    assigned_partitions: m.assigned_partitions.clone(),
+                }
             })
             .collect(),
     }

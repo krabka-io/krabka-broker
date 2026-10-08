@@ -142,10 +142,7 @@ impl ReplicatorSupervisor {
                     storage: self.log_config.clone(),
                     client_id: self.client_id.clone(),
                     shutdown: token.clone(),
-                    inter_broker_client: self.inter_broker_client.clone(),
-                    inter_broker_listener_protocol: self.inter_broker_listener_protocol,
-                    inter_broker_server_name: self.inter_broker_server_name.clone(),
-                    replication: self.replication.clone(),
+                    connection: self.connection_config(),
                 },
             ));
             self.wal_tasks.insert(
@@ -162,14 +159,35 @@ impl ReplicatorSupervisor {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::MetadataRecord;
     use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
 
     use super::*;
-    use crate::replicator_supervisor::test_support::{
-        broker_record, image_with, partition_record, supervisor_fixture,
+    use crate::{
+        replicator_supervisor::test_support::{
+            broker_record, image_with, partition_record, supervisor_fixture,
+        },
+        wal::quorum::registry::{ShardId, WalPlacement},
     };
+
+    /// A three-voter epoch-seven placement, retaining the original discarded fixture guards.
+    fn wal_follower_fixture(
+        image: &MetadataImage,
+        topic_id: Uuid,
+    ) -> (
+        ReplicatorSupervisor,
+        ShardId,
+        HashMap<ShardId, WalPlacement>,
+    ) {
+        let (supervisor, _, _, _) = supervisor_fixture(image.clone());
+        let shard = ShardId {
+            topic_id,
+            partition: PartitionIndex(0),
+        };
+        let placements = maplit::hashmap! {shard => WalPlacement { voters: vec![NodeId(1), NodeId(2), NodeId(3)], leader_epoch: 7 }};
+        (supervisor, shard, placements)
+    }
 
     #[test]
     fn desired_wal_followers_include_only_complete_nonleader_placements() {
@@ -182,27 +200,16 @@ mod tests {
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(2))),
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(3))),
-            MetadataRecord::V1Topic(TopicRecord {
-                name: "diskless".into(),
-                topic_id,
-                partitions: 1,
-                replication_factor: 1,
-            }),
+            MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+                "diskless", topic_id,
+            )),
             partition_record("diskless", 0, NodeId(1), vec![NodeId(1)], 7),
             MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                 topic: "diskless".into(),
                 overrides,
             }),
         ]);
-        let (supervisor, _, _, _) = supervisor_fixture(image.clone());
-        let shard = crate::wal::quorum::registry::ShardId {
-            topic_id,
-            partition: PartitionIndex(0),
-        };
-        let complete = maplit::hashmap! {shard => crate::wal::quorum::registry::WalPlacement {
-            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
-            leader_epoch: 7,
-        }};
+        let (supervisor, shard, complete) = wal_follower_fixture(&image, topic_id);
 
         let desired = supervisor.desired_wal_followers(&image, &complete);
 
@@ -214,7 +221,7 @@ mod tests {
                     leader_epoch: krabka_metadata::LeaderEpoch(7),
                 })
         );
-        let short = maplit::hashmap! {shard => crate::wal::quorum::registry::WalPlacement {
+        let short = maplit::hashmap! {shard => WalPlacement {
             voters: vec![NodeId(1), NodeId(2)],
             leader_epoch: 7,
         }};
@@ -230,12 +237,9 @@ mod tests {
             let mut overrides = BTreeMap::new();
             overrides.insert("krabka.diskless".into(), "true".into());
             image_with(&[
-                MetadataRecord::V1Topic(TopicRecord {
-                    name: "diskless".into(),
-                    topic_id,
-                    partitions: 1,
-                    replication_factor: 1,
-                }),
+                MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+                    "diskless", topic_id,
+                )),
                 partition_record("diskless", 0, NodeId(1), vec![NodeId(1)], leader_epoch),
                 MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                     topic: "diskless".into(),
@@ -244,15 +248,7 @@ mod tests {
             ])
         };
         let image = image_at_epoch(7);
-        let (supervisor, _, _, _) = supervisor_fixture(image.clone());
-        let shard = crate::wal::quorum::registry::ShardId {
-            topic_id,
-            partition: PartitionIndex(0),
-        };
-        let placements = maplit::hashmap! {shard => crate::wal::quorum::registry::WalPlacement {
-            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
-            leader_epoch: 7,
-        }};
+        let (supervisor, shard, placements) = wal_follower_fixture(&image, topic_id);
         let target = WalFollowerSpec {
             topic: "diskless".into(),
             leader: NodeId(1),

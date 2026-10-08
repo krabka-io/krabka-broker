@@ -19,12 +19,7 @@ pub(super) fn make_image_with_broker(node_id: NodeId) -> MetadataImage {
 }
 
 pub(super) fn make_resource(name: &str, configs: Vec<AlterableConfig>) -> AlterConfigsResource {
-    AlterConfigsResource {
-        resource_type: RESOURCE_TYPE_BROKER,
-        resource_name: name.into(),
-        configs,
-        ..Default::default()
-    }
+    make_scoped_resource(RESOURCE_TYPE_BROKER, name, configs)
 }
 
 pub(super) fn make_set_cfg(key: &str, value: &str) -> AlterableConfig {
@@ -49,12 +44,7 @@ pub(super) fn make_topic_resource(
     name: &str,
     configs: Vec<AlterableConfig>,
 ) -> AlterConfigsResource {
-    AlterConfigsResource {
-        resource_type: RESOURCE_TYPE_TOPIC,
-        resource_name: name.into(),
-        configs,
-        ..Default::default()
-    }
+    make_scoped_resource(RESOURCE_TYPE_TOPIC, name, configs)
 }
 
 pub(super) fn image_with_topic_config(name: &str, overrides: &[(&str, &str)]) -> MetadataImage {
@@ -67,10 +57,21 @@ pub(super) fn image_with_topic_config(name: &str, overrides: &[(&str, &str)]) ->
     }));
     img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: name.into(),
-        overrides: overrides
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-            .collect(),
+        overrides: crate::test_support::string_pairs(overrides),
     }));
     img
+}
+
+/// A request resource with the supplied Kafka scope, name and operations.
+pub(super) fn make_scoped_resource(
+    resource_type: i8,
+    name: &str,
+    configs: Vec<AlterableConfig>,
+) -> AlterConfigsResource {
+    AlterConfigsResource {
+        resource_type,
+        resource_name: name.into(),
+        configs,
+        ..Default::default()
+    }
 }

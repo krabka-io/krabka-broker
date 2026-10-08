@@ -9,9 +9,7 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{
-        rolled_log, rolling_test_log, sample_batch, sample_batch_with_epoch, test_log,
-    },
+    log::test_support::{rolled_log, sample_batch, sample_batch_with_epoch, test_log},
 };
 
 /// An epoch covers `[start_offset, next.start_offset)`, so one ending
@@ -56,45 +54,29 @@ fn an_epoch_ending_where_the_range_begins_does_not_overlap_it() {
 
 #[test]
 fn tiered_local_delete_removes_only_deleted_segment_stamp_indexes() {
-    let dir = tempdir().unwrap();
-    let mut log = rolling_test_log(dir.path());
-    log.set_stamp_source(std::sync::Arc::new(
-        crate::stamp_source::MonotonicStampSource::new(10, 1),
-    ))
-    .unwrap();
-    for _ in 0..3 {
-        log.append(&mut sample_batch(1)).unwrap();
-    }
+    let (_dir, mut log) = crate::log::test_support::stamped_rolling_log(10, 1, 3);
 
     check!(log.sealed_txn_indexes.contains_key(&Offset(0)));
     check!(log.delete_local_segments_through(Offset(1)).unwrap() == 1);
     check!(!log.sealed_txn_indexes.contains_key(&Offset(0)));
     check!(log.sealed_txn_indexes.contains_key(&Offset(1)));
 
-    check!(log.stamp_for_offset(Offset(0)) == None);
-    check!(log.stamp_for_offset(Offset(1)) == Some(11));
-    check!(log.stamp_for_offset(Offset(2)) == Some(12));
+    crate::log::test_support::check_stamps(&log, &[(0, None), (1, Some(11)), (2, Some(12))]);
 }
 
 #[test]
 fn tierable_segments_excludes_active_and_reports_paths() {
-    let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(200), // small so we roll fast
-        ..LogConfig::default()
-    };
-    let mut log = Log::open(dir.path(), config).unwrap();
-    for _ in 0..10 {
-        let mut b = sample_batch(2);
-        log.append(&mut b).unwrap();
-    }
+    // small so we roll fast
+    let (dir, mut log) = crate::log::test_support::sample_log(
+        LogConfig {
+            segment_size: bytes(200),
+            ..LogConfig::default()
+        },
+        10,
+        2,
+    );
     log.sync().unwrap();
-    let sealed_count = std::fs::read_dir(dir.path())
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("log"))
-        .count()
-        - 1; // minus the active segment's .log
+    let sealed_count = crate::test_support::log_file_count(dir.path()) - 1; // minus the active segment's .log
 
     let exports = log.tierable_segments();
     assert2::assert!(exports.len() == sealed_count);
@@ -124,34 +106,26 @@ fn tierable_segments_empty_for_single_active_segment() {
 
 #[test]
 fn tierable_segments_last_offset_matches_next_base() {
-    let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(200),
-        ..LogConfig::default()
-    };
-    let mut log = Log::open(dir.path(), config).unwrap();
-    for _ in 0..8 {
-        let mut b = sample_batch(2);
-        log.append(&mut b).unwrap();
-    }
+    let (_dir, mut log) = crate::log::test_support::sample_log(
+        LogConfig {
+            segment_size: bytes(200),
+            ..LogConfig::default()
+        },
+        8,
+        2,
+    );
     log.sync().unwrap();
     let exports = log.tierable_segments();
     assert2::assert!(!exports.is_empty());
     // Each sealed segment's last_offset is exactly one below the next
     // segment's base — contiguous coverage with no gaps.
-    for pair in exports.windows(2) {
-        assert2::assert!(pair[0].last_offset + 1 == pair[1].base_offset);
-    }
+    crate::log::test_support::check_contiguous_exports(&exports);
 }
 
 #[test]
 fn tierable_segments_carry_leader_epochs() {
     let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(200),
-        ..LogConfig::default()
-    };
-    let mut log = Log::open(dir.path(), config).unwrap();
+    let mut log = crate::test_support::segmented_log(dir.path(), bytes(200));
     // epoch 0 for the first few, then epoch 1.
     for _ in 0..4 {
         let mut b = sample_batch_with_epoch(2, 0);
@@ -233,10 +207,7 @@ fn epochs_for_range_clamps_and_filters() {
 #[test]
 fn local_log_start_offset_matches_log_start_offset() {
     let (_dir, mut log) = test_log();
-    for _ in 0..3 {
-        let mut b = sample_batch(2);
-        log.append(&mut b).unwrap();
-    }
+    crate::log::test_support::append_samples(&mut log, 3, 2);
     assert2::assert!(log.local_log_start_offset() == log.log_start_offset());
 }
 

@@ -5,23 +5,19 @@
 //! same `OffsetDeleteResponse` shapes, so the builders live here once instead
 //! of being copied into each sibling test module.
 
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::{
-        offset_delete_request::{
-            OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
-        },
-        offset_delete_response::{OffsetDeleteResponsePartition, OffsetDeleteResponseTopic},
+use krabka_protocol::owned::{
+    offset_delete_request::{
+        OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
     },
+    offset_delete_response::{OffsetDeleteResponsePartition, OffsetDeleteResponseTopic},
 };
 
 /// Fully-specified expected partition row (no struct-update syntax).
 pub(super) fn expected_row(partition_index: i32, error_code: i16) -> OffsetDeleteResponsePartition {
-    OffsetDeleteResponsePartition {
+    tagged_wire!(OffsetDeleteResponsePartition {
         partition_index,
         error_code,
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    })
 }
 
 /// Fully-specified expected topic row (no struct-update syntax).
@@ -29,11 +25,10 @@ pub(super) fn expected_topic(
     name: &str,
     partitions: Vec<OffsetDeleteResponsePartition>,
 ) -> OffsetDeleteResponseTopic {
-    OffsetDeleteResponseTopic {
+    tagged_wire!(OffsetDeleteResponseTopic {
         name: name.to_string(),
         partitions,
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    })
 }
 
 /// Builds a decoded `OffsetDeleteRequest` for group `g` from `(topic name,

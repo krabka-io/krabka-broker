@@ -20,12 +20,8 @@
 //! per-resource work lives in `resource`, and the record builders it
 //! dispatches to live in `topic_configs` and `broker_configs`.
 
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::{
-        alter_configs_request::AlterConfigsRequest,
-        alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
-    },
+use krabka_protocol::owned::{
+    alter_configs_request::AlterConfigsRequest, alter_configs_response::AlterConfigsResponse,
 };
 
 mod broker_configs;
@@ -40,49 +36,83 @@ mod test_support;
 mod tests;
 
 use self::resource::process_resource;
-use crate::{
-    broker::Broker,
-    error::BrokerError,
-    handlers::describe_configs::{
-        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
-        RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
-    },
+use crate::handlers::describe_configs::{
+    RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
+    RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
 };
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: AlterConfigsRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<AlterConfigsResponse, BrokerError> {
-    let image = broker.controller.current_image();
-    let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
-    let validate_only = req.validate_only;
-    let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
-    let duplicate_flags = duplicate_resource_flags(
-        req.resources
-            .iter()
-            .map(|resource| (resource.resource_type, resource.resource_name.as_str())),
-    );
-
-    for (resource, is_duplicate) in req.resources.into_iter().zip(duplicate_flags) {
-        let named = audit_resources_for(&resource, &image);
-        let response =
-            process_resource(broker, &image, ctx, resource, validate_only, is_duplicate).await;
-        // A `--dry-run` request stores nothing, so it changed no resource.
-        if response.error_code == crate::codes::NONE && !validate_only {
-            audited.extend(named);
+/// Both config APIs validate and audit resources in request order.
+macro_rules! config_alter_handler {
+    ($request:ty => $($response:ident)::+, $operation:literal, $audit:path, $process:path) => {
+        pub(crate) async fn handle(
+            broker: &crate::broker::Broker,
+            req: $request,
+            _version: i16,
+            ctx: &crate::handlers::RequestContext<'_>,
+        ) -> Result<$($response)::+, crate::error::BrokerError> {
+            let image = broker.controller.current_image();
+            let mut responses = Vec::with_capacity(req.resources.len());
+            let validate_only = req.validate_only;
+            let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
+            let duplicate_flags = crate::handlers::alter_configs::duplicate_resource_flags(
+                req.resources.iter().map(|resource| (resource.resource_type, resource.resource_name.as_str())),
+            );
+            for (resource, is_duplicate) in req.resources.into_iter().zip(duplicate_flags) {
+                let named = $audit(&resource, &image);
+                let response = $process(broker, &image, ctx, resource, validate_only, is_duplicate).await;
+                // A dry run stores nothing and cannot claim a changed resource.
+                if response.error_code == crate::codes::NONE && !validate_only {
+                    audited.extend(named);
+                }
+                responses.push(response);
+            }
+            crate::handlers::audit_admin_success(broker.audit_log.as_ref(), ctx, $operation, audited);
+            Ok($($response)::+ { responses, throttle_time_ms: 0, ..Default::default() })
         }
-        responses.push(response);
-    }
-    crate::handlers::audit_admin_success(broker.audit_log.as_ref(), ctx, "AlterConfigs", audited);
-
-    let resp = AlterConfigsResponse {
-        responses,
-        throttle_time_ms: 0,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
     };
-    Ok(resp)
+}
+pub(super) use config_alter_handler;
+
+config_alter_handler!(AlterConfigsRequest => AlterConfigsResponse, "AlterConfigs", audit_resources_for, process_resource);
+
+/// Shape checks precede authorization for both config APIs; refused rows retain their resource.
+macro_rules! config_resource_preamble {
+    (($out:ident, $broker:ident, $image:ident, $ctx:ident, $resource:ident), $($row:ident)::+, $include_logger:expr, $shape:expr) => {
+        let mut $out = $($row)::+ {
+            resource_type: $resource.resource_type,
+            resource_name: $resource.resource_name.clone(),
+            error_code: crate::codes::NONE,
+            error_message: None,
+            ..Default::default()
+        };
+        if let Err((code, message)) = $shape {
+            return $out.with_error(code, message);
+        }
+        if let Some((code, message)) = crate::handlers::config_resource_refusal(
+            $broker.config.authorizer.as_ref(), $image, $ctx,
+            ($resource.resource_type, &$resource.resource_name), $include_logger,
+        ) {
+            return $out.with_error(code, message);
+        }
+    };
+}
+pub(super) use config_resource_preamble;
+
+/// Both mutation APIs map controller submission failures to the same Kafka code.
+pub(super) fn submission_code<T>(
+    result: Result<T, krabka_raft::RaftError>,
+    log_failure: impl FnOnce(krabka_raft::RaftError),
+) -> i16 {
+    match result {
+        Ok(_) => crate::codes::NONE,
+        Err(krabka_raft::RaftError::NotLeader { .. } | krabka_raft::RaftError::LeaderUnknown) => {
+            crate::codes::NOT_CONTROLLER
+        }
+        Err(error) => {
+            log_failure(error);
+            crate::codes::UNKNOWN_SERVER_ERROR
+        }
+    }
 }
 
 /// Names the audited resource and the keys the request changes on it.
@@ -237,6 +267,35 @@ pub(super) fn validate_resource_shape<'a>(
 /// The longest config value Kafka's controller writes: `Short.MAX_VALUE`
 /// UTF-16 code units, which is what `String.length()` counts.
 const MAX_CONFIG_VALUE_LENGTH: usize = 32_767;
+
+/// A changed minimum ISR clears ELR; incremental topic requests opt in only
+/// when they mention the key, while legacy replacement always considers it.
+pub(super) fn changes_min_isr(
+    image: &krabka_metadata::MetadataImage,
+    record: &krabka_metadata::MetadataRecord,
+    include_topic: bool,
+) -> bool {
+    match record {
+        krabka_metadata::MetadataRecord::V1TopicConfig(config) => {
+            include_topic
+                && image
+                    .topic_config(&config.topic)
+                    .and_then(|current| current.get(crate::config_keys::MIN_INSYNC_REPLICAS))
+                    != config
+                        .overrides
+                        .get(crate::config_keys::MIN_INSYNC_REPLICAS)
+        }
+        krabka_metadata::MetadataRecord::V1BrokerConfig(config) => {
+            config.node_id == krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+                && config.config_name == crate::config_keys::MIN_INSYNC_REPLICAS
+                && image
+                    .broker_config(config.node_id)
+                    .and_then(|current| current.get(&config.config_name))
+                    != config.config_value.as_ref()
+        }
+        _ => false,
+    }
+}
 
 /// Kafka's `ConfigurationControlManager.validateAlterConfig` refuses, for
 /// every resource type, a written value longer than [`MAX_CONFIG_VALUE_LENGTH`]

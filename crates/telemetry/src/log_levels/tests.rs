@@ -7,29 +7,11 @@ use std::sync::{
 };
 
 use assert2::{assert, check};
-use tracing::{Event, Subscriber};
-use tracing_subscriber::{
-    Layer,
-    layer::{Context, SubscriberExt as _},
-};
+use tracing_subscriber::{Layer, layer::SubscriberExt as _};
 
 use super::{LogLevel, LogLevelController, ROOT_LOGGER};
 
-/// The `target: level` of every event a subscriber let through.
-type Captured = Arc<Mutex<Vec<String>>>;
-
-/// A layer that records the events its filter admits.
-struct CaptureLayer(Captured);
-
-impl<S: Subscriber> Layer<S> for CaptureLayer {
-    fn on_event(&self, event: &Event<'_>, _cx: Context<'_, S>) {
-        let meta = event.metadata();
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(format!("{}:{}", meta.target(), meta.level()));
-    }
-}
+krabka_macros::capture_layer_fixture!(CaptureLayer, Captured, recover_poison);
 
 /// A dispatcher that captures through `controller`'s filter.
 ///

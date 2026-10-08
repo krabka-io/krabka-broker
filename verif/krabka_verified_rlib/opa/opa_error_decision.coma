@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/opa.rs" 86 0 86 75 *)
+(* #"/workspace/crates/verified/src/opa.rs" 78 0 78 75 *)
 
-let%span sopa = "/workspace/crates/verified/src/opa.rs" 84 10 84 71
+let%span sopa = "/workspace/crates/verified/src/opa.rs" 76 10 76 71
 
 use creusot.prelude.Any
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let opa_error_decision [#"/workspace/crates/verified/src/opa.rs" 86 0 86 75] (allow_on_error: bool)
+let opa_error_decision [#"/workspace/crates/verified/src/opa.rs" 78 0 78 75] (allow_on_error: bool)
   (return (x: t_OpaAuthorizationDecision)) = (! bb0
   [ bb0 = any [ br0 -> {allow_on_error = false} (! bb2) | br1 -> {allow_on_error} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- Allow ] s1 | s1 = return {_ret} ]

@@ -6,14 +6,14 @@
 //! Describe returns the full per-tid detail: timeout, start time, and
 //! partitions.
 
+mod support;
+
 use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
-use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, codes};
+use krabka_broker::{BrokerHandle, codes};
 use krabka_client_producer::{OwnedTransaction, Producer, ProducerRecord};
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
     describe_transactions_request::DescribeTransactionsRequest,
     describe_transactions_response::{TopicData, TransactionState as DescribedTransactionState},
     list_transactions_request::ListTransactionsRequest,
@@ -23,14 +23,11 @@ use krabka_protocol::owned::{
 };
 use tempfile::TempDir;
 
-async fn boot_single() -> (BrokerHandle, String, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let bootstrap = broker.listen_addr().to_string();
-    (broker, bootstrap, dir)
-}
+pub use crate::support::boot_single;
+use crate::support::{
+    client::connect_client,
+    topics::{creatable_topic, create_topic_request},
+};
 
 /// `ListTransactions`, retried while the coordinator loads its state
 /// partitions. Kafka answers `COORDINATOR_LOAD_IN_PROGRESS` (14) until every
@@ -103,22 +100,9 @@ async fn describe_transaction(
 }
 
 async fn create_topic(bootstrap: &str, name: &str) {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap, None).await;
     let cr = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(name, 1, 1), 5_000))
         .await
         .unwrap();
     assert!(
@@ -129,19 +113,11 @@ async fn create_topic(bootstrap: &str, name: &str) {
 }
 
 fn rec(topic: &str, v: &str) -> ProducerRecord {
-    ProducerRecord {
-        topic: topic.into(),
-        value: Some(Bytes::from(v.to_string())),
-        ..Default::default()
-    }
+    crate::support::producer::string_record(topic, v)
 }
 
 async fn admin_client(bootstrap: &str) -> krabka_client_core::Client {
-    krabka_client_core::Client::builder()
-        .bootstrap(bootstrap)
-        .build()
-        .await
-        .unwrap()
+    connect_client(bootstrap, None).await
 }
 
 /// Boot a broker, init a transactional producer with the given tid,
@@ -257,12 +233,7 @@ async fn list_transactions_returns_ongoing_txn() {
         }
     );
 
-    transaction.abort().await.unwrap();
-    Arc::into_inner(producer)
-        .expect("transaction guard released its producer reference")
-        .close()
-        .await
-        .unwrap();
+    abort_and_close(transaction, producer).await;
     broker.shutdown().await;
 }
 
@@ -287,12 +258,7 @@ async fn list_transactions_state_filter_excludes_non_matching() {
         "Ongoing txn must not match an Empty state filter: {r:?}",
     );
 
-    transaction.abort().await.unwrap();
-    Arc::into_inner(producer)
-        .expect("transaction guard released its producer reference")
-        .close()
-        .await
-        .unwrap();
+    abort_and_close(transaction, producer).await;
     broker.shutdown().await;
 }
 
@@ -353,12 +319,7 @@ async fn describe_transactions_returns_full_state_for_known_tid() {
         }
     );
 
-    transaction.abort().await.unwrap();
-    Arc::into_inner(producer)
-        .expect("transaction guard released its producer reference")
-        .close()
-        .await
-        .unwrap();
+    abort_and_close(transaction, producer).await;
     broker.shutdown().await;
 }
 
@@ -377,4 +338,14 @@ async fn describe_transactions_returns_not_found_for_unknown_tid() {
     );
 
     broker.shutdown().await;
+}
+
+/// Abort before closing, proving the guard released its owning producer reference.
+async fn abort_and_close(transaction: OwnedTransaction, producer: Arc<Producer>) {
+    transaction.abort().await.unwrap();
+    Arc::into_inner(producer)
+        .expect("transaction guard released its producer reference")
+        .close()
+        .await
+        .unwrap();
 }

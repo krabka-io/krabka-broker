@@ -58,14 +58,10 @@ mod tests {
 
     #[test]
     fn apply_to_parses_multi_voter_quorum_in_order() {
-        use crate::config::BrokerConfig;
-
         let src = r#"
 controller_quorum_voters = ["0@127.0.0.1:9093", "1@127.0.0.2:9093", "2@127.0.0.3:9093"]
 "#;
-        let file: FileConfig = toml::from_str(src).unwrap();
-        let mut cfg = BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(src).unwrap();
 
         // Host:port carried verbatim (parsed, NOT DNS-resolved) so the dialer
         // re-resolves each peer per connect.
@@ -78,8 +74,6 @@ controller_quorum_voters = ["0@127.0.0.1:9093", "1@127.0.0.2:9093", "2@127.0.0.3
     }
     #[test]
     fn apply_to_keeps_unresolvable_hostname_without_dns() {
-        use crate::config::BrokerConfig;
-
         // A peer FQDN that does not resolve right now (a `StatefulSet` peer
         // whose A record isn't published yet, or simply offline) MUST be
         // accepted and carried verbatim — the old resolve-at-startup path
@@ -88,9 +82,7 @@ controller_quorum_voters = ["0@127.0.0.1:9093", "1@127.0.0.2:9093", "2@127.0.0.3
         let src = r#"
 controller_quorum_voters = ["0@demo-broker-0-0.demo-broker-headless.default.svc.cluster.local:9093"]
 "#;
-        let file: FileConfig = toml::from_str(src).unwrap();
-        let mut cfg = BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(src).unwrap();
 
         let expected: Vec<(krabka_raft::NodeId, String)> = vec![(
             krabka_audit::NodeId(0),

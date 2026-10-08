@@ -4,8 +4,6 @@
 
 use std::sync::Arc;
 
-#[cfg(not(target_family = "wasm"))]
-use krabka_units::convert::ByteSizeExt as _;
 use krabka_units::{ByteSize, Time, convert::TimeExt as _};
 use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
@@ -190,23 +188,16 @@ fn tune_accepted_socket(
     send_buffer: ByteSize,
     receive_buffer: ByteSize,
 ) {
-    if let Err(e) = stream.set_nodelay(true) {
-        tracing::debug!(error = %e, "TCP_NODELAY set failed on accepted socket");
-    }
-    #[cfg(not(target_family = "wasm"))]
-    {
-        let sock = socket2::SockRef::from(stream);
-        if let Err(e) = sock.set_send_buffer_size(send_buffer.bytes_usize()) {
-            tracing::debug!(error = %e, "SO_SNDBUF set failed on accepted socket");
-        }
-        if let Err(e) = sock.set_recv_buffer_size(receive_buffer.bytes_usize()) {
-            tracing::debug!(error = %e, "SO_RCVBUF set failed on accepted socket");
-        }
-    }
-    // WASI preview 1 has no socket-buffer options, so wasm32-wasip1 keeps the
-    // host's defaults.
-    #[cfg(target_family = "wasm")]
-    let _ = (send_buffer, receive_buffer);
+    crate::network::client::tune_socket(
+        stream,
+        send_buffer,
+        receive_buffer,
+        [
+            |e| tracing::debug!(error = %e, "TCP_NODELAY set failed on accepted socket"),
+            |e| tracing::debug!(error = %e, "SO_SNDBUF set failed on accepted socket"),
+            |e| tracing::debug!(error = %e, "SO_RCVBUF set failed on accepted socket"),
+        ],
+    );
 }
 
 #[cfg(test)]

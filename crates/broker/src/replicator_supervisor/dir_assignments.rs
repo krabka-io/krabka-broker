@@ -6,10 +6,11 @@ use std::{collections::HashSet, sync::Arc};
 
 use krabka_ids::PartitionIndex;
 use krabka_metadata::MetadataImage;
+use krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest;
 use tracing::warn;
 
 use super::{ReplicatorSupervisor, TopicPartition};
-use crate::partition_registry::PartitionRegistry;
+use crate::{metadata_source::MetadataSource, partition_registry::PartitionRegistry};
 
 /// Compute the dir-assignment reports that changed since last reported.
 ///
@@ -60,9 +61,9 @@ pub(crate) fn collect_changed_assignments(
 pub(super) trait AssignDirsReporter: Send + Sync {
     async fn send(
         &self,
-        controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+        controller: &Arc<dyn MetadataSource>,
         client_id: &str,
-        req: krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
+        req: AssignReplicasToDirsRequest,
     ) -> Result<(), String>;
 }
 
@@ -77,9 +78,9 @@ pub(super) struct NetworkAssignDirsReporter {
 impl AssignDirsReporter for NetworkAssignDirsReporter {
     async fn send(
         &self,
-        controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+        controller: &Arc<dyn MetadataSource>,
         client_id: &str,
-        req: krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
+        req: AssignReplicasToDirsRequest,
     ) -> Result<(), String> {
         crate::assign_dirs::send_assignments(controller, &self.dialer, client_id, req).await
     }
@@ -139,25 +140,15 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::replicator_supervisor::{
-        materialize::materialize_partition,
-        test_support::{
-            MaterializeFixture, single_partition_image, static_source, supervisor_fixture,
-        },
+    use crate::replicator_supervisor::test_support::{
+        single_partition_image, static_source, supervisor_fixture,
     };
 
     /// A reporter that dials a plaintext controller listener and knows no
     /// statically configured quorum.
     fn plaintext_reporter() -> NetworkAssignDirsReporter {
         NetworkAssignDirsReporter {
-            dialer: crate::controller_endpoint::ControllerDialer {
-                outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                    None, None,
-                )),
-                listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-                server_name: "localhost".to_owned(),
-                quorum_voters: Vec::new(),
-            },
+            dialer: crate::test_support::plaintext_controller_dialer(),
         }
     }
 
@@ -165,7 +156,7 @@ mod tests {
     async fn network_reporter_send_propagates_controller_resolution_errors() {
         // The real network reporter must surface send_assignments' error
         // (here: no controller leader elected), not swallow it into Ok(()).
-        let source: Arc<dyn crate::metadata_source::MetadataSource> =
+        let source: Arc<dyn MetadataSource> =
             Arc::new(static_source(MetadataImage::new(Uuid::nil())));
         let err = plaintext_reporter()
             .send(
@@ -210,8 +201,6 @@ mod tests {
 
     #[tokio::test]
     async fn collect_changed_assignments_reports_new_then_skips_unchanged() {
-        use krabka_log::LogConfig;
-        use tempfile::tempdir;
         use uuid::Uuid;
 
         // Build image with a single topic+partition.
@@ -219,15 +208,8 @@ mod tests {
         let img = single_partition_image("t", topic_id, krabka_raft::NodeId(1));
 
         // Materialize the partition under a temp dir.
-        let dir = tempdir().expect("tempdir");
-        let partitions = Arc::new(PartitionRegistry::new());
-        materialize_partition(MaterializeFixture::default().config(
-            &partitions,
-            "t",
-            &[dir.path().to_path_buf()],
-            &LogConfig::default(),
-        ))
-        .expect("materialize");
+        let (dir, partitions) =
+            crate::replicator_supervisor::test_support::materialized_partition();
 
         // Resolve LogDirIds over the same temp dir.
         let log_dir_ids = crate::log_dir_id::LogDirIds::resolve(&[dir.path().to_path_buf()]);

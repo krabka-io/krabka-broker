@@ -4,26 +4,23 @@ use super::ProducerReloadRange;
 #[cfg(creusot)]
 use super::ProducerSnapshotEntryFacts;
 
+open_logic! {
 /// Kafka's `truncateAndReload` keeps a snapshot exactly when
 /// `logStartOffset < offset <= logEndOffset`. A snapshot at the log start
 /// describes no record that is still in the log, so Kafka deletes it too.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn kafka_reload_keeps(offset: Int, log_start: Int, log_end: Int) -> bool {
     pearlite! { log_start < offset && offset <= log_end }
 }
+}
 
+open_logic! {
 /// Some local segment starts at `offset`.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn is_segment_base(bases: Seq<i64>, offset: Int) -> bool {
     pearlite! { exists<j: Int> 0 <= j && j < bases.len() && bases[j]@ == offset }
 }
+}
 
+open_logic! {
 /// Kafka's `removeStraySnapshots(segmentBaseOffsets)` deletes a snapshot
 /// exactly when no segment starts at its offset, unless it is the newest
 /// snapshot and lies above every segment base. That one survivor is the
@@ -32,10 +29,6 @@ pub fn is_segment_base(bases: Seq<i64>, offset: Int) -> bool {
 /// The method walks the snapshots in offset order, deleting each stray one
 /// as soon as a later stray one turns up, then deletes the last stray one if
 /// it lies below the greatest segment base. What is left is the rule above.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn kafka_stray_removed(snapshots: Seq<i64>, index: Int, bases: Seq<i64>) -> bool {
     pearlite! {
         !is_segment_base(bases, snapshots[index]@)
@@ -45,15 +38,13 @@ pub fn kafka_stray_removed(snapshots: Seq<i64>, index: Int, bases: Seq<i64>) -> 
                     ==> bases[j]@ < snapshots[index]@))
     }
 }
+}
 
+open_logic! {
 /// Kafka's replay cursor: `max(segment.baseOffset, mapEndOffset,
 /// logStartOffset)` for the first local segment the replay reads, where
 /// `mapEndOffset` is the loaded snapshot's offset, or the log start when no
 /// snapshot loads. A loaded snapshot always lies above the log start.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn kafka_replay_start(range: ProducerReloadRange, snapshot: Option<i64>) -> Int {
     pearlite! {
         match snapshot {
@@ -65,6 +56,7 @@ pub fn kafka_replay_start(range: ProducerReloadRange, snapshot: Option<i64>) -> 
             },
         }
     }
+}
 }
 
 /// Pick the log start a producer-state reload runs against, as Kafka's
@@ -190,14 +182,11 @@ pub fn producer_snapshot_latest_index(
     best
 }
 
+open_logic! {
 /// The entry's last-record fields are either the no-record sentinel -- a
 /// producer that has only written transaction markers, which Kafka writes as
 /// `(-1, -1, 0)` -- or a real batch that ends before the snapshot's offset,
 /// with room below its last offset for the offsets its delta spans.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn snapshot_last_record_valid(snapshot_offset: Int, entry: ProducerSnapshotEntryFacts) -> bool {
     pearlite! {
         (entry.last_offset@ == -1 && entry.last_sequence@ == -1 && entry.offset_delta@ == 0)
@@ -208,13 +197,11 @@ pub fn snapshot_last_record_valid(snapshot_offset: Int, entry: ProducerSnapshotE
                 && entry.last_offset@ < snapshot_offset)
     }
 }
+}
 
+open_logic! {
 /// The entry's open transaction is either absent (`-1`), or starts before
 /// the snapshot's offset and no later than the producer's last record.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn snapshot_transaction_valid(snapshot_offset: Int, entry: ProducerSnapshotEntryFacts) -> bool {
     pearlite! {
         entry.current_txn_first_offset@ == -1
@@ -222,4 +209,5 @@ pub fn snapshot_transaction_valid(snapshot_offset: Int, entry: ProducerSnapshotE
                 && entry.current_txn_first_offset@ < snapshot_offset
                 && entry.current_txn_first_offset@ <= entry.last_offset@)
     }
+}
 }

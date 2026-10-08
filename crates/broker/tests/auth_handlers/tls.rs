@@ -6,8 +6,7 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use krabka_client_core::Client;
+use krabka_broker::{Broker, BrokerConfig};
 use krabka_protocol::owned::metadata_request::MetadataRequest;
 use krabka_security::{ListenerProtocol, TlsConfig};
 use tokio_rustls::{
@@ -18,7 +17,7 @@ use tokio_rustls::{
     },
 };
 
-use crate::{DEV_CERT, DEV_KEY};
+use crate::{DEV_CERT, DEV_KEY, support::client::connect_owned};
 
 fn write_dev_pem(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let cp = dir.join("cert.pem");
@@ -30,15 +29,7 @@ fn write_dev_pem(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathB
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tls_listener_accepts_tls_handshake_only() {
-    // The broker installs the rustls crypto provider in `Broker::start`,
-    // but the client side of this test also needs one — install it here
-    // so the call below the broker startup doesn't panic when this is
-    // the first test in the process. `.ok()` swallows `AlreadySet`.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    let log_dir = tempfile::tempdir().unwrap();
-    let pem_dir = tempfile::tempdir().unwrap();
-    let (cert_path, key_path) = write_dev_pem(pem_dir.path());
+    let (log_dir, _pem_dir, cert_path, key_path) = tls_fixture();
 
     let cfg = crate::support::tls::ssl_config(
         log_dir.path().to_path_buf(),
@@ -92,7 +83,7 @@ async fn tls_listener_accepts_tls_handshake_only() {
 /// `endpoints[]` array on `MetadataResponseBroker`. So this test asserts:
 ///
 /// 1. The on-disk registration record stored in [`krabka_metadata::MetadataImage`]
-///    carries one [`krabka_metadata::BrokerEndpoint`] per [`ListenerSpec`].
+///    carries one [`krabka_metadata::BrokerEndpoint`] per [`krabka_broker::config::ListenerSpec`].
 /// 2. A `MetadataRequest::v12` round-trip over the PLAINTEXT listener
 ///    returns at least one broker entry whose `host:port` matches one of
 ///    the configured advertised endpoints.
@@ -103,14 +94,7 @@ async fn tls_listener_accepts_tls_handshake_only() {
 /// not TLS termination. `tls_listener_accepts_*` covers TLS termination.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn metadata_response_carries_listener_endpoints() {
-    // The Broker installs the rustls crypto provider during `start`; the
-    // client side doesn't need TLS for this test, but installing here is
-    // cheap and matches the T10 case if this is the first test to run.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    let log_dir = tempfile::tempdir().unwrap();
-    let pem_dir = tempfile::tempdir().unwrap();
-    let (cert_path, key_path) = write_dev_pem(pem_dir.path());
+    let (log_dir, _pem_dir, cert_path, key_path) = tls_fixture();
 
     // Distinct wildcard and loopback binds satisfy listener validation while
     // leaving port allocation atomic with Broker startup.
@@ -122,24 +106,12 @@ async fn metadata_response_carries_listener_endpoints() {
     // out from it); SSL exercises the multi-listener code path.
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![
-        ListenerSpec {
-            name: "PLAINTEXT".to_string(),
-            bind_addr: plaintext_bind,
-            advertised: plaintext_bind.to_string(),
-            protocol: ListenerProtocol::Plaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        },
-        ListenerSpec {
-            name: "SSL".to_string(),
-            bind_addr: ssl_bind,
-            advertised: ssl_bind.to_string(),
-            protocol: ListenerProtocol::Ssl,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        },
+        crate::support::listeners::listener(
+            "PLAINTEXT",
+            plaintext_bind,
+            ListenerProtocol::Plaintext,
+        ),
+        crate::support::listeners::listener("SSL", ssl_bind, ListenerProtocol::Ssl),
     ];
     cfg.inter_broker_listener_name = "PLAINTEXT".to_string();
     cfg.tls_config = Some(TlsConfig {
@@ -190,12 +162,7 @@ async fn metadata_response_carries_listener_endpoints() {
     // that *some* broker entry comes back and matches our id — the
     // per-listener data is verified above via the in-memory image.
     let bootstrap = plaintext_addr.to_string();
-    let client = Client::builder()
-        .bootstrap(&bootstrap)
-        .client_id("krabka-auth-test")
-        .build()
-        .await
-        .expect("client build");
+    let client = connect_owned(&bootstrap, "krabka-auth-test", "client build").await;
     let resp = client
         .send(MetadataRequest::default())
         .await
@@ -211,4 +178,18 @@ async fn metadata_response_carries_listener_endpoints() {
     );
 
     handle.shutdown().await;
+}
+
+fn tls_fixture() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
+    // Installing before broker startup also permits the first client-side TLS build.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let log_dir = tempfile::tempdir().unwrap();
+    let pem_dir = tempfile::tempdir().unwrap();
+    let (cert_path, key_path) = write_dev_pem(pem_dir.path());
+    (log_dir, pem_dir, cert_path, key_path)
 }

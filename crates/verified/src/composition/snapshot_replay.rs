@@ -9,9 +9,9 @@ use super::{
 /// exact replay cursor. No eligible snapshot is lost, and a snapshot in the
 /// discarded tail cannot suppress replay. Tied newest offsets may select either
 /// index. Snapshot decoding/corruption fallback and persistence remain external.
-#[requires(0 <= range.log_start@ && range.log_start@ <= cut@ && cut@ <= range.log_end@)]
+#[requires(replay_range_covers_cut(range, cut@))]
 #[requires(0 <= range.local_start@ && range.local_start@ <= cut@)]
-#[ensures(match result { Some(_) => true, None => false })]
+#[ensures(result != None)]
 #[ensures(match result {
     None => true,
     Some((None, cursor)) => cursor@ == range.log_start@.max(range.local_start@),
@@ -51,7 +51,7 @@ pub(super) fn truncated_snapshot_selection_bounds_replay(
 /// loads decoded state (0), and stops on I/O failure (2). The returned index
 /// names the original candidate, even after removals; ties may choose either.
 /// The decoder's classification and filesystem effects remain host facts.
-#[requires(0 <= range.log_start@ && range.log_start@ <= cut@ && cut@ <= range.log_end@)]
+#[requires(replay_range_covers_cut(range, cut@))]
 #[requires(0 <= range.local_start@ && range.local_start@ <= cut@)]
 #[requires(offsets@.len() == outcomes@.len())]
 #[requires(forall<i: Int> 0 <= i && i < outcomes@.len() ==> outcomes@[i]@ <= 2)]
@@ -69,14 +69,10 @@ pub(super) fn truncated_snapshot_selection_bounds_replay(
     Ok((Some(index), cursor)) => index@ < offsets@.len() && outcomes@[index@] == 0u8
         && range.log_start@ < offsets@[index@]@ && offsets@[index@]@ <= cut@
         && cursor@ == range.local_start@.max(offsets@[index@]@)
-        && forall<i: Int> 0 <= i && i < offsets@.len()
-            && outcomes@[i] != 1u8 && range.log_start@ < offsets@[i]@ && offsets@[i]@ <= cut@
-            ==> offsets@[i]@ <= offsets@[index@]@,
+        && newest_readable_snapshot(offsets@, outcomes@, range.log_start@, cut@, index@),
     Err(index) => index@ < offsets@.len() && outcomes@[index@] == 2u8
         && range.log_start@ < offsets@[index@]@ && offsets@[index@]@ <= cut@
-        && forall<i: Int> 0 <= i && i < offsets@.len()
-            && outcomes@[i] != 1u8 && range.log_start@ < offsets@[i]@ && offsets@[i]@ <= cut@
-            ==> offsets@[i]@ <= offsets@[index@]@,
+        && newest_readable_snapshot(offsets@, outcomes@, range.log_start@, cut@, index@),
 })]
 pub(super) fn corrupt_snapshot_fallback_preserves_replay(
     offsets: &[i64],
@@ -105,7 +101,7 @@ pub(super) fn corrupt_snapshot_fallback_preserves_replay(
     #[invariant(forall<j: Int> 0 <= j && j < origins@.len()
         ==> origins@[j]@ < offsets@.len() && candidates@[j] == offsets@[origins@[j]@])]
     #[invariant(forall<k: Int> 0 <= k && k < offsets@.len() && outcomes@[k] != 1u8
-        ==> exists<j: Int> 0 <= j && j < origins@.len() && origins@[j]@ == k)]
+        ==> crate::sequence::contains_source_index(origins@, k))]
     #[variant(candidates@.len())]
     loop {
         let Some(selected) = producer_snapshot_latest_index(&candidates, shortened) else {
@@ -135,4 +131,26 @@ pub(super) fn corrupt_snapshot_fallback_preserves_replay(
             }
         }
     }
+}
+
+open_logic! {
+/// No other noncorrupt retained snapshot lies above this selected candidate.
+fn newest_readable_snapshot(
+    offsets: Seq<i64>,
+    outcomes: Seq<u8>,
+    floor: Int,
+    cut: Int,
+    index: Int,
+) -> bool {
+    pearlite! { forall<i: Int> 0 <= i && i < offsets.len()
+    && outcomes[i] != 1u8 && floor < offsets[i]@ && offsets[i]@ <= cut
+    ==> offsets[i]@ <= offsets[index]@ }
+}
+}
+
+open_logic! {
+/// The logical retained range contains the truncation cut used for replay.
+fn replay_range_covers_cut(range: ProducerReloadRange, cut: Int) -> bool {
+    pearlite! { 0 <= range.log_start@ && range.log_start@ <= cut && cut <= range.log_end@ }
+}
 }

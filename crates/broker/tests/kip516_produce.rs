@@ -5,11 +5,12 @@
 //! answers `UNKNOWN_TOPIC_ID` on every partition row of a topic whose id does
 //! not resolve to a name. The zero id is such an id.
 use assert2::assert;
+
+use crate::support::topics::{creatable_topic, create_topic_request};
 mod support;
 
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{PartitionProduceResponse, ProduceResponse, TopicProduceResponse},
     },
@@ -23,16 +24,10 @@ const UNKNOWN_TOPIC_ID: i16 = 100;
 async fn produce_unresolved_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     p.client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "p_known".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("p_known", 1, 1),
+            5_000,
+        ))
         .await
         .expect("create topic");
 

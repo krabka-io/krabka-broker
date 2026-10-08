@@ -196,14 +196,7 @@ mod tests {
         let metrics = crate::metrics::BrokerMetrics::default();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(Config {
-            dialer: crate::controller_endpoint::ControllerDialer {
-                outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                    None, None,
-                )),
-                listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-                server_name: "localhost".into(),
-                quorum_voters: Vec::new(),
-            },
+            dialer: crate::test_support::plaintext_controller_dialer(),
             node_id: NodeId(1),
             scan_interval: hours(1),
             partitions,

@@ -94,29 +94,25 @@ mod tests {
         let entity: EntityKey = vec![("user".into(), Some("alice".into()))];
 
         let ok = ok_entry(&entity);
-        let expected_ok = RespEntry {
+        let expected_ok = tagged_wire!(RespEntry {
             error_code: 0,
             error_message: None,
-            entity: vec![RespEntity {
+            entity: vec![tagged_wire!(RespEntity {
                 entity_type: "user".into(),
                 entity_name: Some("alice".into()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+            })],
+        });
         assert!(ok == expected_ok);
 
         let err = err_entry(&entity, INVALID_REQUEST, "bad quota".into());
-        let expected_err = RespEntry {
+        let expected_err = tagged_wire!(RespEntry {
             error_code: INVALID_REQUEST,
             error_message: Some("bad quota".into()),
-            entity: vec![RespEntity {
+            entity: vec![tagged_wire!(RespEntity {
                 entity_type: "user".into(),
                 entity_name: Some("alice".into()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+            })],
+        });
         assert!(err == expected_err);
     }
 
@@ -134,26 +130,22 @@ mod tests {
         apply_submit_error(&mut results, "raft unavailable");
 
         let expected = vec![
-            RespEntry {
+            tagged_wire!(RespEntry {
                 error_code: COORDINATOR_NOT_AVAILABLE,
                 error_message: Some("submit failed: raft unavailable".into()),
-                entity: vec![RespEntity {
+                entity: vec![tagged_wire!(RespEntity {
                     entity_type: "user".into(),
                     entity_name: Some("alice".into()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            RespEntry {
+                })],
+            }),
+            tagged_wire!(RespEntry {
                 error_code: INVALID_REQUEST,
                 error_message: Some("invalid bob quota".into()),
-                entity: vec![RespEntity {
+                entity: vec![tagged_wire!(RespEntity {
                     entity_type: "user".into(),
                     entity_name: Some("bob".into()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
+                })],
+            }),
         ];
         assert!(results == expected);
     }

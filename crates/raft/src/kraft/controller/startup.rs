@@ -35,7 +35,7 @@ use crate::{
         core::QuorumStateMachine,
         log::KraftLog,
         snapshot_fetch::MetadataSnapshotFetchMax,
-        transport::{PeerSender, QuorumStateSnapshot},
+        transport::PeerSender,
         types::{NodeId, QuorumState},
     },
 };
@@ -127,30 +127,7 @@ impl KraftController {
         // published snapshot and the engine's `leader_reported_hwm`, which a
         // node that has heard from no leader yet answers from.
         let initial_hwm = log.hwm().0;
-        let initial_snapshot = QuorumStateSnapshot {
-            leader_id: initial_leader,
-            leader_epoch: initial_epoch,
-            high_watermark: initial_hwm,
-            quorum_high_watermark: initial_hwm,
-            log_end_offset: log.log_end_offset().0,
-            log_start_offset: log.log_start_offset().0,
-            voters: core.quorum_state().voters.clone(),
-            voted_directory_id: core
-                .quorum_state()
-                .voted_key
-                .as_ref()
-                .map(|key| key.directory_id),
-            observers: Vec::new(),
-            per_replica_fetch_offset: BTreeMap::new(),
-            per_replica_last_fetch_ms: BTreeMap::new(),
-            per_replica_last_caught_up_ms: BTreeMap::new(),
-            is_leader: core.role().is_leader(),
-            current_state: if core.role().is_leader() {
-                "leader"
-            } else {
-                "follower"
-            },
-        };
+        let initial_snapshot = super::queries::initial_quorum_snapshot(&core, &log, initial_hwm);
         let (quorum_tx, quorum_rx) = watch::channel(initial_snapshot);
         let (fault_tx, fault_rx) = watch::channel(None);
         let (cmd_tx, cmd_rx) = mpsc::channel(metadata_raft_command_queue_capacity.get());

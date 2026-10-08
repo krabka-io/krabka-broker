@@ -51,12 +51,7 @@ fn site_of(brokers: &[(u64, &str)], node_id: NodeId) -> String {
 /// The sites of one replica list, sorted, so the caller can compare the
 /// spread without depending on the replica order.
 fn sites_of(brokers: &[(u64, &str)], replicas: &[NodeId]) -> Vec<String> {
-    let mut sites = replicas
-        .iter()
-        .map(|node_id| site_of(brokers, *node_id))
-        .collect::<Vec<_>>();
-    sites.sort();
-    sites
+    crate::handlers::test_support::sorted_replica_sites(replicas, |node| site_of(brokers, node))
 }
 
 /// The automatic placement of `new_partitions` partitions that `seed` gives.

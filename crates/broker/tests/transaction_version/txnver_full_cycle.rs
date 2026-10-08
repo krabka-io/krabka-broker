@@ -5,25 +5,13 @@
 //! what proves that the coordinator's encode path for the resolved level runs
 //! and that the transaction commits and reads end to end.
 
-use std::time::Duration;
-
 use assert2::assert;
-use bytes::Bytes;
-use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
-use krabka_client_producer::{Producer, ProducerRecord};
 
 use crate::{
     support,
+    support::producer::string_record as rec,
     txnver_harness::{admin_client, boot_single, create_topic, downgrade_transaction_version},
 };
-
-fn rec(topic: &str, v: &str) -> ProducerRecord {
-    ProducerRecord {
-        topic: topic.into(),
-        value: Some(Bytes::from(v.to_string())),
-        ..Default::default()
-    }
-}
 
 /// Run a full transactional cycle at whatever `transaction.version` the
 /// cluster is currently finalized at: init → begin → send 3 → commit, then a
@@ -37,13 +25,8 @@ fn rec(topic: &str, v: &str) -> ProducerRecord {
 /// transitions within one broker lifetime. Unit tests in `txn::log_record`
 /// cover decode and recovery from disk.
 async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, group: &str) {
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.to_string())
-        .transactional_id(tid)
-        .build()
-        .await
-        .unwrap();
-    producer.init_transactions().await.unwrap();
+    let producer =
+        crate::support::producer::transactional_producer(bootstrap.to_string(), tid).await;
     let txn = producer.begin_transaction().await.unwrap();
     for v in ["a", "b", "c"] {
         producer
@@ -53,20 +36,11 @@ async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, gro
     }
     txn.commit().await.unwrap();
 
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap.to_string())
-        .group_id(group)
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe([topic.to_string()])
-        .build()
-        .await
-        .unwrap();
-
-    let seen = crate::txn_consumer_fixture::poll_values_until(
-        &mut consumer,
-        Duration::from_secs(10),
-        |seen| seen.len() >= 3,
+    let (consumer, seen) = crate::support::transaction_wire::committed_values(
+        bootstrap.to_string(),
+        group,
+        topic,
+        None,
     )
     .await;
     assert!(

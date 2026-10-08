@@ -2,9 +2,9 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_exact_wal_batch_range": { "prover": "alt-ergo", "time": 0.007 },
-      "vc_len_i64": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_wal_covering_batch_range": { "prover": "alt-ergo", "time": 0.039 }
+      "vc_exact_wal_batch_range": { "prover": "alt-ergo", "time": 0.018 },
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_wal_covering_batch_range": { "prover": "alt-ergo", "time": 0.089 }
     }
   }
 }

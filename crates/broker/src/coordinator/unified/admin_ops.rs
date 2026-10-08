@@ -8,20 +8,15 @@
 
 use std::sync::Arc;
 
-use tokio::sync::oneshot;
-
 use super::{
-    actor::{GroupActorHandle, GroupActorMessage},
+    actor::GroupActorMessage,
     group_coordinator::{GroupCoordinator, GroupType},
-    share::actor::{ShareGroupActorHandle, ShareGroupActorMessage},
-    streams::{
-        self,
-        actor::{StreamsGroupActorHandle, StreamsGroupActorMessage},
-    },
+    share::actor::ShareGroupActorMessage,
+    streams::{self, actor::StreamsGroupActorMessage},
 };
 use crate::{
     coordinator::{DeleteGroupError, GroupSnapshot},
-    task_util::ask,
+    task_util::{ask, cloned_registry_values, shutdown_actor},
 };
 
 impl GroupCoordinator {
@@ -41,8 +36,7 @@ impl GroupCoordinator {
     /// them. A *downgraded* group whose handle still reads `Consumer` still
     /// appears here, because its live kind is `Classic`.
     pub async fn list_groups(&self) -> Vec<GroupSnapshot> {
-        let handles: Vec<Arc<GroupActorHandle>> =
-            self.groups.iter().map(|e| e.value().clone()).collect();
+        let handles = cloned_registry_values(&self.groups);
         let mut out = Vec::with_capacity(handles.len());
         for h in handles {
             // `ClassicInspect` replies only for a classic-kind group; a
@@ -185,43 +179,32 @@ impl GroupCoordinator {
     }
 
     pub async fn shutdown_all(&self) {
-        let handles: Vec<Arc<GroupActorHandle>> =
-            self.groups.iter().map(|e| e.value().clone()).collect();
+        let handles = cloned_registry_values(&self.groups);
         for h in handles {
-            let (tx, rx) = oneshot::channel();
-            if h.tx.send(GroupActorMessage::Shutdown(tx)).await.is_ok() {
-                let _ = tokio::time::timeout(self.config.shutdown_ack_timeout, rx).await;
-            }
+            shutdown_actor(
+                &h.tx,
+                GroupActorMessage::Shutdown,
+                self.config.shutdown_ack_timeout,
+            )
+            .await;
         }
-        let share_handles: Vec<Arc<ShareGroupActorHandle>> = self
-            .share_groups
-            .iter()
-            .map(|e| e.value().clone())
-            .collect();
+        let share_handles = cloned_registry_values(&self.share_groups);
         for h in share_handles {
-            let (tx, rx) = oneshot::channel();
-            if h.tx
-                .send(ShareGroupActorMessage::Shutdown(tx))
-                .await
-                .is_ok()
-            {
-                let _ = tokio::time::timeout(self.config.shutdown_ack_timeout, rx).await;
-            }
+            shutdown_actor(
+                &h.tx,
+                ShareGroupActorMessage::Shutdown,
+                self.config.shutdown_ack_timeout,
+            )
+            .await;
         }
-        let streams_handles: Vec<Arc<StreamsGroupActorHandle>> = self
-            .streams_groups
-            .iter()
-            .map(|e| e.value().clone())
-            .collect();
+        let streams_handles = cloned_registry_values(&self.streams_groups);
         for h in streams_handles {
-            let (tx, rx) = oneshot::channel();
-            if h.tx
-                .send(StreamsGroupActorMessage::Shutdown(tx))
-                .await
-                .is_ok()
-            {
-                let _ = tokio::time::timeout(self.config.shutdown_ack_timeout, rx).await;
-            }
+            shutdown_actor(
+                &h.tx,
+                StreamsGroupActorMessage::Shutdown,
+                self.config.shutdown_ack_timeout,
+            )
+            .await;
         }
     }
 }

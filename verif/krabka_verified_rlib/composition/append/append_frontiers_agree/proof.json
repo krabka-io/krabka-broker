@@ -2,35 +2,35 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_append_frontiers_agree": { "prover": "z3", "time": 0.008 },
+      "vc_append_frontiers_agree": { "prover": "z3", "time": 0.015 },
       "vc_branch_Option_LocalRecoveryStep": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.01
       },
-      "vc_branch_Option_i64": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_branch_Option_i64": { "prover": "alt-ergo", "time": 0.015 },
       "vc_branch_Option_tup2_i64_i64": {
         "prover": "alt-ergo",
         "time": 0.009
       },
-      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.009 },
-      "vc_elim_Break'0": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_elim_Break'1": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.009 },
-      "vc_elim_Continue'0": { "prover": "alt-ergo", "time": 0.007 },
-      "vc_elim_Continue'1": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.019 },
+      "vc_elim_Break'0": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_elim_Break'1": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.021 },
+      "vc_elim_Continue'0": { "prover": "alt-ergo", "time": 0.02 },
+      "vc_elim_Continue'1": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.015 },
       "vc_from_residual_Option_AppendFrontiers": {
         "prover": "alt-ergo",
-        "time": 0.012
+        "time": 0.013
       },
-      "vc_local_append_coordinates": { "prover": "alt-ergo", "time": 0.016 },
-      "vc_local_recovery_batch_step": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_local_append_coordinates": { "prover": "alt-ergo", "time": 0.019 },
+      "vc_local_recovery_batch_step": { "prover": "alt-ergo", "time": 0.016 },
       "vc_produce_durability_frontier": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.014
       },
-      "vc_reserve_offsets": { "prover": "alt-ergo", "time": 0.009 },
-      "vc_timestamp_scan_next": { "prover": "alt-ergo", "time": 0.011 }
+      "vc_reserve_offsets": { "prover": "alt-ergo", "time": 0.016 },
+      "vc_timestamp_scan_next": { "prover": "alt-ergo", "time": 0.019 }
     }
   }
 }

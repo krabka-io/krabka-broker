@@ -16,6 +16,115 @@ pub(crate) fn name(tokens: TokenStream) -> Result<Ident, ParseError> {
     }
 }
 
+pub(crate) fn capture_layer(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    let tokens: Vec<_> = tokens.into_iter().collect();
+    let [
+        TokenTree::Ident(name),
+        comma,
+        TokenTree::Ident(captured),
+        comma2,
+        TokenTree::Ident(policy),
+    ] = tokens.as_slice()
+    else {
+        return Err(ParseError::new(
+            Span::call_site(),
+            "expected layer name, captured type name, lock policy",
+        ));
+    };
+    if !comma.is_punct_comma() || !comma2.is_punct_comma() {
+        return Err(ParseError::new(
+            Span::call_site(),
+            "expected comma-separated capture layer arguments",
+        ));
+    }
+    let lock = if policy == "unwrap" {
+        moxy::template! { .unwrap() }
+    } else if policy == "recover_poison" {
+        moxy::template! { .unwrap_or_else(::std::sync::PoisonError::into_inner) }
+    } else {
+        return Err(ParseError::new(
+            policy.span(),
+            "expected unwrap or recover_poison lock policy",
+        ));
+    };
+    Ok(moxy::template! {
+        type {{ captured }} = ::std::sync::Arc<::std::sync::Mutex<Vec<String>>>;
+        struct {{ name }}({{ captured }});
+        impl<S: ::tracing::Subscriber> ::tracing_subscriber::Layer<S> for {{ name }} {
+            fn on_event(&self, event: &::tracing::Event<'_>, _cx: ::tracing_subscriber::layer::Context<'_, S>) {
+                let meta = event.metadata();
+                self.0.lock() {{ lock }} .push(format!("{}:{}", meta.target(), meta.level()));
+            }
+        }
+    })
+}
+
+pub(crate) fn remote_segment_transition_matrix(
+    tokens: TokenStream,
+) -> Result<TokenStream, ParseError> {
+    let name = name(tokens)?;
+    Ok(moxy::template! {
+        fn {{ name }}() -> [[bool; 4]; 4] {
+            [
+                [true, true, true, false],
+                [false, true, true, false],
+                [false, false, true, true],
+                [false, false, false, true],
+            ]
+        }
+    })
+}
+
+pub(crate) fn model_transition(
+    tokens: proc_macro::TokenStream,
+) -> Result<proc_macro::TokenStream, ParseError> {
+    let tokens: Vec<_> = tokens.into_iter().collect();
+    let [
+        proc_macro::TokenTree::Ident(last),
+        comma,
+        proc_macro::TokenTree::Ident(action),
+        comma2,
+        proc_macro::TokenTree::Ident(state),
+        semi,
+        proc_macro::TokenTree::Group(body),
+    ] = tokens.as_slice()
+    else {
+        return Err(ParseError::new(
+            Span::call_site(),
+            "expected last, action, state; { transition body }",
+        ));
+    };
+    if !matches!(comma, proc_macro::TokenTree::Punct(punct) if punct.as_char() == ',')
+        || !matches!(comma2, proc_macro::TokenTree::Punct(punct) if punct.as_char() == ',')
+        || !matches!(semi, proc_macro::TokenTree::Punct(punct) if punct.as_char() == ';')
+        || body.delimiter() != proc_macro::Delimiter::Brace
+    {
+        return Err(ParseError::new(
+            Span::call_site(),
+            "expected three model bindings and a brace-delimited transition body",
+        ));
+    }
+    let last: Ident = last.clone().into();
+    let action: Ident = action.clone().into();
+    let state: Ident = state.clone().into();
+    let mut method: proc_macro::TokenStream = moxy::template! {
+        fn next_state(&self, {{ last }}: &Self::State, {{ action }}: Self::Action) -> Option<Self::State>
+    }.into();
+    let mut kernel: proc_macro::TokenStream = moxy::template! {
+        let mut {{ state }} = {{ last }}.clone();
+    }
+    .into();
+    // Keep the caller's compiler tokens intact. Moxy's Group conversion joins
+    // its opening/closing spans, which makes multiline else blocks appear
+    // separated from `else` to Clippy's source-based formatting checks.
+    kernel.extend(body.stream());
+    method.extend([proc_macro::TokenTree::Group(proc_macro::Group::new(
+        proc_macro::Delimiter::Brace,
+        kernel,
+    ))]);
+    Ok(method)
+}
+
 pub(crate) fn bounded_bfs(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
@@ -36,7 +145,19 @@ pub(crate) fn bounded_bfs(tokens: TokenStream) -> Result<TokenStream, ParseError
 }
 
 pub(crate) fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = name(tokens)?;
+    let (name, full) = if tokens
+        .clone()
+        .into_iter()
+        .any(|token| token.is_punct_comma())
+    {
+        let arguments = crate::meta::arguments(tokens, 2)?;
+        (
+            name(arguments[0].clone())?,
+            crate::meta::mode(arguments[1].clone(), ["plain", "full"])? == "full",
+        )
+    } else {
+        (name(tokens)?, true)
+    };
     Ok(moxy::template! {
         /// Producer state and records retained in one compacted batch.
         #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +167,7 @@ pub(crate) fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseE
             producer_id: i64,
             producer_epoch: i16,
             base_sequence: i32,
-            control: bool,
+            @if full { control: bool, }
             records: Vec<(Option<::bytes::Bytes>, Option<::bytes::Bytes>)>,
         }
         impl {{ name }} {
@@ -57,10 +178,11 @@ pub(crate) fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseE
                     producer_id: batch.producer_id,
                     producer_epoch: batch.producer_epoch,
                     base_sequence: batch.base_sequence,
-                    control: batch.attributes.is_control_batch(),
+                    @if full { control: batch.attributes.is_control_batch(), }
                     records: batch.records.iter().map(|record| (record.key.clone(), record.value.clone())).collect(),
                 }
             }
+            @if full {
             /// The original one-record batch, relocated to `offset`.
             fn whole(offset: i64, batch: &::krabka_protocol::records::RecordBatch) -> Self {
                 Self { base_offset: offset, last_offset: offset, ..Self::of(batch) }
@@ -69,6 +191,46 @@ pub(crate) fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseE
             fn header(offset: i64, batch: &::krabka_protocol::records::RecordBatch) -> Self {
                 Self { records: Vec::new(), ..Self::whole(offset, batch) }
             }
+            }
+        }
+    })
+}
+
+/// Generate the first matching header lookup with the caller's UTF-8 policy.
+pub(crate) fn record_header_text(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    let arguments = crate::meta::arguments(tokens, 2)?;
+    let name = name(arguments[0].clone())?;
+    let strict = crate::meta::mode(arguments[1].clone(), ["strict", "lossy"])? == "strict";
+    Ok(moxy::template! {
+        fn {{ name }}(record: &::krabka_protocol::records::Record, key: &str) -> Option<String> {
+            record.headers.iter()
+                .find(|header| header.key == key)
+                .and_then(|header| header.value.as_ref())
+                .map(|value| {
+                    @if strict { String::from_utf8(value.to_vec()).unwrap() }
+                    @else { String::from_utf8_lossy(value).into_owned() }
+                })
+        }
+    })
+}
+
+/// Generate the three DLQ counter reads with explicit caller types and docs.
+pub(crate) fn share_dlq_meters(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    let arguments = crate::meta::arguments(tokens, 3)?;
+    let mut name_tokens = Vec::from(arguments[0].clone());
+    let name = name(name_tokens.pop().into_iter().collect())?;
+    let attributes = TokenStream::from(name_tokens);
+    let metrics = &arguments[1];
+    let label = &arguments[2];
+    Ok(moxy::template! {
+        {{ attributes }}
+        fn {{ name }}(metrics: &{{ metrics }}, group: &str) -> (u64, u64, u64) {
+            let label = {{ label }} { group_id: group.to_owned() };
+            (
+                metrics.share_group_dlq_records.get_or_create(&label).get(),
+                metrics.share_group_dlq_produce_requests.get_or_create(&label).get(),
+                metrics.share_group_dlq_failed_produce_requests.get_or_create(&label).get(),
+            )
         }
     })
 }
@@ -93,14 +255,8 @@ pub(crate) fn record_batch(tokens: TokenStream) -> Result<TokenStream, ParseErro
 
 /// Generate the shared action adapter inside either simulation harness impl.
 pub(crate) fn simulation_actions(root: TokenStream) -> Result<TokenStream, ParseError> {
-    let root_tokens: Vec<_> = root.into_iter().collect();
-    if root_tokens.is_empty() {
-        return Err(ParseError::new(
-            Span::call_site(),
-            "simulation_actions needs the consensus crate path",
-        ));
-    }
-    let root = TokenStream::from(root_tokens);
+    let root =
+        crate::meta::required_tokens(root, "simulation_actions needs the consensus crate path")?;
     Ok(moxy::template! {
         /// Apply consensus effects, leaving each harness's durability bookkeeping to its hook.
         pub(super) fn apply_action(&mut self, id: {{ root }}::types::NodeId, action: {{ root }}::action::Action) {
@@ -141,11 +297,16 @@ pub(crate) fn metadata_log_delegate(
     let (mut tokens, body) =
         crate::meta::item_body(item, "metadata_log_delegate", TokenTree::is_keyword_impl)?;
     let mut root_tokens: Vec<_> = root.into_iter().collect();
-    // The explicit `keyed` mode opts into delegation of optional keyed writes.
-    let keyed = root_tokens
-        .last()
-        .is_some_and(|token| token.as_ident().is_some_and(|name| name == "keyed"));
-    if keyed {
+    // Optional transport operations require explicit selectors.
+    let mut keyed = false;
+    let mut range = false;
+    loop {
+        let selector = root_tokens.last().and_then(TokenTree::as_ident);
+        match selector {
+            Some(name) if name == "keyed" => keyed = true,
+            Some(name) if name == "range" => range = true,
+            _ => break,
+        }
         root_tokens.pop();
         if root_tokens
             .last()
@@ -153,18 +314,15 @@ pub(crate) fn metadata_log_delegate(
         {
             return Err(ParseError::new(
                 Span::call_site(),
-                "expected crate path, keyed",
+                "expected crate path followed by comma-separated selectors",
             ));
         }
         root_tokens.pop();
     }
-    if root_tokens.is_empty() {
-        return Err(ParseError::new(
-            Span::call_site(),
-            "metadata_log_delegate needs the metadata log crate path",
-        ));
-    }
-    let root = TokenStream::from(root_tokens);
+    let root = crate::meta::required_tokens(
+        TokenStream::from(root_tokens),
+        "metadata_log_delegate needs the metadata log crate path",
+    )?;
     let TokenTree::Group(group) = &mut tokens[body] else {
         unreachable!()
     };
@@ -205,6 +363,19 @@ pub(crate) fn metadata_log_delegate(
             }
         });
     }
+    if range && !has_method("visit_range") {
+        methods.extend(moxy::template! {
+            async fn visit_range(
+                &self,
+                partition: i32,
+                start: i64,
+                end: i64,
+                visit: &mut {{ root }}::log::RangeVisitor<'_>,
+            ) -> Result<(), {{ root }}::error::MetadataLogError> {
+                self.inner.visit_range(partition, start, end, visit).await
+            }
+        });
+    }
     group.tokens = methods.into_iter().chain(group.tokens.clone()).collect();
     Ok(tokens.into())
 }
@@ -223,14 +394,8 @@ pub(crate) fn remote_segment_check(tokens: TokenStream) -> Result<TokenStream, P
 
 /// The harness event adapter, shared by browser and storage simulations.
 pub(crate) fn simulation_step(root: TokenStream) -> Result<TokenStream, ParseError> {
-    let root_tokens: Vec<_> = root.into_iter().collect();
-    if root_tokens.is_empty() {
-        return Err(ParseError::new(
-            Span::call_site(),
-            "simulation_step needs the consensus crate path",
-        ));
-    }
-    let root = TokenStream::from(root_tokens);
+    let root =
+        crate::meta::required_tokens(root, "simulation_step needs the consensus crate path")?;
     Ok(moxy::template! {
         /// Feed one event to the consensus machine, then apply its effects.
         pub(super) fn step(&mut self, id: {{ root }}::NodeId, event: {{ root }}::Event) {

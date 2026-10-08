@@ -14,8 +14,6 @@
 //! plain TOML and checks every key, at every depth, against
 //! `docs/config-schema.json`, which is the schema `FileConfig` generates.
 
-use std::path::PathBuf;
-
 use assert2::{assert, check};
 use krabka_broker::{config::BrokerConfig, file_config::FileConfig};
 use serde_json::Value as Json;
@@ -26,23 +24,10 @@ const EXAMPLES: [&str; 2] = [
     "docs/examples/broker-three-node-quorum.toml",
 ];
 
-/// The repository root, under Cargo or under a Bazel test sandbox.
-fn repo_root() -> PathBuf {
-    if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        return PathBuf::from(dir).join("../..");
-    }
-    let srcdir = std::env::var("TEST_SRCDIR")
-        .expect("CARGO_MANIFEST_DIR (cargo) or TEST_SRCDIR (bazel) must be set");
-    let workspace =
-        std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
-    PathBuf::from(srcdir).join(workspace)
-}
+#[path = "support/repository.rs"]
+mod repository;
 
-fn read_example(relative: &str) -> String {
-    let path = repo_root().join(relative);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
-}
+use repository::read_text as read_example;
 
 /// Turn every disabled setting on. Prose comments start with `# ` and stay.
 fn enable_disabled_settings(text: &str) -> String {
@@ -155,12 +140,7 @@ fn three_node_example_covers_the_cluster_surface() {
     );
 }
 
-fn checked_in_schema() -> Json {
-    let path = repo_root().join("docs/config-schema.json");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    serde_json::from_str(&text).expect("docs/config-schema.json is JSON")
-}
+use repository::checked_in_schema;
 
 /// The object schemas a node can stand for, with `$ref`, `anyOf` and `oneOf`
 /// resolved. `null` branches are dropped: an absent table is not a key.

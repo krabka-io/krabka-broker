@@ -70,6 +70,23 @@ impl Walk {
         self.last = Some((key.to_string(), body.chain.seq));
     }
 
+    /// Stop at the first failure, retaining the already verified part of the run.
+    fn stopped_at(
+        mut self,
+        key: &str,
+        manifest: &SegmentManifest,
+        reason: String,
+        span: Option<EpochSpan>,
+    ) -> Self {
+        self.first_break.get_or_insert(VerifyBreak {
+            manifest_key: key.to_owned(),
+            seq: Some(manifest.body.chain.seq),
+            reason,
+        });
+        self.epochs.extend(span);
+        self
+    }
+
     /// Turns the accumulated walk into the partition's report.
     pub(super) fn into_report(
         mut self,
@@ -150,13 +167,7 @@ pub(super) async fn walk_partition(
             let next_seq = match chain_continuation(manifest, expected_seq, head) {
                 Ok(next_seq) => next_seq,
                 Err(reason) => {
-                    walk.first_break = Some(VerifyBreak {
-                        manifest_key: key.clone(),
-                        seq: Some(body.chain.seq),
-                        reason,
-                    });
-                    walk.epochs.extend(span);
-                    return Ok(walk);
+                    return Ok(walk.stopped_at(key, manifest, reason, span));
                 }
             };
             head = manifest_head(body);
@@ -171,24 +182,12 @@ pub(super) async fn walk_partition(
                 }
                 SignatureState::Valid => {}
                 SignatureState::Invalid(reason) => {
-                    walk.first_break.get_or_insert(VerifyBreak {
-                        manifest_key: key.clone(),
-                        seq: Some(body.chain.seq),
-                        reason,
-                    });
-                    walk.epochs.extend(span);
-                    return Ok(walk);
+                    return Ok(walk.stopped_at(key, manifest, reason, span));
                 }
             }
 
             if let Some(reason) = check_objects(store, manifest, listing, request.depth).await? {
-                walk.first_break = Some(VerifyBreak {
-                    manifest_key: key.clone(),
-                    seq: Some(body.chain.seq),
-                    reason,
-                });
-                walk.epochs.extend(span);
-                return Ok(walk);
+                return Ok(walk.stopped_at(key, manifest, reason, span));
             }
 
             walk.accept(key, manifest, head);

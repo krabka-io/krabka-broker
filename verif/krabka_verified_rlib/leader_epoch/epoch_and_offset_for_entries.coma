@@ -1,47 +1,47 @@
-(* #"/workspace/crates/verified/src/leader_epoch.rs" 109 0 113 26 *)
+(* #"/workspace/crates/verified/src/leader_epoch.rs" 103 0 107 26 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sleader_epoch = "/workspace/crates/verified/src/leader_epoch.rs" 114 28 114 43
-let%span sleader_epoch'0 = "/workspace/crates/verified/src/leader_epoch.rs" 115 16 115 31
-let%span sleader_epoch'1 = "/workspace/crates/verified/src/leader_epoch.rs" 115 33 115 55
-let%span sleader_epoch'2 = "/workspace/crates/verified/src/leader_epoch.rs" 119 16 119 22
-let%span sleader_epoch'3 = "/workspace/crates/verified/src/leader_epoch.rs" 123 14 123 33
-let%span sleader_epoch'4 = "/workspace/crates/verified/src/leader_epoch.rs" 124 14 124 27
-let%span sleader_epoch'5 = "/workspace/crates/verified/src/leader_epoch.rs" 121 16 122 54
-let%span sleader_epoch'6 = "/workspace/crates/verified/src/leader_epoch.rs" 120 16 120 36
-let%span sleader_epoch'7 = "/workspace/crates/verified/src/leader_epoch.rs" 124 31 124 41
-let%span sleader_epoch'8 = "/workspace/crates/verified/src/leader_epoch.rs" 124 31 124 49
-let%span sleader_epoch'9 = "/workspace/crates/verified/src/leader_epoch.rs" 125 13 125 14
-let%span sleader_epoch'10 = "/workspace/crates/verified/src/leader_epoch.rs" 125 8 125 14
-let%span sleader_epoch'11 = "/workspace/crates/verified/src/leader_epoch.rs" 128 12 128 25
-let%span sleader_epoch'12 = "/workspace/crates/verified/src/leader_epoch.rs" 129 15 129 16
-let%span sleader_epoch'13 = "/workspace/crates/verified/src/leader_epoch.rs" 129 32 129 33
-let%span sleader_epoch'14 = "/workspace/crates/verified/src/leader_epoch.rs" 129 28 129 33
-let%span sleader_epoch'15 = "/workspace/crates/verified/src/leader_epoch.rs" 129 20 129 34
-let%span sleader_epoch'16 = "/workspace/crates/verified/src/leader_epoch.rs" 129 20 129 42
-let%span sleader_epoch'17 = "/workspace/crates/verified/src/leader_epoch.rs" 132 13 132 28
-let%span sleader_epoch'18 = "/workspace/crates/verified/src/leader_epoch.rs" 132 30 132 52
-let%span sleader_epoch'19 = "/workspace/crates/verified/src/leader_epoch.rs" 135 22 135 71
-let%span sleader_epoch'20 = "/workspace/crates/verified/src/leader_epoch.rs" 136 22 136 84
-let%span sleader_epoch'21 = "/workspace/crates/verified/src/leader_epoch.rs" 137 16 137 17
-let%span sleader_epoch'22 = "/workspace/crates/verified/src/leader_epoch.rs" 138 30 138 40
-let%span sleader_epoch'23 = "/workspace/crates/verified/src/leader_epoch.rs" 138 30 138 53
-let%span sleader_epoch'24 = "/workspace/crates/verified/src/leader_epoch.rs" 140 25 140 26
-let%span sleader_epoch'25 = "/workspace/crates/verified/src/leader_epoch.rs" 140 21 140 26
-let%span sleader_epoch'26 = "/workspace/crates/verified/src/leader_epoch.rs" 140 13 140 27
-let%span sleader_epoch'27 = "/workspace/crates/verified/src/leader_epoch.rs" 140 13 140 33
-let%span sleader_epoch'28 = "/workspace/crates/verified/src/leader_epoch.rs" 140 35 140 45
-let%span sleader_epoch'29 = "/workspace/crates/verified/src/leader_epoch.rs" 140 35 140 58
-let%span sleader_epoch'30 = "/workspace/crates/verified/src/leader_epoch.rs" 103 11 105 68
-let%span sleader_epoch'31 = "/workspace/crates/verified/src/leader_epoch.rs" 106 10 107 78
+let%span sleader_epoch = "/workspace/crates/verified/src/leader_epoch.rs" 108 28 108 43
+let%span sleader_epoch'0 = "/workspace/crates/verified/src/leader_epoch.rs" 109 16 109 31
+let%span sleader_epoch'1 = "/workspace/crates/verified/src/leader_epoch.rs" 109 33 109 55
+let%span sleader_epoch'2 = "/workspace/crates/verified/src/leader_epoch.rs" 113 16 113 22
+let%span sleader_epoch'3 = "/workspace/crates/verified/src/leader_epoch.rs" 117 14 117 33
+let%span sleader_epoch'4 = "/workspace/crates/verified/src/leader_epoch.rs" 118 14 118 27
+let%span sleader_epoch'5 = "/workspace/crates/verified/src/leader_epoch.rs" 115 16 116 54
+let%span sleader_epoch'6 = "/workspace/crates/verified/src/leader_epoch.rs" 114 16 114 36
+let%span sleader_epoch'7 = "/workspace/crates/verified/src/leader_epoch.rs" 118 31 118 41
+let%span sleader_epoch'8 = "/workspace/crates/verified/src/leader_epoch.rs" 118 31 118 49
+let%span sleader_epoch'9 = "/workspace/crates/verified/src/leader_epoch.rs" 119 13 119 14
+let%span sleader_epoch'10 = "/workspace/crates/verified/src/leader_epoch.rs" 119 8 119 14
+let%span sleader_epoch'11 = "/workspace/crates/verified/src/leader_epoch.rs" 122 12 122 25
+let%span sleader_epoch'12 = "/workspace/crates/verified/src/leader_epoch.rs" 123 15 123 16
+let%span sleader_epoch'13 = "/workspace/crates/verified/src/leader_epoch.rs" 123 32 123 33
+let%span sleader_epoch'14 = "/workspace/crates/verified/src/leader_epoch.rs" 123 28 123 33
+let%span sleader_epoch'15 = "/workspace/crates/verified/src/leader_epoch.rs" 123 20 123 34
+let%span sleader_epoch'16 = "/workspace/crates/verified/src/leader_epoch.rs" 123 20 123 42
+let%span sleader_epoch'17 = "/workspace/crates/verified/src/leader_epoch.rs" 126 13 126 28
+let%span sleader_epoch'18 = "/workspace/crates/verified/src/leader_epoch.rs" 126 30 126 52
+let%span sleader_epoch'19 = "/workspace/crates/verified/src/leader_epoch.rs" 129 22 129 71
+let%span sleader_epoch'20 = "/workspace/crates/verified/src/leader_epoch.rs" 130 22 130 84
+let%span sleader_epoch'21 = "/workspace/crates/verified/src/leader_epoch.rs" 131 16 131 17
+let%span sleader_epoch'22 = "/workspace/crates/verified/src/leader_epoch.rs" 132 30 132 40
+let%span sleader_epoch'23 = "/workspace/crates/verified/src/leader_epoch.rs" 132 30 132 53
+let%span sleader_epoch'24 = "/workspace/crates/verified/src/leader_epoch.rs" 134 25 134 26
+let%span sleader_epoch'25 = "/workspace/crates/verified/src/leader_epoch.rs" 134 21 134 26
+let%span sleader_epoch'26 = "/workspace/crates/verified/src/leader_epoch.rs" 134 13 134 27
+let%span sleader_epoch'27 = "/workspace/crates/verified/src/leader_epoch.rs" 134 13 134 33
+let%span sleader_epoch'28 = "/workspace/crates/verified/src/leader_epoch.rs" 134 35 134 45
+let%span sleader_epoch'29 = "/workspace/crates/verified/src/leader_epoch.rs" 134 35 134 58
+let%span sleader_epoch'30 = "/workspace/crates/verified/src/leader_epoch.rs" 97 11 99 68
+let%span sleader_epoch'31 = "/workspace/crates/verified/src/leader_epoch.rs" 100 10 101 78
 let%span sleader_epoch'32 = "/workspace/crates/verified/src/leader_epoch.rs" 13 49 13 51
 let%span sleader_epoch'33 = "/workspace/crates/verified/src/leader_epoch.rs" 15 46 15 48
-let%span sleader_epoch'34 = "/workspace/crates/verified/src/leader_epoch.rs" 34 8 36 82
-let%span sleader_epoch'35 = "/workspace/crates/verified/src/leader_epoch.rs" 78 8 88 9
-let%span sleader_epoch'36 = "/workspace/crates/verified/src/leader_epoch.rs" 48 8 48 87
+let%span sleader_epoch'34 = "/workspace/crates/verified/src/leader_epoch.rs" 31 8 33 82
+let%span sleader_epoch'35 = "/workspace/crates/verified/src/leader_epoch.rs" 71 8 81 9
+let%span sleader_epoch'36 = "/workspace/crates/verified/src/leader_epoch.rs" 43 8 43 87
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -90,17 +90,17 @@ let len_EpochEntry (self_: Slice64.slice t_EpochEntry) (return (x: UInt64.t)) = 
     = UInt64.t'int result}
     (! return {result}) ]
 
-predicate higher_entry_at [#"/workspace/crates/verified/src/leader_epoch.rs" 32 0 32 80] (entries: Seq.seq t_EpochEntry) (requested: int) (h: int) =
+predicate higher_entry_at [#"/workspace/crates/verified/src/leader_epoch.rs" 29 0 29 80] (entries: Seq.seq t_EpochEntry) (requested: int) (h: int) =
   [%#sleader_epoch'34] 0 <= h
   /\ h < Seq.length entries
   /\ gt_log_Int (Int32.to_int (Seq.get entries h).epoch.f0) requested
   /\ (forall j: int. 0 <= j /\ j < h -> Int32.to_int (Seq.get entries j).epoch.f0 <= requested)
 
-predicate no_higher_entry [#"/workspace/crates/verified/src/leader_epoch.rs" 46 0 46 72] (entries: Seq.seq t_EpochEntry) (requested: int) =
+predicate no_higher_entry [#"/workspace/crates/verified/src/leader_epoch.rs" 41 0 41 72] (entries: Seq.seq t_EpochEntry) (requested: int) =
   [%#sleader_epoch'36] forall i: int. 0 <= i /\ i < Seq.length entries
     -> Int32.to_int (Seq.get entries i).epoch.f0 <= requested
 
-predicate kafka_end_offset_for [#"/workspace/crates/verified/src/leader_epoch.rs" 70 0 76 9] (entries: Seq.seq t_EpochEntry) (requested: int) (log_end: int) (found: int) (end': int) =
+predicate kafka_end_offset_for [#"/workspace/crates/verified/src/leader_epoch.rs" 63 0 69 9] (entries: Seq.seq t_EpochEntry) (requested: int) (log_end: int) (found: int) (end': int) =
   [%#sleader_epoch'35] if requested = - 1 then
     found = - 1 /\ end' = - 1
   else
@@ -114,15 +114,15 @@ predicate kafka_end_offset_for [#"/workspace/crates/verified/src/leader_epoch.rs
         exists h: int. higher_entry_at entries requested h
           /\ end' = Int64.to_int (Seq.get entries h).start_offset.f0'0
           /\ found = (if h = 0 then requested else Int32.to_int (Seq.get entries (h - 1)).epoch.f0)
-    
-  
+
+
 
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let epoch_and_offset_for_entries [#"/workspace/crates/verified/src/leader_epoch.rs" 109 0 113 26]
+let epoch_and_offset_for_entries [#"/workspace/crates/verified/src/leader_epoch.rs" 103 0 107 26]
   (entries: Slice64.slice t_EpochEntry) (requested_epoch: t_LeaderEpoch) (log_end_offset: t_Offset)
   (return (x: tup2_LeaderEpoch_Offset)) =
 {[@stop_split] [@expl:epoch_and_offset_for_entries requires] [%#sleader_epoch'30] forall i: int, j: int. 0 <= i

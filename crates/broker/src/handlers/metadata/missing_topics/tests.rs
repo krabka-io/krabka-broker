@@ -12,7 +12,7 @@ use super::missing_topic_rows;
 use crate::{
     codes,
     coordinator::bootstrap::OFFSETS_TOPIC,
-    test_support::{peer, principal, request_context, start_broker_no_audit_with},
+    test_support::{peer, principal, start_broker_no_audit_with},
 };
 
 fn row(error_code: i16, name: &str, is_internal: bool) -> MetadataResponseTopic {
@@ -38,9 +38,11 @@ async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flig
     })
     .await;
     let broker = handle.broker_arc_for_test();
-    let user = principal("alice");
-    let address = peer();
-    let ctx = request_context(&user, &address, "metadata-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("alice"),
+        client_id = "metadata-client"
+    );
 
     assert!(broker.auto_topic_creation.hold_for_test(OFFSETS_TOPIC));
     let skipped = missing_topic_rows(&broker, &ctx, &["bad name", OFFSETS_TOPIC], true);

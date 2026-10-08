@@ -15,6 +15,9 @@
 //! -- under `--continue-on-corrupt` -- the right segment skipped while
 //! everything else restores intact.
 
+#[path = "support/args.rs"]
+mod cli_args;
+
 use std::path::Path as StdPath;
 
 use assert2::{assert, check};
@@ -24,11 +27,13 @@ use krabka_ids::{LeaderEpoch, Offset};
 use krabka_log::{Log, LogConfig, name};
 use krabka_protocol::records::{CRC_COVERAGE_START, Record, RecordBatch};
 use krabka_remote_storage::{
-    LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
-    RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager as _, TopicIdPartition,
+    LocalTieredStorage, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+    RemoteLogSegmentState, RemoteStorageManager as _, TopicIdPartition,
 };
 use krabka_restore::{Cli, EXIT_BAD_ARGUMENTS, EXIT_INTEGRITY, RestoreArgs, RestoreError, restore};
 use uuid::Uuid;
+
+krabka_macros::export_segment_data_fixture!(export_segment_data);
 
 /// A `LogConfig` whose `segment_size` is shrunk to a 1-byte equivalent, so a
 /// second `append` always rolls the first batch into its own sealed segment
@@ -133,14 +138,7 @@ fn archive_segment(
     storage
         .copy_log_segment_data(
             &metadata,
-            &LogSegmentData {
-                log_segment: export.log_path.clone(),
-                offset_index: export.offset_index_path.clone(),
-                time_index: export.time_index_path.clone(),
-                transaction_index: export.transaction_index_path.clone(),
-                producer_snapshot_index: Some(export.producer_snapshot_path.clone()),
-                leader_epoch_index: Bytes::from_static(b"0\n1\n0 0\n"),
-            },
+            &export_segment_data(&export, true, || Bytes::from_static(b"0\n1\n0 0\n")),
         )
         .expect("archive the segment");
 
@@ -155,19 +153,7 @@ fn archive_segment(
 /// the pipeline reaches segment verification, plus whatever `extra` flags a
 /// scenario needs.
 fn restore_args(archive_root: &StdPath, log_dir: &StdPath, extra: &[&str]) -> RestoreArgs {
-    let mut argv = vec![
-        "krabka-restore".to_owned(),
-        "--archive-local".to_owned(),
-        archive_root.display().to_string(),
-        "--log-dir".to_owned(),
-        log_dir.display().to_string(),
-        "--node-id".to_owned(),
-        "1".to_owned(),
-        "--standalone".to_owned(),
-        "--controller-listener".to_owned(),
-        "127.0.0.1:9093".to_owned(),
-    ];
-    argv.extend(extra.iter().map(|s| (*s).to_owned()));
+    let argv = cli_args::restore_argv(archive_root, log_dir, "127.0.0.1:9093", extra);
     Cli::try_parse_from(argv).expect("valid command line").args
 }
 

@@ -18,10 +18,22 @@
 //! beside the subsystems whose topic-name constants it is built from rather
 //! than under the handlers that happen to answer with it.
 
+#[macro_use]
+mod wire_types;
+#[cfg(test)]
+#[macro_use]
+pub(crate) mod test_support;
+
+#[cfg(test)]
+#[macro_use]
+mod acl_test_support;
+
 mod acl_gates;
 mod admin_audit;
 mod coordinator_routing;
+mod partition_transition;
 #[cfg(test)]
+#[macro_use]
 mod delegation_token_test_support;
 #[cfg(test)]
 mod group_heartbeat_test_support;
@@ -30,17 +42,16 @@ mod partition_materialization;
 mod private_api_keys;
 mod raft_voter;
 mod record_strings;
+mod registration_listeners;
 mod request_names;
 mod response_encoding;
 mod submit_failure;
-#[cfg(test)]
-pub(crate) mod test_support;
-mod wire_types;
 
 pub(crate) use self::{
     acl_gates::{
-        acl_denied, allowed_topics, any_topic_describe_denied, cluster_action_denied,
-        cluster_alter_denied, cluster_describe_denied, denied_topics, group_describe_denied,
+        acl_denied, acl_denied_quiet, allowed_topics, any_topic_describe_denied,
+        cluster_action_denied, cluster_alter_denied, cluster_describe_denied,
+        cluster_shortcut_denied, config_resource_refusal, denied_topics, group_describe_denied,
         group_read_denied, requested_topic_name, subscribed_names_describe_denied, topic_decisions,
     },
     admin_audit::{audit_admin, audit_admin_for, audit_admin_success, audit_resource},
@@ -56,7 +67,9 @@ pub(crate) use self::{
         TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
     },
     record_strings::decode_group_request,
-    response_encoding::{ErrorCodeResponse, ErrorResponse, encode_response, stamp_unset},
+    response_encoding::{
+        ErrorCodeResponse, ErrorResponse, decode_request, encode_response, stamp_unset,
+    },
     submit_failure::submit_failure_code,
     wire_types::{ApiKeyCode, ApiVersion, CorrelationId},
 };

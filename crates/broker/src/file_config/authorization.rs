@@ -125,7 +125,7 @@ mod tests {
     use krabka_units::{Time, convert::TimeExt as _};
 
     use super::*;
-    use crate::{file_config::FileConfig, test_support::peer};
+    use crate::test_support::peer;
 
     /// Both `super_users` lists take Kafka's `User:<name>` form, and
     /// `User:ANONYMOUS` is a super user as in Kafka.
@@ -146,9 +146,7 @@ super_users = ["User:admin", "User:ANONYMOUS", "operator"]
             ),
         ];
         for (case, toml) in cases {
-            let file: FileConfig = toml::from_str(toml).unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
 
             let expected: std::collections::HashSet<String> = [
                 "admin".to_string(),
@@ -166,9 +164,7 @@ super_users = ["User:admin", "User:ANONYMOUS", "operator"]
         let toml = r#"
 super_users = ["operator", "admin"]
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
 
         let expected: std::collections::HashSet<String> =
             ["operator".to_string(), "admin".to_string()].into();
@@ -190,9 +186,7 @@ super_users = ["operator", "admin"]
 type = "simple"
 super_users = ["admin"]
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
 
         assert!(
             cfg.super_users.contains("admin"),
@@ -282,9 +276,7 @@ allow_everyone_if_no_acl_found = true
             ),
         ];
         for (case, toml, expected) in cases {
-            let file: FileConfig = toml::from_str(toml).unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
             assert!(cfg.authorizer.authorize(&img, &req) == expected, "{case}");
         }
     }
@@ -312,9 +304,7 @@ allow_on_error = false
 maximum_cache_size = 100
 expire_after_ms = 60000
 "#;
-            let file: FileConfig = toml::from_str(toml).unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
 
             assert!(cfg.super_users.contains("operator"));
 
@@ -397,9 +387,7 @@ url = "http://opa.invalid:8181/v1/data/k/a"
 
         use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
 
-        let file: FileConfig = toml::from_str("").unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse("").unwrap();
 
         // Default authorizer is AllowAll — anyone gets Allow, including
         // a principal who isn't in any super-user set.

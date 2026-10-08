@@ -23,20 +23,7 @@ async fn high_watermark_reads_cached_value() {
 #[tokio::test]
 async fn install_isr_populates_replica_state() {
     let (p, _dir) = test_partition(Arc::new(Notify::new()));
-    p.install_isr(
-        &[
-            krabka_audit::NodeId(1),
-            krabka_audit::NodeId(2),
-            krabka_audit::NodeId(3),
-        ],
-        &[
-            krabka_audit::NodeId(1),
-            krabka_audit::NodeId(2),
-            krabka_audit::NodeId(3),
-        ],
-        krabka_audit::NodeId(1),
-    )
-    .await;
+    crate::partition::test_support::install_three_replica_isr(&p).await;
     let st = p.replica_state.lock().await;
     check!(
         st.isr

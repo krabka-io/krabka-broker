@@ -7,53 +7,18 @@
 //! two starters and their two matching `CreateTopics` drivers are collected
 //! here rather than duplicated per test module.
 
-use std::net::SocketAddr;
-
-use krabka_broker::{Broker, BrokerHandle};
-use tempfile::TempDir;
-use tokio::net::TcpStream;
-
-pub use crate::support::sasl::start_single_broker_sasl_plaintext_with_users;
-use crate::{CLIENT_ID, kafka_wire};
-
-/// Start a single-broker PLAINTEXT cluster (no SASL).
-/// Returns `(handle, _dir, addr)`.
-pub async fn start_single_broker_plaintext() -> (BrokerHandle, TempDir, SocketAddr) {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-    (handle, log_dir, addr)
-}
-
-/// Create a topic through SASL/PLAIN as the given admin user.
-/// Copied from `partition_reassignment.rs`.
-pub async fn create_topic_as_admin(
-    addr: SocketAddr,
-    topic: &str,
-    partitions: i32,
-    replication_factor: i16,
-) {
-    kafka_wire::create_topic_sasl(
-        addr,
-        CLIENT_ID,
-        ("admin", b"admin-secret"),
-        kafka_wire::topic(topic, partitions, replication_factor),
-    )
-    .await;
-}
+use krabka_broker::BrokerHandle;
 
 /// Create a topic through PLAINTEXT. There is no SASL, and the compat shim
 /// allows everything.
-pub async fn create_topic_plaintext(addr: SocketAddr, topic: &str, partitions: i32, rf: i16) {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
-    kafka_wire::create_topic_on(
-        &mut stream,
-        CLIENT_ID,
-        kafka_wire::topic(topic, partitions, rf),
-    )
-    .await;
-}
+pub use crate::kafka_wire::create_automatic_topic_plaintext as create_topic_plaintext;
+/// Create a topic through SASL/PLAIN as the given admin user.
+/// Copied from `partition_reassignment.rs`.
+pub use crate::kafka_wire::create_topic_as_admin;
+/// Start a single-broker PLAINTEXT cluster (no SASL).
+/// Returns `(handle, _dir, addr)`.
+pub use crate::support::sasl::start_single_broker_plaintext;
+pub use crate::support::sasl::start_single_broker_sasl_plaintext_with_users;
 
 /// Await until `handle` sees `(topic, partition)` present in its image.
 pub async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition: i32) {
@@ -68,6 +33,10 @@ pub async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition
 /// has no broker `follower`, so the test writes the assignment to the metadata
 /// log directly.
 pub async fn add_follower(handle: &BrokerHandle, topic: &str, follower: u64) {
+    assign_follower(handle, topic, follower, false).await;
+}
+
+async fn assign_follower(handle: &BrokerHandle, topic: &str, follower: u64, in_isr: bool) {
     let follower = krabka_metadata::NodeId(follower);
     let mut record = handle
         .controller_image_for_test()
@@ -78,6 +47,9 @@ pub async fn add_follower(handle: &BrokerHandle, topic: &str, follower: u64) {
         record.directories.push(uuid::Uuid::nil());
     }
     record.replicas.push(follower);
+    if in_isr {
+        record.isr.push(follower);
+    }
     record.partition_epoch += 1;
     handle
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(record))
@@ -85,8 +57,13 @@ pub async fn add_follower(handle: &BrokerHandle, topic: &str, follower: u64) {
         .expect("submit the partition record");
     handle
         .wait_for_image(|img| {
-            img.partition(topic, 0)
-                .is_some_and(|partition| partition.replicas.contains(&follower))
+            img.partition(topic, 0).is_some_and(|partition| {
+                if in_isr {
+                    partition.isr.contains(&follower)
+                } else {
+                    partition.replicas.contains(&follower)
+                }
+            })
         })
         .await;
 }
@@ -94,26 +71,5 @@ pub async fn add_follower(handle: &BrokerHandle, topic: &str, follower: u64) {
 /// Add `follower` to the replicas of partition 0 of `topic` and to its ISR, as
 /// a follower that has caught up.
 pub async fn add_follower_in_isr(handle: &BrokerHandle, topic: &str, follower: u64) {
-    let follower = krabka_metadata::NodeId(follower);
-    let mut record = handle
-        .controller_image_for_test()
-        .partition(topic, 0)
-        .expect("the partition is in the image")
-        .clone();
-    if record.directories.len() == record.replicas.len() {
-        record.directories.push(uuid::Uuid::nil());
-    }
-    record.replicas.push(follower);
-    record.isr.push(follower);
-    record.partition_epoch += 1;
-    handle
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(record))
-        .await
-        .expect("submit the partition record");
-    handle
-        .wait_for_image(|img| {
-            img.partition(topic, 0)
-                .is_some_and(|partition| partition.isr.contains(&follower))
-        })
-        .await;
+    assign_follower(handle, topic, follower, true).await;
 }

@@ -1,23 +1,23 @@
-(* #"/workspace/crates/verified/src/timestamp.rs" 39 0 39 72 *)
+(* #"/workspace/crates/verified/src/timestamp.rs" 52 0 52 72 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 40 16 40 32
-let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 43 19 43 25
-let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 44 20 44 26
-let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 51 14 51 40
-let%span stimestamp'3 = "/workspace/crates/verified/src/timestamp.rs" 52 18 52 34
-let%span stimestamp'4 = "/workspace/crates/verified/src/timestamp.rs" 49 16 50 45
-let%span stimestamp'5 = "/workspace/crates/verified/src/timestamp.rs" 47 16 48 46
-let%span stimestamp'6 = "/workspace/crates/verified/src/timestamp.rs" 46 16 46 43
-let%span stimestamp'7 = "/workspace/crates/verified/src/timestamp.rs" 45 16 45 30
-let%span stimestamp'8 = "/workspace/crates/verified/src/timestamp.rs" 53 11 53 28
-let%span stimestamp'9 = "/workspace/crates/verified/src/timestamp.rs" 53 31 53 47
-let%span stimestamp'10 = "/workspace/crates/verified/src/timestamp.rs" 56 17 56 18
-let%span stimestamp'11 = "/workspace/crates/verified/src/timestamp.rs" 56 8 56 18
-let%span stimestamp'12 = "/workspace/crates/verified/src/timestamp.rs" 30 10 37 1
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 53 16 53 32
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 56 19 56 25
+let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 57 20 57 26
+let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 64 14 64 40
+let%span stimestamp'3 = "/workspace/crates/verified/src/timestamp.rs" 65 18 65 34
+let%span stimestamp'4 = "/workspace/crates/verified/src/timestamp.rs" 62 16 63 45
+let%span stimestamp'5 = "/workspace/crates/verified/src/timestamp.rs" 60 16 61 46
+let%span stimestamp'6 = "/workspace/crates/verified/src/timestamp.rs" 59 16 59 43
+let%span stimestamp'7 = "/workspace/crates/verified/src/timestamp.rs" 58 16 58 30
+let%span stimestamp'8 = "/workspace/crates/verified/src/timestamp.rs" 66 11 66 28
+let%span stimestamp'9 = "/workspace/crates/verified/src/timestamp.rs" 66 31 66 47
+let%span stimestamp'10 = "/workspace/crates/verified/src/timestamp.rs" 69 17 69 18
+let%span stimestamp'11 = "/workspace/crates/verified/src/timestamp.rs" 69 8 69 18
+let%span stimestamp'12 = "/workspace/crates/verified/src/timestamp.rs" 43 10 50 1
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -50,7 +50,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let earliest_max_timestamp_index [#"/workspace/crates/verified/src/timestamp.rs" 39 0 39 72]
+let earliest_max_timestamp_index [#"/workspace/crates/verified/src/timestamp.rs" 52 0 52 72]
   (timestamps: Slice64.slice Int64.t) (return (x: t_Option_usize)) = (! bb0
   [ bb0 = s0
     [ s0 = len_i64 [%#stimestamp] {timestamps} (fun (_x: UInt64.t) -> [ &_6 <- _x ] s1)

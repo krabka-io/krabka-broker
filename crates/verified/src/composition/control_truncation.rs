@@ -5,10 +5,18 @@ use crate::{
     storage::{truncation_batch_retained, truncation_frontier},
 };
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
+/// A complete ordered batch sequence begins after its nonnegative physical floor.
+pub fn physical_batch_sequence_valid(ends: Seq<i64>, start: Int, floor: Int) -> bool {
+    pearlite! {
+        0 <= start && start <= floor
+        && (forall<i: Int> 0 <= i && i < ends.len() ==> start < ends[i]@)
+        && (crate::sequence::strictly_increasing(ends))
+    }
+}
+}
+
+open_logic! {
 pub(super) fn physical_truncation_input_valid(
     ends: Seq<i64>,
     start: Int,
@@ -16,11 +24,10 @@ pub(super) fn physical_truncation_input_valid(
     hwm: Int,
 ) -> bool {
     pearlite! {
-        0 <= start && start <= cut
-        && (forall<i: Int> 0 <= i && i < ends.len() ==> start < ends[i]@)
-        && (forall<i: Int, j: Int> 0 <= i && i < j && j < ends.len() ==> ends[i]@ < ends[j]@)
+        physical_batch_sequence_valid(ends, start, cut)
         && 0 <= hwm && hwm <= if ends.len() == 0 { start } else { ends[ends.len() - 1]@ }
     }
+}
 }
 
 // Retained batches, actual end, HWM, retained/committed history lengths,
@@ -33,7 +40,7 @@ type TruncatedControls = (usize, i64, i64, usize, usize, bool, bool);
 /// batch ends and ordered history offsets are host facts. Cuts below the first
 /// local offset use reset-to and are outside this retained-prefix composition.
 #[requires(physical_truncation_input_valid(ends@, physical_start@, cut@, previous_hwm@))]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < history@.len() ==> history@[i]@ < history@[j]@)]
+#[requires(crate::sequence::strictly_increasing(history@))]
 #[requires(0 <= pending_end@)]
 #[ensures((result.0@ <= ends@.len())
     && (forall<i: Int> 0 <= i && i < ends@.len() ==> (i < result.0@) == (ends@[i]@ <= cut@))
@@ -77,4 +84,13 @@ pub(super) fn whole_batch_truncation_bounds_controls(
     let present = frontier_reaches(end, pending_end);
     let ready = frontier_reaches(hwm, pending_end);
     (kept, end, hwm, retained, committed, present, ready)
+}
+
+open_logic! {
+/// The physical frontier is the greatest whole batch end at or below the truncation cut.
+pub(super) fn whole_batch_frontier(ends: Seq<i64>, start: i64, cut: Int, frontier: i64) -> bool {
+    pearlite! { start@ <= frontier@ && frontier@ <= cut
+    && (frontier == start || exists<i: Int> 0 <= i && i < ends.len() && ends[i] == frontier)
+    && (forall<i: Int> 0 <= i && i < ends.len() && ends[i]@ <= cut ==> ends[i]@ <= frontier@) }
+}
 }

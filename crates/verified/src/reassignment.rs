@@ -1,27 +1,23 @@
 //! Partition-reassignment transition decisions.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// The next safe phase of one in-flight partition reassignment.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ReassignmentAction {
-    WaitForReplication,
-    WaitForLeader,
-    Handoff(usize),
-    Complete,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// The next safe phase of one in-flight partition reassignment.
+    pub enum ReassignmentAction {
+        WaitForReplication,
+        WaitForLeader,
+        Handoff(usize),
+        Complete,
+    }
 
-/// Pointwise membership in a reassignment's union, additions, and removals.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct ReassignmentSetMembership {
-    pub in_union: bool,
-    pub adding: bool,
-    pub removing: bool,
+    /// Pointwise membership in a reassignment's union, additions, and removals.
+    pub struct ReassignmentSetMembership {
+        pub in_union: bool,
+        pub adding: bool,
+        pub removing: bool,
+    }
 }
 
 /// Classify one unique replica against the current and requested assignments.

@@ -1,40 +1,37 @@
 //! Pure local-trim decision for the diskless WAL flusher.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// Whether and where to advance one diskless partition's local log start.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct DisklessTrimDecision {
-    pub should_trim: bool,
-    pub target: i64,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Whether and where to advance one diskless partition's local log start.
+    pub struct DisklessTrimDecision {
+        pub should_trim: bool,
+        pub target: i64,
+    }
+
+    /// One decoded-batch step in a diskless cold-read run.
+    pub enum DisklessBatchStep {
+        Invalid,
+        Skip(usize),
+        Start(usize),
+        Continue(usize),
+        Stop,
+    }
 }
 
-/// One decoded-batch step in a diskless cold-read run.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum DisklessBatchStep {
-    Invalid,
-    Skip(usize),
-    Start(usize),
-    Continue(usize),
-    Stop,
-}
-
-/// One diskless partition's retention configuration and floor, read at `now_ms`.
-#[cfg_attr(creusot, derive(Clone, Copy))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct DisklessRetentionPolicy {
-    /// `retention.ms`, or `None` for Kafka's unlimited sentinel.
-    pub retention_ms: Option<i64>,
-    /// `retention.bytes`, or `None` for Kafka's unlimited sentinel.
-    pub retention_bytes: Option<u64>,
-    /// The `DeleteRecords` floor.
-    pub log_start_offset: i64,
-    pub now_ms: i64,
+model_types! {
+    @copy_only
+    /// One diskless partition's retention configuration and floor, read at `now_ms`.
+    pub struct DisklessRetentionPolicy {
+        /// `retention.ms`, or `None` for Kafka's unlimited sentinel.
+        pub retention_ms: Option<i64>,
+        /// `retention.bytes`, or `None` for Kafka's unlimited sentinel.
+        pub retention_bytes: Option<u64>,
+        /// The `DeleteRecords` floor.
+        pub log_start_offset: i64,
+        pub now_ms: i64,
+    }
 }
 
 mod logical_range;

@@ -12,153 +12,150 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    broker::Broker,
     codes,
     coordinator::unified::{
         actor::{GroupActorMessage, GroupKindTag},
         config::NextGenConfig,
     },
-    error::BrokerError,
     task_util::ask,
     time_util::now_ms,
 };
 
-// cargo-mutants: coordinator-backed response projection; integration-tested.
-#[cfg_attr(test, mutants::skip)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: JoinGroupRequest,
-    version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<JoinGroupResponse, BrokerError> {
-    // ── ACL preamble ────────────────────────────────────────────
-    // `Read` on `Group(group_id)`. On Deny → whole-response
-    // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
+context_handler! {
+    // cargo-mutants: coordinator-backed response projection; integration-tested.
+    #[cfg_attr(test, mutants::skip)]
+    JoinGroupRequest => JoinGroupResponse,
+    (broker, req, version, ctx),
     {
-        let image = broker.controller.current_image();
-        if crate::handlers::group_read_denied(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            req.group_id.as_str(),
-        ) {
+        // ── ACL preamble ────────────────────────────────────────────
+        // `Read` on `Group(group_id)`. On Deny → whole-response
+        // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
+        {
+            let image = broker.controller.current_image();
+            if crate::handlers::group_read_denied(
+                broker.config.authorizer.as_ref(),
+                &image,
+                ctx,
+                req.group_id.as_str(),
+            ) {
+                return Ok(respond(
+                    version,
+                    JoinGroupResponse {
+                        error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                        ..Default::default()
+                    },
+                ));
+            }
+        }
+
+        if let Some(error_code) = request_error(&req, &broker.group_coordinator.config)
+            .or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
+        {
             return Ok(respond(
                 version,
                 JoinGroupResponse {
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                    error_code,
+                    member_id: req.member_id,
                     ..Default::default()
                 },
             ));
         }
-    }
 
-    if let Some(error_code) = request_error(&req, &broker.group_coordinator.config)
-        .or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
-    {
-        return Ok(respond(
+        // Route to the one actor for this id, spawning a classic-kind actor if the
+        // id is brand-new. Both RPC families reach the same actor; if a next-gen
+        // consumer actor already owns the id, the actor's `ClassicJoin` arm replies
+        // `INCONSISTENT_GROUP_PROTOCOL` — that is where the per-group kind lock now
+        // lives.
+        //
+        // Mark the group as Classic so that a later StreamsGroupHeartbeat for the
+        // same id can detect it as a classic group and either convert or reject it
+        // (KIP-1071 cold upgrade). First-mark-wins: a prior `mark_next_gen` (or any
+        // other type lock) from a consumer-protocol group is not overridden.
+        // KIP-1071 cold downgrade: a classic JoinGroup for a drained streams group
+        // converts it in place to a classic group; a streams group with live members
+        // is rejected (online streams migration is unsupported). Non-streams group
+        // ids pass through unchanged.
+        match broker
+            .group_coordinator
+            .try_convert_streams_to_classic(&req.group_id, now_ms())
+            .await
+        {
+            Ok(
+                crate::coordinator::unified::streams::migration::DowngradeOutcome::RejectLiveMembers,
+            ) => {
+                return Ok(respond(
+                    version,
+                    JoinGroupResponse {
+                        error_code: codes::GROUP_ID_NOT_FOUND,
+                        ..Default::default()
+                    },
+                ));
+            }
+            Ok(_) => {} // NotStreams | Converted → serve the classic JoinGroup below
+            Err(e) => return Err(e),
+        }
+
+        // Kafka's `classicGroupJoinToClassicGroup`: a member id names a member
+        // of an existing group, so a group that does not exist is not created
+        // for it.
+        if !req.member_id.is_empty() && broker.group_coordinator.find(&req.group_id).is_none() {
+            return Ok(respond(
+                version,
+                JoinGroupResponse {
+                    error_code: codes::UNKNOWN_MEMBER_ID,
+                    member_id: req.member_id,
+                    ..Default::default()
+                },
+            ));
+        }
+
+        broker.group_coordinator.mark_classic(&req.group_id);
+        let handle = broker
+            .group_coordinator
+            .get_or_create_group(&req.group_id, GroupKindTag::Classic);
+
+        // A closed mailbox and a dropped reply both answer REBALANCE_IN_PROGRESS.
+        let Ok(result) = ask(&handle.tx, |reply| GroupActorMessage::ClassicJoin {
+            req,
             version,
-            JoinGroupResponse {
-                error_code,
-                member_id: req.member_id,
-                ..Default::default()
-            },
-        ));
-    }
-
-    // Route to the one actor for this id, spawning a classic-kind actor if the
-    // id is brand-new. Both RPC families reach the same actor; if a next-gen
-    // consumer actor already owns the id, the actor's `ClassicJoin` arm replies
-    // `INCONSISTENT_GROUP_PROTOCOL` — that is where the per-group kind lock now
-    // lives.
-    //
-    // Mark the group as Classic so that a later StreamsGroupHeartbeat for the
-    // same id can detect it as a classic group and either convert or reject it
-    // (KIP-1071 cold upgrade). First-mark-wins: a prior `mark_next_gen` (or any
-    // other type lock) from a consumer-protocol group is not overridden.
-    // KIP-1071 cold downgrade: a classic JoinGroup for a drained streams group
-    // converts it in place to a classic group; a streams group with live members
-    // is rejected (online streams migration is unsupported). Non-streams group
-    // ids pass through unchanged.
-    match broker
-        .group_coordinator
-        .try_convert_streams_to_classic(&req.group_id, now_ms())
+            client_id: ctx.client_id.unwrap_or_default().to_owned(),
+            client_host: ctx.client_host(),
+            reply,
+        })
         .await
-    {
-        Ok(
-            crate::coordinator::unified::streams::migration::DowngradeOutcome::RejectLiveMembers,
-        ) => {
+        else {
             return Ok(respond(
                 version,
                 JoinGroupResponse {
-                    error_code: codes::GROUP_ID_NOT_FOUND,
+                    error_code: codes::REBALANCE_IN_PROGRESS,
                     ..Default::default()
                 },
             ));
-        }
-        Ok(_) => {} // NotStreams | Converted → serve the classic JoinGroup below
-        Err(e) => return Err(e),
+        };
+
+        let resp = JoinGroupResponse {
+            error_code: result.error_code,
+            generation_id: result.generation_id,
+            protocol_type: result.protocol_type,
+            protocol_name: result.protocol_name,
+            leader: result.leader,
+            skip_assignment: result.skip_assignment,
+            member_id: result.member_id,
+            members: result
+                .members
+                .into_iter()
+                .map(|m| JoinGroupResponseMember {
+                    member_id: m.member_id,
+                    group_instance_id: m.group_instance_id,
+                    metadata: m.metadata,
+                    ..Default::default()
+                })
+                .collect(),
+            throttle_time_ms: 0,
+            ..Default::default()
+        };
+        Ok(respond(version, resp))
     }
-
-    // Kafka's `classicGroupJoinToClassicGroup`: a member id names a member
-    // of an existing group, so a group that does not exist is not created
-    // for it.
-    if !req.member_id.is_empty() && broker.group_coordinator.find(&req.group_id).is_none() {
-        return Ok(respond(
-            version,
-            JoinGroupResponse {
-                error_code: codes::UNKNOWN_MEMBER_ID,
-                member_id: req.member_id,
-                ..Default::default()
-            },
-        ));
-    }
-
-    broker.group_coordinator.mark_classic(&req.group_id);
-    let handle = broker
-        .group_coordinator
-        .get_or_create_group(&req.group_id, GroupKindTag::Classic);
-
-    // A closed mailbox and a dropped reply both answer REBALANCE_IN_PROGRESS.
-    let Ok(result) = ask(&handle.tx, |reply| GroupActorMessage::ClassicJoin {
-        req,
-        version,
-        client_id: ctx.client_id.unwrap_or_default().to_owned(),
-        client_host: ctx.client_host(),
-        reply,
-    })
-    .await
-    else {
-        return Ok(respond(
-            version,
-            JoinGroupResponse {
-                error_code: codes::REBALANCE_IN_PROGRESS,
-                ..Default::default()
-            },
-        ));
-    };
-
-    let resp = JoinGroupResponse {
-        error_code: result.error_code,
-        generation_id: result.generation_id,
-        protocol_type: result.protocol_type,
-        protocol_name: result.protocol_name,
-        leader: result.leader,
-        skip_assignment: result.skip_assignment,
-        member_id: result.member_id,
-        members: result
-            .members
-            .into_iter()
-            .map(|m| JoinGroupResponseMember {
-                member_id: m.member_id,
-                group_instance_id: m.group_instance_id,
-                metadata: m.metadata,
-                ..Default::default()
-            })
-            .collect(),
-        throttle_time_ms: 0,
-        ..Default::default()
-    };
-    Ok(respond(version, resp))
 }
 
 /// The request checks of Kafka's `GroupCoordinatorService.joinGroup`, which
@@ -191,7 +188,7 @@ fn respond(version: i16, mut resp: JoinGroupResponse) -> JoinGroupResponse {
 
 #[cfg(test)]
 mod tests {
-    use krabka_protocol::{Decode, UnknownTaggedFields, owned::join_group_response};
+    use krabka_protocol::{Decode, owned::join_group_response};
 
     use super::*;
 
@@ -247,7 +244,7 @@ mod tests {
                 let mut cur: &[u8] = &bytes;
                 let got = JoinGroupResponse::decode(&mut cur, version).expect("decode");
                 assert2::check!(
-                    got == JoinGroupResponse {
+                    got == unthrottled_wire!(JoinGroupResponse {
                         error_code: codes::GROUP_AUTHORIZATION_FAILED,
                         generation_id: -1,
                         protocol_type: None,
@@ -256,9 +253,7 @@ mod tests {
                         skip_assignment: false,
                         member_id: String::new(),
                         members: vec![],
-                        throttle_time_ms: 0,
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    },
+                    }),
                     "v{version} {sent:?}"
                 );
             }

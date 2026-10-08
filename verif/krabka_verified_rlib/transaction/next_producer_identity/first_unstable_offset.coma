@@ -1,22 +1,23 @@
-(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 20 0 20 73 *)
+(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 17 0 17 73 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 22 20 22 26
-let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 29 14 29 36
-let%span snext_producer_identity'1 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 30 18 30 30
-let%span snext_producer_identity'2 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 28 16 28 75
-let%span snext_producer_identity'3 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 27 16 27 89
-let%span snext_producer_identity'4 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 26 16 26 48
-let%span snext_producer_identity'5 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 25 16 25 79
-let%span snext_producer_identity'6 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 24 16 24 32
-let%span snext_producer_identity'7 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 23 16 23 39
-let%span snext_producer_identity'8 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 31 20 31 33
-let%span snext_producer_identity'9 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 38 17 38 18
-let%span snext_producer_identity'10 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 38 8 38 18
-let%span snext_producer_identity'11 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 10 10 18 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 19 20 19 26
+let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 26 14 26 36
+let%span snext_producer_identity'1 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 27 18 27 30
+let%span snext_producer_identity'2 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 25 16 25 75
+let%span snext_producer_identity'3 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 24 16 24 89
+let%span snext_producer_identity'4 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 23 16 23 48
+let%span snext_producer_identity'5 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 22 16 22 79
+let%span snext_producer_identity'6 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 21 16 21 32
+let%span snext_producer_identity'7 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 20 16 20 39
+let%span snext_producer_identity'8 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 28 20 28 33
+let%span snext_producer_identity'9 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 35 17 35 18
+let%span snext_producer_identity'10 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 35 8 35 18
+let%span snext_producer_identity'11 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 12 10 15 1
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 9 8 14 86
 
 use creusot.int.UInt64
 use seq.Seq
@@ -45,11 +46,19 @@ let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
 
 type t_Option_i64 = None | Some Int64.t
 
+predicate first_unstable_frontier [#"/workspace/crates/verified/src/transaction.rs" 7 0 7 87] (starts: Seq.seq Int64.t) (log_end: int) (lso: int) =
+  [%#stransaction] lso <= log_end
+  /\ (forall i: int. 0 <= i /\ i < Seq.length starts -> Int64.to_int (Seq.get starts i) <= log_end)
+  /\ (Seq.length starts = 0 /\ lso = log_end
+  \/ gt_log_Int (Seq.length starts) 0
+  /\ (exists i: int. 0 <= i /\ i < Seq.length starts /\ lso = Int64.to_int (Seq.get starts i))
+  /\ (forall i: int. 0 <= i /\ i < Seq.length starts -> lso <= Int64.to_int (Seq.get starts i)))
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let first_unstable_offset [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 20 0 20 73]
+let first_unstable_offset [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 17 0 17 73]
   (starts: Slice64.slice Int64.t) (log_end: Int64.t) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &lso <- log_end ] s1 | s1 = [ &index <- [%#snext_producer_identity] (0: UInt64.t) ] s2 | s2 = bb1 ]
@@ -108,15 +117,7 @@ let first_unstable_offset [#"/workspace/crates/verified/src/transaction/next_pro
   | & variant_old_bb1: int = Any.any_l () ])
   [ return (result: t_Option_i64) ->
   {[@stop_split] [@expl:first_unstable_offset ensures] [%#snext_producer_identity'11] match result with
-      | Some lso -> Int64.to_int lso <= Int64.to_int log_end
-      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
-          -> Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int log_end)
-      /\ (Seq.length (Slice64.view starts) = 0 /\ Int64.to_int lso = Int64.to_int log_end
-      \/ gt_log_Int (Seq.length (Slice64.view starts)) 0
-      /\ (exists i: int. 0 <= i
-          /\ i < Seq.length (Slice64.view starts) /\ Int64.to_int lso = Int64.to_int (Seq.get (Slice64.view starts) i))
-      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
-        -> Int64.to_int lso <= Int64.to_int (Seq.get (Slice64.view starts) i)))
+      | Some lso -> first_unstable_frontier (Slice64.view starts) (Int64.to_int log_end) (Int64.to_int lso)
       | None -> exists i: int. 0 <= i
         /\ i < Seq.length (Slice64.view starts)
         /\ gt_log_Int (Int64.to_int (Seq.get (Slice64.view starts) i)) (Int64.to_int log_end)

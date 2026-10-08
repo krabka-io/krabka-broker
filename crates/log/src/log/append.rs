@@ -23,6 +23,52 @@ use crate::{
 };
 
 impl Log {
+    pub(super) fn complete_append_state(
+        &mut self,
+        result: Result<(), LogError>,
+        base: Offset,
+    ) -> Result<(), LogError> {
+        if let Err(error) = result {
+            self.rollback_failed_append(base)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Read one append policy, roll against this batch, and retain its write settings.
+    pub(super) fn roll_for_append(
+        &mut self,
+        incoming_size: impl FnOnce() -> ByteSize,
+        max_timestamp: i64,
+    ) -> Result<(ByteSize, bool), LogError> {
+        let (
+            segment_size,
+            segment_roll_interval,
+            segment_index_size,
+            index_interval,
+            flush_on_append,
+        ) = {
+            let cfg = self.config.read().unwrap();
+            (
+                cfg.segment_size,
+                cfg.segment_roll_interval,
+                cfg.segment_index_size,
+                cfg.index_interval,
+                cfg.flush_on_append,
+            )
+        };
+        if self.should_roll_for_incoming(
+            incoming_size(),
+            max_timestamp,
+            segment_size,
+            segment_roll_interval,
+            segment_index_size,
+        ) {
+            self.roll_active_segment()?;
+        }
+        Ok((index_interval, flush_on_append))
+    }
+
     /// Append a `RecordBatch` and return the assigned `base_offset` together
     /// with the log-append stamp the batch carries away from this call.
     ///
@@ -86,11 +132,8 @@ impl Log {
         if !leader_epoch.is_known() {
             return Ok(());
         }
-        if let Err(error) = self.epoch_checkpoint.assign(leader_epoch, base) {
-            self.rollback_failed_append(base)?;
-            return Err(error);
-        }
-        Ok(())
+        let result = self.epoch_checkpoint.assign(leader_epoch, base);
+        self.complete_append_state(result, base)
     }
 
     /// Refuse a batch that would make a scheduled partition's schedule run
@@ -324,35 +367,15 @@ impl Log {
             batch.last_offset_delta,
             Offset(batch.base_offset),
         )?;
-        let (
-            segment_size,
-            segment_roll_interval,
-            segment_index_size,
-            index_interval,
-            flush_on_append,
-        ) = {
-            let cfg = self.config.read().unwrap();
-            (
-                cfg.segment_size,
-                cfg.segment_roll_interval,
-                cfg.segment_index_size,
-                cfg.index_interval,
-                cfg.flush_on_append,
-            )
-        };
-        let incoming_size = ByteSize::from_bytes(
-            u64::try_from(verbatim.map_or_else(|| batch.encoded_len(), <[u8]>::len))
-                .unwrap_or(u64::MAX),
-        );
-        if self.should_roll_for_incoming(
-            incoming_size,
+        let (index_interval, flush_on_append) = self.roll_for_append(
+            || {
+                ByteSize::from_bytes(
+                    u64::try_from(verbatim.map_or_else(|| batch.encoded_len(), <[u8]>::len))
+                        .unwrap_or(u64::MAX),
+                )
+            },
             batch.max_timestamp,
-            segment_size,
-            segment_roll_interval,
-            segment_index_size,
-        ) {
-            self.roll_active_segment()?;
-        }
+        )?;
 
         let result = (|| {
             let active = self
@@ -429,11 +452,7 @@ impl Log {
             Ok(())
         })();
 
-        if let Err(error) = result {
-            self.rollback_failed_append(base_offset)?;
-            return Err(error);
-        }
-        Ok(())
+        self.complete_append_state(result, base_offset)
     }
 
     /// Kafka's `LogSegment.shouldRoll`, checked against an incoming batch

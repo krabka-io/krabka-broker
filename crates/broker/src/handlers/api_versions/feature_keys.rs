@@ -44,23 +44,10 @@ mod tests {
 
     use super::*;
 
-    fn supported(name: &str, min_version: i16, max_version: i16) -> SupportedFeatureKey {
-        SupportedFeatureKey {
-            name: name.into(),
-            min_version,
-            max_version,
-            ..Default::default()
-        }
-    }
+    krabka_macros::supported_feature_fixture!(supported);
+    krabka_macros::supported_features_fixture!(modern_supported, supported);
 
-    fn finalized(name: &str, level: i16) -> FinalizedFeatureKey {
-        FinalizedFeatureKey {
-            name: name.into(),
-            max_version_level: level,
-            min_version_level: level,
-            ..Default::default()
-        }
-    }
+    krabka_macros::finalized_feature_fixture!(finalized);
 
     /// #783: below v4 only `metadata.version` stays, because every other
     /// feature's minimum is 0; from v4 each feature carries Kafka's
@@ -72,15 +59,7 @@ mod tests {
             crate::features::METADATA_VERSION_MIN,
             crate::features::LATEST_PRODUCTION_METADATA_VERSION,
         );
-        let modern = vec![
-            metadata_version.clone(),
-            supported("group.version", 0, 1),
-            supported("transaction.version", 0, 2),
-            supported("share.version", 0, 1),
-            supported("streams.version", 0, 1),
-            supported("eligible.leader.replicas.version", 0, 1),
-            supported("kraft.version", 0, 1),
-        ];
+        let modern = modern_supported(metadata_version.clone(), 1);
         let legacy = vec![metadata_version];
         for (api_version, expected) in [(0, &legacy), (3, &legacy), (4, &modern), (5, &modern)] {
             check!(

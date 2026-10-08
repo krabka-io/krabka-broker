@@ -2,29 +2,29 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_closure0": { "prover": "alt-ergo", "time": 0.009 },
-      "vc_closure1": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_closure0": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_closure1": { "prover": "alt-ergo", "time": 0.01 },
       "vc_constructed_index_retained_candidate": {
         "prover": "alt-ergo",
-        "time": 0.009
+        "time": 0.017
       },
       "vc_constructed_tiered_timestamp_preserves_first": {
         "prover": "z3",
-        "time": 0.021
+        "time": 0.046
       },
       "vc_earliest_timestamp_candidate": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.027
       },
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_list_offsets_kind": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_list_offsets_kind": { "prover": "alt-ergo", "time": 0.012 },
       "vc_list_offsets_selection_decision": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.015
       },
-      "vc_map_usize": { "prover": "alt-ergo", "time": 0.007 },
-      "vc_map_usize'0": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_unwrap_or_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.008 }
+      "vc_map_usize": { "prover": "alt-ergo", "time": 0.022 },
+      "vc_map_usize'0": { "prover": "alt-ergo", "time": 0.021 },
+      "vc_unwrap_or_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.019 }
     }
   }
 }

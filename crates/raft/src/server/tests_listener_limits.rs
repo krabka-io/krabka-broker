@@ -44,10 +44,7 @@ fn context(limits: ListenerLimits) -> ConnectionContext {
 
 /// Reads one response frame and returns its correlation id.
 async fn read_correlation_id<R: AsyncReadExt + Unpin>(stream: &mut R) -> i32 {
-    let mut len = [0u8; 4];
-    stream.read_exact(&mut len).await.expect("response length");
-    let mut frame = vec![0u8; usize::try_from(i32::from_be_bytes(len)).unwrap()];
-    stream.read_exact(&mut frame).await.expect("response frame");
+    let frame = super::test_support::read_frame(stream).await;
     i32::from_be_bytes(frame[..4].try_into().unwrap())
 }
 

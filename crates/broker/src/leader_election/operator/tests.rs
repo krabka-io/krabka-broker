@@ -26,18 +26,13 @@ async fn preferred_happy_path() {
         ElectionType::Preferred,
     )
     .expect("should elect");
-    let expected = PartitionRecord {
-        topic: "foo".into(),
-        partition: 0,
-        leader: NodeId(1),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(1), NodeId(2), NodeId(3)],
-        leader_epoch: LeaderEpoch(6),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    };
+    let expected = crate::leader_election::test_support::expected_partition(
+        "foo",
+        1,
+        &[1, 2, 3],
+        LeaderEpoch(6),
+        vec![],
+    );
     assert!(new_pr == expected);
 }
 
@@ -109,18 +104,13 @@ async fn unclean_happy_path() {
     let new_pr =
         select_new_leader_for_partition(&img, &l, &no_witnesses(), "foo", 0, ElectionType::Unclean)
             .expect("unclean should elect");
-    let expected = PartitionRecord {
-        topic: "foo".into(),
-        partition: 0,
-        leader: NodeId(2),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(2)],
-        leader_epoch: LeaderEpoch(6),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    };
+    let expected = crate::leader_election::test_support::expected_partition(
+        "foo",
+        2,
+        &[2],
+        LeaderEpoch(6),
+        vec![],
+    );
     assert!(new_pr == expected);
 }
 
@@ -194,18 +184,13 @@ async fn operator_unclean_election_skips_a_witness_replica() {
         ElectionType::Unclean,
     )
     .expect("unclean should elect the data replica");
-    let expected = PartitionRecord {
-        topic: "foo".into(),
-        partition: 0,
-        leader: NodeId(3),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(3)],
-        leader_epoch: LeaderEpoch(6),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    };
+    let expected = crate::leader_election::test_support::expected_partition(
+        "foo",
+        3,
+        &[3],
+        LeaderEpoch(6),
+        vec![],
+    );
     assert!(new_pr == expected);
 }
 

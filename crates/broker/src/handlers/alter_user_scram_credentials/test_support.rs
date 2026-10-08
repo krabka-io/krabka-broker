@@ -9,12 +9,9 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use krabka_metadata::MetadataRecord;
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::{
-        alter_user_scram_credentials_request::{ScramCredentialDeletion, ScramCredentialUpsertion},
-        alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
-    },
+use krabka_protocol::owned::{
+    alter_user_scram_credentials_request::{ScramCredentialDeletion, ScramCredentialUpsertion},
+    alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
 };
 use krabka_security::{SaslMechanism, scram::MIN_SCRAM_ITERATIONS};
 
@@ -79,22 +76,17 @@ pub(super) fn expected_result(
     error_code: i16,
     error_message: Option<&str>,
 ) -> AlterUserScramCredentialsResult {
-    AlterUserScramCredentialsResult {
+    tagged_wire!(AlterUserScramCredentialsResult {
         user: user.into(),
         error_code,
         error_message: error_message.map(Into::into),
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    })
 }
 
 pub(super) fn expected_response(
     results: Vec<AlterUserScramCredentialsResult>,
 ) -> super::AlterUserScramCredentialsResponse {
-    super::AlterUserScramCredentialsResponse {
-        throttle_time_ms: 0,
-        results,
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    unthrottled_wire!(super::AlterUserScramCredentialsResponse { results })
 }
 
 pub(super) async fn low_metadata_version(broker: &Broker) {

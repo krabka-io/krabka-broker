@@ -1,5 +1,5 @@
 //! Construction of the KIP-595 static controller voter set from configured
-//! endpoint text. It depends on no other part of the broker.
+//! endpoint text, and selection of a broker's registered listener.
 
 /// Build the KIP-595 static controller [`VoterSet`](krabka_metadata::VoterSet)
 /// from the configured `controller_quorum_voters` (`(id, "<host>:<port>")`).
@@ -59,6 +59,21 @@ pub(super) fn static_controller_voter_set(
         })
         .collect();
     krabka_metadata::VoterSet::from_voters(voters)
+}
+
+/// Select a named registered listener, falling back to the legacy host and port.
+pub(crate) fn registered_listener_endpoint<'a>(
+    broker: &'a krabka_metadata::BrokerRegistrationRecord,
+    listener_name: &str,
+) -> (&'a str, u16) {
+    broker
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.name == listener_name)
+        .map_or_else(
+            || (broker.host.as_str(), broker.port),
+            |endpoint| (endpoint.host.as_str(), endpoint.port),
+        )
 }
 
 #[cfg(test)]

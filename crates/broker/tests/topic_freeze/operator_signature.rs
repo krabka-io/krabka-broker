@@ -20,8 +20,8 @@ use krabka_protocol::{
 use crate::{
     control_plane::{cluster_id, freeze_request, set_freeze, wait_for_registry_len},
     signing::{SignedFreeze, signed_request, verifies_locally},
-    support::{self, OperatorKey},
-    wire::{CONTROL, accepted, create_topic, now_ms, produce_outcome, refused},
+    support::{self, OperatorKey, client::connect_owned},
+    wire::{CONTROL, accepted, create_topic, now_ms, refused},
 };
 
 /// [`support::start_with_operator_key`] with `freeze.require_signature` on.
@@ -37,12 +37,12 @@ async fn start_requiring_signatures(dir: &Path, key: &OperatorKey) -> (BrokerHan
     config.break_glass.approvers = vec![support::ANONYMOUS.to_owned()];
     config.freeze.require_signature = true;
     let broker = Broker::start(config).await.expect("broker start");
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("krabka-broker-test")
-        .build()
-        .await
-        .expect("client build");
+    let client = connect_owned(
+        broker.listen_addr().to_string(),
+        "krabka-broker-test",
+        "client build",
+    )
+    .await;
     (broker, client)
 }
 
@@ -71,14 +71,10 @@ async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted() {
             accepted(2),
         ),
     ] {
-        let keys = tempfile::tempdir().expect("tempdir");
-        let logs = tempfile::tempdir().expect("tempdir");
-        let (broker, client, _key, frozen, control) =
-            operator_fixture(keys.path(), logs.path(), require_signature).await;
-        check!(
-            produce_outcome(&broker, &client, "orders", frozen).await == accepted(1),
-            "{label}"
-        );
+        let (_keys, _logs, broker, client, _key, frozen, control) =
+            operator_case(require_signature).await;
+        crate::wire::check_produce!(&broker, &client, "orders", frozen => accepted(1),
+            "{label}");
 
         let response = set_freeze(
             &client,
@@ -88,14 +84,8 @@ async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted() {
         check!(response.error_code == code, "{label}: {response:?}");
         wait_for_registry_len(&client, usize::from(code == codes::NONE)).await;
 
-        check!(
-            produce_outcome(&broker, &client, "orders", frozen).await == after,
-            "{label}"
-        );
-        check!(
-            produce_outcome(&broker, &client, CONTROL, control).await == accepted(1),
-            "{label}"
-        );
+        crate::wire::check_produce!(&broker, &client;
+            "orders", frozen => after, CONTROL, control => accepted(1); "{label}");
         broker.shutdown().await;
     }
 }
@@ -111,23 +101,11 @@ async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted() {
 /// `set_at_ms`, or rewrote `set_by` would still answer every other case here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {
-    let keys = tempfile::tempdir().expect("tempdir");
-    let logs = tempfile::tempdir().expect("tempdir");
-    let (broker, client, key, frozen, control) =
-        operator_fixture(keys.path(), logs.path(), false).await;
+    let (_keys, _logs, broker, client, key, frozen, control) = operator_case(false).await;
 
     let cluster = cluster_id(&client).await;
     let set_at_ms = now_ms();
-    let request = signed_request(&SignedFreeze {
-        key: &key,
-        cluster_id: &cluster,
-        pattern_type: PATTERN_TYPE_LITERAL,
-        scope: "orders",
-        frozen: true,
-        reason: "incident",
-        set_at_ms,
-        proposal_id: uuid::Uuid::nil(),
-    });
+    let request = incident_request(&key, &cluster, set_at_ms);
     let signature = request.signature.clone();
     let response = set_freeze(&client, request).await;
     check!(
@@ -152,11 +130,8 @@ async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {
     );
     check!(verifies_locally(&key, &cluster, &entries[0]));
 
-    check!(
-        produce_outcome(&broker, &client, "orders", frozen).await
-            == refused("literal", "orders", "incident", 0)
-    );
-    check!(produce_outcome(&broker, &client, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&broker, &client;
+        "orders", frozen => refused("literal", "orders", "incident", 0), CONTROL, control => accepted(1));
     broker.shutdown().await;
 }
 
@@ -175,26 +150,10 @@ async fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
         ("with require_signature off", false),
         ("with require_signature on", true),
     ] {
-        let keys = tempfile::tempdir().expect("tempdir");
-        let logs = tempfile::tempdir().expect("tempdir");
-        let (broker, client, key, frozen, control) =
-            operator_fixture(keys.path(), logs.path(), require_signature).await;
+        let (_keys, _logs, broker, client, key, frozen, control) =
+            operator_case(require_signature).await;
 
-        let cluster = cluster_id(&client).await;
-        let response = set_freeze(
-            &client,
-            signed_request(&SignedFreeze {
-                key: &key,
-                cluster_id: &cluster,
-                pattern_type: PATTERN_TYPE_LITERAL,
-                scope: "orders",
-                frozen: true,
-                reason: "incident",
-                set_at_ms: now_ms(),
-                proposal_id: uuid::Uuid::nil(),
-            }),
-        )
-        .await;
+        let (_cluster, response) = sign_incident(&client, &key).await;
         check!(response.error_code == codes::NONE, "{label}: {response:?}");
         wait_for_registry_len(&client, 1).await;
 
@@ -220,15 +179,8 @@ async fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
             wait_for_registry_len(&client, 1).await[0].scope == "orders",
             "{label}"
         );
-        check!(
-            produce_outcome(&broker, &client, "orders", frozen).await
-                == refused("literal", "orders", "incident", 0),
-            "{label}"
-        );
-        check!(
-            produce_outcome(&broker, &client, CONTROL, control).await == accepted(1),
-            "{label}"
-        );
+        crate::wire::check_produce!(&broker, &client;
+            "orders", frozen => refused("literal", "orders", "incident", 0), CONTROL, control => accepted(1); "{label}");
         broker.shutdown().await;
     }
 }
@@ -245,23 +197,11 @@ async fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
 /// tell an attacker which check they got past.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
-    let keys = tempfile::tempdir().expect("tempdir");
-    let logs = tempfile::tempdir().expect("tempdir");
-    let (broker, client, key, frozen, control) =
-        operator_fixture(keys.path(), logs.path(), false).await;
+    let (_keys, _logs, broker, client, key, frozen, control) = operator_case(false).await;
 
     let cluster = cluster_id(&client).await;
     let set_at_ms = now_ms();
-    let freeze = signed_request(&SignedFreeze {
-        key: &key,
-        cluster_id: &cluster,
-        pattern_type: PATTERN_TYPE_LITERAL,
-        scope: "orders",
-        frozen: true,
-        reason: "incident",
-        set_at_ms,
-        proposal_id: uuid::Uuid::nil(),
-    });
+    let freeze = incident_request(&key, &cluster, set_at_ms);
     let captured = freeze.signature.clone();
     check!(set_freeze(&client, freeze).await.error_code == codes::NONE);
     wait_for_registry_len(&client, 1).await;
@@ -296,11 +236,8 @@ async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
     }
 
     check!(wait_for_registry_len(&client, 1).await[0].scope == "orders");
-    check!(
-        produce_outcome(&broker, &client, "orders", frozen).await
-            == refused("literal", "orders", "incident", 0)
-    );
-    check!(produce_outcome(&broker, &client, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&broker, &client;
+        "orders", frozen => refused("literal", "orders", "incident", 0), CONTROL, control => accepted(1));
     broker.shutdown().await;
 }
 
@@ -315,28 +252,13 @@ async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
 /// attested one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_signature_survives_a_controller_restart_and_still_verifies() {
-    let keys = tempfile::tempdir().expect("tempdir");
-    let logs = tempfile::tempdir().expect("tempdir");
+    let (keys, logs) = operator_directories();
     let key = support::mint_operator_key(keys.path(), "alice-yubi", support::ANONYMOUS);
     let (broker, client, mut config) = support::start_with_operator_key(logs.path(), &key).await;
     create_topic(&broker, &client, "orders").await;
     create_topic(&broker, &client, CONTROL).await;
 
-    let cluster = cluster_id(&client).await;
-    let response = set_freeze(
-        &client,
-        signed_request(&SignedFreeze {
-            key: &key,
-            cluster_id: &cluster,
-            pattern_type: PATTERN_TYPE_LITERAL,
-            scope: "orders",
-            frozen: true,
-            reason: "incident",
-            set_at_ms: now_ms(),
-            proposal_id: uuid::Uuid::nil(),
-        }),
-    )
-    .await;
+    let (cluster, response) = sign_incident(&client, &key).await;
     check!(
         response.error_code == codes::NONE,
         "signed freeze: {response:?}"
@@ -350,18 +272,13 @@ async fn a_signature_survives_a_controller_restart_and_still_verifies() {
     // case fail for a reason that has nothing to do with the signature.
     config.bootstrap_mode = BootstrapMode::Rejoin;
     let broker = support::start_reusing_addrs(&config, "the signed-freeze restart").await;
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("krabka-broker-test")
-        .build()
-        .await
-        .expect("client build");
-    for topic in ["orders", CONTROL] {
-        broker.wait_until_partition_present(topic, 0).await;
-        broker
-            .wait_until_local_partition_leader(topic, 0, krabka_broker::NodeId(broker.node_id()))
-            .await;
-    }
+    let client = connect_owned(
+        broker.listen_addr().to_string(),
+        "krabka-broker-test",
+        "client build",
+    )
+    .await;
+    crate::wire::wait_controlled_partitions(&broker, "orders").await;
 
     let after = wait_for_registry_len(&client, 1).await;
     check!(after == before);
@@ -370,11 +287,8 @@ async fn a_signature_survives_a_controller_restart_and_still_verifies() {
 
     let frozen = support::topic_id_for(&client, "orders").await;
     let control = support::topic_id_for(&client, CONTROL).await;
-    check!(
-        produce_outcome(&broker, &client, "orders", frozen).await
-            == refused("literal", "orders", "incident", 0)
-    );
-    check!(produce_outcome(&broker, &client, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&broker, &client;
+        "orders", frozen => refused("literal", "orders", "incident", 0), CONTROL, control => accepted(1));
     broker.shutdown().await;
 }
 
@@ -390,7 +304,57 @@ async fn operator_fixture(
         let (broker, client, _) = support::start_with_operator_key(logs, &key).await;
         (broker, client)
     };
-    let frozen = create_topic(&broker, &client, "orders").await;
-    let control = create_topic(&broker, &client, CONTROL).await;
+    let (frozen, control) = crate::wire::create_controlled_topic(&broker, &client, "orders").await;
     (broker, client, key, frozen, control)
+}
+
+/// The incident fixture shared by the signed freeze, replay and recovery cases.
+fn incident_request(key: &OperatorKey, cluster: &str, set_at_ms: i64) -> SetTopicFreezeRequest {
+    signed_request(&SignedFreeze {
+        key,
+        cluster_id: cluster,
+        pattern_type: PATTERN_TYPE_LITERAL,
+        scope: "orders",
+        frozen: true,
+        reason: "incident",
+        set_at_ms,
+        proposal_id: uuid::Uuid::nil(),
+    })
+}
+
+/// Keep the signing keys and persistent broker logs alive for the whole case.
+fn operator_directories() -> (tempfile::TempDir, tempfile::TempDir) {
+    let keys = tempfile::tempdir().expect("tempdir");
+    let logs = tempfile::tempdir().expect("tempdir");
+    (keys, logs)
+}
+
+/// Own both directories beside the operator fixture, in the original local drop order.
+async fn operator_case(
+    require_signature: bool,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    BrokerHandle,
+    Client,
+    OperatorKey,
+    WireUuid,
+    WireUuid,
+) {
+    let (keys, logs) = operator_directories();
+    let (broker, client, key, frozen, control) =
+        operator_fixture(keys.path(), logs.path(), require_signature).await;
+    (keys, logs, broker, client, key, frozen, control)
+}
+
+async fn sign_incident(
+    client: &Client,
+    key: &OperatorKey,
+) -> (
+    String,
+    krabka_protocol::krabka::freeze::SetTopicFreezeResponse,
+) {
+    let cluster = cluster_id(client).await;
+    let response = set_freeze(client, incident_request(key, &cluster, now_ms())).await;
+    (cluster, response)
 }

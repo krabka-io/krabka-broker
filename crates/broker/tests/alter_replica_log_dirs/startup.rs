@@ -8,8 +8,8 @@
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig};
-use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_broker::Broker;
+use krabka_client_producer::Producer;
 
 use crate::{
     harness::{count_topic_dirs, wait_all_partitions, wait_for_move_complete},
@@ -30,8 +30,7 @@ async fn startup_resumes_move_for_existing_partition() {
 
     // First boot: create topic, produce a handful of records, then
     // shut down cleanly so the partition directory is left on disk.
-    let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
+    let cfg = crate::support::storage::two_dir_config(primary.path(), extra.path());
     let handle = Broker::start(cfg).await.expect("first boot");
     let addr = handle.listen_addr();
     create_topic(addr, "t", 1).await;
@@ -42,18 +41,12 @@ async fn startup_resumes_move_for_existing_partition() {
         .build()
         .await
         .expect("producer");
-    for i in 0..5i32 {
-        drop(
-            producer
-                .enqueue(ProducerRecord {
-                    topic: "t".into(),
-                    value: Some(Bytes::from(format!("v{i}"))),
-                    ..Default::default()
-                })
-                .await
-                .expect("record is queued"),
-        );
-    }
+    crate::support::producer::enqueue_unkeyed_values(
+        &producer,
+        "t",
+        (0..5i32).map(|i| Bytes::from(format!("v{i}"))),
+    )
+    .await;
     producer.flush().await.expect("flush");
     producer.close().await.expect("producer close");
 
@@ -80,8 +73,7 @@ async fn startup_resumes_move_for_existing_partition() {
 
     // Restart against the same dirs. `BootstrapMode::Rejoin`
     // because the raft log from the first boot is still on disk.
-    let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
+    let mut cfg = crate::support::storage::two_dir_config(primary.path(), extra.path());
     cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let handle = Broker::start(cfg).await.expect("restart");
     let addr = handle.listen_addr();
@@ -110,8 +102,7 @@ async fn startup_cleans_up_stranded_future_dir() {
     std::fs::create_dir_all(&stranded).unwrap();
     assert!(stranded.exists());
 
-    let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
+    let cfg = crate::support::storage::two_dir_config(primary.path(), extra.path());
     let handle = Broker::start(cfg).await.expect("broker start");
     let addr = handle.listen_addr();
 

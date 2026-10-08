@@ -9,30 +9,20 @@ use std::collections::BTreeMap;
 
 use krabka_log::Offset;
 
-use crate::coordinator::unified::persistence_next_gen::MemberAssignmentState;
+use crate::coordinator::unified::actor::reconciliation_model_support::{
+    group_projection, member_projection, model_actions,
+};
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(super) struct MemberProj {
-    pub(super) id: String,
-    pub(super) member_epoch: i32,
-    pub(super) assignment_state: MemberAssignmentState,
-    pub(super) assigned: Vec<i32>,
-    pub(super) pending_revocation: Vec<i32>,
+member_projection! { pub(super) struct MemberProj {
     /// `(partition, assignment epoch)` of every held partition, sorted.
-    pub(super) assignment_epochs: Vec<(i32, i32)>,
-    pub(super) target: Vec<i32>,
-}
+    assignment_epochs: Vec<(i32, i32)>,
+} }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(super) struct CgcState {
-    pub(super) group_epoch: i32,
-    pub(super) dirty: bool,
-    pub(super) target_epoch: i32,
-    pub(super) members: Vec<MemberProj>, // sorted by id
-    pub(super) client_owned: Vec<(String, Vec<i32>)>, // ground-truth ownership ledger
-    pub(super) advertised: Vec<(String, Vec<i32>)>, // last advertised to each member
-    pub(super) committed: Vec<(i32, Offset)>, // MODELED per-partition committed offset, sorted
-}
+group_projection! { pub(super) struct CgcState {
+    members: Vec<MemberProj>,
+    /// Modeled per-partition committed offsets, sorted.
+    committed: Vec<(i32, Offset)>,
+} }
 
 /// Which epoch a member presents on an `OffsetCommit`: its current epoch (the
 /// legitimate owner), one behind (a zombie from before the last rebalance), or
@@ -45,25 +35,12 @@ pub(super) enum EpochKind {
     Forward,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(super) enum CgcAction {
-    Join(String),
-    Leave(String),
-    Heartbeat(String),
-    /// A heartbeat that carries no owned partitions: what the Java client
-    /// sends while its assignment is unchanged.
-    Keepalive(String),
-    ClientAdd(String, i32),
-    ClientRevoke(String, i32),
+model_actions! { pub(super) enum CgcAction {
     Commit(String, i32, EpochKind), // (member, partition, presented-epoch) — fenced commit
-}
+} }
 
 pub(super) fn committed_map(s: &CgcState) -> BTreeMap<i32, Offset> {
     s.committed.iter().copied().collect()
-}
-
-pub(super) fn member<'a>(s: &'a CgcState, id: &str) -> Option<&'a MemberProj> {
-    s.members.iter().find(|m| m.id == id)
 }
 
 pub(super) fn committed_of(s: &CgcState, part: i32) -> Offset {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
-use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataRecord, TopicRecord};
 use krabka_protocol::owned::create_topics_request::CreateTopicsRequest;
 use tempfile::tempdir;
 
@@ -14,6 +14,8 @@ use super::{
     test_support::{controller_with_leader, test_coordinator},
 };
 use crate::{config::BrokerConfig, log_dir, partition_registry::PartitionRegistry};
+
+krabka_macros::single_replica_partition_fixture!(partition_record);
 
 /// Registers a one-partition `__consumer_offsets` that this node leads, as
 /// the first group lookup's auto-creation does.
@@ -27,18 +29,7 @@ async fn register_offsets_topic(controller: &Arc<dyn crate::metadata_source::Met
                 partitions: 1,
                 replication_factor: 1,
             }),
-            MetadataRecord::V1Partition(PartitionRecord {
-                topic: OFFSETS_TOPIC.to_owned(),
-                partition: OFFSETS_PARTITION,
-                leader: node,
-                replicas: vec![node],
-                isr: vec![node],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: Vec::new(),
-                removing_replicas: Vec::new(),
-                directories: Vec::new(),
-                partition_epoch: 0,
-            }),
+            MetadataRecord::V1Partition(partition_record(OFFSETS_TOPIC, OFFSETS_PARTITION, node)),
         ])
         .await
         .expect("register __consumer_offsets");

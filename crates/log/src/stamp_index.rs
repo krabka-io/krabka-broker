@@ -22,6 +22,7 @@ use zerocopy::{
 
 use crate::{
     error::LogError,
+    index::open_index,
     io::{IoTarget, LogIo},
 };
 
@@ -46,6 +47,16 @@ struct StampEntryRaw {
     stamp: U64<BigEndian>,
 }
 
+impl StampEntryRaw {
+    fn new(entry: StampEntry) -> Self {
+        Self {
+            base_offset: I64::new(entry.base_offset.0),
+            last_offset: I64::new(entry.last_offset.0),
+            stamp: U64::new(entry.stamp),
+        }
+    }
+}
+
 const _: [(); ENTRY_BYTES] = [(); std::mem::size_of::<StampEntryRaw>()];
 
 #[derive(Debug)]
@@ -56,52 +67,52 @@ pub struct StampIndex {
 }
 
 impl StampIndex {
-    /// Open or recover a `.stampindex` file at the given path. This method
-    /// reads the entire file into memory at startup. An empty file or a
-    /// missing file is acceptable and means zero stamped ranges.
-    #[instrument(
-        level = "debug",
-        skip_all,
-        fields(path = %path.display(), entries = tracing::field::Empty),
-        err,
-    )]
-    /// # Errors
-    /// Returns an error when log I/O fails or the file's length is not a
-    /// whole number of fixed-width entries.
-    /// # Panics
-    /// Panics if the in-place reinterpretation of a length-validated,
-    /// `Unaligned` byte buffer fails. That invariant cannot be false.
-    pub fn open(path: PathBuf) -> Result<Self, LogError> {
-        let mut entries = Vec::new();
-        let bytes = crate::index::read_sidecar(&path, ENTRY_BYTES, "stampindex")?;
-        let raws = <[StampEntryRaw]>::ref_from_bytes(&bytes)
-            .expect("length is a multiple of ENTRY_BYTES and StampEntryRaw is Unaligned");
-        entries.reserve(raws.len());
-        for raw in raws {
-            entries.push(StampEntry {
-                base_offset: Offset(raw.base_offset.get()),
-                last_offset: Offset(raw.last_offset.get()),
-                stamp: raw.stamp.get(),
-            });
+    open_index! {
+        /// Open or recover a `.stampindex` file at the given path. This method
+        /// reads the entire file into memory at startup. An empty file or a
+        /// missing file is acceptable and means zero stamped ranges.
+        /// # Errors
+        /// Returns an error when log I/O fails or the file's length is not a
+        /// whole number of fixed-width entries.
+        /// # Panics
+        /// Panics if the in-place reinterpretation of a length-validated,
+        /// `Unaligned` byte buffer fails. That invariant cannot be false.
+        pub fn open(path: PathBuf) -> Result<Self, LogError> {
+            let entries = crate::index::read_sidecar::<StampEntryRaw, _>(
+                &path,
+                "stampindex",
+                "length is a multiple of ENTRY_BYTES and StampEntryRaw is Unaligned",
+                |raws| {
+                    let mut entries = Vec::with_capacity(raws.len());
+                    for raw in raws {
+                        entries.push(StampEntry {
+                            base_offset: Offset(raw.base_offset.get()),
+                            last_offset: Offset(raw.last_offset.get()),
+                            stamp: raw.stamp.get(),
+                        });
+                    }
+                    entries
+                        .sort_unstable_by_key(|entry| (entry.base_offset.0, entry.last_offset.0, entry.stamp));
+                    // A write followed by an uncertain sync can be retried and
+                    // leave an exact duplicate on disk. Canonicalize that retry,
+                    // but reject a duplicate range with a different stamp below.
+                    entries.dedup();
+                    if !Self::entries_valid(&entries) {
+                        return Err(LogError::Corrupt(format!(
+                            "stampindex {} contains inverted or overlapping ranges",
+                            path.display()
+                        )));
+                    }
+                    Ok(entries)
+                },
+            )?;
+            tracing::Span::current().record("entries", entries.len());
+            Ok(Self {
+                path,
+                io: crate::io::file_io(),
+                entries,
+            })
         }
-        entries
-            .sort_unstable_by_key(|entry| (entry.base_offset.0, entry.last_offset.0, entry.stamp));
-        // A write followed by an uncertain sync can be retried and
-        // leave an exact duplicate on disk. Canonicalize that retry,
-        // but reject a duplicate range with a different stamp below.
-        entries.dedup();
-        if !Self::entries_valid(&entries) {
-            return Err(LogError::Corrupt(format!(
-                "stampindex {} contains inverted or overlapping ranges",
-                path.display()
-            )));
-        }
-        tracing::Span::current().record("entries", entries.len());
-        Ok(Self {
-            path,
-            io: crate::io::file_io(),
-            entries,
-        })
     }
 
     /// Append one stamped-range entry.
@@ -120,12 +131,7 @@ impl StampIndex {
     /// Returns an error when appending to or syncing the file fails.
     pub fn append(&mut self, entry: StampEntry) -> Result<(), LogError> {
         let (bases, lasts) = Self::coordinates(&self.entries);
-        if let Some(position) = krabka_verified::exact_stamp_range_index(
-            &bases,
-            &lasts,
-            entry.base_offset.0,
-            entry.last_offset.0,
-        ) {
+        if let Some(position) = Self::exact_range_index(&bases, &lasts, entry) {
             if self.entries[position] == entry {
                 return Ok(());
             }
@@ -160,11 +166,7 @@ impl StampIndex {
             .append(true)
             .open(&self.path)
             .map_err(LogError::Io)?;
-        let raw = StampEntryRaw {
-            base_offset: I64::new(entry.base_offset.0),
-            last_offset: I64::new(entry.last_offset.0),
-            stamp: U64::new(entry.stamp),
-        };
+        let raw = StampEntryRaw::new(entry);
         crate::io::write_all(&*self.io, IoTarget::StampIndex, &f, raw.as_bytes())
             .map_err(LogError::Io)?;
         self.io
@@ -172,6 +174,15 @@ impl StampIndex {
             .map_err(LogError::Io)?;
         self.entries.insert(position, entry);
         Ok(())
+    }
+
+    fn exact_range_index(bases: &[i64], lasts: &[i64], entry: StampEntry) -> Option<usize> {
+        krabka_verified::exact_stamp_range_index(
+            bases,
+            lasts,
+            entry.base_offset.0,
+            entry.last_offset.0,
+        )
     }
 
     /// Insert a committed transactional range or replace the same exact
@@ -183,12 +194,7 @@ impl StampIndex {
     /// fails.
     pub fn upsert(&mut self, entry: StampEntry) -> Result<(), LogError> {
         let (bases, lasts) = Self::coordinates(&self.entries);
-        if let Some(position) = krabka_verified::exact_stamp_range_index(
-            &bases,
-            &lasts,
-            entry.base_offset.0,
-            entry.last_offset.0,
-        ) {
+        if let Some(position) = Self::exact_range_index(&bases, &lasts, entry) {
             if self.entries[position] != entry {
                 let mut entries = self.entries.clone();
                 entries[position] = entry;
@@ -206,15 +212,11 @@ impl StampIndex {
     /// # Errors
     /// Returns an error when rewriting or syncing the sidecar fails.
     pub fn truncate_from(&mut self, offset: Offset) -> Result<(), LogError> {
-        let entries: Vec<_> = self
-            .entries
-            .iter()
-            .copied()
-            .filter(|entry| entry.last_offset < offset)
-            .collect();
-        if entries.len() == self.entries.len() {
+        let Some(entries) =
+            crate::index::changed_entries(&self.entries, |entry| entry.last_offset < offset)
+        else {
             return Ok(());
-        }
+        };
         self.rewrite(&entries)?;
         self.entries = entries;
         Ok(())
@@ -245,18 +247,9 @@ impl StampIndex {
     }
 
     fn rewrite(&self, entries: &[StampEntry]) -> Result<(), LogError> {
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.path)
-            .map_err(LogError::Io)?;
+        let file = crate::index::rewrite_sidecar_file(&self.path)?;
         for entry in entries {
-            let raw = StampEntryRaw {
-                base_offset: I64::new(entry.base_offset.0),
-                last_offset: I64::new(entry.last_offset.0),
-                stamp: U64::new(entry.stamp),
-            };
+            let raw = StampEntryRaw::new(*entry);
             crate::io::write_all(&*self.io, IoTarget::StampIndex, &file, raw.as_bytes())
                 .map_err(LogError::Io)?;
         }
@@ -304,14 +297,20 @@ mod tests {
 
     use super::*;
 
+    fn index_with(entries: &[StampEntry]) -> (TempDir, PathBuf, StampIndex) {
+        let (dir, path, mut index) = crate::index::index_fixture("00.stampindex", |path| {
+            StampIndex::open(path.to_path_buf())
+        });
+        for entry in entries {
+            index.append(*entry).unwrap();
+        }
+        (dir, path, index)
+    }
+
     fn write_entries(path: &std::path::Path, entries: &[StampEntry]) {
         let mut bytes = Vec::with_capacity(entries.len() * ENTRY_BYTES);
         for entry in entries {
-            let raw = StampEntryRaw {
-                base_offset: I64::new(entry.base_offset.0),
-                last_offset: I64::new(entry.last_offset.0),
-                stamp: U64::new(entry.stamp),
-            };
+            let raw = StampEntryRaw::new(*entry);
             bytes.extend_from_slice(raw.as_bytes());
         }
         std::fs::write(path, bytes).unwrap();
@@ -327,36 +326,17 @@ mod tests {
 
     #[test]
     fn stamp_append_round_trips_through_disk() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let mut idx = StampIndex::open(path.clone()).unwrap();
-        idx.append(StampEntry {
-            base_offset: Offset(5),
-            last_offset: Offset(7),
-            stamp: 1_000,
-        })
-        .unwrap();
-        idx.append(StampEntry {
-            base_offset: Offset(10),
-            last_offset: Offset(12),
-            stamp: 2_000,
-        })
-        .unwrap();
+        let (_dir, path, _idx) = index_with(&[
+            crate::test_support::stamp_entry(5, 7, 1_000),
+            crate::test_support::stamp_entry(10, 12, 2_000),
+        ]);
 
         let idx2 = StampIndex::open(path).unwrap();
         assert2::assert!(
             idx2.entries()
                 == &[
-                    StampEntry {
-                        base_offset: Offset(5),
-                        last_offset: Offset(7),
-                        stamp: 1_000,
-                    },
-                    StampEntry {
-                        base_offset: Offset(10),
-                        last_offset: Offset(12),
-                        stamp: 2_000,
-                    },
+                    crate::test_support::stamp_entry(5, 7, 1_000),
+                    crate::test_support::stamp_entry(10, 12, 2_000),
                 ]
         );
     }
@@ -384,57 +364,26 @@ mod tests {
     #[test]
     fn open_canonicalizes_retries_and_rejects_malformed_ranges() {
         let dir = TempDir::new().unwrap();
-        let first = StampEntry {
-            base_offset: Offset(0),
-            last_offset: Offset(2),
-            stamp: 100,
-        };
-        let second = StampEntry {
-            base_offset: Offset(10),
-            last_offset: Offset(12),
-            stamp: 200,
-        };
+        let first = crate::test_support::stamp_entry(0, 2, 100);
+        let second = crate::test_support::stamp_entry(10, 12, 200);
         let path = dir.path().join("retries.stampindex");
         write_entries(&path, &[second, first, second]);
         assert2::assert!(StampIndex::open(path).unwrap().entries() == [first, second]);
 
         for (name, entries) in [
-            (
-                "inverted",
-                vec![StampEntry {
-                    base_offset: Offset(7),
-                    last_offset: Offset(6),
-                    stamp: 1,
-                }],
-            ),
+            ("inverted", vec![crate::test_support::stamp_entry(7, 6, 1)]),
             (
                 "overlap",
                 vec![
-                    StampEntry {
-                        base_offset: Offset(0),
-                        last_offset: Offset(4),
-                        stamp: 1,
-                    },
-                    StampEntry {
-                        base_offset: Offset(4),
-                        last_offset: Offset(8),
-                        stamp: 2,
-                    },
+                    crate::test_support::stamp_entry(0, 4, 1),
+                    crate::test_support::stamp_entry(4, 8, 2),
                 ],
             ),
             (
                 "conflicting-retry",
                 vec![
-                    StampEntry {
-                        base_offset: Offset(0),
-                        last_offset: Offset(4),
-                        stamp: 1,
-                    },
-                    StampEntry {
-                        base_offset: Offset(0),
-                        last_offset: Offset(4),
-                        stamp: 2,
-                    },
+                    crate::test_support::stamp_entry(0, 4, 1),
+                    crate::test_support::stamp_entry(0, 4, 2),
                 ],
             ),
         ] {
@@ -446,19 +395,9 @@ mod tests {
 
     #[test]
     fn out_of_order_append_stays_canonical_across_reopen() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let mut idx = StampIndex::open(path.clone()).unwrap();
-        let first = StampEntry {
-            base_offset: Offset(0),
-            last_offset: Offset(2),
-            stamp: 100,
-        };
-        let second = StampEntry {
-            base_offset: Offset(10),
-            last_offset: Offset(12),
-            stamp: 200,
-        };
+        let (_dir, path, mut idx) = index_with(&[]);
+        let first = crate::test_support::stamp_entry(0, 2, 100);
+        let second = crate::test_support::stamp_entry(10, 12, 200);
         idx.append(second).unwrap();
         idx.append(first).unwrap();
         assert2::assert!(idx.entries() == [first, second]);
@@ -469,11 +408,7 @@ mod tests {
     fn mutation_io_failures_leave_the_in_memory_index_unchanged() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("00.stampindex");
-        let original = StampEntry {
-            base_offset: Offset(0),
-            last_offset: Offset(2),
-            stamp: 100,
-        };
+        let original = crate::test_support::stamp_entry(0, 2, 100);
         let mut idx = StampIndex::open(path.clone()).unwrap();
         idx.append(original).unwrap();
         std::fs::remove_file(&path).unwrap();
@@ -491,11 +426,7 @@ mod tests {
         assert2::assert!(idx.entries() == [original]);
         assert2::assert!(
             let LogError::Io(_) = idx
-                .append(StampEntry {
-                    base_offset: Offset(4),
-                    last_offset: Offset(5),
-                    stamp: 300,
-                })
+                .append(crate::test_support::stamp_entry(4, 5, 300))
                 .unwrap_err()
         );
         assert2::assert!(idx.entries() == [original]);
@@ -503,93 +434,56 @@ mod tests {
 
     #[test]
     fn stamp_for_offset_finds_covering_range() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let mut idx = StampIndex::open(path).unwrap();
-        idx.append(StampEntry {
-            base_offset: Offset(0),
-            last_offset: Offset(4),
-            stamp: 100,
-        })
-        .unwrap();
-        idx.append(StampEntry {
-            base_offset: Offset(10),
-            last_offset: Offset(14),
-            stamp: 200,
-        })
-        .unwrap();
+        let (_dir, _path, idx) = index_with(&[
+            crate::test_support::stamp_entry(0, 4, 100),
+            crate::test_support::stamp_entry(10, 14, 200),
+        ]);
 
         // Inclusive endpoints and interior offsets resolve to their range.
-        assert2::assert!(idx.stamp_for_offset(Offset(0)) == Some(100));
-        assert2::assert!(idx.stamp_for_offset(Offset(4)) == Some(100));
-        assert2::assert!(idx.stamp_for_offset(Offset(10)) == Some(200));
-        assert2::assert!(idx.stamp_for_offset(Offset(14)) == Some(200));
-        // Offsets in the gap and past the end are uncovered.
-        assert2::assert!(idx.stamp_for_offset(Offset(5)) == None);
-        assert2::assert!(idx.stamp_for_offset(Offset(15)) == None);
+        for (offset, expected) in [
+            (0, Some(100)),
+            (4, Some(100)),
+            (10, Some(200)),
+            (14, Some(200)),
+            // Offsets in the gap and past the end are uncovered.
+            (5, None),
+            (15, None),
+        ] {
+            assert2::assert!(idx.stamp_for_offset(Offset(offset)) == expected);
+        }
     }
 
     #[test]
     fn append_rejects_overlapping_ranges_but_accepts_exact_retry() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let mut idx = StampIndex::open(path).unwrap();
-        let entry = StampEntry {
-            base_offset: Offset(5),
-            last_offset: Offset(7),
-            stamp: 100,
-        };
+        let (_dir, _path, mut idx) = index_with(&[]);
+        let entry = crate::test_support::stamp_entry(5, 7, 100);
         idx.append(entry).unwrap();
         idx.append(entry).unwrap();
         assert2::assert!(idx.entries() == [entry]);
 
         let error = idx
-            .append(StampEntry {
-                base_offset: Offset(7),
-                last_offset: Offset(9),
-                stamp: 200,
-            })
+            .append(crate::test_support::stamp_entry(7, 9, 200))
             .unwrap_err();
         assert2::assert!(let LogError::Corrupt(_) = error);
 
         let error = idx
-            .append(StampEntry {
-                base_offset: Offset(10),
-                last_offset: Offset(9),
-                stamp: 300,
-            })
+            .append(crate::test_support::stamp_entry(10, 9, 300))
             .unwrap_err();
         assert2::assert!(let LogError::InvalidArgument(_) = error);
     }
 
     #[test]
     fn upsert_replaces_only_an_exact_range() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let mut idx = StampIndex::open(path.clone()).unwrap();
-        idx.append(StampEntry {
-            base_offset: Offset(5),
-            last_offset: Offset(7),
-            stamp: 100,
-        })
-        .unwrap();
+        let (_dir, path, mut idx) = index_with(&[crate::test_support::stamp_entry(5, 7, 100)]);
 
-        idx.upsert(StampEntry {
-            base_offset: Offset(5),
-            last_offset: Offset(7),
-            stamp: 200,
-        })
-        .unwrap();
+        idx.upsert(crate::test_support::stamp_entry(5, 7, 200))
+            .unwrap();
         assert2::assert!(idx.stamp_for_offset(Offset(6)) == Some(200));
         assert2::assert!(StampIndex::open(path).unwrap().entries() == idx.entries());
 
         for (base, last) in [(5, 8), (4, 7)] {
             let error = idx
-                .upsert(StampEntry {
-                    base_offset: Offset(base),
-                    last_offset: Offset(last),
-                    stamp: 300,
-                })
+                .upsert(crate::test_support::stamp_entry(base, last, 300))
                 .unwrap_err();
             assert2::assert!(let LogError::Corrupt(_) = error);
         }
@@ -597,59 +491,25 @@ mod tests {
 
     #[test]
     fn truncate_from_removes_tail_entries_on_disk() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let mut idx = StampIndex::open(path.clone()).unwrap();
-        for entry in [
-            StampEntry {
-                base_offset: Offset(0),
-                last_offset: Offset(2),
-                stamp: 100,
-            },
-            StampEntry {
-                base_offset: Offset(3),
-                last_offset: Offset(6),
-                stamp: 103,
-            },
-            StampEntry {
-                base_offset: Offset(10),
-                last_offset: Offset(12),
-                stamp: 110,
-            },
-        ] {
-            idx.append(entry).unwrap();
-        }
+        let (_dir, path, mut idx) = index_with(&[
+            crate::test_support::stamp_entry(0, 2, 100),
+            crate::test_support::stamp_entry(3, 6, 103),
+            crate::test_support::stamp_entry(10, 12, 110),
+        ]);
 
         idx.truncate_from(Offset(6)).unwrap();
         assert2::assert!(
             StampIndex::open(path).unwrap().entries()
-                == [StampEntry {
-                    base_offset: Offset(0),
-                    last_offset: Offset(2),
-                    stamp: 100,
-                }]
+                == [crate::test_support::stamp_entry(0, 2, 100)]
         );
     }
 
     #[test]
     fn remove_ranges_requires_both_exact_boundaries() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let mut idx = StampIndex::open(path.clone()).unwrap();
-        for entry in [
-            StampEntry {
-                base_offset: Offset(0),
-                last_offset: Offset(1),
-                stamp: 10,
-            },
-            StampEntry {
-                base_offset: Offset(2),
-                last_offset: Offset(3),
-                stamp: 20,
-            },
-        ] {
-            idx.append(entry).unwrap();
-        }
+        let (_dir, path, mut idx) = index_with(&[
+            crate::test_support::stamp_entry(0, 1, 10),
+            crate::test_support::stamp_entry(2, 3, 20),
+        ]);
 
         idx.remove_ranges(&[(Offset(0), Offset(9)), (Offset(9), Offset(3))])
             .unwrap();
@@ -658,33 +518,17 @@ mod tests {
 
         assert2::assert!(
             StampIndex::open(path).unwrap().entries()
-                == [StampEntry {
-                    base_offset: Offset(0),
-                    last_offset: Offset(1),
-                    stamp: 10,
-                }]
+                == [crate::test_support::stamp_entry(0, 1, 10)]
         );
     }
 
     #[test]
     fn append_rejects_overlapping_single_offset_range_as_corrupt() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let mut idx = StampIndex::open(path).unwrap();
-        idx.append(StampEntry {
-            base_offset: Offset(0),
-            last_offset: Offset(5),
-            stamp: 10,
-        })
-        .unwrap();
+        let (_dir, _path, mut idx) = index_with(&[crate::test_support::stamp_entry(0, 5, 10)]);
 
         // Overlapping single-offset range (last_offset == base_offset)
         let err = idx
-            .append(StampEntry {
-                base_offset: Offset(2),
-                last_offset: Offset(2),
-                stamp: 20,
-            })
+            .append(crate::test_support::stamp_entry(2, 2, 20))
             .unwrap_err();
         assert2::assert!(let LogError::Corrupt(_) = err);
     }
@@ -707,16 +551,10 @@ mod tests {
             }
         }
         let called = Arc::new(AtomicBool::new(false));
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let mut idx = StampIndex::open(path).unwrap();
+        let (_dir, _path, mut idx) = index_with(&[]);
         idx.set_io(Arc::new(SpyIo(called.clone())));
-        idx.append(StampEntry {
-            base_offset: Offset(0),
-            last_offset: Offset(0),
-            stamp: 1,
-        })
-        .unwrap();
+        idx.append(crate::test_support::stamp_entry(0, 0, 1))
+            .unwrap();
         assert2::assert!(called.load(Ordering::SeqCst));
     }
 }
