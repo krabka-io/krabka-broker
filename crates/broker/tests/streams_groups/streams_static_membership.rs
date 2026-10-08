@@ -32,8 +32,8 @@ const GROUP_ID_NOT_FOUND: i16 = 69;
 async fn every_static_member_request_is_refused_and_changes_nothing() {
     let (_b, bootstrap, _dir) = boot().await;
     let client = connect(&bootstrap).await;
-    finalize_streams_version(&client).await;
     create_topic(&client, "static-input", 2).await;
+    finalize_streams_version(&client).await;
 
     let (member_id, joined) = join_and_converge(
         &client,
