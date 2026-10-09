@@ -3,7 +3,7 @@
 //! These synchronous kernels have Creusot contracts proved under their stated
 //! preconditions. Host state, concurrency, and I/O remain outside that boundary.
 //! See `docs/verification.md` and `docs/proof-contract-audit.md`.
-#![doc(html_root_url = "https://docs.rs/krabka-verified/1.0.0")]
+#![doc(html_root_url = "https://docs.rs/krabka-verified/1.0.1")]
 
 /// Declare an open proof model with the crate's mutation-testing policy.
 macro_rules! open_logic {
