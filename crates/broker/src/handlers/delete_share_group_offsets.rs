@@ -407,7 +407,17 @@ mod tests {
             share_allow_all,
             context(ctx, "alice")
         );
-        create_topics(&broker_handle, &broker, &["t"], &ctx).await;
+        create_topics(&broker_handle, &broker, &["t", "elsewhere"], &ctx).await;
+        // `share-held` holds state for a topic the image has. The actor's
+        // session tick drops the state of every topic the image lacks, as
+        // Kafka's `maybeCleanupShareGroupState` does, and that tick can run
+        // between the seed and the request.
+        let elsewhere_id = broker
+            .controller
+            .current_image()
+            .topic("elsewhere")
+            .expect("elsewhere topic metadata")
+            .topic_id;
         let coordinator = &broker.group_coordinator;
         let _classic = coordinator.get_or_create_classic("classic");
         coordinator.mark_share("share-empty");
@@ -419,7 +429,7 @@ mod tests {
             .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
                 state_partition_metadata: ShareGroupStatePartitionMetadataValue {
                     initialized: vec![TopicPartitionsInfo {
-                        topic_id: uuid::Uuid::from_bytes([5; 16]),
+                        topic_id: elsewhere_id,
                         topic_name: "elsewhere".into(),
                         partitions: vec![0],
                     }],
