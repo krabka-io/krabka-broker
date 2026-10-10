@@ -471,11 +471,8 @@ mod tests {
             extra.path().to_path_buf(),
             third.path().to_path_buf(),
         ];
-        let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
-        let part = crate::future_log::test_support::registered_source(
+        let source = crate::future_log::test_support::registered_source_fixture(
             primary.path(),
-            &partitions,
             crate::future_log::test_support::FutureSourceSetup::default(),
         );
 
@@ -483,11 +480,11 @@ mod tests {
         let crate::future_log::test_support::PlantedFutureLog {
             path: future_path,
             cancel: old_cancel,
-        } = crate::future_log::test_support::plant_future_log(&future_logs, extra.path());
+        } = crate::future_log::test_support::plant_future_log(&source.future_logs, extra.path());
 
         move_with_defaults!(
-            &partitions,
-            &future_logs,
+            &source.partitions,
+            &source.future_logs,
             &log_dirs,
             &crate::log_dir_status::LogDirRegistry::default(),
             None,
@@ -498,9 +495,9 @@ mod tests {
 
         tokio::time::timeout(Duration::from_millis(500), async {
             loop {
-                let moved = canonicalize_or_self(&part.log_dir.load_full())
+                let moved = canonicalize_or_self(&source.partition.log_dir.load_full())
                     == canonicalize_or_self(third.path());
-                if moved && future_logs.is_empty() {
+                if moved && source.future_logs.is_empty() {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -511,6 +508,6 @@ mod tests {
 
         assert!(old_cancel.is_cancelled());
         assert!(!future_path.exists());
-        assert!(part.log_end_offset() == 3);
+        assert!(source.partition.log_end_offset() == 3);
     }
 }

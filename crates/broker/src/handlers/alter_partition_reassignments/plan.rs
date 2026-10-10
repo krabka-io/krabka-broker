@@ -944,14 +944,7 @@ mod tests {
         let cases = [
             (
                 "a reassignment is in progress",
-                img_with(ReassignmentImageSetup {
-                    assignment: ReassignmentSetup {
-                        adding: vec![krabka_ids::NodeId(3)],
-                        removing: vec![krabka_ids::NodeId(2)],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
+                crate::handlers::alter_partition_reassignments::test_support::pending_reassignment_image(),
             ),
             (
                 "nothing to cancel",

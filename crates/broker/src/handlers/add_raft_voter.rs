@@ -172,7 +172,6 @@ mod tests {
 
     use assert2::assert;
     use krabka_protocol::{
-        Decode as _,
         owned::{add_raft_voter_request::Listener, add_raft_voter_response},
         primitives::uuid::Uuid as ProtoUuid,
     };
@@ -216,11 +215,10 @@ mod tests {
                 error_message: Some("not the raft leader".into()),
                 ..Default::default()
             };
-            let bytes = crate::handlers::encode_response(&resp, version).expect("encode");
-            let mut cur: &[u8] = &bytes;
-            let decoded = AddRaftVoterResponse::decode(&mut cur, version).expect("decode");
+            let (decoded, consumed) =
+                crate::test_support::round_trip_response(&resp, krabka_ids::ApiVersion(version));
             assert!(decoded.error_code == codes::NOT_LEADER_OR_FOLLOWER);
-            assert!(cur.is_empty(), "all bytes consumed at v{version}");
+            assert!(consumed, "all bytes consumed at v{version}");
         }
     }
 

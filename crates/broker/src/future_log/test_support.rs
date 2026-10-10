@@ -116,15 +116,28 @@ pub(super) fn source_fixture(setup: FutureSourceSetup) -> SourceFixture {
     }
 }
 
-/// Publish the source partition only after its initial records have been appended.
-pub(super) fn registered_source(
+pub(super) struct RegisteredSourceFixture {
+    pub partition: Arc<Partition>,
+    pub future_logs: Arc<dashmap::DashMap<(String, PartitionIndex), Arc<super::FutureLogState>>>,
+    pub partitions: Arc<crate::partition_registry::PartitionRegistry>,
+}
+
+/// Publish a populated source in registries using its configured timestamp source.
+pub(super) fn registered_source_fixture(
     primary: &Path,
-    partitions: &crate::partition_registry::PartitionRegistry,
     setup: FutureSourceSetup,
-) -> Arc<Partition> {
-    let part = source_partition(primary, setup);
-    partitions.insert("t".into(), PartitionIndex(0), part.clone());
-    part
+) -> RegisteredSourceFixture {
+    let partitions = Arc::new(
+        crate::partition_registry::PartitionRegistry::with_stamp_source(setup.stamp_source.clone()),
+    );
+    let future_logs = Arc::new(dashmap::DashMap::new());
+    let partition = source_partition(primary, setup);
+    partitions.insert("t".into(), PartitionIndex(0), partition.clone());
+    RegisteredSourceFixture {
+        partition,
+        future_logs,
+        partitions,
+    }
 }
 
 pub(super) struct PlantedFutureLog {

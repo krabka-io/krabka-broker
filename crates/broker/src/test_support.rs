@@ -1341,6 +1341,17 @@ pub(crate) fn decode_response<T: Decode<'static>>(bytes: &Bytes, version: i16) -
     resp
 }
 
+/// Encode and decode a response while returning the decoder's consumption result.
+pub(crate) fn round_trip_response<T: Encode + Decode<'static>>(
+    response: &T,
+    version: krabka_ids::ApiVersion,
+) -> (T, bool) {
+    let bytes = crate::handlers::encode_response(response, version.0).expect("encode");
+    let mut cursor: &[u8] = &bytes;
+    let decoded = T::decode(&mut cursor, version.0).expect("decode");
+    (decoded, cursor.is_empty())
+}
+
 /// An authorizer that reads the grants from the principal name.
 ///
 /// The name is a `+`-separated list of `<ResourceType>:<AclOperation>` grants,

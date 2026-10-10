@@ -296,22 +296,37 @@ impl Cluster {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+enum DeadLetterShareVersion {
+    One,
+    #[default]
+    Two,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct DeadLetterQueueSetup<'a> {
+    #[default(crate::support::share::ShareRecordCount(3))]
+    records: crate::support::share::ShareRecordCount,
+    version: DeadLetterShareVersion,
+    #[default(&[])]
+    topic_configs: &'a [(&'a str, &'a str)],
+}
+
 /// Keep the feature gate and topic/group configuration in their original order.
 async fn configure_dead_letters(
     client: &Client,
     broker: &BrokerHandle,
-    version_two: bool,
-    extra_topic_configs: &[(&str, &str)],
+    setup: DeadLetterQueueSetup<'_>,
 ) {
-    if version_two {
+    if matches!(setup.version, DeadLetterShareVersion::Two) {
         finalize_share_version_two(client).await;
     }
-    create_dead_letter_topic_with(broker, client, extra_topic_configs).await;
+    create_dead_letter_topic_with(broker, client, setup.topic_configs).await;
     point_group_at_dead_letter_topic(client).await;
 }
 
 async fn acquired_records(
-    records: i64,
+    records: crate::support::share::ShareRecordCount,
     tweak: impl FnOnce(&mut BrokerConfig),
     configure: impl AsyncFnOnce(&Client, &BrokerHandle),
 ) -> Cluster {
@@ -320,7 +335,7 @@ async fn acquired_records(
             client,
             crate::support::share::ShareRecordsSetup {
                 topic_id: tid,
-                count: crate::support::share::ShareRecordCount(records),
+                count: records,
                 ..Default::default()
             },
         )
@@ -353,7 +368,7 @@ async fn join_and_acquire(
 }
 
 async fn acquired_records_from(
-    records: i64,
+    records: crate::support::share::ShareRecordCount,
     tweak: impl FnOnce(&mut BrokerConfig),
     configure: impl AsyncFnOnce(&Client, &BrokerHandle),
     produce: impl AsyncFnOnce(&Client, uuid::Uuid),
@@ -370,7 +385,7 @@ async fn acquired_records_from(
     configure(&client, &broker).await;
     produce(&client, tid).await;
     let (member, row) = join_and_acquire(&broker, &client, tid).await;
-    assert!(acquired_count(&row) == records, "{row:?}");
+    assert!(acquired_count(&row) == records.0, "{row:?}");
     Cluster {
         broker,
         client,
@@ -386,7 +401,7 @@ async fn acquired_records_from(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_rejected_batch_is_dead_lettered_then_archived() {
     let _permit = broker_test_permit().await;
-    let cluster = acquired_dead_letters(3, |_| {}, true, &[]).await;
+    let cluster = acquired_dead_letters(|_| {}, DeadLetterQueueSetup::default()).await;
     let (broker, client, tid, _member) = cluster.parts();
 
     cluster.reject_acquired(0, 2).await;
@@ -442,7 +457,14 @@ async fn a_rejected_batch_is_dead_lettered_then_archived() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted() {
     let _permit = broker_test_permit().await;
-    let cluster = acquired_dead_letters(5, |_| {}, true, &[]).await;
+    let cluster = acquired_dead_letters(
+        |_| {},
+        DeadLetterQueueSetup {
+            records: crate::support::share::ShareRecordCount(5),
+            ..Default::default()
+        },
+    )
+    .await;
     let (broker, client, tid, member) = cluster.parts();
 
     reject_ranges(client, member, *tid, 1, &[(0, 0), (2, 2), (4, 4)]).await;
@@ -485,7 +507,15 @@ async fn rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_write_the_topic_refuses_counts_as_failed_and_still_archives() {
     let _permit = broker_test_permit().await;
-    let cluster = acquired_dead_letters(1, |_| {}, true, &[("max.message.bytes", "100")]).await;
+    let cluster = acquired_dead_letters(
+        |_| {},
+        DeadLetterQueueSetup {
+            records: crate::support::share::ShareRecordCount(1),
+            topic_configs: &[("max.message.bytes", "100")],
+            ..Default::default()
+        },
+    )
+    .await;
     let (broker, client, tid, _member) = cluster.parts();
 
     cluster.reject_acquired(0, 0).await;
@@ -508,13 +538,14 @@ async fn a_write_the_topic_refuses_counts_as_failed_and_still_archives() {
 async fn a_record_that_uses_up_its_deliveries_is_dead_lettered() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_dead_letters(
-        1,
         |config| {
             config.share_group.record_lock_duration = Duration::from_millis(150);
             config.share_group.max_delivery_attempts = 2;
         },
-        true,
-        &[],
+        DeadLetterQueueSetup {
+            records: crate::support::share::ShareRecordCount(1),
+            ..Default::default()
+        },
     )
     .await;
     let (broker, client, tid, member) = cluster.parts();
@@ -561,7 +592,15 @@ async fn a_record_that_uses_up_its_deliveries_is_dead_lettered() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reject_below_share_version_two_writes_nothing() {
     let _permit = broker_test_permit().await;
-    let cluster = acquired_dead_letters(2, |_| {}, false, &[]).await;
+    let cluster = acquired_dead_letters(
+        |_| {},
+        DeadLetterQueueSetup {
+            records: crate::support::share::ShareRecordCount(2),
+            version: DeadLetterShareVersion::One,
+            ..Default::default()
+        },
+    )
+    .await;
     let (broker, client, tid, _member) = cluster.parts();
 
     cluster.reject_acquired(0, 1).await;
@@ -581,7 +620,7 @@ async fn a_reject_below_share_version_two_writes_nothing() {
 async fn a_failed_write_still_archives_the_record() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_records(
-        2,
+        crate::support::share::ShareRecordCount(2),
         |_| {},
         async |client, _| {
             finalize_share_version_two(client).await;
@@ -617,7 +656,7 @@ async fn a_failed_write_still_archives_the_record() {
 async fn a_missing_topic_is_created_when_the_cluster_allows_it() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_records(
-        1,
+        crate::support::share::ShareRecordCount(1),
         |_| {},
         async |client, _| {
             finalize_share_version_two(client).await;
@@ -662,10 +701,18 @@ async fn a_missing_topic_is_created_when_the_cluster_allows_it() {
 async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_records_from(
-        1,
+        crate::support::share::ShareRecordCount(1),
         |_| {},
         async |client, broker| {
-            configure_dead_letters(client, broker, true, &[("max.message.bytes", "1100")]).await;
+            configure_dead_letters(
+                client,
+                broker,
+                DeadLetterQueueSetup {
+                    topic_configs: &[("max.message.bytes", "1100")],
+                    ..Default::default()
+                },
+            )
+            .await;
         },
         async |client, tid| {
             let values = vec![Bytes::from(vec![b'x'; 1_000])];
@@ -834,13 +881,11 @@ async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered(
 }
 
 async fn acquired_dead_letters(
-    records: i64,
     customize: impl FnOnce(&mut BrokerConfig),
-    version_two: bool,
-    topic_configs: &[(&str, &str)],
+    setup: DeadLetterQueueSetup<'_>,
 ) -> Cluster {
-    acquired_records(records, customize, async |client, broker| {
-        configure_dead_letters(client, broker, version_two, topic_configs).await;
+    acquired_records(setup.records, customize, async |client, broker| {
+        configure_dead_letters(client, broker, setup).await;
     })
     .await
 }

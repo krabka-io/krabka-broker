@@ -75,6 +75,23 @@ fn context<'a>(principal: &'a Principal, peer: &'a SocketAddr) -> RequestContext
     )
 }
 
+/// Borrow Alice's caller-owned context while inspecting a supplied image.
+fn with_freeze_env(
+    config: &BrokerConfig,
+    image: &MetadataImage,
+    check: impl FnOnce(&super::checks::FreezeEnv<'_>),
+) {
+    let principal = principal(ALICE_NAME);
+    let peer = peer();
+    let ctx = context(&principal, &peer);
+    let env = super::checks::FreezeEnv {
+        config,
+        image,
+        ctx: &ctx,
+    };
+    check(&env);
+}
+
 // A broker configuration with alice's operator key loaded.
 fn config_with_alice(dir: &TempDir) -> (BrokerConfig, Ed25519KeyPair) {
     let (pair, path) = crate::test_support::ed25519_public_key_file(
@@ -92,6 +109,12 @@ fn config_with_alice(dir: &TempDir) -> (BrokerConfig, Ed25519KeyPair) {
         ..BrokerConfig::default()
     };
     (config, pair)
+}
+
+fn alice_key_configuration() -> (TempDir, BrokerConfig, Ed25519KeyPair) {
+    let dir = TempDir::new().expect("tempdir");
+    let (config, pair) = config_with_alice(&dir);
+    (dir, config, pair)
 }
 
 fn freeze_request(scope: &str, pattern_type: i8) -> SetTopicFreezeRequest {

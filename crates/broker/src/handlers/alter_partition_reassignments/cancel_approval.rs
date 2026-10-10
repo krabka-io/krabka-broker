@@ -206,14 +206,7 @@ mod tests {
 
     /// A partition mid-reassignment, beside the proposals the registry holds.
     fn img_reassigning(proposals: &[krabka_metadata::BreakGlassProposalRecord]) -> MetadataImage {
-        let mut img = img_with(ReassignmentImageSetup {
-            assignment: ReassignmentSetup {
-                adding: vec![krabka_ids::NodeId(3)],
-                removing: vec![krabka_ids::NodeId(2)],
-                ..Default::default()
-            },
-            ..Default::default()
-        });
+        let mut img = crate::handlers::alter_partition_reassignments::test_support::pending_reassignment_image();
         for proposal in proposals {
             img.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
         }

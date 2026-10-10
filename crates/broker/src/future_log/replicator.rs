@@ -279,13 +279,8 @@ mod tests {
         let target = tempdir().unwrap();
         let stamp_source: Arc<dyn krabka_log::StampSource> =
             Arc::new(TestStampSource(AtomicU64::new(100)));
-        let partitions = Arc::new(PartitionRegistry::with_stamp_source(Some(Arc::clone(
-            &stamp_source,
-        ))));
-        let future_logs = Arc::new(DashMap::new());
-        let part = crate::future_log::test_support::registered_source(
+        let source = crate::future_log::test_support::registered_source_fixture(
             primary.path(),
-            &partitions,
             crate::future_log::test_support::FutureSourceSetup {
                 stamp_source: Some(stamp_source),
                 ..Default::default()
@@ -293,22 +288,26 @@ mod tests {
         );
 
         resume_and_wait(
-            &part,
-            &partitions,
-            &future_logs,
+            &source.partition,
+            &source.partitions,
+            &source.future_logs,
             target.path(),
             Duration::from_millis(500),
             "future log should catch up and swap",
         )
         .await;
 
-        assert!(part.log_end_offset() == 3);
+        assert!(source.partition.log_end_offset() == 3);
         assert!(
-            canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target.path())
+            canonicalize_or_self(&source.partition.log_dir.load_full())
+                == canonicalize_or_self(target.path())
         );
-        assert!(part.stamp_for_offset(Offset(0)) == Some(101));
-        append_records(&part, crate::test_support::PartitionRecordsSetup::default());
-        assert!(part.stamp_for_offset(Offset(3)) == Some(102));
+        assert!(source.partition.stamp_for_offset(Offset(0)) == Some(101));
+        append_records(
+            &source.partition,
+            crate::test_support::PartitionRecordsSetup::default(),
+        );
+        assert!(source.partition.stamp_for_offset(Offset(3)) == Some(102));
     }
 
     #[tokio::test]

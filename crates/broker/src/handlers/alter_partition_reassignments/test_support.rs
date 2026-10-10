@@ -86,6 +86,18 @@ pub(super) struct ReassignmentImageSetup<'a> {
     pub partition_epoch: crate::test_support::PartitionEpoch,
 }
 
+/// The in-progress replacement of broker two by broker three.
+pub(super) fn pending_reassignment_image() -> MetadataImage {
+    img_with(ReassignmentImageSetup {
+        assignment: ReassignmentSetup {
+            adding: vec![krabka_ids::NodeId(3)],
+            removing: vec![krabka_ids::NodeId(2)],
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
+
 pub(super) fn img_with(setup: ReassignmentImageSetup<'_>) -> MetadataImage {
     let ReassignmentImageSetup {
         assignment,

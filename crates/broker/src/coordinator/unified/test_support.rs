@@ -348,27 +348,67 @@ pub(crate) fn wire_bytes(fields: &[&str]) -> Vec<u8> {
         .collect()
 }
 
+pub(crate) struct HeartbeatWriteFailure {
+    label: &'static str,
+    failure: Option<crate::error::BrokerError>,
+    expected: crate::test_support::KafkaErrorCode,
+}
+
+pub(crate) struct FailedHeartbeatFixture {
+    pub coordinator: std::sync::Arc<super::GroupCoordinator>,
+    pub log: std::sync::Arc<super::offsets_log::fake::InMemoryOffsetsLog>,
+    pub expected: crate::test_support::KafkaErrorCode,
+    pub label: &'static str,
+}
+
+impl FailedHeartbeatFixture {
+    pub async fn check_no_batches(&self) {
+        assert2::check!(self.log.batches().await.is_empty(), "{}", self.label);
+    }
+}
+
+impl HeartbeatWriteFailure {
+    /// Arm the fixture's next durable append without changing its coordinator configuration.
+    pub fn coordinator(
+        self,
+        factory: impl FnOnce() -> (
+            std::sync::Arc<super::GroupCoordinator>,
+            std::sync::Arc<super::offsets_log::fake::InMemoryOffsetsLog>,
+        ),
+    ) -> FailedHeartbeatFixture {
+        let (coordinator, log) = factory();
+        log.fail_next_append(self.failure);
+        FailedHeartbeatFixture {
+            coordinator,
+            log,
+            expected: self.expected,
+            label: self.label,
+        }
+    }
+}
+
 /// The three independent failure expectations for a heartbeat's durable write.
-pub(crate) fn heartbeat_write_failures()
--> [(&'static str, Option<crate::error::BrokerError>, i16); 3] {
+pub(crate) fn heartbeat_write_failures() -> [HeartbeatWriteFailure; 3] {
     let uncommitted =
         |code| Some(crate::error::BrokerError::CoordinatorWriteUncommitted { partition: 0, code });
     [
-        (
-            "the partition writer is gone",
-            None,
-            crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
-        ),
-        (
-            "the leadership moved before the write committed",
-            uncommitted(crate::codes::NOT_COORDINATOR),
-            crate::codes::NOT_COORDINATOR,
-        ),
-        (
-            "the write did not commit in time",
-            uncommitted(crate::codes::COORDINATOR_NOT_AVAILABLE),
-            crate::codes::COORDINATOR_NOT_AVAILABLE,
-        ),
+        HeartbeatWriteFailure {
+            label: "the partition writer is gone",
+            failure: None,
+            expected: crate::test_support::KafkaErrorCode(
+                crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ),
+        },
+        HeartbeatWriteFailure {
+            label: "the leadership moved before the write committed",
+            failure: uncommitted(crate::codes::NOT_COORDINATOR),
+            expected: crate::test_support::KafkaErrorCode(crate::codes::NOT_COORDINATOR),
+        },
+        HeartbeatWriteFailure {
+            label: "the write did not commit in time",
+            failure: uncommitted(crate::codes::COORDINATOR_NOT_AVAILABLE),
+            expected: crate::test_support::KafkaErrorCode(crate::codes::COORDINATOR_NOT_AVAILABLE),
+        },
     ]
 }
 

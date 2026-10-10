@@ -71,9 +71,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_protocol::{
-        Decode as _, owned::remove_raft_voter_response, primitives::uuid::Uuid as ProtoUuid,
-    };
+    use krabka_protocol::{owned::remove_raft_voter_response, primitives::uuid::Uuid as ProtoUuid};
 
     use crate::test_support::DenyAll;
 
@@ -108,14 +106,13 @@ mod tests {
                 error_message: Some("cannot remove the last voter".into()),
                 ..Default::default()
             };
-            let bytes = crate::handlers::encode_response(&resp, version).expect("encode");
-            let mut cur: &[u8] = &bytes;
-            let decoded = RemoveRaftVoterResponse::decode(&mut cur, version).expect("decode");
+            let (decoded, consumed) =
+                crate::test_support::round_trip_response(&resp, krabka_ids::ApiVersion(version));
             assert!(
                 (
                     decoded.error_code,
                     decoded.error_message.as_deref(),
-                    cur.is_empty(),
+                    consumed,
                 ) == (
                     codes::INVALID_REQUEST,
                     Some("cannot remove the last voter"),

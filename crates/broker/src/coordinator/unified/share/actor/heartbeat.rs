@@ -561,13 +561,12 @@ mod tests {
     /// does not know.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
-        for (what, failure, expected) in
-            crate::coordinator::unified::test_support::heartbeat_write_failures()
-        {
-            let (metadata, _id) = metadata_with_topic(TopicMetadataSetup::default());
-            let (coord, log) = make_coordinator(metadata);
-            let handle = coord.get_or_create_share("g");
-            log.fail_next_append(failure);
+        for case in crate::coordinator::unified::test_support::heartbeat_write_failures() {
+            let fixture = case.coordinator(|| {
+                let (metadata, _id) = metadata_with_topic(TopicMetadataSetup::default());
+                make_coordinator(metadata)
+            });
+            let handle = fixture.coordinator.get_or_create_share("g");
 
             let response = heartbeat(
                 &handle,
@@ -578,12 +577,13 @@ mod tests {
             check!(
                 response
                     == ShareGroupHeartbeatResponse {
-                        error_code: expected,
+                        error_code: fixture.expected.0,
                         ..Default::default()
                     },
-                "{what}"
+                "{}",
+                fixture.label
             );
-            check!(log.batches().await.is_empty(), "{what}");
+            fixture.check_no_batches().await;
         }
     }
 

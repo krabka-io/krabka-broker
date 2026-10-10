@@ -309,20 +309,18 @@ async fn fenced_epoch_is_rejected() {
 /// up again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
-    for (what, failure, expected) in
-        crate::coordinator::unified::test_support::heartbeat_write_failures()
-    {
-        let (coord, log) = make_coordinator();
-        let handle = coord.get_or_create_streams("g");
-        log.fail_next_append(failure);
+    for case in crate::coordinator::unified::test_support::heartbeat_write_failures() {
+        let fixture = case.coordinator(make_coordinator);
+        let handle = fixture.coordinator.get_or_create_streams("g");
 
         let response = heartbeat(&handle, member_request("m1", 0)).await;
 
         check!(
-            response == super::response::error_resp(expected, None),
-            "{what}"
+            response == super::response::error_resp(fixture.expected.0, None),
+            "{}",
+            fixture.label
         );
-        check!(log.batches().await.is_empty(), "{what}");
+        fixture.check_no_batches().await;
     }
 }
 

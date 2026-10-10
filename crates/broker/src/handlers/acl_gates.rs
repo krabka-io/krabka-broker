@@ -114,9 +114,11 @@ macro_rules! named_acl_gates {
 
 named_acl_gates!(
     group_read_denied: Group(Read, group_id),
+    group_delete_denied: Group(Delete, group_id),
     /// The `Describe` gate on `Group(group_id)`, the twin of [`group_read_denied`].
     group_describe_denied: Group(Describe, group_id),
     cluster_alter_denied: Cluster(Alter),
+    cluster_alter_configs_denied: Cluster(AlterConfigs),
     cluster_action_denied: Cluster(ClusterAction),
     /// The `Describe` gate on `Cluster("kafka-cluster")`, the twin of [`cluster_alter_denied`].
     /// The barrier, write-freeze and break-glass control planes all use this gate.
