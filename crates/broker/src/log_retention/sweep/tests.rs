@@ -175,7 +175,7 @@ async fn a_failed_deletion_is_counted_and_takes_the_log_dir_offline() {
         // reclamation uses unique names and runs through writer maintenance.
         let mut log = partition.log.lock().expect("partition log lock");
         let mut config = log.config_snapshot();
-        config.file_delete_delay = krabka_units::Time::ZERO;
+        config.file_delete_delay = krabka_units::millis(0);
         log.set_config(config);
     }
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
