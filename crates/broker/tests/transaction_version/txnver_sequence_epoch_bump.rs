@@ -267,7 +267,12 @@ async fn codes_across_restart(case: &Case) -> [i16; 3] {
         .await
         .expect("start broker");
     let client = admin_client(&broker.listen_addr().to_string()).await;
-    create_topic(&client, case.topic, 1).await;
+    create_topic(
+        &client,
+        case.topic,
+        crate::support::topics::TopicPartitionCount(1),
+    )
+    .await;
     let producer = set_up(&client, case).await;
     let live_rejected = probe(&client, case, &producer, case.rejected).await;
     broker.shutdown().await;

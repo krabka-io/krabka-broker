@@ -42,12 +42,26 @@ pub fn voter_set(ids: &[NodeId]) -> krabka_metadata::voters::VoterSet {
     }))
 }
 
+/// Number of metadata records between count-triggered snapshots; zero disables the trigger.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    derive_more::Display,
+    derive_more::From,
+    derive_more::Into,
+)]
+pub struct SnapshotRecordCount(pub u64);
+
 #[derive(Clone, Copy)]
 pub struct ControllerSetup<'a> {
     pub me: NodeId,
     pub ids: &'a [NodeId],
     pub election_timeout: Time,
-    pub snapshot_interval_records: u64,
+    pub snapshot_interval_records: SnapshotRecordCount,
     pub heartbeat_interval: Option<Time>,
     pub controller_fetch_miss_limit: ControllerFetchMissLimit,
     pub metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
@@ -61,7 +75,7 @@ impl Default for ControllerSetup<'_> {
             me: NodeId(1),
             ids: &[NodeId(1), NodeId(2), NodeId(3)],
             election_timeout: TEST_ELECTION_TIMEOUT,
-            snapshot_interval_records: 0,
+            snapshot_interval_records: SnapshotRecordCount(0),
             heartbeat_interval: None,
             controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
             metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
@@ -74,7 +88,7 @@ impl Default for ControllerSetup<'_> {
 pub fn build(setup: ControllerSetup<'_>) -> (KraftController, tempfile::TempDir) {
     spawn_test_controller(setup.me, setup.ids, |config| {
         config.election_timeout = setup.election_timeout;
-        config.snapshot_interval_records = setup.snapshot_interval_records;
+        config.snapshot_interval_records = setup.snapshot_interval_records.0;
         config.heartbeat_interval = setup.heartbeat_interval;
         config.controller_fetch_miss_limit = setup.controller_fetch_miss_limit;
         config.metadata_raft_command_queue_capacity = setup.metadata_raft_command_queue_capacity;

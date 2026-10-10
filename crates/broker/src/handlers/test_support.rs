@@ -440,6 +440,20 @@ pub(crate) async fn produce_wire(
     crate::test_support::decode_response(&response_bytes, version)
 }
 
+/// Send a fixture acknowledgement using the current wire version and default principal.
+pub(crate) async fn send_acknowledgements(
+    broker: &BrokerHandle,
+    setup: AcknowledgementSetup<'_>,
+) -> krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse {
+    let request = acknowledge_batches_request(setup);
+    share_acknowledge_wire(
+        broker,
+        krabka_protocol::owned::share_acknowledge_request::MAX_VERSION,
+        &request,
+    )
+    .await
+}
+
 pub(crate) async fn share_acknowledge_wire(
     broker: &BrokerHandle,
     version: i16,
@@ -567,23 +581,97 @@ pub(crate) enum AcknowledgementMode {
 
 /// A partition index and its ordered acknowledgement ranges, with independent
 /// lifetimes for the range list and its acknowledgement-type slices.
-pub(crate) type PartitionAcknowledgements<'a, 'b> = (i32, &'a [(i64, i64, &'b [i8])]);
+/// Wire acknowledgement codes include malformed values in validation cases.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    derive_more::Display,
+    derive_more::From,
+    derive_more::Into,
+)]
+pub(crate) struct AcknowledgementCode(pub i8);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct AcknowledgementSetup<'a, 'b> {
+#[derive(Clone, Default)]
+pub(crate) struct AcknowledgementBatchSetup {
+    pub first_offset: krabka_log::Offset,
+    pub last_offset: krabka_log::Offset,
+    pub types: Vec<AcknowledgementCode>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct AcknowledgementPartitionSetup {
+    pub index: krabka_ids::PartitionIndex,
+    pub batches: Vec<AcknowledgementBatchSetup>,
+}
+
+type WirePartitionAcknowledgements<'a, 'b> = (i32, &'a [(i64, i64, &'b [i8])]);
+
+impl AcknowledgementPartitionSetup {
+    /// One acknowledgement code covering an inclusive offset range on partition zero.
+    pub(crate) fn single_batch(
+        offsets: std::ops::RangeInclusive<krabka_log::Offset>,
+        code: AcknowledgementCode,
+    ) -> Self {
+        Self {
+            batches: vec![AcknowledgementBatchSetup {
+                first_offset: *offsets.start(),
+                last_offset: *offsets.end(),
+                types: vec![code],
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// Adapt the literal wire tables used by malformed-request cases.
+    pub(crate) fn from_wire((index, batches): WirePartitionAcknowledgements<'_, '_>) -> Self {
+        Self {
+            index: krabka_ids::PartitionIndex(index),
+            batches: batches
+                .iter()
+                .map(|&(first, last, types)| AcknowledgementBatchSetup {
+                    first_offset: krabka_log::Offset(first),
+                    last_offset: krabka_log::Offset(last),
+                    types: types.iter().copied().map(AcknowledgementCode).collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, krabka_macros::FieldDefaults)]
+pub(crate) struct AcknowledgementSetup<'a> {
     #[default("g")]
     pub group: &'a str,
     #[default("member")]
     pub member: &'a str,
     pub epoch: ShareSessionEpoch,
     pub topic_id: WireUuid,
-    #[default((0, &[]))]
-    pub partition: PartitionAcknowledgements<'a, 'b>,
+    pub partition: AcknowledgementPartitionSetup,
     pub mode: AcknowledgementMode,
 }
 
+impl<'a> AcknowledgementSetup<'a> {
+    /// The default member and acknowledgement mode for one topic's session.
+    pub(crate) fn for_topic_session(
+        group: &'a str,
+        epoch: ShareSessionEpoch,
+        topic_id: WireUuid,
+    ) -> Self {
+        Self {
+            group,
+            epoch,
+            topic_id,
+            ..Default::default()
+        }
+    }
+}
+
 pub(crate) fn acknowledge_batches_request(
-    setup: AcknowledgementSetup<'_, '_>,
+    setup: AcknowledgementSetup<'_>,
 ) -> krabka_protocol::owned::share_acknowledge_request::ShareAcknowledgeRequest {
     use krabka_protocol::owned::share_acknowledge_request::{
         AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch, ShareAcknowledgeRequest,
@@ -593,7 +681,7 @@ pub(crate) fn acknowledge_batches_request(
         member,
         epoch,
         topic_id,
-        partition: (partition_index, batches),
+        partition,
         mode,
     } = setup;
     ShareAcknowledgeRequest {
@@ -604,8 +692,17 @@ pub(crate) fn acknowledge_batches_request(
         topics: vec![AcknowledgeTopic {
             topic_id,
             partitions: vec![AcknowledgePartition {
-                partition_index,
-                acknowledgement_batches: acknowledgement_batches!(AcknowledgementBatch, batches),
+                partition_index: partition.index.0,
+                acknowledgement_batches: partition
+                    .batches
+                    .into_iter()
+                    .map(|batch| AcknowledgementBatch {
+                        first_offset: batch.first_offset.0,
+                        last_offset: batch.last_offset.0,
+                        acknowledge_types: batch.types.into_iter().map(|kind| kind.0).collect(),
+                        ..Default::default()
+                    })
+                    .collect(),
                 ..Default::default()
             }],
             ..Default::default()

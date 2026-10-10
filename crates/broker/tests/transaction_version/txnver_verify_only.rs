@@ -80,7 +80,7 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
     let (broker, bootstrap, _dir) = boot_single().await;
     let client = admin_client(&bootstrap).await;
     // Two partitions so (t,1) is a real partition that simply isn't in the txn.
-    create_topic(&client, "t", 2).await;
+    create_topic(&client, "t", crate::support::topics::TopicPartitionCount(2)).await;
 
     // Locate (and trigger loading of) the transaction coordinator for TID.
     // On a single-broker cluster the coordinator is this same node, but the

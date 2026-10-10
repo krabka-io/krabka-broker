@@ -151,10 +151,15 @@ async fn share_acknowledge(
 ) -> ShareAcknowledgeResponse {
     let request = crate::handlers::test_support::acknowledge_batches_request(
         crate::handlers::test_support::AcknowledgementSetup {
-            group,
-            topic_id,
-            partition: (partition_index, batches),
-            ..Default::default()
+            partition: crate::handlers::test_support::AcknowledgementPartitionSetup::from_wire((
+                partition_index,
+                batches,
+            )),
+            ..crate::handlers::test_support::AcknowledgementSetup::for_topic_session(
+                group,
+                crate::handlers::test_support::ShareSessionEpoch::default(),
+                topic_id,
+            )
         },
     );
     crate::handlers::test_support::share_acknowledge_wire_as(broker, VERSION, user, &request).await

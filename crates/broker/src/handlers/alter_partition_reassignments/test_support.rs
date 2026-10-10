@@ -80,7 +80,7 @@ pub(super) fn request(setup: ReassignmentRequestSetup<'_>) -> AlterPartitionReas
 crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 
 /// A registered six-broker image with one partition in the supplied reassignment state.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+#[derive(Clone, krabka_macros::FieldDefaults)]
 pub(super) struct ReassignmentImageSetup<'a> {
     pub assignment: ReassignmentSetup<'a>,
     pub partition_epoch: crate::test_support::PartitionEpoch,
@@ -91,7 +91,7 @@ pub(super) fn img_with(setup: ReassignmentImageSetup<'_>) -> MetadataImage {
         assignment,
         partition_epoch,
     } = setup;
-    let replicas = assignment.replicas;
+    let replica_count = assignment.replicas.len();
     let mut img = MetadataImage::new(uuid::Uuid::nil());
     // Register brokers 1..=6 so validate_target accepts target lists.
     for n in 1u64..=6 {
@@ -106,7 +106,7 @@ pub(super) fn img_with(setup: ReassignmentImageSetup<'_>) -> MetadataImage {
         name: "foo".into(),
         topic_id: uuid::Uuid::nil(),
         partitions: 1,
-        replication_factor: i16::try_from(replicas.len()).expect("replication factor fits i16"),
+        replication_factor: i16::try_from(replica_count).expect("replication factor fits i16"),
     }));
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
         partition_epoch: partition_epoch.0,

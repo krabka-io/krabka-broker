@@ -208,8 +208,8 @@ mod tests {
     fn img_reassigning(proposals: &[krabka_metadata::BreakGlassProposalRecord]) -> MetadataImage {
         let mut img = img_with(ReassignmentImageSetup {
             assignment: ReassignmentSetup {
-                adding: &[3],
-                removing: &[2],
+                adding: vec![krabka_ids::NodeId(3)],
+                removing: vec![krabka_ids::NodeId(2)],
                 ..Default::default()
             },
             ..Default::default()
@@ -378,8 +378,8 @@ mod tests {
         let broker = handle.broker_arc_for_test();
         let image = img_with(ReassignmentImageSetup {
             assignment: ReassignmentSetup {
-                replicas: &[1, 2],
-                isr: &[1, 2],
+                replicas: vec![krabka_ids::NodeId(1), krabka_ids::NodeId(2)],
+                isr: vec![krabka_ids::NodeId(1), krabka_ids::NodeId(2)],
                 ..Default::default()
             },
             ..Default::default()

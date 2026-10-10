@@ -166,7 +166,12 @@ async fn a_group_assigns_no_sooner_than_its_own_assignment_interval() {
                 &handle,
                 crate::coordinator::unified::share::actor::test_support::InitializedTopicSetup {
                     topic_id,
-                    partitions: vec![0, 1, 2, 3],
+                    partitions: vec![
+                        krabka_ids::PartitionIndex(0),
+                        krabka_ids::PartitionIndex(1),
+                        krabka_ids::PartitionIndex(2),
+                        krabka_ids::PartitionIndex(3),
+                    ],
                     ..Default::default()
                 },
             )

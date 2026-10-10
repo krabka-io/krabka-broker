@@ -174,8 +174,8 @@ use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
 pub struct TransactionTopicSetup<'a> {
     #[default("orders")]
     pub name: &'a str,
-    #[default(1)]
-    pub partitions: i32,
+    #[default(crate::support::topics::TopicPartitionCount(1))]
+    pub partitions: crate::support::topics::TopicPartitionCount,
     pub configs: Vec<CreatableTopicConfig>,
     #[default("CreateTopics")]
     pub context: &'a str,
@@ -192,7 +192,7 @@ pub async fn create_topic(client: &krabka_client_core::Client, setup: Transactio
         .send(crate::support::topics::create_topic_request(
             krabka_protocol::owned::create_topics_request::CreatableTopic {
                 configs,
-                ..crate::support::topics::creatable_topic(name, partitions, 1)
+                ..crate::support::topics::creatable_topic(name, partitions.0, 1)
             },
             5_000,
         ))

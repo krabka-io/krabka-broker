@@ -95,6 +95,19 @@ pub(crate) fn metadata_log() -> krabka_raft::MetadataLogConfig {
 
 /// Engine setup with snapshots disabled by default. Snapshot catch-up scenarios
 /// set a small record interval so the leader snapshots and prunes after a burst.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    derive_more::Display,
+    derive_more::From,
+    derive_more::Into,
+)]
+pub(crate) struct SnapshotRecordCount(pub u64);
+
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(crate) struct SimEngineSetup<'a> {
     #[default(NodeId(1))]
@@ -104,7 +117,7 @@ pub(crate) struct SimEngineSetup<'a> {
     pub cluster_id: uuid::Uuid,
     #[default(STAGGERED_TIMEOUTS[0])]
     pub election_timeout: Time,
-    pub snapshot_interval_records: u64,
+    pub snapshot_interval_records: SnapshotRecordCount,
 }
 
 pub(crate) fn build_engine(
@@ -133,7 +146,7 @@ pub(crate) fn build_engine(
             metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
             metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
             peers: Arc::new(net.as_peer(me)),
-            snapshot_interval_records,
+            snapshot_interval_records: snapshot_interval_records.0,
             max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
             max_snapshot_interval: millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use assert2::{assert, check};
+use krabka_raft::NodeId;
 use tokio::net::TcpListener;
 
 use super::*;
@@ -8,14 +9,14 @@ use crate::{broker::test_support::submit_metadata_topic_partition, config::Broke
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct StaticVoterSetup<'a> {
-    #[default(1)]
-    node_id: u64,
+    #[default(NodeId(1))]
+    node_id: NodeId,
     #[default(SocketAddr::from(([127, 0, 0, 1], 0)))]
     listen_addr: SocketAddr,
     #[default(SocketAddr::from(([127, 0, 0, 1], 0)))]
     controller_addr: SocketAddr,
     // An empty list retains the automatic quorum used by ordinary single-broker fixtures.
-    voters: &'a [(u64, SocketAddr)],
+    voters: &'a [(NodeId, SocketAddr)],
 }
 
 fn static_voter_test_config(
@@ -29,15 +30,15 @@ fn static_voter_test_config(
         voters,
     } = setup;
     let mut config = BrokerConfig::for_tests(log_dir.to_path_buf());
-    config.broker_id = i32::try_from(node_id).expect("node id fits broker id");
-    config.node_id = krabka_raft::NodeId(node_id);
+    config.broker_id = i32::try_from(node_id.0).expect("node id fits broker id");
+    config.node_id = node_id;
     config.listen_addr = listen_addr;
     config.advertised_listener = listen_addr.to_string();
     config.controller_listen_addr = controller_addr;
-    config.directory_id = uuid::Uuid::from_u128(u128::from(node_id));
+    config.directory_id = uuid::Uuid::from_u128(u128::from(node_id.0));
     config.controller_quorum_voters = voters
         .iter()
-        .map(|(id, addr)| (krabka_raft::NodeId(*id), addr.to_string()))
+        .map(|(id, addr)| (*id, addr.to_string()))
         .collect();
     config
 }
@@ -54,12 +55,12 @@ async fn broker_handle_reports_non_default_node_and_voter_state() {
     let listen8 = data_listener8.local_addr().unwrap();
     let controller7 = controller_listener7.local_addr().unwrap();
     let controller8 = controller_listener8.local_addr().unwrap();
-    let voters = [(7, controller7), (8, controller8)];
+    let voters = [(NodeId(7), controller7), (NodeId(8), controller8)];
 
     let config7 = static_voter_test_config(
         dir7.path(),
         StaticVoterSetup {
-            node_id: 7,
+            node_id: NodeId(7),
             listen_addr: listen7,
             controller_addr: controller7,
             voters: &voters,
@@ -68,7 +69,7 @@ async fn broker_handle_reports_non_default_node_and_voter_state() {
     let config8 = static_voter_test_config(
         dir8.path(),
         StaticVoterSetup {
-            node_id: 8,
+            node_id: NodeId(8),
             listen_addr: listen8,
             controller_addr: controller8,
             voters: &voters,

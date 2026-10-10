@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use krabka_ids::PartitionIndex;
 use krabka_protocol::{
     owned::{
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
@@ -104,8 +105,8 @@ pub(super) struct InitializedTopicSetup<'a> {
     pub topic_id: Uuid,
     #[default("t")]
     pub topic_name: &'a str,
-    #[default(vec![0])]
-    pub partitions: Vec<i32>,
+    #[default(vec![PartitionIndex(0)])]
+    pub partitions: Vec<PartitionIndex>,
 }
 
 pub(super) async fn seed_initialized(
@@ -128,7 +129,7 @@ pub(super) async fn seed_initialized(
                 initialized: vec![TopicPartitionsInfo {
                     topic_id: uuid::Uuid::from_bytes(topic_id.0),
                     topic_name: topic_name.to_owned(),
-                    partitions,
+                    partitions: partitions.into_iter().map(|index| index.0).collect(),
                 }],
                 ..ShareGroupStatePartitionMetadataValue::default()
             },

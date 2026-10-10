@@ -159,22 +159,22 @@ fn producer_history(history: ProducerHistory) -> Vec<RecordBatch> {
 
 #[derive(Clone, Copy)]
 struct ActiveProducerSetup {
-    producer_id: i64,
-    producer_epoch: i16,
-    last_sequence: i32,
-    last_timestamp: i64,
-    coordinator_epoch: i32,
-    current_txn_start_offset: Option<i64>,
+    producer_id: ProducerId,
+    producer_epoch: BatchProducerEpoch,
+    last_sequence: BatchSequence,
+    last_timestamp: BatchTimestamp,
+    coordinator_epoch: MarkerCoordinatorEpoch,
+    current_txn_start_offset: Option<Offset>,
 }
 
 impl Default for ActiveProducerSetup {
     fn default() -> Self {
         Self {
-            producer_id: 7,
-            producer_epoch: 0,
-            last_sequence: 0,
-            last_timestamp: 1_000,
-            coordinator_epoch: -1,
+            producer_id: ProducerId(7),
+            producer_epoch: BatchProducerEpoch(0),
+            last_sequence: BatchSequence(0),
+            last_timestamp: BatchTimestamp(1_000),
+            coordinator_epoch: MarkerCoordinatorEpoch(-1),
             current_txn_start_offset: None,
         }
     }
@@ -190,12 +190,12 @@ fn active(setup: ActiveProducerSetup) -> ActiveProducer {
         current_txn_start_offset,
     } = setup;
     ActiveProducer {
-        producer_id: ProducerId(producer_id),
-        producer_epoch,
-        last_sequence,
-        last_timestamp,
-        coordinator_epoch,
-        current_txn_start_offset: current_txn_start_offset.map(Offset),
+        producer_id,
+        producer_epoch: producer_epoch.0,
+        last_sequence: last_sequence.0,
+        last_timestamp: last_timestamp.0,
+        coordinator_epoch: coordinator_epoch.0,
+        current_txn_start_offset,
     }
 }
 
@@ -245,9 +245,9 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
             "idempotent batches",
             producer_history(ProducerHistory::Idempotent),
             vec![active(ActiveProducerSetup {
-                producer_epoch: 2,
-                last_sequence: 4,
-                last_timestamp: 2_000,
+                producer_epoch: BatchProducerEpoch(2),
+                last_sequence: BatchSequence(4),
+                last_timestamp: BatchTimestamp(2_000),
                 ..Default::default()
             })],
         ),
@@ -269,10 +269,10 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
                 }),
             ],
             vec![active(ActiveProducerSetup {
-                producer_id: 8,
-                last_sequence: 2,
-                last_timestamp: 1_500,
-                current_txn_start_offset: Some(0),
+                producer_id: ProducerId(8),
+                last_sequence: BatchSequence(2),
+                last_timestamp: BatchTimestamp(1_500),
+                current_txn_start_offset: Some(Offset(0)),
                 ..Default::default()
             })],
         ),
@@ -280,11 +280,11 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
             "a commit at the same epoch (transaction version 1)",
             producer_history(ProducerHistory::Committed),
             vec![active(ActiveProducerSetup {
-                producer_id: 9,
-                producer_epoch: 1,
-                last_sequence: 1,
-                last_timestamp: 3_000,
-                coordinator_epoch: 5,
+                producer_id: ProducerId(9),
+                producer_epoch: BatchProducerEpoch(1),
+                last_sequence: BatchSequence(1),
+                last_timestamp: BatchTimestamp(3_000),
+                coordinator_epoch: MarkerCoordinatorEpoch(5),
                 ..Default::default()
             })],
         ),
@@ -292,11 +292,11 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
             "an abort at a bumped epoch (transaction version 2)",
             producer_history(ProducerHistory::Aborted),
             vec![active(ActiveProducerSetup {
-                producer_id: 10,
-                producer_epoch: 2,
-                last_sequence: -1,
-                last_timestamp: 4_000,
-                coordinator_epoch: 6,
+                producer_id: ProducerId(10),
+                producer_epoch: BatchProducerEpoch(2),
+                last_sequence: BatchSequence(-1),
+                last_timestamp: BatchTimestamp(4_000),
+                coordinator_epoch: MarkerCoordinatorEpoch(6),
                 ..Default::default()
             })],
         ),
@@ -304,11 +304,11 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
             "a marker without a data batch",
             producer_history(ProducerHistory::MarkerOnly),
             vec![active(ActiveProducerSetup {
-                producer_id: 11,
-                producer_epoch: 3,
-                last_sequence: -1,
-                last_timestamp: 5_000,
-                coordinator_epoch: 7,
+                producer_id: ProducerId(11),
+                producer_epoch: BatchProducerEpoch(3),
+                last_sequence: BatchSequence(-1),
+                last_timestamp: BatchTimestamp(5_000),
+                coordinator_epoch: MarkerCoordinatorEpoch(7),
                 ..Default::default()
             })],
         ),
@@ -335,11 +335,11 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
                 }),
             ],
             vec![active(ActiveProducerSetup {
-                producer_id: 12,
-                last_sequence: 1,
-                last_timestamp: 3_000,
-                coordinator_epoch: 2,
-                current_txn_start_offset: Some(2),
+                producer_id: ProducerId(12),
+                last_sequence: BatchSequence(1),
+                last_timestamp: BatchTimestamp(3_000),
+                coordinator_epoch: MarkerCoordinatorEpoch(2),
+                current_txn_start_offset: Some(Offset(2)),
                 ..Default::default()
             })],
         ),
@@ -348,19 +348,19 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
             producer_history(ProducerHistory::SeveralProducers),
             vec![
                 active(ActiveProducerSetup {
-                    producer_id: 20,
-                    last_timestamp: 2_000,
+                    producer_id: ProducerId(20),
+                    last_timestamp: BatchTimestamp(2_000),
                     ..Default::default()
                 }),
                 active(ActiveProducerSetup {
-                    producer_id: 25,
-                    producer_epoch: 4,
-                    last_timestamp: 3_000,
-                    current_txn_start_offset: Some(2),
+                    producer_id: ProducerId(25),
+                    producer_epoch: BatchProducerEpoch(4),
+                    last_timestamp: BatchTimestamp(3_000),
+                    current_txn_start_offset: Some(Offset(2)),
                     ..Default::default()
                 }),
                 active(ActiveProducerSetup {
-                    producer_id: 30,
+                    producer_id: ProducerId(30),
                     ..Default::default()
                 }),
             ],
@@ -531,9 +531,9 @@ fn an_expired_producer_starts_again_without_its_retained_batches() {
     assert!(
         log.active_producers()
             == vec![active(ActiveProducerSetup {
-                producer_id: 5,
-                last_sequence: 2,
-                last_timestamp: 20_000,
+                producer_id: ProducerId(5),
+                last_sequence: BatchSequence(2),
+                last_timestamp: BatchTimestamp(20_000),
                 ..Default::default()
             })]
     );

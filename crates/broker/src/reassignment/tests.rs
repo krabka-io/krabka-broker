@@ -113,8 +113,8 @@ async fn start_watching_reassignment(
     tokio::task::JoinHandle<()>,
 ) {
     let initial = img(ReassignmentSetup {
-        replicas: &[1],
-        isr: &[1],
+        replicas: vec![krabka_ids::NodeId(1)],
+        isr: vec![krabka_ids::NodeId(1)],
         ..Default::default()
     });
     let controller = Arc::new(MockReassignmentController::new(is_leader, initial));
@@ -124,8 +124,8 @@ async fn start_watching_reassignment(
     let task = tokio::spawn(run(task_controller, l, shutdown.clone()));
     tokio::task::yield_now().await;
     controller.publish(img(ReassignmentSetup {
-        adding: &[3],
-        removing: &[2],
+        adding: vec![krabka_ids::NodeId(3)],
+        removing: vec![krabka_ids::NodeId(2)],
         ..Default::default()
     }));
     (controller, shutdown, task)

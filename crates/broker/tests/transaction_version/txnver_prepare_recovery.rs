@@ -181,7 +181,12 @@ async fn open_transaction(
     topic: &str,
     downgrade_to: Option<i16>,
 ) -> Identity {
-    create_topic(client, topic, 1).await;
+    create_topic(
+        client,
+        topic,
+        crate::support::topics::TopicPartitionCount(1),
+    )
+    .await;
     if let Some(level) = downgrade_to {
         downgrade_transaction_version(client, level).await;
     }

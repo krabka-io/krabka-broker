@@ -505,25 +505,40 @@ pub(crate) fn topic_partition_image(
 krabka_macros::topic_record_fixture!(single_partition_topic);
 
 /// Seeds the one-partition reassignment fixtures with the fixed leader epoch.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ReassignmentSetup<'a> {
-    pub replicas: &'a [u64],
-    pub isr: &'a [u64],
-    pub adding: &'a [u64],
-    pub removing: &'a [u64],
-    pub leader: u64,
+    pub replicas: Vec<NodeId>,
+    pub isr: Vec<NodeId>,
+    pub adding: Vec<NodeId>,
+    pub removing: Vec<NodeId>,
+    pub leader: NodeId,
     pub directories: &'a [uuid::Uuid],
 }
 
 impl Default for ReassignmentSetup<'_> {
     fn default() -> Self {
         Self {
-            replicas: &[1, 2, 3],
-            isr: &[1, 2, 3],
-            adding: &[],
-            removing: &[],
-            leader: 1,
+            replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+            isr: vec![NodeId(1), NodeId(2), NodeId(3)],
+            adding: vec![],
+            removing: vec![],
+            leader: NodeId(1),
             directories: &[],
+        }
+    }
+}
+
+impl ReassignmentSetup<'_> {
+    /// An in-flight replacement with the new replica already in the ISR.
+    pub(crate) fn replacing_replica(removed: NodeId, added: NodeId) -> Self {
+        let mut replicas = Self::default().replicas;
+        replicas.push(added);
+        Self {
+            isr: replicas.clone(),
+            replicas,
+            adding: vec![added],
+            removing: vec![removed],
+            ..Default::default()
         }
     }
 }
@@ -544,12 +559,12 @@ pub(crate) fn reassignment_partition(setup: ReassignmentSetup<'_>) -> PartitionR
     PartitionRecord {
         topic: "foo".into(),
         partition: 0,
-        leader: NodeId(leader),
-        replicas: replica_nodes(replicas),
-        isr: replica_nodes(isr),
+        leader,
+        replicas,
+        isr,
         leader_epoch: krabka_metadata::LeaderEpoch(5),
-        adding_replicas: replica_nodes(adding),
-        removing_replicas: replica_nodes(removing),
+        adding_replicas: adding,
+        removing_replicas: removing,
         directories: directories.to_vec(),
         partition_epoch: 0,
     }

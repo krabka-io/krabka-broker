@@ -175,7 +175,12 @@ async fn assert_ongoing_txn_survives_restart(case: &RecoveryCase) {
             Some("krabka-txnv-test"),
         )
         .await;
-        create_topic(&client, case.topic, 1).await;
+        create_topic(
+            &client,
+            case.topic,
+            crate::support::topics::TopicPartitionCount(1),
+        )
+        .await;
         if let Some(level) = case.downgrade_to {
             downgrade_transaction_version(&client, level).await;
         }

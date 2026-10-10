@@ -11,6 +11,7 @@ use krabka_protocol::{
 };
 
 use super::*;
+use crate::test_support::{PartitionCount, ReplicationFactor};
 
 fn configs(pairs: &[(&str, &str)]) -> Vec<CreatableTopicConfig> {
     pairs
@@ -25,8 +26,8 @@ fn configs(pairs: &[(&str, &str)]) -> Vec<CreatableTopicConfig> {
 
 struct AutoTopicSetup<'a> {
     name: &'a str,
-    num_partitions: i32,
-    replication_factor: i16,
+    num_partitions: PartitionCount,
+    replication_factor: ReplicationFactor,
     configs: Vec<CreatableTopicConfig>,
 }
 
@@ -34,8 +35,8 @@ impl Default for AutoTopicSetup<'_> {
     fn default() -> Self {
         Self {
             name: "orders",
-            num_partitions: -1,
-            replication_factor: -1,
+            num_partitions: PartitionCount(-1),
+            replication_factor: ReplicationFactor(-1),
             configs: vec![],
         }
     }
@@ -50,8 +51,8 @@ fn topic(setup: AutoTopicSetup<'_>) -> CreatableTopic {
     } = setup;
     CreatableTopic {
         name: name.to_owned(),
-        num_partitions,
-        replication_factor,
+        num_partitions: num_partitions.0,
+        replication_factor: replication_factor.0,
         configs,
         ..Default::default()
     }
@@ -95,8 +96,8 @@ fn creatable_topic_follows_kafkas_creatable_topic() {
             crate::coordinator::bootstrap::OFFSETS_TOPIC,
             topic(AutoTopicSetup {
                 name: crate::coordinator::bootstrap::OFFSETS_TOPIC,
-                num_partitions: 11,
-                replication_factor: 3,
+                num_partitions: PartitionCount(11),
+                replication_factor: ReplicationFactor(3),
                 configs: configs(&[
                     ("cleanup.policy", "compact"),
                     ("compression.type", "producer"),
@@ -110,8 +111,8 @@ fn creatable_topic_follows_kafkas_creatable_topic() {
             crate::txn::bootstrap::TOPIC,
             topic(AutoTopicSetup {
                 name: crate::txn::bootstrap::TOPIC,
-                num_partitions: 12,
-                replication_factor: 2,
+                num_partitions: PartitionCount(12),
+                replication_factor: ReplicationFactor(2),
                 configs: configs(&[
                     ("cleanup.policy", "compact"),
                     ("compression.type", "uncompressed"),
@@ -127,8 +128,8 @@ fn creatable_topic_follows_kafkas_creatable_topic() {
             crate::share_coordinator::bootstrap::TOPIC,
             topic(AutoTopicSetup {
                 name: crate::share_coordinator::bootstrap::TOPIC,
-                num_partitions: 13,
-                replication_factor: 4,
+                num_partitions: PartitionCount(13),
+                replication_factor: ReplicationFactor(4),
                 configs: configs(&[
                     ("cleanup.policy", "delete"),
                     ("compression.type", "producer"),
@@ -144,8 +145,8 @@ fn creatable_topic_follows_kafkas_creatable_topic() {
             crate::barrier::STATE_TOPIC,
             topic(AutoTopicSetup {
                 name: crate::barrier::STATE_TOPIC,
-                num_partitions: 14,
-                replication_factor: 5,
+                num_partitions: PartitionCount(14),
+                replication_factor: ReplicationFactor(5),
                 configs: configs(&[("cleanup.policy", "compact")]),
             }),
         ),
@@ -169,7 +170,7 @@ fn creatable_topic_follows_kafkas_creatable_topic() {
             &partitions_supplied,
             "orders",
             topic(AutoTopicSetup {
-                num_partitions: 6,
+                num_partitions: PartitionCount(6),
                 ..Default::default()
             }),
         ),
@@ -178,8 +179,8 @@ fn creatable_topic_follows_kafkas_creatable_topic() {
             &both_supplied,
             "orders",
             topic(AutoTopicSetup {
-                num_partitions: 6,
-                replication_factor: 7,
+                num_partitions: PartitionCount(6),
+                replication_factor: ReplicationFactor(7),
                 ..Default::default()
             }),
         ),
@@ -413,12 +414,12 @@ async fn a_streams_creation_skips_a_backed_off_or_in_flight_topic() {
         vec![
             topic(AutoTopicSetup {
                 name: "backed-off",
-                num_partitions: 1,
+                num_partitions: PartitionCount(1),
                 ..Default::default()
             }),
             topic(AutoTopicSetup {
                 name: "in-flight",
-                num_partitions: 1,
+                num_partitions: PartitionCount(1),
                 ..Default::default()
             }),
         ],
@@ -432,12 +433,12 @@ async fn a_streams_creation_skips_a_backed_off_or_in_flight_topic() {
         vec![
             topic(AutoTopicSetup {
                 name: "backed-off",
-                num_partitions: 1,
+                num_partitions: PartitionCount(1),
                 ..Default::default()
             }),
             topic(AutoTopicSetup {
                 name: "fresh",
-                num_partitions: 1,
+                num_partitions: PartitionCount(1),
                 ..Default::default()
             }),
         ],

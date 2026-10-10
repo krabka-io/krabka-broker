@@ -38,7 +38,7 @@ fn start_snapshot_pair(
                     ids: voters,
                     cluster_id: cid,
                     election_timeout: STAGGERED_TIMEOUTS[idx],
-                    snapshot_interval_records: interval,
+                    snapshot_interval_records: crate::harness::SnapshotRecordCount(interval),
                 },
             );
             net.register(id, ctrl);
@@ -172,7 +172,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
             ids: &ids,
             cluster_id: cid,
             election_timeout: STAGGERED_TIMEOUTS[2],
-            snapshot_interval_records: interval,
+            snapshot_interval_records: crate::harness::SnapshotRecordCount(interval),
         },
     );
     net.register(NodeId(3), lag_ctrl);

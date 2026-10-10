@@ -122,7 +122,7 @@ fn ordinary_snapshot_does_not_reload_the_live_image() {
 async fn single_leader_snapshot_fixture() -> (KraftController, tempfile::TempDir) {
     let (ctrl, dir) = build(ControllerSetup {
         ids: &[NodeId(1)],
-        snapshot_interval_records: 3,
+        snapshot_interval_records: crate::kraft::controller::test_support::SnapshotRecordCount(3),
         ..Default::default()
     });
     super::test_support::elect_single_voter_controller(&ctrl).await;

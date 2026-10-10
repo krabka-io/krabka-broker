@@ -362,80 +362,59 @@ mod tests {
         // Every case is one tick over an image with all brokers alive.
         struct Case {
             name: &'static str,
-            replicas: &'static [u64],
-            isr: &'static [u64],
-            adding: &'static [u64],
-            removing: &'static [u64],
-            leader: u64,
+            assignment: ReassignmentSetup<'static>,
             /// The leader and ISR of the record the tick submits, if any.
             expected: Option<(u64, &'static [u64])>,
         }
-        let case = |name, replicas, isr, adding, removing, leader, expected| Case {
-            name,
-            replicas,
-            isr,
-            adding,
-            removing,
-            leader,
-            expected,
-        };
         let cases = [
-            case(
-                "broker 2 is a target replica outside the ISR",
-                &[1, 2, 3],
-                &[1, 3],
-                &[],
-                &[3],
-                1,
-                None,
-            ),
-            case(
-                "every target replica is in the ISR",
-                &[1, 2, 3],
-                &[1, 2, 3],
-                &[],
-                &[3],
-                1,
-                Some((1, &[1, 2])),
-            ),
-            case(
-                "the leader is removed and broker 3 is not in the ISR",
-                &[3, 4, 1, 2],
-                &[1, 2, 4],
-                &[4],
-                &[1, 2],
-                1,
-                None,
-            ),
-            case(
-                "the leader is removed and every target replica is in the ISR",
-                &[3, 4, 1, 2],
-                &[1, 3, 4],
-                &[4],
-                &[1, 2],
-                1,
+            Case {
+                name: "broker 2 is a target replica outside the ISR",
+                assignment: ReassignmentSetup {
+                    isr: vec![NodeId(1), NodeId(3)],
+                    removing: vec![NodeId(3)],
+                    ..Default::default()
+                },
+                expected: None,
+            },
+            Case {
+                name: "every target replica is in the ISR",
+                assignment: ReassignmentSetup {
+                    removing: vec![NodeId(3)],
+                    ..Default::default()
+                },
+                expected: Some((1, &[1, 2])),
+            },
+            Case {
+                name: "the leader is removed and broker 3 is not in the ISR",
+                assignment: ReassignmentSetup {
+                    replicas: vec![NodeId(3), NodeId(4), NodeId(1), NodeId(2)],
+                    isr: vec![NodeId(1), NodeId(2), NodeId(4)],
+                    adding: vec![NodeId(4)],
+                    removing: vec![NodeId(1), NodeId(2)],
+                    ..Default::default()
+                },
+                expected: None,
+            },
+            Case {
+                name: "the leader is removed and every target replica is in the ISR",
+                assignment: ReassignmentSetup {
+                    replicas: vec![NodeId(3), NodeId(4), NodeId(1), NodeId(2)],
+                    isr: vec![NodeId(1), NodeId(3), NodeId(4)],
+                    adding: vec![NodeId(4)],
+                    removing: vec![NodeId(1), NodeId(2)],
+                    ..Default::default()
+                },
                 // The handoff goes first; completion follows on the next tick.
-                Some((3, &[1, 3, 4])),
-            ),
+                expected: Some((3, &[1, 3, 4])),
+            },
         ];
         for Case {
             name: case,
-            replicas,
-            isr,
-            adding,
-            removing,
-            leader,
+            assignment,
             expected,
         } in cases
         {
-            let image = img(ReassignmentSetup {
-                replicas,
-                isr,
-                adding,
-                removing,
-                leader,
-                ..Default::default()
-            });
+            let image = img(assignment);
             let l = liveness(&[1, 2, 3, 4]).await;
 
             let updates = compute_reassignment_progress(&image, &l).await;
@@ -472,8 +451,8 @@ mod tests {
         let db = Uuid::from_u128(0xB);
         let dc = Uuid::from_u128(0xC);
         let image = img(ReassignmentSetup {
-            adding: &[3],
-            removing: &[2],
+            adding: vec![krabka_ids::NodeId(3)],
+            removing: vec![krabka_ids::NodeId(2)],
             directories: &[da, db, dc],
             ..Default::default()
         });
@@ -486,8 +465,8 @@ mod tests {
     #[tokio::test]
     async fn complete_when_adding_in_isr_writes_target() {
         let img = img(ReassignmentSetup {
-            adding: &[3],
-            removing: &[2],
+            adding: vec![krabka_ids::NodeId(3)],
+            removing: vec![krabka_ids::NodeId(2)],
             ..Default::default()
         });
         let pr = completed_target(&img).await;
@@ -531,9 +510,9 @@ mod tests {
             // replicas=[1,2,3], removing=[3]: the completion drops broker 3
             // from the replica set, and the published ELR still names it.
             let mut image = std::sync::Arc::try_unwrap(img(ReassignmentSetup {
-                isr,
-                adding,
-                removing: &[3],
+                isr: isr.iter().copied().map(krabka_ids::NodeId).collect(),
+                adding: adding.iter().copied().map(krabka_ids::NodeId).collect(),
+                removing: vec![krabka_ids::NodeId(3)],
                 ..Default::default()
             }))
             .expect("the fixture holds the only reference");
@@ -593,8 +572,8 @@ mod tests {
     #[tokio::test]
     async fn freeze_allows_completion_of_an_already_accepted_reassignment() {
         let mut image = img(ReassignmentSetup {
-            adding: &[3],
-            removing: &[2],
+            adding: vec![krabka_ids::NodeId(3)],
+            removing: vec![krabka_ids::NodeId(2)],
             ..Default::default()
         });
         Arc::make_mut(&mut image).apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
@@ -613,50 +592,43 @@ mod tests {
 
     #[tokio::test]
     async fn no_update_emitted_when_waiting_idle_or_no_alive_target() {
-        // (case, replicas, isr, adding, removing, leader, alive) — every case
+        // (case, assignment, alive) — every case
         // should wait / stay idle: compute_reassignment_progress emits nothing.
         let cases = [
             // Adding replica 3 not yet in ISR → wait.
             (
                 "adding_not_in_isr",
-                vec![1, 2, 3],
-                vec![1, 2],
-                vec![3],
-                vec![2],
-                1,
+                ReassignmentSetup {
+                    isr: vec![NodeId(1), NodeId(2)],
+                    adding: vec![NodeId(3)],
+                    removing: vec![NodeId(2)],
+                    ..Default::default()
+                },
                 vec![1, 2, 3],
             ),
             // leader=2, removing=[2]; only target replicas {1,3} in isr but
             // none alive (only 2 alive) — wait.
             (
                 "leader_handoff_no_alive_target_replica",
-                vec![1, 2, 3],
-                vec![1, 2, 3],
-                vec![3],
-                vec![2],
-                2,
+                ReassignmentSetup {
+                    adding: vec![NodeId(3)],
+                    removing: vec![NodeId(2)],
+                    leader: NodeId(2),
+                    ..Default::default()
+                },
                 vec![2],
             ),
             // No reassignment in flight → idle partition emits no update.
             (
                 "idle_partition",
-                vec![1, 2, 3],
-                vec![1, 2, 3],
-                vec![],
-                vec![],
-                1,
+                ReassignmentSetup {
+                    ..Default::default()
+                },
                 vec![1, 2, 3],
             ),
         ];
-        for (case, replicas, isr, adding, removing, leader, alive) in cases {
-            let img = img(ReassignmentSetup {
-                replicas: &replicas,
-                isr: &isr,
-                adding: &adding,
-                removing: &removing,
-                leader,
-                ..Default::default()
-            });
+        for (case, assignment, alive) in cases {
+            let img = img(assignment);
             let l = liveness(&alive).await;
             let updates = compute_reassignment_progress(&img, &l).await;
             assert!(
@@ -670,9 +642,9 @@ mod tests {
     async fn leader_handoff_when_leader_in_removing() {
         // leader=2, removing=[2]; new leader must come from target ∩ isr = {1,3} ∩ {1,2,3} = {1,3}.
         let img = img(ReassignmentSetup {
-            adding: &[3],
-            removing: &[2],
-            leader: 2,
+            adding: vec![krabka_ids::NodeId(3)],
+            removing: vec![krabka_ids::NodeId(2)],
+            leader: krabka_ids::NodeId(2),
             ..Default::default()
         });
         let l = liveness(&[1, 2, 3]).await;
@@ -695,9 +667,9 @@ mod tests {
     #[test]
     fn exhausted_epochs_block_reassignment_transitions() {
         let image = img(ReassignmentSetup {
-            adding: &[3],
-            removing: &[2],
-            leader: 2,
+            adding: vec![krabka_ids::NodeId(3)],
+            removing: vec![krabka_ids::NodeId(2)],
+            leader: krabka_ids::NodeId(2),
             ..Default::default()
         });
         let mut record = image.partition("foo", 0).expect("seeded partition").clone();
@@ -754,11 +726,23 @@ mod tests {
         // adding=[4,5], removing=[1,2], replicas=[1,2,3,4,5].
         // target = [3,4,5]. isr ⊇ adding required; isr=[1,2,3,4,5].
         let img = img(ReassignmentSetup {
-            replicas: &[1, 2, 3, 4, 5],
-            isr: &[1, 2, 3, 4, 5],
-            adding: &[4, 5],
-            removing: &[1, 2],
-            leader: 3,
+            replicas: vec![
+                krabka_ids::NodeId(1),
+                krabka_ids::NodeId(2),
+                krabka_ids::NodeId(3),
+                krabka_ids::NodeId(4),
+                krabka_ids::NodeId(5),
+            ],
+            isr: vec![
+                krabka_ids::NodeId(1),
+                krabka_ids::NodeId(2),
+                krabka_ids::NodeId(3),
+                krabka_ids::NodeId(4),
+                krabka_ids::NodeId(5),
+            ],
+            adding: vec![krabka_ids::NodeId(4), krabka_ids::NodeId(5)],
+            removing: vec![krabka_ids::NodeId(1), krabka_ids::NodeId(2)],
+            leader: krabka_ids::NodeId(3),
             ..Default::default()
         });
         let l = liveness(&[1, 2, 3, 4, 5]).await;
@@ -777,11 +761,13 @@ mod tests {
     fn completion_keeps_the_operators_target_order() {
         // Target [3,4,1] over current [1,2,3]: the start wrote [3,4,1,2].
         let image = img(ReassignmentSetup {
-            replicas: &[3, 4, 1, 2],
-            isr: &[1, 2, 3, 4],
-            adding: &[4],
-            removing: &[2],
-            ..Default::default()
+            replicas: vec![
+                krabka_ids::NodeId(3),
+                krabka_ids::NodeId(4),
+                krabka_ids::NodeId(1),
+                krabka_ids::NodeId(2),
+            ],
+            ..ReassignmentSetup::replacing_replica(NodeId(2), NodeId(4))
         });
         let record = image.partition("foo", 0).expect("seeded partition");
         let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
@@ -808,11 +794,7 @@ mod tests {
         // adding=[4], removing=[2]; isr=[1,2,3,4]; target=[1,3,4].
         // new_isr = isr ∩ target = [1,3,4].
         let img = img(ReassignmentSetup {
-            replicas: &[1, 2, 3, 4],
-            isr: &[1, 2, 3, 4],
-            adding: &[4],
-            removing: &[2],
-            ..Default::default()
+            ..ReassignmentSetup::replacing_replica(NodeId(2), NodeId(4))
         });
         let l = liveness(&[1, 2, 3, 4]).await;
         let updates = compute_reassignment_progress(&img, &l).await;

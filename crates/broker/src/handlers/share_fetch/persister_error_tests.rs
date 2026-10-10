@@ -119,18 +119,22 @@ async fn share_acknowledge(
     topic_id: WireUuid,
     (first_offset, last_offset): (i64, i64),
 ) -> i16 {
-    let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
-    let request = crate::handlers::test_support::acknowledge_batches_request(
+    let response = crate::handlers::test_support::send_acknowledgements(
+        broker,
         crate::handlers::test_support::AcknowledgementSetup {
-            group,
-            epoch: crate::handlers::test_support::ShareSessionEpoch(epoch),
-            topic_id,
-            partition: (0, &[(first_offset, last_offset, &[ACCEPT])]),
-            ..Default::default()
+            partition: crate::handlers::test_support::AcknowledgementPartitionSetup::single_batch(
+                krabka_log::Offset(first_offset)..=krabka_log::Offset(last_offset),
+                crate::handlers::test_support::AcknowledgementCode(ACCEPT),
+            ),
+            ..crate::handlers::test_support::AcknowledgementSetup::for_topic_session(
+                group,
+                crate::handlers::test_support::ShareSessionEpoch(epoch),
+                topic_id,
+            )
         },
-    );
-    let response =
-        crate::handlers::test_support::share_acknowledge_wire(broker, version, &request).await;
+    )
+    .await;
+
     response.responses[0].partitions[0].error_code
 }
 

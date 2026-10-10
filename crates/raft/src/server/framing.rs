@@ -346,14 +346,41 @@ mod tests {
         request
     }
 
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        Default,
+        PartialEq,
+        Eq,
+        derive_more::Display,
+        derive_more::From,
+        derive_more::Into,
+    )]
+    struct FrameCorrelationId(i32);
+
+    /// Signed wire lengths include the null sentinel and malformed negative cases.
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        Default,
+        PartialEq,
+        Eq,
+        derive_more::Display,
+        derive_more::From,
+        derive_more::Into,
+    )]
+    struct ClientIdLength(i16);
+
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct ControllerFrameSetup<'a> {
         #[default(ApiKey(52))]
         api_key: ApiKey,
         #[default(ApiVersion(2))]
         api_version: ApiVersion,
-        #[default(123)]
-        correlation_id: i32,
+        #[default(FrameCorrelationId(123))]
+        correlation_id: FrameCorrelationId,
         #[default("raft-client")]
         client_id: &'a str,
         body: &'a [u8],
@@ -373,7 +400,7 @@ mod tests {
             api_key,
             api_version,
             correlation_id,
-            client_id_len: i16::try_from(client_id.len()).unwrap(),
+            client_id_len: ClientIdLength(i16::try_from(client_id.len()).unwrap()),
             client_id_bytes: client_id.as_bytes(),
             tagged_or_body: &tagged_body,
         })
@@ -385,10 +412,10 @@ mod tests {
         api_key: ApiKey,
         #[default(ApiVersion(2))]
         api_version: ApiVersion,
-        #[default(123)]
-        correlation_id: i32,
-        #[default(-1)]
-        client_id_len: i16,
+        #[default(FrameCorrelationId(123))]
+        correlation_id: FrameCorrelationId,
+        #[default(ClientIdLength(-1))]
+        client_id_len: ClientIdLength,
         client_id_bytes: &'a [u8],
         #[default(&[0])]
         tagged_or_body: &'a [u8],
@@ -406,8 +433,8 @@ mod tests {
         let mut frame = bytes::BytesMut::new();
         frame.put_i16(api_key.get());
         frame.put_i16(api_version.get());
-        frame.put_i32(correlation_id);
-        frame.put_i16(client_id_len);
+        frame.put_i32(correlation_id.0);
+        frame.put_i16(client_id_len.0);
         frame.put_slice(client_id_bytes);
         frame.put_slice(tagged_or_body);
         length_prefixed(&frame)
@@ -516,7 +543,7 @@ mod tests {
             (
                 "client id bytes shortfall",
                 raw_request_frame(RawControllerFrameSetup {
-                    client_id_len: 4,
+                    client_id_len: ClientIdLength(4),
                     client_id_bytes: b"x",
                     tagged_or_body: &[],
                     ..Default::default()
@@ -550,7 +577,7 @@ mod tests {
         let frame = raw_request_frame(RawControllerFrameSetup {
             api_key: ApiKey(53),
             api_version: ApiVersion(0),
-            client_id_len: 0,
+            client_id_len: ClientIdLength(0),
             tagged_or_body: &[1, b'p', b'a', b'y'],
             ..Default::default()
         });
@@ -613,7 +640,7 @@ mod tests {
                 request_frame(ControllerFrameSetup {
                     api_key: key,
                     api_version: ApiVersion(flexible_min),
-                    correlation_id: 7,
+                    correlation_id: FrameCorrelationId(7),
                     client_id,
                     body: b"body",
                 }),
@@ -626,8 +653,8 @@ mod tests {
                 raw_request_frame(RawControllerFrameSetup {
                     api_key: key,
                     api_version: ApiVersion(flexible_min - 1),
-                    correlation_id: 7,
-                    client_id_len: id_len,
+                    correlation_id: FrameCorrelationId(7),
+                    client_id_len: ClientIdLength(id_len),
                     client_id_bytes: client_id.as_bytes(),
                     tagged_or_body: b"body",
                 }),
@@ -640,7 +667,7 @@ mod tests {
                 request_frame(ControllerFrameSetup {
                     api_key: ApiKey(vote_request::API_KEY),
                     api_version: ApiVersion(vote_request::FLEXIBLE_MIN),
-                    correlation_id: 7,
+                    correlation_id: FrameCorrelationId(7),
                     client_id,
                     body: b"body",
                 }),
@@ -653,8 +680,8 @@ mod tests {
                 raw_request_frame(RawControllerFrameSetup {
                     api_key: unclaimed,
                     api_version: ApiVersion(flexible_min),
-                    correlation_id: 7,
-                    client_id_len: id_len,
+                    correlation_id: FrameCorrelationId(7),
+                    client_id_len: ClientIdLength(id_len),
                     client_id_bytes: client_id.as_bytes(),
                     tagged_or_body: b"body",
                 }),

@@ -221,7 +221,12 @@ async fn add_partition(client: &Client, producer: Producer, topic: &str) {
 }
 
 async fn set_up(client: &Client, case: &Case) -> Producer {
-    create_topic(client, case.name, 1).await;
+    create_topic(
+        client,
+        case.name,
+        crate::support::topics::TopicPartitionCount(1),
+    )
+    .await;
     let mut producer = init(client, case.name).await;
     if case.probe.epoch_offset < 0 {
         // A second InitProducerId bumps the epoch, so a batch can carry an

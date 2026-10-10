@@ -92,6 +92,9 @@ fn expected_metadata() -> serde_json::Value {
     })
 }
 
+#[derive(Clone, Copy, Default)]
+struct EventTimeMillis(i64);
+
 #[derive(krabka_macros::FieldDefaults)]
 struct UnsignedPrivilegeSetup<'a> {
     #[default(AuditOutcome::Success)]
@@ -110,7 +113,7 @@ struct UnsignedPrivilegeSetup<'a> {
     #[default(AuditEndpoint { ip: "10.0.0.4".into(), port: 9092 })]
     source: AuditEndpoint,
     reason: &'a str,
-    time_ms: i64,
+    time_ms: EventTimeMillis,
 }
 
 fn unsigned_privilege(setup: UnsignedPrivilegeSetup<'_>) -> AuditEvent {
@@ -141,7 +144,7 @@ fn unsigned_privilege(setup: UnsignedPrivilegeSetup<'_>) -> AuditEvent {
         signed_at_ms: 0,
         source,
         reason: reason.into(),
-        time_ms,
+        time_ms: time_ms.0,
     }
 }
 
@@ -197,7 +200,7 @@ fn privileged_action_maps_to_6003_with_the_whole_body() {
             unsigned_privilege(UnsignedPrivilegeSetup {
                 principal: carol.clone(),
                 counterparties: vec![alice.clone(), bob.clone()],
-                time_ms: 11,
+                time_ms: EventTimeMillis(11),
                 ..Default::default()
             }),
             serde_json::json!({
@@ -245,7 +248,7 @@ fn privileged_action_maps_to_6003_with_the_whole_body() {
                     auth_method: "Internal".into(),
                 },
                 reason: "background recovery ran without an approval",
-                time_ms: 12,
+                time_ms: EventTimeMillis(12),
                 ..Default::default()
             }),
             serde_json::json!({
