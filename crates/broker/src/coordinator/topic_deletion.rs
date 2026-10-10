@@ -60,11 +60,8 @@ pub(crate) fn spawn(
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => return,
-                changed = images.changed() => {
-                    if changed.is_err() {
-                        return;
-                    }
-                    let image = images.borrow_and_update().clone();
+                image = crate::metadata_source::next_published_image(&mut images) => {
+                    let Some(image) = image else { return; };
                     let owned = |group_id: &str| {
                         local_partition_for_group(&image, node_id, group_id).is_ok()
                     };

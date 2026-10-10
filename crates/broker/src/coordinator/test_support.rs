@@ -187,6 +187,51 @@ impl Default for OffsetRecordSetup<'_> {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) enum DeletionTarget {
+    #[default]
+    OffsetsOnly,
+    Group,
+}
+
+/// An ordered deletion batch, optionally ending with the group's tombstone.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct DeletionTombstonesSetup<'a> {
+    #[default("g")]
+    pub group: &'a str,
+    pub offsets: &'a [(&'a str, krabka_ids::PartitionIndex)],
+    pub target: DeletionTarget,
+}
+
+pub(crate) fn deletion_tombstones(
+    setup: DeletionTombstonesSetup<'_>,
+) -> Vec<(crate::coordinator::persistence::Key, Option<bytes::Bytes>)> {
+    use crate::coordinator::persistence::Key;
+    let mut records: Vec<_> = setup
+        .offsets
+        .iter()
+        .map(|(topic, partition)| {
+            (
+                Key::OffsetCommit {
+                    group_id: setup.group.into(),
+                    topic: (*topic).into(),
+                    partition: partition.0,
+                },
+                None,
+            )
+        })
+        .collect();
+    if matches!(setup.target, DeletionTarget::Group) {
+        records.push((
+            Key::GroupMetadata {
+                group_id: setup.group.into(),
+            },
+            None,
+        ));
+    }
+    records
+}
+
 pub(crate) fn offset_record(setup: OffsetRecordSetup<'_>) -> krabka_protocol::records::Record {
     let OffsetRecordSetup {
         group,

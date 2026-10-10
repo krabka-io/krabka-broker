@@ -103,7 +103,12 @@ pub(crate) fn produce_console(
         args.extend(["--producer.config", "/client.properties"]);
     }
     crate::support::jvm_stdin_output(
-        &mut crate::support::jvm_docker_command(image, mounts, &args, true),
+        &mut crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+            image,
+            mounts,
+            args: &args,
+            input: crate::support::ContainerInput::Attached,
+        }),
         payload,
     )
 }
@@ -385,9 +390,14 @@ pub(crate) fn consume_console(
     if !mounts.is_empty() {
         args.extend(["--consumer.config", "/client.properties"]);
     }
-    let out = crate::support::jvm_docker_command(image, mounts, &args, false)
-        .output()
-        .expect("console consumer");
+    let out = crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+        image,
+        mounts,
+        args: &args,
+        ..Default::default()
+    })
+    .output()
+    .expect("console consumer");
     if require_success {
         assert!(
             out.status.success(),
@@ -476,10 +486,9 @@ pub(crate) const KAFKA_IMAGE_ELR: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 /// Verify TCP connectivity from inside a bridge-network container with
 /// `--add-host=host.docker.internal:host-gateway`.
 pub(crate) fn nc_check_connectivity() {
-    let out = crate::support::jvm_docker_command(
-        "alpine",
-        &[],
-        &[
+    let out = crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+        image: "alpine",
+        args: &[
             "sh",
             "-c",
             &format!(
@@ -488,8 +497,8 @@ pub(crate) fn nc_check_connectivity() {
                 host_port()
             ),
         ],
-        false,
-    )
+        ..Default::default()
+    })
     .output()
     .expect("spawn nc check");
     eprintln!(
@@ -961,10 +970,10 @@ pub(crate) fn denied_console_consumer(
     group: &str,
     context: &str,
 ) -> std::process::Output {
-    crate::support::jvm_docker_command(
-        KAFKA_IMAGE_TXN,
-        &[mount],
-        &[
+    crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+        image: KAFKA_IMAGE_TXN,
+        mounts: &[mount],
+        args: &[
             "kafka-console-consumer",
             "--bootstrap-server",
             super::ports::broker0_advertised(),
@@ -980,8 +989,8 @@ pub(crate) fn denied_console_consumer(
             "--consumer.config",
             "/client.properties",
         ],
-        false,
-    )
+        ..Default::default()
+    })
     .stderr(Stdio::piped())
     .stdout(Stdio::piped())
     .output()

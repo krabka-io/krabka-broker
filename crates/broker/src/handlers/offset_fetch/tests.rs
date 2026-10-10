@@ -442,13 +442,26 @@ async fn seed_topic_reference_group(broker_handle: &crate::broker::BrokerHandle)
 
 /// The request row for `topic`, and the topic row that the response carries
 /// for it at `version` with `partition` as its only partition row.
-fn topic_reference_rows(
-    version: i16,
+#[derive(Clone, Copy)]
+struct OffsetFetchVersion(i16);
+
+#[derive(krabka_macros::FieldDefaults)]
+struct TopicReferenceSetup {
+    #[default(OffsetFetchVersion(9))]
+    version: OffsetFetchVersion,
+    #[default(TopicRef::KnownName)]
     topic: TopicRef,
     known_id: WireUuid,
+    #[default(no_offset_row(codes::NONE))]
     partition: OffsetFetchResponsePartitions,
+}
+
+fn topic_reference_rows(
+    setup: TopicReferenceSetup,
 ) -> (OffsetFetchRequestTopics, OffsetFetchResponseTopics) {
-    let (name, topic_id) = topic.wire_reference((KNOWN_NAME, known_id), (UNKNOWN_NAME, UNKNOWN_ID));
+    let (name, topic_id) = setup
+        .topic
+        .wire_reference((KNOWN_NAME, setup.known_id), (UNKNOWN_NAME, UNKNOWN_ID));
     let request = OffsetFetchRequestTopics {
         name: name.to_string(),
         topic_id,
@@ -456,7 +469,7 @@ fn topic_reference_rows(
         ..Default::default()
     };
     // The wire carries the name at v8 and v9, and the id at v10.
-    let id_only = version >= 10;
+    let id_only = setup.version.0 >= 10;
     let response = OffsetFetchResponseTopics {
         name: if id_only {
             String::new()
@@ -464,7 +477,7 @@ fn topic_reference_rows(
             name.to_string()
         },
         topic_id: if id_only { topic_id } else { WireUuid::ZERO },
-        partitions: vec![partition],
+        partitions: vec![setup.partition],
         ..Default::default()
     };
     (request, response)
@@ -533,7 +546,12 @@ async fn run_topic_reference_table(
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
     for (version, topic, partition) in cases {
-        let (request_row, response_row) = topic_reference_rows(version, topic, known_id, partition);
+        let (request_row, response_row) = topic_reference_rows(TopicReferenceSetup {
+            version: OffsetFetchVersion(version),
+            topic,
+            known_id,
+            partition,
+        });
         let response = fetch(&broker, version, &groups_request(vec![request_row])).await;
         actual.push((version, topic, response));
         expected.push((version, topic, groups_response(vec![response_row])));
@@ -603,14 +621,18 @@ async fn refused_topics_follow_the_answered_topics() {
     .await;
     let known_id = seed_topic_reference_group(&broker_handle).await;
     let broker = broker_handle.broker_arc_for_test();
-    let (zero_request, zero_response) = topic_reference_rows(
-        VERSION,
-        TopicRef::ZeroId,
+    let (zero_request, zero_response) = topic_reference_rows(TopicReferenceSetup {
+        version: OffsetFetchVersion(VERSION),
+        topic: TopicRef::ZeroId,
         known_id,
-        no_offset_row(codes::UNKNOWN_TOPIC_ID),
-    );
-    let (known_request, known_response) =
-        topic_reference_rows(VERSION, TopicRef::KnownId, known_id, seeded_row());
+        partition: no_offset_row(codes::UNKNOWN_TOPIC_ID),
+    });
+    let (known_request, known_response) = topic_reference_rows(TopicReferenceSetup {
+        version: OffsetFetchVersion(VERSION),
+        topic: TopicRef::KnownId,
+        known_id,
+        partition: seeded_row(),
+    });
 
     let actual = fetch(
         &broker,

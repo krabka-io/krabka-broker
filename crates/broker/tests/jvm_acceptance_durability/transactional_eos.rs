@@ -227,7 +227,7 @@ async fn transactional_console_producer_eos() {
     // 2. Compile the small Java helper against the image's Kafka client jars.
     //    It writes one committed transaction, one aborted transaction, and a
     //    later record that seals the abort marker's transaction index.
-    let mut producer = crate::support::jvm_docker_command("--entrypoint", &[], &["bash",
+    let mut producer = crate::support::jvm_docker_command(crate::support::JvmDockerSetup { image: "--entrypoint", args: &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/TransactionalProducer.java; \
@@ -237,7 +237,7 @@ async fn transactional_console_producer_eos() {
             "--",
             &bootstrap_1,
             TOPIC,
-        ], true)
+        ], input: crate::support::ContainerInput::Attached, ..Default::default() })
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -362,7 +362,7 @@ async fn transactional_console_producer_eos() {
         "--bootstrap-server",
         &bootstrap_1,
     ]);
-    let mut zombie = crate::support::jvm_docker_command("--entrypoint", &[], &["bash",
+    let mut zombie = crate::support::jvm_docker_command(crate::support::JvmDockerSetup { image: "--entrypoint", args: &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/ZombieProducer.java; \
@@ -372,7 +372,7 @@ async fn transactional_console_producer_eos() {
             "--",
             &bootstrap_1,
             ZOMBIE_TOPIC,
-        ], true)
+        ], input: crate::support::ContainerInput::Attached, ..Default::default() })
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

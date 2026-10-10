@@ -240,21 +240,32 @@ pub fn docker_tool_command(image: &str, options: &[&str]) -> std::process::Comma
 }
 
 /// Prepare a disposable tool container that can reach the host broker.
-pub fn jvm_docker_command(
-    image: &str,
-    mounts: &[&str],
-    args: &[&str],
-    interactive: bool,
-) -> std::process::Command {
+#[derive(Clone, Copy, Default)]
+pub enum ContainerInput {
+    #[default]
+    Closed,
+    Attached,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct JvmDockerSetup<'a> {
+    #[default("mirror.gcr.io/apache/kafka:4.3.1")]
+    pub image: &'a str,
+    pub mounts: &'a [&'a str],
+    pub args: &'a [&'a str],
+    pub input: ContainerInput,
+}
+
+pub fn jvm_docker_command(setup: JvmDockerSetup<'_>) -> std::process::Command {
     let mut options = vec!["--add-host=host.docker.internal:host-gateway"];
-    if interactive {
+    if matches!(setup.input, ContainerInput::Attached) {
         options.push("-i");
     }
-    for mount in mounts {
+    for mount in setup.mounts {
         options.extend(["-v", mount]);
     }
-    let mut command = docker_tool_command(image, &options);
-    command.args(args);
+    let mut command = docker_tool_command(setup.image, &options);
+    command.args(setup.args);
     command
 }
 
@@ -344,9 +355,13 @@ pub async fn format_jvm_voter(
 
 /// Run a JVM tool while leaving success and output assertions to its caller.
 pub fn jvm_docker_run(image: &str, args: &[&str]) -> std::process::Output {
-    let out = jvm_docker_command(image, &[], args, false)
-        .output()
-        .expect("docker run");
+    let out = jvm_docker_command(crate::support::JvmDockerSetup {
+        image,
+        args,
+        ..Default::default()
+    })
+    .output()
+    .expect("docker run");
     eprintln!(
         "KRABKA[test] docker {image} {args:?} status={} stderr={}",
         out.status,
@@ -653,10 +668,9 @@ pub fn jvm_spawn_piped(command: &mut std::process::Command, context: &str) -> st
 /// The shared acks-all console-producer command; callers retain their write/exit assertions.
 pub fn jvm_acks_all_producer(image: &str, bootstrap: &str, topic: &str) -> std::process::Child {
     jvm_spawn_piped(
-        &mut jvm_docker_command(
+        &mut jvm_docker_command(crate::support::JvmDockerSetup {
             image,
-            &[],
-            &[
+            args: &[
                 "kafka-console-producer",
                 "--bootstrap-server",
                 bootstrap,
@@ -665,17 +679,22 @@ pub fn jvm_acks_all_producer(image: &str, bootstrap: &str, topic: &str) -> std::
                 "--producer-property",
                 "acks=all",
             ],
-            true,
-        ),
+            input: crate::support::ContainerInput::Attached,
+            ..Default::default()
+        }),
         "spawn JVM producer",
     )
 }
 
 /// Capture a plain JVM tool while retaining the suite-specific log prefix.
 pub fn jvm_tool_output(image: &str, args: &[&str], log_scope: &str) -> std::process::Output {
-    let out = jvm_docker_command(image, &[], args, false)
-        .output()
-        .expect("spawn docker run");
+    let out = jvm_docker_command(crate::support::JvmDockerSetup {
+        image,
+        args,
+        ..Default::default()
+    })
+    .output()
+    .expect("spawn docker run");
     eprintln!(
         "KRABKA[{log_scope}] docker_run image={image} {args:?} status={} stderr_len={}",
         out.status,

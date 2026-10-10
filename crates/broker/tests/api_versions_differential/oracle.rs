@@ -120,12 +120,11 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
 /// Run the tool from a throwaway container against the krabka broker that
 /// `listeners` advertises, and return its stdout.
 pub(crate) fn krabka_api_versions(listeners: &JvmListeners) -> String {
-    let out = crate::support::jvm_docker_command(
-        ORACLE_IMAGE,
-        &[],
-        &[TOOL, "--bootstrap-server", &listeners.advertised],
-        false,
-    )
+    let out = crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+        image: ORACLE_IMAGE,
+        args: &[TOOL, "--bootstrap-server", &listeners.advertised],
+        ..Default::default()
+    })
     .output()
     .expect("spawn docker run kafka-broker-api-versions");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();

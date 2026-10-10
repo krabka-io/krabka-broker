@@ -191,7 +191,7 @@ async fn wait_for_delivery_policy(broker: &BrokerHandle, topic: &str, policy: De
 
 // Compile and run the probe in the container, and return everything it printed.
 fn run_probe(bootstrap: &str) -> String {
-    let mut probe = crate::support::jvm_docker_command("--entrypoint", &[], &["bash",
+    let mut probe = crate::support::jvm_docker_command(crate::support::JvmDockerSetup { image: "--entrypoint", args: &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/DeliverAtTimeProbe.java; \
@@ -203,7 +203,7 @@ fn run_probe(bootstrap: &str) -> String {
             SCHEDULED_TOPIC,
             IMMEDIATE_TOPIC,
             &DELAY_MS.to_string(),
-        ], true)
+        ], input: crate::support::ContainerInput::Attached, ..Default::default() })
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

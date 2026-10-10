@@ -25,7 +25,7 @@ mod test_support;
 
 pub(crate) use self::{
     fatal_fault::or_fatal_fault,
-    image_watch::{wait_for_image_change, watch_image_loop},
+    image_watch::{next_published_image, wait_for_image_change, watch_image_loop},
 };
 pub use self::{observer_source::ObserverSource, quorum_forwarder::QuorumForwarder};
 

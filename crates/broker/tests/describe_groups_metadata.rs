@@ -33,19 +33,25 @@ use crate::support::{
     client::connect_owned,
 };
 
-fn sync_request(
-    group_id: &str,
-    generation_id: i32,
-    member_id: &str,
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct AssignedSyncSetup<'a> {
+    #[default("g")]
+    group_id: &'a str,
+    generation_id: crate::support::classic::GenerationId,
+    member_id: &'a str,
     assignment: &'static [u8],
+}
+
+fn sync_request(
+    setup: AssignedSyncSetup<'_>,
 ) -> krabka_protocol::owned::sync_group_request::SyncGroupRequest {
     classic_sync_request(crate::support::classic::ClassicSyncSetup {
-        group_id: group_id.to_owned(),
-        generation_id: crate::support::classic::GenerationId(generation_id),
-        member_id: member_id.to_owned(),
+        group_id: setup.group_id.to_owned(),
+        generation_id: setup.generation_id,
+        member_id: setup.member_id.to_owned(),
         assignments: vec![sync_assignment(
-            member_id.to_owned(),
-            Bytes::from_static(assignment),
+            setup.member_id.to_owned(),
+            Bytes::from_static(setup.assignment),
         )],
         ..Default::default()
     })
@@ -192,7 +198,12 @@ async fn describe_groups_reports_member_metadata_and_protocol_name() {
 
     // ── SyncGroup: leader supplies its own assignment. ──
     let r3 = client
-        .send(sync_request(group_id, generation_id, &member_id, ASSIGN))
+        .send(sync_request(AssignedSyncSetup {
+            group_id,
+            generation_id: crate::support::classic::GenerationId(generation_id),
+            member_id: &member_id,
+            assignment: ASSIGN,
+        }))
         .await
         .expect("SyncGroup must round-trip");
     assert!(
@@ -264,12 +275,12 @@ async fn describe_groups_matches_real_kafka_range_subscription() {
 
     // SyncGroup: leader supplies the REAL captured assignment bytes.
     let r3 = client
-        .send(sync_request(
+        .send(sync_request(AssignedSyncSetup {
             group_id,
-            generation_id,
-            &member_id,
-            REAL_KAFKA_ASSIGNMENT,
-        ))
+            generation_id: crate::support::classic::GenerationId(generation_id),
+            member_id: &member_id,
+            assignment: REAL_KAFKA_ASSIGNMENT,
+        }))
         .await
         .expect("SyncGroup must round-trip");
     assert!(

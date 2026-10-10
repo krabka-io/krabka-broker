@@ -233,12 +233,12 @@ pub(crate) fn execute_plan(
     } else {
         "--execute"
     };
-    let out = crate::support::jvm_docker_command(
-        crate::jvm_acceptance::KAFKA_IMAGE_TXN,
-        &[admin_mount, &mount],
-        &args,
-        false,
-    )
+    let out = crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+        image: crate::jvm_acceptance::KAFKA_IMAGE_TXN,
+        mounts: &[admin_mount, &mount],
+        args: &args,
+        ..Default::default()
+    })
     .output()
     .expect(context);
     eprintln!(

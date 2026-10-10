@@ -19,10 +19,10 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     let (cluster, _admin_props, admin_mount) =
         Box::pin(crate::cluster::reassignment_cluster(TOPIC)).await;
 
-    let mut producer = crate::support::jvm_docker_command(
-        KAFKA_IMAGE_TXN,
-        &[&admin_mount],
-        &[
+    let mut producer = crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+        image: KAFKA_IMAGE_TXN,
+        mounts: &[&admin_mount],
+        args: &[
             "kafka-console-producer",
             "--topic",
             TOPIC,
@@ -31,8 +31,8 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
             "--producer.config",
             "/client.properties",
         ],
-        true,
-    )
+        input: crate::support::ContainerInput::Attached,
+    })
     .stdin(Stdio::piped())
     .spawn()
     .expect("spawn kafka-console-producer");

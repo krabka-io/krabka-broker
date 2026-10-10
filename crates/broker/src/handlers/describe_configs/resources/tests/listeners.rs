@@ -25,9 +25,6 @@ const SYNONYMS_ONLY: EntryOptions = EntryOptions {
     include_documentation: false,
 };
 
-const LIST: i8 = ConfigType::List.wire();
-const STRING: i8 = ConfigType::String.wire();
-
 /// Kafka 4.3.1's built-in defaults of the two keys that have one.
 const DEFAULT_LISTENERS: &str = "PLAINTEXT://:9092";
 const DEFAULT_PROTOCOL_MAP: &str =
@@ -108,30 +105,42 @@ fn single_listener_node() -> BrokerConfig {
 
 // A key that `server.properties` names: the value at `STATIC_BROKER_CONFIG`,
 // with the built-in default beneath it when the key has one.
-fn named(
-    name: &str,
-    value: &str,
-    read_only: bool,
-    config_type: i8,
-    default: Option<&str>,
-) -> DescribeConfigsResourceResult {
-    tagged_wire!(DescribeConfigsResourceResult {
-        name: name.to_owned(),
-        value: Some(value.to_owned()),
-        read_only,
-        config_source: CONFIG_SOURCE_STATIC_BROKER,
-        is_sensitive: false,
-        synonyms: std::iter::once(synonym(name, value, CONFIG_SOURCE_STATIC_BROKER))
-            .chain(default.map(|default| synonym(name, default, CONFIG_SOURCE_DEFAULT)))
-            .collect(),
-        config_type,
-        documentation: None,
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct NamedConfigSetup<'a> {
+    #[default("listeners")]
+    name: &'a str,
+    value: &'a str,
+    mutability: ConfigMutability,
+    #[default(ConfigType::List)]
+    config_type: ConfigType,
+    builtin_default: Option<&'a str>,
+}
+
+fn named(setup: NamedConfigSetup<'_>) -> DescribeConfigsResourceResult {
+    expected_config_entry(ExpectedConfigSetup {
+        name: setup.name,
+        value: Some(setup.value),
+        mutability: setup.mutability,
+        source: ConfigSourceCode(CONFIG_SOURCE_STATIC_BROKER),
+        synonyms: std::iter::once(synonym(
+            setup.name,
+            setup.value,
+            CONFIG_SOURCE_STATIC_BROKER,
+        ))
+        .chain(
+            setup
+                .builtin_default
+                .map(|default| synonym(setup.name, default, CONFIG_SOURCE_DEFAULT)),
+        )
+        .collect(),
+        config_type: ConfigTypeCode(setup.config_type.wire()),
+        ..Default::default()
     })
 }
 
 // A key that `server.properties` does not name and that has no built-in
 // default: a null value at `DEFAULT_CONFIG`, with no synonym.
-fn unset(name: &str, config_type: i8) -> DescribeConfigsResourceResult {
+fn unset(name: &str, config_type: ConfigType) -> DescribeConfigsResourceResult {
     tagged_wire!(DescribeConfigsResourceResult {
         name: name.to_owned(),
         value: None,
@@ -139,35 +148,55 @@ fn unset(name: &str, config_type: i8) -> DescribeConfigsResourceResult {
         config_source: CONFIG_SOURCE_DEFAULT,
         is_sensitive: false,
         synonyms: Vec::new(),
-        config_type,
+        config_type: config_type.wire(),
         documentation: None,
     })
 }
 
 fn listeners(value: &str) -> DescribeConfigsResourceResult {
-    named("listeners", value, false, LIST, Some(DEFAULT_LISTENERS))
+    named(NamedConfigSetup {
+        value,
+        builtin_default: Some(DEFAULT_LISTENERS),
+        ..Default::default()
+    })
 }
 
 fn advertised(value: &str) -> DescribeConfigsResourceResult {
-    named("advertised.listeners", value, true, LIST, None)
+    named(NamedConfigSetup {
+        name: "advertised.listeners",
+        value,
+        mutability: ConfigMutability::ReadOnly,
+        ..Default::default()
+    })
 }
 
 fn protocol_map(value: &str) -> DescribeConfigsResourceResult {
-    named(
-        "listener.security.protocol.map",
+    named(NamedConfigSetup {
+        name: "listener.security.protocol.map",
         value,
-        false,
-        STRING,
-        Some(DEFAULT_PROTOCOL_MAP),
-    )
+        config_type: ConfigType::String,
+        builtin_default: Some(DEFAULT_PROTOCOL_MAP),
+        ..Default::default()
+    })
 }
 
 fn controller_listener_names() -> DescribeConfigsResourceResult {
-    named("controller.listener.names", "CONTROLLER", true, LIST, None)
+    named(NamedConfigSetup {
+        name: "controller.listener.names",
+        value: "CONTROLLER",
+        mutability: ConfigMutability::ReadOnly,
+        ..Default::default()
+    })
 }
 
 fn inter_broker(value: &str) -> DescribeConfigsResourceResult {
-    named("inter.broker.listener.name", value, true, STRING, None)
+    named(NamedConfigSetup {
+        name: "inter.broker.listener.name",
+        value,
+        mutability: ConfigMutability::ReadOnly,
+        config_type: ConfigType::String,
+        ..Default::default()
+    })
 }
 
 // Kafka's `listeners` is what the node opens: the controller listener alone on
@@ -189,9 +218,9 @@ fn a_named_broker_reports_the_listener_keys_of_its_roles() {
             "controller-only",
             two_listener_node(&[Controller], None),
             vec![
-                unset("advertised.listeners", LIST),
+                unset("advertised.listeners", ConfigType::List),
                 controller_listener_names(),
-                unset("inter.broker.listener.name", STRING),
+                unset("inter.broker.listener.name", ConfigType::String),
                 protocol_map("CONTROLLER:SSL"),
                 listeners("CONTROLLER://0.0.0.0:9093"),
             ],
@@ -226,7 +255,7 @@ fn a_named_broker_reports_the_listener_keys_of_its_roles() {
             vec![
                 advertised("PLAINTEXT://localhost:9092"),
                 controller_listener_names(),
-                unset("inter.broker.listener.name", STRING),
+                unset("inter.broker.listener.name", ConfigType::String),
                 protocol_map("PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"),
                 listeners("PLAINTEXT://127.0.0.1:9092,CONTROLLER://127.0.0.1:9093"),
             ],

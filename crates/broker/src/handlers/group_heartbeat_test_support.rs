@@ -190,20 +190,38 @@ pub(super) fn streams_request(
     group_id: &str,
     member_id: &str,
 ) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
-    streams_request_with_topology(group_id, member_id, "in", Vec::new())
+    streams_request_with_topology(StreamsTopologySetup {
+        group_id,
+        member_id,
+        ..Default::default()
+    })
+}
+
+use krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo;
+
+#[derive(krabka_macros::FieldDefaults)]
+pub(super) struct StreamsTopologySetup<'a> {
+    #[default("g")]
+    pub group_id: &'a str,
+    #[default("m1")]
+    pub member_id: &'a str,
+    #[default("in")]
+    pub source_topic: &'a str,
+    pub state_changelog_topics: Vec<TopicInfo>,
 }
 
 pub(super) fn streams_request_with_topology(
-    group_id: &str,
-    member_id: &str,
-    source_topic: &str,
-    state_changelog_topics: Vec<
-        krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo,
-    >,
+    setup: StreamsTopologySetup<'_>,
 ) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
     use krabka_protocol::owned::streams_group_heartbeat_request::{
         StreamsGroupHeartbeatRequest, Subtopology, Topology,
     };
+    let StreamsTopologySetup {
+        group_id,
+        member_id,
+        source_topic,
+        state_changelog_topics,
+    } = setup;
     StreamsGroupHeartbeatRequest {
         group_id: group_id.into(),
         member_id: member_id.into(),
