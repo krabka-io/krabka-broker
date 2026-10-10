@@ -30,7 +30,9 @@ pub fn product() -> ProductInfo {
     }
 }
 
-pub fn life(n: i64) -> AuditEvent {
+/// Lifecycle fixture for a node, with its identity also used as the timestamp.
+pub fn life(node: crate::NodeId) -> AuditEvent {
+    let n = i64::try_from(node.0).expect("fixture node identity fits the audit record");
     AuditEvent::Lifecycle {
         kind: LifecycleKind::BrokerStarted,
         node_id: n,

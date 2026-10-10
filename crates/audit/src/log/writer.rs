@@ -464,9 +464,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (log, sink, handle) = memory_writer(dir.path(), MemoryWriterSetup::default());
 
-        log.emit(life(1));
-        log.emit(life(2));
-        log.emit(life(3));
+        log.emit(life(crate::NodeId(1)));
+        log.emit(life(crate::NodeId(2)));
+        log.emit(life(crate::NodeId(3)));
 
         // Dropping the only sender ends the writer loop cleanly.
         finish_writer(log, handle).await;
@@ -483,8 +483,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // no signer, huge interval => no checkpoints, just chaining
         let (log, sink, h) = memory_writer(dir.path(), MemoryWriterSetup::default());
-        log.emit(life(1));
-        log.emit(life(2));
+        log.emit(life(crate::NodeId(1)));
+        log.emit(life(crate::NodeId(2)));
         finish_writer(log, h).await;
 
         let recs = sink.records();
@@ -519,7 +519,7 @@ mod tests {
             ),
         });
         for i in 0..4 {
-            log.emit(life(i));
+            log.emit(life(crate::NodeId(i)));
         }
         finish_writer(log, h).await; // closes channel -> final checkpoint (none pending here: 4 % 2 == 0)
 
@@ -552,9 +552,9 @@ mod tests {
     async fn shutdown_emits_final_checkpoint_for_pending_tail() {
         // every_n large so only the shutdown path emits
         let (pubkey, _dir, (log, sink, h)) = signed_writer(SignedWriterSetup::default());
-        log.emit(life(1));
-        log.emit(life(2));
-        log.emit(life(3));
+        log.emit(life(crate::NodeId(1)));
+        log.emit(life(crate::NodeId(2)));
+        log.emit(life(crate::NodeId(3)));
         finish_writer(log, h).await;
 
         let recs = sink.records();
@@ -594,7 +594,7 @@ mod tests {
         // The sender is still alive, so nothing but the unarmable ticker can
         // end the run: the writer stops rather than run on without a cadence,
         // and the event emitted before it noticed never reaches the sink.
-        log.emit(life(1));
+        log.emit(life(crate::NodeId(1)));
         handle.await.unwrap();
         check!(sink.records().is_empty());
         drop(log);
@@ -613,7 +613,7 @@ mod tests {
         params.spool = None;
         let handle = spawn_writer(rx, params);
 
-        log.emit(life(1));
+        log.emit(life(crate::NodeId(1)));
         finish_writer(log, handle).await;
 
         check!(stats.dropped() >= 1);
@@ -639,7 +639,7 @@ mod tests {
         params.spool = None;
         let handle = spawn_writer(rx, params);
 
-        log.emit(life(1));
+        log.emit(life(crate::NodeId(1)));
         crate::log::test_support::await_until(
             "loss marker, event, and checkpoint reached sink",
             || {
@@ -685,7 +685,7 @@ mod tests {
         } = pending_loss_writer(&sink, || Arc::clone(&stats), signer);
         let handle = spawn_writer(rx, params);
 
-        log.emit(life(1));
+        log.emit(life(crate::NodeId(1)));
         crate::log::test_support::await_until("loss marker, event, and checkpoint spooled", || {
             stats.spooled() >= 3
         })

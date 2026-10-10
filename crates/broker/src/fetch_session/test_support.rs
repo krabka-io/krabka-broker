@@ -16,14 +16,19 @@ use super::{
     cache::FetchSessionCache,
 };
 
+#[derive(Clone, Copy)]
+pub(super) struct SessionSlotCount(pub usize);
+
 /// Builds a cache whose LRU clock is a [`ManualMonotonicClock`] sitting at its
 /// own origin. The returned `Arc` is both the clock the cache stamps from and
 /// the handle that advances it, so a test can put successive allocations on
 /// distinct points in the cache's recency order. The test advances logical
 /// time with `clock.advance(..)` instead of a sleep between allocations.
-pub(super) fn manual_cache(max_slots: usize) -> (FetchSessionCache, Arc<ManualMonotonicClock>) {
+pub(super) fn manual_cache(
+    max_slots: SessionSlotCount,
+) -> (FetchSessionCache, Arc<ManualMonotonicClock>) {
     let clock = ManualMonotonicClock::new_shared();
-    let cache = FetchSessionCache::with_clock(max_slots, clock.clone());
+    let cache = FetchSessionCache::with_clock(max_slots.0, clock.clone());
     (cache, clock)
 }
 

@@ -898,25 +898,37 @@ mod tests {
     /// metadata manager, the way a previous leader's copy pass left it. The
     /// boundaries are the caller's, which is the point: the next leader's are
     /// its own.
-    fn finished_segment(
-        rlmm: &Arc<dyn RemoteLogMetadataManager>,
-        id: u128,
-        base: i64,
-        last: i64,
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct FinishedSegmentSetup {
+        #[default(Uuid::from_u128(1))]
+        id: Uuid,
+        #[default(krabka_log::Offset(0))]
+        base: krabka_log::Offset,
+        #[default(krabka_log::Offset(99))]
+        last: krabka_log::Offset,
+        #[default(LeaderEpoch(0))]
         epoch: LeaderEpoch,
-    ) {
-        let segment_id = RemoteLogSegmentId::new(tp(), Uuid::from_u128(id));
-        let started = RemoteLogSegmentMetadata::new(
-            segment_id.clone(),
+    }
+
+    fn finished_segment(rlmm: &Arc<dyn RemoteLogMetadataManager>, setup: FinishedSegmentSetup) {
+        let FinishedSegmentSetup {
+            id,
             base,
             last,
+            epoch,
+        } = setup;
+        let segment_id = RemoteLogSegmentId::new(tp(), id);
+        let started = RemoteLogSegmentMetadata::new(
+            segment_id.clone(),
+            base.0,
+            last.0,
             100,
             1,
             100,
             RemoteLogSegmentDetails::new(
                 64,
                 RemoteLogSegmentState::CopySegmentStarted,
-                maplit::btreemap! {epoch => base},
+                maplit::btreemap! {epoch => base.0},
             ),
         )
         .unwrap();
@@ -1045,8 +1057,22 @@ mod tests {
     #[tokio::test]
     async fn a_new_leaders_misaligned_segments_below_the_watermark_are_not_re_copied() {
         let (rsm, rlmm) = accepting_backends(None);
-        finished_segment(&rlmm, 0xa1, 0, 99, LeaderEpoch(0));
-        finished_segment(&rlmm, 0xa2, 100, 199, LeaderEpoch(0));
+        finished_segment(
+            &rlmm,
+            FinishedSegmentSetup {
+                id: Uuid::from_u128(0xa1),
+                ..Default::default()
+            },
+        );
+        finished_segment(
+            &rlmm,
+            FinishedSegmentSetup {
+                id: Uuid::from_u128(0xa2),
+                base: krabka_log::Offset(100),
+                last: krabka_log::Offset(199),
+                ..Default::default()
+            },
+        );
 
         let copied = copy_eligible(
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
@@ -1086,8 +1112,22 @@ mod tests {
     #[tokio::test]
     async fn a_hole_is_filled_without_re_copying_the_segments_above_it() {
         let (rsm, rlmm) = accepting_backends(None);
-        finished_segment(&rlmm, 0xb1, 0, 99, LeaderEpoch(0));
-        finished_segment(&rlmm, 0xb2, 200, 299, LeaderEpoch(0));
+        finished_segment(
+            &rlmm,
+            FinishedSegmentSetup {
+                id: Uuid::from_u128(0xb1),
+                ..Default::default()
+            },
+        );
+        finished_segment(
+            &rlmm,
+            FinishedSegmentSetup {
+                id: Uuid::from_u128(0xb2),
+                base: krabka_log::Offset(200),
+                last: krabka_log::Offset(299),
+                ..Default::default()
+            },
+        );
 
         let copied = copy_exports(
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
@@ -1109,7 +1149,13 @@ mod tests {
     async fn copy_lag_counts_the_segments_the_tier_does_not_hold_whole() {
         let rsm: Arc<dyn RemoteStorageManager> = Arc::new(RefusingRsm);
         let rlmm = fixtures::in_memory_metadata();
-        finished_segment(&rlmm, 0xc1, 0, 99, LeaderEpoch(0));
+        finished_segment(
+            &rlmm,
+            FinishedSegmentSetup {
+                id: Uuid::from_u128(0xc1),
+                ..Default::default()
+            },
+        );
         let metrics = BrokerMetrics::new();
         let tier = tier_with_metrics(
             &rsm,
