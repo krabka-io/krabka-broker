@@ -420,7 +420,7 @@ Validated operational policy loaded from `[runtime]`.
 | `diskless_wal_index_projection_timeout` | string | broker default | duration | Maximum wait for a published diskless WAL index record to be projected. |
 | `diskless_wal_local_replica_count` | integer (uint) | broker default |  | Local replica count used in diskless WAL mode. |
 | `diskless_wal_trim_safety_lag` | integer (int64) | broker default |  | Committed offsets retained behind the diskless WAL trim frontier. |
-| `fetch_max_bytes` | string | broker default | byte size | Broker-wide maximum bytes returned by one consumer `Fetch` or `ShareFetch`, Kafka's `fetch.max.bytes` (default 55 MiB). One batch can exceed the cap to let the fetch make progress. |
+| `fetch_max_bytes` | string | broker default | byte size | Maximum bytes returned by one consumer `Fetch` or `ShareFetch`, Kafka's `fetch.max.bytes`. Kafka's default is 57,671,680 bytes. |
 | `future_log_move_read_chunk` | string | broker default | byte size | Bytes copied per read during a KIP-113 future-log move. |
 | `future_log_move_retry_backoff` | string | broker default | duration | Retry delay after a KIP-113 future-log move fails. |
 | `gauge_poll_interval` | string | broker default | duration | Cadence at which broker gauges are refreshed. |

@@ -507,10 +507,10 @@ mod tests {
                 vec![300, 300],
             ),
             (
-                "only the listed partition is throttled",
+                "only the listed partition is throttled and an oversized payload progresses",
                 "1:1",
                 vec![800, 800],
-                vec![800, 0],
+                vec![800, 800],
             ),
             (
                 "the wildcard throttles every partition",

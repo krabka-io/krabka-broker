@@ -101,9 +101,11 @@ fn translate(pattern: &str) -> Result<String, String> {
             while index + 1 < chars.len() && !(chars[index] == '\\' && chars[index + 1] == 'E') {
                 index += 1;
             }
-            let quoted: String = chars[start..index].iter().collect();
+            let has_terminator = index + 1 < chars.len();
+            let end = if has_terminator { index } else { chars.len() };
+            let quoted: String = chars[start..end].iter().collect();
             out.push_str(&regex::escape(&quoted));
-            if index + 1 < chars.len() {
+            if has_terminator {
                 index += 2; // closing \\E
             } else {
                 index = chars.len(); // RE2J quotes through end of input

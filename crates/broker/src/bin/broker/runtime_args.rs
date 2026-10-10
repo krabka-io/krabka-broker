@@ -375,6 +375,7 @@ mod tests {
         log-timestamp-scan-window KRABKA_LOG_TIMESTAMP_SCAN_WINDOW None ---------++--\n\
         log-delivery-clock-uncertainty KRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY None -------+-----\n\
         message-max-bytes KRABKA_MESSAGE_MAX_BYTES None +-------++---\n\
+        fetch-max-bytes KRABKA_FETCH_MAX_BYTES None +-------++---\n\
         socket-request-max KRABKA_SOCKET_REQUEST_MAX None ---------++--\n\
         sasl-server-max-receive KRABKA_SASL_SERVER_MAX_RECEIVE None ---------++--\n\
         connection-failed-authentication-delay KRABKA_CONNECTION_FAILED_AUTHENTICATION_DELAY None +-----++-----\n\
