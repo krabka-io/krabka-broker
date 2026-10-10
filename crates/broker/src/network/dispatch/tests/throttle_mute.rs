@@ -18,7 +18,6 @@ use krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity}
 use krabka_protocol::{
     Decode, Encode as _,
     owned::{fetch_response::FetchResponse, produce_response::ProduceResponse},
-    primitives::uuid::Uuid,
     records::{Record, RecordBatch},
 };
 use krabka_units::{Time, convert::TimeExt as _, millis};
@@ -195,11 +194,9 @@ fn produce_body(topic: &str, acks: i16, record_bytes: usize, count: usize) -> By
             ..Default::default()
         })
         .collect();
-    let request = single_partition_produce(
-        topic,
-        Uuid::default(),
-        0,
-        Some(
+    let request = single_partition_produce(SinglePartitionProduceSetup {
+        topic: (topic).into(),
+        records: Some(
             RecordBatch {
                 last_offset_delta: i32::try_from(count - 1).expect("record count"),
                 records,
@@ -207,8 +204,10 @@ fn produce_body(topic: &str, acks: i16, record_bytes: usize, count: usize) -> By
             }
             .into(),
         ),
-        (acks, 30_000),
-    );
+        acknowledgements: ProduceAcknowledgements::from_wire(WireAcknowledgements(acks)),
+        timeout: ProduceTimeoutMillis(30_000),
+        ..Default::default()
+    });
     let mut body = BytesMut::new();
     request
         .encode(&mut body, PRODUCE_VERSION)

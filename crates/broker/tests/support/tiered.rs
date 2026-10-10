@@ -25,7 +25,6 @@ pub async fn create_configured_topic(
                 configs,
                 ..crate::support::topics::creatable_topic(topic, 1, 1)
             },
-            5_000,
         ))
         .await
         .expect("CreateTopics");
@@ -44,12 +43,14 @@ pub async fn create_assigned_topic(
     segment_bytes: Option<&str>,
 ) {
     let response = client
-        .send(crate::support::topics::create_topic_request(
+        .send(crate::support::topics::create_topic_request_with_setup(
             krabka_protocol::owned::create_topics_request::CreatableTopic {
                 configs: tiered_configs(segment_bytes),
                 ..crate::support::topic_on(topic, &[replicas])
             },
-            10_000,
+            crate::support::topics::CreateTopicRequestSetup {
+                timeout: crate::support::topics::CreateTopicsTimeoutMillis(10_000),
+            },
         ))
         .await
         .expect("CreateTopics");
@@ -99,8 +100,17 @@ pub async fn produce_records(
                 value: Some(value(index)),
                 ..Default::default()
             }]);
-        let response =
-            crate::support::client::produce_batch(client, topic, topic_id, batch, 1, 10_000).await;
+        let response = crate::support::client::produce_batch(
+            client,
+            batch,
+            crate::support::client::BatchProduceSetup {
+                topic,
+                topic_id,
+                timeout: crate::support::produce::ProduceTimeoutMillis(10_000),
+                ..Default::default()
+            },
+        )
+        .await;
         assert2::assert!(response.error_code == 0, "Produce failed: {response:?}");
     }
 }

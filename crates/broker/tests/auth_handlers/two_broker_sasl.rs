@@ -19,7 +19,6 @@ use crate::{
     harness::admin_plain_password,
     support::{
         client::connect_client,
-        produce::single_partition_produce,
         records::{batch_from_records, value_record},
     },
 };
@@ -189,12 +188,13 @@ async fn two_broker_sasl_plaintext_replication() {
         )
     };
     let prod = producer
-        .send(single_partition_produce(
-            "sasl-repl",
-            topic_id,
-            0,
-            Some(batch.into()),
-            (-1, 5_000),
+        .send(crate::support::produce::batch_request(
+            batch,
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: ("sasl-repl").into(),
+                topic_id,
+                ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+            },
         ))
         .await
         .unwrap();

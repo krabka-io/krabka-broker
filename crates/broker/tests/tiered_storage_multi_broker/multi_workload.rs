@@ -125,8 +125,17 @@ pub(crate) async fn produce_and_await_remote_segments(
             value: Some(bytes::Bytes::from(format!("test-record-{index}"))),
             ..Default::default()
         }]);
-        let response =
-            crate::support::client::produce_batch(admin, TOPIC, topic_id, batch, -1, 10_000).await;
+        let response = crate::support::client::produce_batch(
+            admin,
+            batch,
+            crate::support::client::BatchProduceSetup {
+                topic: TOPIC,
+                topic_id,
+                acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+                timeout: crate::support::produce::ProduceTimeoutMillis(10_000),
+            },
+        )
+        .await;
         assert!(response.error_code == 0, "Produce failed: {response:?}");
     }
 

@@ -84,12 +84,13 @@ async fn produce(
     let request = ProduceRequest {
         // A Kafka producer names its transactional id on every request.
         transactional_id: batch_transactional_id.map(str::to_owned),
-        ..crate::support::produce::single_partition_produce(
-            topic,
-            id,
-            0,
-            Some(batch.into()),
-            (-1, 5_000),
+        ..crate::support::produce::batch_request(
+            batch,
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: (topic).into(),
+                topic_id: id,
+                ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+            },
         )
     };
     let response =

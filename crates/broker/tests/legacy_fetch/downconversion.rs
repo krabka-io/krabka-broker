@@ -32,10 +32,11 @@ async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {
     // 1. Create topic.
     let cr = p
         .client
-        .send(create_topic_request(
-            creatable_topic("legacy_fetch_basic", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(
+            "legacy_fetch_basic",
+            1,
+            1,
+        )))
         .await
         .expect("CreateTopics");
     assert!(

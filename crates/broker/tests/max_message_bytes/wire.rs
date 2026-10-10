@@ -145,7 +145,16 @@ pub(super) async fn produce_batch(
     topic_id: WireUuid,
     batch: RecordBatch,
 ) -> PartitionProduceResponse {
-    crate::support::client::produce_batch(client, topic, topic_id, batch, 1, 5_000).await
+    crate::support::client::produce_batch(
+        client,
+        batch,
+        crate::support::client::BatchProduceSetup {
+            topic,
+            topic_id,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// The partition row an accepted produce answers with, at `base_offset`, on a

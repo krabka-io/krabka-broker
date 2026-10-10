@@ -12,7 +12,6 @@ use crate::{
         create_topic, init_transactional_producer, topic_id_for, transactional_batch,
     },
     support,
-    support::produce::single_partition_produce,
 };
 
 #[tokio::test]
@@ -117,12 +116,13 @@ fn transaction_values_request(
 ) -> ProduceRequest {
     ProduceRequest {
         transactional_id: Some("describe-producers-tid".into()),
-        ..single_partition_produce(
-            "transactions",
-            topic_id,
-            0,
-            Some(transactional_batch(values).into()),
-            (-1, 5_000),
+        ..crate::support::produce::batch_request(
+            transactional_batch(values),
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: ("transactions").into(),
+                topic_id,
+                ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+            },
         )
     }
 }

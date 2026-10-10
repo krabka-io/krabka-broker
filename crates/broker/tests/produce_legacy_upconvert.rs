@@ -63,13 +63,12 @@ async fn produce_v1_message_set_is_upconverted_and_round_trips() {
 
     let legacy_bytes = build_v1_message_set(&[b"alpha", b"beta", b"gamma"]);
 
-    let req = single_partition_produce(
-        "legacy",
+    let req = single_partition_produce(crate::support::produce::SinglePartitionProduceSetup {
+        topic: ("legacy").into(),
         topic_id,
-        0,
-        Some(RecordsPayload::Legacy(legacy_bytes)),
-        (1, 5_000),
-    );
+        records: Some(RecordsPayload::Legacy(legacy_bytes)),
+        ..Default::default()
+    });
     let resp = p.client.send(req).await.expect("Produce");
     let pr = &resp.responses[0].partition_responses[0];
     assert!(
@@ -135,13 +134,12 @@ async fn produce_malformed_legacy_bytes_returns_invalid_record() {
     let mut garbage = vec![0u8; 100];
     garbage[8..12].copy_from_slice(&88_i32.to_be_bytes());
     garbage[16] = 0; // explicit: not v2
-    let req = single_partition_produce(
-        "bad",
+    let req = single_partition_produce(crate::support::produce::SinglePartitionProduceSetup {
+        topic: ("bad").into(),
         topic_id,
-        0,
-        Some(RecordsPayload::Legacy(Bytes::from(garbage))),
-        (1, 5_000),
-    );
+        records: Some(RecordsPayload::Legacy(Bytes::from(garbage))),
+        ..Default::default()
+    });
     let resp = p.client.send(req).await.expect("Produce");
     let pr = &resp.responses[0].partition_responses[0];
     assert!(

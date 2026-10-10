@@ -232,6 +232,32 @@ pub(crate) fn deletion_tombstones(
     records
 }
 
+/// Deletion expectations for ordered partitions of a single topic.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct TopicDeletionTombstonesSetup<'a> {
+    #[default("g")]
+    pub group: &'a str,
+    #[default("orders")]
+    pub topic: &'a str,
+    pub partitions: &'a [krabka_ids::PartitionIndex],
+    pub target: DeletionTarget,
+}
+
+pub(crate) fn topic_deletion_tombstones(
+    setup: TopicDeletionTombstonesSetup<'_>,
+) -> Vec<(crate::coordinator::persistence::Key, Option<bytes::Bytes>)> {
+    let offsets: Vec<_> = setup
+        .partitions
+        .iter()
+        .map(|partition| (setup.topic, *partition))
+        .collect();
+    deletion_tombstones(DeletionTombstonesSetup {
+        group: setup.group,
+        offsets: &offsets,
+        target: setup.target,
+    })
+}
+
 pub(crate) fn offset_record(setup: OffsetRecordSetup<'_>) -> krabka_protocol::records::Record {
     let OffsetRecordSetup {
         group,

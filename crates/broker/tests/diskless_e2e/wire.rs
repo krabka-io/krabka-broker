@@ -26,7 +26,6 @@ use crate::{
             delete_records_partition, delete_records_request, delete_records_topic,
             list_offset_partition, single_partition_list_offsets,
         },
-        produce::single_partition_produce,
         records::batch_from_records,
     },
 };
@@ -103,16 +102,12 @@ async fn produce_one(client: &Client, topic_id: WireUuid, value: Bytes, index: u
     let deadline = Instant::now() + Duration::from_mins(1);
     loop {
         let batch = stamped_batch(value.clone());
-        let response = client
-            .send(single_partition_produce(
-                TOPIC,
-                topic_id,
-                0,
-                Some(batch.into()),
-                (-1, 30_000),
-            ))
-            .await
-            .expect("Produce");
+        let response = crate::support::produce::send_batch(
+            &client,
+            batch,
+            crate::support::produce::SinglePartitionProduceSetup {topic: (TOPIC).into(), topic_id, ..crate::support::produce::SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()},
+        )
+        .await;
         let partition = &response.responses[0].partition_responses[0];
         match partition.error_code {
             0 => return,
@@ -253,12 +248,13 @@ pub(crate) async fn produce_until_stopped(
     while !stop.is_cancelled() {
         let batch = stamped_batch(Bytes::from(format!("diskless-e2e-churn-{index:04}")));
         let _ = client
-            .send(single_partition_produce(
-                TOPIC,
-                topic_id,
-                0,
-                Some(batch.into()),
-                (-1, 5_000),
+            .send(crate::support::produce::batch_request(
+                batch,
+                crate::support::produce::SinglePartitionProduceSetup {
+                    topic: (TOPIC).into(),
+                    topic_id,
+                    ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+                },
             ))
             .await;
         index += 1;

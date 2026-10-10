@@ -23,10 +23,7 @@ use krabka_protocol::owned::{
 use tempfile::TempDir;
 
 use crate::{
-    support::{
-        produce::single_partition_produce,
-        transactions::{end_transaction_request, init_producer_request},
-    },
+    support::transactions::{end_transaction_request, init_producer_request},
     txnver_harness::{
         admin_client, config, create_topic, downgrade_transaction_version, find_coordinator,
         topic_id,
@@ -109,12 +106,13 @@ async fn produce(
     );
     let request = ProduceRequest {
         transactional_id: transaction.map(|(transactional_id, _)| transactional_id.to_owned()),
-        ..single_partition_produce(
-            topic,
-            topic_id(client, topic).await,
-            0,
-            Some(batch.into()),
-            (-1, 5_000),
+        ..crate::support::produce::batch_request(
+            batch,
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: (topic).into(),
+                topic_id: topic_id(client, topic).await,
+                ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+            },
         )
     };
     let response = crate::support::transaction_wire::settled_produce(client, request, SETTLE).await;

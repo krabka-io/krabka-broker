@@ -16,9 +16,8 @@ use tokio::{
 };
 
 use crate::support::{
-    produce::single_partition_produce,
     records::{batch_from_records, value_record},
-    topics::{CreateTopicSetup, create_topic_request},
+    topics::CreateTopicSetup,
 };
 pub async fn connect(bootstrap: &str, client_id: &str) -> Arc<Client> {
     Arc::new(connect_client(bootstrap, Some(client_id)).await)
@@ -133,7 +132,12 @@ pub async fn create_topic_spec(
     timeout_ms: i32,
 ) -> WireUuid {
     let resp = client
-        .send(create_topic_request(topic, timeout_ms))
+        .send(crate::support::topics::create_topic_request_with_setup(
+            topic,
+            crate::support::topics::CreateTopicRequestSetup {
+                timeout: crate::support::topics::CreateTopicsTimeoutMillis(timeout_ms),
+            },
+        ))
         .await
         .expect("CreateTopics");
     assert!(
@@ -143,8 +147,19 @@ pub async fn create_topic_spec(
     resp.topics[0].topic_id
 }
 
+/// Number of sequential vN records in a fixture batch.
+#[derive(Clone, Copy)]
+pub struct ValueRecordCount(pub i32);
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ValueBatchSetup {
+    #[default(ValueRecordCount(1))]
+    pub records: ValueRecordCount,
+}
+
 /// One vN record per offset, starting at zero within the batch.
-pub fn value_batch(n: i32) -> RecordBatch {
+pub fn value_batch(setup: ValueBatchSetup) -> RecordBatch {
+    let n = setup.records.0;
     RecordBatch {
         base_offset: 0,
         last_offset_delta: (n - 1).max(0),
@@ -156,25 +171,34 @@ pub fn value_batch(n: i32) -> RecordBatch {
     }
 }
 
+/// Options shared by single-partition batch producers.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct BatchProduceSetup<'a> {
+    #[default("orders")]
+    pub topic: &'a str,
+    pub topic_id: WireUuid,
+    pub acknowledgements: crate::support::produce::ProduceAcknowledgements,
+    pub timeout: crate::support::produce::ProduceTimeoutMillis,
+}
+
 /// Produce one batch, preserving the caller's acknowledgement and deadline.
 pub async fn produce_batch(
     client: &Client,
-    topic: &str,
-    topic_id: WireUuid,
     batch: RecordBatch,
-    acks: i16,
-    timeout_ms: i32,
+    setup: BatchProduceSetup<'_>,
 ) -> PartitionProduceResponse {
-    let response = client
-        .send(single_partition_produce(
-            topic.to_owned(),
-            topic_id,
-            0,
-            Some(batch.into()),
-            (acks, timeout_ms),
-        ))
-        .await
-        .expect("Produce");
+    let response = crate::support::produce::send_batch(
+        &client,
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: setup.topic.to_owned(),
+            topic_id: setup.topic_id,
+            acknowledgements: setup.acknowledgements,
+            timeout: setup.timeout,
+            ..Default::default()
+        },
+    )
+    .await;
     response.responses[0].partition_responses[0].clone()
 }
 
@@ -269,6 +293,17 @@ pub async fn connect_c1(bootstrap: &str) -> Arc<Client> {
     connect(bootstrap, "c1").await
 }
 
+/// Client identity and diagnostics for a configured broker fixture.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct BrokerClientSetup<'a> {
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    #[default("broker start")]
+    pub broker_context: &'a str,
+    #[default("client build")]
+    pub client_context: &'a str,
+}
+
 /// Start a configured broker and connect the fixture's explicitly named client.
 /// The caller retains its original directory guard and readiness policy.
 ///
@@ -276,12 +311,15 @@ pub async fn connect_c1(bootstrap: &str) -> Arc<Client> {
 /// Panics if startup or client construction fails, with each caller's diagnostic.
 pub async fn start_broker_client(
     config: BrokerConfig,
-    client_id: &str,
-    broker_context: &str,
-    client_context: &str,
+    setup: BrokerClientSetup<'_>,
 ) -> (BrokerHandle, Client) {
-    let broker = configured_broker(config, Some(broker_context)).await;
-    let client = connect_owned(broker.listen_addr().to_string(), client_id, client_context).await;
+    let broker = configured_broker(config, Some(setup.broker_context)).await;
+    let client = connect_owned(
+        broker.listen_addr().to_string(),
+        setup.client_id,
+        setup.client_context,
+    )
+    .await;
     (broker, client)
 }
 

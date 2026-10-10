@@ -22,7 +22,6 @@ use crate::{
     support::{
         fetch::single_partition_fetch,
         offsets::{list_offset_partition, single_partition_list_offsets},
-        produce::single_partition_produce,
     },
 };
 
@@ -72,16 +71,16 @@ pub async fn ready_topic(broker: &BrokerHandle, client: &Client, topic: &str, mo
 }
 
 pub async fn produce(client: &Client, topic: &str, topic_id: Uuid, batch: RecordBatch) {
-    let response = client
-        .send(single_partition_produce(
-            topic.to_owned(),
+    let response = crate::support::produce::send_batch(
+        &client,
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: topic.to_owned(),
             topic_id,
-            0,
-            Some(batch.into()),
-            (1, 5_000),
-        ))
-        .await
-        .expect("Produce");
+            ..Default::default()
+        },
+    )
+    .await;
     let written = response
         .responses
         .first()

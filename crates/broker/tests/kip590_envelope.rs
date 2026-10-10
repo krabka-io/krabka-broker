@@ -193,10 +193,9 @@ async fn send_envelope_on(
 fn embedded_create_topics(topic: &str) -> Bytes {
     let version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
     let body = encode(
-        &crate::support::topics::create_topic_request(
-            crate::support::topics::creatable_topic(topic, 1, 1),
-            5_000,
-        ),
+        &crate::support::topics::create_topic_request(crate::support::topics::creatable_topic(
+            topic, 1, 1,
+        )),
         version,
     );
     // The length prefix belongs to the outer connection, not to `request_data`
@@ -656,10 +655,9 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
         client_id: Some("adminclient-1".as_bytes()),
         tagged: Some(&[0]),
         body: &encode(
-            &crate::support::topics::create_topic_request(
-                crate::support::topics::creatable_topic(TOPIC, 1, 1),
-                5_000,
-            ),
+            &crate::support::topics::create_topic_request(crate::support::topics::creatable_topic(
+                TOPIC, 1, 1,
+            )),
             krabka_protocol::owned::create_topics_request::MAX_VERSION,
         ),
     })

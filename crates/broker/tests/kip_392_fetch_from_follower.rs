@@ -36,9 +36,7 @@ use krabka_protocol::{
 use support::cluster_lock;
 use tempfile::TempDir;
 
-use crate::support::{
-    client::connect_client, fetch::fetch_topic_row, produce::single_partition_produce,
-};
+use crate::support::{client::connect_client, fetch::fetch_topic_row};
 
 mod support;
 
@@ -237,16 +235,18 @@ async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
 
     // Step 3: produce N records to the leader with acks=all so they commit.
     let producer = connect_client(leader_addr.clone(), None).await;
-    let prod = producer
-        .send(single_partition_produce(
-            "t",
+    let prod = crate::support::produce::send_batch(
+        &producer,
+        record_batch(crate::support::client::ValueBatchSetup {
+            records: crate::support::client::ValueRecordCount(N_RECORDS),
+        }),
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: ("t").into(),
             topic_id,
-            0,
-            Some(record_batch(N_RECORDS).into()),
-            (-1, 5_000),
-        ))
-        .await
-        .expect("Produce");
+            ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+        },
+    )
+    .await;
     assert!(
         prod.responses[0].partition_responses[0].error_code == 0,
         "Produce acks=all"

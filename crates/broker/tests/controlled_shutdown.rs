@@ -33,7 +33,7 @@ const CREATE_TOPICS_VERSION: i16 = 7;
 const CLIENT_ID: &str = "krabka-controlled-shutdown-test";
 
 async fn create_topic(addr: SocketAddr, name: &str, partitions: i32, rf: i16) {
-    let req = create_topic_request(creatable_topic(name.to_string(), partitions, rf), 5_000);
+    let req = create_topic_request(creatable_topic(name.to_string(), partitions, rf));
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_TOPICS_VERSION)

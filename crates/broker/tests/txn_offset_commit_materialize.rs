@@ -73,7 +73,7 @@ const TOPIC: &str = "src";
 /// by name.
 async fn create_topic(client: &krabka_client_core::Client) {
     let resp = client
-        .send(create_topic_request(creatable_topic(TOPIC, 1, 1), 5_000))
+        .send(create_topic_request(creatable_topic(TOPIC, 1, 1)))
         .await
         .expect("create topic");
     assert!(resp.topics[0].error_code == 0, "create topic: {resp:?}");

@@ -33,10 +33,32 @@ pub fn creatable_topic(
     }
 }
 
-pub fn create_topic_request(topic: CreatableTopic, timeout_ms: i32) -> CreateTopicsRequest {
+/// Signed protocol deadlines retain deliberately invalid fixture values.
+#[derive(Clone, Copy)]
+pub struct CreateTopicsTimeoutMillis(pub i32);
+
+impl Default for CreateTopicsTimeoutMillis {
+    fn default() -> Self {
+        Self(5_000)
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct CreateTopicRequestSetup {
+    pub timeout: CreateTopicsTimeoutMillis,
+}
+
+pub fn create_topic_request(topic: CreatableTopic) -> CreateTopicsRequest {
+    create_topic_request_with_setup(topic, CreateTopicRequestSetup::default())
+}
+
+pub fn create_topic_request_with_setup(
+    topic: CreatableTopic,
+    setup: CreateTopicRequestSetup,
+) -> CreateTopicsRequest {
     CreateTopicsRequest {
         topics: vec![topic],
-        timeout_ms,
+        timeout_ms: setup.timeout.0,
         ..Default::default()
     }
 }
@@ -80,14 +102,16 @@ pub fn creatable_topic_with_configs(setup: ConfiguredTopicSetup) -> CreatableTop
 
 /// A single-partition diskless topic created through the ordinary admin handler.
 pub fn diskless_topic_request(name: impl Into<String>, replication: i16) -> CreateTopicsRequest {
-    create_topic_request(
+    crate::support::topics::create_topic_request_with_setup(
         creatable_topic_with_configs(crate::support::topics::ConfiguredTopicSetup {
             name: name.into(),
             replicas: crate::support::topics::TopicReplicationFactor(replication),
             configs: topic_configs([("krabka.diskless", "true")]),
             ..Default::default()
         }),
-        10_000,
+        crate::support::topics::CreateTopicRequestSetup {
+            timeout: crate::support::topics::CreateTopicsTimeoutMillis(10_000),
+        },
     )
 }
 
@@ -112,10 +136,7 @@ pub async fn create_assigned_partition<'a>(
     brokers: impl IntoIterator<Item = &'a krabka_broker::BrokerHandle>,
 ) -> krabka_protocol::primitives::uuid::Uuid {
     let response = client
-        .send(create_topic_request(
-            super::topic_on(topic, &[replicas]),
-            5_000,
-        ))
+        .send(create_topic_request(super::topic_on(topic, &[replicas])))
         .await
         .unwrap();
     assert2::assert!(response.topics[0].error_code == 0);

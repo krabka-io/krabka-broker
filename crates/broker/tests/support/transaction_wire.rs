@@ -124,12 +124,13 @@ pub(crate) fn produce_request(setup: TransactionProduceSetup<'_>) -> ProduceRequ
     ProduceRequest {
         // KIP-890 verification needs the transactional id for transactional batches.
         transactional_id: producer.map(|_| transactional_id.to_string()),
-        ..crate::support::produce::single_partition_produce(
-            topic,
-            topic_id,
-            0,
-            Some(batch.into()),
-            (-1, 5_000),
+        ..crate::support::produce::batch_request(
+            batch,
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: (topic).into(),
+                topic_id,
+                ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+            },
         )
     }
 }
@@ -197,7 +198,6 @@ pub async fn create_topic(client: &krabka_client_core::Client, setup: Transactio
                 configs,
                 ..crate::support::topics::creatable_topic(name, partitions.0, 1)
             },
-            5_000,
         ))
         .await
         .unwrap();
@@ -340,7 +340,6 @@ pub(crate) async fn create_assigned_topic(
     let created = client
         .send(crate::support::topics::create_topic_request(
             crate::support::topic_on(name, &[replicas]),
-            5_000,
         ))
         .await
         .expect("CreateTopics");

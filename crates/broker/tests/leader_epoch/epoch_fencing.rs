@@ -13,7 +13,6 @@ use crate::{
     support::{
         client::connect_client,
         fetch::{fetch_partition, single_partition_fetch},
-        produce::single_partition_produce,
     },
 };
 
@@ -51,12 +50,13 @@ async fn fenced_leader_epoch_truncates_zombie_writes() {
     let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "fence").await;
     client
-        .send(single_partition_produce(
-            "fence",
-            topic_id,
-            0,
-            Some(record("v0").into()),
-            (1, 5_000),
+        .send(crate::support::produce::batch_request(
+            record("v0"),
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: ("fence").into(),
+                topic_id,
+                ..Default::default()
+            },
         ))
         .await
         .expect("produce");

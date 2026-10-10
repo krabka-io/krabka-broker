@@ -45,10 +45,7 @@ pub async fn create_topic_on_replicas(broker: &BrokerHandle, bootstrap: &str, na
     let client = connect_client(bootstrap.to_string(), None).await;
     let replicas: Vec<i32> = (1..=i32::from(rf)).collect();
     let resp = client
-        .send(create_topic_request(
-            super::topic_on(name, &[&replicas]),
-            5_000,
-        ))
+        .send(create_topic_request(super::topic_on(name, &[&replicas])))
         .await
         .expect("CreateTopics");
     assert!(
@@ -64,14 +61,12 @@ pub async fn create_topic_on_replicas(broker: &BrokerHandle, bootstrap: &str, na
 
 pub async fn produce_batch(
     bootstrap: &str,
-    topic: &str,
     batch: RecordBatch,
-    acks: i16,
-    timeout_ms: i32,
+    mut setup: super::client::BatchProduceSetup<'_>,
 ) -> Result<i64, i16> {
     let client = connect_client(bootstrap.to_string(), None).await;
-    let topic_id = topic_id_for(&client, topic).await;
-    let pr = super::client::produce_batch(&client, topic, topic_id, batch, acks, timeout_ms).await;
+    setup.topic_id = topic_id_for(&client, setup.topic).await;
+    let pr = super::client::produce_batch(&client, batch, setup).await;
     if pr.error_code == 0 {
         Ok(pr.base_offset)
     } else {
@@ -81,17 +76,8 @@ pub async fn produce_batch(
 
 pub async fn produce_acks(
     bootstrap: &str,
-    topic: &str,
     values: &[&str],
-    acks: i16,
-    timeout_ms: i32,
+    setup: super::client::BatchProduceSetup<'_>,
 ) -> Result<i64, i16> {
-    produce_batch(
-        bootstrap,
-        topic,
-        record_batch_with_values(values),
-        acks,
-        timeout_ms,
-    )
-    .await
+    produce_batch(bootstrap, record_batch_with_values(values), setup).await
 }

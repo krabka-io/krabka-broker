@@ -39,7 +39,6 @@ use krabka_protocol::{
 
 use crate::support::{
     fetch::single_partition_fetch,
-    produce::single_partition_produce,
     records::{batch_from_records, value_record},
 };
 
@@ -97,7 +96,14 @@ async fn produce_gzip(addr: SocketAddr, topic: &str, topic_id: Uuid, value: &[u8
         attributes: Attributes::default().with_compression(CompressionType::Gzip),
         ..batch_from_records(vec![value_record(0, Some(Bytes::copy_from_slice(value)))])
     };
-    let req = single_partition_produce(topic, topic_id, 0, Some(batch.into()), (-1, 5_000));
+    let req = crate::support::produce::batch_request(
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: (topic).into(),
+            topic_id,
+            ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+        },
+    );
     let version: i16 = 9;
     let (_, r): (usize, ProduceResponse) =
         kafka_wire::request_once(addr, &req, (0, version), CLIENT_ID, (1, true)).await;

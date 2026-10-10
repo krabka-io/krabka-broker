@@ -8,7 +8,6 @@ use crate::support::{
     discovery::{api_versions_request_for, topic_metadata_request},
     fetch::single_partition_fetch,
     offsets::{list_offset_partition, single_partition_list_offsets},
-    produce::single_partition_produce,
     records::value_record,
     topics::{creatable_topic, create_topic_request},
 };
@@ -79,19 +78,20 @@ async fn list_offsets_by_timestamp_local() {
     let p = support::start().await;
 
     p.client
-        .send(create_topic_request(creatable_topic("by_ts", 1, 1), 5_000))
+        .send(create_topic_request(creatable_topic("by_ts", 1, 1)))
         .await
         .unwrap();
     let topic_id = topic_id_for(&p.client, "by_ts").await;
 
     // Offsets 0..=2 with timestamps 100, 200, 300.
     p.client
-        .send(single_partition_produce(
-            "by_ts",
-            topic_id,
-            0,
-            Some(timestamped_batch(&[("a", 100), ("b", 200), ("c", 300)]).into()),
-            (1, 5_000),
+        .send(crate::support::produce::batch_request(
+            timestamped_batch(&[("a", 100), ("b", 200), ("c", 300)]),
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: ("by_ts").into(),
+                topic_id,
+                ..Default::default()
+            },
         ))
         .await
         .unwrap();
@@ -140,7 +140,7 @@ async fn end_to_end_create_produce_fetch_delete() {
     // 2. CreateTopics.
     let cr = p
         .client
-        .send(create_topic_request(creatable_topic("e2e", 1, 1), 5_000))
+        .send(create_topic_request(creatable_topic("e2e", 1, 1)))
         .await
         .unwrap();
     assert!(cr.topics[0].error_code == 0);
@@ -153,12 +153,13 @@ async fn end_to_end_create_produce_fetch_delete() {
     // 4. Produce 3 records.
     let pr = p
         .client
-        .send(single_partition_produce(
-            "e2e",
-            topic_id,
-            0,
-            Some(record_batch_with_values(&["a", "b", "c"]).into()),
-            (1, 5_000),
+        .send(crate::support::produce::batch_request(
+            record_batch_with_values(&["a", "b", "c"]),
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: ("e2e").into(),
+                topic_id,
+                ..Default::default()
+            },
         ))
         .await
         .unwrap();
@@ -208,10 +209,11 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     let p = support::start().await;
     let create = p
         .client
-        .send(create_topic_request(
-            creatable_topic("one-way-produce", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(
+            "one-way-produce",
+            1,
+            1,
+        )))
         .await
         .expect("create topic");
     assert!(create.topics[0].error_code == 0);
@@ -219,12 +221,13 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     let mut stream = tokio::net::TcpStream::connect(p.broker.listen_addr())
         .await
         .expect("connect raw client");
-    let produce = single_partition_produce(
-        "one-way-produce",
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        0,
-        Some(record_batch_with_values(&["value"]).into()),
-        (0, 5_000),
+    let produce = crate::support::produce::batch_request(
+        record_batch_with_values(&["value"]),
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: ("one-way-produce").into(),
+            acknowledgements: crate::support::produce::ProduceAcknowledgements::NoResponse,
+            ..Default::default()
+        },
     );
     let mut body = BytesMut::new();
     produce.encode(&mut body, 9).expect("encode Produce v9");
@@ -294,10 +297,7 @@ async fn second_open_recovers_partitions_from_disk() {
         let bootstrap = handle.listen_addr().to_string();
         let client = connect_client(&bootstrap, Some("recovery-test")).await;
         let cr = client
-            .send(create_topic_request(
-                creatable_topic("persisted", 2, 1),
-                5_000,
-            ))
+            .send(create_topic_request(creatable_topic("persisted", 2, 1)))
             .await
             .unwrap();
         assert!(cr.topics[0].error_code == 0);

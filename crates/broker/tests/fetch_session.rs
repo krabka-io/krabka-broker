@@ -7,10 +7,7 @@
 
 use assert2::{assert, check};
 
-use crate::support::{
-    fetch::{fetch_request_for, fetch_topic_row},
-    produce::single_partition_produce,
-};
+use crate::support::fetch::{fetch_request_for, fetch_topic_row};
 mod support;
 
 use krabka_protocol::{
@@ -49,12 +46,14 @@ async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
 
 async fn produce(p: &support::InProcess, topic: &str, partition: i32, records: i32) {
     let topic_id = topic_id_for(&p.client, topic).await;
-    let req = single_partition_produce(
-        topic,
-        topic_id,
-        partition,
-        Some(one_record_batch(records).into()),
-        (1, 5_000),
+    let req = crate::support::produce::batch_request(
+        one_record_batch(records),
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: (topic).into(),
+            topic_id,
+            partition: krabka_ids::PartitionIndex(partition),
+            ..Default::default()
+        },
     );
     let resp = p.client.send(req).await.expect("Produce");
     assert!(

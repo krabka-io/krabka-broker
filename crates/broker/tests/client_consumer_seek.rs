@@ -78,7 +78,7 @@ async fn seek_rejects_negative_offset() {
 
     let admin = connect_client(&bootstrap, None).await;
     admin
-        .send(create_topic_request(creatable_topic("n", 1, 1), 5_000))
+        .send(create_topic_request(creatable_topic("n", 1, 1)))
         .await
         .unwrap();
 

@@ -14,7 +14,6 @@ use crate::{
     support::{
         client::connect_client,
         fetch::{fetch_partition, single_partition_fetch},
-        produce::single_partition_produce,
     },
 };
 
@@ -50,12 +49,13 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
         let client = &client;
         async move {
             client
-                .send(single_partition_produce(
-                    "diverge",
-                    topic_id,
-                    0,
-                    Some(record(value).into()),
-                    (1, 5_000),
+                .send(crate::support::produce::batch_request(
+                    record(value),
+                    crate::support::produce::SinglePartitionProduceSetup {
+                        topic: ("diverge").into(),
+                        topic_id,
+                        ..Default::default()
+                    },
                 ))
                 .await
                 .expect("produce");

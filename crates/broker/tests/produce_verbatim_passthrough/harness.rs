@@ -122,11 +122,12 @@ pub async fn produce_payload(
 ) -> Result<i64, i16> {
     let resp = client
         .send(single_partition_produce(
-            topic,
-            topic_id,
-            0,
-            Some(records),
-            (1, 5_000),
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: (topic).into(),
+                topic_id,
+                records: Some(records),
+                ..Default::default()
+            },
         ))
         .await
         .expect("Produce");

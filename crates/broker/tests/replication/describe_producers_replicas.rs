@@ -30,11 +30,11 @@ use krabka_protocol::{
         write_txn_markers_request::WriteTxnMarkersRequest,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{RecordBatch, RecordsPayload},
+    records::RecordBatch,
 };
 use tempfile::TempDir;
 
-use crate::{support, support::produce::single_partition_produce};
+use crate::support;
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 
@@ -121,12 +121,9 @@ fn produce_request(
 ) -> ProduceRequest {
     ProduceRequest {
         transactional_id: transactional_id.map(Into::into),
-        ..single_partition_produce(
-            TOPIC,
-            topic_id,
-            0,
-            Some(RecordsPayload::V2(vec![batch])),
-            (-1, 30_000),
+        ..crate::support::produce::batch_request(
+            batch,
+            crate::support::produce::SinglePartitionProduceSetup {topic: (TOPIC).into(), topic_id, ..crate::support::produce::SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()},
         )
     }
 }

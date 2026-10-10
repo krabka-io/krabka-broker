@@ -15,11 +15,8 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    client::connect_owned,
-    fetch::single_partition_fetch,
-    produce::single_partition_produce,
-    records::batch_from_records,
-    topics::{creatable_topic, create_topic_request},
+    client::connect_owned, fetch::single_partition_fetch, records::batch_from_records,
+    topics::creatable_topic,
 };
 
 /// The floor the fetch asks for. 64 KiB is orders of magnitude above the one
@@ -71,22 +68,20 @@ async fn connect(bootstrap: &str) -> Client {
 /// Append one small record -- small enough that `MIN_BYTES` stays out of reach
 /// whatever the batch overhead of the broker on the other end is.
 async fn produce_one(client: &Client, topic: &str, topic_id: WireUuid, value: &'static [u8]) {
-    let produced = client
-        .send(single_partition_produce(
-            topic,
+    let produced = crate::support::produce::send_batch(
+        &client,
+        batch_from_records(vec![Record {
+            value: Some(bytes::Bytes::from_static(value)),
+            ..Default::default()
+        }]),
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: (topic).into(),
             topic_id,
-            0,
-            Some(
-                batch_from_records(vec![Record {
-                    value: Some(bytes::Bytes::from_static(value)),
-                    ..Default::default()
-                }])
-                .into(),
-            ),
-            (1, 10_000),
-        ))
-        .await
-        .expect("Produce");
+            timeout: crate::support::produce::ProduceTimeoutMillis(10_000),
+            ..Default::default()
+        },
+    )
+    .await;
     assert!(
         produced.responses[0].partition_responses[0].error_code == 0,
         "Produce"
@@ -97,7 +92,12 @@ async fn produce_one(client: &Client, topic: &str, topic_id: WireUuid, value: &'
 /// behind.
 async fn create_topic(client: &Client, topic: &str) {
     let response = client
-        .send(create_topic_request(creatable_topic(topic, 1, 1), 10_000))
+        .send(crate::support::topics::create_topic_request_with_setup(
+            creatable_topic(topic, 1, 1),
+            crate::support::topics::CreateTopicRequestSetup {
+                timeout: crate::support::topics::CreateTopicsTimeoutMillis(10_000),
+            },
+        ))
         .await
         .expect("CreateTopics");
     let code = response.topics[0].error_code;

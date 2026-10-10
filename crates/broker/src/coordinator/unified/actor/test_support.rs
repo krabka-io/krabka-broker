@@ -412,18 +412,11 @@ pub(super) async fn log_has_classic_group_metadata_write(
     log: &InMemoryOffsetsLog,
     group_id: &str,
 ) -> bool {
-    use crate::coordinator::unified::persistence::{Key, parse_key};
-    log.batches().await.iter().any(|batch| {
-        batch.records.iter().any(|rec| {
-            rec.value.is_some()
-                && rec.key.as_ref().is_some_and(|k| {
-                    matches!(
-                        parse_key(k),
-                        Ok(Key::GroupMetadata { group_id: ref gid }) if gid == group_id
-                    )
-                })
-        })
-    })
+    log.has_classic_group_metadata_record(
+        group_id,
+        crate::coordinator::unified::offsets_log::fake::ClassicMetadataRecord::Write,
+    )
+    .await
 }
 
 /// Seeds a classic consumer group "g" with a single classic member

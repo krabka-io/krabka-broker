@@ -53,10 +53,7 @@ async fn denied_operation_returns_topic_authorization_failed() {
     // Attempt a create that will be denied.
     let resp = p
         .client
-        .send(create_topic_request(
-            creatable_topic("denied-topic", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic("denied-topic", 1, 1)))
         .await
         .unwrap();
 

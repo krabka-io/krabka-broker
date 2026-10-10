@@ -75,7 +75,7 @@ async fn create_topic_on_any_node_propagates() {
     // CreateTopics against node 0.
     let c = connect_client(cluster[0].1.listen_addr.to_string(), None).await;
     let resp = c
-        .send(create_topic_request(creatable_topic("prop", 3, 1), 5_000))
+        .send(create_topic_request(creatable_topic("prop", 3, 1)))
         .await
         .unwrap();
     assert!(resp.topics[0].error_code == 0);
@@ -136,10 +136,7 @@ async fn leader_kill_recovers() {
     // CreateTopics against a survivor succeeds.
     let c = connect_client(cluster[0].1.listen_addr.to_string(), None).await;
     let resp = c
-        .send(create_topic_request(
-            creatable_topic("post-kill", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic("post-kill", 1, 1)))
         .await
         .unwrap();
     assert!(resp.topics[0].error_code == 0);
@@ -165,10 +162,7 @@ async fn follower_forwards_create_topic() {
 
     let c = connect_client(cluster[follower_idx].1.listen_addr.to_string(), None).await;
     let resp = c
-        .send(create_topic_request(
-            creatable_topic("via-follower", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic("via-follower", 1, 1)))
         .await
         .unwrap();
     assert!(resp.topics[0].error_code == 0);
@@ -206,7 +200,7 @@ async fn concurrent_topic_creates_one_wins() {
     let mut joins = Vec::new();
     for c in clients {
         joins.push(tokio::spawn(async move {
-            c.send(create_topic_request(creatable_topic("race", 1, 1), 5_000))
+            c.send(create_topic_request(creatable_topic("race", 1, 1)))
                 .await
                 .unwrap()
         }));

@@ -264,7 +264,7 @@ fn server_certificate() -> CertificateDer<'static> {
 }
 
 fn create_topics_body(topic: &str) -> BytesMut {
-    let request = create_topic_request(creatable_topic(topic, 1, 1), 5_000);
+    let request = create_topic_request(creatable_topic(topic, 1, 1));
     let mut body = BytesMut::new();
     request.encode(&mut body, 7).expect("encode CreateTopics");
     body

@@ -28,9 +28,7 @@ use krabka_client_core::Client;
 use krabka_protocol::records::RecordBatch;
 use support::cluster_lock;
 
-use crate::support::{
-    client::connect_client, produce::single_partition_produce, records::value_record,
-};
+use crate::support::{client::connect_client, records::value_record};
 
 mod support;
 
@@ -52,12 +50,14 @@ async fn produce_one(
     batch.last_offset_delta = 0;
     for attempt in 1..=10 {
         let resp = client
-            .send(single_partition_produce(
-                topic,
-                topic_id,
-                partition,
-                Some(batch.clone().into()),
-                (-1, 5_000),
+            .send(crate::support::produce::batch_request(
+                batch.clone(),
+                crate::support::produce::SinglePartitionProduceSetup {
+                    topic: (topic).into(),
+                    topic_id,
+                    partition: krabka_ids::PartitionIndex(partition),
+                    ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+                },
             ))
             .await
             .expect("produce");

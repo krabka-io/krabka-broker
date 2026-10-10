@@ -30,7 +30,6 @@ use crate::{
     support,
     support::{
         offsets::{delete_records_partition, delete_records_request, delete_records_topic},
-        produce::single_partition_produce,
         records::{batch_from_records, value_record},
         sasl::scram_upsertion,
         topics::{creatable_topic, create_topic_request},
@@ -58,17 +57,16 @@ async fn produce_one(
             Some(bytes::Bytes::from_static(b"audited-record")),
         )])
     };
-    let resp = p
-        .client
-        .send(single_partition_produce(
-            topic,
+    let resp = crate::support::produce::send_batch(
+        &p.client,
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: (topic).into(),
             topic_id,
-            0,
-            Some(batch.into()),
-            (1, 5_000),
-        ))
-        .await
-        .expect("Produce");
+            ..Default::default()
+        },
+    )
+    .await;
     assert2::check!(resp.responses[0].partition_responses[0].error_code == 0);
 }
 
@@ -190,7 +188,7 @@ async fn every_admin_mutation_is_audited() {
 
     let created = p
         .client
-        .send(create_topic_request(creatable_topic(topic, 1, 1), 5_000))
+        .send(create_topic_request(creatable_topic(topic, 1, 1)))
         .await
         .expect("CreateTopics");
     assert2::check!(created.topics[0].error_code == 0);

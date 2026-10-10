@@ -31,10 +31,7 @@ use crate::support::start_ready_group as start;
 async fn offset_commit_and_fetch_by_topic_id_round_trip() {
     let p = start().await;
     p.client
-        .send(create_topic_request(
-            creatable_topic("o_topic", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic("o_topic", 1, 1)))
         .await
         .expect("create topic");
     let id = topic_id_for(&p.client, "o_topic").await;
@@ -142,10 +139,7 @@ async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
 async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
     let p = start().await;
     p.client
-        .send(create_topic_request(
-            creatable_topic("oc_known", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic("oc_known", 1, 1)))
         .await
         .expect("create topic");
     let known = topic_id_for(&p.client, "oc_known").await;
@@ -208,10 +202,7 @@ async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
 async fn offset_fetch_all_echoes_topic_id() {
     let p = start().await;
     p.client
-        .send(create_topic_request(
-            creatable_topic("fa_topic", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic("fa_topic", 1, 1)))
         .await
         .expect("create topic");
     let id = topic_id_for(&p.client, "fa_topic").await;

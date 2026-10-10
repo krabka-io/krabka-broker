@@ -93,7 +93,7 @@ pub(super) fn latest_row(offset: i64) -> ListOffsetsPartitionResponse {
 
 pub(super) async fn create_topic(client: &Client, name: &str) {
     let response = client
-        .send(create_topic_request(creatable_topic(name, 1, 1), 5_000))
+        .send(create_topic_request(creatable_topic(name, 1, 1)))
         .await
         .expect("CreateTopics");
     check!(

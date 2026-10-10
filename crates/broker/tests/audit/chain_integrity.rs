@@ -34,10 +34,7 @@ async fn signed_checkpoints_appear_on_audit_topic() {
     let audit_before = p.broker.metrics().audit_events.get();
     let _ = p
         .client
-        .send(create_topic_request(
-            creatable_topic("cp-topic", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic("cp-topic", 1, 1)))
         .await
         .unwrap();
 
@@ -74,7 +71,7 @@ async fn audit_chain_continues_across_restart() {
         let (broker, client) = support::start_with_dir(dir.path()).await;
         let audit_before = broker.metrics().audit_events.get();
         let _ = client
-            .send(create_topic_request(creatable_topic("r1", 1, 1), 5_000))
+            .send(create_topic_request(creatable_topic("r1", 1, 1)))
             .await
             .unwrap();
         // Ensure the r1 CreateTopics audit record is durable before shutdown.
@@ -90,7 +87,7 @@ async fn audit_chain_continues_across_restart() {
     let (broker, client) = support::start_with_dir(dir.path()).await;
     let audit_before = broker.metrics().audit_events.get();
     let _ = client
-        .send(create_topic_request(creatable_topic("r2", 1, 1), 5_000))
+        .send(create_topic_request(creatable_topic("r2", 1, 1)))
         .await
         .unwrap();
     // Ensure the r2 CreateTopics audit record is durable before consuming.

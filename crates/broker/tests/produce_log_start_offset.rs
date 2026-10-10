@@ -146,10 +146,7 @@ async fn create_topic(
     name: &str,
 ) -> WireUuid {
     let response = client
-        .send(create_topic_request(
-            creatable_topic(name.to_owned(), 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(name.to_owned(), 1, 1)))
         .await
         .expect("CreateTopics");
     assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
@@ -181,7 +178,16 @@ async fn produce_as(
         base_sequence,
         ..batch_from_records(vec![value_record(0, Some(Bytes::from_static(b"frame")))])
     };
-    crate::support::client::produce_batch(client, topic, topic_id, batch, 1, 5_000).await
+    crate::support::client::produce_batch(
+        client,
+        batch,
+        crate::support::client::BatchProduceSetup {
+            topic,
+            topic_id,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Trim partition 0 of `topic` to `offset` and hand back the whole row.

@@ -33,10 +33,7 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use crate::support::{
-    produce::single_partition_produce,
-    records::{batch_from_records, value_record},
-};
+use crate::support::records::{batch_from_records, value_record};
 
 krabka_macros::assignment_dirs_fixture!(assignment_dirs_request);
 
@@ -82,12 +79,13 @@ async fn produce_and_get_error(addr: SocketAddr, topic: &str, partition: i32) ->
         0,
         Some(bytes::Bytes::from_static(b"kip-112-test")),
     )]);
-    let req = single_partition_produce(
-        topic.to_string(),
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        partition,
-        Some(batch.into()),
-        (1, 5_000),
+    let req = crate::support::produce::batch_request(
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: topic.to_string(),
+            partition: krabka_ids::PartitionIndex(partition),
+            ..Default::default()
+        },
     );
     let mut body = BytesMut::new();
     req.encode(&mut body, PRODUCE_VERSION).unwrap();

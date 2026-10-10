@@ -464,20 +464,14 @@ fn identity_rows() -> Vec<IdentityRow> {
             name: "known member rejoins with epoch 0",
             member_epoch: MemberEpoch(0),
             owned: Some(vec![]),
-            expected: identity_ok(IdentityExpectationSetup {
-                partitions: Some(vec![PartitionIndex(0), PartitionIndex(1)]),
-                ..Default::default()
-            }),
+            expected: identity_ok_two_partitions(),
             ..Default::default()
         },
         IdentityRow {
             name: "previous epoch with a subset of the assignment",
             member_epoch: MemberEpoch(4),
             owned: Some(vec![krabka_ids::PartitionIndex(0)]),
-            expected: identity_ok(IdentityExpectationSetup {
-                partitions: Some(vec![PartitionIndex(0), PartitionIndex(1)]),
-                ..Default::default()
-            }),
+            expected: identity_ok_two_partitions(),
             ..Default::default()
         },
         IdentityRow {
@@ -1175,4 +1169,12 @@ async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
         );
         check!(got == want, "{label}");
     }
+}
+
+/// Independent success expectation for both partitions of the fixture topic.
+fn identity_ok_two_partitions() -> ConsumerGroupHeartbeatResponse {
+    identity_ok(IdentityExpectationSetup {
+        partitions: Some(vec![PartitionIndex(0), PartitionIndex(1)]),
+        ..Default::default()
+    })
 }

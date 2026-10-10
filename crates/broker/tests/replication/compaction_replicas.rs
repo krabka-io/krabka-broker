@@ -23,13 +23,10 @@ use krabka_client_core::{Connection, ConnectionOptions};
 use krabka_protocol::{
     owned::create_topics_request::CreatableTopicConfig,
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
+    records::{Record, RecordBatch},
 };
 
-use crate::{
-    support,
-    support::{produce::single_partition_produce, records::batch_from_records},
-};
+use crate::{support, support::records::batch_from_records};
 
 const TOPIC: &str = "compaction-replicas";
 
@@ -103,16 +100,12 @@ fn record(
 /// Send `batch` to the leader with `acks=-1`, and return the error code of
 /// the partition row.
 async fn produce(leader: &Connection, topic_id: WireUuid, batch: RecordBatch) -> i16 {
-    let response = leader
-        .send(single_partition_produce(
-            TOPIC,
-            topic_id,
-            0,
-            Some(RecordsPayload::V2(vec![batch])),
-            (-1, 30_000),
-        ))
-        .await
-        .expect("Produce");
+    let response = crate::support::produce::send_batch(
+        &leader,
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {topic: (TOPIC).into(), topic_id, ..crate::support::produce::SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()},
+    )
+    .await;
     response.responses[0].partition_responses[0].error_code
 }
 

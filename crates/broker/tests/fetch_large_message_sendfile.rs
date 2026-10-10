@@ -21,7 +21,6 @@ use assert2::assert;
 use crate::support::{
     client::create_topic,
     fetch::{fetch_partition, single_partition_fetch},
-    produce::single_partition_produce,
     records::value_record,
 };
 mod support;
@@ -115,17 +114,16 @@ async fn large_message_fetch_round_trips_byte_exact() {
     // the Linux plaintext fetch goes zero-copy.
     let (batch, expected) = large_records(64, 2 * 1024);
 
-    let prod = p
-        .client
-        .send(single_partition_produce(
-            "big",
-            tid,
-            0,
-            Some(batch.into()),
-            (1, 5_000),
-        ))
-        .await
-        .expect("Produce");
+    let prod = crate::support::produce::send_batch(
+        &p.client,
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: ("big").into(),
+            topic_id: tid,
+            ..Default::default()
+        },
+    )
+    .await;
     assert!(prod.responses[0].partition_responses[0].error_code == 0);
 
     // Fetch with a generous byte budget so the whole run comes back in one go.

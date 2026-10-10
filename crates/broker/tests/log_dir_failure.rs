@@ -164,7 +164,7 @@ async fn create_topic(broker: &BrokerHandle, topic: &str) {
     )
     .await;
     let resp = client
-        .send(create_topic_request(creatable_topic(topic, 1, 3), 5_000))
+        .send(create_topic_request(creatable_topic(topic, 1, 3)))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0, "{resp:?}");

@@ -322,10 +322,11 @@ async fn controller_listener_serves_the_topic_lifecycle() {
     let connection = dial_controller(&broker).await;
 
     let created = connection
-        .send(create_topic_request(
-            creatable_topic("controller-lifecycle", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(
+            "controller-lifecycle",
+            1,
+            1,
+        )))
         .await
         .expect("CreateTopics over the controller listener");
 
@@ -581,10 +582,11 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
         .broker_epoch;
 
     let created = connection
-        .send(create_topic_request(
-            creatable_topic("controller-dirs", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(
+            "controller-dirs",
+            1,
+            1,
+        )))
         .await
         .expect("CreateTopics over the controller listener");
     assert!(let [created_topic] = &created.topics[..]);
@@ -721,10 +723,11 @@ async fn controller_only_node_places_no_replica_on_itself() {
     let connection = dial_controller(&broker).await;
 
     let created = connection
-        .send(create_topic_request(
-            creatable_topic("controller-only-placement", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(
+            "controller-only-placement",
+            1,
+            1,
+        )))
         .await
         .expect("CreateTopics over a controller-only listener");
     connection.close();

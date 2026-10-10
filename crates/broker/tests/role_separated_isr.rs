@@ -110,7 +110,7 @@ async fn create_replicated_topic(broker: &BrokerHandle, topic: &str) {
     )
     .await;
     let resp = client
-        .send(create_topic_request(creatable_topic(topic, 1, 2), 5_000))
+        .send(create_topic_request(creatable_topic(topic, 1, 2)))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0, "{resp:?}");

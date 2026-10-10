@@ -26,7 +26,6 @@ use crate::{
     support::{
         discovery::coordinator_lookup_request,
         offsets::{list_offset_partition, single_partition_list_offsets},
-        produce::single_partition_produce,
         records::{
             BatchTransaction, ProducerSequence, TransactionProbeBatchSetup, transaction_probe_batch,
         },
@@ -123,12 +122,12 @@ async fn produce_at(
 ) -> PartitionProduceResponse {
     let request = ProduceRequest {
         transactional_id: transactional_id.map(str::to_owned),
-        ..single_partition_produce(
-            topic,
-            krabka_protocol::primitives::uuid::Uuid::default(),
-            0,
-            Some(batch.into()),
-            (-1, 5_000),
+        ..crate::support::produce::batch_request(
+            batch,
+            crate::support::produce::SinglePartitionProduceSetup {
+                topic: (topic).into(),
+                ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+            },
         )
     };
     let response = match version.0 {

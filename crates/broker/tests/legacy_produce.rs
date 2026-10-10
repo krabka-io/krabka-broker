@@ -81,10 +81,7 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
     // 1. Create topic "legacy_v0" with 1 partition using the typed client.
     let cr = p
         .client
-        .send(create_topic_request(
-            creatable_topic("legacy_v0", 1, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic("legacy_v0", 1, 1)))
         .await
         .expect("CreateTopics");
     assert!(

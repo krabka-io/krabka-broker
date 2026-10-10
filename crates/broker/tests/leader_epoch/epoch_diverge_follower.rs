@@ -8,12 +8,7 @@
 
 use assert2::assert;
 
-use crate::{
-    cluster_lock,
-    epoch_harness::record,
-    support,
-    support::{client::connect_client, produce::single_partition_produce},
-};
+use crate::{cluster_lock, epoch_harness::record, support, support::client::connect_client};
 
 /// KIP-320 follower side, end to end. A follower whose local log has a
 /// divergent suffix beyond the leader's epoch boundary must truncate that
@@ -61,12 +56,13 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
     let producer = connect_client(leader_addr, None).await;
     for i in 0..k {
         let prod = producer
-            .send(single_partition_produce(
-                "divtrunc",
-                topic_id,
-                0,
-                Some(record(&format!("v{i}")).into()),
-                (-1, 5_000),
+            .send(crate::support::produce::batch_request(
+                record(&format!("v{i}")),
+                crate::support::produce::SinglePartitionProduceSetup {
+                    topic: ("divtrunc").into(),
+                    topic_id,
+                    ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+                },
             ))
             .await
             .unwrap();

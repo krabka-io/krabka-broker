@@ -115,7 +115,7 @@ async fn the_kfc9_gauges_and_counters_move_on_real_requests() {
 
     // A gated Kafka transition with no approval behind it.
     let created = alice
-        .send(create_topic_request(creatable_topic("doomed", 1, 1), 5_000))
+        .send(create_topic_request(creatable_topic("doomed", 1, 1)))
         .await
         .expect("CreateTopics");
     check!(created.topics[0].error_code == 0);

@@ -16,7 +16,6 @@ use crate::{
     support::{
         fetch::single_partition_fetch,
         offsets::{list_offset_partition, single_partition_list_offsets},
-        produce::single_partition_produce,
     },
 };
 
@@ -27,12 +26,13 @@ async fn produce_assigns_base_offsets() {
     let topic_id = topic_id_for(&p.client, "prod").await;
 
     // First produce: 3 records → base 0.
-    let req = single_partition_produce(
-        "prod",
-        topic_id,
-        0,
-        Some(one_record_batch(3).into()),
-        (1, 5_000),
+    let req = crate::support::produce::batch_request(
+        one_record_batch(3),
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: ("prod").into(),
+            topic_id,
+            ..Default::default()
+        },
     );
     let resp = p.client.send(req).await.expect("Produce 1");
     assert!(resp.responses.len() == 1);
@@ -41,12 +41,13 @@ async fn produce_assigns_base_offsets() {
     check!(resp.responses[0].partition_responses[0].base_offset == 0);
 
     // Second produce: 2 records → base 3.
-    let req2 = single_partition_produce(
-        "prod",
-        topic_id,
-        0,
-        Some(one_record_batch(2).into()),
-        (1, 5_000),
+    let req2 = crate::support::produce::batch_request(
+        one_record_batch(2),
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: ("prod").into(),
+            topic_id,
+            ..Default::default()
+        },
     );
     let resp2 = p.client.send(req2).await.expect("Produce 2");
     assert!(resp2.responses[0].partition_responses[0].error_code == 0);
@@ -62,12 +63,12 @@ async fn produce_assigns_base_offsets() {
 #[tokio::test]
 async fn produce_without_a_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
-    let req = single_partition_produce(
-        "nope",
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        0,
-        Some(one_record_batch(1).into()),
-        (1, 5_000),
+    let req = crate::support::produce::batch_request(
+        one_record_batch(1),
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: ("nope").into(),
+            ..Default::default()
+        },
     );
     let resp = p.client.send(req).await.expect("Produce unknown");
     assert!(resp.responses[0].partition_responses[0].error_code == 100);
@@ -80,12 +81,13 @@ async fn produce_then_fetch_round_trip() {
     create_topic(&p, "round", 1).await;
     let topic_id = topic_id_for(&p.client, "round").await;
 
-    let prod = single_partition_produce(
-        "round",
-        topic_id,
-        0,
-        Some(one_record_batch(3).into()),
-        (1, 5_000),
+    let prod = crate::support::produce::batch_request(
+        one_record_batch(3),
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: ("round").into(),
+            topic_id,
+            ..Default::default()
+        },
     );
     let presp = p.client.send(prod).await.expect("Produce");
     assert!(presp.responses[0].partition_responses[0].error_code == 0);

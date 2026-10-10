@@ -61,12 +61,9 @@ struct Row {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
-    let orders_group_tombstones = crate::coordinator::test_support::deletion_tombstones(
-        crate::coordinator::test_support::DeletionTombstonesSetup {
-            offsets: &[
-                ("orders", krabka_ids::PartitionIndex(0)),
-                ("orders", krabka_ids::PartitionIndex(1)),
-            ],
+    let orders_group_tombstones = crate::coordinator::test_support::topic_deletion_tombstones(
+        crate::coordinator::test_support::TopicDeletionTombstonesSetup {
+            partitions: &[krabka_ids::PartitionIndex(0), krabka_ids::PartitionIndex(1)],
             target: crate::coordinator::test_support::DeletionTarget::Group,
             ..Default::default()
         },

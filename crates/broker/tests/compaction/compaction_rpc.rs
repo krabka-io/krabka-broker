@@ -25,10 +25,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     CLIENT_ID, kafka_wire,
-    support::{
-        produce::single_partition_produce,
-        records::{batch_from_records, value_record},
-    },
+    support::records::{batch_from_records, value_record},
 };
 
 /// Create a topic with config overrides, on PLAINTEXT and with no SASL.
@@ -110,12 +107,13 @@ pub(crate) async fn produce_record(
         ..batch_from_records(vec![record])
     };
 
-    let req = single_partition_produce(
-        topic.to_string(),
-        topic_id,
-        0,
-        Some(batch.into()),
-        (1, 5_000),
+    let req = crate::support::produce::batch_request(
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: topic.to_string(),
+            topic_id,
+            ..Default::default()
+        },
     );
 
     let version: i16 = 9; // flexible, pre-KIP-516 (no topic_id required on the wire at v9)

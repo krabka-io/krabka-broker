@@ -39,17 +39,18 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
         .collect();
 
     let req = crate::support::produce::single_partition_produce(
-        topic.to_string(),
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        0,
-        Some(
-            RecordBatch {
-                last_offset_delta: i32::try_from(count - 1).unwrap(),
-                ..batch_from_records(records)
-            }
-            .into(),
-        ),
-        (1, 5_000), // leader ack only (rf=1 topic)
+        // leader ack only (rf=1 topic)
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: topic.to_string(),
+            records: Some(
+                RecordBatch {
+                    last_offset_delta: i32::try_from(count - 1).unwrap(),
+                    ..batch_from_records(records)
+                }
+                .into(),
+            ),
+            ..Default::default()
+        },
     );
 
     let mut stream = TcpStream::connect(addr).await.expect("connect");

@@ -22,10 +22,7 @@ use tokio::{
 
 use crate::{
     kafka_wire,
-    support::{
-        produce::single_partition_produce,
-        topics::{creatable_topic, create_topic_request},
-    },
+    support::topics::{creatable_topic, create_topic_request},
 };
 
 /// Verify successful down-conversion and extract the exact legacy bytes.
@@ -85,10 +82,11 @@ pub async fn create_topic_with_partitions(
     num_partitions: i32,
 ) {
     let cr = client
-        .send(create_topic_request(
-            creatable_topic(name, num_partitions, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(
+            name,
+            num_partitions,
+            1,
+        )))
         .await
         .expect("CreateTopics");
     assert!(
@@ -113,12 +111,13 @@ pub async fn produce_batch_to(
     batch: RecordBatch,
 ) {
     const PRODUCE_VERSION: i16 = 9;
-    let req = single_partition_produce(
-        topic,
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        partition,
-        Some(RecordsPayload::V2(vec![batch])),
-        (1, 5_000),
+    let req = crate::support::produce::batch_request(
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: (topic).into(),
+            partition: krabka_ids::PartitionIndex(partition),
+            ..Default::default()
+        },
     );
     let mut body = BytesMut::new();
     req.encode(&mut body, PRODUCE_VERSION)

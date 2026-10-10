@@ -286,6 +286,13 @@ pub mod fake {
 
     use super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, async_trait};
 
+    /// Which classic metadata operation a test expects in the append log.
+    #[derive(Clone, Copy)]
+    pub enum ClassicMetadataRecord {
+        Write,
+        Tombstone,
+    }
+
     #[derive(Debug, Default)]
     pub struct InMemoryOffsetsLog {
         pub appended: Mutex<Vec<RecordBatch>>,
@@ -353,16 +360,26 @@ pub mod fake {
         /// `GroupMetadata`, and a null value. Tests read it to assert that the
         /// upgrade flip removed the classic group record atomically.
         pub async fn has_classic_group_metadata_tombstone(&self, group_id: &str) -> bool {
+            self.has_classic_group_metadata_record(group_id, ClassicMetadataRecord::Tombstone)
+                .await
+        }
+
+        /// Match a classic metadata key and its expected value presence.
+        pub async fn has_classic_group_metadata_record(
+            &self,
+            group_id: &str,
+            operation: ClassicMetadataRecord,
+        ) -> bool {
             use crate::coordinator::unified::persistence::{Key, parse_key};
             self.appended.lock().await.iter().any(|batch| {
-                batch.records.iter().any(|rec| {
-                    rec.value.is_none()
-                        && rec.key.as_ref().is_some_and(|k| {
-                            matches!(
-                                parse_key(k),
-                                Ok(Key::GroupMetadata { group_id: ref gid }) if gid == group_id
-                            )
-                        })
+                batch.records.iter().any(|record| {
+                    let value_matches = match operation {
+                        ClassicMetadataRecord::Write => record.value.is_some(),
+                        ClassicMetadataRecord::Tombstone => record.value.is_none(),
+                    };
+                    value_matches && record.key.as_ref().is_some_and(|key| {
+                        matches!(parse_key(key), Ok(Key::GroupMetadata { group_id: ref id }) if id == group_id)
+                    })
                 })
             })
         }
