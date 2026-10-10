@@ -15,10 +15,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     CLIENT_ID, kafka_wire,
-    support::{
-        fetch::{fetch_partition, single_partition_fetch},
-        records::{batch_from_records, value_record},
-    },
+    support::records::{batch_from_records, value_record},
 };
 
 /// Produce `count` records of `record_bytes` bytes each to `(topic, 0)` over
@@ -93,11 +90,11 @@ pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: 
 
     let req = FetchRequest {
         replica_id,
-        ..single_partition_fetch(
-            topic.to_string(),
-            krabka_protocol::primitives::uuid::Uuid::default(),
-            fetch_partition(0, 0, 1 << 20),
-            (0, 1, 1 << 20),
+        ..crate::support::fetch::named_topic_fetch(
+            topic,
+            crate::support::fetch::FetchLimits::one_mebibyte(
+                crate::support::fetch::RequestWaitMillis(0),
+            ),
         )
     };
 

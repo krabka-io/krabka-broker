@@ -155,12 +155,18 @@ pub async fn fetch_first_batch(
     let resp = client
         .send(FetchRequest {
             replica_id: -1,
-            ..single_partition_fetch(
-                topic,
+            ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+                topic: topic.into(),
                 topic_id,
-                fetch_partition(0, 0, 8 << 20),
-                (1_000, 1, 8 << 20),
-            )
+                partition: fetch_partition(crate::support::fetch::FetchPartitionSetup {
+                    maximum: crate::support::fetch::FetchByteLimit(8 << 20),
+                    ..Default::default()
+                }),
+                limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
+                    crate::support::fetch::RequestWaitMillis(1_000),
+                    crate::support::fetch::FetchByteLimit(8 << 20),
+                ),
+            })
         })
         .await
         .expect("Fetch");

@@ -18,7 +18,6 @@ use crate::{
     acl_admin::create_topic_as_admin,
     client_api::{drive_fetch_as_plain, drive_produce_as_plain, single_record_produce_request},
     polling::retry_produce_until_allowed,
-    support::fetch::{fetch_partition, single_partition_fetch},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -97,11 +96,11 @@ async fn fetch_denied_without_topic_read_acl() {
 
     // alice has NO Read-on-foo binding → Fetch must return 29 on the
     // partition row.
-    let req = single_partition_fetch(
-        "foo".to_string(),
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        fetch_partition(0, 0, 1_048_576),
-        (0, 1, 1_048_576),
+    let req = crate::support::fetch::named_topic_fetch(
+        "foo",
+        crate::support::fetch::FetchLimits::one_mebibyte(crate::support::fetch::RequestWaitMillis(
+            0,
+        )),
     );
     let resp = drive_fetch_as_plain(addr, "alice", b"wonderland", req)
         .await

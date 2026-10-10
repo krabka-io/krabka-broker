@@ -13,9 +13,7 @@
 use assert2::assert;
 
 use crate::support::{
-    client::create_topic,
-    fetch::{fetch_partition, single_partition_fetch},
-    produce::single_partition_produce,
+    client::create_topic, fetch::single_partition_fetch, produce::single_partition_produce,
 };
 mod support;
 
@@ -88,12 +86,11 @@ async fn produce_v1_message_set_is_upconverted_and_round_trips() {
             .client
             .send(FetchRequest {
                 replica_id: -1,
-                ..single_partition_fetch(
-                    "legacy",
+                ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+                    topic: "legacy".into(),
                     topic_id,
-                    fetch_partition(0, 0, 1 << 20),
-                    (500, 1, 1 << 20),
-                )
+                    ..Default::default()
+                })
             })
             .await
             .expect("Fetch");

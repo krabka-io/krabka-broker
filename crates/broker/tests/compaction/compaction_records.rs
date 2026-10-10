@@ -43,12 +43,19 @@ pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> 
     loop {
         let req = FetchRequest {
             replica_id: -1,
-            ..single_partition_fetch(
-                topic.to_string(),
+            ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+                topic: topic.to_string(),
                 topic_id,
-                fetch_partition(0, next_offset, 1 << 22),
-                (100, 1, 1 << 22),
-            )
+                partition: fetch_partition(crate::support::fetch::FetchPartitionSetup {
+                    offset: krabka_ids::Offset(next_offset),
+                    maximum: crate::support::fetch::FetchByteLimit(1 << 22),
+                    ..Default::default()
+                }),
+                limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
+                    crate::support::fetch::RequestWaitMillis(100),
+                    crate::support::fetch::FetchByteLimit(1 << 22),
+                ),
+            })
         };
         let mut stream = TcpStream::connect(addr).await.expect("connect");
         let resp: FetchResponse =

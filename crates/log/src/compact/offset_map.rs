@@ -166,10 +166,22 @@ mod tests {
         let seg = write_sealed_batches(
             dir.path(),
             &[
-                transactional_record(5, 1000, b"k", b"committed"),
+                transactional_record(crate::compact::test_support::TransactionalRecordSetup {
+                    offset: crate::Offset(5),
+                    payload: (b"k", b"committed"),
+                    ..Default::default()
+                }),
                 control_batch(6, 1000, 1 /* COMMIT */),
-                transactional_record(10, 2000, b"k", b"aborted"),
-                transactional_record(11, 2000, b"only-aborted", b"v"),
+                transactional_record(crate::compact::test_support::TransactionalRecordSetup {
+                    offset: crate::Offset(10),
+                    producer: crate::ProducerId(2000),
+                    payload: (b"k", b"aborted"),
+                }),
+                transactional_record(crate::compact::test_support::TransactionalRecordSetup {
+                    offset: crate::Offset(11),
+                    producer: crate::ProducerId(2000),
+                    payload: (b"only-aborted", b"v"),
+                }),
                 control_batch(12, 2000, 0 /* ABORT */),
             ],
         );

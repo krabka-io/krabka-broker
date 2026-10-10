@@ -10,14 +10,13 @@ use std::time::{Duration, Instant};
 use assert2::assert;
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::fetch_request::FetchRequest,
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordsPayload},
 };
 
 use crate::support::{
     client::connect_owned,
-    fetch::{fetch_partition, single_partition_fetch},
+    fetch::single_partition_fetch,
     produce::single_partition_produce,
     records::batch_from_records,
     topics::{creatable_topic, create_topic_request},
@@ -175,10 +174,16 @@ pub(crate) async fn min_bytes_exchange(bootstrap: &str, topic: &str) -> (Duratio
     let started = Instant::now();
     let fetched = client
         .send(single_partition_fetch(
-            topic,
-            topic_id,
-            fetch_partition(0, 0, 1_048_576),
-            (MAX_WAIT_MS, MIN_BYTES, FetchRequest::default().max_bytes),
+            crate::support::fetch::SinglePartitionFetchSetup {
+                topic: topic.into(),
+                topic_id,
+                limits: crate::support::fetch::FetchLimits {
+                    wait: crate::support::fetch::RequestWaitMillis(MAX_WAIT_MS),
+                    minimum: crate::support::fetch::FetchByteLimit(MIN_BYTES),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
         ))
         .await
         .expect("Fetch");

@@ -13,10 +13,7 @@ use assert2::assert;
 use bytes::{Bytes, BytesMut};
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        fetch_request::FetchRequest,
-        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest},
-    },
+    owned::list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest},
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
@@ -134,6 +131,25 @@ async fn produce_one(client: &Client, topic_id: WireUuid, value: Bytes, index: u
     }
 }
 
+/// The same diskless read shape is used for data and for a raw offset error.
+fn data_fetch(
+    topic_id: WireUuid,
+    offset: krabka_ids::Offset,
+) -> krabka_protocol::owned::fetch_request::FetchRequest {
+    single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+        topic: TOPIC.into(),
+        topic_id,
+        partition: fetch_partition(crate::support::fetch::FetchPartitionSetup {
+            offset,
+            maximum: crate::support::fetch::FetchByteLimit(4 * 1024 * 1024),
+            ..Default::default()
+        }),
+        limits: crate::support::fetch::FetchLimits::wait_for_data(
+            crate::support::fetch::RequestWaitMillis(500),
+        ),
+    })
+}
+
 /// Read `expected` records back from `bootstrap`, starting at `start_offset`.
 ///
 /// The loop retries until the deadline because a just-promoted broker settles
@@ -154,12 +170,7 @@ pub(crate) async fn fetch_log(
 
     while records.len() < expected {
         let response = client
-            .send(single_partition_fetch(
-                TOPIC,
-                topic_id,
-                fetch_partition(0, next, 4 * 1024 * 1024),
-                (500, 1, FetchRequest::default().max_bytes),
-            ))
+            .send(data_fetch(topic_id, krabka_ids::Offset(next)))
             .await
             .expect("Fetch");
         let partition = response
@@ -329,12 +340,7 @@ pub(crate) async fn earliest_offset(bootstrap: &str) -> i64 {
 pub(crate) async fn fetch_error_code(bootstrap: &str, topic_id: WireUuid, offset: i64) -> i16 {
     let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
     let response = client
-        .send(single_partition_fetch(
-            TOPIC,
-            topic_id,
-            fetch_partition(0, offset, 4 * 1024 * 1024),
-            (500, 1, FetchRequest::default().max_bytes),
-        ))
+        .send(data_fetch(topic_id, krabka_ids::Offset(offset)))
         .await
         .expect("Fetch");
     response.responses[0].partitions[0].error_code

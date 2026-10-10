@@ -6,7 +6,7 @@ use assert2::{assert, check};
 use crate::support::{
     client::connect_client,
     discovery::{api_versions_request_for, topic_metadata_request},
-    fetch::{fetch_partition, single_partition_fetch},
+    fetch::single_partition_fetch,
     offsets::{list_offset_partition, single_partition_list_offsets},
     produce::single_partition_produce,
     records::value_record,
@@ -187,10 +187,14 @@ async fn end_to_end_create_produce_fetch_delete() {
     let fr = p
         .client
         .send(single_partition_fetch(
-            "e2e",
-            topic_id,
-            fetch_partition(0, 0, 1 << 20),
-            (100, 1, 1 << 20),
+            crate::support::fetch::SinglePartitionFetchSetup {
+                topic: "e2e".into(),
+                topic_id,
+                limits: crate::support::fetch::FetchLimits::one_mebibyte(
+                    crate::support::fetch::RequestWaitMillis(100),
+                ),
+                ..Default::default()
+            },
         ))
         .await
         .unwrap();

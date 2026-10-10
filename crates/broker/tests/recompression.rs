@@ -38,7 +38,7 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    fetch::{fetch_partition, single_partition_fetch},
+    fetch::single_partition_fetch,
     produce::single_partition_produce,
     records::{batch_from_records, value_record},
 };
@@ -108,12 +108,11 @@ async fn produce_gzip(addr: SocketAddr, topic: &str, topic_id: Uuid, value: &[u8
 async fn fetch_first_batch(addr: SocketAddr, topic: &str, topic_id: Uuid) -> RecordBatch {
     let req = FetchRequest {
         replica_id: -1,
-        ..single_partition_fetch(
-            topic,
+        ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+            topic: topic.into(),
             topic_id,
-            fetch_partition(0, 0, 1 << 20),
-            (500, 1, 1 << 20),
-        )
+            ..Default::default()
+        })
     };
     let version: i16 = 12;
     let (_, r): (usize, FetchResponse) =

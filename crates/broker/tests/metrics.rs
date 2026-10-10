@@ -31,7 +31,7 @@ use krabka_protocol::{
 use tokio::net::TcpStream;
 
 use crate::support::{
-    fetch::{fetch_partition, single_partition_fetch},
+    fetch::single_partition_fetch,
     records::{batch_from_records, value_record},
     topics::{creatable_topic, create_topic_request},
 };
@@ -108,12 +108,11 @@ async fn produce_to(addr: std::net::SocketAddr, topic: &str, partition: i32) -> 
 
 async fn fetch_one(addr: std::net::SocketAddr) {
     use krabka_protocol::owned::fetch_response::FetchResponse;
-    let req = single_partition_fetch(
-        TOPIC,
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        fetch_partition(0, 0, 1024 * 1024),
-        (500, 1, 1024 * 1024),
-    );
+    let req = single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+        topic: TOPIC.into(),
+        topic_id: krabka_protocol::primitives::uuid::Uuid::default(),
+        ..Default::default()
+    });
     let (_, r): (usize, FetchResponse) =
         kafka_wire::request_once(addr, &req, (1, FETCH_VERSION), CLIENT_ID, (1, true)).await;
     assert!(r.error_code == 0, "fetch top-level: {r:?}");

@@ -21,7 +21,7 @@ use crate::{
     support,
     support::{
         client::connect_owned,
-        fetch::{fetch_partition, single_partition_fetch},
+        fetch::single_partition_fetch,
         offsets::{offset_commit_partition, offset_commit_topic},
     },
     wire::{CONTROL, accepted, create_topic, refused},
@@ -54,10 +54,11 @@ async fn scrape(addr: std::net::SocketAddr) -> String {
 async fn fetch_record_count(client: &Client, topic: &str, topic_id: WireUuid) -> usize {
     let response = client
         .send(single_partition_fetch(
-            topic,
-            topic_id,
-            fetch_partition(0, 0, 1 << 20),
-            (500, 1, 1 << 20),
+            crate::support::fetch::SinglePartitionFetchSetup {
+                topic: topic.into(),
+                topic_id,
+                ..Default::default()
+            },
         ))
         .await
         .expect("Fetch");

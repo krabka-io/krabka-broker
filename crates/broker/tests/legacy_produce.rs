@@ -154,10 +154,11 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
     let fetch_resp = p
         .client
         .send(crate::support::fetch::single_partition_fetch(
-            "legacy_v0".to_owned(),
-            topic_id,
-            crate::support::fetch::fetch_partition(0, 0, 1 << 20),
-            (500, 1, 1 << 20),
+            crate::support::fetch::SinglePartitionFetchSetup {
+                topic: "legacy_v0".to_owned(),
+                topic_id,
+                ..Default::default()
+            },
         ))
         .await
         .expect("Fetch");

@@ -15,7 +15,7 @@ mod support;
 use bytes::Bytes;
 use krabka_protocol::{
     owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        fetch_request::{FetchPartition, FetchTopic},
         fetch_response::{FetchableTopicResponse, PartitionData},
     },
     primitives::uuid::Uuid as WireUuid,
@@ -61,7 +61,9 @@ async fn fetch_unresolved_topic_id_returns_unknown_topic_id() {
                     partitions: vec![partition(0), partition(1)],
                     ..Default::default()
                 }],
-                (100, 1, FetchRequest::default().max_bytes),
+                crate::support::fetch::FetchLimits::wait_for_data(
+                    crate::support::fetch::RequestWaitMillis(100),
+                ),
             ))
             .await
             .expect("fetch");

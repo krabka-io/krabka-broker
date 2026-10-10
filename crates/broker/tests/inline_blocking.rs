@@ -24,7 +24,7 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    fetch::{fetch_partition, single_partition_fetch},
+    fetch::single_partition_fetch,
     produce::single_partition_produce,
     records::{batch_from_records, value_record},
 };
@@ -83,10 +83,14 @@ async fn produce_and_fetch(client: &krabka_client_core::Client) -> usize {
 
     let fetched = client
         .send(single_partition_fetch(
-            TOPIC,
-            topic_id,
-            fetch_partition(0, 0, 1 << 20),
-            (100, 1, 1 << 20),
+            crate::support::fetch::SinglePartitionFetchSetup {
+                topic: TOPIC.into(),
+                topic_id,
+                limits: crate::support::fetch::FetchLimits::one_mebibyte(
+                    crate::support::fetch::RequestWaitMillis(100),
+                ),
+                ..Default::default()
+            },
         ))
         .await
         .expect("Fetch");

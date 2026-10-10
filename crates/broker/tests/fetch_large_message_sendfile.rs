@@ -135,12 +135,18 @@ async fn large_message_fetch_round_trips_byte_exact() {
         .send(FetchRequest {
             session_id: 0,
             session_epoch: -1,
-            ..single_partition_fetch(
-                "big",
-                tid,
-                fetch_partition(0, 0, 8 * 1024 * 1024),
-                (200, 1, 8 * 1024 * 1024),
-            )
+            ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+                topic: "big".into(),
+                topic_id: tid,
+                partition: fetch_partition(crate::support::fetch::FetchPartitionSetup {
+                    maximum: crate::support::fetch::FetchByteLimit(8 * 1024 * 1024),
+                    ..Default::default()
+                }),
+                limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
+                    crate::support::fetch::RequestWaitMillis(200),
+                    crate::support::fetch::FetchByteLimit(8 * 1024 * 1024),
+                ),
+            })
         })
         .await
         .expect("Fetch");

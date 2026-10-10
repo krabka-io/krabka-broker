@@ -651,12 +651,19 @@ async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<Stri
         let response = client
             .send(FetchRequest {
                 replica_id: -1,
-                ..single_partition_fetch(
-                    TOPIC,
-                    topic.topic_id,
-                    fetch_partition(partition, offset, 1 << 24),
-                    (0, 1, 1 << 24),
-                )
+                ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+                    topic: TOPIC.into(),
+                    topic_id: topic.topic_id,
+                    partition: fetch_partition(crate::support::fetch::FetchPartitionSetup {
+                        partition: krabka_ids::PartitionIndex(partition),
+                        offset: krabka_ids::Offset(offset),
+                        maximum: crate::support::fetch::FetchByteLimit(1 << 24),
+                    }),
+                    limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
+                        crate::support::fetch::RequestWaitMillis(0),
+                        crate::support::fetch::FetchByteLimit(1 << 24),
+                    ),
+                })
             })
             .await
             .expect("Fetch");

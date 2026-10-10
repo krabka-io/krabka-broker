@@ -5,9 +5,7 @@
 //! the same in-process broker.
 
 use assert2::{assert, check};
-use krabka_protocol::owned::{
-    fetch_request::FetchRequest, list_offsets_request::ListOffsetsRequest,
-};
+use krabka_protocol::owned::list_offsets_request::ListOffsetsRequest;
 
 /// Builds one `RecordBatch` that carries `n` empty records with sequential
 /// offset deltas.
@@ -16,7 +14,7 @@ use crate::{
     harness::{create_topic, topic_id_for},
     support,
     support::{
-        fetch::{fetch_partition, single_partition_fetch},
+        fetch::single_partition_fetch,
         offsets::{list_offset_partition, single_partition_list_offsets},
         produce::single_partition_produce,
     },
@@ -92,12 +90,14 @@ async fn produce_then_fetch_round_trip() {
     let presp = p.client.send(prod).await.expect("Produce");
     assert!(presp.responses[0].partition_responses[0].error_code == 0);
 
-    let fetch = single_partition_fetch(
-        "round",
+    let fetch = single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+        topic: "round".into(),
         topic_id,
-        fetch_partition(0, 0, 1_048_576),
-        (100, 1, FetchRequest::default().max_bytes),
-    );
+        limits: crate::support::fetch::FetchLimits::wait_for_data(
+            crate::support::fetch::RequestWaitMillis(100),
+        ),
+        ..Default::default()
+    });
     let fresp = p.client.send(fetch).await.expect("Fetch");
     assert!(fresp.responses.len() == 1);
     crate::support::fetch::check_record_count(&fresp.responses[0].partitions[0], 3);

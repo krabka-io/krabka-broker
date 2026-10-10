@@ -37,7 +37,7 @@ use crate::{
     share_rpc::{acquired_count, fetch_until_acquired, share_fetch},
     support::{
         configs::{feature_update, incremental_config, incremental_request, incremental_resource},
-        fetch::{fetch_partition, single_partition_fetch},
+        fetch::single_partition_fetch,
         offsets::{list_offset_partition, single_partition_list_offsets},
         share::{acknowledge_partition, acknowledge_request, acknowledge_topic},
     },
@@ -156,10 +156,14 @@ async fn dead_letter_records(broker: &BrokerHandle, client: &Client) -> Vec<Reco
     let dlq_id = topic_id(broker, DLQ_TOPIC);
     let response = client
         .send(single_partition_fetch(
-            DLQ_TOPIC,
-            wire(dlq_id),
-            fetch_partition(0, 0, 1 << 20),
-            (100, 1, 1 << 20),
+            crate::support::fetch::SinglePartitionFetchSetup {
+                topic: DLQ_TOPIC.into(),
+                topic_id: wire(dlq_id),
+                limits: crate::support::fetch::FetchLimits::one_mebibyte(
+                    crate::support::fetch::RequestWaitMillis(100),
+                ),
+                ..Default::default()
+            },
         ))
         .await
         .expect("Fetch");

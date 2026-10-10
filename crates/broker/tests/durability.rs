@@ -29,7 +29,7 @@ use tempfile::TempDir;
 
 use crate::support::{
     client::connect_client,
-    fetch::{fetch_partition, single_partition_fetch},
+    fetch::single_partition_fetch,
     topics::{creatable_topic, create_topic_request},
 };
 
@@ -209,12 +209,11 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
     let resp = client
         .send(FetchRequest {
             replica_id: -1,
-            ..single_partition_fetch(
-                "clamp",
+            ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+                topic: "clamp".into(),
                 topic_id,
-                fetch_partition(0, 0, 1 << 20),
-                (500, 1, 1 << 20),
-            )
+                ..Default::default()
+            })
         })
         .await
         .expect("Fetch");

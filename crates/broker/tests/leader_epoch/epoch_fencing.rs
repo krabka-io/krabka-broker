@@ -26,15 +26,17 @@ async fn fetch_with_epoch(
     client
         .send(FetchRequest {
             replica_id: 99,
-            ..single_partition_fetch(
-                topic,
+            ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+                topic: topic.into(),
                 topic_id,
-                FetchPartition {
+                partition: FetchPartition {
                     current_leader_epoch: epoch,
-                    ..fetch_partition(0, 0, 1 << 20)
+                    ..fetch_partition(crate::support::fetch::FetchPartitionSetup::default())
                 },
-                (100, 1, 1 << 20),
-            )
+                limits: crate::support::fetch::FetchLimits::one_mebibyte(
+                    crate::support::fetch::RequestWaitMillis(100),
+                ),
+            })
         })
         .await
         .expect("fetch")

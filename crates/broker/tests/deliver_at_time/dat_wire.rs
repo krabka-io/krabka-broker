@@ -20,7 +20,7 @@ use crate::{
     dat_fixtures::{Mode, Visible, now_ms},
     support,
     support::{
-        fetch::{fetch_partition, single_partition_fetch},
+        fetch::single_partition_fetch,
         offsets::{list_offset_partition, single_partition_list_offsets},
         produce::single_partition_produce,
     },
@@ -103,10 +103,14 @@ pub async fn fetch_values(
 ) -> Vec<String> {
     let response = client
         .send(single_partition_fetch(
-            topic.to_owned(),
-            topic_id,
-            fetch_partition(0, 0, 1 << 20),
-            (max_wait_ms, 1, 1 << 20),
+            crate::support::fetch::SinglePartitionFetchSetup {
+                topic: topic.to_owned(),
+                topic_id,
+                limits: crate::support::fetch::FetchLimits::one_mebibyte(
+                    crate::support::fetch::RequestWaitMillis(max_wait_ms),
+                ),
+                ..Default::default()
+            },
         ))
         .await
         .expect("Fetch");
