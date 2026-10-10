@@ -3537,6 +3537,7 @@ dependencies = [
  "krabka-protocol",
  "krabka-units",
  "memmap2",
+ "rustix",
  "tempfile",
 ]
 

@@ -6,8 +6,8 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["Cargo.toml"])
 
 # The library is an empty shell: this crate exists to host
-# `benches/mmap_read.rs`. The library target still exists so `crate_bench` has
-# a crate to link.
+# `benches/mmap_read.rs` and `benches/uncached_io.rs`. The library target still
+# exists so `crate_bench` has a crate to link.
 crate_library(name = "log-iobench")
 
 # `bazel build //...` compiles the bench and `bazel test //...` lints it.

@@ -1,7 +1,12 @@
 # krabka-log-iobench
 
-Bench-only crate that answers one question: **does a memory map of the log
-segments, through `memmap2`/`memmapix`, make the fetch read path faster?**
+Bench-only crate that answers two questions:
+
+- **Does a memory map of the log segments, through `memmap2`/`memmapix`, make
+  the fetch read path faster?** `benches/mmap_read.rs`, below.
+- **What does bypassing the page cache cost, Redpanda-style with `O_DIRECT` or
+  with Linux 6.14's `RWF_DONTCACHE`?** `benches/uncached_io.rs`, in
+  [Uncached I/O](#uncached-io).
 
 It exists as a separate crate because the workspace sets
 `unsafe_code = "forbid"`, and `Mmap::map` is `unsafe` by contract. This crate
@@ -82,3 +87,59 @@ byte*, and the decode does touch every byte. A true zero-copy win needs a
    `rustix` instead of `libc`. It uses the same `mmap(2)` and gives no
    performance advantage. Use the `memmap2` already in the tree if the project
    ever adopts mmap. There is no throughput reason to change to `memmapix`.
+
+## Uncached I/O
+
+`benches/uncached_io.rs` races the buffered I/O that `krabka-log` does today
+against `O_DIRECT`, which Redpanda opens every segment with, and
+`RWF_DONTCACHE`, a buffered read or write that drops its pages once the I/O is
+done. It needs no `unsafe`. It is Linux-only and builds to an empty `main`
+elsewhere.
+
+```sh
+KRABKA_IOBENCH_DIR=/path/on/the/disk/under/test \
+  cargo bench --bench uncached_io -p krabka-log-iobench
+```
+
+Point `KRABKA_IOBENCH_DIR` at the disk you want to measure. The default is the
+system temporary directory, which is often tmpfs, and tmpfs supports neither
+`O_DIRECT` nor `RWF_DONTCACHE`. The bench probes both and prints a
+`skipping ...` line with the kernel's error for each one it cannot run.
+
+`uncached_read/*` walks a 64 MiB file in 1 MiB and 16 KiB reads:
+
+| variant          | what it does                                                         |
+|------------------|----------------------------------------------------------------------|
+| `pread_warm`     | current behaviour, file resident                                     |
+| `pread_cold`     | current behaviour after `POSIX_FADV_DONTNEED` drops the file (untimed) |
+| `dontcache_warm` | `preadv2(RWF_DONTCACHE)` on the resident file                        |
+| `dontcache_cold` | `preadv2(RWF_DONTCACHE)` after the file is dropped                   |
+| `odirect`        | aligned `pread` on an `O_DIRECT` handle                              |
+
+The write groups write the same sizes in two shapes:
+
+| group                  | what it writes                                                                 |
+|------------------------|--------------------------------------------------------------------------------|
+| `uncached_overwrite/*` | in place, over a file written out in full beforehand: a preallocated segment   |
+| `uncached_append/*`    | at the end of a file that starts empty, as `krabka-log` appends to a segment today |
+
+An append pays for block allocation on every write and for the new file size
+on every `fdatasync`; an overwrite pays for neither. `buffered`, `dontcache`
+and `odirect` each run alone and then with `fdatasync` after every write. The
+`fdatasync` is what makes an append durable in all three cases: `O_DIRECT`
+skips the page cache but not the drive's write cache.
+
+Every byte comes from a pseudorandom stream whose state runs on across the
+whole fixture, and each write offset gets bytes of its own. A storage stack
+that compresses or deduplicates cannot serve any of it with fewer physical
+bytes.
+
+The cold variants evict the whole file, not the range about to be read. The
+walk is sequential, so the readahead of one read would otherwise have cached the
+next range already. The warm variants read the whole 64 MiB file once before
+they start, and `RWF_DONTCACHE` drops only pages its own read brought in, so
+the file stays resident.
+
+What this bench does not measure is the point of `RWF_DONTCACHE`: that a cold
+read or a bulk append leaves the rest of the page cache alone. It times one I/O
+at a time, with nothing else competing for the cache.

@@ -5,12 +5,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Bench-only crate: compares the log segment read path against mmap variants"
+description = "Bench-only crate: compares the log segment I/O path against mmap, O_DIRECT and RWF_DONTCACHE variants"
 repository = "https://github.com/robot-head/crabka"
 homepage = "https://github.com/robot-head/crabka"
 documentation = "https://docs.rs/krabka-log-iobench"
 readme = "README.md"
-keywords = ["kafka", "benchmark", "mmap", "krabka"]
+keywords = ["kafka", "benchmark", "mmap", "direct-io", "krabka"]
 categories = ["development-tools::profiling"]
 
 # This crate does NOT enable `[lints] workspace = true`. The workspace forbids
@@ -32,7 +32,12 @@ krabka-macros = { version = "1.0.1", path = "../macros" }
 assert2 = { workspace = true }
 tempfile = { workspace = true }
 criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
+rustix = { workspace = true }
 
 [[bench]]
 name = "mmap_read"
+harness = false
+
+[[bench]]
+name = "uncached_io"
 harness = false
