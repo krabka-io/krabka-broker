@@ -154,13 +154,22 @@ pub(crate) mod test_support {
         share_coordinator::{
             bootstrap,
             config::ShareCoordinatorConfig,
-            coordinator::{ShareCoordinator, test_support::state_batch},
+            coordinator::{
+                ShareCoordinator,
+                test_support::{
+                    DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, state_batch,
+                },
+            },
             persistence::StateBatch,
         },
     };
 
-    pub(crate) fn batch(first_offset: i64, last_offset: i64) -> StateBatch {
-        state_batch(first_offset, last_offset, 2, 3)
+    pub(crate) fn batch(bounds: std::ops::RangeInclusive<Offset>) -> StateBatch {
+        state_batch(StateBatchSetup {
+            bounds,
+            delivery: FixtureDeliveryState::Acknowledged,
+            attempts: DeliveryAttemptCount(3),
+        })
     }
 
     pub(crate) fn open_all_state_partitions(
@@ -251,7 +260,7 @@ pub(crate) mod test_support {
                 crate::share_coordinator::coordinator::test_support::share_write(
                     (17, 3),
                     (101, 9),
-                    vec![batch(101, 105)],
+                    vec![batch(Offset(101)..=Offset(105))],
                 ),
             )
             .await
@@ -276,13 +285,23 @@ pub(crate) mod test_support {
             }
         };
         ($response:ident, $result:ident, $partition:ident; keyed) => {
-            fn response(topic_id: uuid::Uuid, partition: i32, error_code: i16, message: Option<&str>) -> $response {
+            #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+            struct StateResponseSetup<'a> {
+                #[default(TOPIC)]
+                topic: uuid::Uuid,
+                partition: krabka_ids::PartitionIndex,
+                #[default($crate::test_support::KafkaErrorCode($crate::codes::NONE))]
+                code: $crate::test_support::KafkaErrorCode,
+                message: Option<&'a str>,
+            }
+
+            fn response(setup: StateResponseSetup<'_>) -> $response {
                 super::super::test_support::response_fixture!(@value $response, $result,
-                    krabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes()),
+                    krabka_protocol::primitives::uuid::Uuid(*setup.topic.as_bytes()),
                     vec![$partition {
-                        partition,
-                        error_code,
-                        error_message: message.map(str::to_owned),
+                        partition: setup.partition.0,
+                        error_code: setup.code.0,
+                        error_message: setup.message.map(str::to_owned),
                         unknown_tagged_fields: krabka_protocol::tagged_fields::UnknownTaggedFields(vec![]),
                     }]
                 )

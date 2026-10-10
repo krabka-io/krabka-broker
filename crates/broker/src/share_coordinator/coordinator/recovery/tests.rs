@@ -122,7 +122,7 @@ async fn write_persists_and_recovers() {
                 "g",
                 tid,
                 0,
-                share_write((2, 3), (20, 4), vec![batch(20, 29)]),
+                share_write((2, 3), (20, 4), vec![batch(Offset(20)..=Offset(29))]),
             )
             .await
             .unwrap();
@@ -147,7 +147,7 @@ async fn write_persists_and_recovers() {
     check!(st.leader_epoch == 3);
     check!(st.start_offset == 20);
     check!(st.delivery_complete_count == 4);
-    check!(st.state_batches == vec![batch(20, 29)]);
+    check!(st.state_batches == vec![batch(Offset(20)..=Offset(29))]);
 }
 
 /// Kafka's `share.coordinator.state.topic.compression.codec`: each codec is
@@ -257,7 +257,7 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
                 delivery_complete_count: 8,
                 create_timestamp: 0,
                 write_timestamp: 0,
-                state_batches: vec![batch(50, 59)],
+                state_batches: vec![batch(Offset(50)..=Offset(59))],
             }
             .encode(),
         ),
@@ -273,7 +273,7 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
     check!(st.leader_epoch == 9);
     check!(st.start_offset == 50);
     check!(st.delivery_complete_count == 8);
-    check!(st.state_batches == vec![batch(50, 59)]);
+    check!(st.state_batches == vec![batch(Offset(50)..=Offset(59))]);
     // Batch B's snapshot sits at base_offset 2 (single record, delta 0).
     check!(st.last_snapshot_offset == 2);
 }
@@ -433,7 +433,7 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
         },
         Step::Read {
             on: Broker::A,
-            expected: Ok(Some((20, vec![batch(20, 29)]))),
+            expected: Ok(Some((20, vec![batch(Offset(20)..=Offset(29))]))),
         },
         // Leadership moves to B. B has not run its load yet.
         Step::Refresh {
@@ -470,7 +470,7 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
         Step::AwaitActive { on: Broker::B },
         Step::Read {
             on: Broker::B,
-            expected: Ok(Some((20, vec![batch(20, 29)]))),
+            expected: Ok(Some((20, vec![batch(Offset(20)..=Offset(29))]))),
         },
         Step::Write {
             on: Broker::B,
@@ -493,7 +493,7 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
         },
         Step::Read {
             on: Broker::A,
-            expected: Ok(Some((30, vec![batch(30, 39)]))),
+            expected: Ok(Some((30, vec![batch(Offset(30)..=Offset(39))]))),
         },
         Step::Read {
             on: Broker::B,
@@ -552,7 +552,11 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
                         "g",
                         topic_id,
                         0,
-                        share_write((1, 0), (start, 0), vec![batch(start, start + 9)]),
+                        share_write(
+                            (1, 0),
+                            (start, 0),
+                            vec![batch(Offset(start)..=Offset(start + 9))],
+                        ),
                     )
                     .await
                     .map_err(ShareStateError::code);
@@ -695,7 +699,7 @@ fn update_then_snapshot(snap_key: bytes::Bytes, upd_key: bytes::Bytes) -> Record
                 delivery_complete_count: 4,
                 create_timestamp: 0,
                 write_timestamp: 0,
-                state_batches: vec![batch(20, 29)],
+                state_batches: vec![batch(Offset(20)..=Offset(29))],
             }
             .encode(),
         ),
@@ -734,7 +738,7 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
         delivery_complete_count: 0,
         create_timestamp: 0,
         write_timestamp: 0,
-        state_batches: vec![batch(start, start + 9)],
+        state_batches: vec![batch(Offset(start)..=Offset(start + 9))],
     };
     let update = ShareUpdateValue {
         snapshot_epoch: 0,

@@ -156,9 +156,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        share_coordinator::coordinator::test_support::state_batch as batch,
+        share_coordinator::coordinator::test_support::{
+            DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, state_batch as batch,
+        },
         share_partition::state::{
-            AckType, AcquiredRange, DS_ARCHIVING,
+            AckType, AcquiredRange,
             test_support::{
                 AcquiredWindowSetup, DeadLetterQueue, DlqRangeSetup, LOCK, acquire_window,
                 dlq_range as range, t0,
@@ -362,8 +364,16 @@ mod tests {
         assert!(
             batches
                 == vec![
-                    batch(0, 1, DS_ARCHIVING, 1),
-                    batch(2, 2, crate::share_partition::state::DS_AVAILABLE, 1),
+                    batch(StateBatchSetup {
+                        bounds: Offset(0)..=Offset(1),
+                        delivery: FixtureDeliveryState::Archiving,
+                        ..Default::default()
+                    }),
+                    batch(StateBatchSetup {
+                        bounds: Offset(2)..=Offset(2),
+                        delivery: FixtureDeliveryState::Available,
+                        ..Default::default()
+                    }),
                 ]
         );
 
@@ -381,7 +391,11 @@ mod tests {
                         ..Default::default()
                     })],
                     Offset(2),
-                    vec![batch(2, 2, crate::share_partition::state::DS_AVAILABLE, 1)],
+                    vec![batch(StateBatchSetup {
+                        bounds: Offset(2)..=Offset(2),
+                        delivery: FixtureDeliveryState::Available,
+                        ..Default::default()
+                    })],
                 )
         );
     }
@@ -392,7 +406,16 @@ mod tests {
     #[test]
     fn an_archiving_run_holds_the_spso() {
         let mut s = AcquisitionState::new(Offset(0));
-        s.load_from(Offset(0), 1, 1, &[batch(0, 0, DS_ARCHIVING, 5)]);
+        s.load_from(
+            Offset(0),
+            1,
+            1,
+            &[batch(StateBatchSetup {
+                bounds: Offset(0)..=Offset(0),
+                delivery: FixtureDeliveryState::Archiving,
+                attempts: DeliveryAttemptCount(5),
+            })],
+        );
 
         assert!((s.start_offset, s.delivery_complete_count()) == (Offset(0), 0));
     }

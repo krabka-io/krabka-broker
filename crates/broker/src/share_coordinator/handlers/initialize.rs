@@ -79,6 +79,7 @@ mod tests {
             },
             persistence::ShareSnapshotValue,
         },
+        test_support::KafkaErrorCode,
     };
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([32; 16]);
@@ -185,7 +186,7 @@ mod tests {
                     offset: Offset(10),
                     ..Default::default()
                 }),
-                response: response(TOPIC, 0, codes::NONE, None),
+                response: response(StateResponseSetup::default()),
                 summary: Some((5, 0, Offset(10), 0)),
                 appended: if trunk {
                     vec![]
@@ -206,7 +207,7 @@ mod tests {
                     offset: Offset(20),
                     ..Default::default()
                 }),
-                response: response(TOPIC, 0, codes::NONE, None),
+                response: response(StateResponseSetup::default()),
                 summary: Some((5, 0, Offset(20), 0)),
                 appended: vec![snapshot(SnapshotSetup {
                     snapshot_epoch: SnapshotEpoch(1),
@@ -223,7 +224,11 @@ mod tests {
                     offset: Offset(10),
                     ..Default::default()
                 }),
-                response: response(TOPIC, 0, codes::FENCED_STATE_EPOCH, Some(fenced)),
+                response: response(StateResponseSetup {
+                    code: KafkaErrorCode(codes::FENCED_STATE_EPOCH),
+                    message: Some(fenced),
+                    ..Default::default()
+                }),
                 summary: Some((5, 0, Offset(10), 0)),
                 appended: vec![],
             },
@@ -235,7 +240,10 @@ mod tests {
                     offset: Offset(-1),
                     ..Default::default()
                 }),
-                response: response(TOPIC, 1, codes::NONE, None),
+                response: response(StateResponseSetup {
+                    partition: PartitionIndex(1),
+                    ..Default::default()
+                }),
                 summary: Some((1, 0, Offset(-1), -1)),
                 appended: vec![snapshot(SnapshotSetup {
                     offset: Offset(-1),
@@ -250,12 +258,12 @@ mod tests {
                     partition: PartitionIndex(-1),
                     ..Default::default()
                 }),
-                response: response(
-                    TOPIC,
-                    -1,
-                    codes::INVALID_REQUEST,
-                    Some("The partition id cannot be a negative number."),
-                ),
+                response: response(StateResponseSetup {
+                    partition: PartitionIndex(-1),
+                    code: KafkaErrorCode(codes::INVALID_REQUEST),
+                    message: Some("The partition id cannot be a negative number."),
+                    ..Default::default()
+                }),
                 summary: None,
                 appended: vec![],
             },
@@ -269,12 +277,11 @@ mod tests {
                         epoch: InitializationEpoch(-1),
                         ..Default::default()
                     }),
-                    response: response(
-                        TOPIC,
-                        0,
-                        codes::INVALID_REQUEST,
-                        Some("The state epoch cannot be a negative number."),
-                    ),
+                    response: response(StateResponseSetup {
+                        code: KafkaErrorCode(codes::INVALID_REQUEST),
+                        message: Some("The state epoch cannot be a negative number."),
+                        ..Default::default()
+                    }),
                     summary: Some((5, 0, Offset(10), 0)),
                     appended: vec![],
                 }
@@ -286,7 +293,7 @@ mod tests {
                         epoch: InitializationEpoch(-1),
                         ..Default::default()
                     }),
-                    response: response(TOPIC, 0, codes::NONE, None),
+                    response: response(StateResponseSetup::default()),
                     summary: Some((-1, 0, Offset(0), 0)),
                     appended: vec![snapshot(SnapshotSetup {
                         snapshot_epoch: SnapshotEpoch(1),
@@ -302,7 +309,12 @@ mod tests {
                     partition: PartitionIndex(3),
                     ..Default::default()
                 }),
-                response: response(TOPIC, 3, codes::UNKNOWN_TOPIC_OR_PARTITION, Some(unknown)),
+                response: response(StateResponseSetup {
+                    partition: PartitionIndex(3),
+                    code: KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
+                    message: Some(unknown),
+                    ..Default::default()
+                }),
                 summary: None,
                 appended: vec![],
             },
@@ -313,12 +325,12 @@ mod tests {
                     topic: UNKNOWN_TOPIC,
                     ..Default::default()
                 }),
-                response: response(
-                    UNKNOWN_TOPIC,
-                    0,
-                    codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    Some(unknown),
-                ),
+                response: response(StateResponseSetup {
+                    topic: UNKNOWN_TOPIC,
+                    code: KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
+                    message: Some(unknown),
+                    ..Default::default()
+                }),
                 summary: None,
                 appended: vec![],
             },
@@ -341,14 +353,13 @@ mod tests {
                     epoch: InitializationEpoch(6),
                     ..Default::default()
                 }),
-                response: response(
-                    TOPIC,
-                    0,
-                    codes::NOT_COORDINATOR,
-                    Some(
+                response: response(StateResponseSetup {
+                    code: KafkaErrorCode(codes::NOT_COORDINATOR),
+                    message: Some(
                         "Unable to initialize share group state: This is not the correct coordinator.",
                     ),
-                ),
+                    ..Default::default()
+                }),
                 summary: None,
                 appended: vec![],
             },

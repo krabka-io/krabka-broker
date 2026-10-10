@@ -610,7 +610,9 @@ mod tests {
             (
                 "abort",
                 abort_marker(1000, 2),
-                vec![crate::test_support::aborted_txn(1000, 0, 3, 4)],
+                vec![crate::test_support::aborted_txn(
+                    crate::test_support::AbortedTxnSetup::default(),
+                )],
                 vec![None, None, None, None],
             ),
         ] {

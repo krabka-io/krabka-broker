@@ -173,7 +173,13 @@ mod tests {
                 control_batch(12, 2000, 0 /* ABORT */),
             ],
         );
-        let aborted = vec![crate::test_support::aborted_txn(2000, 10, 12, 13)];
+        let aborted = vec![crate::test_support::aborted_txn(
+            crate::test_support::AbortedTxnSetup {
+                producer: crate::ProducerId(2000),
+                bounds: crate::Offset(10)..=crate::Offset(12),
+                stable: crate::Offset(13),
+            },
+        )];
         let map = offset_map_for(&[&seg], aborted);
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k") => Offset(5)});
     }
