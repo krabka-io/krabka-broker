@@ -26,7 +26,7 @@ use crate::{
 
 /// Create `TOPIC` with one partition and rf=3, and return its id.
 pub(crate) async fn create_topic(client: &Client) -> WireUuid {
-    crate::support::client::create_topic_with(client, TOPIC, 1, 3, 10_000).await
+    crate::support::client::create_replicated_topic(client, TOPIC).await
 }
 
 fn produce_request(topic_id: WireUuid, n: i32) -> ProduceRequest {

@@ -81,7 +81,15 @@ async fn connect() -> Client {
 /// Creates `topic` with 1 partition and waits until this broker leads
 /// partition 0.
 async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str) -> uuid::Uuid {
-    support::client::create_led_topic(broker, client, topic, 1).await;
+    support::client::create_led_topic(
+        broker,
+        client,
+        crate::support::topics::CreateTopicSetup {
+            topic,
+            ..Default::default()
+        },
+    )
+    .await;
     support::share::topic_id(broker, topic)
 }
 

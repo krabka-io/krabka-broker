@@ -18,7 +18,7 @@ use tokio::{
 use crate::support::{
     produce::single_partition_produce,
     records::{batch_from_records, value_record},
-    topics::{CreateTopicSetup, creatable_topic, create_topic_request},
+    topics::{CreateTopicSetup, create_topic_request},
 };
 pub async fn connect(bootstrap: &str, client_id: &str) -> Arc<Client> {
     Arc::new(connect_client(bootstrap, Some(client_id)).await)
@@ -65,20 +65,24 @@ pub async fn connect_owned(bootstrap: impl AsRef<str>, client_id: &str, context:
     connect_with_context(bootstrap, Some(client_id), context).await
 }
 pub async fn create_topic(client: &Client, topic: &str, partitions: i32) {
-    create_topic_with(client, topic, partitions, 1, 5_000).await;
+    create_topic_with(
+        client,
+        crate::support::topics::CreateTopicSetup {
+            topic,
+            num_partitions: crate::support::topics::TopicPartitionCount(partitions),
+            ..Default::default()
+        },
+    )
+    .await;
 }
 
 /// Create a topic and verify that its first partition becomes local.
 ///
 /// # Panics
 /// Panics if creation fails or the partition never becomes local.
-pub async fn create_led_topic(
-    broker: &BrokerHandle,
-    client: &Client,
-    topic: &str,
-    partitions: i32,
-) {
-    create_topic(client, topic, partitions).await;
+pub async fn create_led_topic(broker: &BrokerHandle, client: &Client, setup: CreateTopicSetup<'_>) {
+    let topic = setup.topic;
+    create_topic_with(client, setup).await;
     broker.wait_until_partition_present(topic, 0).await;
     assert!(broker.has_partition(topic, 0), "partition never led");
 }
@@ -103,17 +107,21 @@ pub async fn http_get(addr: SocketAddr, path: &str, flush: bool) -> String {
     String::from_utf8(buf).unwrap()
 }
 
-pub async fn create_topic_with(
-    client: &Client,
-    topic: &str,
-    partitions: i32,
-    replication_factor: i16,
-    timeout_ms: i32,
-) -> WireUuid {
-    create_topic_spec(
+pub async fn create_topic_with(client: &Client, setup: CreateTopicSetup<'_>) -> WireUuid {
+    let mut request = crate::support::topics::configured_topic_request(setup);
+    create_topic_spec(client, request.topics.remove(0), request.timeout_ms).await
+}
+
+/// The three-replica topic used by witness and stretched-quorum scenarios.
+pub async fn create_replicated_topic(client: &Client, topic: &str) -> WireUuid {
+    create_topic_with(
         client,
-        creatable_topic(topic, partitions, replication_factor),
-        timeout_ms,
+        CreateTopicSetup {
+            topic,
+            replication_factor: crate::support::topics::TopicReplicationFactor(3),
+            timeout: krabka_units::millis(10_000),
+            ..Default::default()
+        },
     )
     .await
 }
@@ -239,28 +247,10 @@ pub async fn metadata_fetch(
 ///
 /// # Panics
 /// Panics if the request fails, its topic row is missing, or creation is rejected.
-pub async fn create_configured_topic(
-    client: &Client,
-    topic: &str,
-    configs: &[(&str, &str)],
-    partitions: i32,
-    replication_factor: i16,
-    timeout_ms: i32,
-) {
+pub async fn create_configured_topic(client: &Client, setup: CreateTopicSetup<'_>) {
+    let topic = setup.topic;
     let response = client
-        .send(crate::support::topics::configured_topic_request(
-            CreateTopicSetup {
-                topic,
-                configs,
-                num_partitions: crate::support::topics::TopicPartitionCount(partitions),
-                replication_factor: crate::support::topics::TopicReplicationFactor(
-                    replication_factor,
-                ),
-                timeout: <krabka_units::Time as krabka_units::convert::TimeExt>::from_millis(
-                    i64::from(timeout_ms),
-                ),
-            },
-        ))
+        .send(crate::support::topics::configured_topic_request(setup))
         .await
         .expect("CreateTopics");
     let created = response.topics.first().expect("one topic result");

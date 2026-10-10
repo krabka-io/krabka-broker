@@ -32,11 +32,11 @@ const VISIBILITY_DEADLINE: Duration = Duration::from_secs(30);
 pub async fn create_topic(client: &Client, topic: &str, mode: Mode) {
     crate::support::client::create_configured_topic(
         client,
-        topic,
-        &[("delivery.mode", mode.value)],
-        1,
-        1,
-        5_000,
+        crate::support::topics::CreateTopicSetup {
+            topic,
+            configs: &[("delivery.mode", mode.value)],
+            ..Default::default()
+        },
     )
     .await;
 }

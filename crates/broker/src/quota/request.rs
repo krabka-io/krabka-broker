@@ -161,7 +161,13 @@ mod tests {
                 vec![("user", Some("alice")), ("client-id", None)],
             ]
             .map(|entity| {
-                crate::quota::test_support::quota_record(entity, "request_percentage", 0.001)
+                crate::quota::test_support::quota_record(
+                    crate::quota::test_support::QuotaRecordSetup {
+                        entity,
+                        key: "request_percentage",
+                        value: crate::quota::test_support::QuotaValue(0.001),
+                    },
+                )
             })
             .to_vec(),
         );

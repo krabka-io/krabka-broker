@@ -165,11 +165,11 @@ async fn create_topic(bootstrap: &str, topic: &str, mode: &str) {
             .await;
     support::client::create_configured_topic(
         &client,
-        topic,
-        &[("delivery.mode", mode)],
-        1,
-        1,
-        5_000,
+        crate::support::topics::CreateTopicSetup {
+            topic,
+            configs: &[("delivery.mode", mode)],
+            ..Default::default()
+        },
     )
     .await;
 }

@@ -109,8 +109,15 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
     // Create the topic with replication_factor=1. Each partition lives on
     // exactly ONE broker; the bootstrap broker has NO replica for partitions
     // placed on the other two nodes.
-    let topic_id =
-        crate::support::client::create_topic_with(&admin, topic, n_partitions, 1, 5_000).await;
+    let topic_id = crate::support::client::create_topic_with(
+        &admin,
+        crate::support::topics::CreateTopicSetup {
+            topic,
+            num_partitions: crate::support::topics::TopicPartitionCount(n_partitions),
+            ..Default::default()
+        },
+    )
+    .await;
 
     // Wait until node 1's controller image knows every partition AND its
     // assigned leader. The metadata image is raft-replicated and is the exact

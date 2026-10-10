@@ -283,9 +283,11 @@ mod tests {
     #[test]
     fn consume_consumer_quota_tuple_match_overage_throttles() {
         let img = crate::quota::test_support::image_with_quota(
-            vec![("user", Some("alice")), ("client-id", Some("app-x"))],
-            "consumer_byte_rate",
-            1024.0,
+            crate::quota::test_support::QuotaRecordSetup {
+                entity: vec![("user", Some("alice")), ("client-id", Some("app-x"))],
+                key: "consumer_byte_rate",
+                value: crate::quota::test_support::QuotaValue(1024.0),
+            },
         );
         // A one-second window, so 4096 bytes at 1024 B/s is over the burst
         // rather than inside the default 11-second one.
@@ -314,9 +316,10 @@ mod tests {
     #[test]
     fn a_throttled_fetch_gives_the_whole_charge_back() {
         let img = crate::quota::test_support::image_with_quota(
-            vec![("user", Some("alice"))],
-            "consumer_byte_rate",
-            1_000.0,
+            crate::quota::test_support::QuotaRecordSetup {
+                key: "consumer_byte_rate",
+                ..Default::default()
+            },
         );
         let consume = |buckets: &crate::quota::QuotaBuckets, bytes| {
             super::consume_consumer_quota(&img, buckets, "alice", Some("app"), bytes)

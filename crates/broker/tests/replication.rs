@@ -67,7 +67,16 @@ async fn metrics_cluster(topic: &str) -> (Cluster, std::net::SocketAddr) {
     .expect("3-broker cluster");
     support::wait_for_all_brokers_registered(&cluster, 3).await;
     let admin = connect_client(cluster[0].1.listen_addr.to_string(), None).await;
-    support::client::create_topic_with(&admin, topic, 12, 3, 5_000).await;
+    support::client::create_topic_with(
+        &admin,
+        crate::support::topics::CreateTopicSetup {
+            topic,
+            num_partitions: crate::support::topics::TopicPartitionCount(12),
+            replication_factor: crate::support::topics::TopicReplicationFactor(3),
+            ..Default::default()
+        },
+    )
+    .await;
     for (handle, _, _) in &cluster {
         for partition in 0..12 {
             handle.wait_until_partition_present(topic, partition).await;
