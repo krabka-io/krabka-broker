@@ -311,15 +311,15 @@ pub(crate) const fn unauthorized_topic_cases(
     ]
 }
 
-/// Both share APIs carry the same acknowledgement ranges in distinct wire types.
+/// Adapt typed acknowledgement ranges to each share API's concrete wire batch.
 macro_rules! acknowledgement_batches {
     ($ty:ident, $batches:expr) => {
         $batches
-            .iter()
-            .map(|&(first_offset, last_offset, types)| $ty {
-                first_offset,
-                last_offset,
-                acknowledge_types: types.to_vec(),
+            .into_iter()
+            .map(|batch| $ty {
+                first_offset: batch.first_offset.0,
+                last_offset: batch.last_offset.0,
+                acknowledge_types: batch.types.into_iter().map(|kind| kind.0).collect(),
                 ..Default::default()
             })
             .collect()
@@ -446,33 +446,37 @@ pub(crate) async fn send_acknowledgements(
     let request = acknowledge_batches_request(setup);
     share_acknowledge_wire(
         broker,
-        krabka_protocol::owned::share_acknowledge_request::MAX_VERSION,
         &request,
+        crate::handlers::test_support::ShareWireSetup {
+            version: krabka_ids::ApiVersion(
+                krabka_protocol::owned::share_acknowledge_request::MAX_VERSION,
+            ),
+            ..Default::default()
+        },
     )
     .await
 }
 
-pub(crate) async fn share_acknowledge_wire(
-    broker: &BrokerHandle,
-    version: i16,
-    request: &krabka_protocol::owned::share_acknowledge_request::ShareAcknowledgeRequest,
-) -> krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse {
-    share_acknowledge_wire_as(broker, version, "share-consumer", request).await
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct ShareWireSetup<'a> {
+    #[default(krabka_ids::ApiVersion(2))]
+    pub version: krabka_ids::ApiVersion,
+    #[default("share-consumer")]
+    pub user: &'a str,
 }
 
-pub(crate) async fn share_acknowledge_wire_as(
+pub(crate) async fn share_acknowledge_wire(
     broker: &BrokerHandle,
-    version: i16,
-    user: &str,
     request: &krabka_protocol::owned::share_acknowledge_request::ShareAcknowledgeRequest,
+    setup: ShareWireSetup<'_>,
 ) -> krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse {
     context_wire(
         broker,
-        krabka_protocol::owned::share_acknowledge_request::API_KEY,
-        version,
         request,
-        user,
-        ("share-client", "handle share acknowledge"),
+        ContextWireSetup {
+            operation: ShareOperation::Acknowledge,
+            wire: setup,
+        },
     )
     .await
 }
@@ -685,16 +689,10 @@ pub(crate) fn acknowledge_batches_request(
             topic_id,
             partitions: vec![AcknowledgePartition {
                 partition_index: partition.index.0,
-                acknowledgement_batches: partition
-                    .batches
-                    .into_iter()
-                    .map(|batch| AcknowledgementBatch {
-                        first_offset: batch.first_offset.0,
-                        last_offset: batch.last_offset.0,
-                        acknowledge_types: batch.types.into_iter().map(|kind| kind.0).collect(),
-                        ..Default::default()
-                    })
-                    .collect(),
+                acknowledgement_batches: acknowledgement_batches!(
+                    AcknowledgementBatch,
+                    partition.batches
+                ),
                 ..Default::default()
             }],
             ..Default::default()
@@ -703,56 +701,80 @@ pub(crate) fn acknowledge_batches_request(
     }
 }
 
-pub(crate) async fn share_fetch_wire(
+/// Return the incremental rows for the first topic, or no rows when it is omitted.
+pub(crate) async fn share_fetch_partition_rows(
     broker: &BrokerHandle,
-    version: i16,
     request: &krabka_protocol::owned::share_fetch_request::ShareFetchRequest,
-) -> krabka_protocol::owned::share_fetch_response::ShareFetchResponse {
-    share_fetch_wire_as(broker, version, "share-consumer", request).await
+    setup: ShareWireSetup<'_>,
+) -> Vec<krabka_protocol::owned::share_fetch_response::PartitionData> {
+    share_fetch_wire(broker, request, setup)
+        .await
+        .responses
+        .into_iter()
+        .next()
+        .map(|topic| topic.partitions)
+        .unwrap_or_default()
 }
 
-pub(crate) async fn share_fetch_wire_as(
+pub(crate) async fn share_fetch_wire(
     broker: &BrokerHandle,
-    version: i16,
-    user: &str,
     request: &krabka_protocol::owned::share_fetch_request::ShareFetchRequest,
+    setup: ShareWireSetup<'_>,
 ) -> krabka_protocol::owned::share_fetch_response::ShareFetchResponse {
     context_wire(
         broker,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
-        version,
         request,
-        user,
-        ("share-client", "handle share fetch"),
+        ContextWireSetup {
+            operation: ShareOperation::Fetch,
+            wire: setup,
+        },
     )
     .await
 }
 
-/// Encodes and decodes one contextual dispatch using the fixture's identity.
-/// Specialized dispatch kinds, including `Produce` and `Fetch`, use their own helpers.
+#[derive(Clone, Copy)]
+enum ShareOperation {
+    Fetch,
+    Acknowledge,
+}
+
+#[derive(Clone, Copy)]
+struct ContextWireSetup<'a> {
+    operation: ShareOperation,
+    wire: ShareWireSetup<'a>,
+}
+
+/// Encodes and decodes one contextual share dispatch using the fixture's identity.
 async fn context_wire<R: Decode<'static>>(
     broker: &BrokerHandle,
-    api_key: i16,
-    version: i16,
     request: &impl Encode,
-    user: &str,
-    (client_id, expectation): (&str, &str),
+    setup: ContextWireSetup<'_>,
 ) -> R {
+    let (api_key, expectation) = match setup.operation {
+        ShareOperation::Fetch => (
+            krabka_protocol::owned::share_fetch_request::API_KEY,
+            "handle share fetch",
+        ),
+        ShareOperation::Acknowledge => (
+            krabka_protocol::owned::share_acknowledge_request::API_KEY,
+            "handle share acknowledge",
+        ),
+    };
     let shared = broker.broker_arc_for_test();
-    let user = crate::test_support::principal(user);
+    let user = crate::test_support::principal(setup.wire.user);
     let peer = crate::test_support::peer();
-    let context = crate::test_support::request_context(&user, &peer, client_id);
-    let request_bytes = crate::test_support::encode_request(request, version);
+    let context = crate::test_support::request_context(&user, &peer, "share-client");
+    let request_bytes = crate::test_support::encode_request(request, setup.wire.version.0);
     let response = crate::test_support::try_dispatch_context(
         &shared,
         api_key,
-        version,
+        setup.wire.version.0,
         &request_bytes,
         &context,
     )
     .await
     .expect(expectation);
-    crate::test_support::decode_response(&response, version)
+    crate::test_support::decode_response(&response, setup.wire.version.0)
 }
 
 /// Reads the ordered record states of partition zero without changing its locks.

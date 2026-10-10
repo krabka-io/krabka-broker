@@ -349,7 +349,9 @@ mod tests {
         for (level, want_disabled) in cases {
             let image = match level {
                 None => MetadataImage::new(uuid::Uuid::nil()),
-                Some(level) => image_with_group_version(level),
+                Some(level) => image_with_group_version(
+                    crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(level),
+                ),
             };
             assert!(
                 group_version_disabled(&image) == want_disabled,
@@ -742,7 +744,11 @@ mod tests {
             (broker_handle, _dir, broker),
             group_controller_peer(authorizer)
         );
-        set_group_version(&broker, 0).await;
+        set_group_version(
+            &broker,
+            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(0),
+        )
+        .await;
         request_identity!(
             (principal, peer, ctx),
             crate::test_support::principal("nobody"),

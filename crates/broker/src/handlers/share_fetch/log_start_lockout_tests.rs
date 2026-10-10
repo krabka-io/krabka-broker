@@ -143,7 +143,6 @@ async fn share_fetch_rows(
     broker: &BrokerHandle,
     setup: ShareFetchRowsSetup<'_>,
 ) -> Vec<PartitionData> {
-    let version = krabka_protocol::owned::share_fetch_request::MAX_VERSION;
     let request = ShareFetchRequest {
         group_id: Some(setup.group.into()),
         member_id: Some("member".into()),
@@ -164,13 +163,12 @@ async fn share_fetch_rows(
         ),
         ..Default::default()
     };
-    let response = crate::handlers::test_support::share_fetch_wire(broker, version, &request).await;
-    // An incremental response leaves out a partition with nothing new.
-    response
-        .responses
-        .first()
-        .map(|topic| topic.partitions.clone())
-        .unwrap_or_default()
+    crate::handlers::test_support::share_fetch_partition_rows(
+        broker,
+        &request,
+        crate::handlers::test_support::ShareWireSetup::default(),
+    )
+    .await
 }
 
 async fn share_fetch_one(broker: &BrokerHandle, setup: ShareFetchRowsSetup<'_>) -> PartitionData {

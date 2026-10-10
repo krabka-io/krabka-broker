@@ -343,11 +343,7 @@ mod tests {
             (broker_handle, _dir, broker),
             start_broker(Arc::new(acl_authorizer()))
         );
-        broker
-            .controller
-            .submit_change(vec![group_read_acl("g")])
-            .await
-            .expect("grant group Read");
+        crate::handlers::group_heartbeat_test_support::grant_group_read(&broker, "g").await;
         request_identity!(
             (principal, peer, ctx),
             alice(),

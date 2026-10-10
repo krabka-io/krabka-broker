@@ -118,7 +118,8 @@ mod tests {
 
     use super::*;
     use crate::handlers::delegation_token_test_support::{
-        DAY_MS, authed, authed_with_token, stored_expiry, test_controller,
+        DAY_MS, OwnershipRefusalSetup, TokenMutationRefusalSetup, TokenPeriodMillis, authed,
+        mutation_credential_refusals, ownership_refusal, stored_expiry, test_controller,
     };
 
     /// Refusals come in Kafka's order, carry Kafka's expiry, and leave the
@@ -129,131 +130,66 @@ mod tests {
     async fn refusals_follow_kafka_order() {
         refusal_token_fixture!((_dir, controller, secret, live, expired));
 
-        // (case, caller, secret configured, hmac, period, error code, expiry)
-        let cases = [
-            (
-                "token-authenticated owner",
-                authed_with_token("alice", true),
-                true,
+        let cases = mutation_credential_refusals(&live.0).into_iter().chain([
+            ownership_refusal(&live.0, OwnershipRefusalSetup::default()),
+            ownership_refusal(
                 &live.0,
-                -1,
-                crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-                -1,
-            ),
-            (
-                "token-authenticated owner, tokens disabled",
-                authed_with_token("alice", true),
-                false,
-                &live.0,
-                -1,
-                crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-                -1,
-            ),
-            (
-                "tokens disabled",
-                authed("alice"),
-                false,
-                &live.0,
-                -1,
-                crate::codes::DELEGATION_TOKEN_AUTH_DISABLED,
-                0,
-            ),
-            (
-                "unknown hmac",
-                authed("alice"),
-                true,
-                &vec![0xFF; 32],
-                -1,
-                crate::codes::DELEGATION_TOKEN_NOT_FOUND,
-                0,
-            ),
-            // The image keeps no HMAC, so a token is found only under the
-            // secret key that computed the HMAC the client holds.
-            (
-                "hmac computed under another secret key",
-                authed("alice"),
-                true,
-                &krabka_security::compute_token_hmac(b"other", "live"),
-                -1,
-                crate::codes::DELEGATION_TOKEN_NOT_FOUND,
-                0,
-            ),
-            (
-                "foreign caller",
-                authed("eve"),
-                true,
-                &live.0,
-                -1,
-                crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH,
-                0,
-            ),
-            (
-                "super user",
-                authed("admin"),
-                true,
-                &live.0,
-                0,
-                crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH,
-                0,
+                OwnershipRefusalSetup {
+                    name: "super user",
+                    caller: "admin",
+                    period: TokenPeriodMillis(0),
+                },
             ),
             // `allowedToRenew` is the owner or a renewer. Unlike `filterToken`'s
             // `ownerOrRenewer`, it leaves out the requester that created the
             // token for another owner.
-            (
-                "requester of a token created for another owner",
-                authed("minter"),
-                true,
+            ownership_refusal(
                 &live.0,
-                0,
-                crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH,
-                0,
+                OwnershipRefusalSetup {
+                    name: "requester of a token created for another owner",
+                    caller: "minter",
+                    period: TokenPeriodMillis(0),
+                },
             ),
-            (
-                "foreign caller, expired token",
-                authed("eve"),
-                true,
-                &expired.0,
-                0,
-                crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH,
-                0,
-            ),
-            (
-                "owner, expired token",
-                authed("alice"),
-                true,
-                &expired.0,
-                0,
-                crate::codes::DELEGATION_TOKEN_EXPIRED,
-                0,
-            ),
-            (
-                "renewer, expired token",
-                authed("bob"),
-                true,
-                &expired.0,
-                1_000,
-                crate::codes::DELEGATION_TOKEN_EXPIRED,
-                0,
-            ),
-        ];
-        for (case, auth, enabled, hmac, period, error_code, expiry_timestamp_ms) in cases {
+            TokenMutationRefusalSetup {
+                name: "foreign caller, expired token",
+                authentication: authed("eve"),
+                hmac: expired.0.clone(),
+                period: TokenPeriodMillis(0),
+                error: crate::test_support::KafkaErrorCode(
+                    crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH,
+                ),
+                ..Default::default()
+            },
+            TokenMutationRefusalSetup {
+                name: "owner, expired token",
+                hmac: expired.0.clone(),
+                period: TokenPeriodMillis(0),
+                error: crate::test_support::KafkaErrorCode(crate::codes::DELEGATION_TOKEN_EXPIRED),
+                ..Default::default()
+            },
+            TokenMutationRefusalSetup {
+                name: "renewer, expired token",
+                authentication: authed("bob"),
+                hmac: expired.0.clone(),
+                period: TokenPeriodMillis(1_000),
+                error: crate::test_support::KafkaErrorCode(crate::codes::DELEGATION_TOKEN_EXPIRED),
+                ..Default::default()
+            },
+        ]);
+        for case in cases {
             let resp = handle(
                 &ExpireDelegationTokenRequest {
-                    hmac: hmac.clone().into(),
-                    expiry_time_period_ms: period,
+                    hmac: case.hmac.into(),
+                    expiry_time_period_ms: case.period.0,
                     ..Default::default()
                 },
-                &auth,
-                enabled.then_some(&secret),
+                &case.authentication,
+                case.secret.get(&secret),
                 &*controller,
             )
             .await;
-            let expected = ExpireDelegationTokenResponse {
-                error_code,
-                expiry_timestamp_ms,
-                ..Default::default()
-            };
-            assert!(resp == expected, "{case}");
+            check_token_mutation_refusal!(resp, case, ExpireDelegationTokenResponse);
         }
         assert!(
             (

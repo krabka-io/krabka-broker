@@ -18,7 +18,7 @@ use crate::{
     polling::{
         named_metadata_as_alice, retry_join_group_until_allowed, retry_metadata_until_topic_visible,
     },
-    support::transactions::init_producer_request,
+    support::{acl::TopicAclSetup, transactions::init_producer_request},
 };
 
 /// Only t1 is visible to Alice, with a real ACL image disabling the compat shim.
@@ -32,11 +32,11 @@ async fn alice_metadata_fixture() -> (
     create_topic_as_admin(addr, "t1", 1).await;
     create_topic_as_admin(addr, "t2", 1).await;
     handle
-        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
-            "t1",
-            "User:alice",
-            krabka_metadata::AclOperation::Describe,
-        ))
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(TopicAclSetup {
+            topic: "t1",
+            operation: krabka_metadata::AclOperation::Describe,
+            ..Default::default()
+        }))
         .await
         .expect("seed Describe-on-t1 ACL for alice");
     (handle, dir, addr)

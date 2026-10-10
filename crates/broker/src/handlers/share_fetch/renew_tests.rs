@@ -119,7 +119,15 @@ async fn share_fetch_as(
     user: &str,
     request: &ShareFetchRequest,
 ) -> ShareFetchResponse {
-    crate::handlers::test_support::share_fetch_wire_as(broker, VERSION, user, request).await
+    crate::handlers::test_support::share_fetch_wire(
+        broker,
+        request,
+        crate::handlers::test_support::ShareWireSetup {
+            version: krabka_ids::ApiVersion(VERSION),
+            user,
+        },
+    )
+    .await
 }
 
 async fn share_acknowledge(
@@ -127,11 +135,13 @@ async fn share_acknowledge(
     setup: AcknowledgementSetup<'_>,
 ) -> ShareAcknowledgeResponse {
     let request = crate::handlers::test_support::acknowledge_batches_request(setup);
-    crate::handlers::test_support::share_acknowledge_wire_as(
+    crate::handlers::test_support::share_acknowledge_wire(
         broker,
-        VERSION,
-        "share-consumer",
         &request,
+        crate::handlers::test_support::ShareWireSetup {
+            version: krabka_ids::ApiVersion(VERSION),
+            ..Default::default()
+        },
     )
     .await
 }

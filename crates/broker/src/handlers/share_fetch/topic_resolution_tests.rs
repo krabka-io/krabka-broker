@@ -135,7 +135,15 @@ async fn share_fetch(
     version: i16,
     request: &ShareFetchRequest,
 ) -> ShareFetchResponse {
-    crate::handlers::test_support::share_fetch_wire(broker, version, request).await
+    crate::handlers::test_support::share_fetch_wire(
+        broker,
+        request,
+        crate::handlers::test_support::ShareWireSetup {
+            version: krabka_ids::ApiVersion(version),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// The empty record set, as a client decodes it. Kafka's

@@ -304,12 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_answers_security_disabled_when_no_authorizer_is_configured() {
-        seeded_acl_fixture!(
-            (broker_handle, _dir, broker, ctx),
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)),
-            vec![crate::handlers::acl_test_support::alice_orders_acl()],
-            "admin"
-        );
+        security_disabled_acl_fixture!((broker_handle, _dir, broker, ctx));
 
         let resp = describe_alice_orders(&broker, &ctx);
 

@@ -256,12 +256,18 @@ mod tests {
             if let Ok((mut socket, _)) = listener.accept().await {
                 let apis = [
                     (
-                        krabka_protocol::owned::remove_raft_voter_request::API_KEY,
-                        krabka_protocol::owned::remove_raft_voter_request::MAX_VERSION,
+                        krabka_ids::ApiKey(
+                            krabka_protocol::owned::remove_raft_voter_request::API_KEY,
+                        ),
+                        krabka_ids::ApiVersion(
+                            krabka_protocol::owned::remove_raft_voter_request::MAX_VERSION,
+                        ),
                     ),
                     (
-                        krabka_protocol::owned::add_raft_voter_request::API_KEY,
-                        krabka_protocol::owned::add_raft_voter_request::MAX_VERSION,
+                        krabka_ids::ApiKey(krabka_protocol::owned::add_raft_voter_request::API_KEY),
+                        krabka_ids::ApiVersion(
+                            krabka_protocol::owned::add_raft_voter_request::MAX_VERSION,
+                        ),
                     ),
                 ];
                 if negotiate_versions(&mut socket, &apis).await.is_ok()

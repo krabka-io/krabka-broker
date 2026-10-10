@@ -72,7 +72,6 @@ async fn share_fetch(
     topic_id: WireUuid,
     accept: Option<(i64, i64)>,
 ) -> PartitionData {
-    let version = krabka_protocol::owned::share_fetch_request::MAX_VERSION;
     let request = ShareFetchRequest {
         group_id: Some(group.into()),
         member_id: Some("member".into()),
@@ -100,14 +99,13 @@ async fn share_fetch(
         }],
         ..Default::default()
     };
-    let response = crate::handlers::test_support::share_fetch_wire(broker, version, &request).await;
-    // An incremental response leaves out a partition with nothing new.
-    response
-        .responses
-        .first()
-        .and_then(|topic| topic.partitions.first())
-        .cloned()
-        .unwrap_or_default()
+    let rows = crate::handlers::test_support::share_fetch_partition_rows(
+        broker,
+        &request,
+        crate::handlers::test_support::ShareWireSetup::default(),
+    )
+    .await;
+    rows.into_iter().next().unwrap_or_default()
 }
 
 /// Sends a `ShareAcknowledge` that accepts `[first, last]` on partition 0 of

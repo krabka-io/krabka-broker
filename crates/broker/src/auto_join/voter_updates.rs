@@ -368,9 +368,15 @@ mod tests {
 
             use crate::auto_join::test_support::{negotiate_versions, read_frame, write_response};
             while let Ok((mut socket, _)) = listener.accept().await {
-                if negotiate_versions(&mut socket, &[(req::API_KEY, req::MAX_VERSION)])
-                    .await
-                    .is_ok()
+                if negotiate_versions(
+                    &mut socket,
+                    &[(
+                        krabka_ids::ApiKey(req::API_KEY),
+                        krabka_ids::ApiVersion(req::MAX_VERSION),
+                    )],
+                )
+                .await
+                .is_ok()
                     && let Ok(frame) = read_frame(&mut socket).await
                     && frame.len() >= 8
                     && i16::from_be_bytes([frame[0], frame[1]]) == req::API_KEY
@@ -380,8 +386,16 @@ mod tests {
                         error_code: response_code,
                         ..Default::default()
                     };
-                    let _ = write_response(&mut socket, &frame, &response, req::MAX_VERSION, true)
-                        .await;
+                    let _ = write_response(
+                        &mut socket,
+                        &frame,
+                        &response,
+                        crate::auto_join::test_support::ResponseWireSetup {
+                            version: krabka_ids::ApiVersion(req::MAX_VERSION),
+                            header: crate::auto_join::test_support::ResponseHeaderMode::Flexible,
+                        },
+                    )
+                    .await;
                 }
             }
         });

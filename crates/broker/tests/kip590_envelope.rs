@@ -41,6 +41,8 @@ use krabka_protocol::{
 use krabka_security::{ListenerProtocol, SaslMechanism, SecretBytes};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+use crate::support::acl::ClusterAclSetup;
+
 mod support;
 
 /// `DefaultKafkaPrincipalBuilder.serialize(new KafkaPrincipal("User",
@@ -430,9 +432,11 @@ async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
     for (principal, host) in [("User:alice", "10.1.2.3"), ("User:bob", "127.0.0.1")] {
         broker
             .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(
-                principal,
-                host,
-                AclOperation::Create,
+                ClusterAclSetup {
+                    principal,
+                    host,
+                    operation: AclOperation::Create,
+                },
             ))
             .await
             .expect("seed host ACL");
@@ -525,9 +529,7 @@ async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded
     broker.wait_until_brokers_registered(1).await;
     broker
         .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(
-            "User:alice",
-            "*",
-            AclOperation::ClusterAction,
+            ClusterAclSetup::default(),
         ))
         .await
         .expect("seed ClusterAction ACL");

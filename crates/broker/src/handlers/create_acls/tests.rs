@@ -238,10 +238,7 @@ async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
         crate::features::CIDR_ACL_HOST_MIN_LEVEL,
         "seed cidr-supporting metadata.version"
     );
-    test_ctx!(ctx, "admin");
-    let req = cidr_request();
-
-    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
+    let resp = drive_cidr_request(&broker).await;
 
     let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![committed()],
@@ -480,12 +477,16 @@ fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
     check!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }
 
+async fn drive_cidr_request(broker: &crate::broker::Broker) -> CreateAclsResponse {
+    test_ctx!(ctx, "admin");
+    handle(broker, cidr_request(), VERSION, &ctx)
+        .await
+        .expect("handle")
+}
+
 async fn check_cidr_refusal(broker_handle: &crate::broker::BrokerHandle) {
     let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
-    let req = cidr_request();
-
-    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
+    let resp = drive_cidr_request(&broker).await;
 
     let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![tagged_wire!(AclCreationResult {

@@ -6,6 +6,8 @@
 use krabka_broker::{BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer};
 use krabka_security::SaslMechanism;
 
+use crate::support::acl::TopicAclSetup;
+
 /// Build a `BrokerConfig` with a single `SASL_PLAINTEXT` listener, PLAIN
 /// enabled, and the given super-user. The non-super-user case still
 /// declares a super-user so the cluster-Alter gate applies. It also
@@ -79,11 +81,11 @@ pub async fn start_alice_topic_grant(
     let addr = handle.listen_addr();
     crate::acl_admin::create_topic_as_admin(addr, "foo", 1).await;
     handle
-        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
-            "foo",
-            "User:alice",
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(TopicAclSetup {
+            topic: "foo",
             operation,
-        ))
+            ..Default::default()
+        }))
         .await
         .expect("seed Alice's topic operation ACL");
     (handle, dir, addr)

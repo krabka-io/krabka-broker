@@ -20,24 +20,39 @@ pub fn assn(broker_ids: &[i32]) -> CreatePartitionsAssignment {
     }
 }
 
-pub fn topic_req(
-    name: &str,
-    count: i32,
-    assignments: Option<Vec<CreatePartitionsAssignment>>,
-) -> CreatePartitionsTopic {
+#[derive(krabka_macros::FieldDefaults)]
+pub struct PartitionTopicSetup<'a> {
+    #[default("t")]
+    pub name: &'a str,
+    #[default(crate::handlers::test_support::TopicPartitionCount(3))]
+    pub count: crate::handlers::test_support::TopicPartitionCount,
+    pub assignments: Option<Vec<CreatePartitionsAssignment>>,
+}
+
+pub fn topic_req(setup: PartitionTopicSetup<'_>) -> CreatePartitionsTopic {
     CreatePartitionsTopic {
-        name: name.into(),
-        count,
-        assignments,
+        name: setup.name.into(),
+        count: setup.count.0,
+        assignments: setup.assignments,
         ..Default::default()
     }
 }
 
-pub fn request(topics: Vec<CreatePartitionsTopic>, validate_only: bool) -> CreatePartitionsRequest {
+#[derive(Clone, Copy, Default)]
+pub enum PartitionMutation {
+    #[default]
+    Apply,
+    Validate,
+}
+
+pub fn request(
+    topics: Vec<CreatePartitionsTopic>,
+    mutation: PartitionMutation,
+) -> CreatePartitionsRequest {
     CreatePartitionsRequest {
         topics,
         timeout_ms: 5_000,
-        validate_only,
+        validate_only: matches!(mutation, PartitionMutation::Validate),
         ..Default::default()
     }
 }
@@ -50,6 +65,16 @@ pub struct SeedTopicSetup<'a> {
     pub partitions: crate::handlers::test_support::TopicPartitionCount,
     #[default(crate::handlers::test_support::TopicReplicationFactor(1))]
     pub rf: crate::handlers::test_support::TopicReplicationFactor,
+}
+
+impl<'a> SeedTopicSetup<'a> {
+    pub fn single_partition(name: &'a str) -> Self {
+        Self {
+            name,
+            partitions: crate::handlers::test_support::TopicPartitionCount(1),
+            ..Default::default()
+        }
+    }
 }
 
 pub async fn seed_topic(handle: &BrokerHandle, setup: SeedTopicSetup<'_>) {

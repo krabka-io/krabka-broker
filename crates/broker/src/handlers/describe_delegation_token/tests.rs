@@ -26,14 +26,28 @@ use crate::handlers::delegation_token_test_support::{
     TokenSetup, anonymous, authed, authed_with_token, kp, seed_token, test_controller,
 };
 
+#[derive(Clone, Copy, Default)]
+struct DescribeTokenSetup<'a> {
+    request: Option<&'a DescribeDelegationTokenRequest>,
+    authentication: Option<&'a crate::network::auth::ConnectionAuth>,
+    secret: Option<&'a SecretBytes>,
+}
+
 fn describe(
-    req: &DescribeDelegationTokenRequest,
-    auth: &crate::network::auth::ConnectionAuth,
-    secret: Option<&SecretBytes>,
     controller: &dyn crate::metadata_source::MetadataSource,
     authorizer: &dyn crate::authorizer::Authorizer,
+    setup: DescribeTokenSetup<'_>,
 ) -> krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse {
-    handle(req, auth, secret, controller, &peer(), authorizer)
+    let default_request = no_owner_filter();
+    let default_authentication = authed("alice");
+    handle(
+        setup.request.unwrap_or(&default_request),
+        setup.authentication.unwrap_or(&default_authentication),
+        setup.secret,
+        controller,
+        &peer(),
+        authorizer,
+    )
 }
 
 async fn seed_alice_tokens(controller: &ControllerHandle) {
@@ -108,12 +122,28 @@ fn token_ids(
     resp.tokens.iter().map(|t| t.token_id.as_str()).collect()
 }
 
+fn check_visible_token_ids(
+    response: &krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse,
+    expected: &[&str],
+) {
+    assert!(response.error_code == 0);
+    let expected: std::collections::HashSet<_> = expected.iter().copied().collect();
+    assert!(token_ids(response) == expected);
+}
+
 #[tokio::test]
 async fn returns_auth_disabled_when_no_secret_key() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
     let req = no_owner_filter();
-    let resp = describe(&req, &authed("alice"), None, &*controller, &simple_authz());
+    let resp = describe(
+        &*controller,
+        &simple_authz(),
+        DescribeTokenSetup {
+            request: Some(&req),
+            ..Default::default()
+        },
+    );
     assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
     controller.cancel().await;
 }
@@ -124,11 +154,13 @@ async fn anonymous_caller_is_rejected_without_exposing_token_hmacs() {
     seed_token(&controller, TokenSetup::default()).await;
 
     let resp = describe(
-        &no_owner_filter(),
-        &anonymous(),
-        Some(&secret),
         &*controller,
         &crate::authorizer::AllowAllAuthorizer,
+        DescribeTokenSetup {
+            authentication: Some(&anonymous()),
+            secret: Some(&secret),
+            ..Default::default()
+        },
     );
 
     assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
@@ -149,11 +181,16 @@ async fn token_authed_caller_is_refused_entirely() {
     seed_alice_tokens(&controller).await;
 
     let resp = describe(
-        &no_owner_filter(),
-        &authed_with_token("alice", true),
-        Some(&secret),
         &*controller,
         &crate::authorizer::AllowAllAuthorizer,
+        DescribeTokenSetup {
+            authentication: Some(&authed_with_token(
+                "alice",
+                crate::handlers::delegation_token_test_support::CredentialSource::DelegationToken,
+            )),
+            secret: Some(&secret),
+            ..Default::default()
+        },
     );
 
     assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
@@ -174,11 +211,15 @@ async fn token_authed_caller_gets_request_not_allowed_before_auth_disabled() {
     let controller = test_controller(dir.path().into()).await;
 
     let resp = describe(
-        &no_owner_filter(),
-        &authed_with_token("alice", true),
-        None,
         &*controller,
         &crate::authorizer::AllowAllAuthorizer,
+        DescribeTokenSetup {
+            authentication: Some(&authed_with_token(
+                "alice",
+                crate::handlers::delegation_token_test_support::CredentialSource::DelegationToken,
+            )),
+            ..Default::default()
+        },
     );
 
     assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
@@ -197,14 +238,15 @@ async fn empty_owners_list_returns_no_tokens_without_error() {
         ..Default::default()
     };
     let resp = describe(
-        &req,
-        &authed("alice"),
-        Some(&secret),
         &*controller,
         &crate::authorizer::AllowAllAuthorizer,
+        DescribeTokenSetup {
+            request: Some(&req),
+            secret: Some(&secret),
+            ..Default::default()
+        },
     );
-    assert!(resp.error_code == 0);
-    assert!(resp.tokens.is_empty());
+    check_visible_token_ids(&resp, &[]);
     controller.cancel().await;
 }
 
@@ -285,11 +327,12 @@ async fn filter_token_matches_owner_renewer_or_token_id_acl() {
         }
 
         let resp = describe(
-            &no_owner_filter(),
-            &authed("alice"),
-            Some(&secret),
             &*controller,
             &simple_authz(),
+            DescribeTokenSetup {
+                secret: Some(&secret),
+                ..Default::default()
+            },
         );
         assert!(resp.error_code == 0, "{name}");
         let expected: std::collections::HashSet<&str> = expected.iter().copied().collect();
@@ -346,14 +389,15 @@ async fn renewer_sees_the_token_and_owner_filter_matches_renewer_too() {
         ..Default::default()
     };
     let resp = describe(
-        &req,
-        &authed("carol"),
-        Some(&secret),
         &*controller,
         &simple_authz(),
+        DescribeTokenSetup {
+            request: Some(&req),
+            authentication: Some(&authed("carol")),
+            secret: Some(&secret),
+        },
     );
-    assert!(resp.error_code == 0);
-    assert!(token_ids(&resp) == std::collections::HashSet::from(["t-b"]));
+    check_visible_token_ids(&resp, &["t-b"]);
     controller.cancel().await;
 }
 
@@ -370,11 +414,13 @@ async fn describe_acl_on_token_id_grants_exactly_that_token() {
     seed_acl(&controller, describe_token_acl("t-a", "bob")).await;
 
     let resp = describe(
-        &no_owner_filter(),
-        &authed("bob"),
-        Some(&secret),
         &*controller,
         &simple_authz(),
+        DescribeTokenSetup {
+            authentication: Some(&authed("bob")),
+            secret: Some(&secret),
+            ..Default::default()
+        },
     );
     assert!(resp.error_code == 0);
     assert!(
@@ -459,11 +505,13 @@ async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
         }
         let authorizer = simple_authz().with_allow_everyone_if_no_acl_found(default_allow);
         let resp = describe(
-            &no_owner_filter(),
-            &authed("bob"),
-            Some(&secret),
             &*controller,
             &authorizer,
+            DescribeTokenSetup {
+                authentication: Some(&authed("bob")),
+                secret: Some(&secret),
+                ..Default::default()
+            },
         );
         assert!(resp.error_code == 0);
         assert!(
@@ -487,14 +535,15 @@ async fn unrelated_caller_sees_nothing() {
     seed_token(&controller, TokenSetup::default()).await;
 
     let resp = describe(
-        &no_owner_filter(),
-        &authed("eve"),
-        Some(&secret),
         &*controller,
         &simple_authz(),
+        DescribeTokenSetup {
+            authentication: Some(&authed("eve")),
+            secret: Some(&secret),
+            ..Default::default()
+        },
     );
-    assert!(resp.error_code == 0);
-    assert!(resp.tokens.is_empty());
+    check_visible_token_ids(&resp, &[]);
     controller.cancel().await;
 }
 
@@ -544,11 +593,13 @@ async fn requester_of_a_token_minted_for_another_owner_finds_and_sees_it() {
             ..Default::default()
         };
         let resp = describe(
-            &req,
-            &authed(caller),
-            Some(&secret),
             &*controller,
             &simple_authz(),
+            DescribeTokenSetup {
+                request: Some(&req),
+                authentication: Some(&authed(caller)),
+                secret: Some(&secret),
+            },
         );
         let visible: std::collections::HashSet<&str> = token_ids(&resp);
         let expected: std::collections::HashSet<&str> = expected.iter().copied().collect();
@@ -573,11 +624,12 @@ async fn describe_response_reports_the_requester_that_created_the_token() {
     seed_admin_minted_token(&controller).await;
 
     let resp = describe(
-        &no_owner_filter(),
-        &authed("alice"),
-        Some(&secret),
         &*controller,
         &simple_authz(),
+        DescribeTokenSetup {
+            secret: Some(&secret),
+            ..Default::default()
+        },
     );
     assert!(
         resp.tokens

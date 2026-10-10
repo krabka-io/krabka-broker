@@ -15,7 +15,7 @@ use krabka_protocol::{
     ProtocolError,
     owned::{
         delete_acls_request::DeleteAclsFilter,
-        delete_acls_response::{DeleteAclsFilterResult, DeleteAclsMatchingAcl, DeleteAclsResponse},
+        delete_acls_response::{DeleteAclsFilterResult, DeleteAclsResponse},
     },
 };
 
@@ -27,10 +27,9 @@ use crate::{
     handlers::{
         acl_test_support::{all_acls, seed_acls},
         delete_acls::test_support::{
-            OPERATION_ANY, OPERATION_READ, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL,
-            PATTERN_TYPE_MATCH, PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY,
-            RESOURCE_TYPE_TOPIC, VERSION, acl, configured_authorizer, filter, named_filters,
-            request, test_context,
+            OPERATION_ANY, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_MATCH,
+            PATTERN_TYPE_PREFIXED, PERMISSION_ANY, RESOURCE_TYPE_TOPIC, VERSION, acl,
+            configured_authorizer, filter, named_filters, request, test_context,
         },
     },
     test_support::{DenyAll, start_broker_with_authorizer_no_audit as start_broker, test_ctx},
@@ -77,17 +76,7 @@ async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
         filter_results: vec![tagged_wire!(DeleteAclsFilterResult {
             error_code: codes::NONE,
             error_message: None,
-            matching_acls: vec![tagged_wire!(DeleteAclsMatchingAcl {
-                error_code: codes::NONE,
-                error_message: None,
-                resource_type: RESOURCE_TYPE_TOPIC,
-                resource_name: "orders".into(),
-                pattern_type: PATTERN_TYPE_LITERAL,
-                principal: "User:alice".into(),
-                host: "*".into(),
-                operation: OPERATION_READ,
-                permission_type: PERMISSION_ALLOW,
-            })],
+            matching_acls: vec![crate::handlers::acl_test_support::expected_deleted_orders_acl()],
         })],
     });
     assert!(resp == expected);
@@ -111,12 +100,7 @@ async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
 /// seeded binding must survive the refusal.
 #[tokio::test]
 async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_configured() {
-    seeded_acl_fixture!(
-        (broker_handle, _dir, broker, ctx),
-        start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)),
-        vec![crate::handlers::acl_test_support::alice_orders_acl()],
-        "admin"
-    );
+    security_disabled_acl_fixture!((broker_handle, _dir, broker, ctx));
     let req = named_filters(&[("orders", "User:alice"), ("payments", "User:bob")]);
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");

@@ -353,23 +353,41 @@ mod tests {
 
             let resp = drive(&broker, &req, &p, &peer);
 
-            let expected = DescribeProducersResponse {
-                throttle_time_ms: 0,
-                topics: vec![TopicResponse {
-                    name: name.to_owned(),
-                    partitions: vec![PartitionResponse {
-                        partition_index: 0,
-                        error_code: expected_code,
-                        error_message: expected_message.clone(),
-                        active_producers: Vec::new(),
-                        ..Default::default()
-                    }],
+            let expected = empty_producer_response(EmptyProducerResponseSetup {
+                topic: name,
+                partition: krabka_ids::PartitionIndex(0),
+                error_code: crate::test_support::KafkaErrorCode(expected_code),
+                message: expected_message.clone(),
+            });
+            assert!(resp == expected, "topic {name:?}");
+            broker_handle.shutdown().await;
+        }
+    }
+
+    #[derive(krabka_macros::FieldDefaults)]
+    struct EmptyProducerResponseSetup<'a> {
+        #[default("orders")]
+        topic: &'a str,
+        partition: krabka_ids::PartitionIndex,
+        error_code: crate::test_support::KafkaErrorCode,
+        message: Option<String>,
+    }
+
+    /// Independent wire oracle for a partition that exposes no producer state.
+    fn empty_producer_response(setup: EmptyProducerResponseSetup<'_>) -> DescribeProducersResponse {
+        DescribeProducersResponse {
+            topics: vec![TopicResponse {
+                name: setup.topic.to_owned(),
+                partitions: vec![PartitionResponse {
+                    partition_index: setup.partition.0,
+                    error_code: setup.error_code.0,
+                    error_message: setup.message,
+                    active_producers: Vec::new(),
                     ..Default::default()
                 }],
                 ..Default::default()
-            };
-            assert!(resp == expected, "topic {name:?}");
-            broker_handle.shutdown().await;
+            }],
+            ..Default::default()
         }
     }
 
@@ -415,20 +433,12 @@ mod tests {
         ];
         for (name, error_message) in cases {
             let resp = drive(&broker, &request(name, &[5]), &p, &peer);
-            let expected = DescribeProducersResponse {
-                topics: vec![TopicResponse {
-                    name: name.to_owned(),
-                    partitions: vec![PartitionResponse {
-                        partition_index: 5,
-                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                        error_message,
-                        active_producers: Vec::new(),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            };
+            let expected = empty_producer_response(EmptyProducerResponseSetup {
+                topic: name,
+                partition: krabka_ids::PartitionIndex(5),
+                error_code: crate::test_support::KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
+                message: error_message,
+            });
             assert!(resp == expected, "topic {name:?}");
         }
         broker_handle.shutdown().await;

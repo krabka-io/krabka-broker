@@ -10,11 +10,11 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 use krabka_broker::Broker;
-use krabka_metadata::AclOperation;
 use krabka_security::SaslMechanism;
 
 use crate::{
     sasl::{create_topic_sasl_plain, drive_elect_leaders_sasl_plain},
+    support::acl::TopicAclSetup,
     wait::wait_partition_exists,
 };
 
@@ -67,11 +67,11 @@ async fn non_super_user_without_acl_denied() {
     // is irrelevant — any non-empty `image.acls` flips the shim off and
     // forces the authorizer to evaluate every request.
     handle
-        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
-            "__compat_shim_disable__",
-            "User:admin",
-            AclOperation::Read,
-        ))
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(TopicAclSetup {
+            topic: "__compat_shim_disable__",
+            principal: "User:admin",
+            ..Default::default()
+        }))
         .await
         .expect("seed dummy ACL");
 

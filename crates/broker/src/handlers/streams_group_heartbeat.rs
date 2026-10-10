@@ -152,7 +152,6 @@ mod tests {
 
     use crate::{
         broker::Broker,
-        handlers::{group_heartbeat_test_support::acl_authorizer, group_read_denied},
         test_support::{peer, principal},
     };
 
@@ -939,15 +938,12 @@ mod tests {
     fn group_read_denied_yields_group_authorization_failed() {
         use krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse;
 
-        let authorizer = acl_authorizer();
-        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        request_identity!(
-            (principal, peer, ctx),
-            crate::test_support::principal("ANONYMOUS"),
-            client_id = "streams-client"
+        crate::handlers::group_heartbeat_test_support::check_group_read_denied(
+            crate::handlers::group_heartbeat_test_support::GroupAclSetup {
+                client_id: "streams-client",
+                ..Default::default()
+            },
         );
-
-        assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
 
         let bytes = crate::handlers::encode_response(
             &reply(codes::GROUP_AUTHORIZATION_FAILED, None),

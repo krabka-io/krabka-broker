@@ -79,6 +79,123 @@ impl RefusalFixture {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) enum SecretProvision {
+    #[default]
+    Configured,
+    Absent,
+}
+
+impl SecretProvision {
+    pub(super) fn get(
+        self,
+        secret: &krabka_security::SecretBytes,
+    ) -> Option<&krabka_security::SecretBytes> {
+        match self {
+            Self::Configured => Some(secret),
+            Self::Absent => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct TokenPeriodMillis(pub i64);
+
+#[derive(krabka_macros::FieldDefaults)]
+pub(super) struct TokenMutationRefusalSetup {
+    #[default("token refusal")]
+    pub name: &'static str,
+    #[default(authed("alice"))]
+    pub authentication: ConnectionAuth,
+    pub secret: SecretProvision,
+    pub hmac: Vec<u8>,
+    #[default(TokenPeriodMillis(-1))]
+    pub period: TokenPeriodMillis,
+    pub error: crate::test_support::KafkaErrorCode,
+    pub expiry: crate::test_support::UnixMillis,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct OwnershipRefusalSetup {
+    #[default("foreign caller")]
+    pub name: &'static str,
+    #[default("eve")]
+    pub caller: &'static str,
+    #[default(TokenPeriodMillis(-1))]
+    pub period: TokenPeriodMillis,
+}
+
+pub(super) fn ownership_refusal(
+    hmac: &[u8],
+    setup: OwnershipRefusalSetup,
+) -> TokenMutationRefusalSetup {
+    TokenMutationRefusalSetup {
+        name: setup.name,
+        authentication: authed(setup.caller),
+        hmac: hmac.to_vec(),
+        period: setup.period,
+        error: crate::test_support::KafkaErrorCode(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH),
+        ..Default::default()
+    }
+}
+
+/// Compare the complete API-specific wire response with independent refusal data.
+macro_rules! check_token_mutation_refusal {
+    ($response:ident, $case:ident, $ty:ident) => {
+        let expected = $ty {
+            error_code: $case.error.0,
+            expiry_timestamp_ms: $case.expiry.0,
+            ..Default::default()
+        };
+        assert2::assert!($response == expected, "{}", $case.name);
+    };
+}
+
+/// The shared credential and HMAC refusals precede each API's ownership and expiry checks.
+pub(super) fn mutation_credential_refusals(live_hmac: &[u8]) -> Vec<TokenMutationRefusalSetup> {
+    use crate::test_support::{KafkaErrorCode, UnixMillis};
+    let token_authenticated = [
+        ("token-authenticated owner", SecretProvision::Configured),
+        (
+            "token-authenticated owner, tokens disabled",
+            SecretProvision::Absent,
+        ),
+    ]
+    .into_iter()
+    .map(|(name, secret)| TokenMutationRefusalSetup {
+        name,
+        authentication: authed_with_token("alice", CredentialSource::DelegationToken),
+        secret,
+        hmac: live_hmac.to_vec(),
+        error: KafkaErrorCode(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED),
+        expiry: UnixMillis(-1),
+        ..Default::default()
+    });
+    token_authenticated
+        .chain([
+            TokenMutationRefusalSetup {
+                name: "tokens disabled",
+                secret: SecretProvision::Absent,
+                hmac: live_hmac.to_vec(),
+                error: KafkaErrorCode(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED),
+                ..Default::default()
+            },
+            TokenMutationRefusalSetup {
+                name: "unknown hmac",
+                hmac: vec![0xFF; 32],
+                error: KafkaErrorCode(crate::codes::DELEGATION_TOKEN_NOT_FOUND),
+                ..Default::default()
+            },
+            TokenMutationRefusalSetup {
+                name: "hmac computed under another secret key",
+                hmac: krabka_security::compute_token_hmac(b"other", "live"),
+                error: KafkaErrorCode(crate::codes::DELEGATION_TOKEN_NOT_FOUND),
+                ..Default::default()
+            },
+        ])
+        .collect()
+}
+
 /// Starts a single-voter controller and waits for its leader.
 pub(super) async fn test_controller(log_dir: PathBuf) -> Arc<ControllerHandle> {
     let config = ControllerConfig {
@@ -97,8 +214,15 @@ pub(super) async fn test_controller(log_dir: PathBuf) -> Arc<ControllerHandle> {
     controller
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) enum CredentialSource {
+    #[default]
+    Password,
+    DelegationToken,
+}
+
 /// An authenticated SCRAM connection, optionally using a delegation token.
-pub(super) fn authed_with_token(name: &str, via_token: bool) -> ConnectionAuth {
+pub(super) fn authed_with_token(name: &str, source: CredentialSource) -> ConnectionAuth {
     ConnectionAuth::Authenticated {
         principal: Principal {
             name: name.into(),
@@ -107,12 +231,12 @@ pub(super) fn authed_with_token(name: &str, via_token: bool) -> ConnectionAuth {
         },
         mechanism: SaslMechanism::ScramSha256,
         expires_at_ms: None,
-        authenticated_via_token: via_token,
+        authenticated_via_token: matches!(source, CredentialSource::DelegationToken),
     }
 }
 
 pub(super) fn authed(name: &str) -> ConnectionAuth {
-    authed_with_token(name, false)
+    authed_with_token(name, CredentialSource::Password)
 }
 
 /// The synthetic authenticated state of PLAINTEXT and SSL without mTLS.

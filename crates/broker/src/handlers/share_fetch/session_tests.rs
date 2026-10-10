@@ -138,7 +138,15 @@ async fn share_fetch(broker: &BrokerHandle, fetch: &Fetch<'_>) -> ShareFetchResp
         },
         ..Default::default()
     };
-    crate::handlers::test_support::share_fetch_wire(broker, VERSION, &request).await
+    crate::handlers::test_support::share_fetch_wire(
+        broker,
+        &request,
+        crate::handlers::test_support::ShareWireSetup {
+            version: krabka_ids::ApiVersion(VERSION),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 async fn states(broker: &BrokerHandle, group: &str, topic_id: WireUuid) -> Vec<RecordState> {
@@ -402,8 +410,15 @@ async fn the_acquire_mode_and_batch_size_shape_the_acquired_rows() {
             }],
             ..Default::default()
         };
-        let response =
-            crate::handlers::test_support::share_fetch_wire(&broker, version, &request).await;
+        let response = crate::handlers::test_support::share_fetch_wire(
+            &broker,
+            &request,
+            crate::handlers::test_support::ShareWireSetup {
+                version: krabka_ids::ApiVersion(version),
+                ..Default::default()
+            },
+        )
+        .await;
         let acquired: Vec<(i64, i64)> = response
             .responses
             .iter()

@@ -127,12 +127,7 @@ async fn partition(
     );
 
     let mut batch = crate::handlers::test_support::default_records_batch(&[b"first", b"second"]);
-    partition
-        .log
-        .lock()
-        .expect("partition log lock")
-        .append(&mut batch)
-        .expect("append the records");
+    crate::test_support::append_partition_batch(&partition, &mut batch);
     partition
 }
 

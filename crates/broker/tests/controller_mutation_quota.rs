@@ -34,6 +34,7 @@ use krabka_metadata::AclOperation;
 use crate::support::client::metric_value;
 use crate::{
     cluster::start_single_broker_sasl_plaintext_with_users,
+    support::acl::{ClusterAclSetup, TopicAclSetup},
     topic_admin::{drive_create_topics_sasl, drive_delete_topics_sasl},
 };
 
@@ -66,8 +67,10 @@ async fn controller_mutation_rate_throttles_create_topics() {
 
     // Seed an ACL granting alice Cluster Create — this also disables the
     // compat shim (allow-all when no ACLs present in image).
-    let admin_acl =
-        crate::support::acl::cluster_acl_record("User:alice", "*", AclOperation::Create);
+    let admin_acl = crate::support::acl::cluster_acl_record(ClusterAclSetup {
+        operation: AclOperation::Create,
+        ..Default::default()
+    });
     handle
         .submit_metadata_record_for_test(admin_acl)
         .await
@@ -140,11 +143,11 @@ async fn controller_mutation_rate_throttles_delete_topics() {
 
     // Seed a dummy ACL to disable the compat shim (allow-all when no ACLs present).
     // Use an unrelated ACL; the real alice ACLs come below.
-    let shim_disable = crate::support::acl::topic_acl_record(
-        "__compat_shim_disable__",
-        "User:admin",
-        AclOperation::Read,
-    );
+    let shim_disable = crate::support::acl::topic_acl_record(TopicAclSetup {
+        topic: "__compat_shim_disable__",
+        principal: "User:admin",
+        ..Default::default()
+    });
     handle
         .submit_metadata_record_for_test(shim_disable)
         .await
@@ -163,8 +166,11 @@ async fn controller_mutation_rate_throttles_delete_topics() {
     assert!(ec == 0);
 
     // Grant alice Topic Delete on "to-delete".
-    let alice_delete_acl =
-        crate::support::acl::topic_acl_record("to-delete", "User:alice", AclOperation::Delete);
+    let alice_delete_acl = crate::support::acl::topic_acl_record(TopicAclSetup {
+        topic: "to-delete",
+        operation: AclOperation::Delete,
+        ..Default::default()
+    });
     handle
         .submit_metadata_record_for_test(alice_delete_acl)
         .await

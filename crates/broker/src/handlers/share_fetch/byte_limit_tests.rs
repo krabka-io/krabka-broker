@@ -190,8 +190,13 @@ async fn send_share_fetch(
 ) -> ShareFetchResponse {
     crate::handlers::test_support::share_fetch_wire(
         broker,
-        krabka_protocol::owned::share_fetch_request::MAX_VERSION,
         request,
+        crate::handlers::test_support::ShareWireSetup {
+            version: krabka_ids::ApiVersion(
+                krabka_protocol::owned::share_fetch_request::MAX_VERSION,
+            ),
+            ..Default::default()
+        },
     )
     .await
 }
@@ -597,8 +602,15 @@ async fn release(
             )
         },
     );
-    let response =
-        crate::handlers::test_support::share_acknowledge_wire(broker, version, &request).await;
+    let response = crate::handlers::test_support::share_acknowledge_wire(
+        broker,
+        &request,
+        crate::handlers::test_support::ShareWireSetup {
+            version: krabka_ids::ApiVersion(version),
+            ..Default::default()
+        },
+    )
+    .await;
     let row = &response.responses[0].partitions[0];
     assert!(
         (response.error_code, row.error_code) == (codes::NONE, codes::NONE),

@@ -35,6 +35,7 @@ use crate::{
         ResponseHeaderSelection as WireResponseHeaderSelection,
     },
     support::{
+        acl::TopicAclSetup,
         discovery::api_versions_request_for,
         wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
     },
@@ -610,7 +611,15 @@ async fn prepare_quota_topic(
     )
     .await;
     wait_partition_exists(broker, topic, 0).await;
-    crate::support::acl::seed_topic_acl(broker, topic, "User:alice", operation).await;
+    crate::support::acl::seed_topic_acl(
+        broker,
+        TopicAclSetup {
+            topic,
+            operation,
+            ..Default::default()
+        },
+    )
+    .await;
 }
 
 fn check_successful_produce(response: &krabka_protocol::owned::produce_response::ProduceResponse) {

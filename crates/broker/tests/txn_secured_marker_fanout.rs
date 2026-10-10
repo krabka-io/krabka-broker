@@ -59,6 +59,7 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 use crate::support::{
+    acl::AllowAclSetup,
     records::{batch_from_records, value_record},
     topics::{creatable_topic, create_topic_request},
     transactions::{end_transaction_request, init_producer_request},
@@ -512,24 +513,26 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
     wait_both_registered(&cluster).await;
 
     let grants = [
-        allow(
-            ResourceType::Cluster,
-            "kafka-cluster",
-            &format!("User:{USER}"),
-            AclOperation::ClusterAction,
-        ),
-        allow(
-            ResourceType::TransactionalId,
-            "*",
-            &format!("User:{CLIENT_USER}"),
-            AclOperation::Write,
-        ),
-        allow(
-            ResourceType::Topic,
-            "*",
-            &format!("User:{CLIENT_USER}"),
-            AclOperation::Write,
-        ),
+        allow(AllowAclSetup {
+            resource_type: ResourceType::Cluster,
+            resource_name: "kafka-cluster",
+            principal: &format!("User:{USER}"),
+            operation: AclOperation::ClusterAction,
+            ..Default::default()
+        }),
+        allow(AllowAclSetup {
+            resource_type: ResourceType::TransactionalId,
+            resource_name: "*",
+            principal: &format!("User:{CLIENT_USER}"),
+            operation: AclOperation::Write,
+            ..Default::default()
+        }),
+        allow(AllowAclSetup {
+            resource_name: "*",
+            principal: &format!("User:{CLIENT_USER}"),
+            operation: AclOperation::Write,
+            ..Default::default()
+        }),
     ];
     for grant in grants {
         cluster[0]

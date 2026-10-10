@@ -11,6 +11,31 @@ pub(super) fn acl_authorizer() -> crate::authorizer::SimpleAclAuthorizer {
     crate::authorizer::SimpleAclAuthorizer::new(HashSet::new())
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct GroupAclSetup<'a> {
+    #[default("consumer-client")]
+    pub client_id: &'a str,
+    #[default("ANONYMOUS")]
+    pub principal: &'a str,
+    #[default("g")]
+    pub group: &'a str,
+}
+
+/// An anonymous group-read probe is denied against an empty authorizer and image.
+pub(super) fn check_group_read_denied(setup: GroupAclSetup<'_>) {
+    let authorizer = acl_authorizer();
+    let image = MetadataImage::new(uuid::Uuid::nil());
+    let principal = crate::test_support::principal(setup.principal);
+    let peer = crate::test_support::peer();
+    let ctx = crate::test_support::request_context(&principal, &peer, setup.client_id);
+    assert!(super::group_read_denied(
+        &authorizer,
+        &image,
+        &ctx,
+        setup.group
+    ));
+}
+
 /// An operation on a named resource, allowed to `User:alice` from any host.
 pub(super) fn acl(
     resource_type: ResourceType,
@@ -37,21 +62,33 @@ pub(super) fn group_read_acl(name: &str) -> MetadataRecord {
     acl(ResourceType::Group, name, AclOperation::Read)
 }
 
-fn group_version(level: i16) -> MetadataRecord {
+/// The finalized metadata feature level, including the disabled zero sentinel.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct GroupFeatureLevel(pub i16);
+
+pub(super) async fn grant_group_read(broker: &crate::broker::Broker, group: &str) {
+    broker
+        .controller
+        .submit_change(vec![group_read_acl(group)])
+        .await
+        .expect("grant group Read");
+}
+
+fn group_version(level: GroupFeatureLevel) -> MetadataRecord {
     MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
         name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
-        level,
+        level: level.0,
     })
 }
 
-pub(super) fn image_with_group_version(level: i16) -> MetadataImage {
+pub(super) fn image_with_group_version(level: GroupFeatureLevel) -> MetadataImage {
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     image.apply(&group_version(level));
     image
 }
 
 /// Override the broker's release-default finalized consumer-group feature.
-pub(super) async fn set_group_version(broker: &crate::broker::Broker, level: i16) {
+pub(super) async fn set_group_version(broker: &crate::broker::Broker, level: GroupFeatureLevel) {
     broker
         .controller
         .submit_change(vec![group_version(level)])
@@ -62,7 +99,7 @@ pub(super) async fn set_group_version(broker: &crate::broker::Broker, level: i16
 /// Start the coordinator fixture with an explicit finalized group version.
 pub(super) async fn versioned_group_broker(
     authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
-    level: i16,
+    level: GroupFeatureLevel,
 ) -> (
     crate::BrokerHandle,
     tempfile::TempDir,

@@ -52,7 +52,10 @@ use tokio_rustls::rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject as _},
 };
 
-use crate::support::topics::{creatable_topic, create_topic_request};
+use crate::support::{
+    acl::ClusterAclSetup,
+    topics::{creatable_topic, create_topic_request},
+};
 
 const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
 const MESSAGE: &str = "Cluster authorization failed.";
@@ -94,9 +97,11 @@ async fn start_with(
 
 async fn allow(broker: &BrokerHandle, principal: &str, operation: AclOperation) {
     broker
-        .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(
-            principal, "*", operation,
-        ))
+        .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(ClusterAclSetup {
+            principal,
+            operation,
+            ..Default::default()
+        }))
         .await
         .expect("seed ACL");
 }

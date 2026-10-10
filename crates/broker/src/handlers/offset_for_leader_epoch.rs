@@ -542,12 +542,7 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        partition
-            .log
-            .lock()
-            .expect("partition log lock")
-            .append(&mut batch)
-            .expect("append the records");
+        crate::test_support::append_partition_batch(&partition, &mut batch);
         partition
     }
 
