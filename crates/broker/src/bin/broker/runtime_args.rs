@@ -82,6 +82,8 @@ pub struct RuntimeArgs {
     pub log_delivery_clock_uncertainty: Option<Time>,
     #[arg(long, env = "KRABKA_MESSAGE_MAX_BYTES", value_parser = parse_kafka_int_byte_size)]
     pub message_max_bytes: Option<ByteSize>,
+    #[arg(long, env = "KRABKA_FETCH_MAX_BYTES", value_parser = parse_kafka_int_byte_size)]
+    pub fetch_max_bytes: Option<ByteSize>,
     pub socket_request_max: Option<ByteSize>,
     pub sasl_server_max_receive: Option<ByteSize>,
     #[arg(long, env = "KRABKA_CONNECTION_FAILED_AUTHENTICATION_DELAY", value_parser = krabka_units::parse::non_negative_time)]

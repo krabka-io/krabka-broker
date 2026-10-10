@@ -85,6 +85,29 @@ fn publish_leader_updates_leader_and_quorum_watchers() {
 }
 
 #[test]
+fn quorum_snapshot_timestamp_tracks_applied_not_newer_committed_records() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let noop = super::records::noop_record_value().expect("no-op record");
+    let mut batch = metadata_record_batch(1, &[noop]).expect("metadata batch");
+    engine.log.append(&mut batch, 1_700_000_000_123).expect("append");
+    engine.advance_and_apply(Offset(1));
+    let noop = super::records::noop_record_value().expect("no-op record");
+    let mut later_batch = metadata_record_batch(1, &[noop]).expect("metadata batch");
+    engine
+        .log
+        .append(&mut later_batch, 1_700_000_111_222)
+        .expect("append later batch");
+    // The quorum commits the later batch, but the metadata image has not
+    // applied it yet.
+    engine.log.advance_hwm(Offset(2));
+    engine.leader_reported_hwm = 4;
+
+    let snapshot = engine.quorum_state_snapshot();
+    assert2::assert!(snapshot.last_applied_record_timestamp_ms == 1_700_000_000_123);
+    assert2::assert!(engine.pending_record_processing_time_samples == 1);
+}
+
+#[test]
 fn metadata_fetch_slice_excludes_negative_hwm_and_uncommitted_batches() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     let mut multi = RecordBatch {

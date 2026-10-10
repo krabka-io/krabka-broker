@@ -6,15 +6,9 @@
 //! time in the input. Rust's `regex` gives the same guarantee and the same
 //! refusals for lookaround, backreferences and possessive quantifiers.
 //!
-//! The two grammars are not identical. What is knowingly left:
-//!
-//! - **Accepted here, refused by RE2J.** `regex`'s character-class set
-//!   operations (`[\w&&\d]`, `[a-z--b]`, nested `[[a-z]x]`), which RE2J reads
-//!   as ordinary class members or as a syntax error. Screening these would
-//!   need a class parser, and getting one wrong refuses patterns Kafka takes.
-//! - **Refused here, accepted by RE2J.** `\Q...\E` literal quoting, which
-//!   `regex` has no equivalent for, and a repetition large enough to exceed
-//!   `regex`'s compiled-size limit.
+//! The two grammars are not identical. We translate RE2J's `\Q...\E` quoting
+//! and character-class syntax before compiling, and leave only `regex`'s
+//! compiled-size limit as a known acceptance difference.
 //!
 //! The inline flags are screened, because that is the divergence a client is
 //! likely to hit: `regex` takes `x`, `u` and `R`, and RE2J refuses them.
@@ -82,6 +76,100 @@ pub(crate) fn unsupported_inline_flag(pattern: &str) -> Option<char> {
 
 /// RE2J's `ERR_INVALID_REPEAT_OP`, its message for a possessive quantifier.
 pub(crate) const INVALID_REPEAT_OP: &str = "invalid nested repetition operator";
+
+/// RE2J's `ERR_INVALID_CHAR_RANGE`.
+const INVALID_CHAR_RANGE: &str = "invalid character class range";
+
+/// Translate RE2J's literal quoting and character-class behavior to syntax
+/// accepted by Rust's non-backtracking `regex` engine.
+fn translate(pattern: &str) -> Result<String, String> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut out = String::with_capacity(pattern.len());
+    let mut index = 0;
+    let mut in_class = false;
+    let mut class_first = false;
+
+    while index < chars.len() {
+        let current = chars[index];
+        if !in_class && current == '\\' && chars.get(index + 1) == Some(&'Q') {
+            index += 2;
+            let start = index;
+            while index + 1 < chars.len() && !(chars[index] == '\\' && chars[index + 1] == 'E') {
+                index += 1;
+            }
+            let quoted: String = chars[start..index].iter().collect();
+            out.push_str(&regex::escape(&quoted));
+            if index + 1 < chars.len() {
+                index += 2; // closing \\E
+            } else {
+                index = chars.len(); // RE2J quotes through end of input
+            }
+            continue;
+        }
+
+        if current == '\\' {
+            out.push(current);
+            if let Some(&escaped) = chars.get(index + 1) {
+                out.push(escaped);
+                index += 2;
+            } else {
+                index += 1;
+            }
+            if in_class && class_first {
+                class_first = false;
+            }
+            continue;
+        }
+
+        if in_class {
+            if current == ']' && !class_first {
+                in_class = false;
+                out.push(current);
+                index += 1;
+                continue;
+            }
+            if current == '^' && class_first {
+                out.push(current);
+                index += 1;
+                continue;
+            }
+            if current == '[' {
+                // RE2J treats an unescaped '[' as a class member. Escaping it
+                // keeps Rust from interpreting it as a nested set.
+                out.push_str(r"\[");
+            } else if current == '&' && chars.get(index + 1) == Some(&'&') {
+                // RE2J's class grammar treats both ampersands literally.
+                out.push_str(r"\&\&");
+                index += 2;
+                class_first = false;
+                continue;
+            } else if current == '-' && chars.get(index + 1) == Some(&'-') {
+                if class_first {
+                    // At the beginning RE2J accepts `--a` as the range `-` to
+                    // `a`. Force that same interpretation in Rust's parser.
+                    out.push_str(r"\x2d");
+                } else {
+                    // Rust accepts this as set subtraction; RE2J parses it as
+                    // a descending range and refuses it.
+                    return Err(INVALID_CHAR_RANGE.to_owned());
+                }
+            } else {
+                out.push(current);
+            }
+            class_first = false;
+            index += 1;
+            continue;
+        }
+
+        if current == '[' {
+            in_class = true;
+            class_first = true;
+        }
+        out.push(current);
+        index += 1;
+    }
+    Ok(out)
+}
 
 /// Whether `pattern` carries a possessive quantifier (`a*+`, `a++`, `a?+`,
 /// `a{2,3}+`).
@@ -160,16 +248,18 @@ pub(crate) fn check(pattern: &str) -> Result<(), String> {
 /// Returns the reason, in the wording Kafka puts in its
 /// `INVALID_REGULAR_EXPRESSION` message.
 pub(crate) fn compile_full_match(pattern: &str) -> Result<regex::Regex, String> {
-    if unsupported_inline_flag(pattern).is_some() {
+    let translated = translate(pattern)?;
+    if unsupported_inline_flag(&translated).is_some() {
         return Err(INVALID_PERL_OP.to_owned());
     }
-    if possessive_quantifier(pattern) {
+    if possessive_quantifier(&translated) {
         return Err(INVALID_REPEAT_OP.to_owned());
     }
     // Compile the pattern on its own first, so the error text names what the
     // client sent rather than the anchors around it.
-    regex::Regex::new(pattern).map_err(|error| flatten_error(&error))?;
-    regex::Regex::new(&format!(r"\A(?:{pattern})\z")).map_err(|error| flatten_error(&error))
+    regex::Regex::new(&translated).map_err(|error| flatten_error(&error))?;
+    regex::Regex::new(&format!(r"\A(?:{translated})\z"))
+        .map_err(|error| flatten_error(&error))
 }
 
 #[cfg(test)]
@@ -215,6 +305,50 @@ mod tests {
             .map(|(pattern, _)| (*pattern, compile_full_match(pattern).is_ok()))
             .collect();
         assert!(actual == expected);
+    }
+
+    #[test]
+    fn literal_quoting_matches_re2j() {
+        let quoted = compile_full_match(r"\Q[a.*]\E").expect("quoted literal compiles");
+        check!(quoted.is_match("[a.*]"));
+        check!(!quoted.is_match("aaa"));
+
+        let through_end = compile_full_match(r"prefix\Q.+[").expect("unterminated quote compiles");
+        check!(through_end.is_match("prefix.+["));
+
+        // The first `\\E` ends quoting, and the trailing expression is parsed
+        // normally.
+        let ended = compile_full_match(r"\Q.\E+").expect("quote terminator compiles");
+        check!(ended.is_match("."));
+        check!(ended.is_match("..."));
+        check!(!ended.is_match("+"));
+    }
+
+    #[test]
+    fn character_class_operations_keep_re2j_meaning() {
+        let literal_ampersands = compile_full_match("[a&&b]").expect("literal class compiles");
+        for character in ["a", "&", "b"] {
+            check!(literal_ampersands.is_match(character));
+        }
+        check!(!literal_ampersands.is_match("c"));
+
+        let groups_are_unioned = compile_full_match(r"[\w&&\d]").expect("class compiles");
+        for character in ["x", "7", "&"] {
+            check!(groups_are_unioned.is_match(character));
+        }
+
+        // RE2J reads the leading pair as a range from '-' to 'a', not set
+        // subtraction.
+        let leading_hyphens = compile_full_match("[--a]").expect("leading range compiles");
+        check!(leading_hyphens.is_match("-"));
+        check!(leading_hyphens.is_match("0"));
+        check!(leading_hyphens.is_match("a"));
+
+        check!(compile_full_match("[a-z--b]").err() == Some(INVALID_CHAR_RANGE.to_owned()));
+        // An unescaped '[' inside a class is a member, not a nested set.
+        let literal_open_bracket = compile_full_match("[[a]").expect("class compiles");
+        check!(literal_open_bracket.is_match("["));
+        check!(literal_open_bracket.is_match("a"));
     }
 
     /// `Matcher.matches()` matches the whole input, and an inline `(?m)` does

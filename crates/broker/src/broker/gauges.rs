@@ -10,6 +10,15 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{config::BrokerConfig, partition_registry::PartitionRegistry};
 
+/// Epoch milliseconds for the KIP-835 time-since-last-applied-record gauge.
+fn epoch_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
+}
+
 /// Counts the partitions `node_id` leads from a site other than the stretch
 /// cluster's preferred leader site.
 ///
@@ -230,6 +239,24 @@ pub(super) fn spawn_broker_gauge_updater(
                     .raft_observers
                     .set(i64::try_from(snap.observers.len()).unwrap_or(i64::MAX));
             }
+            let applied_timestamp_ms = controller.last_applied_record_timestamp_ms();
+            metrics
+                .metadata_last_applied_timestamp_ms
+                .set(applied_timestamp_ms);
+            let applied_lag_ms = if applied_timestamp_ms > 0 {
+                epoch_now_ms().saturating_sub(applied_timestamp_ms)
+            } else {
+                0
+            };
+            metrics.metadata_last_applied_lag_ms.set(applied_lag_ms);
+            let (processing_avg_us, processing_max_us) =
+                controller.pending_record_processing_time_us();
+            metrics
+                .pending_record_processing_time_us_avg
+                .set(i64::try_from(processing_avg_us).unwrap_or(i64::MAX));
+            metrics
+                .pending_record_processing_time_us_max
+                .set(i64::try_from(processing_max_us).unwrap_or(i64::MAX));
 
             // Metadata applied offset and lag (#390)
             let applied_offset = controller.current_metadata_offset();

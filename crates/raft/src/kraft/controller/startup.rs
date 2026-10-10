@@ -127,7 +127,12 @@ impl KraftController {
         // published snapshot and the engine's `leader_reported_hwm`, which a
         // node that has heard from no leader yet answers from.
         let initial_hwm = log.hwm().0;
-        let initial_snapshot = super::queries::initial_quorum_snapshot(&core, &log, initial_hwm);
+        let initial_snapshot = super::queries::initial_quorum_snapshot(
+            &core,
+            &log,
+            initial_hwm,
+            last_snapshot_timestamp_ms,
+        );
         let (quorum_tx, quorum_rx) = watch::channel(initial_snapshot);
         let (fault_tx, fault_rx) = watch::channel(None);
         let (cmd_tx, cmd_rx) = mpsc::channel(metadata_raft_command_queue_capacity.get());
@@ -180,6 +185,10 @@ impl KraftController {
             clean_at: clock_base + METADATA_LOG_CLEAN_INTERVAL,
             last_snapshot_end_offset,
             last_snapshot_timestamp_ms,
+            last_applied_record_timestamp_ms: last_snapshot_timestamp_ms,
+            pending_record_processing_time_us_total: 0,
+            pending_record_processing_time_samples: 0,
+            pending_record_processing_time_us_max: 0,
             last_snapshot_at_ms: 0,
             bytes_since_snapshot: 0,
             downgrade_snapshot_pending,
