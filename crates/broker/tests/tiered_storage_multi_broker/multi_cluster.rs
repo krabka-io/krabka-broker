@@ -79,7 +79,8 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
     // Build a config for broker `i` (1-indexed broker_id/node_id).
     let broker_configs: Vec<BrokerConfig> = (0..3)
         .map(|i| {
-            let mut cfg = crate::support::node_config(i, log_dirs[i].path());
+            let mut cfg =
+                crate::support::node_config(crate::support::NodeIndex(i), log_dirs[i].path());
             cfg.log_config.segment_size = segment_sizes[i];
             cfg.directory_id = uuid::Uuid::from_u128(u128::try_from(i + 1).unwrap());
             cfg.listen_addr = client_addrs[i];

@@ -7,7 +7,7 @@
 
 use std::{net::SocketAddr, time::Duration};
 
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle};
+use krabka_broker::{Broker, BrokerConfig, BrokerError, BrokerHandle};
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use tempfile::TempDir;
 
@@ -72,6 +72,8 @@ impl LinkedCluster {
             })
             .collect();
 
+        let topology = support::RoleTopology::new(&client_addrs, &controller_addrs, &voters);
+
         let mut starts = Vec::with_capacity(3);
         let mut metas: Vec<(BrokerConfig, TempDir)> = Vec::with_capacity(3);
         for (index, (data, controller)) in
@@ -79,12 +81,11 @@ impl LinkedCluster {
         {
             let dir = TempDir::new().unwrap();
             let mut cfg = support::broker_config(
-                index,
-                &client_addrs,
-                &controller_addrs,
-                &voters,
                 dir.path(),
-                BootstrapMode::Bootstrap,
+                topology.node_setup(crate::support::ClusterBootstrapSetup {
+                    index: crate::support::NodeIndex(index),
+                    ..Default::default()
+                }),
             );
             // Peers and clients learn this site through its relay; the broker
             // itself binds the real port behind it.

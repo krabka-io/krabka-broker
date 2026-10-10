@@ -51,10 +51,11 @@ async fn start_role_separated() -> RoleSeparated {
 
     let ctrl_dir = TempDir::new().unwrap();
     let ctrl_cfg = topology.config(
-        0,
         ctrl_dir.path(),
-        BootstrapMode::Bootstrap,
-        NodeRole::Controller,
+        crate::support::RoleNodeSetup {
+            role: NodeRole::Controller,
+            ..Default::default()
+        },
     );
     let controller = support::start_held_node(
         ctrl_cfg,
@@ -70,7 +71,14 @@ async fn start_role_separated() -> RoleSeparated {
     let mut broker_configs = Vec::with_capacity(NODES - 1);
     for index in 1..NODES {
         let dir = TempDir::new().unwrap();
-        let cfg = topology.config(index, dir.path(), BootstrapMode::Join, NodeRole::Broker);
+        let cfg = topology.config(
+            dir.path(),
+            crate::support::RoleNodeSetup {
+                index: crate::support::NodeIndex(index),
+                mode: BootstrapMode::Join,
+                ..Default::default()
+            },
+        );
         broker_configs.push(cfg.clone());
         brokers.push(
             support::start_held_node(

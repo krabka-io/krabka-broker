@@ -123,7 +123,12 @@ async fn keepalive(client: &Client, group: &str, member_id: &str, epoch: i32) {
         ..Default::default()
     }]);
     let _ = client
-        .send(follow_up(group, member_id, epoch, active))
+        .send(follow_up(crate::support::streams::StreamsFollowUpSetup {
+            group,
+            member_id,
+            epoch: crate::support::streams::StreamsMemberEpoch(epoch),
+            active,
+        }))
         .await;
 }
 

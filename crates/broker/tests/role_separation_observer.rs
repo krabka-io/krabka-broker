@@ -102,10 +102,11 @@ async fn start_role_separated_with(
 
     let ctrl_dir = TempDir::new().unwrap();
     let mut ctrl_cfg = topology.config(
-        0,
         ctrl_dir.path(),
-        BootstrapMode::Bootstrap,
-        NodeRole::Controller,
+        crate::support::RoleNodeSetup {
+            role: NodeRole::Controller,
+            ..Default::default()
+        },
     );
     customize(0, &mut ctrl_cfg);
     let controller_metadata_dir = ctrl_cfg.metadata_dir().to_path_buf();
@@ -124,7 +125,14 @@ async fn start_role_separated_with(
     let mut broker_configs = Vec::with_capacity(brokers);
     for index in 1..nodes {
         let dir = TempDir::new().unwrap();
-        let mut cfg = topology.config(index, dir.path(), BootstrapMode::Join, NodeRole::Broker);
+        let mut cfg = topology.config(
+            dir.path(),
+            crate::support::RoleNodeSetup {
+                index: crate::support::NodeIndex(index),
+                mode: BootstrapMode::Join,
+                ..Default::default()
+            },
+        );
         customize(index, &mut cfg);
         broker_configs.push(cfg.clone());
         observers.push(

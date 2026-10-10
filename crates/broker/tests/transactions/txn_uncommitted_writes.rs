@@ -255,6 +255,8 @@ impl RelayedCluster {
         let voters: Vec<(u64, SocketAddr)> = (0..3)
             .map(|index| (u64::try_from(index + 1).unwrap(), controller_addrs[index]))
             .collect();
+        let topology = support::RoleTopology::new(&client_addrs, &controller_addrs, &voters);
+
         let mut starts = Vec::with_capacity(3);
         let mut metas = Vec::with_capacity(3);
         for (index, (data, controller)) in
@@ -262,12 +264,11 @@ impl RelayedCluster {
         {
             let dir = TempDir::new().expect("tempdir");
             let mut config = support::broker_config(
-                index,
-                &client_addrs,
-                &controller_addrs,
-                &voters,
                 dir.path(),
-                BootstrapMode::Bootstrap,
+                topology.node_setup(crate::support::ClusterBootstrapSetup {
+                    index: crate::support::NodeIndex(index),
+                    ..Default::default()
+                }),
             )
             .with_internal_topics_for(3);
             config.advertised_listener = relays[index].addr().to_string();

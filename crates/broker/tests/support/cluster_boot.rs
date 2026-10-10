@@ -34,40 +34,55 @@ pub async fn shutdown_cluster(cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)
 /// such as `elect_leaders` that drive `add_learner` and `change_membership`
 /// manually and need extra config overrides per broker. `start_n_node`'s
 /// auto-join path cannot support that flow.
-pub fn broker_config(
-    i: usize,
-    client_addrs: &[SocketAddr],
-    controller_addrs: &[SocketAddr],
-    voters: &[(u64, SocketAddr)],
-    log_dir: &std::path::Path,
-    mode: BootstrapMode,
-) -> BrokerConfig {
-    let listen = client_addrs[i];
-    let mut cfg = crate::support::node_config(i, log_dir);
-    cfg.listen_addr = listen;
-    cfg.advertised_listener = listen.to_string();
-    cfg.controller_listen_addr = controller_addrs[i];
-    // `controller_quorum_voters` carries `<host>:<port>` strings (the dialer
-    // re-resolves per connect); test voter sets are built from `SocketAddr`s,
-    // so stringify here.
-    cfg.controller_quorum_voters = crate::support::controller_voters(voters);
-    cfg.bootstrap_mode = mode;
-    cfg
+const DEFAULT_ENDPOINTS: [SocketAddr; 1] = [SocketAddr::V4(std::net::SocketAddrV4::new(
+    std::net::Ipv4Addr::LOCALHOST,
+    0,
+))];
+
+#[derive(krabka_macros::FieldDefaults)]
+pub struct ClusterNodeSetup<'a> {
+    pub index: crate::support::NodeIndex,
+    #[default(&DEFAULT_ENDPOINTS)]
+    pub client_addrs: &'a [SocketAddr],
+    #[default(&DEFAULT_ENDPOINTS)]
+    pub controller_addrs: &'a [SocketAddr],
+    pub voters: Vec<(NodeId, String)>,
+    #[default(BootstrapMode::Bootstrap)]
+    pub mode: BootstrapMode,
+}
+
+pub fn broker_config(log_dir: &std::path::Path, setup: ClusterNodeSetup<'_>) -> BrokerConfig {
+    let mut config = addressed_node_config(
+        log_dir,
+        AddressedNodeSetup {
+            node: NodeId(u64::try_from(setup.index.0 + 1).expect("one-based node id")),
+            client: setup.client_addrs[setup.index.0],
+            controller: setup.controller_addrs[setup.index.0],
+        },
+    );
+    config.controller_quorum_voters = setup.voters;
+    config.bootstrap_mode = setup.mode;
+    config
 }
 
 /// Listener addresses and node identity common to formatted bootstrap nodes.
-pub fn addressed_node_config(
-    id: u64,
-    log_dir: &std::path::Path,
-    client: SocketAddr,
-    controller: SocketAddr,
-) -> BrokerConfig {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct AddressedNodeSetup {
+    #[default(NodeId(1))]
+    pub node: NodeId,
+    #[default(DEFAULT_ENDPOINTS[0])]
+    pub client: SocketAddr,
+    #[default(DEFAULT_ENDPOINTS[0])]
+    pub controller: SocketAddr,
+}
+
+pub fn addressed_node_config(log_dir: &std::path::Path, setup: AddressedNodeSetup) -> BrokerConfig {
     let mut config = BrokerConfig::for_tests(log_dir.to_path_buf());
-    config.broker_id = i32::try_from(id).expect("node id");
-    config.node_id = NodeId(id);
-    config.listen_addr = client;
-    config.advertised_listener = client.to_string();
-    config.controller_listen_addr = controller;
+    config.broker_id = i32::try_from(setup.node.0).expect("node id");
+    config.node_id = setup.node;
+    config.listen_addr = setup.client;
+    config.advertised_listener = setup.client.to_string();
+    config.controller_listen_addr = setup.controller;
     config
 }
 
@@ -112,6 +127,22 @@ pub struct RoleTopology<'a> {
     voters: &'a [(u64, SocketAddr)],
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct RoleNodeSetup {
+    pub index: crate::support::NodeIndex,
+    #[default(BootstrapMode::Bootstrap)]
+    pub mode: BootstrapMode,
+    #[default(krabka_broker::config::NodeRole::Broker)]
+    pub role: krabka_broker::config::NodeRole,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ClusterBootstrapSetup {
+    pub index: crate::support::NodeIndex,
+    #[default(BootstrapMode::Bootstrap)]
+    pub mode: BootstrapMode,
+}
+
 impl<'a> RoleTopology<'a> {
     pub fn new(
         clients: &'a [SocketAddr],
@@ -125,26 +156,30 @@ impl<'a> RoleTopology<'a> {
         }
     }
 
+    /// Resolve one node's held addresses and voter endpoints from this topology.
+    pub fn node_setup(&self, setup: ClusterBootstrapSetup) -> ClusterNodeSetup<'a> {
+        ClusterNodeSetup {
+            index: setup.index,
+            client_addrs: self.clients,
+            controller_addrs: self.controllers,
+            voters: crate::support::controller_voters(self.voters),
+            mode: setup.mode,
+        }
+    }
+
     /// Apply exactly one role after the ordinary static-voter configuration.
     ///
     /// # Panics
     /// Panics if the node index or checked broker id is out of range.
-    pub fn config(
-        &self,
-        index: usize,
-        log_dir: &std::path::Path,
-        mode: BootstrapMode,
-        role: krabka_broker::config::NodeRole,
-    ) -> BrokerConfig {
+    pub fn config(&self, log_dir: &std::path::Path, setup: RoleNodeSetup) -> BrokerConfig {
         let mut config = broker_config(
-            index,
-            self.clients,
-            self.controllers,
-            self.voters,
             log_dir,
-            mode,
+            self.node_setup(ClusterBootstrapSetup {
+                index: setup.index,
+                mode: setup.mode,
+            }),
         );
-        config.roles = vec![role];
+        config.roles = vec![setup.role];
         config
     }
 }

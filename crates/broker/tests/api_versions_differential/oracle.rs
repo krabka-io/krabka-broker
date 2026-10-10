@@ -101,12 +101,14 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
         ],
         inter_broker_listener_name: "BROKER".to_string(),
         ..crate::support::jvm_broker_config(
-            1,
-            client_addr,
-            controller_addr,
-            &listeners.advertised,
             dir.path().to_path_buf(),
-            &[(1, controller_addr)],
+            crate::support::JvmBrokerSetup {
+                listen: client_addr,
+                controller: controller_addr,
+                advertised: listeners.advertised.clone(),
+                voters: crate::support::controller_voters(&[(1, controller_addr)]),
+                ..Default::default()
+            },
         )
     };
     let handle = Broker::start(config).await.expect("start broker");

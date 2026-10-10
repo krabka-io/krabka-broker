@@ -51,10 +51,17 @@ fn two_phase_init(
 const NONE: i16 = 0;
 const TRANSACTIONAL_ID_AUTHORIZATION_FAILED: i16 = 53;
 
-async fn boot(two_pc_enabled: bool) -> (BrokerHandle, String, TempDir) {
+#[derive(Clone, Copy)]
+enum TwoPhaseCommitSupport {
+    Enabled,
+    Disabled,
+}
+
+async fn boot(support: TwoPhaseCommitSupport) -> (BrokerHandle, String, TempDir) {
     let dir = TempDir::new().unwrap();
     let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
-    cfg.features.transaction_two_phase_commit_enable = two_pc_enabled;
+    cfg.features.transaction_two_phase_commit_enable =
+        matches!(support, TwoPhaseCommitSupport::Enabled);
     // v6 is `latestVersionUnstable`: a broker accepts it only with Kafka's
     // `unstable.api.versions.enable`, and closes the connection otherwise.
     cfg.features.unstable_api_versions = krabka_broker::api_catalog::UnstableApiVersions::Enabled;
@@ -74,7 +81,7 @@ async fn client(bootstrap: &str) -> krabka_client_core::Client {
 /// `UNSUPPORTED_*` code.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn enable_2pc_rejected_when_cluster_disabled() {
-    let (broker, bootstrap, _dir) = boot(false).await;
+    let (broker, bootstrap, _dir) = boot(TwoPhaseCommitSupport::Disabled).await;
     let client = client(&bootstrap).await;
 
     let resp = client
@@ -103,7 +110,7 @@ async fn enable_2pc_rejected_when_cluster_disabled() {
 /// no-op without a separate describe round trip.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
-    let (broker, bootstrap, _dir) = boot(true).await;
+    let (broker, bootstrap, _dir) = boot(TwoPhaseCommitSupport::Enabled).await;
     // The producer does not retry COORDINATOR_NOT_AVAILABLE from
     // FindCoordinator. Bring the transaction coordinator up first.
     broker.wait_until_transaction_coordinator_ready().await;
@@ -150,7 +157,7 @@ async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
 /// timeout back through `DescribeTransactions`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn enable_2pc_persists_no_timeout_sentinel() {
-    let (broker, bootstrap, _dir) = boot(true).await;
+    let (broker, bootstrap, _dir) = boot(TwoPhaseCommitSupport::Enabled).await;
     // The producer does not retry COORDINATOR_NOT_AVAILABLE from
     // FindCoordinator. Bring the transaction coordinator up first.
     broker.wait_until_transaction_coordinator_ready().await;
@@ -225,7 +232,7 @@ async fn enable_2pc_persists_no_timeout_sentinel() {
 async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {
     use krabka_protocol::owned::update_features_response::UpdateFeaturesResponse;
 
-    let (broker, bootstrap, _dir) = boot(true).await;
+    let (broker, bootstrap, _dir) = boot(TwoPhaseCommitSupport::Enabled).await;
     let client = client(&bootstrap).await;
 
     let api_versions = client

@@ -99,10 +99,12 @@ async fn start(
     )
     .expect("krabka-format wrote meta.properties");
     let mut config = crate::support::addressed_node_config(
-        node.id,
         log_dir,
-        node.client_addr,
-        node.controller_addr,
+        crate::support::AddressedNodeSetup {
+            node: krabka_broker::NodeId(node.id),
+            client: node.client_addr,
+            controller: node.controller_addr,
+        },
     );
     config.controller_quorum_voters = vec![];
     config.bootstrap_servers = bootstrap.iter().map(ToString::to_string).collect();

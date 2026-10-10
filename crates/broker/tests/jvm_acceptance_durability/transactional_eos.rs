@@ -183,14 +183,16 @@ async fn transactional_console_producer_eos() {
             ],
             inter_broker_listener_name: "INTERNAL".to_string(),
             ..crate::support::jvm_broker_config(
-                u64::try_from(i + 1).unwrap(),
-                listen_addr,
-                format!("0.0.0.0:{}", controller_ports[i])
-                    .parse()
-                    .expect("static addr"),
-                &advertised_listener,
                 dir.path().to_path_buf(),
-                &voters,
+                crate::support::JvmBrokerSetup {
+                    node: krabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
+                    listen: listen_addr,
+                    controller: format!("0.0.0.0:{}", controller_ports[i])
+                        .parse()
+                        .expect("static addr"),
+                    advertised: advertised_listener.clone(),
+                    voters: crate::support::controller_voters(&voters),
+                },
             )
         };
         tempdirs.push(dir);

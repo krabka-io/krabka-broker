@@ -83,23 +83,10 @@ impl MixedCluster {
 /// `jvm_static_quorum_spike.rs::krabka_controller_config` plus a bound data
 /// listener.
 fn krabka_mixed_config(
-    i: usize,
-    client_port: u16,
-    advertised_host: &str,
-    own_controller_addr: SocketAddr,
-    voters: &[(u64, SocketAddr)],
-    cluster_id: Uuid,
     log_dir: &std::path::Path,
+    setup: crate::support::JvmStaticVoterSetup,
 ) -> BrokerConfig {
-    let mut cfg = support::jvm_static_voter_config(
-        i,
-        format!("0.0.0.0:{client_port}").parse().unwrap(),
-        format!("{advertised_host}:{client_port}"),
-        own_controller_addr,
-        voters,
-        cluster_id,
-        log_dir,
-    );
+    let mut cfg = support::jvm_static_voter_config(log_dir, setup);
     cfg.heartbeat_interval = krabka_units::millis(1_000);
     // Kafka's `broker.session.timeout.ms` default. The controller starts a
     // broker's session when its registration lands, and the JVM broker
@@ -157,22 +144,34 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
     let dir1 = TempDir::new().unwrap();
     let dir2 = TempDir::new().unwrap();
     let cfg1 = krabka_mixed_config(
-        0,
-        krabka_client_ports[0],
-        &advertised_host,
-        format!("0.0.0.0:{p1}").parse().unwrap(),
-        &krabka_voters,
-        cluster_id,
         dir1.path(),
+        crate::support::JvmStaticVoterSetup {
+            broker: crate::support::JvmBrokerSetup {
+                listen: format!("0.0.0.0:{}", krabka_client_ports[0])
+                    .parse()
+                    .unwrap(),
+                advertised: format!("{}:{}", advertised_host, krabka_client_ports[0]),
+                controller: format!("0.0.0.0:{p1}").parse().unwrap(),
+                voters: crate::support::controller_voters(&krabka_voters),
+                ..Default::default()
+            },
+            cluster_id,
+        },
     );
     let cfg2 = krabka_mixed_config(
-        1,
-        krabka_client_ports[1],
-        &advertised_host,
-        format!("0.0.0.0:{p2}").parse().unwrap(),
-        &krabka_voters,
-        cluster_id,
         dir2.path(),
+        crate::support::JvmStaticVoterSetup {
+            broker: crate::support::JvmBrokerSetup {
+                node: krabka_broker::NodeId(u64::try_from((1) + 1).expect("one-based node id")),
+                listen: format!("0.0.0.0:{}", krabka_client_ports[1])
+                    .parse()
+                    .unwrap(),
+                advertised: format!("{}:{}", advertised_host, krabka_client_ports[1]),
+                controller: format!("0.0.0.0:{p2}").parse().unwrap(),
+                voters: crate::support::controller_voters(&krabka_voters),
+            },
+            cluster_id,
+        },
     );
     format_at_kafka_4_0(dir1.path(), &cid_str, &cfg1).await;
     format_at_kafka_4_0(dir2.path(), &cid_str, &cfg2).await;

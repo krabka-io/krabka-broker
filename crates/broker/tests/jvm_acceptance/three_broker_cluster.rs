@@ -93,12 +93,14 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
     let configs: [BrokerConfig; N] = std::array::from_fn(|index| {
         let listener = &listeners[index];
         let mut config = crate::support::jvm_broker_config(
-            voters[index].0,
-            listener.listen.parse().expect("client address"),
-            voters[index].1,
-            &listener.advertised,
             dirs[index].path().to_path_buf(),
-            &voters,
+            crate::support::JvmBrokerSetup {
+                node: krabka_broker::NodeId(voters[index].0),
+                listen: listener.listen.parse().expect("client address"),
+                controller: voters[index].1,
+                advertised: listener.advertised.clone(),
+                voters: crate::support::controller_voters(&voters),
+            },
         );
         config.listeners = vec![ListenerSpec {
             advertised: listener.advertised.clone(),

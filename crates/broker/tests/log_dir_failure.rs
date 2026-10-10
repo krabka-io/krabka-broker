@@ -92,10 +92,11 @@ async fn start_cluster() -> Cluster {
 
     let controller_dir = TempDir::new().unwrap();
     let ctrl_cfg = topology.config(
-        0,
         controller_dir.path(),
-        BootstrapMode::Bootstrap,
-        NodeRole::Controller,
+        crate::support::RoleNodeSetup {
+            role: NodeRole::Controller,
+            ..Default::default()
+        },
     );
     let controller = support::start_held_node(
         ctrl_cfg,
@@ -110,7 +111,14 @@ async fn start_cluster() -> Cluster {
     for index in 1..NODES {
         let primary = TempDir::new().unwrap();
         let extra = TempDir::new().unwrap();
-        let mut cfg = topology.config(index, primary.path(), BootstrapMode::Join, NodeRole::Broker);
+        let mut cfg = topology.config(
+            primary.path(),
+            crate::support::RoleNodeSetup {
+                index: crate::support::NodeIndex(index),
+                mode: BootstrapMode::Join,
+                ..Default::default()
+            },
+        );
         cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
         cfg.replica_lag_time_max = krabka_units::minutes(10);
         apply_server_properties(&mut cfg);

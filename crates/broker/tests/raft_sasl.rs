@@ -64,7 +64,7 @@ fn sasl_broker_config(log_dir: &std::path::Path, setup: SaslBrokerSetup<'_>) -> 
     } = setup;
     let (ctrl, ctrl_addr) = controller;
     let (plain_user, plain_pass) = credentials;
-    let mut cfg = crate::support::node_config(slot.0, log_dir);
+    let mut cfg = crate::support::node_config(crate::support::NodeIndex(slot.0), log_dir);
     cfg.listen_addr = data_addr;
     cfg.advertised_listener = data_addr.to_string();
     cfg.controller_listen_addr = ctrl_addr;
@@ -346,7 +346,7 @@ async fn controller_listener_plaintext_legacy_path_unchanged() {
 
     // Plain (no SASL) configs: don't use sasl_broker_config because we
     // want zero auth on either listener (legacy path).
-    let mut c1 = crate::support::node_config(0, dir1.path());
+    let mut c1 = crate::support::node_config(crate::support::NodeIndex(0), dir1.path());
     c1.listen_addr = data_listen_addr();
     c1.advertised_listener = data_listen_addr().to_string();
     c1.controller_listen_addr = ctrl_addrs[0];
@@ -354,7 +354,7 @@ async fn controller_listener_plaintext_legacy_path_unchanged() {
     c1.bootstrap_mode = BootstrapMode::Bootstrap;
     c1.controller_listener_protocol = ListenerProtocol::Plaintext;
 
-    let mut c2 = crate::support::node_config(1, dir2.path());
+    let mut c2 = crate::support::node_config(crate::support::NodeIndex(1), dir2.path());
     c2.listen_addr = data_listen_addr();
     c2.advertised_listener = data_listen_addr().to_string();
     c2.controller_listen_addr = ctrl_addrs[1];
