@@ -346,6 +346,7 @@ mod cli_support;
 mod config_table;
 mod container_fixtures;
 mod cross_storage_fixtures;
+mod deterministic_random;
 mod dispatch;
 mod enum_str;
 mod field_defaults;
@@ -829,4 +830,10 @@ function_macros! {
 #[moxy::attribute]
 pub fn s3_fields(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     s3_fields::expand(meta, item)
+}
+
+function_macros! {
+    /// Define a named `SplitMix64` step that advances the caller's stream state.
+    /// Placement shuffles and benchmark byte streams share the exact same arithmetic.
+    splitmix64_step => deterministic_random::splitmix64_step;
 }
