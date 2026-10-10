@@ -21,12 +21,12 @@ use krabka_protocol::{
 
 use super::{FIRST_TOPIC_ID_VERSION, handle};
 use crate::{
-    authorizer::{AllowAllAuthorizer, Authorizer},
+    authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
     test_support::{
         DenyAll, decode_response, encode_request, peer, principal,
-        start_broker_with_authorizer_no_audit,
+        start_broker_with_authorizer_no_audit as start,
     },
 };
 
@@ -76,10 +76,6 @@ fn appended_partition(version: i16) -> PartitionProduceResponse {
         log_start_offset: if version >= 5 { 0 } else { -1 },
         ..Default::default()
     }
-}
-
-async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with_authorizer_no_audit(authorizer).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {

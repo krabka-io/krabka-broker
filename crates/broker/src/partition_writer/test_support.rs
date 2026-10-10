@@ -318,3 +318,13 @@ pub(super) async fn single_replica_options() -> WriterOptions {
         ..Default::default()
     }
 }
+
+/// A running writer with a one-slot queue, retaining caller ownership of its log.
+pub(super) fn spawn_default_writer(
+    path: &std::path::Path,
+    log: Arc<Mutex<Log>>,
+) -> (mpsc::Sender<WriterMessage>, tokio::task::JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel(1);
+    let writer = spawn_writer(path, log, rx, WriterOptions::default());
+    (tx, writer)
+}

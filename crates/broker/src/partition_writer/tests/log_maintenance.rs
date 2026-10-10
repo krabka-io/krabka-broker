@@ -6,14 +6,13 @@ use krabka_log::{LogConfig, Offset};
 use tempfile::tempdir;
 
 use super::*;
-use crate::partition_writer::test_support::sample_batch;
+use crate::partition_writer::test_support::{sample_batch, spawn_default_writer};
 
 #[tokio::test]
 async fn writer_set_log_config_swaps_config() {
     let dir = tempdir().expect("tempdir");
     let log = open_default_log(dir.path());
-    let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions::default());
+    let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
 
     let new_cfg = LogConfig {
         retention: Some(krabka_units::minutes(2)),
@@ -51,8 +50,7 @@ async fn writer_trim_to_offset_advances_log_start() {
             .expect("append");
     }
 
-    let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions::default());
+    let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
 
     let (ack, ack_rx) = tokio::sync::oneshot::channel();
     tx.send(WriterMessage::TrimToOffset {
@@ -97,11 +95,15 @@ async fn writer_flush_timer_runs_after_a_live_config_change_without_another_appe
         let flushed = std::sync::Arc::new(tokio::sync::Notify::new());
         {
             let mut log = log.lock().unwrap();
-            log.append(&mut sample_batch(2)).unwrap();
+            log.append(&mut sample_batch(
+                crate::test_support::EmptyPayloadBatchSetup {
+                    count: crate::test_support::RecordCount(2),
+                },
+            ))
+            .unwrap();
             log.test_set_io(std::sync::Arc::new(ObserveFlush(flushed.clone())));
         }
-        let (tx, rx) = mpsc::channel(1);
-        let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions::default());
+        let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
         let (ack, ack_rx) = tokio::sync::oneshot::channel();
         tx.send(WriterMessage::SetLogConfig { config, ack })
             .await

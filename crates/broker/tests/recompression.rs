@@ -230,14 +230,13 @@ fn stored_owned_batches_honor_every_codec_level() {
                 ..batch_from_records(vec![value_record(0, Some(Bytes::from(value)))])
             };
             let (base, _) = log.append(&mut batch).unwrap();
-            let mut expected = bytes::BytesMut::new();
-            batch
-                .encode_with_compression_level(&mut expected, Some(level))
-                .unwrap();
+            let expected = encoded_at_level(&batch, CompressionLevel(level));
             let stored = log
                 .read_raw(base, log.log_end_offset(), gibibytes(1))
                 .unwrap();
-            check!(stored.bytes == expected.freeze(), "{codec:?} level={level}");
+            check!(stored.bytes == expected, "{codec:?} level={level}");
         }
     }
 }
+
+krabka_macros::compression_bytes_fixture!(encoded_at_level, CompressionLevel);

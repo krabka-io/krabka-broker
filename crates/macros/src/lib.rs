@@ -840,3 +840,8 @@ function_macros! {
     /// Placement shuffles and benchmark byte streams share the exact same arithmetic.
     splitmix64_step => deterministic_random::splitmix64_step;
 }
+
+function_macros! {
+    /// Generate an independent compression-byte oracle with a named codec level.
+    compression_bytes_fixture => cross_storage_fixtures::compression_bytes_fixture;
+}

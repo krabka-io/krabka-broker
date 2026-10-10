@@ -28,11 +28,11 @@ use super::{
     FIRST_TOPIC_ID_VERSION, test_support::expected_refused_partition as refused_partition,
 };
 use crate::{
-    authorizer::{AllowAllAuthorizer, Authorizer},
+    authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
     fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID},
-    test_support::{DenyAll, start_broker_with_authorizer_no_audit},
+    test_support::{DenyAll, start_broker_with_authorizer_no_audit as start},
 };
 
 /// An id that no topic in these tests has.
@@ -90,10 +90,6 @@ fn fetch_topic(name: &str, topic_id: WireUuid) -> FetchTopic {
         }],
         ..Default::default()
     }
-}
-
-async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with_authorizer_no_audit(authorizer).await
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
