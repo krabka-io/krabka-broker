@@ -17,7 +17,7 @@ use crate::leader_election::test_support::{
 async fn preferred_happy_path() {
     let img = img_with_partition(ElectionSetup {
         topic: "foo",
-        leader: 2,
+        leader: krabka_raft::NodeId(2),
         ..Default::default()
     });
     let l = alive_set(&[1, 2, 3]);
@@ -33,8 +33,12 @@ async fn preferred_happy_path() {
     let expected =
         crate::leader_election::test_support::expected_partition(ExpectedPartitionSetup {
             topic: "foo",
-            leader: 1,
-            isr: &[1, 2, 3],
+            leader: krabka_raft::NodeId(1),
+            isr: &[
+                krabka_raft::NodeId(1),
+                krabka_raft::NodeId(2),
+                krabka_raft::NodeId(3),
+            ],
             ..Default::default()
         });
     assert!(new_pr == expected);
@@ -45,7 +49,7 @@ async fn preferred_election_rejects_exhausted_metadata_epochs() {
     for (partition_epoch, leader_epoch) in [(i32::MAX, 5), (0, i32::MAX)] {
         let mut img = img_with_partition(ElectionSetup {
             topic: "foo",
-            leader: 2,
+            leader: krabka_raft::NodeId(2),
             ..Default::default()
         });
         let mut record = img.partition("foo", 0).expect("seeded partition").clone();
@@ -88,8 +92,8 @@ async fn preferred_election_error_cases() {
     for (leader, isr, alive, expected) in cases {
         let img = img_with_partition(ElectionSetup {
             topic: "foo",
-            leader,
-            isr,
+            leader: krabka_raft::NodeId(leader),
+            isr: &crate::test_support::replica_nodes(isr),
             ..Default::default()
         });
         let l = alive_set(alive);
@@ -114,7 +118,7 @@ async fn unclean_happy_path() {
     // ISR is just {1}, broker 1 is dead, brokers 2/3 are alive.
     let img = img_with_partition(ElectionSetup {
         topic: "foo",
-        isr: &[1],
+        isr: &[krabka_raft::NodeId(1)],
         ..Default::default()
     });
     let l = alive_set(&[2, 3]);
@@ -124,7 +128,7 @@ async fn unclean_happy_path() {
     let expected =
         crate::leader_election::test_support::expected_partition(ExpectedPartitionSetup {
             topic: "foo",
-            isr: &[2],
+            isr: &[krabka_raft::NodeId(2)],
             ..Default::default()
         });
     assert!(new_pr == expected);
@@ -134,7 +138,7 @@ async fn unclean_happy_path() {
 async fn unclean_no_alive_replicas() {
     let img = img_with_partition(ElectionSetup {
         topic: "foo",
-        isr: &[1],
+        isr: &[krabka_raft::NodeId(1)],
         ..Default::default()
     });
     let l = alive_set(&[]); // everyone dead
@@ -148,7 +152,7 @@ async fn unclean_no_alive_replicas() {
 async fn unclean_isr_member_alive_returns_election_not_needed() {
     let img = img_with_partition(ElectionSetup {
         topic: "foo",
-        isr: &[1, 2],
+        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
         ..Default::default()
     });
     let l = alive_set(&[1, 2]); // ISR has live member
@@ -180,7 +184,7 @@ async fn preferred_election_refuses_a_witness_preferred_replica() {
     // preferred replica can never lead.
     let img = img_with_partition(ElectionSetup {
         topic: "foo",
-        leader: 2,
+        leader: krabka_raft::NodeId(2),
         ..Default::default()
     });
     let l = alive_set(&[1, 2, 3]);
@@ -203,7 +207,7 @@ async fn operator_unclean_election_skips_a_witness_replica() {
     // it must not report the election as unneeded either.
     let img = img_with_partition(ElectionSetup {
         topic: "foo",
-        isr: &[1, 2],
+        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
         ..Default::default()
     });
     let l = alive_set(&[2, 3]);
@@ -219,8 +223,8 @@ async fn operator_unclean_election_skips_a_witness_replica() {
     let expected =
         crate::leader_election::test_support::expected_partition(ExpectedPartitionSetup {
             topic: "foo",
-            leader: 3,
-            isr: &[3],
+            leader: krabka_raft::NodeId(3),
+            isr: &[krabka_raft::NodeId(3)],
             ..Default::default()
         });
     assert!(new_pr == expected);
@@ -319,8 +323,8 @@ async fn elections_skip_a_replica_on_a_dead_log_dir() {
         let dirs: Vec<Uuid> = (1..=3).map(Uuid::from_u128).collect();
         let mut img = img_with_partition(ElectionSetup {
             topic: "foo",
-            leader,
-            isr,
+            leader: krabka_raft::NodeId(leader),
+            isr: &crate::test_support::replica_nodes(isr),
             dirs: &dirs,
             ..Default::default()
         });

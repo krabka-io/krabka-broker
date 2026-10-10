@@ -40,9 +40,9 @@ const NODE: u64 = 10;
 fn image_with_partition(leader: u64, replicas: &[u64]) -> MetadataImage {
     crate::leader_election::test_support::img_with_partition(
         crate::leader_election::test_support::ElectionSetup {
-            leader,
-            replicas,
-            isr: replicas,
+            leader: krabka_raft::NodeId(leader),
+            replicas: &crate::test_support::replica_nodes(replicas),
+            isr: &crate::test_support::replica_nodes(replicas),
             ..Default::default()
         },
     )
@@ -89,7 +89,7 @@ fn register_broker(img: &mut MetadataImage, node_id: u64, host: &str, port: u16)
         BrokerRegistrationRecord {
             host: host.into(),
             port,
-            ..crate::test_support::broker_registration(node_id)
+            ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
         },
     ));
 }
@@ -101,7 +101,7 @@ fn broker_record(node_id: u64, incarnation: Uuid) -> BrokerRegistrationRecord {
     BrokerRegistrationRecord {
         incarnation_id: incarnation,
         port: 1,
-        ..crate::test_support::broker_registration(node_id)
+        ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
     }
 }
 

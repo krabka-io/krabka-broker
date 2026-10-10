@@ -65,8 +65,8 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
         plan.changes
             == vec![MetadataRecord::V1Partition(expected_partition(
                 ExpectedPartitionSetup {
-                    leader: 1,
-                    isr: &[1, 2],
+                    leader: krabka_raft::NodeId(1),
+                    isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
                     leader_epoch: LeaderEpoch(5),
                     ..Default::default()
                 }
@@ -81,7 +81,7 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
 #[tokio::test]
 async fn a_published_membership_is_withdrawn_without_a_partition_change() {
     let mut image = img_with_partition(ElectionSetup {
-        isr: &[1, 2],
+        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
         ..Default::default()
     });
     crate::test_support::finalize_elr_version(&mut image);
@@ -108,8 +108,8 @@ async fn a_published_membership_is_withdrawn_without_a_partition_change() {
 #[tokio::test]
 async fn the_only_isr_member_restarting_uncleanly_leaves_the_partition_leaderless() {
     let mut image = img_with_partition(ElectionSetup {
-        leader: 3,
-        isr: &[3],
+        leader: krabka_raft::NodeId(3),
+        isr: &[krabka_raft::NodeId(3)],
         ..Default::default()
     });
     crate::test_support::finalize_elr_version(&mut image);
@@ -136,7 +136,7 @@ async fn the_only_isr_member_restarting_uncleanly_leaves_the_partition_leaderles
 #[tokio::test]
 async fn a_partition_the_returning_broker_leads_is_re_elected() {
     let image = img_with_partition(ElectionSetup {
-        leader: 3,
+        leader: krabka_raft::NodeId(3),
         ..Default::default()
     });
 
@@ -146,8 +146,8 @@ async fn a_partition_the_returning_broker_leads_is_re_elected() {
         plan.changes
             == vec![MetadataRecord::V1Partition(expected_partition(
                 ExpectedPartitionSetup {
-                    leader: 1,
-                    isr: &[1, 2],
+                    leader: krabka_raft::NodeId(1),
+                    isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
                     ..Default::default()
                 }
             ))]
@@ -160,7 +160,7 @@ async fn a_partition_the_returning_broker_leads_is_re_elected() {
 #[tokio::test]
 async fn a_partition_the_returning_broker_is_not_in_costs_nothing() {
     let image = img_with_partition(ElectionSetup {
-        isr: &[1, 2],
+        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
         ..Default::default()
     });
 

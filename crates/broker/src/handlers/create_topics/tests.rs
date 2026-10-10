@@ -314,7 +314,7 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(
                 krabka_metadata::BrokerRegistrationRecord {
                     broker_epoch: -1,
-                    ..crate::test_support::broker_registration(node_id)
+                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
                 },
             )])
             .await
@@ -703,7 +703,7 @@ async fn diskless_wal_validation_names_the_active_leader_of_a_manual_assignment(
         local_object_store(object_store)
     );
     for node_id in [2, 3] {
-        crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+        crate::test_support::seed_remote_broker(&broker_handle, krabka_raft::NodeId(node_id)).await;
     }
     crate::test_support::fence_remote_broker(&broker_handle, 2).await;
     let req = request(vec![CreatableTopic {
@@ -1300,7 +1300,8 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
     for (fenced, witnesses, lists, error_code, error_message, partitions) in rows {
         broker_fixture!((broker_handle, _dir, broker), allow_all);
         for node_id in [2, 3, 4] {
-            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+            crate::test_support::seed_remote_broker(&broker_handle, krabka_raft::NodeId(node_id))
+                .await;
         }
         for &node_id in witnesses {
             crate::test_support::make_witness(&broker_handle, node_id).await;
@@ -1428,7 +1429,8 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
     for (fenced, shutting_down, rf, outcome) in rows {
         broker_fixture!((broker_handle, _dir, broker), allow_all);
         for node_id in [2, 3] {
-            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+            crate::test_support::seed_remote_broker(&broker_handle, krabka_raft::NodeId(node_id))
+                .await;
         }
         for &node_id in fenced {
             crate::test_support::fence_remote_broker(&broker_handle, node_id).await;

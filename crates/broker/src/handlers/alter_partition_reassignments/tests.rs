@@ -32,13 +32,13 @@ async fn seed_reassignable_partition(broker: &Broker) {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
                 broker_epoch: -1,
                 host: "localhost".into(),
-                ..crate::test_support::broker_registration(1)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(1))
             }),
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
                 broker_epoch: -1,
                 host: "localhost".into(),
                 port: 9093,
-                ..crate::test_support::broker_registration(2)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: "orders".into(),
@@ -74,7 +74,7 @@ async fn seed_cancellable_partition(broker: &Broker) {
                 broker_epoch: -1,
                 host: "localhost".into(),
                 port: 9092 + u16::try_from(node).expect("node id fits u16"),
-                ..crate::test_support::broker_registration(node)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
             })
         })
         .collect();

@@ -135,6 +135,7 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed) {
 mod tests {
     use assert2::check;
     use bytes::Bytes;
+    use krabka_ids::PartitionIndex;
     use krabka_protocol::owned::heartbeat_request::HeartbeatRequest;
 
     use super::*;
@@ -149,6 +150,7 @@ mod tests {
                 TargetAssignmentMemberValue,
             },
             reconciler::ReconcileInput,
+            test_support::MemberEpoch,
         },
     };
 
@@ -181,21 +183,32 @@ mod tests {
     /// hosts one classic member: a k5 with the classic sub-state, a k7 target
     /// of `target`, and a k8 current assignment at `member_epoch` in `state`
     /// of `assigned` with `pending` awaiting revocation.
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct HostedCurrentSetup {
+        #[default(MemberEpoch(5))]
+        epoch: MemberEpoch,
+        #[default(MemberAssignmentState::Stable)]
+        state: MemberAssignmentState,
+    }
+
     #[derive(krabka_macros::FieldDefaults)]
     struct HostedClassicSetup {
-        #[default(vec![0, 1])]
-        target: Vec<i32>,
-        #[default((5, MemberAssignmentState::Stable))]
-        current: (i32, MemberAssignmentState),
-        #[default(vec![0, 1])]
-        assigned: Vec<i32>,
-        pending: Vec<i32>,
+        #[default(vec![PartitionIndex(0), PartitionIndex(1)])]
+        target: Vec<PartitionIndex>,
+        current: HostedCurrentSetup,
+        #[default(vec![PartitionIndex(0), PartitionIndex(1)])]
+        assigned: Vec<PartitionIndex>,
+        pending: Vec<PartitionIndex>,
     }
 
     fn hosted_classic_seed(setup: HostedClassicSetup) -> GroupSeed {
         let HostedClassicSetup {
             target,
-            current: (member_epoch, state),
+            current:
+                HostedCurrentSetup {
+                    epoch: member_epoch,
+                    state,
+                },
             assigned,
             pending,
         } = setup;
@@ -223,7 +236,7 @@ mod tests {
                 TargetAssignmentMemberValue {
                     topic_partitions: vec![AssignedTopicPartitions {
                         topic_id: TOPIC,
-                        partitions: target,
+                        partitions: target.into_iter().map(|index| index.0).collect(),
                     }],
                 },
             )]
@@ -231,17 +244,17 @@ mod tests {
             current_per_member: [(
                 "m".to_string(),
                 CurrentMemberAssignmentValue {
-                    member_epoch,
-                    previous_member_epoch: member_epoch - 1,
+                    member_epoch: member_epoch.0,
+                    previous_member_epoch: member_epoch.0 - 1,
                     state,
                     assigned_partitions: vec![CurrentTopicPartitions {
                         topic_id: TOPIC,
-                        partitions: assigned,
+                        partitions: assigned.into_iter().map(|index| index.0).collect(),
                         assignment_epochs: None,
                     }],
                     partitions_pending_revocation: vec![CurrentTopicPartitions {
                         topic_id: TOPIC,
-                        partitions: pending,
+                        partitions: pending.into_iter().map(|index| index.0).collect(),
                         assignment_epochs: None,
                     }],
                 },
@@ -300,9 +313,12 @@ mod tests {
             apply_seed(
                 &mut state,
                 hosted_classic_seed(HostedClassicSetup {
-                    current,
-                    assigned: assigned.clone(),
-                    pending: pending.clone(),
+                    current: HostedCurrentSetup {
+                        epoch: MemberEpoch(current.0),
+                        state: current.1,
+                    },
+                    assigned: assigned.iter().copied().map(PartitionIndex).collect(),
+                    pending: pending.iter().copied().map(PartitionIndex).collect(),
                     ..Default::default()
                 }),
             );

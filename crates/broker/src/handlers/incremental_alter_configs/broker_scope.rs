@@ -231,7 +231,7 @@ mod tests {
         image.apply(&MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
                 port: 9093,
-                ..crate::test_support::broker_registration(2)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
             },
         ));
         for (node, key, value) in configs {

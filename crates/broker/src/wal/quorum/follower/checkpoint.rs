@@ -208,10 +208,15 @@ mod tests {
     /// here is a change to the 1.x on-disk contract.
     const GOLDEN_CHECKPOINT: &str = "0\n3 7\n";
 
-    fn checkpoint_log(records: i32) -> (tempfile::TempDir, std::path::PathBuf, Log) {
+    fn empty_checkpoint_log() -> (tempfile::TempDir, std::path::PathBuf, Log) {
         let dir = tempfile::tempdir().unwrap();
         let checkpoint = dir.path().join(DURABLE_OFFSET_FILE);
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        (dir, checkpoint, log)
+    }
+
+    fn checkpoint_log(records: i32) -> (tempfile::TempDir, std::path::PathBuf, Log) {
+        let (dir, checkpoint, mut log) = empty_checkpoint_log();
         let mut batch = crate::wal::quorum::test_support::batch(records);
         log.append(&mut batch).unwrap();
         (dir, checkpoint, log)
@@ -306,9 +311,7 @@ mod tests {
 
     #[test]
     fn follower_recovery_discards_a_suffix_beyond_the_durable_checkpoint() {
-        let dir = tempfile::tempdir().unwrap();
-        let checkpoint = dir.path().join(DURABLE_OFFSET_FILE);
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (dir, checkpoint, mut log) = empty_checkpoint_log();
         let mut durable = RecordBatch {
             base_offset: 0,
             records: vec![Record::default()],

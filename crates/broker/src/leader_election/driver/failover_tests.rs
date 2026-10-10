@@ -105,7 +105,7 @@ async fn on_broker_dead_bounds_a_stalled_commit() {
 async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
     // Partition t-0: leader 1, ISR {1, 2}. Replica 3 is out of the ISR.
     let img = img_with_partition(ElectionSetup {
-        isr: &[1, 2],
+        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
         ..Default::default()
     });
     let source = fake_source(img, Some(NodeId(7)));
@@ -171,7 +171,7 @@ async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
     assert!(batches.len() == 1);
     let expected =
         crate::leader_election::test_support::expected_partition(ExpectedPartitionSetup {
-            isr: &[2],
+            isr: &[krabka_raft::NodeId(2)],
             ..Default::default()
         });
     assert!(*one_partition_change(&batches[0]) == expected);
@@ -184,14 +184,14 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
     struct Case {
         name: &'static str,
         controller_leader: Option<NodeId>,
-        leader: u64,
-        isr: &'static [u64],
+        leader: NodeId,
+        isr: &'static [NodeId],
         dead: &'static [u64],
         alive: &'static [u64],
         expected: Option<PartitionRecord>,
     }
     let base = crate::leader_election::test_support::expected_partition(ExpectedPartitionSetup {
-        leader: 1,
+        leader: krabka_raft::NodeId(1),
         isr: &[],
         leader_epoch: LeaderEpoch(5),
         ..Default::default()
@@ -200,8 +200,12 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         Case {
             name: "dead leader still leads: elect an alive ISR member",
             controller_leader: Some(NodeId(7)),
-            leader: 1,
-            isr: &[1, 2, 3],
+            leader: NodeId(1),
+            isr: &[
+                krabka_raft::NodeId(1),
+                krabka_raft::NodeId(2),
+                krabka_raft::NodeId(3),
+            ],
             dead: &[1],
             alive: &[2, 3],
             expected: Some(PartitionRecord {
@@ -214,8 +218,12 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         Case {
             name: "dead ISR member: shrink the ISR without an epoch bump",
             controller_leader: Some(NodeId(7)),
-            leader: 1,
-            isr: &[1, 2, 3],
+            leader: NodeId(1),
+            isr: &[
+                krabka_raft::NodeId(1),
+                krabka_raft::NodeId(2),
+                krabka_raft::NodeId(3),
+            ],
             dead: &[2],
             alive: &[1, 3],
             expected: Some(PartitionRecord {
@@ -226,8 +234,8 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         Case {
             name: "failover already done: dead broker is a plain replica",
             controller_leader: Some(NodeId(7)),
-            leader: 2,
-            isr: &[2, 3],
+            leader: NodeId(2),
+            isr: &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
             dead: &[1],
             alive: &[2, 3],
             expected: None,
@@ -235,8 +243,12 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         Case {
             name: "not the controller leader: no re-drive",
             controller_leader: Some(NodeId(8)),
-            leader: 1,
-            isr: &[1, 2, 3],
+            leader: NodeId(1),
+            isr: &[
+                krabka_raft::NodeId(1),
+                krabka_raft::NodeId(2),
+                krabka_raft::NodeId(3),
+            ],
             dead: &[1],
             alive: &[2, 3],
             expected: None,
@@ -271,8 +283,8 @@ async fn sweep_walks_the_image_once_per_change_while_a_dead_broker_stays_resolve
     // walks the image once, records that nothing is stuck, and skips the
     // walk on later ticks until the image or the dead set changes.
     let mut img = img_with_partition(ElectionSetup {
-        leader: 2,
-        isr: &[2, 3],
+        leader: krabka_raft::NodeId(2),
+        isr: &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
         ..Default::default()
     });
     register_brokers(&mut img, &[1, 2, 3]);

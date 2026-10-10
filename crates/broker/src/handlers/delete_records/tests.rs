@@ -697,7 +697,7 @@ async fn register_follower(broker_handle: &crate::broker::BrokerHandle) {
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
                 broker_epoch: -1,
-                ..crate::test_support::broker_registration(FOLLOWER)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(FOLLOWER))
             },
         ))
         .await

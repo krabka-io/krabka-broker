@@ -498,7 +498,7 @@ fn resolve_image() -> krabka_metadata::MetadataImage {
                 host: "legacy".into(),
                 port: 1000,
                 endpoints,
-                ..crate::test_support::broker_registration(node)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
             },
         ));
     }
@@ -728,7 +728,7 @@ async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
                 broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(2),
                 port: 9094,
-                ..crate::test_support::broker_registration(other.0)
+                ..crate::test_support::broker_registration(other)
             },
         )])
         .await

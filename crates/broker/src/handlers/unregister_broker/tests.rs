@@ -258,7 +258,7 @@ fn registration(setup: RegistrationSetup) -> MetadataRecord {
         broker_epoch: -1,
         incarnation_id: Uuid::from_u128(u128::from(node_id.0)),
         host: format!("broker-{}", node_id.0),
-        ..crate::test_support::broker_registration(node_id.0)
+        ..crate::test_support::broker_registration(node_id)
     })
 }
 

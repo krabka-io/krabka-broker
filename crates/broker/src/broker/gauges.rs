@@ -393,7 +393,7 @@ mod tests {
             image.apply(&krabka_metadata::MetadataRecord::V1BrokerRegistration(
                 krabka_metadata::BrokerRegistrationRecord {
                     rack: Some(node_rack.to_string()),
-                    ..crate::test_support::broker_registration(node_id)
+                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
                 },
             ));
         }

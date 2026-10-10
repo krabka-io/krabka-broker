@@ -208,7 +208,7 @@ mod tests {
                 port: 9092,
                 protocol: krabka_security::ListenerProtocol::Plaintext,
             }],
-            ..crate::test_support::broker_registration(id)
+            ..crate::test_support::broker_registration(krabka_raft::NodeId(id))
         })
     }
 

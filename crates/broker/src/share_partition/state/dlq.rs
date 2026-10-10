@@ -159,13 +159,24 @@ mod tests {
         share_coordinator::coordinator::test_support::state_batch as batch,
         share_partition::state::{
             AckType, AcquiredRange, DS_ARCHIVING,
-            test_support::{LOCK, acquire_window, dlq_range as range, t0},
+            test_support::{
+                AcquiredWindowSetup, DeadLetterQueue, DlqRangeSetup, LOCK, acquire_window,
+                dlq_range as range, t0,
+            },
         },
+        test_support::RecordCount,
     };
 
     fn state_with_dlq(records: i64) -> AcquisitionState {
         let mut s = AcquisitionState::new(Offset(0));
-        acquire_window(&mut s, records, 100, true);
+        acquire_window(
+            &mut s,
+            AcquiredWindowSetup {
+                end: Offset(records),
+                record_limit: RecordCount(100),
+                dead_letter_queue: DeadLetterQueue::Enabled,
+            },
+        );
         s
     }
 
@@ -192,7 +203,11 @@ mod tests {
             ) == (
                 Offset(0),
                 2,
-                vec![range(0, 1, 1, Some(DlqCause::ClientReject))],
+                vec![range(DlqRangeSetup {
+                    last: Offset(1),
+                    cause: Some(DlqCause::ClientReject),
+                    ..Default::default()
+                })],
                 vec![
                     (0, RecordState::Archiving),
                     (1, RecordState::Archiving),
@@ -243,7 +258,11 @@ mod tests {
                     s.record_states(),
                     s.delivery_complete_count(),
                 ) == (
-                    vec![range(0, 1, 1, Some(DlqCause::DeliveryCountExceeded))],
+                    vec![range(DlqRangeSetup {
+                        last: Offset(1),
+                        cause: Some(DlqCause::DeliveryCountExceeded),
+                        ..Default::default()
+                    })],
                     vec![(0, RecordState::Archiving), (1, RecordState::Archiving)],
                     0,
                 ),
@@ -269,7 +288,10 @@ mod tests {
             (acquired, s.take_pending_dlq(), s.record_states())
                 == (
                     Vec::<AcquiredRange>::new(),
-                    vec![range(0, 0, 1, Some(DlqCause::DeliveryCountExceeded))],
+                    vec![range(DlqRangeSetup {
+                        cause: Some(DlqCause::DeliveryCountExceeded),
+                        ..Default::default()
+                    })],
                     vec![(0, RecordState::Archiving)],
                 )
         );
@@ -351,7 +373,10 @@ mod tests {
         assert!(
             (pending, spso, after)
                 == (
-                    vec![range(0, 1, 1, None)],
+                    vec![range(DlqRangeSetup {
+                        last: Offset(1),
+                        ..Default::default()
+                    })],
                     Offset(2),
                     vec![batch(2, 2, crate::share_partition::state::DS_AVAILABLE, 1)],
                 )

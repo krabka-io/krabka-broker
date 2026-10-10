@@ -159,9 +159,13 @@ mod tests {
             manager::test_support::manager_with_dlq,
             state::{
                 AckType, AcquisitionState, DlqCause, RecordState,
-                test_support::{acquire_window, dlq_range as range},
+                test_support::{
+                    AcquiredWindowSetup, DeadLetterQueue, DeliveryCount, DlqRangeSetup,
+                    acquire_window, dlq_range as range,
+                },
             },
         },
+        test_support::RecordCount,
     };
 
     /// A sink that keeps each write in flight for a few polls, and remembers
@@ -198,7 +202,14 @@ mod tests {
         let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
         {
             let mut state = cell.lock().await;
-            acquire_window(&mut state, records, 100, true);
+            acquire_window(
+                &mut state,
+                AcquiredWindowSetup {
+                    end: Offset(records),
+                    record_limit: RecordCount(100),
+                    dead_letter_queue: DeadLetterQueue::Enabled,
+                },
+            );
         }
         cell
     }
@@ -317,39 +328,131 @@ mod tests {
     fn coalesce_joins_only_neighbours_with_one_count_and_cause() {
         let reject = Some(DlqCause::ClientReject);
         let exceeded = Some(DlqCause::DeliveryCountExceeded);
+        let rejected_offsets_0_0_delivery_1 = range(DlqRangeSetup {
+            cause: reject,
+            ..Default::default()
+        });
+        let rejected_offsets_0_2_delivery_1 = range(DlqRangeSetup {
+            last: Offset(2),
+            cause: reject,
+            ..Default::default()
+        });
+        let rejected_offsets_2_2_delivery_1 = range(DlqRangeSetup {
+            first: Offset(2),
+            last: Offset(2),
+            cause: reject,
+            ..Default::default()
+        });
+        let rejected_offsets_1_1_delivery_2 = range(DlqRangeSetup {
+            first: Offset(1),
+            last: Offset(1),
+            delivery_count: DeliveryCount(2),
+            cause: reject,
+        });
+        let rejected_offsets_0_0_delivery_5 = range(DlqRangeSetup {
+            delivery_count: DeliveryCount(5),
+            cause: reject,
+            ..Default::default()
+        });
+        let exceeded_offsets_1_1_delivery_5 = range(DlqRangeSetup {
+            first: Offset(1),
+            last: Offset(1),
+            delivery_count: DeliveryCount(5),
+            cause: exceeded,
+        });
+        let exceeded_offsets_0_0_delivery_5 = range(DlqRangeSetup {
+            delivery_count: DeliveryCount(5),
+            cause: exceeded,
+            ..Default::default()
+        });
+        let restored_offsets_1_1_delivery_5 = range(DlqRangeSetup {
+            first: Offset(1),
+            last: Offset(1),
+            delivery_count: DeliveryCount(5),
+            ..Default::default()
+        });
         let cases = [
             (vec![], vec![]),
             (
-                vec![range(0, 0, 1, reject), range(1, 2, 1, reject)],
-                vec![range(0, 2, 1, reject)],
-            ),
-            (
-                vec![range(3, 3, 1, reject), range(0, 2, 1, reject)],
-                vec![range(0, 3, 1, reject)],
+                vec![
+                    rejected_offsets_0_0_delivery_1,
+                    range(DlqRangeSetup {
+                        first: Offset(1),
+                        last: Offset(2),
+                        cause: reject,
+                        ..Default::default()
+                    }),
+                ],
+                vec![rejected_offsets_0_2_delivery_1],
             ),
             (
                 vec![
-                    range(0, 0, 1, reject),
-                    range(1, 1, 1, reject),
-                    range(2, 2, 1, reject),
+                    range(DlqRangeSetup {
+                        first: Offset(3),
+                        last: Offset(3),
+                        cause: reject,
+                        ..Default::default()
+                    }),
+                    rejected_offsets_0_2_delivery_1,
                 ],
-                vec![range(0, 2, 1, reject)],
+                vec![range(DlqRangeSetup {
+                    last: Offset(3),
+                    cause: reject,
+                    ..Default::default()
+                })],
             ),
             (
-                vec![range(0, 0, 1, reject), range(2, 2, 1, reject)],
-                vec![range(0, 0, 1, reject), range(2, 2, 1, reject)],
+                vec![
+                    rejected_offsets_0_0_delivery_1,
+                    range(DlqRangeSetup {
+                        first: Offset(1),
+                        last: Offset(1),
+                        cause: reject,
+                        ..Default::default()
+                    }),
+                    rejected_offsets_2_2_delivery_1,
+                ],
+                vec![rejected_offsets_0_2_delivery_1],
             ),
             (
-                vec![range(0, 0, 1, reject), range(1, 1, 2, reject)],
-                vec![range(0, 0, 1, reject), range(1, 1, 2, reject)],
+                vec![
+                    rejected_offsets_0_0_delivery_1,
+                    rejected_offsets_2_2_delivery_1,
+                ],
+                vec![
+                    rejected_offsets_0_0_delivery_1,
+                    rejected_offsets_2_2_delivery_1,
+                ],
             ),
             (
-                vec![range(0, 0, 5, reject), range(1, 1, 5, exceeded)],
-                vec![range(0, 0, 5, reject), range(1, 1, 5, exceeded)],
+                vec![
+                    rejected_offsets_0_0_delivery_1,
+                    rejected_offsets_1_1_delivery_2,
+                ],
+                vec![
+                    rejected_offsets_0_0_delivery_1,
+                    rejected_offsets_1_1_delivery_2,
+                ],
             ),
             (
-                vec![range(0, 0, 5, exceeded), range(1, 1, 5, None)],
-                vec![range(0, 0, 5, exceeded), range(1, 1, 5, None)],
+                vec![
+                    rejected_offsets_0_0_delivery_5,
+                    exceeded_offsets_1_1_delivery_5,
+                ],
+                vec![
+                    rejected_offsets_0_0_delivery_5,
+                    exceeded_offsets_1_1_delivery_5,
+                ],
+            ),
+            (
+                vec![
+                    exceeded_offsets_0_0_delivery_5,
+                    restored_offsets_1_1_delivery_5,
+                ],
+                vec![
+                    exceeded_offsets_0_0_delivery_5,
+                    restored_offsets_1_1_delivery_5,
+                ],
             ),
         ];
 

@@ -25,7 +25,7 @@ fn registration(node_id: u64) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
         fenced: true,
         incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),
-        ..crate::test_support::broker_registration(node_id)
+        ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
     })
 }
 

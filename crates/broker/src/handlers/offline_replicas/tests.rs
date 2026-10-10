@@ -33,7 +33,7 @@ fn registration_on(node_id: u64, log_dirs: Vec<Uuid>, listener: &str) -> Metadat
             protocol: krabka_security::ListenerProtocol::Plaintext,
         }],
         log_dirs,
-        ..crate::test_support::broker_registration(node_id)
+        ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
     })
 }
 

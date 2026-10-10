@@ -394,7 +394,7 @@ mod tests {
             BrokerRegistrationRecord {
                 // Discard port: refuses connections immediately.
                 port: 9,
-                ..crate::test_support::broker_registration(2)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
             },
         ));
 

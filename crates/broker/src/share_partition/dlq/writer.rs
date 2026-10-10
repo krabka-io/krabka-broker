@@ -651,7 +651,7 @@ mod tests {
                 image.apply(&MetadataRecord::V1BrokerRegistration(
                     BrokerRegistrationRecord {
                         host: "h".into(),
-                        ..crate::test_support::broker_registration(*leader)
+                        ..crate::test_support::broker_registration(krabka_raft::NodeId(*leader))
                     },
                 ));
             }

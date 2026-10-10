@@ -186,7 +186,7 @@ pub(super) fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
             port: 19092,
             protocol: krabka_security::ListenerProtocol::Plaintext,
         }],
-        ..crate::test_support::broker_registration(node_id.0)
+        ..crate::test_support::broker_registration(node_id)
     }
 }
 

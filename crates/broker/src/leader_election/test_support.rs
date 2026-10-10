@@ -21,10 +21,10 @@ use crate::{
 #[derive(Clone, Copy)]
 pub struct ElectionSetup<'a> {
     pub topic: &'a str,
-    pub partition: i32,
-    pub leader: u64,
-    pub replicas: &'a [u64],
-    pub isr: &'a [u64],
+    pub partition: krabka_ids::PartitionIndex,
+    pub leader: NodeId,
+    pub replicas: &'a [NodeId],
+    pub isr: &'a [NodeId],
     pub dirs: &'a [Uuid],
 }
 
@@ -32,10 +32,10 @@ impl Default for ElectionSetup<'_> {
     fn default() -> Self {
         Self {
             topic: "t",
-            partition: 0,
-            leader: 1,
-            replicas: &[1, 2, 3],
-            isr: &[1, 2, 3],
+            partition: krabka_ids::PartitionIndex(0),
+            leader: NodeId(1),
+            replicas: &[NodeId(1), NodeId(2), NodeId(3)],
+            isr: &[NodeId(1), NodeId(2), NodeId(3)],
             dirs: &[],
         }
     }
@@ -65,10 +65,10 @@ pub fn seed_partition(setup: ElectionSetup<'_>) -> PartitionRecord {
     } = setup;
     PartitionRecord {
         topic: topic.into(),
-        partition,
-        leader: NodeId(leader),
-        replicas: crate::test_support::replica_nodes(replicas),
-        isr: crate::test_support::replica_nodes(isr),
+        partition: partition.0,
+        leader,
+        replicas: replicas.to_vec(),
+        isr: isr.to_vec(),
         leader_epoch: LeaderEpoch(5),
         adding_replicas: vec![],
         removing_replicas: vec![],
@@ -104,8 +104,8 @@ pub async fn failover_with_alive(
 
 /// Independent expected result of a clean election for the three-replica fixture.
 pub fn expected_clean_election(
-    leader: u64,
-    isr: &[u64],
+    leader: NodeId,
+    isr: &[NodeId],
     directories: Vec<Uuid>,
 ) -> PartitionRecord {
     expected_partition(ExpectedPartitionSetup {
@@ -119,8 +119,8 @@ pub fn expected_clean_election(
 /// Independent expected partition after one change to the three-replica fixture.
 pub struct ExpectedPartitionSetup<'a> {
     pub topic: &'a str,
-    pub leader: u64,
-    pub isr: &'a [u64],
+    pub leader: NodeId,
+    pub isr: &'a [NodeId],
     pub leader_epoch: LeaderEpoch,
     pub directories: Vec<Uuid>,
 }
@@ -129,8 +129,8 @@ impl Default for ExpectedPartitionSetup<'_> {
     fn default() -> Self {
         Self {
             topic: "t",
-            leader: 2,
-            isr: &[2, 3],
+            leader: NodeId(2),
+            isr: &[NodeId(2), NodeId(3)],
             leader_epoch: LeaderEpoch(6),
             directories: vec![],
         }
@@ -148,9 +148,9 @@ pub fn expected_partition(setup: ExpectedPartitionSetup<'_>) -> PartitionRecord 
     PartitionRecord {
         topic: topic.into(),
         partition: 0,
-        leader: NodeId(leader),
+        leader,
         replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: isr.iter().copied().map(NodeId).collect(),
+        isr: isr.to_vec(),
         leader_epoch,
         adding_replicas: vec![],
         removing_replicas: vec![],
@@ -367,7 +367,7 @@ pub fn register_broker_with_dirs(img: &mut MetadataImage, id: u64, log_dirs: Vec
         krabka_metadata::BrokerRegistrationRecord {
             incarnation_id: Uuid::from_u128(u128::from(id)),
             log_dirs,
-            ..crate::test_support::broker_registration(id)
+            ..crate::test_support::broker_registration(krabka_raft::NodeId(id))
         },
     ));
 }

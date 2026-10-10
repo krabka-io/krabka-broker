@@ -481,7 +481,7 @@ fn image_of(
     let mut records = vec![MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
             rack: broker_rack.map(str::to_owned),
-            ..crate::test_support::broker_registration(broker.0)
+            ..crate::test_support::broker_registration(broker)
         },
     )];
     for &(name, id, partitions) in topics {
@@ -682,8 +682,19 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         )
         .await;
 
-        let expected =
-            super::test_support::expected_active_response("m1", row.epoch, row.status, row.active);
+        let expected = super::test_support::expected_active_response(
+            super::test_support::ActiveResponseSetup {
+                epoch: crate::coordinator::unified::test_support::MemberEpoch(row.epoch),
+                status: row.status,
+                active: row.active.map(|partitions| {
+                    partitions
+                        .into_iter()
+                        .map(krabka_ids::PartitionIndex)
+                        .collect()
+                }),
+                ..Default::default()
+            },
+        );
         check!(resp == expected, "{}", row.name);
     }
 }
@@ -860,7 +871,17 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
         ..Default::default()
     };
     let expected = |member_id: &str, epoch, active: Option<Vec<i32>>| {
-        super::test_support::expected_active_response(member_id, epoch, Some(vec![]), active)
+        super::test_support::expected_active_response(super::test_support::ActiveResponseSetup {
+            member_id,
+            epoch: crate::coordinator::unified::test_support::MemberEpoch(epoch),
+            status: Some(vec![]),
+            active: active.map(|partitions| {
+                partitions
+                    .into_iter()
+                    .map(krabka_ids::PartitionIndex)
+                    .collect()
+            }),
+        })
     };
 
     let (before, _log) = make_coordinator();
@@ -1229,19 +1250,26 @@ async fn the_heartbeat_status_list_follows_kafka() {
         }
 
         let expected = super::test_support::expected_active_response(
-            row.member,
-            row.epoch,
-            Some(
-                row.status
-                    .iter()
-                    .map(|(status_code, detail)| Status {
-                        status_code: *status_code,
-                        status_detail: (*detail).into(),
-                        ..Default::default()
-                    })
-                    .collect(),
-            ),
-            row.active,
+            super::test_support::ActiveResponseSetup {
+                member_id: row.member,
+                epoch: crate::coordinator::unified::test_support::MemberEpoch(row.epoch),
+                status: Some(
+                    row.status
+                        .iter()
+                        .map(|(status_code, detail)| Status {
+                            status_code: *status_code,
+                            status_detail: (*detail).into(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                ),
+                active: row.active.map(|partitions| {
+                    partitions
+                        .into_iter()
+                        .map(krabka_ids::PartitionIndex)
+                        .collect()
+                }),
+            },
         );
         check!(last == Some(expected), "{}", row.name);
     }

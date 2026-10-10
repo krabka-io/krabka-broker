@@ -134,9 +134,9 @@ mod tests {
             let node = |id: &u64| NodeId(*id);
             let mut image = image_with_dir_partition(
                 crate::handlers::broker_heartbeat::test_support::ElectionSetup {
-                    leader: case.leader,
-                    replicas: &[1, 2],
-                    isr: case.isr,
+                    leader: krabka_raft::NodeId(case.leader),
+                    replicas: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+                    isr: &crate::test_support::replica_nodes(case.isr),
                     dirs: &[Uuid::nil(), Uuid::nil()],
                     ..Default::default()
                 },

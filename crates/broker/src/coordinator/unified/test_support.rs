@@ -17,6 +17,17 @@ use super::{
 };
 use crate::test_support::string_pairs;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct MemberEpoch(pub i32);
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct MemberEpochs {
+    #[default(MemberEpoch(6))]
+    pub current: MemberEpoch,
+    #[default(MemberEpoch(5))]
+    pub previous: MemberEpoch,
+}
+
 /// An active-only stable streams seed, with no standby, warmup or revocations.
 pub(crate) fn stable_streams_assignment(
     epochs: (i32, i32),

@@ -108,7 +108,7 @@ fn changed_topics_are_the_created_changed_and_deleted_topics() {
                     incarnation_id: Uuid::from_u128(3),
                     host: "broker-3".into(),
                     rack: Some("rack-c".into()),
-                    ..crate::test_support::broker_registration(3)
+                    ..crate::test_support::broker_registration(krabka_raft::NodeId(3))
                 },
             )],
             vec![],

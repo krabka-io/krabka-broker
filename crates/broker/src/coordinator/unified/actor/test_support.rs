@@ -10,6 +10,8 @@ use krabka_protocol::{
     owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest, primitives::uuid::Uuid,
 };
 
+use crate::coordinator::unified::test_support::MemberEpoch;
+
 pub(crate) mod rpc;
 
 use super::{GroupActorHandle, MetadataProvider};
@@ -530,12 +532,9 @@ pub(super) fn seeded_bidirectional_coordinator(
     (coordinator, log, handle)
 }
 
-#[derive(Clone, Copy, Default)]
-pub(super) struct NativeMemberEpoch(pub i32);
-
 pub(super) struct JoinedNativeConsumer {
     pub member_id: String,
-    pub epoch: NativeMemberEpoch,
+    pub epoch: MemberEpoch,
 }
 
 /// Join a group's first native consumer and retain its assigned identity and epoch.
@@ -544,7 +543,7 @@ pub(super) async fn join_native_consumer(handle: &Arc<GroupActorHandle>) -> Join
     assert!(response.error_code == codes::NONE);
     JoinedNativeConsumer {
         member_id: response.member_id.expect("native member id"),
-        epoch: NativeMemberEpoch(response.member_epoch),
+        epoch: MemberEpoch(response.member_epoch),
     }
 }
 

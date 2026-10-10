@@ -98,7 +98,7 @@ pub(super) fn img_with(setup: ReassignmentImageSetup<'_>) -> MetadataImage {
         img.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
                 host: "localhost".into(),
-                ..crate::test_support::broker_registration(n)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(n))
             },
         ));
     }

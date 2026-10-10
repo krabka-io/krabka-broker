@@ -140,7 +140,7 @@ mod tests {
             incarnation_id: Uuid::from_u128(u128::from(node_id)),
             host: format!("broker-{node_id}"),
             log_dirs: dirs.to_vec(),
-            ..crate::test_support::broker_registration(node_id)
+            ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
         }
     }
 
@@ -192,8 +192,8 @@ mod tests {
     fn two_replica_image(directories: &[Uuid]) -> krabka_metadata::MetadataImage {
         image_with_dir_partition(
             crate::handlers::broker_heartbeat::test_support::ElectionSetup {
-                replicas: &[1, 2],
-                isr: &[1, 2],
+                replicas: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+                isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
                 dirs: directories,
                 ..Default::default()
             },

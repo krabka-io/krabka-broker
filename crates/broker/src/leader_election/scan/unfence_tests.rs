@@ -26,7 +26,7 @@ use crate::{
 /// alone in its record, and with `published` as its ELR state.
 fn leaderless_image(published: &str) -> MetadataImage {
     let mut img = img_with_partition(ElectionSetup {
-        isr: &[1],
+        isr: &[krabka_raft::NodeId(1)],
         ..Default::default()
     });
     crate::test_support::finalize_elr_version(&mut img);
@@ -52,15 +52,36 @@ fn leaderless_image(published: &str) -> MetadataImage {
 /// bumps the epoch only when the leader changes, so the partition record stays
 /// whole and the ELR and recovery records follow it. Any other election is the
 /// one `V1PartitionUpdate` Kafka's `PartitionChangeRecord` is.
-fn elected(leader: u64, eligible: &[u64], recovering: bool) -> Vec<MetadataRecord> {
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ElectionRecovery {
+    #[default]
+    Complete,
+    Recovering,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct ElectedSetup<'a> {
+    #[default(NodeId(1))]
+    leader: NodeId,
+    eligible: &'a [NodeId],
+    recovery: ElectionRecovery,
+}
+
+fn elected(setup: ElectedSetup<'_>) -> Vec<MetadataRecord> {
+    let ElectedSetup {
+        leader,
+        eligible,
+        recovery,
+    } = setup;
     let partition = expected_partition(ExpectedPartitionSetup {
         leader,
         isr: &[leader],
         ..Default::default()
     });
-    let eligible: Vec<NodeId> = eligible.iter().copied().map(NodeId).collect();
-    let recovery = recovering.then_some(LeaderRecoveryState::Recovering);
-    if leader != 1 {
+    let eligible = eligible.to_vec();
+    let recovery =
+        (recovery == ElectionRecovery::Recovering).then_some(LeaderRecoveryState::Recovering);
+    if leader != NodeId(1) {
         return vec![MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
             partition,
             eligible_leader_replicas: Some(eligible),
@@ -114,7 +135,10 @@ async fn an_unfence_elects_for_a_partition_with_no_leader() {
             published: "0::1",
             unfenced: 1,
             alive: &[2, 3],
-            expected: elected(1, &[], true),
+            expected: elected(ElectedSetup {
+                recovery: ElectionRecovery::Recovering,
+                ..Default::default()
+            }),
             unclean_elections: 1,
         },
         Case {
@@ -122,7 +146,10 @@ async fn an_unfence_elects_for_a_partition_with_no_leader() {
             published: "0:1,2,3:1",
             unfenced: 1,
             alive: &[2, 3],
-            expected: elected(1, &[2, 3], false),
+            expected: elected(ElectedSetup {
+                eligible: &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
+                ..Default::default()
+            }),
             unclean_elections: 0,
         },
         Case {
@@ -130,7 +157,11 @@ async fn an_unfence_elects_for_a_partition_with_no_leader() {
             published: "0:1,2,3:1",
             unfenced: 2,
             alive: &[3],
-            expected: elected(2, &[1, 3], false),
+            expected: elected(ElectedSetup {
+                leader: NodeId(2),
+                eligible: &[krabka_raft::NodeId(1), krabka_raft::NodeId(3)],
+                ..Default::default()
+            }),
             unclean_elections: 0,
         },
     ];

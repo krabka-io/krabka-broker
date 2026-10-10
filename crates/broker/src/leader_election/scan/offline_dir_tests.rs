@@ -16,16 +16,19 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy)]
+struct ReplicaSlot(usize);
+
 fn offline_image(
-    leader: u64,
-    isr: &[u64],
-    failed_replica: Option<usize>,
+    leader: NodeId,
+    isr: &[NodeId],
+    failed_replica: Option<ReplicaSlot>,
 ) -> (MetadataImage, uuid::Uuid, uuid::Uuid) {
     let bad = uuid::Uuid::from_u128(0xDEAD);
     let good = uuid::Uuid::from_u128(0x1);
     let mut directories = [good; 3];
     if let Some(index) = failed_replica {
-        directories[index] = bad;
+        directories[index.0] = bad;
     }
     (
         img_with_partition(ElectionSetup {
@@ -40,7 +43,11 @@ fn offline_image(
 }
 
 fn unclean_election_image() -> (MetadataImage, uuid::Uuid, uuid::Uuid) {
-    let (mut img, bad, good) = offline_image(1, &[1, 2], Some(0));
+    let (mut img, bad, good) = offline_image(
+        krabka_raft::NodeId(1),
+        &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+        Some(ReplicaSlot(0)),
+    );
     set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
     (img, bad, good)
 }
@@ -77,32 +84,60 @@ async fn scan_offline_dir_with_metrics(
 
 #[tokio::test]
 async fn offline_dir_elects_alive_isr_member_when_leader_dir_failed() {
-    let (img, bad, good) = offline_image(1, &[1, 2, 3], Some(0));
+    let (img, bad, good) = offline_image(
+        krabka_raft::NodeId(1),
+        &[
+            krabka_raft::NodeId(1),
+            krabka_raft::NodeId(2),
+            krabka_raft::NodeId(3),
+        ],
+        Some(ReplicaSlot(0)),
+    );
     let plan = scan_offline_dir(&img, 1, bad, &[1, 2, 3]).await;
     let MetadataRecord::V1Partition(pr) = &plan.changes[0] else {
         panic!()
     };
-    let expected = expected_clean_election(2, &[2, 3], vec![bad, good, good]);
+    let expected = expected_clean_election(
+        krabka_raft::NodeId(2),
+        &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
+        vec![bad, good, good],
+    );
     assert!(*pr == expected);
 }
 
 #[tokio::test]
 async fn offline_dir_leaves_healthy_dir_partition_untouched() {
-    let (img, bad, _good) = offline_image(1, &[1, 2, 3], None);
+    let (img, bad, _good) = offline_image(
+        krabka_raft::NodeId(1),
+        &[
+            krabka_raft::NodeId(1),
+            krabka_raft::NodeId(2),
+            krabka_raft::NodeId(3),
+        ],
+        None,
+    );
     let plan = scan_offline_dir(&img, 1, bad, &[1, 2, 3]).await;
     assert!(plan.changes.is_empty());
 }
 
 #[tokio::test]
 async fn offline_dir_shrinks_isr_for_non_leader_replica() {
-    let (img, bad, good) = offline_image(1, &[1, 2, 3], Some(1));
+    let (img, bad, good) = offline_image(
+        krabka_raft::NodeId(1),
+        &[
+            krabka_raft::NodeId(1),
+            krabka_raft::NodeId(2),
+            krabka_raft::NodeId(3),
+        ],
+        Some(ReplicaSlot(1)),
+    );
     let plan = scan_offline_dir(&img, 2, bad, &[1, 2, 3]).await;
     let MetadataRecord::V1Partition(pr) = &plan.changes[0] else {
         panic!()
     };
     let expected = expected_partition(ExpectedPartitionSetup {
-        leader: 1,
-        isr: &[1, 3],
+        leader: krabka_raft::NodeId(1),
+        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(3)],
         leader_epoch: LeaderEpoch(5),
         directories: vec![good, bad, good],
         ..Default::default()
@@ -114,7 +149,11 @@ async fn offline_dir_shrinks_isr_for_non_leader_replica() {
 async fn offline_dir_idempotent_after_failover() {
     // After failover: broker 1's dir is bad but broker 1 is no longer
     // leader (broker 2 is), and broker 1 is not in ISR {2,3} either.
-    let (img, bad, _good) = offline_image(2, &[2, 3], Some(0));
+    let (img, bad, _good) = offline_image(
+        krabka_raft::NodeId(2),
+        &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
+        Some(ReplicaSlot(0)),
+    );
     let plan = scan_offline_dir(&img, 1, bad, &[1, 2, 3]).await;
     assert!(plan.changes.is_empty());
 }
@@ -125,7 +164,11 @@ async fn offline_dir_empty_isr_defers_offset_aware_strategies_to_urm() {
         ("Balanced", RecoveryStrategy::Balanced),
         ("Aggressive", RecoveryStrategy::Aggressive),
     ] {
-        let (mut img, bad, _good) = offline_image(1, &[1, 2], Some(0));
+        let (mut img, bad, _good) = offline_image(
+            krabka_raft::NodeId(1),
+            &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+            Some(ReplicaSlot(0)),
+        );
         set_topic_config(&mut img, "t", UNCLEAN_RECOVERY_STRATEGY, name);
         // Only node 3 is alive, and it is outside the ISR.
         let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
@@ -150,7 +193,11 @@ async fn offline_dir_empty_isr_unclean_enabled_elects_out_of_isr_replica() {
     let pr = one_partition_change(&plan.changes);
     // Must elect broker 3 (only alive out-of-ISR) with a singleton
     // ISR (unclean election) and a bumped leader_epoch.
-    let expected = expected_clean_election(3, &[3], vec![bad, good, good]);
+    let expected = expected_clean_election(
+        krabka_raft::NodeId(3),
+        &[krabka_raft::NodeId(3)],
+        vec![bad, good, good],
+    );
     assert!(*pr == expected);
     assert!(
         metrics.unclean_leader_elections_total.get() == 1,
@@ -162,7 +209,11 @@ async fn offline_dir_empty_isr_unclean_enabled_elects_out_of_isr_replica() {
 async fn offline_dir_empty_isr_no_unclean_leaves_partition_unavailable() {
     // Broker 1 is leader on bad dir, broker 2 dead, broker 3 alive but
     // not in ISR.  No recovery strategy, no unclean flag → no change.
-    let (img, bad, _good) = offline_image(1, &[1, 2], Some(0));
+    let (img, bad, _good) = offline_image(
+        krabka_raft::NodeId(1),
+        &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+        Some(ReplicaSlot(0)),
+    );
     // only 3 alive, but not in ISR
     let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
     assert!(

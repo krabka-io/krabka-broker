@@ -114,41 +114,22 @@ pub async fn serve_jwks_https(
 ) -> (std::net::SocketAddr, CancellationToken, std::path::PathBuf) {
     use tokio::io::AsyncWriteExt as _;
 
-    // Install the rustls CryptoProvider once (idempotent — discards Err
-    // on re-install). Required for rustls::ServerConfig::builder.
-    let (listener, acceptor, cert_path) = crate::test_support::loopback_tls_listener().await;
-    let addr = listener.local_addr().unwrap();
-    let shutdown = CancellationToken::new();
-    let srv_shutdown = shutdown.clone();
-
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                () = srv_shutdown.cancelled() => break,
-                Ok((sock, _peer)) = listener.accept() => {
-                    let acceptor = acceptor.clone();
-                    tokio::spawn(async move {
-                        use tokio::io::AsyncReadExt as _;
-                        let Ok(mut tls) = acceptor.accept(sock).await else { return };
-                        // Drain a minimal request line + headers (we
-                        // don't parse — just ignore until empty line).
-                        // Then write a fixed JSON reply.
-                        let mut buf = [0u8; 1024];
-                        let _ = tls.read(&mut buf).await;
-                        let header = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-                            body.len(),
-                        );
-                        let _ = tls.write_all(header.as_bytes()).await;
-                        let _ = tls.write_all(body.as_bytes()).await;
-                        let _ = tls.shutdown().await;
-                    });
-                }
-            }
-        }
-    });
-
-    (addr, shutdown, cert_path)
+    crate::test_support::serve_loopback_tls(move |mut tls| async move {
+        use tokio::io::AsyncReadExt as _;
+        // Drain a minimal request line + headers (we
+        // don't parse — just ignore until empty line).
+        // Then write a fixed JSON reply.
+        let mut buf = [0u8; 1024];
+        let _ = tls.read(&mut buf).await;
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len(),
+        );
+        let _ = tls.write_all(header.as_bytes()).await;
+        let _ = tls.write_all(body.as_bytes()).await;
+        let _ = tls.shutdown().await;
+    })
+    .await
 }
 
 /// Serves a fixed body and counts how many HTTP requests reached the

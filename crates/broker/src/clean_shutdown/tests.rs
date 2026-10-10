@@ -22,7 +22,7 @@ fn image_registering_node_at(broker_epoch: i64) -> MetadataImage {
                 "broker-2", 9092,
             )],
             log_dirs: vec![uuid::Uuid::from_u128(11)],
-            ..crate::test_support::broker_registration(NODE.0)
+            ..crate::test_support::broker_registration(NODE)
         },
     ));
     image

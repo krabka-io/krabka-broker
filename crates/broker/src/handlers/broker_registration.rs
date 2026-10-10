@@ -485,7 +485,7 @@ mod tests {
                     incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
                     host: "broker".into(),
                     log_dirs: vec![uuid::Uuid::from_u128(directory)],
-                    ..crate::test_support::broker_registration(node)
+                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
                 },
             ));
         }
@@ -584,7 +584,7 @@ mod wire_tests {
                 )],
                 log_dirs: vec![uuid::Uuid::from_u128(1011)],
                 features: krabka_metadata::supported_feature_ranges(),
-                ..crate::test_support::broker_registration(REGISTERED.0)
+                ..crate::test_support::broker_registration(REGISTERED)
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: TOPIC.into(),

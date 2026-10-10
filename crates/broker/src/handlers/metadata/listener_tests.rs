@@ -48,7 +48,7 @@ fn registration(
                 protocol: krabka_security::ListenerProtocol::Plaintext,
             })
             .collect(),
-        ..crate::test_support::broker_registration(node_id)
+        ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
     })
 }
 

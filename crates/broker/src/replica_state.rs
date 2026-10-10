@@ -1088,7 +1088,7 @@ mod tests {
                 in_controlled_shutdown,
                 broker_epoch,
                 host: "localhost".to_string(),
-                ..crate::test_support::broker_registration(node)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
             })
         };
         let mut image = policy_image();

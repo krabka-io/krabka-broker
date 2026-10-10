@@ -348,7 +348,8 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         for node_id in [2, 3, 4] {
-            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+            crate::test_support::seed_remote_broker(&broker_handle, krabka_raft::NodeId(node_id))
+                .await;
         }
         seed_remote_topic(&broker_handle).await;
         for &node_id in witnesses {
@@ -442,7 +443,8 @@ async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         for node_id in [3, 4] {
-            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+            crate::test_support::seed_remote_broker(&broker_handle, krabka_raft::NodeId(node_id))
+                .await;
         }
         seed_remote_topic(&broker_handle).await;
         for &node_id in fenced {

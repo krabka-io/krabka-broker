@@ -691,7 +691,7 @@ mod tests {
                 BrokerRegistrationRecord {
                     host: String::new(),
                     port: 0,
-                    ..crate::test_support::broker_registration(n)
+                    ..crate::test_support::broker_registration(krabka_raft::NodeId(n))
                 },
             ));
         }

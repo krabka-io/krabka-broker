@@ -123,7 +123,7 @@ async fn seed_remote_leaders(broker: &BrokerHandle) {
                     port: 9192,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 }],
-                ..crate::test_support::broker_registration(2)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: "remote".into(),

@@ -545,7 +545,7 @@ mod tests {
                     BrokerRegistrationRecord {
                         broker_epoch: 11,
                         host: "localhost".into(),
-                        ..crate::test_support::broker_registration(7)
+                        ..crate::test_support::broker_registration(krabka_raft::NodeId(7))
                     },
                 )])
                 .leader(Some(krabka_raft::NodeId(1)))

@@ -24,7 +24,7 @@ pub(super) fn reg_at(id: NodeId, host: &str, port: u16) -> MetadataRecord {
         broker_epoch: i64::try_from(id.0).unwrap(),
         host: host.to_string(),
         port,
-        ..crate::test_support::broker_registration(id.0)
+        ..crate::test_support::broker_registration(id)
     })
 }
 

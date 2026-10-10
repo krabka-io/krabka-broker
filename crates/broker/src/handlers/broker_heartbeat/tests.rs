@@ -141,7 +141,7 @@ fn new_registration(node: u64) -> krabka_metadata::MetadataRecord {
             incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
             port: 19_090 + u16::try_from(node).expect("a small node id"),
             log_dirs: vec![uuid::Uuid::from_u128(1000 + u128::from(node))],
-            ..crate::test_support::broker_registration(node)
+            ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
         },
     )
 }
@@ -539,7 +539,7 @@ fn a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0() {
         broker_epoch: 5,
         incarnation_id: dir(2),
         log_dirs: vec![dir(1), dir(2)],
-        ..crate::test_support::broker_registration(2)
+        ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
     };
     let image_at = |level: i16| {
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());

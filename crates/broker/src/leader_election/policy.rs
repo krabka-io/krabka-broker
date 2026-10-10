@@ -561,9 +561,9 @@ mod tests {
 
     fn partition_record(leader: u64, replicas: &[u64], isr: &[u64]) -> PartitionRecord {
         crate::leader_election::test_support::seed_partition(ElectionSetup {
-            leader,
-            replicas,
-            isr,
+            leader: krabka_raft::NodeId(leader),
+            replicas: &crate::test_support::replica_nodes(replicas),
+            isr: &crate::test_support::replica_nodes(isr),
             ..Default::default()
         })
     }

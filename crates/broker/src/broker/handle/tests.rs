@@ -104,7 +104,9 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
                     port: 19_092,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 }],
-                ..crate::test_support::broker_registration(handle.node_id() + 1)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(
+                    handle.node_id() + 1,
+                ))
             },
         ))
         .await

@@ -127,6 +127,40 @@ pub(crate) async fn loopback_tls_listener()
     (listener, TlsAcceptor::from(Arc::new(server_cfg)), cert_path)
 }
 
+/// Serve concurrent TLS connections with the caller's protocol handler until shutdown.
+pub(crate) async fn serve_loopback_tls<F, Fut>(
+    handler: F,
+) -> (
+    std::net::SocketAddr,
+    tokio_util::sync::CancellationToken,
+    std::path::PathBuf,
+)
+where
+    F: Fn(tokio_rustls::server::TlsStream<tokio::net::TcpStream>) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let (listener, acceptor, cert_path) = loopback_tls_listener().await;
+    let addr = listener.local_addr().unwrap();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let srv_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = srv_shutdown.cancelled() => break,
+                Ok((sock, _peer)) = listener.accept() => {
+                    let acceptor = acceptor.clone();
+                    let handler = handler.clone();
+                    tokio::spawn(async move {
+                        let Ok(tls) = acceptor.accept(sock).await else { return };
+                        handler(tls).await;
+                    });
+                }
+            }
+        }
+    });
+    (addr, shutdown, cert_path)
+}
+
 /// Opens a local replica with a running writer in the supplied log directory.
 pub(crate) fn open_partition(
     log_dir: &std::path::Path,
@@ -1087,13 +1121,13 @@ pub(crate) async fn lead_transaction_state_partitions(
 ///
 /// A test spells out each field its scenario depends on and takes the rest
 /// from here: `BrokerRegistrationRecord { fenced: true,
-/// ..broker_registration(2) }`.
-pub(crate) fn broker_registration(node_id: u64) -> krabka_metadata::BrokerRegistrationRecord {
+/// ..broker_registration(NodeId(2)) }`.
+pub(crate) fn broker_registration(node_id: NodeId) -> krabka_metadata::BrokerRegistrationRecord {
     krabka_metadata::BrokerRegistrationRecord {
         fenced: false,
         in_controlled_shutdown: false,
         cordoned_log_dirs: None,
-        node_id: krabka_raft::NodeId(node_id),
+        node_id,
         broker_epoch: 0,
         incarnation_id: uuid::Uuid::nil(),
         host: "127.0.0.1".into(),
@@ -1133,7 +1167,7 @@ pub(crate) async fn wait_for_controller_leader(broker: &Broker) {
 }
 
 /// Register `node_id` as a remote broker in the controller's image.
-pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
+pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: NodeId) {
     handle
         .broker_arc_for_test()
         .controller

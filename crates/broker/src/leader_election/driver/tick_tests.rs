@@ -92,8 +92,11 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
 
     let batches = partition_batches(&fixture.source.submitted());
     assert!(batches.len() == 1, "the edge submits once, got {batches:?}");
-    let expected =
-        crate::leader_election::test_support::expected_clean_election(2, &[2, 3], vec![]);
+    let expected = crate::leader_election::test_support::expected_clean_election(
+        krabka_raft::NodeId(2),
+        &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
+        vec![],
+    );
     assert!(*one_partition_change(&batches[0]) == expected);
 
     // The test source never applies the change, so the image still shows

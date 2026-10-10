@@ -96,7 +96,7 @@ fn registration_record(incarnation: u128) -> MetadataRecord {
         incarnation_id: uuid::Uuid::from_u128(incarnation),
         port: 9094,
         endpoints: plaintext_endpoints(EndpointPort(9094)),
-        ..crate::test_support::broker_registration(3)
+        ..crate::test_support::broker_registration(krabka_raft::NodeId(3))
     })
 }
 
@@ -126,7 +126,7 @@ async fn activate_followers(broker: &Broker) {
                         endpoints: plaintext_endpoints(EndpointPort(
                             9092 + u16::try_from(node).expect("a small node id"),
                         )),
-                        ..crate::test_support::broker_registration(node)
+                        ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
                     })
                 })
                 .collect(),
