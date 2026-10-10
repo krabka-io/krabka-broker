@@ -157,10 +157,21 @@ mod tests {
         _directory: tempfile::TempDir,
     }
 
-    fn failing_spool(
-        cap: krabka_units::prelude::ByteSize,
-        checkpoint_every_n: Option<u64>,
-    ) -> FailingSpoolFixture {
+    use crate::log::test_support::{AuditEventCount, CheckpointFrequency};
+
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct FailingSpoolSetup {
+        #[default(ROOMY_CAP)]
+        cap: krabka_units::ByteSize,
+        frequency: CheckpointFrequency,
+    }
+
+    fn failing_spool(setup: FailingSpoolSetup) -> FailingSpoolFixture {
+        let FailingSpoolSetup { cap, frequency } = setup;
+        let checkpoint_every_n = match frequency {
+            CheckpointFrequency::Disabled => None,
+            CheckpointFrequency::Every(count) => Some(count.0),
+        };
         let directory = tempfile::tempdir().unwrap();
         let (signer, public_key) = checkpoint_every_n.map_or((None, None), |_| {
             let (signer, public_key) = test_signer();
@@ -245,7 +256,7 @@ mod tests {
 
     #[tokio::test]
     async fn records_spool_on_sink_failure_then_replay_to_sink() {
-        let fixture = failing_spool(ROOMY_CAP, None);
+        let fixture = failing_spool(FailingSpoolSetup::default());
 
         fixture.log.emit(life(1));
         fixture.log.emit(life(2));
@@ -364,7 +375,10 @@ mod tests {
     async fn checkpoint_is_spooled_in_spool_mode_and_replayed_in_order() {
         // Topic down: records and count-triggered checkpoints spool together.
         // Emit a checkpoint after every 2 records.
-        let fixture = failing_spool(ROOMY_CAP, Some(2));
+        let fixture = failing_spool(FailingSpoolSetup {
+            frequency: CheckpointFrequency::Every(AuditEventCount(2)),
+            ..Default::default()
+        });
         fixture.log.emit(life(0));
         fixture.log.emit(life(1)); // 2 records → triggers a checkpoint, all spooled
         // 2 chained records + 1 count-triggered checkpoint all land in the spool
@@ -497,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn partial_replay_keeps_remainder_then_drains() {
-        let fixture = failing_spool(ROOMY_CAP, None);
+        let fixture = failing_spool(FailingSpoolSetup::default());
         fixture.log.emit(life(0));
         fixture.log.emit(life(1));
         fixture.log.emit(life(2));
