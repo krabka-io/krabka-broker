@@ -57,7 +57,7 @@ fn timer_flushes_dirty_idle_logs_even_with_remote_storage_enabled() {
     sync_observer::take_segment_flushes();
     log.flush_if_due(last + Duration::from_millis(999)).unwrap();
     check!(sync_observer::take_segment_flushes().is_empty());
-    log.last_flush = Instant::now() - Duration::from_secs(1);
+    log.last_flush = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
     log.tick(SystemTime::now(), Offset(1)).unwrap();
     check!(sync_observer::take_segment_flushes() == vec![Offset(0)]);
     check!(log.maintenance_delay(SystemTime::now()) == None);
