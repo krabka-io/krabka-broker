@@ -240,15 +240,16 @@ async fn empty_owners_list_returns_no_tokens_without_error() {
         owners: Some(vec![]),
         ..Default::default()
     };
-    let resp = describe_unrestricted(
+    check_description_visibility(
         &*controller,
+        &crate::authorizer::AllowAllAuthorizer,
         DescribeTokenSetup {
             request: Some(&req),
             secret: Some(&secret),
             ..Default::default()
         },
+        &[],
     );
-    check_visible_token_ids(&resp, &[]);
     controller.cancel().await;
 }
 
@@ -415,7 +416,7 @@ async fn describe_acl_on_token_id_grants_exactly_that_token() {
     seed_alice_tokens(&controller).await;
     seed_acl(&controller, describe_token_acl("t-a", "bob")).await;
 
-    let resp = describe(
+    let resp = describe_checked(
         &*controller,
         &simple_authz(),
         DescribeTokenSetup {
@@ -424,7 +425,6 @@ async fn describe_acl_on_token_id_grants_exactly_that_token() {
             ..Default::default()
         },
     );
-    assert!(resp.error_code == 0);
     assert!(
         token_ids(&resp) == std::collections::HashSet::from(["t-a"]),
         "an ACL on t-a must not also surface t-b, same owner or not; got {:?}",
@@ -506,7 +506,7 @@ async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
             .await;
         }
         let authorizer = simple_authz().with_allow_everyone_if_no_acl_found(default_allow);
-        let resp = describe(
+        let resp = describe_checked(
             &*controller,
             &authorizer,
             DescribeTokenSetup {
@@ -515,7 +515,6 @@ async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
                 ..Default::default()
             },
         );
-        assert!(resp.error_code == 0);
         assert!(
             token_ids(&resp)
                 == expected
@@ -536,7 +535,7 @@ async fn unrelated_caller_sees_nothing() {
     token_fixture!(dir, controller, secret);
     seed_token(&controller, TokenSetup::default()).await;
 
-    let resp = describe(
+    check_description_visibility(
         &*controller,
         &simple_authz(),
         DescribeTokenSetup {
@@ -544,8 +543,8 @@ async fn unrelated_caller_sees_nothing() {
             secret: Some(&secret),
             ..Default::default()
         },
+        &[],
     );
-    check_visible_token_ids(&resp, &[]);
     controller.cancel().await;
 }
 
@@ -654,4 +653,23 @@ async fn describe_response_reports_the_requester_that_created_the_token() {
             }]
     );
     controller.cancel().await;
+}
+
+fn check_description_visibility(
+    controller: &dyn crate::metadata_source::MetadataSource,
+    authorizer: &dyn crate::authorizer::Authorizer,
+    setup: DescribeTokenSetup<'_>,
+    expected: &[&str],
+) {
+    check_visible_token_ids(&describe(controller, authorizer, setup), expected);
+}
+
+fn describe_checked(
+    controller: &dyn crate::metadata_source::MetadataSource,
+    authorizer: &dyn crate::authorizer::Authorizer,
+    setup: DescribeTokenSetup<'_>,
+) -> krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse {
+    let response = describe(controller, authorizer, setup);
+    assert!(response.error_code == 0);
+    response
 }

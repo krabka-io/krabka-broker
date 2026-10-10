@@ -517,6 +517,17 @@ mod tests {
         cursor: Option<RequestCursor>,
     }
 
+    impl DescribeTopicsSetup {
+        /// A one-partition pagination budget over the caller's ordered topic names.
+        fn one_partition(topics: &[&str]) -> Self {
+            Self {
+                topics: topics.iter().map(|name| (*name).to_owned()).collect(),
+                response_partition_limit: ResponsePartitionLimit(1),
+                ..Default::default()
+            }
+        }
+    }
+
     fn request(setup: DescribeTopicsSetup) -> DescribeTopicPartitionsRequest {
         let DescribeTopicsSetup {
             topics,
@@ -573,11 +584,27 @@ mod tests {
             .collect()
     }
 
+    fn ordered_a_b_topics() -> [TopicSetup<'static>; 2] {
+        [
+            TopicSetup {
+                topic: "a",
+                ..TopicSetup::single_replica()
+            },
+            TopicSetup {
+                topic: "b",
+                topic_id: uuid::Uuid::from_u128(2),
+                ..TopicSetup::single_replica()
+            },
+        ]
+    }
+
     macro_rules! seeded_topics_fixture {
         (($handle:ident, $dir:ident, $broker:ident, $ctx:ident), $authorizer:expr,
-            [$(($topic:expr, $partitions:expr, $id:expr)),* $(,)?]) => {
+            $topics:expr) => {
             let ($handle, $dir) = start_broker($authorizer).await;
-            $(seed_topic(&$handle, TopicSetup { topic: $topic, topic_id: uuid::Uuid::from_u128($partitions), partitions: PartitionCount($id), ..TopicSetup::single_replica() }).await;)*
+            for setup in $topics {
+                seed_topic(&$handle, setup).await;
+            }
             let $broker = $handle.broker_arc_for_test();
             test_ctx!($ctx, "admin");
         };
@@ -588,16 +615,12 @@ mod tests {
         seeded_topics_fixture!(
             (broker_handle, _dir, broker, ctx),
             Arc::new(DenyTopics(&["c"])),
-            [("a", 1, 1), ("b", 2, 1)]
+            ordered_a_b_topics()
         );
         // Budget of 1: "a" fills it, "b" is truncated with no row (the
         // partition-budget-at-topic-boundary rule), "c" is denied. Without
         // the fix, "c" would vanish instead of appearing after "b".
-        let req = request(DescribeTopicsSetup {
-            topics: vec!["a", "b", "c"].into_iter().map(str::to_owned).collect(),
-            response_partition_limit: ResponsePartitionLimit(1),
-            ..Default::default()
-        });
+        let req = request(DescribeTopicsSetup::one_partition(&["a", "b", "c"]));
 
         let resp = describe(&broker, req, &ctx).await;
 
@@ -716,7 +739,7 @@ mod tests {
         seeded_topics_fixture!(
             (broker_handle, _dir, broker, ctx),
             Arc::new(crate::authorizer::AllowAllAuthorizer),
-            [("a", 1, 1), ("b", 2, 1)]
+            ordered_a_b_topics()
         );
         let req = request(DescribeTopicsSetup {
             topics: vec!["b", "a", "b", "a"]
@@ -763,7 +786,10 @@ mod tests {
             seeded_topics_fixture!(
                 (broker_handle, _dir, broker, ctx),
                 Arc::new(crate::authorizer::AllowAllAuthorizer),
-                [("a", 1, 1)]
+                [TopicSetup {
+                    topic: "a",
+                    ..TopicSetup::single_replica()
+                }]
             );
             let req = request(DescribeTopicsSetup {
                 cursor,
@@ -794,7 +820,11 @@ mod tests {
         seeded_topics_fixture!(
             (broker_handle, _dir, broker, ctx),
             Arc::new(crate::authorizer::AllowAllAuthorizer),
-            [("a", 1, 2)]
+            [TopicSetup {
+                topic: "a",
+                partitions: PartitionCount(2),
+                ..TopicSetup::single_replica()
+            }]
         );
         let req = request(DescribeTopicsSetup {
             response_partition_limit: ResponsePartitionLimit(0),
@@ -854,11 +884,7 @@ mod tests {
             }
             let broker = broker_handle.broker_arc_for_test();
             test_ctx!(ctx, "admin");
-            let req = request(DescribeTopicsSetup {
-                topics: vec!["a", "b"].into_iter().map(str::to_owned).collect(),
-                response_partition_limit: ResponsePartitionLimit(1),
-                ..Default::default()
-            });
+            let req = request(DescribeTopicsSetup::one_partition(&["a", "b"]));
 
             let resp = describe(&broker, req, &ctx).await;
 

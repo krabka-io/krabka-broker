@@ -80,6 +80,22 @@ async fn drive_trim(
     drive(broker, &request(setup), ctx).await
 }
 
+/// Compare the entire response with independent caller-specified expected rows.
+async fn check_trim_response(
+    broker: &Broker,
+    context: &crate::handlers::RequestContext<'_>,
+    request: &DeleteRecordsRequest,
+    expected: ExpectedTrimRowsSetup<'_>,
+) {
+    let response = drive(broker, request, context).await;
+    assert!(
+        response
+            == unthrottled_wire!(DeleteRecordsResponse {
+                topics: expected_trim_rows(expected),
+            })
+    );
+}
+
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct RefusedTrimSetup<'a> {
     #[default("orders")]
@@ -189,17 +205,18 @@ async fn handle_denied_topic_returns_topic_auth_rows() {
         ..Default::default()
     });
 
-    let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
-
-    let expected = unthrottled_wire!(DeleteRecordsResponse {
-        topics: expected_trim_rows(ExpectedTrimRowsSetup {
+    check_trim_response(
+        &broker,
+        &test_context(&p, &peer),
+        &req,
+        ExpectedTrimRowsSetup {
             topic: "secret",
             indices: &[PartitionIndex(0), PartitionIndex(2)],
             error: KafkaErrorCode(codes::TOPIC_AUTHORIZATION_FAILED),
             ..Default::default()
-        }),
-    });
-    assert!(resp == expected);
+        },
+    )
+    .await;
     broker_handle.shutdown().await;
 }
 
@@ -213,17 +230,18 @@ async fn handle_unknown_partition_preserves_requested_index() {
         ..Default::default()
     });
 
-    let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
-
-    let expected = unthrottled_wire!(DeleteRecordsResponse {
-        topics: expected_trim_rows(ExpectedTrimRowsSetup {
+    check_trim_response(
+        &broker,
+        &test_context(&p, &peer),
+        &req,
+        ExpectedTrimRowsSetup {
             topic: "missing",
             indices: &[PartitionIndex(4)],
             error: KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
             ..Default::default()
-        }),
-    });
-    assert!(resp == expected);
+        },
+    )
+    .await;
     broker_handle.shutdown().await;
 }
 

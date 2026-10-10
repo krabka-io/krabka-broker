@@ -19,7 +19,7 @@ pub(super) struct FetchWireSetup<'a> {
     pub client_id: &'a str,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FetchReplicaId(pub i32);
 impl Default for FetchReplicaId {
     fn default() -> Self {

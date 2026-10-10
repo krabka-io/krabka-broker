@@ -12,8 +12,7 @@ use krabka_broker::{BrokerConfig, BrokerHandle, file_config::FileConfig};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_response::PartitionProduceResponse,
+        create_topics_request::CreateTopicsRequest, produce_response::PartitionProduceResponse,
     },
     primitives::uuid::Uuid as WireUuid,
     records::RecordBatch,
@@ -170,7 +169,16 @@ pub fn mock_topic_fixture(
     Box::pin(async move {
         let registry = registry().await;
         let (broker, client, dir) = boot(&registry.uri()).await;
-        let id = create_topic(&broker, &client, topic, configs).await;
+        let id = create_topic(
+            &broker,
+            &client,
+            crate::harness::SchemaTopicSetup {
+                name: topic,
+                configs,
+                ..Default::default()
+            },
+        )
+        .await;
         (registry, broker, client, dir, id)
     })
 }
@@ -185,53 +193,35 @@ pub async fn produce_value(
     produce(client, topic, topic_id, batch_with_value(value)).await
 }
 
-/// Create `name` with the given topic configs and wait for its partition.
+/// Create a configured schema-validation topic and wait for its local partition.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct SchemaTopicSetup<'a> {
+    #[default("validated")]
+    pub name: &'a str,
+    #[default(VALIDATED)]
+    pub configs: &'a [(&'a str, &'a str)],
+    #[default(crate::support::topics::TopicReplicationFactor(1))]
+    pub replicas: crate::support::topics::TopicReplicationFactor,
+}
+
+/// The committed `CreateTopics` response supplies the identity, even when another
+/// bootstrap broker's Metadata image has not caught up with the commit yet.
 pub async fn create_topic(
     broker: &BrokerHandle,
     client: &Client,
-    name: &str,
-    configs: &[(&str, &str)],
-) -> WireUuid {
-    create_topic_rf(broker, client, name, configs, 1).await
-}
-
-/// Create `name` with an explicit replication factor, wait until `broker`
-/// has its partition, and answer the topic id.
-///
-/// The id comes from the `CreateTopics` response, which the broker sends only
-/// after the topic record commits. A `Metadata` read is not safe here: `client`
-/// can bootstrap to a broker other than `broker`, and that broker can still be
-/// one fetch behind the commit. It then answers the topic as unknown with a
-/// zero id, and a `Produce` at version 13 or later carries only that zero id.
-pub async fn create_topic_rf(
-    broker: &BrokerHandle,
-    client: &Client,
-    name: &str,
-    configs: &[(&str, &str)],
-    replication_factor: i16,
+    setup: SchemaTopicSetup<'_>,
 ) -> WireUuid {
     let topic = creatable_topic(crate::support::topics::ConfiguredTopicSetup {
-        name: (name).into(),
-        replicas: crate::support::topics::TopicReplicationFactor(replication_factor),
+        name: setup.name.into(),
+        replicas: setup.replicas,
+        configs: crate::support::topics::topic_configs(setup.configs.iter().copied()),
         ..Default::default()
     });
-    create_topic_from(broker, client, topic, configs).await
-}
-
-async fn create_topic_from(
-    broker: &BrokerHandle,
-    client: &Client,
-    topic: CreatableTopic,
-    configs: &[(&str, &str)],
-) -> WireUuid {
     let name = topic.name.clone();
     let name = name.as_str();
     let resp = client
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                configs: crate::support::topics::topic_configs(configs.iter().copied()),
-                ..topic
-            }],
+            topics: vec![topic],
             timeout_ms: 5_000,
             ..Default::default()
         })
