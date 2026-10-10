@@ -129,8 +129,15 @@ fn prepared_two_pc_entry(last_update_ms: i64) -> TxnEntry {
 
 /// A metadata image where `__transaction_state` has one partition, led by
 /// `leader`.
-fn image_with_leader(leader: NodeId, leader_epoch: i32) -> MetadataImage {
-    crate::txn::coordinator::test_support::state_image(leader, leader_epoch, &[leader])
+fn image_with_leader(leader: NodeId, leader_epoch: krabka_metadata::LeaderEpoch) -> MetadataImage {
+    crate::txn::coordinator::test_support::state_image(
+        crate::txn::coordinator::test_support::StateImageSetup {
+            leader,
+            leader_epoch,
+            replicas: &[leader],
+            ..Default::default()
+        },
+    )
 }
 
 /// A coordinator that persisted `entry` as the leader of the single
@@ -159,7 +166,10 @@ async fn seeded_coordinator(entry: TxnEntry, leader: NodeId) -> (Arc<TxnCoordina
         mebibytes(1),
     ));
     coordinator
-        .refresh_leader_partitions(&image_with_leader(NodeId(1), 0))
+        .refresh_leader_partitions(&image_with_leader(
+            NodeId(1),
+            krabka_metadata::LeaderEpoch(0),
+        ))
         .await
         .finished()
         .await;
@@ -170,7 +180,10 @@ async fn seeded_coordinator(entry: TxnEntry, leader: NodeId) -> (Arc<TxnCoordina
     if leader != NodeId(1) {
         drop(
             coordinator
-                .refresh_leader_partitions(&image_with_leader(leader, 1))
+                .refresh_leader_partitions(&image_with_leader(
+                    leader,
+                    krabka_metadata::LeaderEpoch(1),
+                ))
                 .await,
         );
     }
@@ -361,7 +374,10 @@ async fn replaying_a_tombstone_reclaims_the_producer_id_index() {
     // The broker is elected again and replays the log: the value record, then
     // the tombstone that follows it.
     coordinator
-        .recover(&image_with_leader(NodeId(1), 1))
+        .recover(&image_with_leader(
+            NodeId(1),
+            krabka_metadata::LeaderEpoch(1),
+        ))
         .await
         .expect("replay __transaction_state");
 
@@ -388,7 +404,10 @@ async fn replaying_a_tombstone_keeps_a_pid_that_now_names_another_id() {
         .expect("persist the reissued id");
 
     coordinator
-        .recover(&image_with_leader(NodeId(1), 1))
+        .recover(&image_with_leader(
+            NodeId(1),
+            krabka_metadata::LeaderEpoch(1),
+        ))
         .await
         .expect("replay __transaction_state");
 
@@ -439,7 +458,10 @@ async fn a_sweep_tick_refreshes_leadership_before_expiring() {
     // partition, and at a 1ms expiry the entry's `last_update_ms` is long past
     // under any wall clock.
     let source = FakeMetadataSource::builder()
-        .image(image_with_leader(NodeId(1), 2))
+        .image(image_with_leader(
+            NodeId(1),
+            krabka_metadata::LeaderEpoch(2),
+        ))
         .build();
     crate::txn::id_expiration::sweep_once(
         &coordinator,

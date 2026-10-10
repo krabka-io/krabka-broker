@@ -110,8 +110,15 @@ fn completion_decision_accepts_only_the_exact_prepared_snapshot() {
     );
 }
 
-fn image(leader: NodeId, leader_epoch: i32) -> MetadataImage {
-    super::super::test_support::state_image(leader, leader_epoch, &[leader])
+fn image(leader: NodeId, leader_epoch: krabka_metadata::LeaderEpoch) -> MetadataImage {
+    super::super::test_support::state_image(
+        crate::txn::coordinator::test_support::StateImageSetup {
+            leader,
+            leader_epoch,
+            replicas: &[leader],
+            ..Default::default()
+        },
+    )
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -132,10 +139,10 @@ async fn loaded_coordinator(
     let coordinator = Arc::new(super::super::test_support::coordinator_with_registry(
         NodeId(1),
         partitions,
-        1,
+        crate::test_support::PartitionCount(1),
     ));
     coordinator
-        .refresh_leader_partitions(&image(NodeId(1), 0))
+        .refresh_leader_partitions(&image(NodeId(1), krabka_metadata::LeaderEpoch(0)))
         .await
         .finished()
         .await;
@@ -160,7 +167,7 @@ async fn coordinator(
     // The election of `leader` comes at a higher leader epoch. This broker
     // loads the partition again, or unloads it.
     coordinator
-        .refresh_leader_partitions(&image(leader, 1))
+        .refresh_leader_partitions(&image(leader, krabka_metadata::LeaderEpoch(1)))
         .await
         .finished()
         .await;
@@ -306,7 +313,7 @@ async fn recovery_queues_every_prepared_transaction_for_completion() {
 
     // A new election loads the partition again.
     coordinator
-        .recover(&image(NodeId(1), 2))
+        .recover(&image(NodeId(1), krabka_metadata::LeaderEpoch(2)))
         .await
         .expect("replay __transaction_state");
 
