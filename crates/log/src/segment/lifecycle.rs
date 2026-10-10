@@ -13,11 +13,13 @@ use tracing::instrument;
 use super::{Segment, io::seek_to_log_size};
 use crate::error::LogError;
 
-/// Log a block reservation or release the filesystem refused.
+/// Log a block reservation, a release, or a switch to `O_DIRECT` that the
+/// filesystem refused.
 ///
-/// A filesystem without `fallocate` refuses every one, so that is not news
-/// worth more than a debug line; anything else, a full disk above all, is.
-fn log_refused(operation: &'static str, base_offset: Offset, error: &std::io::Error) {
+/// A filesystem without `fallocate` or `O_DIRECT` refuses every one, so that
+/// is not news worth more than a debug line; anything else, a full disk above
+/// all, is.
+pub(super) fn log_refused(operation: &'static str, base_offset: Offset, error: &std::io::Error) {
     if error.kind() == std::io::ErrorKind::Unsupported {
         tracing::debug!(operation, base_offset = base_offset.0, %error, "segment preallocation unsupported");
     } else {
@@ -62,13 +64,18 @@ impl Segment {
     /// Sealing first writes the segment's final time-index entry, Kafka's
     /// `LogSegment.onBecomeInactiveSegment`: the sparse index lags the writes,
     /// so without it a reopened segment would not learn the timestamp of the
-    /// batches after its last index point from the index.
+    /// batches after its last index point from the index. A segment that
+    /// wrote through `O_DIRECT` then goes back to the page cache, which cuts
+    /// the padding past its last batch, and what is left of its block
+    /// reservation is given back.
     ///
     /// # Errors
     /// Returns an error when the time-index entry cannot be written or its
-    /// offset overflows the index range. The segment stays open then.
+    /// offset overflows the index range, or when the padding cannot be cut.
+    /// The segment stays open then.
     pub fn seal(&mut self) -> Result<(), LogError> {
         self.append_running_max_time_entry()?;
+        self.write_buffered()?;
         self.sealed = true;
         self.release_reservation();
         Ok(())
@@ -211,6 +218,7 @@ impl Segment {
         seek_to_log_size(&self.log_file, position)?;
         self.log_size = position;
         self.renew_reservation();
+        self.resync_direct()?;
         self.last_offset = last_offset;
         self.max_timestamp = max_timestamp;
         self.max_timestamp_offset = max_timestamp_offset;
@@ -295,6 +303,7 @@ impl Segment {
         seek_to_log_size(&self.log_file, pos)?;
         self.log_size = pos;
         self.renew_reservation();
+        self.resync_direct()?;
         self.last_offset = last_kept_offset;
         self.max_timestamp = last_kept_ts;
         self.max_timestamp_offset = last_kept_ts_offset;

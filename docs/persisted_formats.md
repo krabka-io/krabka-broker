@@ -65,7 +65,7 @@ Each partition directory is `<log_dir>/<topic>-<partition>/`.
 
 Kafka names a replica move directory `<topic>-<partition>.<uuid>-future`. [`format-divergences.md`](format-divergences.md) records the difference. The broker writes no recovery-point, replication-offset or cleaner-offset checkpoint, and no `partition.metadata`.
 
-A `.log` file is always exactly as long as the batches in it. With `preallocate=true`, Kafka sets a new segment's length to `segment.bytes` and trims it when the segment closes, so after a crash its file can end in zeros. krabka reserves the blocks with `fallocate(FALLOC_FL_KEEP_SIZE)` instead and leaves the length alone, so `preallocate` changes no byte that any 1.x broker reads.
+A sealed `.log` file is always exactly as long as the batches in it, and so is an active one unless `preallocate=true`. With `preallocate=true`, Kafka sets a new segment's length to `segment.bytes` and trims it when the segment closes, so after a crash its file can end in zeros. krabka reserves the blocks with `fallocate(FALLOC_FL_KEEP_SIZE)` without changing the length, and writes the active segment through `O_DIRECT`, which writes whole blocks: the active segment's file can run up to one block (at most 4 KiB on the filesystems the broker runs on) of zeros past its last batch. Sealing the segment, turning `preallocate` off, and a clean shutdown cut the zeros. After a crash they stay, and the tail recovery of every 1.x release cuts them like any bytes that do not decode as a batch, as Kafka cuts its own preallocated tail. `recovery_cuts_the_padding_a_crash_leaves` in `crates/log/src/log/direct_writes.rs` holds that reader to it.
 
 ### Log directory root
 

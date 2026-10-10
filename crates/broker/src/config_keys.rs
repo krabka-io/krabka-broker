@@ -203,7 +203,8 @@ pub(crate) const FLUSH_MS: &str = "flush.ms";
 /// entries.
 pub(crate) const INDEX_INTERVAL_BYTES: &str = "index.interval.bytes";
 /// Kafka's `preallocate`: whether a new segment reserves `segment.bytes` of
-/// disk when it is created.
+/// disk when it is created, and the active segment writes through
+/// `O_DIRECT`.
 pub(crate) const PREALLOCATE: &str = "preallocate";
 /// Kafka's `message.timestamp.type`: whose clock the stored records carry.
 pub(crate) const MESSAGE_TIMESTAMP_TYPE: &str = "message.timestamp.type";

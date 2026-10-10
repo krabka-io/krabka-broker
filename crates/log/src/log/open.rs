@@ -189,6 +189,8 @@ impl Log {
             reconciled_frontier: Offset(0),
             delivery_watermark: Offset(0),
             delivery_pending_ms: None,
+            #[cfg(test)]
+            tail_cache_size: crate::config::TAIL_CACHE_SIZE,
         };
         // Restore a log start that the segment names cannot express: a trim
         // that landed inside a segment left its records on disk, and only the

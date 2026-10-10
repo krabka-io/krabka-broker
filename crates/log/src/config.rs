@@ -47,6 +47,18 @@ pub const DEFAULT_READ_BUFFER_CAP: ByteSize = mebibytes(4);
 /// kernel to read ahead.
 pub const DEFAULT_READ_AHEAD_MAX: ByteSize = mebibytes(4);
 
+/// How much of the newest data an active segment that writes through
+/// `O_DIRECT` keeps in memory to serve reads with: one default
+/// `max.partition.fetch.bytes`.
+///
+/// Those writes bypass the page cache and drop what it held of the range, so
+/// without this a consumer reading right behind the producer reads from disk.
+/// Every partition under [`SegmentAllocation::Preallocate`] holds up to this
+/// much, plus one batch. It is a constant rather than a [`LogConfig`] field
+/// because the broker holds its log config by value across `await`s, where
+/// every byte of it counts against `clippy::large_futures`.
+pub(crate) const TAIL_CACHE_SIZE: ByteSize = mebibytes(1);
+
 /// Default byte window for timestamp scans between sparse index entries.
 pub const DEFAULT_TIMESTAMP_SCAN_WINDOW: ByteSize = kibibytes(64);
 
@@ -115,8 +127,14 @@ pub enum SegmentAllocation {
     OnWrite,
     /// `preallocate=true`: reserve `segment_size` of disk blocks for a
     /// segment before the first append into it, so appends do not allocate
-    /// as they grow it. A truncate gives the reservation up, and the segment
-    /// takes it again.
+    /// as they grow it, and write its batches through `O_DIRECT`. A truncate
+    /// gives the reservation up, and the segment takes it again.
+    ///
+    /// The `O_DIRECT` writes bypass the page cache. The newest 1 MiB of the
+    /// segment stays in memory to serve reads, and a direct write covers whole blocks, so the active segment's
+    /// file runs up to a block past its last batch until it is sealed. Where
+    /// the kernel does not report the alignment `O_DIRECT` needs (before Linux
+    /// 6.1, or on tmpfs), the segment writes through the page cache.
     ///
     /// Kafka sets the file's length to `segment.bytes` and trims it back when
     /// the segment closes. krabka reserves the blocks without changing the

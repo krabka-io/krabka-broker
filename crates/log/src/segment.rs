@@ -13,6 +13,8 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt};
 
 mod activation;
 mod append;
+mod direct;
+mod direct_mode;
 #[cfg(test)]
 mod dump_log_tests;
 mod header_walk;
@@ -83,6 +85,13 @@ pub struct Segment {
     /// a filesystem that refuses is asked once per segment rather than once
     /// per append. `0` when nothing has been asked.
     reserve_requested: u64,
+    /// The `O_DIRECT` writer and the newest bytes it wrote, while this
+    /// segment writes through `O_DIRECT`. See [`direct_mode`]. Boxed: every
+    /// sealed segment carries the field, and a log is held across `await`s.
+    direct: Option<Box<direct_mode::DirectMode>>,
+    /// Whether [`Segment::write_direct`] has asked for an `O_DIRECT` handle
+    /// since the segment last wrote through the page cache, granted or not.
+    direct_asked: bool,
 }
 
 /// Verbatim, decode-free output of [`Segment::read_raw`].

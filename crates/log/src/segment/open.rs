@@ -73,6 +73,8 @@ impl Segment {
             last_offset: base_offset - 1,
             reserved_end: 0,
             reserve_requested: 0,
+            direct: None,
+            direct_asked: false,
         })
     }
 

@@ -261,6 +261,22 @@ impl Partition {
         }
     }
 
+    /// The bytes of the log's segments when its directory is `dir`: Kafka's
+    /// `UnifiedLog.size`, which `DescribeLogDirs` reports as
+    /// `PartitionSize`. Cheap: takes the `Arc<Mutex<Log>>` briefly.
+    ///
+    /// The log counts the bytes of its batches, where its files can hold
+    /// more: the active segment of a `preallocate` partition writes through
+    /// `O_DIRECT` and carries up to a block of padding past its last batch.
+    ///
+    /// Returns `None` when the log lives in another directory, or if the log
+    /// mutex is poisoned.
+    #[must_use]
+    pub fn log_size_in(&self, dir: &std::path::Path) -> Option<ByteSize> {
+        let log = self.log.lock().ok()?;
+        (log.dir() == dir).then(|| log.size())
+    }
+
     /// Last Stable Offset at `high_watermark`: Kafka's
     /// `UnifiedLog.lastStableOffset`. A transaction that is open, or complete
     /// with a marker that `high_watermark` has not passed, holds it at the
@@ -376,6 +392,21 @@ mod tests {
         check!(p.stamp_for_offset(Offset(0)) == Some(4242));
         check!(p.stamp_for_offset(Offset(2)) == Some(4242));
         check!(p.stamp_for_offset(Offset(3)) == None); // beyond the stamped range
+    }
+
+    /// The size `DescribeLogDirs` reports is the log's own, and only for the
+    /// directory the log lives in.
+    #[tokio::test]
+    async fn log_size_in_reports_the_logs_size_for_its_own_directory_only() {
+        let (p, _dir) = test_partition(Arc::new(Notify::new()));
+        append_records(&p, 3);
+        let (log_dir, size) = {
+            let log = p.log.lock().expect("log mutex");
+            (log.dir().to_path_buf(), log.size())
+        };
+
+        check!(p.log_size_in(&log_dir) == Some(size));
+        check!(p.log_size_in(&log_dir.join("elsewhere")) == None);
     }
 
     #[test]

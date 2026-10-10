@@ -755,7 +755,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         ConfigScope::Topic,
         ConfigType::Boolean,
         Some("false"),
-        "Reserve segment.bytes of disk for each new segment without changing the file's length, and return the unused part when the segment rolls. Linux only; elsewhere, or on a filesystem that refuses, a segment grows as it is written.",
+        "Reserve segment.bytes of disk for each new segment without changing the file's length, return the unused part when the segment rolls, and write the active segment through O_DIRECT, keeping its newest 1 MiB in memory for reads. Linux only; elsewhere, or on a filesystem that refuses, a segment grows as it is written through the page cache.",
         ValueCheck::Bool,
     ),
     key(

@@ -58,6 +58,12 @@ impl LogIo for Recorder {
         self.requests.lock().unwrap().push(Request::Release { len });
         Ok(())
     }
+
+    /// No `O_DIRECT` here: these cases are about the reservation alone, and
+    /// `direct_writes` covers the writes.
+    fn open_direct(&self, _path: &Path) -> std::io::Result<crate::io::DirectFile> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 }
 
 const SEGMENT: ByteSize = mebibytes(1);
@@ -194,18 +200,20 @@ fn allocated(dir: &Path, base: i64) -> u64 {
     std::os::unix::fs::MetadataExt::blocks(&metadata) * 512
 }
 
-/// On a real file the reservation takes the blocks and leaves the length
-/// alone, so every reader still sees exactly the batches written, and the
-/// seal hands the blocks back. A filesystem that cannot reserve fails the
-/// first assertion; every one the broker runs on can.
+/// On a real file the reservation takes the blocks without lengthening the
+/// file, and the seal hands them back and leaves the file exactly as long as
+/// its batches. While the segment is active its file may also carry the
+/// block of padding an `O_DIRECT` write leaves, which the seal cuts. A
+/// filesystem that cannot reserve fails the first assertion; every one the
+/// broker runs on can.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_real_reservation_holds_blocks_past_the_end_until_the_seal() {
     let (dir, mut log) = configured_test_log(preallocating());
 
     log.append(&mut sample_batch(3)).unwrap();
-    let written = log_len(dir.path(), 0);
-    assert2::assert!(written == log.size().bytes_u64());
+    let written = log.size().bytes_u64();
+    assert2::assert!(log_len(dir.path(), 0) < SEGMENT.bytes_u64());
     assert2::assert!(allocated(dir.path(), 0) >= SEGMENT.bytes_u64());
 
     assert2::assert!(log.roll().unwrap());
@@ -216,16 +224,29 @@ fn a_real_reservation_holds_blocks_past_the_end_until_the_seal() {
     assert2::assert!(allocated(dir.path(), 3) >= SEGMENT.bytes_u64());
 }
 
-/// A reservation outlives the process that made it. A log reopened without
-/// `preallocate` still finds the blocks an earlier run reserved, and the
-/// seal gives them back rather than leaving them for as long as retention
-/// keeps the segment.
+/// A reservation outlives a process that crashed holding it: nothing on
+/// disk records it but the blocks. A clean close cuts the active segment's
+/// `O_DIRECT` padding, which frees them, so the leftover is made here the way
+/// a crash leaves it. A log reopened without `preallocate` still finds the
+/// blocks, and the seal gives them back rather than leaving them for as long
+/// as retention keeps the segment.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_reopened_segment_gives_back_an_earlier_runs_reservation() {
-    let (dir, mut log) = configured_test_log(preallocating());
+fn a_reopened_segment_gives_back_a_crashed_runs_reservation() {
+    let (dir, mut log) = configured_test_log(LogConfig::default());
     append_samples(&mut log, 1, 3);
     drop(log);
+    let file = File::options()
+        .write(true)
+        .open(name::log_path(dir.path(), 0))
+        .unwrap();
+    rustix::fs::fallocate(
+        &file,
+        rustix::fs::FallocateFlags::KEEP_SIZE,
+        0,
+        SEGMENT.bytes_u64(),
+    )
+    .unwrap();
 
     let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
     assert2::assert!(log.log_end_offset() == Offset(3));

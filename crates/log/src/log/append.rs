@@ -73,12 +73,20 @@ impl Log {
         // than where segments are made: a topic's own config reaches a log
         // only after it is opened, and a truncate takes a reservation away,
         // so this is the one place that sees each segment under the config
-        // in force when it is written. A segment asks once; see
-        // `Segment::reserve`.
-        if segment_allocation == SegmentAllocation::Preallocate
-            && let Some(active) = self.active.as_mut()
-        {
-            active.reserve(segment_size);
+        // in force when it is written. A segment asks once for each; see
+        // `Segment::reserve` and `Segment::write_direct`.
+        #[cfg(test)]
+        let tail_cache_size = self.tail_cache_size;
+        #[cfg(not(test))]
+        let tail_cache_size = crate::config::TAIL_CACHE_SIZE;
+        if let Some(active) = self.active.as_mut() {
+            match segment_allocation {
+                SegmentAllocation::Preallocate => {
+                    active.reserve(segment_size);
+                    active.write_direct(tail_cache_size);
+                }
+                SegmentAllocation::OnWrite => active.write_buffered()?,
+            }
         }
         Ok((index_interval, flush_on_append))
     }
