@@ -67,6 +67,16 @@ pub async fn finish_writer(log: Arc<AuditLog>, handle: tokio::task::JoinHandle<(
     handle.await.unwrap();
 }
 
+/// Emit the supplied lifecycle sequence and drain it through the writer's shutdown.
+pub async fn finish_lifecycle_writer(
+    log: Arc<AuditLog>,
+    handle: tokio::task::JoinHandle<()>,
+    nodes: &[crate::NodeId],
+) {
+    emit_lifecycle(&log, nodes);
+    finish_writer(log, handle).await;
+}
+
 pub fn failed_sink_stats() -> (Arc<FailableSink>, Arc<AuditStats>) {
     let sink = Arc::new(FailableSink::default());
     sink.set_fail(true);
