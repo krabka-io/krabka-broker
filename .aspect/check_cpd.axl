@@ -46,12 +46,29 @@ def snapshot_sources(ctx, work, root):
 
 def detector_args(config, source, output, minimum_tokens = MINIMUM_TOKENS):
     return [
-        "--config", config,
-        "--format", "rust", "--mode", "weak",
-        "--min-tokens", str(minimum_tokens), "--min-lines", str(MINIMUM_LINES),
-        "--max-size", "100mb", "--max-lines", "1000000",
-        "--no-gitignore", "--fail-on-empty", "--exit-code", "1",
-        "--reporters", "console,json", "--output", output, source,
+        "--config",
+        config,
+        "--format",
+        "rust",
+        "--mode",
+        "weak",
+        "--min-tokens",
+        str(minimum_tokens),
+        "--min-lines",
+        str(MINIMUM_LINES),
+        "--max-size",
+        "100mb",
+        "--max-lines",
+        "1000000",
+        "--no-gitignore",
+        "--fail-on-empty",
+        "--exit-code",
+        "1",
+        "--reporters",
+        "console,json",
+        "--output",
+        output,
+        source,
     ]
 
 def repository_report(report, sources, root):
@@ -88,6 +105,7 @@ def prepare_detector(ctx, work, root):
     for name in ["package.json", "package-lock.json"]:
         ctx.std.fs.copy(root + "/tools/cpd/" + name, work + "/" + name)
     _must(ctx, ["npm", "ci", "--no-audit", "--no-fund", "--ignore-scripts", "--prefix", work], root)
+
     # An explicit empty config prevents a local .jscpd.json from relaxing CI.
     config = work + "/config.json"
     ctx.std.fs.write(config, "{}\n")

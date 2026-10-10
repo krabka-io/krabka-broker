@@ -9,7 +9,7 @@ use crate::broker::FetchVisibility;
 use crate::broker::committed_fetch_response;
 
 open_logic! {
-pub(super) fn scheduled_activation_due(activation: Int, uncertainty: Int, now: Int) -> bool {
+pub fn scheduled_activation_due(activation: Int, uncertainty: Int, now: Int) -> bool {
     pearlite! { uncertainty >= 0 && activation + uncertainty <= i64::MAX@
     && activation + uncertainty <= now }
 }

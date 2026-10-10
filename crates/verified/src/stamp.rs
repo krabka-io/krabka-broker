@@ -138,7 +138,7 @@ fn stamp_cursor_in_bounds(bases: Seq<i64>, lasts: Seq<i64>, index: Int) -> bool 
 
 open_logic! {
 /// Every listed stamp range has one inclusive end.
-fn stamp_range_arrays_parallel(bases: Seq<i64>, lasts: Seq<i64>) -> bool {
+pub fn stamp_range_arrays_parallel(bases: Seq<i64>, lasts: Seq<i64>) -> bool {
     pearlite! { bases.len() == lasts.len() }
 }
 }

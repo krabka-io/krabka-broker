@@ -111,7 +111,7 @@ model_types! {
 }
 
 open_logic! {
-fn exact_user_quota_absent(facts: UserClientQuotaFacts) -> bool {
+pub fn exact_user_quota_absent(facts: UserClientQuotaFacts) -> bool {
     pearlite! { facts.exact_pair == QuotaCandidatePresence::Absent
     && facts.exact_user_default_client == QuotaCandidatePresence::Absent
     && facts.exact_user == QuotaCandidatePresence::Absent }

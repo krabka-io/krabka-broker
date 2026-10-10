@@ -845,3 +845,18 @@ function_macros! {
     /// Generate an independent compression-byte oracle with a named codec level.
     compression_bytes_fixture => cross_storage_fixtures::compression_bytes_fixture;
 }
+
+mod archive_rows;
+
+/// Generate one annotated archive-validation walk with coherent proof bindings.
+#[moxy::function(name = "validate_archive_rows")]
+pub fn validate_archive_rows(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    let expanded = archive_rows::expand(tokens.into())?;
+    // Creusot matches logical captures to MIR locals by identifier context.
+    // Reparse the complete function together so generated and supplied annotations
+    // share the same context as the local bindings they describe.
+    Ok(expanded
+        .to_string()
+        .parse()
+        .expect("valid archive walk expansion"))
+}

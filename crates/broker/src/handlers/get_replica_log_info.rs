@@ -134,7 +134,6 @@ fn unanswered(partition: i32, error_code: i16, error_message: &str) -> Partition
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_protocol::Encode;
 
     use super::*;
     use crate::test_support::peer;
@@ -147,7 +146,6 @@ mod tests {
     async fn hosted_partition_reports_current_leader_epoch() {
         use std::sync::{Arc, atomic::Ordering};
 
-        use bytes::BytesMut;
         use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
         use krabka_protocol::owned::{
             get_replica_log_info_request::{self, GetReplicaLogInfoRequest, TopicPartitions},
@@ -210,8 +208,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let mut req_buf = BytesMut::new();
-        req.encode(&mut req_buf, version).expect("encode req");
+        let req_buf = crate::test_support::encode_request(&req, version);
 
         request_identity!(
             (p, peer, ctx),
@@ -238,7 +235,6 @@ mod tests {
     /// `CLUSTER_AUTHORIZATION_FAILED`.
     #[test]
     fn cluster_action_denied_yields_cluster_authorization_failed() {
-        use bytes::BytesMut;
         use krabka_protocol::owned::{
             get_replica_log_info_request::{self, GetReplicaLogInfoRequest, TopicPartitions},
             get_replica_log_info_response::GetReplicaLogInfoResponse,
@@ -263,8 +259,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let mut req_buf = BytesMut::new();
-        req.encode(&mut req_buf, version).expect("encode req");
+        let req_buf = crate::test_support::encode_request(&req, version);
 
         let bytes =
             respond(version, &req_buf, |_, partition| denied_row(partition)).expect("encode resp");

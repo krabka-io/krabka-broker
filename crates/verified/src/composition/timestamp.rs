@@ -147,12 +147,12 @@ pub fn time_archive_valid(entries: Seq<(i64, u32)>, max_relative: Int) -> bool {
 }
 }
 
-validate_archive_rows! {
+krabka_macros::validate_archive_rows! {
 /// Archive row validation makes the remote prefix floor and local binary
 /// scan start agree. Raw trailing padding must be excluded before validation;
 /// the separate remote scan theorem admits its zero-offset rows directly.
 /// Reject exactly invalid rows; successful validation returns actual cursors.
-#[ensures(match result {
+#[ensures(|result| match result {
     Err(()) => !time_archive_valid(entries@, max_relative@),
     Ok((count, remote, local)) => time_archive_valid(entries@, max_relative@)
         && time_cursor_matches(entries@, (count, remote, local))

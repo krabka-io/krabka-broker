@@ -51,6 +51,7 @@ def _test_real_git_snapshots_include_moves_deletions_and_new_files(ctx):
 def _test_real_detector_finds_commented_hidden_copies_and_rejects_empty(ctx):
     work = temp_tree(ctx, {})
     detector, config = prepare_detector(ctx, work, ctx.std.env.bazel_root_dir())
+
     # Distinct statements prevent within-file repeats; copies differ in comments.
     body = "\n".join(["    let value_%s = %s;" % (i, i) for i in range(30)])
     root = temp_tree(ctx, {

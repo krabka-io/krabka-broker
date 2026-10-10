@@ -162,6 +162,43 @@ mod tests {
         )
     }
 
+    #[derive(Clone, Copy, Default)]
+    enum InstalledRole {
+        #[default]
+        Uninstalled,
+        Leader,
+    }
+
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct HostedPartitionSetup {
+        #[default(krabka_audit::NodeId(1))]
+        image_leader: krabka_audit::NodeId,
+        role: InstalledRole,
+    }
+
+    async fn hosted_fixture(
+        setup: HostedPartitionSetup,
+    ) -> (
+        tempfile::TempDir,
+        MetadataImage,
+        PartitionRegistry,
+        Arc<Partition>,
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let image = image_with_topic("orders", setup.image_leader.0);
+        let partitions = PartitionRegistry::new();
+        let partition = local_partition(dir.path());
+        if matches!(setup.role, InstalledRole::Leader) {
+            partition.install_leader_change(1, 0).await;
+        }
+        partitions.insert(
+            "orders".into(),
+            krabka_ids::PartitionIndex(0),
+            partition.clone(),
+        );
+        (dir, image, partitions, partition)
+    }
+
     /// Keep the borrowed context and its log-directory registry in each caller's scope.
     macro_rules! partition_context {
         (($status:ident, $context:ident), $partitions:expr, $image:expr) => {
@@ -210,14 +247,11 @@ mod tests {
 
     #[tokio::test]
     async fn following_locally_is_not_leader_or_follower_unless_debugging() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let image = image_with_topic("orders", 2);
-        let partitions = PartitionRegistry::new();
-        partitions.insert(
-            "orders".into(),
-            krabka_ids::PartitionIndex(0),
-            local_partition(dir.path()),
-        );
+        let (_dir, image, partitions, _partition) = hosted_fixture(HostedPartitionSetup {
+            image_leader: krabka_audit::NodeId(2),
+            ..Default::default()
+        })
+        .await;
         partition_context!((log_dir_status, ctx), &partitions, &image);
 
         let refused = resolve_leadership("orders", 0, -1, -1, ctx).map(|_| ());
@@ -229,16 +263,11 @@ mod tests {
 
     #[tokio::test]
     async fn leading_locally_resolves_and_an_offline_log_dir_is_reported() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let image = image_with_topic("orders", 1);
-        let partitions = PartitionRegistry::new();
-        let partition = local_partition(dir.path());
-        partition.install_leader_change(1, 0).await;
-        partitions.insert(
-            "orders".into(),
-            krabka_ids::PartitionIndex(0),
-            partition.clone(),
-        );
+        let (_dir, image, partitions, partition) = hosted_fixture(HostedPartitionSetup {
+            role: InstalledRole::Leader,
+            ..Default::default()
+        })
+        .await;
         partition_context!((log_dir_status, ctx), &partitions, &image);
         let resolved = resolve_leadership("orders", 0, -1, -1, ctx);
         assert!(resolved.is_ok());
@@ -255,15 +284,8 @@ mod tests {
         // `current_leader` atomic still names the old leader, and a request
         // arriving in that window must not be served from the not-yet-caught-up
         // local log.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let image = image_with_topic("orders", 1);
-        let partitions = PartitionRegistry::new();
-        let partition = local_partition(dir.path());
-        partitions.insert(
-            "orders".into(),
-            krabka_ids::PartitionIndex(0),
-            partition.clone(),
-        );
+        let (_dir, image, partitions, partition) =
+            hosted_fixture(HostedPartitionSetup::default()).await;
         partition_context!((log_dir_status, ctx), &partitions, &image);
 
         let got = resolve_leadership("orders", 0, -1, -1, ctx).map(|_| ());

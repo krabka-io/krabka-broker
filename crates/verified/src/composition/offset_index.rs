@@ -15,11 +15,11 @@ pub fn offset_archive_valid(entries: Seq<(u32, u32)>, max_relative: Int, log_byt
 }
 }
 
-validate_archive_rows! {
+krabka_macros::validate_archive_rows! {
 /// Return actual floor/ceiling byte positions after complete row validation.
 /// Invalid archives are rejected exactly. Empty indexes keep the zero fallback,
 /// including empty logs. Byte bounds alone do not establish truthful batch rows.
-#[ensures(match result {
+#[ensures(|result| match result {
     Err(()) => !offset_archive_valid(entries@, max_relative@, log_bytes@),
     Ok((floor, ceiling)) => offset_archive_valid(entries@, max_relative@, log_bytes@)
         && (entries@.len() == 0 || floor@ < log_bytes@)

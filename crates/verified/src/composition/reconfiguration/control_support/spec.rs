@@ -1,7 +1,9 @@
 use creusot_std::prelude::*;
 
 use super::super::spec::{expected_member, grant_count, has_node, membership_matches_change};
-use crate::reconfiguration::VoterChangeKind;
+use crate::reconfiguration::{
+    ReconfigurationState, TargetVoter, VoterChangeKind, VoterChangeRequest,
+};
 
 open_logic! {
 pub fn control_record_count(version: u16, kind: VoterChangeKind) -> Int {
@@ -90,7 +92,7 @@ pub fn prefix_grants_agree(
 }
 
 #[logic(open)]
-pub(super) fn control_request_admitted(
+pub fn control_request_admitted(
     old: Seq<u64>,
     state: crate::reconfiguration::ReconfigurationState,
     request: crate::reconfiguration::VoterChangeRequest,
