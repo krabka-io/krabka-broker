@@ -31,18 +31,31 @@ macro_rules! refusal_token_fixture {
     };
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct TokenMutationIndex(pub usize);
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct MutationSeedSetup {
+    pub index: TokenMutationIndex,
+    #[default(TokenPeriodMillis(60_000))]
+    pub expiry_delta: TokenPeriodMillis,
+    #[default(TokenPeriodMillis(DAY_MS))]
+    pub maximum_delta: TokenPeriodMillis,
+}
+
 /// Seed one mutation case against the same wall-clock reading for both limits.
 macro_rules! seeded_token_fixture {
-    (($token_id:ident, $hmac:ident, $seeded_at:ident, $maximum:ident), $controller:expr, $index:expr, $expiry_delta:expr, $max_delta:expr) => {
-        let $token_id = format!("tok-{}", $index);
+    (($token_id:ident, $hmac:ident, $seeded_at:ident, $maximum:ident), $controller:expr, $setup:expr) => {
+        let seed_setup = $setup;
+        let $token_id = format!("tok-{}", seed_setup.index.0);
         let $hmac = crate::handlers::delegation_token_test_support::hmac_for(&$token_id);
         let $seeded_at = crate::time_util::now_ms();
-        let $maximum = $seeded_at + $max_delta;
+        let $maximum = $seeded_at + seed_setup.maximum_delta.0;
         crate::handlers::delegation_token_test_support::seed_token(
             $controller,
             crate::handlers::delegation_token_test_support::TokenSetup {
                 token_id: &$token_id,
-                expires_at: crate::test_support::UnixMillis($seeded_at + $expiry_delta),
+                expires_at: crate::test_support::UnixMillis($seeded_at + seed_setup.expiry_delta.0),
                 max_expires_at: crate::test_support::UnixMillis($maximum),
                 ..crate::handlers::delegation_token_test_support::TokenSetup::for_mutation()
             },
@@ -351,26 +364,109 @@ pub(super) async fn refusal_tokens(
     (live, expired)
 }
 
-/// The expiry returned by a successful mutation lies in its caller-pinned
-/// wall-clock window, or equals the caller-pinned lifetime cap.
+#[derive(Clone, Copy, Default)]
+pub(super) struct TokenMutationWindow {
+    before: crate::test_support::UnixMillis,
+    after: crate::test_support::UnixMillis,
+}
+
+/// Pin independent wall-clock bounds around execution of a token mutation.
+pub(super) async fn in_mutation_window<F: std::future::Future>(
+    mutation: F,
+) -> (TokenMutationWindow, F::Output) {
+    let before = crate::test_support::UnixMillis(crate::time_util::now_ms());
+    let response = mutation.await;
+    let after = crate::test_support::UnixMillis(crate::time_util::now_ms());
+    (TokenMutationWindow { before, after }, response)
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) enum TokenPersistence {
+    #[default]
+    Deleted,
+    Stored,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum TokenExpiryRule {
+    RelativeToMutation(TokenPeriodMillis),
+    LifetimeCap,
+}
+
+impl TokenExpiryRule {
+    pub fn with_cap(self, maximum: crate::test_support::UnixMillis) -> ExpiryExpectation {
+        match self {
+            Self::RelativeToMutation(period) => ExpiryExpectation::RelativeToMutation(period),
+            Self::LifetimeCap => ExpiryExpectation::LifetimeCap(maximum),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ExpiryExpectation {
+    RelativeToMutation(TokenPeriodMillis),
+    LifetimeCap(crate::test_support::UnixMillis),
+}
+
+impl ExpiryExpectation {
+    pub fn for_period(
+        period: Option<TokenPeriodMillis>,
+        maximum: crate::test_support::UnixMillis,
+    ) -> Self {
+        match period {
+            Some(period) => Self::RelativeToMutation(period),
+            None => Self::LifetimeCap(maximum),
+        }
+    }
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct TokenExpirySetup {
+    pub window: TokenMutationWindow,
+    #[default(ExpiryExpectation::LifetimeCap(crate::test_support::UnixMillis(0)))]
+    pub expectation: ExpiryExpectation,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct TokenMutationOutcome {
+    pub error: crate::test_support::KafkaErrorCode,
+    pub expiry: crate::test_support::UnixMillis,
+}
+
+/// The expiry lies in the independently pinned clock window, or equals the lifetime cap.
 pub(super) fn check_expiry_window(
     case: &str,
-    (error_code, expiry): (i16, i64),
-    (before, after): (i64, i64),
-    expected_delta: Option<i64>,
-    maximum: i64,
+    outcome: TokenMutationOutcome,
+    setup: TokenExpirySetup,
 ) {
-    assert!(error_code == crate::codes::NONE, "{case}");
-    match expected_delta {
-        Some(delta) => assert!(
-            (before + delta..=after + delta).contains(&expiry),
-            "{case}: {} not in [{}, {}]",
-            expiry,
-            before + delta,
-            after + delta
-        ),
-        None => assert!(expiry == maximum, "{case}"),
+    assert!(outcome.error.0 == crate::codes::NONE, "{case}");
+    match setup.expectation {
+        ExpiryExpectation::RelativeToMutation(delta) => {
+            let before = setup.window.before.0;
+            let after = setup.window.after.0;
+            assert!(
+                (before + delta.0..=after + delta.0).contains(&outcome.expiry.0),
+                "{case}: {} not in [{}, {}]",
+                outcome.expiry.0,
+                before + delta.0,
+                after + delta.0
+            );
+        }
+        ExpiryExpectation::LifetimeCap(maximum) => assert!(outcome.expiry == maximum, "{case}"),
     }
+}
+
+macro_rules! check_token_expiry {
+    ($case:expr, $response:expr, $setup:expr) => {
+        crate::handlers::delegation_token_test_support::check_expiry_window(
+            $case,
+            crate::handlers::delegation_token_test_support::TokenMutationOutcome {
+                error: crate::test_support::KafkaErrorCode($response.error_code),
+                expiry: crate::test_support::UnixMillis($response.expiry_timestamp_ms),
+            },
+            $setup,
+        );
+    };
 }
 
 pub(super) fn stored_expiry(controller: &ControllerHandle, token_id: &str) -> Option<i64> {

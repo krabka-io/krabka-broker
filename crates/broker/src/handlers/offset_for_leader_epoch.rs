@@ -436,9 +436,7 @@ mod tests {
     async fn leader_check_needs_the_installed_role_and_the_image_to_name_this_node() {
         let image = crate::handlers::produce::test_support::image_with_topic("orders", &[1, 2]);
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let partition = crate::test_support::open_partition(
-            dir.path(),
+        let (_dir, partition) = crate::test_support::temporary_partition(
             crate::test_support::StandalonePartitionSetup::default(),
         );
 

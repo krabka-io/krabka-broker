@@ -170,9 +170,13 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::handlers::delegation_token_test_support::{
-        DAY_MS, OwnershipRefusalSetup, TokenMutationRefusalSetup, authed,
-        mutation_credential_refusals, ownership_refusal, test_controller,
+    use crate::{
+        handlers::delegation_token_test_support::{
+            DAY_MS, ExpiryExpectation, MutationSeedSetup, OwnershipRefusalSetup, TokenExpirySetup,
+            TokenMutationIndex, TokenMutationRefusalSetup, TokenPeriodMillis, authed,
+            in_mutation_window, mutation_credential_refusals, ownership_refusal, test_controller,
+        },
+        test_support::UnixMillis,
     };
 
     fn stored_expiry(controller: &ControllerHandle, token_id: &str) -> i64 {
@@ -339,13 +343,14 @@ mod tests {
             seeded_token_fixture!(
                 (token_id, hmac, seeded_at, max_timestamp_ms),
                 &controller,
-                index,
-                expiry_delta,
-                max_delta
+                MutationSeedSetup {
+                    index: TokenMutationIndex(index),
+                    expiry_delta: TokenPeriodMillis(expiry_delta),
+                    maximum_delta: TokenPeriodMillis(max_delta)
+                }
             );
 
-            let before = now_ms();
-            let resp = handle(
+            let (window, resp) = in_mutation_window(handle(
                 &RenewDelegationTokenRequest {
                     hmac: hmac.into(),
                     renew_period_ms: period,
@@ -355,16 +360,18 @@ mod tests {
                 Some(&secret),
                 default_period,
                 &*controller,
-            )
+            ))
             .await;
-            let after = now_ms();
-
-            crate::handlers::delegation_token_test_support::check_expiry_window(
+            check_token_expiry!(
                 case,
-                (resp.error_code, resp.expiry_timestamp_ms),
-                (before, after),
-                expected_delta,
-                max_timestamp_ms,
+                resp,
+                TokenExpirySetup {
+                    window,
+                    expectation: ExpiryExpectation::for_period(
+                        expected_delta.map(TokenPeriodMillis),
+                        UnixMillis(max_timestamp_ms)
+                    ),
+                }
             );
             assert!(
                 stored_expiry(&controller, &token_id) == resp.expiry_timestamp_ms,

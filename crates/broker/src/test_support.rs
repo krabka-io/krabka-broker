@@ -192,6 +192,15 @@ where
     (addr, shutdown, cert_path)
 }
 
+/// Own the temporary directory alongside its replica until the caller drops both.
+pub(crate) fn temporary_partition(
+    setup: StandalonePartitionSetup<'_>,
+) -> (tempfile::TempDir, Arc<crate::partition::Partition>) {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let partition = open_partition(directory.path(), setup);
+    (directory, partition)
+}
+
 /// Opens a local replica with a running writer in the supplied log directory.
 pub(crate) fn open_partition(
     log_dir: &std::path::Path,

@@ -117,15 +117,37 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::handlers::delegation_token_test_support::{
-        DAY_MS, OwnershipRefusalSetup, TokenMutationRefusalSetup, TokenPeriodMillis, authed,
-        mutation_credential_refusals, ownership_refusal, stored_expiry, test_controller,
+    use crate::{
+        handlers::delegation_token_test_support::{
+            DAY_MS, MutationSeedSetup, OwnershipRefusalSetup, TokenExpiryRule, TokenExpirySetup,
+            TokenMutationIndex, TokenMutationRefusalSetup, TokenPeriodMillis, TokenPersistence,
+            authed, in_mutation_window, mutation_credential_refusals, ownership_refusal,
+            stored_expiry, test_controller,
+        },
+        test_support::UnixMillis,
     };
 
     /// Refusals come in Kafka's order, carry Kafka's expiry, and leave the
     /// token alone. A caller that is neither owner nor renewer gets
     /// `DELEGATION_TOKEN_OWNER_MISMATCH`, a super user included and before
     /// the expiry check.
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct ExpiryCaseSetup<'a> {
+        #[default("owner deletes")]
+        name: &'a str,
+        #[default("alice")]
+        caller: &'a str,
+        #[default(TokenPeriodMillis(-1))]
+        period: TokenPeriodMillis,
+        #[default(TokenPeriodMillis(60_000))]
+        expiry_delta: TokenPeriodMillis,
+        #[default(TokenPeriodMillis(DAY_MS))]
+        maximum_delta: TokenPeriodMillis,
+        #[default(TokenExpiryRule::RelativeToMutation(TokenPeriodMillis(0)))]
+        rule: TokenExpiryRule,
+        persistence: TokenPersistence,
+    }
+
     #[tokio::test]
     async fn refusals_follow_kafka_order() {
         refusal_token_fixture!((_dir, controller, secret, live, expired));
@@ -207,101 +229,102 @@ mod tests {
     async fn expires_to_kafka_deadline() {
         token_fixture!(dir, controller, secret);
 
-        // (case, caller, period, current expiry delta, max delta, expected
-        //  expiry delta; `None` means the max timestamp; whether the token
-        //  is deleted)
         let cases = [
-            ("owner deletes", "alice", -1, 60_000, DAY_MS, Some(0), true),
-            ("renewer deletes", "bob", -5, 60_000, DAY_MS, Some(0), true),
-            (
-                "owner deletes an expired token",
-                "alice",
-                -1,
-                -1_000,
-                DAY_MS,
-                Some(0),
-                true,
-            ),
-            (
-                "zero expires now",
-                "alice",
-                0,
-                60_000,
-                DAY_MS,
-                Some(0),
-                false,
-            ),
-            (
-                "renewer shortens",
-                "bob",
-                30_000,
-                60_000,
-                DAY_MS,
-                Some(30_000),
-                false,
-            ),
-            (
-                "owner lengthens",
-                "alice",
-                120_000,
-                60_000,
-                DAY_MS,
-                Some(120_000),
-                false,
-            ),
-            (
-                "capped at the max timestamp",
-                "alice",
-                2 * DAY_MS,
-                60_000,
-                DAY_MS,
-                None,
-                false,
-            ),
-            (
-                "period near i64::MAX saturates",
-                "alice",
-                i64::MAX,
-                60_000,
-                DAY_MS,
-                None,
-                false,
-            ),
+            ExpiryCaseSetup::default(),
+            ExpiryCaseSetup {
+                name: "renewer deletes",
+                caller: "bob",
+                period: TokenPeriodMillis(-5),
+                ..Default::default()
+            },
+            ExpiryCaseSetup {
+                name: "owner deletes an expired token",
+                expiry_delta: TokenPeriodMillis(-1_000),
+                ..Default::default()
+            },
+            ExpiryCaseSetup {
+                name: "zero expires now",
+                period: TokenPeriodMillis(0),
+                persistence: TokenPersistence::Stored,
+                ..Default::default()
+            },
+            ExpiryCaseSetup {
+                name: "renewer shortens",
+                caller: "bob",
+                period: TokenPeriodMillis(30_000),
+                rule: TokenExpiryRule::RelativeToMutation(TokenPeriodMillis(30_000)),
+                persistence: TokenPersistence::Stored,
+                ..Default::default()
+            },
+            ExpiryCaseSetup {
+                name: "owner lengthens",
+                period: TokenPeriodMillis(120_000),
+                rule: TokenExpiryRule::RelativeToMutation(TokenPeriodMillis(120_000)),
+                persistence: TokenPersistence::Stored,
+                ..Default::default()
+            },
+            ExpiryCaseSetup {
+                name: "capped at the max timestamp",
+                period: TokenPeriodMillis(2 * DAY_MS),
+                rule: TokenExpiryRule::LifetimeCap,
+                persistence: TokenPersistence::Stored,
+                ..Default::default()
+            },
+            ExpiryCaseSetup {
+                name: "period near i64::MAX saturates",
+                period: TokenPeriodMillis(i64::MAX),
+                rule: TokenExpiryRule::LifetimeCap,
+                persistence: TokenPersistence::Stored,
+                ..Default::default()
+            },
         ];
-        for (index, (case, caller, period, expiry_delta, max_delta, expected_delta, deleted)) in
-            cases.into_iter().enumerate()
+        for (
+            index,
+            ExpiryCaseSetup {
+                name: case,
+                caller,
+                period,
+                expiry_delta,
+                maximum_delta,
+                rule,
+                persistence,
+            },
+        ) in cases.into_iter().enumerate()
         {
             seeded_token_fixture!(
                 (token_id, hmac, seeded_at, max_timestamp_ms),
                 &controller,
-                index,
-                expiry_delta,
-                max_delta
+                MutationSeedSetup {
+                    index: TokenMutationIndex(index),
+                    expiry_delta,
+                    maximum_delta
+                }
             );
 
-            let before = now_ms();
-            let resp = handle(
+            let (window, resp) = in_mutation_window(handle(
                 &ExpireDelegationTokenRequest {
                     hmac: hmac.into(),
-                    expiry_time_period_ms: period,
+                    expiry_time_period_ms: period.0,
                     ..Default::default()
                 },
                 &authed(caller),
                 Some(&secret),
                 &*controller,
-            )
+            ))
             .await;
-            let after = now_ms();
-
-            crate::handlers::delegation_token_test_support::check_expiry_window(
+            check_token_expiry!(
                 case,
-                (resp.error_code, resp.expiry_timestamp_ms),
-                (before, after),
-                expected_delta,
-                max_timestamp_ms,
+                resp,
+                TokenExpirySetup {
+                    window,
+                    expectation: rule.with_cap(UnixMillis(max_timestamp_ms)),
+                }
             );
             let stored = stored_expiry(&controller, &token_id);
-            let want = (!deleted).then_some(resp.expiry_timestamp_ms);
+            let want = match persistence {
+                TokenPersistence::Deleted => None,
+                TokenPersistence::Stored => Some(resp.expiry_timestamp_ms),
+            };
             assert!(stored == want, "{case}");
         }
         controller.cancel().await;
