@@ -173,11 +173,10 @@ fn translate(pattern: &str) -> Result<String, String> {
                     class_first = false;
                     class_first_member = false;
                     continue;
-                } else {
-                    // Rust accepts this as set subtraction; RE2J parses it as
-                    // a descending range and refuses it.
-                    return Err(INVALID_CHAR_RANGE.to_owned());
                 }
+                // Rust accepts this as set subtraction; RE2J parses it as a
+                // descending range and refuses it.
+                return Err(INVALID_CHAR_RANGE.to_owned());
             } else {
                 out.push(current);
             }
