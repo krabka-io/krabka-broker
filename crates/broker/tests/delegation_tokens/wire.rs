@@ -20,7 +20,8 @@ use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
 use crate::{
-    kafka_wire, kafka_wire::ExchangeSetup as WireExchangeSetup,
+    kafka_wire,
+    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
     support::wire::CorrelationId as WireCorrelationId,
 };
 
@@ -48,7 +49,15 @@ pub(crate) async fn sasl_plain_authenticate(
     user: &str,
     password: &[u8],
 ) -> io::Result<TcpStream> {
-    kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password).await
+    kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user,
+            password: (password).to_vec(),
+        },
+    )
+    .await
 }
 
 /// SCRAM-SHA-256 delegation-token driver. It has the same wire shape as

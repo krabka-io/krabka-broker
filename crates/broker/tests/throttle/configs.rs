@@ -15,7 +15,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     CLIENT_ID, kafka_wire,
-    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
     support::{
         configs::{
             describe_resource, incremental_config, incremental_request, incremental_resource,
@@ -37,9 +37,16 @@ pub async fn drive_incremental_alter_configs(
     pass: &str,
     resources: ConfigResources,
 ) -> i16 {
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for IncrementalAlterConfigs");
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user,
+            password: (pass.as_bytes()).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for IncrementalAlterConfigs");
     incremental_alter_configs_on(&mut stream, resources).await
 }
 
@@ -81,9 +88,16 @@ pub async fn drive_describe_configs(
         ..Default::default()
     };
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for DescribeConfigs");
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user,
+            password: (pass.as_bytes()).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for DescribeConfigs");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION)
         .expect("encode DescribeConfigs");

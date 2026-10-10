@@ -9,7 +9,10 @@ use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse
 use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
-use crate::harness::{alice_password, wrong_scram_password};
+use crate::{
+    harness::{alice_password, wrong_scram_password},
+    kafka_wire::ScramAuthenticationSetup,
+};
 
 /// Happy-path drive of a SASL/SCRAM-SHA-512 session.
 ///
@@ -105,10 +108,12 @@ pub async fn drive_sasl_scram_session(
     let mut stream = TcpStream::connect(addr).await?;
     crate::kafka_wire::sasl_scram_authenticate_on(
         &mut stream,
-        "krabka-sasl-test",
-        user,
-        password,
-        mechanism,
+        &ScramAuthenticationSetup {
+            client_id: "krabka-sasl-test",
+            user,
+            password: (password).into(),
+            mechanism,
+        },
     )
     .await?;
     crate::harness::metadata_probe(&mut stream, 5).await

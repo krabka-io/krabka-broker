@@ -1,7 +1,6 @@
 use assert2::assert;
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig, Offset};
-use krabka_protocol::records::{Record, RecordBatch};
 use krabka_units::prelude::bytes;
 
 use super::{Checked, Decision, ProducerState, RetainedBatch, SequenceContext};
@@ -24,33 +23,28 @@ pub(super) async fn check(
         .await
 }
 
-fn batch(pid: i64, sequence: i32, delta: i32) -> RecordBatch {
-    RecordBatch {
-        producer_id: pid,
-        producer_epoch: 7,
-        base_sequence: sequence,
-        last_offset_delta: delta,
-        records: (0..=delta)
-            .map(|offset_delta| Record {
-                offset_delta,
-                ..Record::default()
-            })
-            .collect(),
-        ..RecordBatch::default()
-    }
-}
+use super::test_support::{
+    ProducerBatchSetup, ProducerSequence, SequenceDelta, opened_log, producer_batch as batch,
+};
 
 #[tokio::test]
 async fn reopening_rebuilds_only_the_snapshot_seed_and_uncovered_tail() {
     for count in 0..=7 {
-        let dir = tempfile::tempdir().unwrap();
-        let config = LogConfig::default();
-        let mut log = Log::open(dir.path(), config.clone()).unwrap();
-        log.append(&mut batch(42, 0, 0)).unwrap();
-        log.append(&mut batch(42, 1, 0)).unwrap();
+        let (dir, config, mut log) = opened_log();
+        log.append(&mut batch(ProducerBatchSetup::default()))
+            .unwrap();
+        log.append(&mut batch(ProducerBatchSetup {
+            sequence: ProducerSequence(1),
+            ..Default::default()
+        }))
+        .unwrap();
         log.take_producer_snapshot().unwrap();
         for sequence in 2..2 + count {
-            log.append(&mut batch(42, sequence, 0)).unwrap();
+            log.append(&mut batch(ProducerBatchSetup {
+                sequence: ProducerSequence(sequence),
+                ..Default::default()
+            }))
+            .unwrap();
         }
         drop(log);
         let reopened = Log::open(dir.path(), config).unwrap();
@@ -112,8 +106,16 @@ async fn a_surviving_snapshot_preserves_a_retry_below_the_local_floor() {
         ..LogConfig::default()
     };
     let mut log = Log::open(dir.path(), config.clone()).unwrap();
-    log.append(&mut batch(42, 0, 1)).unwrap();
-    log.append(&mut batch(99, 0, 0)).unwrap();
+    log.append(&mut batch(ProducerBatchSetup {
+        delta: SequenceDelta(1),
+        ..Default::default()
+    }))
+    .unwrap();
+    log.append(&mut batch(ProducerBatchSetup {
+        producer: krabka_log::ProducerId(99),
+        ..Default::default()
+    }))
+    .unwrap();
     log.take_producer_snapshot().unwrap();
     assert!(log.trim_to_offset(Offset(2)).unwrap() == Offset(2));
     drop(log);

@@ -307,6 +307,41 @@ pub(crate) mod test_support {
         )
     }
 
+    pub(crate) fn producer_quota_image(entities: Vec<QuotaEntitySpec<'_>>) -> MetadataImage {
+        uniform_quota_image(UniformQuotaImageSetup {
+            entities,
+            ..Default::default()
+        })
+    }
+
+    pub(crate) fn app1_producer_quota() -> ClientQuotaRecord {
+        quota_record(QuotaRecordSetup {
+            entity: vec![("client-id", Some("app1"))],
+            value: QuotaValue(200.0),
+            ..Default::default()
+        })
+    }
+
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    pub(crate) struct UserBucketSetup<'a> {
+        #[default("producer_byte_rate")]
+        pub key: &'a str,
+        #[default(QuotaValue(0.0))]
+        pub rate: QuotaValue,
+    }
+
+    pub(crate) fn alice_bucket(
+        setup: UserBucketSetup<'_>,
+    ) -> (
+        std::sync::Arc<super::QuotaBuckets>,
+        std::sync::Arc<crate::throttle::TokenBucket>,
+    ) {
+        let buckets = std::sync::Arc::new(super::QuotaBuckets::new());
+        let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+        let bucket = buckets.get_or_create(setup.key, &key, setup.rate.0);
+        (buckets, bucket)
+    }
+
     /// The 5,000-byte pair used to compare lookup precedence with bucket refresh.
     pub(crate) fn alice_app1_producer_quota() -> ClientQuotaRecord {
         quota_record(QuotaRecordSetup {

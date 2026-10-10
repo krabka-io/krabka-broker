@@ -85,7 +85,7 @@ use krabka_protocol::{
 use crate::support::{
     configs::feature_update,
     discovery::api_versions_request_for,
-    sasl::scram_upsertion,
+    sasl::{ScramAlgorithm, ScramIterations, ScramUpsertionSetup, scram_upsertion},
     topics::{creatable_topic, create_topic_request},
 };
 
@@ -502,15 +502,13 @@ async fn controller_listener_serves_the_scram_write_path() {
 
     let altered = connection
         .send(AlterUserScramCredentialsRequest {
-            upsertions: vec![scram_upsertion(
-                "alice",
-                SCRAM_SHA_256,
-                8_192,
-                (
-                    Bytes::from_static(b"salt-bytes"),
-                    Bytes::from_static(b"salted-password-bytes"),
-                ),
-            )],
+            upsertions: vec![scram_upsertion(ScramUpsertionSetup {
+                mechanism: ScramAlgorithm::Sha256,
+                iterations: ScramIterations(8_192),
+                salt: Bytes::from_static(b"salt-bytes"),
+                salted_password: Bytes::from_static(b"salted-password-bytes"),
+                ..Default::default()
+            })],
             ..Default::default()
         })
         .await

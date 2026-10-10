@@ -11,7 +11,7 @@ use krabka_protocol::{Decode, Encode};
 
 use super::{round_trip, sasl_plain_authenticate};
 use crate::{
-    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
     support::wire::HeaderEncoding as RequestHeaderEncoding,
 };
 
@@ -75,9 +75,16 @@ pub async fn drive_alter_client_quotas_sasl(
 
     let version: i16 = 1; // flexible
 
-    let mut stream = sasl_plain_authenticate(addr, client_id, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for AlterClientQuotas");
+    let mut stream = sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id,
+            user,
+            password: (pass.as_bytes()).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for AlterClientQuotas");
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .expect("encode AlterClientQuotas");
@@ -146,9 +153,16 @@ pub async fn drive_describe_client_quotas_sasl(
 
     let version: i16 = 1; // flexible
 
-    let mut stream = sasl_plain_authenticate(addr, client_id, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for DescribeClientQuotas");
+    let mut stream = sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id,
+            user,
+            password: (pass.as_bytes()).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for DescribeClientQuotas");
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .expect("encode DescribeClientQuotas");

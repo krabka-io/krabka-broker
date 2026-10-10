@@ -212,9 +212,9 @@ mod tests {
 
     #[test]
     fn refresh_updates_existing_bucket_rate() {
-        let buckets = Arc::new(QuotaBuckets::new());
-        let key: EntityKey = vec![("user".into(), Some("alice".into()))];
-        let b = buckets.get_or_create("producer_byte_rate", &key, 0.0);
+        let (buckets, b) = crate::quota::test_support::alice_bucket(
+            crate::quota::test_support::UserBucketSetup::default(),
+        );
         assert!(b.byte_rate() == bucket_rate(0.0));
 
         let img = img_with_quota(crate::quota::test_support::QuotaRecordSetup {
@@ -227,9 +227,11 @@ mod tests {
 
     #[test]
     fn refresh_zeroes_bucket_when_quota_removed_from_image() {
-        let buckets = Arc::new(QuotaBuckets::new());
-        let key: EntityKey = vec![("user".into(), Some("alice".into()))];
-        let b = buckets.get_or_create("producer_byte_rate", &key, 1024.0);
+        let (buckets, b) =
+            crate::quota::test_support::alice_bucket(crate::quota::test_support::UserBucketSetup {
+                rate: crate::quota::test_support::QuotaValue(1024.0),
+                ..Default::default()
+            });
         assert!(b.byte_rate() == bucket_rate(1024.0));
 
         let empty = Arc::new(MetadataImage::new(uuid::Uuid::nil()));
@@ -515,9 +517,12 @@ mod tests {
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for (quota_key, rate, want) in cases {
-            let buckets = Arc::new(QuotaBuckets::new());
-            let key: EntityKey = vec![("user".into(), Some("alice".into()))];
-            let b = buckets.get_or_create(quota_key, &key, 1024.0);
+            let (buckets, b) = crate::quota::test_support::alice_bucket(
+                crate::quota::test_support::UserBucketSetup {
+                    key: quota_key,
+                    rate: crate::quota::test_support::QuotaValue(1024.0),
+                },
+            );
 
             let img = img_with_quota(crate::quota::test_support::QuotaRecordSetup {
                 key: quota_key,
@@ -547,13 +552,7 @@ mod tests {
             ("user".into(), Some("alice".into())),
         ];
         let alice = || quota_record(crate::quota::test_support::QuotaRecordSetup::default());
-        let app1 = || {
-            quota_record(crate::quota::test_support::QuotaRecordSetup {
-                entity: vec![("client-id", Some("app1"))],
-                value: crate::quota::test_support::QuotaValue(200.0),
-                ..Default::default()
-            })
-        };
+        let app1 = || crate::quota::test_support::app1_producer_quota();
         let alice_app1 = || crate::quota::test_support::alice_app1_producer_quota();
         // (label, bucket key, quotas the bucket was made under, quotas after
         // the alter, the rate the bucket keeps)

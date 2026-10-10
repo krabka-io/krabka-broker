@@ -22,9 +22,6 @@ use tokio::sync::Mutex;
 use crate::partition::LogOffset;
 
 #[cfg(test)]
-#[macro_use]
-mod commit_macro;
-#[cfg(test)]
 mod completed_commit;
 mod decision;
 mod entry;
@@ -36,6 +33,8 @@ mod replication_mirror;
 mod restart_agreement;
 #[cfg(test)]
 mod snapshot_tail;
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

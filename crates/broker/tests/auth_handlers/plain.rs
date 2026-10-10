@@ -13,6 +13,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     harness::{alice_password, round_trip, wrong_scram_password},
+    kafka_wire::PlainAuthenticationSetup,
     support::wire::{HeaderEncoding as RequestHeaderEncoding, SocketExchangeSetup},
 };
 
@@ -124,8 +125,15 @@ async fn drive_sasl_plain_session(
     password: &[u8],
 ) -> Result<(), io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
-    crate::kafka_wire::sasl_plain_authenticate_on(&mut stream, "krabka-sasl-test", user, password)
-        .await?;
+    crate::kafka_wire::sasl_plain_authenticate_on(
+        &mut stream,
+        &PlainAuthenticationSetup {
+            client_id: "krabka-sasl-test",
+            user,
+            password: (password).to_vec(),
+        },
+    )
+    .await?;
     crate::harness::metadata_probe(&mut stream, 4).await
 }
 

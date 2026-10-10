@@ -259,14 +259,20 @@ const IDEMPOTENT_EPOCH_BUMP: &[Step] = &[
     },
 ];
 
+const TV2_MARKER_EPOCH_EXPECTATIONS: [(Probe, Decision); 3] = [
+    ((4, 0, 0), Decision::Append),
+    ((4, 3, 0), Decision::OutOfOrder),
+    ((3, 0, 2), Decision::Fenced),
+];
+
 const CASES: &[Case] = &[
     Case {
         name: "transaction version 2 commit bumps the epoch",
         steps: TV2_COMMIT,
         expected: &[
-            ((4, 0, 0), Decision::Append),
-            ((4, 3, 0), Decision::OutOfOrder),
-            ((3, 0, 2), Decision::Fenced),
+            TV2_MARKER_EPOCH_EXPECTATIONS[0],
+            TV2_MARKER_EPOCH_EXPECTATIONS[1],
+            TV2_MARKER_EPOCH_EXPECTATIONS[2],
             ((3, 3, 0), Decision::Fenced),
             ((5, 0, 0), Decision::Append),
             ((5, 3, 0), Decision::OutOfOrder),
@@ -275,11 +281,7 @@ const CASES: &[Case] = &[
     Case {
         name: "transaction version 2 abort bumps the epoch",
         steps: TV2_ABORT,
-        expected: &[
-            ((4, 0, 0), Decision::Append),
-            ((4, 3, 0), Decision::OutOfOrder),
-            ((3, 0, 2), Decision::Fenced),
-        ],
+        expected: &TV2_MARKER_EPOCH_EXPECTATIONS,
     },
     Case {
         name: "transaction version 2 second transaction restarts at 0",

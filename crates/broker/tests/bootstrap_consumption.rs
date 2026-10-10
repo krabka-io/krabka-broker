@@ -36,7 +36,7 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::net::TcpStream;
 
 use crate::{
-    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    kafka_wire::{ExchangeSetup as WireExchangeSetup, ScramAuthenticationSetup},
     support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
 };
 
@@ -153,10 +153,12 @@ async fn drive_sasl_scram_session(
     let mut stream = TcpStream::connect(addr).await?;
     kafka_wire::sasl_scram_authenticate_on(
         &mut stream,
-        CLIENT_ID,
-        user,
-        password,
-        krabka_security::SaslMechanism::ScramSha512,
+        &ScramAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user,
+            password: (password).into(),
+            ..Default::default()
+        },
     )
     .await?;
     let md_resp: MetadataResponse = kafka_wire::exchange(

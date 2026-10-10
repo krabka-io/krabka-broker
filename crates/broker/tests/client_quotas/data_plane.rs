@@ -19,7 +19,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     CLIENT_ID, kafka_wire,
-    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
     support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
 };
 
@@ -107,9 +107,16 @@ pub async fn drive_fetch_sasl(
 
     let req = crate::support::topics::consumer_fetch_request(topic);
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass)
-        .await
-        .expect("SASL authenticate for Fetch");
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user,
+            password: (pass).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for Fetch");
     let mut body = BytesMut::new();
     req.encode(&mut body, version).expect("encode Fetch");
     let resp_bytes = kafka_wire::round_trip(

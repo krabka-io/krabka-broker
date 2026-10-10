@@ -20,7 +20,7 @@ use krabka_protocol::{
 
 use crate::{
     CLIENT_ID, kafka_wire,
-    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
     support::{topics::creatable_topic, wire::HeaderEncoding as RequestHeaderEncoding},
 };
 
@@ -46,9 +46,16 @@ pub(crate) async fn drive_create_topics_sasl(
         },
     );
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for CreateTopics");
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user,
+            password: (pass.as_bytes()).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode CreateTopics");
     let resp_bytes = kafka_wire::round_trip(
@@ -91,9 +98,16 @@ pub(crate) async fn drive_delete_topics_sasl(
         ..Default::default()
     };
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for DeleteTopics");
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user,
+            password: (pass.as_bytes()).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for DeleteTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode DeleteTopics");
     let resp_bytes = kafka_wire::round_trip(

@@ -7,7 +7,8 @@ use std::net::SocketAddr;
 use krabka_ids::ApiKey as WireApiKey;
 
 use crate::{
-    CLIENT_ID, kafka_wire, kafka_wire::ExchangeSetup as WireExchangeSetup,
+    CLIENT_ID, kafka_wire,
+    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
     support::wire::HeaderEncoding as RequestHeaderEncoding,
 };
 
@@ -29,9 +30,16 @@ pub(crate) async fn drive_describe_user_scram_credentials_sasl(
 
     let req = describe_request(users_filter);
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for DescribeUserScramCredentials");
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user,
+            password: (pass.as_bytes()).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for DescribeUserScramCredentials");
 
     let resp: DescribeUserScramCredentialsResponse = kafka_wire::exchange(
         &mut stream,

@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions};
 
 pub use crate::kafka_wire::create_configured_topic_sasl as create_topic_sasl_plain;
-use crate::{kafka_wire, wire::CLIENT_ID};
+use crate::{kafka_wire, kafka_wire::PlainAuthenticationSetup, wire::CLIENT_ID};
 
 /// Drives `ElectLeaders` over a SASL/PLAIN authenticated connection.
 ///
@@ -25,9 +25,16 @@ pub async fn drive_elect_leaders_sasl_plain(
     partitions: Vec<i32>,
     election_type: i8,
 ) -> Vec<(i32, i16)> {
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password)
-        .await
-        .expect("SASL authenticate for ElectLeaders");
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user,
+            password: (password).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for ElectLeaders");
     let req = ElectLeadersRequest {
         election_type,
         topic_partitions: Some(vec![TopicPartitions {

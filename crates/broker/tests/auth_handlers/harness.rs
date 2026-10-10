@@ -8,22 +8,17 @@ use std::io;
 use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use tokio::net::TcpStream;
 
-use crate::{
-    kafka_wire,
-    kafka_wire::ExchangeSetup as WireExchangeSetup,
-    support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
-};
-
 /// alice's SCRAM test password, built from characters at runtime.
 ///
 /// The value is a non-secret test fixture. But a literal that goes into the
 /// client SASL-auth calls trips GitHub's default code-scanning credential
 /// query. This function keeps those call sites free of literals.
-pub fn alice_password() -> String {
-    ['w', 'o', 'n', 'd', 'e', 'r', 'l', 'a', 'n', 'd']
-        .iter()
-        .collect()
-}
+pub use crate::support::sasl::alice_password;
+use crate::{
+    kafka_wire,
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
+};
 
 /// admin PLAIN test password, built at runtime.
 ///
@@ -128,10 +123,10 @@ pub async fn start_scram_alice(
         .expect("broker must start");
     crate::support::sasl::provision_scram(
         &broker,
-        "alice",
-        alice_password().as_bytes(),
-        mechanism,
-        4096,
+        crate::support::sasl::ScramCredentialSetup {
+            mechanism,
+            ..Default::default()
+        },
     )
     .await;
     broker
@@ -210,10 +205,11 @@ pub async fn start_reauth_broker(
         for user in ["alice", "bob"] {
             crate::support::sasl::provision_scram(
                 &broker,
-                user,
-                alice_password().as_bytes(),
-                mechanism,
-                4096,
+                crate::support::sasl::ScramCredentialSetup {
+                    user: (user).into(),
+                    mechanism,
+                    ..Default::default()
+                },
             )
             .await;
         }

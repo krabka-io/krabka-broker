@@ -31,7 +31,8 @@ use super::{
 use crate::{
     kafka_wire,
     kafka_wire::{
-        ExchangeSetup as WireExchangeSetup, ResponseHeaderSelection as WireResponseHeaderSelection,
+        ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup,
+        ResponseHeaderSelection as WireResponseHeaderSelection,
     },
     support::{
         discovery::api_versions_request_for,
@@ -417,9 +418,7 @@ async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
 
     // One connection for every alice request: re-authenticating would charge
     // each handshake to the same quota bucket.
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "alice", b"alice-secret")
-        .await
-        .expect("SASL authenticate for AddOffsetsToTxn");
+    let mut stream = alice_quota_connection(addr, "SASL authenticate for AddOffsetsToTxn").await;
 
     // Baseline: no quota is configured yet, so there is no delay to report.
     let baseline = drive_add_offsets_to_txn(&mut stream, 10).await;
@@ -456,6 +455,20 @@ async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
 /// `ThrottleTimeMs` at all, and v3 is the first flexible one, which is what a
 /// modern client negotiates with.
 const API_VERSIONS_VERSION: i16 = 3;
+
+/// Open the fixture's Alice session without charging a second handshake.
+async fn alice_quota_connection(addr: std::net::SocketAddr, context: &str) -> TcpStream {
+    kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            password: b"alice-secret".to_vec(),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect(context)
+}
 
 /// Drives one `ApiVersions` v3 handshake on an already-authenticated `stream`
 /// and returns the decoded response.
@@ -504,9 +517,7 @@ async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersions
 async fn request_percentage_throttle_is_reported_on_api_versions() {
     let (handle, _dir, addr) = quota_fixture().await;
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "alice", b"alice-secret")
-        .await
-        .expect("SASL authenticate for ApiVersions");
+    let mut stream = alice_quota_connection(addr, "SASL authenticate for ApiVersions").await;
 
     // Baseline: no quota is configured yet, so there is no delay to report.
     let baseline = drive_api_versions(&mut stream, 10).await;

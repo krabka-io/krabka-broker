@@ -141,6 +141,16 @@ where
     Ok(cur.to_vec())
 }
 
+#[derive(Clone, krabka_macros::FieldDefaults)]
+pub struct PlainAuthenticationSetup<'a> {
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    #[default("alice")]
+    pub user: &'a str,
+    #[default(crate::support::sasl::alice_password().into_bytes())]
+    pub password: Vec<u8>,
+}
+
 /// Connects to `addr` and authenticates the connection with SASL/PLAIN.
 ///
 /// # Errors
@@ -149,12 +159,10 @@ where
 /// non-zero `SaslHandshake` or `SaslAuthenticate` error code.
 pub async fn sasl_plain_authenticate(
     addr: SocketAddr,
-    client_id: &str,
-    user: &str,
-    password: &[u8],
+    setup: &PlainAuthenticationSetup<'_>,
 ) -> io::Result<TcpStream> {
     let mut stream = TcpStream::connect(addr).await?;
-    sasl_plain_authenticate_on(&mut stream, client_id, user, password).await?;
+    sasl_plain_authenticate_on(&mut stream, setup).await?;
     Ok(stream)
 }
 
@@ -174,7 +182,15 @@ where
     Q: Encode,
     R: for<'de> Decode<'de>,
 {
-    let mut stream = sasl_plain_authenticate(addr, client_id, user, password).await?;
+    let mut stream = sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id,
+            user,
+            password: (password).to_vec(),
+        },
+    )
+    .await?;
     let mut body = BytesMut::new();
     request
         .encode(&mut body, version)
@@ -241,13 +257,16 @@ pub async fn create_topic_as_super_user(
 /// non-zero `SaslHandshake` or `SaslAuthenticate` error code.
 pub async fn sasl_plain_authenticate_on<S>(
     stream: &mut S,
-    client_id: &str,
-    user: &str,
-    password: &[u8],
+    setup: &PlainAuthenticationSetup<'_>,
 ) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let PlainAuthenticationSetup {
+        client_id,
+        user,
+        password,
+    } = setup;
     let av_body = encode_named(&ApiVersionsRequest::default(), 0, "ApiVersions")?;
     let av_resp = round_trip(
         stream,
@@ -486,23 +505,37 @@ pub async fn create_topic_on(
 /// Create a topic on a newly authenticated PLAIN session.
 pub async fn create_topic_sasl(
     addr: SocketAddr,
-    client_id: &str,
-    (user, password): (&str, &[u8]),
     topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
+    setup: &PlainAuthenticationSetup<'_>,
 ) {
-    let mut stream = sasl_plain_authenticate(addr, client_id, user, password)
+    let mut stream = sasl_plain_authenticate(addr, setup)
         .await
         .expect("SASL authenticate for CreateTopics");
-    create_topic_on(&mut stream, client_id, topic).await;
+    create_topic_on(&mut stream, setup.client_id, topic).await;
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub struct ScramAuthenticationSetup<'a> {
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    #[default("alice")]
+    pub user: &'a str,
+    #[default(crate::support::sasl::alice_password())]
+    pub password: String,
+    #[default(krabka_security::SaslMechanism::ScramSha512)]
+    pub mechanism: krabka_security::SaslMechanism,
 }
 
 pub async fn sasl_scram_authenticate_on(
     stream: &mut TcpStream,
-    client_id: &str,
-    user: &str,
-    password: &str,
-    mechanism: krabka_security::SaslMechanism,
+    setup: &ScramAuthenticationSetup<'_>,
 ) -> io::Result<()> {
+    let (client_id, user, password, mechanism) = (
+        setup.client_id,
+        setup.user,
+        setup.password.as_str(),
+        setup.mechanism,
+    );
     // ── 1. ApiVersions (v0, non-flexible). Same as PLAIN: pre-auth allowlist.
     let _av_resp: ApiVersionsResponse = exchange(
         stream,
@@ -760,9 +793,12 @@ pub struct SaslTopicSetup<'a> {
 pub async fn create_configured_topic_sasl(addr: SocketAddr, setup: SaslTopicSetup<'_>) {
     create_topic_sasl(
         addr,
-        setup.client_id,
-        (setup.user, setup.password),
         topic(setup.topic),
+        &PlainAuthenticationSetup {
+            client_id: setup.client_id,
+            user: setup.user,
+            password: (setup.password).to_vec(),
+        },
     )
     .await;
 }
@@ -845,9 +881,16 @@ pub async fn produce_sasl_with_ids(
 ) -> krabka_protocol::owned::produce_response::ProduceResponse {
     const VERSION: i16 = 11;
     let req = produce_records(records.0, records.1, records.2);
-    let mut stream = sasl_plain_authenticate(addr, client_ids.0, credentials.0, credentials.1)
-        .await
-        .expect("SASL authenticate for Produce");
+    let mut stream = sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup {
+            client_id: client_ids.0,
+            user: credentials.0,
+            password: (credentials.1).to_vec(),
+        },
+    )
+    .await
+    .expect("SASL authenticate for Produce");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode Produce");
     let resp_bytes = round_trip(

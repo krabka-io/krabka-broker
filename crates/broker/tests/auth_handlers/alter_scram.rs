@@ -24,7 +24,7 @@ use crate::{
     harness::{admin_plain_password, alice_password, round_trip, wrong_scram_password},
     scram::drive_sasl_scram_session,
     support::{
-        sasl::scram_upsertion,
+        sasl::{ScramAlgorithm, ScramUpsertionSetup, scram_upsertion},
         wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
             SocketExchangeSetup,
@@ -86,15 +86,12 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
 
     let (salt, salted) = pbkdf2_salt_and_salted_sha256(alice_password().as_bytes(), 4096);
     let req = AlterUserScramCredentialsRequest {
-        upsertions: vec![scram_upsertion(
-            "alice".to_string(),
-            WIRE_MECH_SCRAM_SHA_256,
-            4096,
-            (
-                bytes::Bytes::from(salt),
-                bytes::Bytes::from(salted.to_vec()),
-            ),
-        )],
+        upsertions: vec![scram_upsertion(ScramUpsertionSetup {
+            mechanism: ScramAlgorithm::Sha256,
+            salt: bytes::Bytes::from(salt),
+            salted_password: bytes::Bytes::from(salted.to_vec()),
+            ..Default::default()
+        })],
         ..Default::default()
     };
     let resp =
@@ -251,15 +248,11 @@ fn pbkdf2_salt_and_salted_sha256(password: &[u8], iterations: u32) -> (Vec<u8>, 
 fn alice_sha512_request() -> AlterUserScramCredentialsRequest {
     let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
     AlterUserScramCredentialsRequest {
-        upsertions: vec![scram_upsertion(
-            "alice".to_string(),
-            WIRE_MECH_SCRAM_SHA_512,
-            4096,
-            (
-                bytes::Bytes::from(salt),
-                bytes::Bytes::from(salted.to_vec()),
-            ),
-        )],
+        upsertions: vec![scram_upsertion(ScramUpsertionSetup {
+            salt: bytes::Bytes::from(salt),
+            salted_password: bytes::Bytes::from(salted.to_vec()),
+            ..Default::default()
+        })],
         ..Default::default()
     }
 }

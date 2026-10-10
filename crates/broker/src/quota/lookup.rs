@@ -535,12 +535,7 @@ mod tests {
             ),
         ];
         for (label, configured, principal, client_id, expected) in cases {
-            let img = crate::quota::test_support::uniform_quota_image(
-                crate::quota::test_support::UniformQuotaImageSetup {
-                    entities: configured,
-                    ..Default::default()
-                },
-            );
+            let img = crate::quota::test_support::producer_quota_image(configured);
             check!(
                 lookup_quota_with_key(&img, principal, Some(client_id), "producer_byte_rate")
                     == expected,
@@ -633,12 +628,7 @@ mod tests {
             ),
         ];
         for (label, configured, principal, null_expected, empty_expected) in cases {
-            let img = crate::quota::test_support::uniform_quota_image(
-                crate::quota::test_support::UniformQuotaImageSetup {
-                    entities: configured,
-                    ..Default::default()
-                },
-            );
+            let img = crate::quota::test_support::producer_quota_image(configured);
             check!(
                 lookup_quota_with_key(&img, principal, None, "producer_byte_rate") == null_expected,
                 "null: {label}"
@@ -660,11 +650,7 @@ mod tests {
         let img = img_with(vec![
             rec(crate::quota::test_support::QuotaRecordSetup::default()),
             crate::quota::test_support::alice_app1_producer_quota(),
-            rec(crate::quota::test_support::QuotaRecordSetup {
-                entity: vec![("client-id", Some("app1"))],
-                value: crate::quota::test_support::QuotaValue(200.0),
-                ..Default::default()
-            }),
+            crate::quota::test_support::app1_producer_quota(),
             rec(crate::quota::test_support::QuotaRecordSetup {
                 entity: vec![("user", None)],
                 value: crate::quota::test_support::QuotaValue(700.0),
@@ -755,45 +741,48 @@ mod tests {
     }
 
     #[test]
-    fn ip_specific_match() {
-        let img = img_with_ip(vec![rec_ip(IpQuotaSetup {
-            ip: Some("127.0.0.1"),
-            ..Default::default()
-        })]);
-        let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(
-            lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(1.0)
-        );
-    }
-
-    #[test]
-    fn ip_default_fallback() {
-        let img = img_with_ip(vec![rec_ip(IpQuotaSetup {
-            value: crate::quota::test_support::QuotaValue(2.0),
-            ..Default::default()
-        })]);
-        let ip: std::net::IpAddr = "10.0.0.7".parse().unwrap();
-        assert!(
-            lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(2.0)
-        );
-    }
-
-    #[test]
-    fn ip_specific_wins_over_default() {
-        let img = img_with_ip(vec![
-            rec_ip(IpQuotaSetup {
-                value: crate::quota::test_support::QuotaValue(8.0),
-                ..Default::default()
-            }),
-            rec_ip(IpQuotaSetup {
-                ip: Some("127.0.0.1"),
-                ..Default::default()
-            }),
-        ]);
-        let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(
-            lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(1.0)
-        );
+    fn ip_quotas_prefer_an_exact_address_and_fall_back_to_the_default() {
+        let cases = [
+            (
+                vec![rec_ip(IpQuotaSetup {
+                    ip: Some("127.0.0.1"),
+                    ..Default::default()
+                })],
+                "127.0.0.1",
+                Some(1.0),
+            ),
+            (
+                vec![rec_ip(IpQuotaSetup {
+                    value: crate::quota::test_support::QuotaValue(2.0),
+                    ..Default::default()
+                })],
+                "10.0.0.7",
+                Some(2.0),
+            ),
+            (
+                vec![
+                    rec_ip(IpQuotaSetup {
+                        value: crate::quota::test_support::QuotaValue(8.0),
+                        ..Default::default()
+                    }),
+                    rec_ip(IpQuotaSetup {
+                        ip: Some("127.0.0.1"),
+                        ..Default::default()
+                    }),
+                ],
+                "127.0.0.1",
+                Some(1.0),
+            ),
+        ];
+        for (records, address, expected) in cases {
+            let image = img_with_ip(records);
+            let ip: std::net::IpAddr = address.parse().unwrap();
+            assert!(
+                lookup_ip_quota(&image, &IpNames::default(), ip, "connection_creation_rate")
+                    == expected,
+                "{address}"
+            );
+        }
     }
 
     #[test]

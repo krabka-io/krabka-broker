@@ -31,7 +31,7 @@ use crate::{
     support::{
         offsets::{delete_records_partition, delete_records_request, delete_records_topic},
         records::{batch_from_records, value_record},
-        sasl::scram_upsertion,
+        sasl::{ScramAlgorithm, ScramUpsertionSetup, scram_upsertion},
         topics::{creatable_topic, create_topic_request},
     },
 };
@@ -40,8 +40,6 @@ use crate::{
 const RESOURCE_TYPE_TOPIC: i8 = 2;
 /// The `IncrementalAlterConfigs` `config_operation` for SET.
 const OP_SET: i8 = 0;
-/// The KIP-554 mechanism discriminant for `SCRAM-SHA-256`.
-const SCRAM_SHA_256: i8 = 1;
 
 /// Append one record to partition 0, so that a later `DeleteRecords` has
 /// something below the high watermark to delete.
@@ -307,15 +305,13 @@ async fn every_admin_mutation_is_audited() {
     let scram = p
         .client
         .send(AlterUserScramCredentialsRequest {
-            upsertions: vec![scram_upsertion(
-                user,
-                SCRAM_SHA_256,
-                4_096,
-                (
-                    bytes::Bytes::from_static(b"audited-salt"),
-                    bytes::Bytes::from_static(b"audited-salted-password-32-byte"),
-                ),
-            )],
+            upsertions: vec![scram_upsertion(ScramUpsertionSetup {
+                name: (user).into(),
+                mechanism: ScramAlgorithm::Sha256,
+                salt: bytes::Bytes::from_static(b"audited-salt"),
+                salted_password: bytes::Bytes::from_static(b"audited-salted-password-32-byte"),
+                ..Default::default()
+            })],
             ..Default::default()
         })
         .await
