@@ -13,6 +13,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::{FutureExt as _, StreamExt as _};
+use krabka_ids::PartitionIndex;
 use krabka_remote_storage_topic::{
     AssignmentHandle, MetadataEventLog, MetadataEventStream, PartitionStart,
 };
@@ -66,23 +67,25 @@ impl MetadataEventLog for PacedReplayLog {
 /// in-flight flush landing exactly while a restarting projection establishes
 /// its subscription. A watermark read *before* subscribing steps over that
 /// record; one read after cannot.
+#[derive(krabka_macros::FieldDefaults)]
+pub(crate) struct RacingAppendSetup {
+    pub partition: PartitionIndex,
+    pub key: Bytes,
+    pub event: Bytes,
+}
+
 pub(crate) struct RacingAppendLog {
     inner: Arc<dyn MetadataEventLog>,
-    racing: StdMutex<Option<(i32, Bytes, Bytes)>>,
+    racing: StdMutex<Option<RacingAppendSetup>>,
 }
 
 impl RacingAppendLog {
-    /// Race the keyed record `(key, event)` onto `partition`, as the flusher
+    /// Race the setup's keyed record onto its partition, as the flusher
     /// publishes every index record.
-    pub(crate) fn new(
-        inner: Arc<dyn MetadataEventLog>,
-        partition: i32,
-        key: Bytes,
-        event: Bytes,
-    ) -> Arc<Self> {
+    pub(crate) fn new(inner: Arc<dyn MetadataEventLog>, setup: RacingAppendSetup) -> Arc<Self> {
         Arc::new(Self {
             inner,
-            racing: StdMutex::new(Some((partition, key, event))),
+            racing: StdMutex::new(Some(setup)),
         })
     }
 }
@@ -99,12 +102,12 @@ impl MetadataEventLog for RacingAppendLog {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        if let Some((partition, key, event)) = racing {
+        if let Some(setup) = racing {
             // `subscribe` is synchronous, so this drives the append to
             // completion in one poll. The in-process fixture's `publish_keyed`
             // never yields, so it always finishes on the first.
             self.inner
-                .publish_keyed(partition, key, Some(event))
+                .publish_keyed(setup.partition.0, setup.key, Some(setup.event))
                 .now_or_never()
                 .expect("the in-process fixture publishes without yielding")
                 .expect("racing append");

@@ -180,14 +180,7 @@ async fn a_registration_change_waits_for_an_uncommitted_registration() {
     crate::kraft::controller::test_support::elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2))
         .await;
     let commit = || async {
-        let qs = ctrl.quorum_state().await.unwrap();
-        ctrl.inject_event(Event::ReceiveFetch {
-            from: NodeId(2),
-            fetch_epoch: qs.leader_epoch,
-            fetch_offset: qs.log_end_offset,
-        })
-        .await
-        .unwrap();
+        super::test_support::commit_pending(&ctrl, NodeId(2)).await;
     };
     let register = || {
         let ctrl = ctrl.clone();

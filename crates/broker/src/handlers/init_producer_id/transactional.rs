@@ -523,6 +523,22 @@ mod tests {
         .await
     }
 
+    async fn init_near_exhaustion(
+        coordinator: &Arc<TxnCoordinator>,
+        tid: &str,
+    ) -> InitProducerIdResponse {
+        init_verified(
+            coordinator,
+            tid,
+            InitIdentity::Existing(InitIdentitySetup {
+                producer_epoch: ProducerEpoch(i16::MAX - 1),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("init responds")
+    }
+
     #[tokio::test]
     async fn dispatch_abort_markers_appends_marker_to_local_partition() {
         let dir = tempfile::tempdir().unwrap();
@@ -1043,16 +1059,7 @@ mod tests {
             entry.producer_epoch = i16::MAX - 1;
         }
 
-        let rotated = init_verified(
-            &coordinator,
-            TID,
-            InitIdentity::Existing(InitIdentitySetup {
-                producer_epoch: ProducerEpoch(i16::MAX - 1),
-                ..Default::default()
-            }),
-        )
-        .await
-        .expect("init responds");
+        let rotated = init_near_exhaustion(&coordinator, TID).await;
         check!(rotated.error_code == codes::NONE);
         check!(rotated.producer_id != 1000);
         check!(rotated.producer_epoch == 0);
@@ -1060,16 +1067,7 @@ mod tests {
         check!(entry.prev_producer_id == ProducerId(1000));
         check!(entry.last_producer_epoch == i16::MAX - 1);
 
-        let retried = init_verified(
-            &coordinator,
-            TID,
-            InitIdentity::Existing(InitIdentitySetup {
-                producer_epoch: ProducerEpoch(i16::MAX - 1),
-                ..Default::default()
-            }),
-        )
-        .await
-        .expect("init responds");
+        let retried = init_near_exhaustion(&coordinator, TID).await;
         check!(
             (
                 retried.error_code,
@@ -1379,16 +1377,7 @@ mod tests {
         ongoing.state = TxnState::Ongoing;
         seed(&coordinator, ongoing).await;
 
-        let fenced = init_verified(
-            &coordinator,
-            TID,
-            InitIdentity::Existing(InitIdentitySetup {
-                producer_epoch: ProducerEpoch(i16::MAX - 1),
-                ..Default::default()
-            }),
-        )
-        .await
-        .expect("init responds");
+        let fenced = init_near_exhaustion(&coordinator, TID).await;
         check!(
             fenced
                 == InitProducerIdResponse {
@@ -1412,16 +1401,7 @@ mod tests {
         // The producer that names its old, exhausted identity again is
         // recognised as a retry of the rotation, and answered the rotated pair
         // without a write.
-        let stale = init_verified(
-            &coordinator,
-            TID,
-            InitIdentity::Existing(InitIdentitySetup {
-                producer_epoch: ProducerEpoch(i16::MAX - 1),
-                ..Default::default()
-            }),
-        )
-        .await
-        .expect("init responds");
+        let stale = init_near_exhaustion(&coordinator, TID).await;
         check!(
             stale
                 == InitProducerIdResponse {

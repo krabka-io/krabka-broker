@@ -453,7 +453,7 @@ pub async fn submit_change_with_timeout(
 }
 
 /// Commit the current tail by delivering a follower fetch at its end offset.
-pub async fn commit_pending(ctrl: &KraftController, follower: NodeId) {
+pub async fn commit_pending(ctrl: &KraftController, follower: NodeId) -> QuorumStateSnapshot {
     let quorum = ctrl.quorum_state().await.unwrap();
     ctrl.inject_event(Event::ReceiveFetch {
         from: follower,
@@ -462,6 +462,7 @@ pub async fn commit_pending(ctrl: &KraftController, follower: NodeId) {
     })
     .await
     .unwrap();
+    quorum
 }
 
 pub fn single_voter_leader_engine() -> (Engine, tempfile::TempDir) {
@@ -508,4 +509,14 @@ pub fn spawn_submit(
 ) -> tokio::task::JoinHandle<Result<SubmitChangeResult, RaftError>> {
     let ctrl = ctrl.clone();
     tokio::spawn(async move { ctrl.submit_change(records).await })
+}
+
+/// Spawn a change and retain the existing 20ms wait for its uncommitted append.
+pub async fn pending_submission(
+    ctrl: &KraftController,
+    records: Vec<krabka_metadata::MetadataRecord>,
+) -> tokio::task::JoinHandle<Result<SubmitChangeResult, RaftError>> {
+    let submission = spawn_submit(ctrl, records);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    submission
 }

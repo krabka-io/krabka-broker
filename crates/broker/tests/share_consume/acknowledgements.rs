@@ -164,9 +164,18 @@ async fn reject_archives() {
     .await;
     let row3 = crate::support::share::refetch_while_empty(
         &fixture.client,
-        ("g1", &fixture.member, fixture.tid, 0),
         row3,
-        4..18,
+        crate::support::share::RefetchSetup {
+            session: crate::support::share::ShareSessionSetup {
+                member: &fixture.member,
+                topic_id: fixture.tid,
+                ..Default::default()
+            },
+            epochs: crate::support::share::RetryEpochs {
+                start: crate::support::share::ShareSessionEpoch(4),
+                ..Default::default()
+            },
+        },
     )
     .await;
     assert!(

@@ -49,9 +49,19 @@ async fn acquire_past_leading_batch_returns_bytes() {
         session.fetch_at(crate::support::share::ShareSessionEpoch(2)),
     )
     .await;
-    let row3 =
-        crate::support::share::refetch_while_empty(&client, ("g1", &member, tid, 0), row3, 3..18)
-            .await;
+    let row3 = crate::support::share::refetch_while_empty(
+        &client,
+        row3,
+        crate::support::share::RefetchSetup {
+            session: crate::support::share::ShareSessionSetup {
+                member: &member,
+                topic_id: tid,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await;
     assert!(
         acquired_count(&row3) == 1,
         "offset 3 must be acquired, got {:?}",

@@ -748,9 +748,11 @@ mod tests {
         let racing_key = WalIndexKey::from(&racing.entries[0]).to_bytes();
         let restarted = DisklessIndexLog::start(RacingAppendLog::new(
             PacedReplayLog::new(event_log, ReplayPace::OneEvery(Duration::from_millis(40))),
-            0,
-            racing_key,
-            racing.to_bytes().unwrap(),
+            crate::diskless::index_log::test_support::RacingAppendSetup {
+                key: racing_key,
+                event: racing.to_bytes().unwrap(),
+                ..Default::default()
+            },
         ))
         .await
         .unwrap();

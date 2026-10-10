@@ -142,14 +142,7 @@ async fn pending_offset_reservations_are_contiguous_before_commit() {
         tokio::spawn(async move { third_ctrl.submit_change(offset_advance("other", 4)).await });
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
-    let qs = ctrl.quorum_state().await.unwrap();
-    ctrl.inject_event(Event::ReceiveFetch {
-        from: NodeId(2),
-        fetch_epoch: qs.leader_epoch,
-        fetch_offset: qs.log_end_offset,
-    })
-    .await
-    .unwrap();
+    let qs = super::test_support::commit_pending(&ctrl, NodeId(2)).await;
 
     let first = first.await.unwrap().unwrap();
     let second = second.await.unwrap().unwrap();
@@ -236,11 +229,11 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
         consumed_at_ms: i64::MAX,
         ..proposal.clone()
     };
-    let first = super::test_support::spawn_submit(
+    let first = super::test_support::pending_submission(
         &ctrl,
         vec![MetadataRecord::V1BreakGlassProposal(consumed.clone())],
-    );
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    )
+    .await;
 
     let concurrent = tokio::time::timeout(
         StdDuration::from_secs(1),
@@ -282,11 +275,11 @@ async fn a_new_leader_refuses_a_consume_until_its_own_epoch_commits() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
     let proposal = break_glass_proposal(0x591, BreakGlassAction::DeleteTopic, "doomed", i64::MAX);
-    let create = super::test_support::spawn_submit(
+    let create = super::test_support::pending_submission(
         &ctrl,
         vec![MetadataRecord::V1BreakGlassProposal(proposal.clone())],
-    );
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    )
+    .await;
     commit_pending(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
@@ -379,11 +372,11 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
     assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
 
     let replacement = freeze("orders", i64::MAX, true);
-    let replace = super::test_support::spawn_submit(
+    let replace = super::test_support::pending_submission(
         &ctrl,
         vec![MetadataRecord::V1TopicFreeze(replacement.clone())],
-    );
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    )
+    .await;
 
     let concurrent = tokio::time::timeout(
         StdDuration::from_secs(1),
@@ -444,11 +437,11 @@ async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
 
-    let create = super::test_support::spawn_submit(
+    let create = super::test_support::pending_submission(
         &ctrl,
         vec![MetadataRecord::V1DelegationToken(original.clone())],
-    );
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    )
+    .await;
     commit_pending(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
@@ -723,8 +716,7 @@ async fn rejection_scoped_to_owning_waiter_range() {
 
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
 
-    let zero = super::test_support::spawn_submit(&ctrl, topic_record_named("zero", 9));
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let zero = super::test_support::pending_submission(&ctrl, topic_record_named("zero", 9)).await;
     commit_pending(&ctrl, NodeId(2)).await;
     let rz = tokio::time::timeout(StdDuration::from_secs(5), zero)
         .await

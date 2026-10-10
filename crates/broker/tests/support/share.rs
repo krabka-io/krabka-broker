@@ -570,34 +570,35 @@ pub fn record_values(batches: &[RecordBatch]) -> Vec<String> {
         .collect()
 }
 
-/// Retry empty incremental acquisitions using the case's explicit session-epoch bounds.
-/// The initial row is supplied by the caller; every retry retains its original 100ms spacing.
-///
-/// # Panics
-/// Panics if the fetch fails or answers a nonzero top-level code.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct RetryEpochs {
+    #[default(ShareSessionEpoch(3))]
+    pub start: ShareSessionEpoch,
+    #[default(ShareSessionEpoch(18))]
+    pub end: ShareSessionEpoch,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct RefetchSetup<'a> {
+    pub session: ShareSessionSetup<'a>,
+    pub epochs: RetryEpochs,
+}
+
+/// Retry empty acquisitions over explicit session epochs, retaining 100ms spacing.
 pub async fn refetch_while_empty(
     client: &Client,
-    (group, member, tid, partition): (&str, &str, uuid::Uuid, i32),
     mut row: krabka_protocol::owned::share_fetch_response::PartitionData,
-    epochs: std::ops::Range<i32>,
+    setup: RefetchSetup<'_>,
 ) -> krabka_protocol::owned::share_fetch_response::PartitionData {
-    for epoch in epochs {
+    for epoch in setup.epochs.start.0..setup.epochs.end.0 {
         if acquired_count(&row) > 0 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         row = fetch_row(
             client,
-            share_fetch_req(crate::support::share::ShareFetchSetup::from(
-                crate::support::share::ShareSessionSetup {
-                    group,
-                    member,
-                    topic_id: tid,
-                    partition: krabka_ids::PartitionIndex(partition),
-                    epoch: crate::support::share::ShareSessionEpoch(epoch),
-                },
-            )),
-            crate::support::share::FetchSessionMode::Incremental,
+            share_fetch_req(setup.session.fetch_at(ShareSessionEpoch(epoch))),
+            FetchSessionMode::Incremental,
         )
         .await;
     }
