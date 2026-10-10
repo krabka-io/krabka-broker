@@ -203,7 +203,12 @@ async fn admin_offsets_rejected_when_share_disabled() {
     let cfg = broker_config(dir.path().to_path_buf());
     let broker = Broker::start(cfg).await.unwrap();
     let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
+    create_topic(
+        &broker,
+        &client,
+        crate::support::share::ShareTopicSetup::default(),
+    )
+    .await;
     let enabled = describe_offsets(&client, "g1", "t", vec![0]).await;
     assert!(
         enabled.error_code != UNSUPPORTED_VERSION,

@@ -37,7 +37,13 @@ async fn writer_fires_hw_notify_after_produce_when_rf_one() {
     let waiter = observed.hw_advance_notify.notified();
     tokio::pin!(waiter);
 
-    let _ack_rx = queue_batch(&tx, sample_batch(2)).await;
+    let _ack_rx = queue_batch(
+        &tx,
+        sample_batch(crate::test_support::EmptyPayloadBatchSetup {
+            count: crate::test_support::RecordCount(2),
+        }),
+    )
+    .await;
 
     tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
         .await
@@ -56,7 +62,11 @@ async fn writer_does_not_notify_hw_when_append_leaves_hw_unchanged() {
     let waiter = observed.hw_advance_notify.notified();
     tokio::pin!(waiter);
 
-    let ack_rx = queue_batch(&tx, sample_batch(1)).await;
+    let ack_rx = queue_batch(
+        &tx,
+        sample_batch(crate::test_support::EmptyPayloadBatchSetup::default()),
+    )
+    .await;
     ack_rx.await.expect("ack").expect("append ok");
 
     assert!(observed.replica_state.lock().await.hw == 0);
@@ -74,7 +84,13 @@ async fn writer_does_not_notify_hw_when_append_leaves_hw_unchanged() {
 async fn writer_does_not_advance_hw_when_followers_lagging() {
     let (_dir, tx, observed) = fixture(&[1, 2, 3]).await;
 
-    let ack_rx = queue_batch(&tx, sample_batch(3)).await;
+    let ack_rx = queue_batch(
+        &tx,
+        sample_batch(crate::test_support::EmptyPayloadBatchSetup {
+            count: crate::test_support::RecordCount(3),
+        }),
+    )
+    .await;
     ack_rx.await.expect("ack").expect("append ok");
 
     assert!(observed.replica_state.lock().await.hw == 0);

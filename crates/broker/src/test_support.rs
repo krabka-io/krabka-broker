@@ -2594,8 +2594,14 @@ impl krabka_raft::OutboundDialer for RecordingDialer {
 
 krabka_macros::keyed_record_batch_fixture!(keyed_records_batch);
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct EmptyPayloadBatchSetup {
+    pub count: RecordCount,
+}
+
 /// An empty-payload fixture batch with the protocol's original default headers.
-pub(crate) fn default_records_batch(n: i32) -> RecordBatch {
+pub(crate) fn default_records_batch(setup: EmptyPayloadBatchSetup) -> RecordBatch {
+    let n = setup.count.0;
     let mut batch = RecordBatch {
         last_offset_delta: n - 1,
         ..RecordBatch::default()
@@ -2607,6 +2613,18 @@ pub(crate) fn default_records_batch(n: i32) -> RecordBatch {
         });
     }
     batch
+}
+
+/// Explicit values with the protocol's default batch header and leader epoch zero.
+pub(crate) fn default_value_records_batch(values: &[&'static [u8]]) -> RecordBatch {
+    RecordBatch {
+        partition_leader_epoch: 0,
+        ..static_records_batch(values, UnixMillis(0))
+    }
+}
+
+pub(crate) fn single_value_batch(value: &'static [u8]) -> RecordBatch {
+    default_value_records_batch(&[value])
 }
 
 /// Spawn a caught-up replica whose entire local log is committed.

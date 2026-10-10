@@ -22,10 +22,21 @@ async fn consume_accept_restart() {
 
     let tid;
     {
-        let (broker, client, topic) =
-            crate::support::share::start_topic(broker_config(log_dir.clone()), "t", 1).await;
+        let (broker, client, topic) = crate::support::share::start_topic(
+            broker_config(log_dir.clone()),
+            crate::support::share::ShareTopicSetup::default(),
+        )
+        .await;
         tid = topic;
-        let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
+        let (member, _) = crate::harness::initialize_consumption(
+            &broker,
+            &client,
+            crate::support::share::ConsumptionSetup {
+                topic_id: tid,
+                ..Default::default()
+            },
+        )
+        .await;
         let session = crate::support::share::ShareSessionSetup::joined(&member, tid);
 
         // First fetch (epoch 0 opens the session): acquire offsets 0..2.
@@ -156,7 +167,14 @@ async fn reject_archives() {
 
     // Produce one more (offset 2). The SPSO advanced past the rejected pair, so
     // only the new offset is acquired — proving the rejected ones were skipped.
-    produce_n(&fixture.client, "t", fixture.tid, 0, 1).await;
+    produce_n(
+        &fixture.client,
+        crate::support::share::ShareRecordsSetup {
+            topic_id: fixture.tid,
+            ..Default::default()
+        },
+    )
+    .await;
     let row3 = share_fetch(
         &fixture.client,
         session.fetch_at(crate::support::share::ShareSessionEpoch(3)),
@@ -196,7 +214,11 @@ struct AcquiredPair {
 }
 
 async fn acquired_pair() -> AcquiredPair {
-    let fixture = crate::harness::consumption_fixture(2).await;
+    let fixture =
+        crate::harness::consumption_fixture(crate::support::share::ShareRecordSeedSetup {
+            count: crate::support::share::ShareRecordCount(2),
+        })
+        .await;
     let row = acquire_both(&fixture.client, &fixture.member, fixture.tid).await;
     AcquiredPair { fixture, row }
 }

@@ -43,7 +43,11 @@ async fn writer_trim_to_offset_advances_log_start() {
     for _ in 0..2 {
         log.lock()
             .expect("lock")
-            .append(&mut sample_batch(2))
+            .append(&mut sample_batch(
+                crate::test_support::EmptyPayloadBatchSetup {
+                    count: crate::test_support::RecordCount(2),
+                },
+            ))
             .expect("append");
     }
 

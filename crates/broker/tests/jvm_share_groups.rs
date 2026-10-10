@@ -146,14 +146,16 @@ async fn produce_at(
         .collect();
     support::share::produce_batch(
         client,
-        topic,
-        tid,
-        0,
         RecordBatch {
             last_offset_delta: i32::try_from(values.len() - 1).unwrap(),
             base_timestamp: timestamp_ms,
             max_timestamp: timestamp_ms,
             records,
+            ..Default::default()
+        },
+        crate::support::share::ShareProduceSetup {
+            topic,
+            topic_id: tid,
             ..Default::default()
         },
     )

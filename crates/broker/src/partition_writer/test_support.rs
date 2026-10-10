@@ -137,7 +137,12 @@ impl crate::wal::WalStore for GatedWal {
 pub(super) fn open_log_with_records(path: &std::path::Path, records: i32) -> Log {
     let mut log = Log::open(path, LogConfig::default()).expect("open log");
     if records > 0 {
-        log.append(&mut sample_batch(records)).expect("append");
+        log.append(&mut sample_batch(
+            crate::test_support::EmptyPayloadBatchSetup {
+                count: crate::test_support::RecordCount(records),
+            },
+        ))
+        .expect("append");
     }
     log
 }

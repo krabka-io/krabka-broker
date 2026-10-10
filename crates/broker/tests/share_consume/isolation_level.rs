@@ -55,10 +55,12 @@ async fn isolation_fixture(
     uuid::Uuid,
     String,
 ) {
-    let (permit, broker, client, dir, tid) = Box::pin(
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}),
-    )
-    .await;
+    let (permit, broker, client, dir, tid) =
+        Box::pin(crate::support::share::permitted_topic_fixture(
+            crate::support::share::ShareTopicSetup::default(),
+            |_| {},
+        ))
+        .await;
     let bootstrap = broker.listen_addr().to_string();
     bootstrap_share_state(&broker, &client, "g1").await;
     if let Some(level) = level {
@@ -234,7 +236,14 @@ async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) ->
     } else {
         txn.abort().await.unwrap();
     }
-    produce_n(&client, "t", tid, 0, 1).await;
+    produce_n(
+        &client,
+        crate::support::share::ShareRecordsSetup {
+            topic_id: tid,
+            ..Default::default()
+        },
+    )
+    .await;
 
     let (member, _member_epoch) =
         crate::support::share::join_consume_member(&broker, &client, tid).await;

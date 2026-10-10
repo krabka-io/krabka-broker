@@ -22,7 +22,11 @@ fn seeded_log(path: &std::path::Path) -> Arc<Mutex<Log>> {
     let log = open_default_log(path);
     log.lock()
         .expect("lock")
-        .append(&mut sample_batch(4))
+        .append(&mut sample_batch(
+            crate::test_support::EmptyPayloadBatchSetup {
+                count: crate::test_support::RecordCount(4),
+            },
+        ))
         .expect("append");
     log
 }
@@ -91,7 +95,11 @@ async fn a_reservation_refused_during_a_controller_election_answers_not_leader()
             },
         );
 
-        let ack_rx = queue_batch(&tx, sample_batch(1)).await;
+        let ack_rx = queue_batch(
+            &tx,
+            sample_batch(crate::test_support::EmptyPayloadBatchSetup::default()),
+        )
+        .await;
         let answer = ack_rx
             .await
             .expect("ack recv")
@@ -131,7 +139,13 @@ async fn diskless_writer_acks_all_gates_on_durable_hw() {
     let hw_waiter = observed.hw_advance_notify.notified();
     tokio::pin!(hw_waiter);
 
-    let ack_rx = queue_batch(&tx, sample_batch(3)).await;
+    let ack_rx = queue_batch(
+        &tx,
+        sample_batch(crate::test_support::EmptyPayloadBatchSetup {
+            count: crate::test_support::RecordCount(3),
+        }),
+    )
+    .await;
 
     let assigned = ack_rx.await.expect("ack recv").expect("append ok");
     assert!(assigned.base_offset == 0);
@@ -180,7 +194,11 @@ async fn diskless_acked_record_survives_reopen() {
             },
         );
 
-        let ack_rx = queue_batch(&tx, sample_batch(1)).await;
+        let ack_rx = queue_batch(
+            &tx,
+            sample_batch(crate::test_support::EmptyPayloadBatchSetup::default()),
+        )
+        .await;
 
         let assigned = ack_rx.await.expect("ack recv").expect("append ok");
         assert2::assert!((assigned.base_offset) == (0));
@@ -284,7 +302,11 @@ async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
     let log = open_default_log(dir.path());
     log.lock()
         .expect("lock")
-        .append(&mut sample_batch(2))
+        .append(&mut sample_batch(
+            crate::test_support::EmptyPayloadBatchSetup {
+                count: crate::test_support::RecordCount(2),
+            },
+        ))
         .expect("append");
 
     let (sync_started_tx, _sync_started_rx) = oneshot::channel();
@@ -293,7 +315,11 @@ async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
     let partition = PartitionIndex(0);
     let cache = Arc::new(crate::diskless::hot_tail::HotTailCache::default());
     let mut encoded = BytesMut::new();
-    sample_batch(2).encode(&mut encoded).expect("encode batch");
+    sample_batch(crate::test_support::EmptyPayloadBatchSetup {
+        count: crate::test_support::RecordCount(2),
+    })
+    .encode(&mut encoded)
+    .expect("encode batch");
     let encoded = encoded.freeze();
     cache.insert_run(topic_id, partition, &encoded);
     let gated_wal = Arc::new(

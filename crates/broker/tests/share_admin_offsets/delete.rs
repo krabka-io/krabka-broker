@@ -85,12 +85,19 @@ async fn delete_removes_topic() {
 /// restart.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_rewrites_metadata_topic_absent_after_restart() {
-    let (_permit, _dir, log_dir) = crate::harness::restart_directory().await;
+    let crate::harness::InitializedRestartFixture {
+        _permit,
+        _dir,
+        log_dir,
+        topic: initial,
+    } = crate::harness::initialized_restart_fixture(
+        crate::support::share::ShareRecordSeedSetup::default(),
+    )
+    .await;
 
     let tid;
     {
-        let (broker, client, topic, member) =
-            crate::harness::initialized_topic(log_dir.clone(), 3).await;
+        let (broker, client, topic, member) = initial;
         tid = topic;
         let _ = fetch_until_acquired(
             &client,

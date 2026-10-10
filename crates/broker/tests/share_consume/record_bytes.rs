@@ -32,7 +32,8 @@ async fn acquire_past_leading_batch_returns_bytes() {
         _dir,
         tid,
         member,
-    } = crate::harness::consumption_fixture(3).await;
+    } = crate::harness::consumption_fixture(crate::support::share::ShareRecordSeedSetup::default())
+        .await;
     let session = crate::share_rpc::acquire_three_and_acknowledge(
         &client,
         crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)).reject(),
@@ -41,7 +42,14 @@ async fn acquire_past_leading_batch_returns_bytes() {
 
     // A separate single-record batch at offset 3 (this starts a new batch; the
     // acquired range 3..3 begins past the leading 0..2 batch).
-    produce_n(&client, "t", tid, 0, 1).await;
+    produce_n(
+        &client,
+        crate::support::share::ShareRecordsSetup {
+            topic_id: tid,
+            ..Default::default()
+        },
+    )
+    .await;
 
     // Acquire offset 3 — the payload must carry the record bytes.
     let row3 = share_fetch(
@@ -93,10 +101,12 @@ async fn acquire_past_leading_batch_returns_bytes() {
 async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i32, value: &str) {
     crate::support::share::produce_values(
         client,
-        topic,
-        tid,
-        partition,
         vec![bytes::Bytes::from(value.to_string())],
+        crate::support::share::ShareProduceSetup {
+            topic,
+            topic_id: tid,
+            partition: krabka_ids::PartitionIndex(partition),
+        },
     )
     .await;
 }
@@ -118,8 +128,11 @@ async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i
 /// v0, v2), never the gap offset 1's value v1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fragmented_window_records_match_acquired_offsets() {
-    let (_permit, broker, client, _dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) = crate::support::share::permitted_topic_fixture(
+        crate::support::share::ShareTopicSetup::default(),
+        |_| {},
+    )
+    .await;
     bootstrap_share_state(&broker, &client, "g1").await;
     // Three separate single-record batches: offset 0=v0, 1=v1, 2=v2.
     produce_one(&client, "t", tid, 0, "v0").await;

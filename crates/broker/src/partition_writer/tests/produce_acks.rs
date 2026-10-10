@@ -15,7 +15,13 @@ use crate::{
 
 async fn writer_after_first_append() -> DefaultWriter {
     let fixture = default_writer();
-    let ack = queue_batch(&fixture.sender, sample_batch(3)).await;
+    let ack = queue_batch(
+        &fixture.sender,
+        sample_batch(crate::test_support::EmptyPayloadBatchSetup {
+            count: crate::test_support::RecordCount(3),
+        }),
+    )
+    .await;
     let assigned = ack.await.expect("ack recv").expect("append ok");
     assert!(assigned.base_offset == 0);
     fixture
@@ -32,7 +38,13 @@ async fn writer_appends_and_acks() {
     } = writer_after_first_append().await;
 
     // Second append assigns offset 3.
-    let ack_rx = queue_batch(&tx, sample_batch(2)).await;
+    let ack_rx = queue_batch(
+        &tx,
+        sample_batch(crate::test_support::EmptyPayloadBatchSetup {
+            count: crate::test_support::RecordCount(2),
+        }),
+    )
+    .await;
     assert!(
         ack_rx
             .await
@@ -58,7 +70,11 @@ async fn writer_groups_queued_produces_up_to_configured_cap() {
     let (tx, rx) = mpsc::channel(3);
 
     for _ in 0..3 {
-        let _ack_rx = queue_batch(&tx, sample_batch(1)).await;
+        let _ack_rx = queue_batch(
+            &tx,
+            sample_batch(crate::test_support::EmptyPayloadBatchSetup::default()),
+        )
+        .await;
     }
 
     let writer = spawn_writer(
@@ -104,7 +120,11 @@ async fn durable_sync_ack_waits_for_diskless_wal() {
         },
     );
 
-    let append_ack_rx = queue_batch(&tx, sample_batch(1)).await;
+    let append_ack_rx = queue_batch(
+        &tx,
+        sample_batch(crate::test_support::EmptyPayloadBatchSetup::default()),
+    )
+    .await;
     assert!(
         append_ack_rx
             .await
@@ -166,7 +186,7 @@ async fn writer_appends_verbatim_byte_exact() {
     } = default_writer();
 
     // "Producer" batch with a bogus base_offset + epoch the log overwrites.
-    let mut producer = sample_batch(1);
+    let mut producer = sample_batch(crate::test_support::EmptyPayloadBatchSetup::default());
     producer.base_offset = 555;
     producer.partition_leader_epoch = -1;
     producer.max_timestamp = 1_234;
@@ -226,7 +246,11 @@ async fn writer_fires_notify_after_append() {
     let waiter = notify.notified();
     tokio::pin!(waiter);
 
-    let _ack_rx = queue_batch(&tx, sample_batch(1)).await;
+    let _ack_rx = queue_batch(
+        &tx,
+        sample_batch(crate::test_support::EmptyPayloadBatchSetup::default()),
+    )
+    .await;
 
     // Should wake within a short timeout.
     tokio::time::timeout(std::time::Duration::from_secs(1), waiter)

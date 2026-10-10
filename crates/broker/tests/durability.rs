@@ -27,11 +27,7 @@ use support::{
 };
 use tempfile::TempDir;
 
-use crate::support::{
-    client::connect_client,
-    fetch::single_partition_fetch,
-    topics::{creatable_topic, create_topic_request},
-};
+use crate::support::{client::connect_client, fetch::single_partition_fetch};
 
 mod support;
 
@@ -417,28 +413,21 @@ const OVERLAP_TIMEOUT_MS: i32 = 1_000;
 async fn create_topic_with_partitions(
     broker: &BrokerHandle,
     bootstrap: &str,
-    name: &str,
-    partitions: i32,
-    rf: i16,
+    setup: crate::support::topics::CreateTopicSetup<'_>,
 ) {
     let client = connect_client(bootstrap.to_string(), None).await;
     let resp = client
-        .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
-                name: (name).into(),
-                partitions: crate::support::topics::TopicPartitionCount(partitions),
-                replicas: crate::support::topics::TopicReplicationFactor(rf),
-                ..Default::default()
-            },
-        )))
+        .send(crate::support::topics::configured_topic_request(setup))
         .await
         .expect("CreateTopics");
     assert!(
         resp.topics[0].error_code == 0,
         "CreateTopics failed: {resp:?}"
     );
-    for index in 0..partitions {
-        broker.wait_until_partition_present(name, index).await;
+    for index in 0..setup.num_partitions.0 {
+        broker
+            .wait_until_partition_present(setup.topic, index)
+            .await;
     }
 }
 
@@ -505,9 +494,12 @@ async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
     create_topic_with_partitions(
         &cluster[0].0,
         &bootstrap_1,
-        "overlap",
-        OVERLAP_PARTITIONS,
-        2,
+        crate::support::topics::CreateTopicSetup {
+            topic: "overlap",
+            num_partitions: crate::support::topics::TopicPartitionCount(OVERLAP_PARTITIONS),
+            replication_factor: crate::support::topics::TopicReplicationFactor(2),
+            ..Default::default()
+        },
     )
     .await;
     // Both replicas in the ISR before the follower goes away, so the wait

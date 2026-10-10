@@ -21,12 +21,19 @@ use crate::harness::{acquired_count, fetch_until_acquired};
 async fn delivery_complete_count_restored_across_restart() {
     const N: i64 = 4;
     const COMPLETE: i32 = 3; // N - 1
-    let (_permit, _dir, log_dir) = crate::harness::restart_directory().await;
+    let crate::harness::InitializedRestartFixture {
+        _permit,
+        _dir,
+        log_dir,
+        topic: initial,
+    } = crate::harness::initialized_restart_fixture(crate::support::share::ShareRecordSeedSetup {
+        count: crate::support::share::ShareRecordCount(N),
+    })
+    .await;
 
     let tid;
     {
-        let (broker, client, topic, member) =
-            crate::harness::initialized_topic(log_dir.clone(), N).await;
+        let (broker, client, topic, member) = initial;
         tid = topic;
 
         // Acquire 0..N-1 and Accept 1..N-1: the SPSO stays at 0 behind the

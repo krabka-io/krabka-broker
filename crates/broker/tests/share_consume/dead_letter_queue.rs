@@ -316,7 +316,15 @@ async fn acquired_records(
     configure: impl AsyncFnOnce(&Client, &BrokerHandle),
 ) -> Cluster {
     acquired_records_from(records, tweak, configure, async |client: &Client, tid| {
-        produce_n(client, "t", tid, 0, records).await;
+        produce_n(
+            client,
+            crate::support::share::ShareRecordsSetup {
+                topic_id: tid,
+                count: crate::support::share::ShareRecordCount(records),
+                ..Default::default()
+            },
+        )
+        .await;
     })
     .await
 }
@@ -353,7 +361,11 @@ async fn acquired_records_from(
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = trunk_config(&dir);
     tweak(&mut config);
-    let (broker, client, tid) = crate::support::share::start_topic(config, "t", 1).await;
+    let (broker, client, tid) = crate::support::share::start_topic(
+        config,
+        crate::support::share::ShareTopicSetup::default(),
+    )
+    .await;
     bootstrap_share_state(&broker, &client, GROUP).await;
     configure(&client, &broker).await;
     produce(&client, tid).await;
@@ -657,7 +669,15 @@ async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
         },
         async |client, tid| {
             let values = vec![Bytes::from(vec![b'x'; 1_000])];
-            produce_values(client, "t", tid, 0, values).await;
+            produce_values(
+                client,
+                values,
+                crate::support::share::ShareProduceSetup {
+                    topic_id: tid,
+                    ..Default::default()
+                },
+            )
+            .await;
         },
     )
     .await;
@@ -772,13 +792,25 @@ async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered(
         dir: remote_dir.path().to_path_buf(),
     });
     config.remote_log_manager_interval = krabka_units::millis(100);
-    let (broker, client, tid) = crate::support::share::start_topic(config, "t", 1).await;
+    let (broker, client, tid) = crate::support::share::start_topic(
+        config,
+        crate::support::share::ShareTopicSetup::default(),
+    )
+    .await;
     bootstrap_share_state(&broker, &client, GROUP).await;
     finalize_share_version_two(&client).await;
     create_dead_letter_topic(&broker, &client).await;
     point_group_at_dead_letter_topic(&client).await;
     tier_the_source_topic(&broker, &client).await;
-    produce_n(&client, "t", tid, 0, 3).await;
+    produce_n(
+        &client,
+        crate::support::share::ShareRecordsSetup {
+            topic_id: tid,
+            count: crate::support::share::ShareRecordCount(3),
+            ..Default::default()
+        },
+    )
+    .await;
     wait_until_local_log_start(&client, 3).await;
 
     let (member, row) = join_and_acquire(&broker, &client, tid).await;

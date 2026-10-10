@@ -90,22 +90,33 @@ crate::share_consumption_fixture!(
 /// Initialize the persisted topic/group fixture before a restart scenario.
 pub async fn initialized_topic(
     log_dir: std::path::PathBuf,
-    records: i64,
+    setup: crate::support::share::ShareRecordSeedSetup,
 ) -> (
     krabka_broker::BrokerHandle,
     std::sync::Arc<Client>,
     uuid::Uuid,
     String,
 ) {
-    let (broker, client, tid) =
-        crate::support::share::start_topic(broker_config(log_dir), "t", 1).await;
-    let (member, _) = initialize_consumption(&broker, &client, tid, records).await;
+    let (broker, client, tid) = crate::support::share::start_topic(
+        broker_config(log_dir),
+        crate::support::share::ShareTopicSetup::default(),
+    )
+    .await;
+    let (member, _) = initialize_consumption(
+        &broker,
+        &client,
+        crate::support::share::ConsumptionSetup {
+            topic_id: tid,
+            count: setup.count,
+        },
+    )
+    .await;
     (broker, client, tid, member)
 }
 
 /// Prepare g1's persister and data without joining a member to the group.
 pub async fn seeded_empty_group(
-    records: i64,
+    setup: crate::support::share::ShareRecordSeedSetup,
 ) -> (
     tokio::sync::OwnedSemaphorePermit,
     krabka_broker::BrokerHandle,
@@ -113,10 +124,21 @@ pub async fn seeded_empty_group(
     tempfile::TempDir,
     uuid::Uuid,
 ) {
-    let (permit, broker, client, dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
+    let (permit, broker, client, dir, tid) = crate::support::share::permitted_topic_fixture(
+        crate::support::share::ShareTopicSetup::default(),
+        |_| {},
+    )
+    .await;
     bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, records).await;
+    produce_n(
+        &client,
+        crate::support::share::ShareRecordsSetup {
+            topic_id: tid,
+            count: setup.count,
+            ..Default::default()
+        },
+    )
+    .await;
     (permit, broker, client, dir, tid)
 }
 
@@ -142,13 +164,48 @@ pub async fn acquired_topic() -> (
     String,
     krabka_protocol::owned::share_fetch_response::PartitionData,
 ) {
-    let (permit, broker, client, dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
-    let (member, _) = initialize_consumption(&broker, &client, tid, 3).await;
+    let crate::support::share::ConsumptionFixture {
+        _permit: permit,
+        broker,
+        client,
+        _dir: dir,
+        tid,
+        member,
+    } = crate::support::share::consumption_fixture(
+        crate::support::share::ShareRecordSeedSetup::default(),
+        initialize_consumption,
+    )
+    .await;
     let row = fetch_until_acquired(
         &client,
         crate::support::share::ShareSessionSetup::opening(&member, tid),
     )
     .await;
     (permit, broker, client, dir, tid, member, row)
+}
+
+/// Retain the directory and permit across both boots of an initialized-topic test.
+pub struct InitializedRestartFixture {
+    pub _permit: tokio::sync::OwnedSemaphorePermit,
+    pub _dir: tempfile::TempDir,
+    pub log_dir: std::path::PathBuf,
+    pub topic: (
+        krabka_broker::BrokerHandle,
+        std::sync::Arc<Client>,
+        uuid::Uuid,
+        String,
+    ),
+}
+
+pub async fn initialized_restart_fixture(
+    setup: crate::support::share::ShareRecordSeedSetup,
+) -> InitializedRestartFixture {
+    let (permit, dir, log_dir) = restart_directory().await;
+    let topic = initialized_topic(log_dir.clone(), setup).await;
+    InitializedRestartFixture {
+        _permit: permit,
+        _dir: dir,
+        log_dir,
+        topic,
+    }
 }

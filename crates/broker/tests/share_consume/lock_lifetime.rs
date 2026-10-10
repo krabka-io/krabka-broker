@@ -179,15 +179,25 @@ async fn lock_fixture(
     uuid::Uuid,
     String,
 ) {
-    let (permit, broker, client, dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |config| {
+    let (permit, broker, client, dir, tid) = crate::support::share::permitted_topic_fixture(
+        crate::support::share::ShareTopicSetup::default(),
+        |config| {
             config.share_group.record_lock_duration = lock_duration;
             if let Some(attempts) = max_delivery_attempts {
                 config.share_group.max_delivery_attempts = attempts;
             }
-        })
-        .await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
+        },
+    )
+    .await;
+    let (member, _) = crate::harness::initialize_consumption(
+        &broker,
+        &client,
+        crate::support::share::ConsumptionSetup {
+            topic_id: tid,
+            count: crate::support::share::ShareRecordCount(1),
+        },
+    )
+    .await;
 
     (permit, broker, client, dir, tid, member)
 }

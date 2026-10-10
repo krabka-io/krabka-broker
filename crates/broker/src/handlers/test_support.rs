@@ -553,13 +553,7 @@ pub(crate) async fn seed_partition_replicas(
         .expect("submit partition record");
 }
 
-/// Plain records with the protocol's default batch header, whose leader epoch is zero.
-pub(crate) fn default_records_batch(values: &[&'static [u8]]) -> RecordBatch {
-    RecordBatch {
-        partition_leader_epoch: 0,
-        ..crate::test_support::static_records_batch(values, crate::test_support::UnixMillis(0))
-    }
-}
+pub(crate) use crate::test_support::default_value_records_batch as default_records_batch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::From, derive_more::Into)]
 pub(crate) struct ShareSessionEpoch(pub i32);

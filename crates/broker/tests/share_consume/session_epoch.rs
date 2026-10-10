@@ -24,7 +24,7 @@ async fn session_epoch_validation() {
         _dir,
         tid,
         member,
-    } = crate::harness::consumption_fixture(1).await;
+    } = crate::harness::single_record_consumption_fixture().await;
 
     // Open (epoch 0) succeeds: top-level error_code 0.
     let opened: ShareFetchResponse = client
@@ -91,7 +91,7 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
         _dir,
         tid,
         member,
-    } = crate::harness::consumption_fixture(1).await;
+    } = crate::harness::single_record_consumption_fixture().await;
 
     let first = fetch_until_acquired(
         &client,
@@ -105,7 +105,14 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
     )
     .await;
 
-    produce_n(&client, "t", tid, 0, 1).await;
+    produce_n(
+        &client,
+        crate::support::share::ShareRecordsSetup {
+            topic_id: tid,
+            ..Default::default()
+        },
+    )
+    .await;
     let cached: ShareFetchResponse = client
         .send(crate::support::share::empty_session_request(
             crate::support::share::EmptySessionSetup {
@@ -155,7 +162,14 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
     assert!(forgotten.error_code == NONE);
     assert!(forgotten.responses.is_empty());
 
-    produce_n(&client, "t", tid, 0, 1).await;
+    produce_n(
+        &client,
+        crate::support::share::ShareRecordsSetup {
+            topic_id: tid,
+            ..Default::default()
+        },
+    )
+    .await;
     let after_forget: ShareFetchResponse = client
         .send(crate::support::share::empty_session_request(
             crate::support::share::EmptySessionSetup {

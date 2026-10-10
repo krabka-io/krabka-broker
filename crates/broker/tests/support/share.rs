@@ -97,19 +97,53 @@ pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
     );
 }
 
-pub async fn produce_n(client: &Client, topic: &str, tid: uuid::Uuid, partition: i32, n: i64) {
-    let values = (0..n)
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ShareProduceSetup<'a> {
+    #[default("t")]
+    pub topic: &'a str,
+    pub topic_id: uuid::Uuid,
+    pub partition: krabka_ids::PartitionIndex,
+}
+
+#[derive(Clone, Copy)]
+pub struct ShareRecordCount(pub i64);
+
+impl Default for ShareRecordCount {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ShareRecordsSetup<'a> {
+    #[default("t")]
+    pub topic: &'a str,
+    pub topic_id: uuid::Uuid,
+    pub partition: krabka_ids::PartitionIndex,
+    pub count: ShareRecordCount,
+}
+
+impl<'a> From<ShareRecordsSetup<'a>> for ShareProduceSetup<'a> {
+    fn from(setup: ShareRecordsSetup<'a>) -> Self {
+        Self {
+            topic: setup.topic,
+            topic_id: setup.topic_id,
+            partition: setup.partition,
+        }
+    }
+}
+
+pub async fn produce_n(client: &Client, setup: ShareRecordsSetup<'_>) {
+    let values = (0..setup.count.0)
         .map(|i| bytes::Bytes::from(format!("v{i}")))
         .collect();
-    produce_values(client, topic, tid, partition, values).await;
+    produce_values(client, values, setup.into()).await;
 }
 
 pub async fn produce_values(
     client: &Client,
-    topic: &str,
-    tid: uuid::Uuid,
-    partition: i32,
     values: Vec<bytes::Bytes>,
+    setup: ShareProduceSetup<'_>,
 ) {
     let n = i64::try_from(values.len()).unwrap();
     let records: Vec<Record> = values
@@ -119,13 +153,11 @@ pub async fn produce_values(
         .collect();
     produce_batch(
         client,
-        topic,
-        tid,
-        partition,
         RecordBatch {
             last_offset_delta: i32::try_from(n - 1).unwrap(),
             ..batch_from_records(records)
         },
+        setup,
     )
     .await;
 }
@@ -147,13 +179,13 @@ pub async fn join(client: &Client, group: &str, topic: &str) -> (String, i32) {
 }
 
 /// Produce a supplied batch, preserving its timestamps and record geometry on retries.
-pub async fn produce_batch(
-    client: &Client,
-    topic: &str,
-    tid: uuid::Uuid,
-    partition: i32,
-    batch: RecordBatch,
-) {
+pub async fn produce_batch(client: &Client, batch: RecordBatch, setup: ShareProduceSetup<'_>) {
+    let ShareProduceSetup {
+        topic,
+        topic_id: tid,
+        partition,
+    } = setup;
+    let partition = partition.0;
     for _ in 0..40 {
         let resp = client
             .send(ProduceRequest {
@@ -193,10 +225,26 @@ pub async fn produce_batch(
     panic!("partition never became produceable for {topic}:{partition}");
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ShareTopicSetup<'a> {
+    #[default("t")]
+    pub topic: &'a str,
+    pub partitions: crate::support::topics::TopicPartitionCount,
+}
+
+impl<'a> From<ShareTopicSetup<'a>> for crate::support::topics::CreateTopicSetup<'a> {
+    fn from(setup: ShareTopicSetup<'a>) -> Self {
+        Self {
+            topic: setup.topic,
+            num_partitions: setup.partitions,
+            ..Default::default()
+        }
+    }
+}
+
 /// A broker, client and materialized data topic, retaining the fixture directory.
 pub async fn topic_fixture(
-    topic: &str,
-    partitions: i32,
+    setup: ShareTopicSetup<'_>,
     customize: impl FnOnce(&mut BrokerConfig),
 ) -> (
     krabka_broker::BrokerHandle,
@@ -207,14 +255,13 @@ pub async fn topic_fixture(
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = broker_config(dir.path().to_path_buf());
     customize(&mut config);
-    let (broker, client, tid) = start_topic(config, topic, partitions).await;
+    let (broker, client, tid) = start_topic(config, setup).await;
     (broker, client, dir, tid)
 }
 
 /// A topic fixture that holds this binary's broker permit for the test's lifetime.
 pub async fn permitted_topic_fixture(
-    topic: &str,
-    partitions: i32,
+    setup: ShareTopicSetup<'_>,
     customize: impl FnOnce(&mut BrokerConfig),
 ) -> (
     tokio::sync::OwnedSemaphorePermit,
@@ -224,7 +271,7 @@ pub async fn permitted_topic_fixture(
     uuid::Uuid,
 ) {
     let permit = broker_test_permit().await;
-    let (broker, client, dir, tid) = topic_fixture(topic, partitions, customize).await;
+    let (broker, client, dir, tid) = topic_fixture(setup, customize).await;
     (permit, broker, client, dir, tid)
 }
 
@@ -234,11 +281,10 @@ pub async fn connect(bootstrap: &str) -> Arc<Client> {
 pub async fn create_topic(
     broker: &krabka_broker::BrokerHandle,
     client: &Client,
-    topic: &str,
-    partitions: i32,
+    setup: ShareTopicSetup<'_>,
 ) {
-    crate::support::client::create_topic(client, topic, partitions).await;
-    broker.wait_until_partition_present(topic, 0).await;
+    crate::support::client::create_topic_with(client, setup.into()).await;
+    broker.wait_until_partition_present(setup.topic, 0).await;
 }
 
 #[derive(Clone, Copy)]
@@ -506,13 +552,12 @@ pub async fn fetch_until_acquired(
 /// Start a data topic on a caller-owned broker config (including restart fixtures).
 pub async fn start_topic(
     cfg: BrokerConfig,
-    topic: &str,
-    partitions: i32,
+    setup: ShareTopicSetup<'_>,
 ) -> (krabka_broker::BrokerHandle, Arc<Client>, uuid::Uuid) {
     let broker = krabka_broker::Broker::start(cfg).await.unwrap();
     let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, topic, partitions).await;
-    let tid = topic_id(&broker, topic);
+    create_topic(&broker, &client, setup).await;
+    let tid = topic_id(&broker, setup.topic);
     (broker, client, tid)
 }
 
@@ -782,6 +827,61 @@ pub async fn join_consume_member(
     (member, epoch)
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ConsumptionSetup {
+    pub topic_id: uuid::Uuid,
+    #[default(ShareRecordCount(3))]
+    pub count: ShareRecordCount,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ShareRecordSeedSetup {
+    #[default(ShareRecordCount(3))]
+    pub count: ShareRecordCount,
+}
+
+/// Owners and initialized membership for a fresh g1/t consume session.
+pub struct ConsumptionFixture {
+    pub _permit: tokio::sync::OwnedSemaphorePermit,
+    pub broker: krabka_broker::BrokerHandle,
+    pub client: std::sync::Arc<krabka_client_core::Client>,
+    pub _dir: tempfile::TempDir,
+    pub tid: uuid::Uuid,
+    pub member: String,
+}
+
+impl ConsumptionFixture {
+    pub fn session(&self) -> ShareSessionSetup<'_> {
+        ShareSessionSetup::joined(&self.member, self.tid)
+    }
+}
+
+/// Retain every topic owner while the suite-specific initializer joins and waits.
+pub async fn consumption_fixture(
+    setup: ShareRecordSeedSetup,
+    initialize: impl AsyncFn(&krabka_broker::BrokerHandle, &Client, ConsumptionSetup) -> (String, i32),
+) -> ConsumptionFixture {
+    let (permit, broker, client, dir, tid) =
+        permitted_topic_fixture(ShareTopicSetup::default(), |_| {}).await;
+    let (member, _) = initialize(
+        &broker,
+        &client,
+        ConsumptionSetup {
+            topic_id: tid,
+            count: setup.count,
+        },
+    )
+    .await;
+    ConsumptionFixture {
+        _permit: permit,
+        broker,
+        client,
+        _dir: dir,
+        tid,
+        member,
+    }
+}
+
 /// Generate the common g1/t setup while retaining each suite's join and readiness policy.
 #[macro_export]
 macro_rules! share_consumption_fixture {
@@ -792,11 +892,11 @@ macro_rules! share_consumption_fixture {
         pub async fn $name(
             $broker: &::krabka_broker::BrokerHandle,
             $client: &::krabka_client_core::Client,
-            $tid: ::uuid::Uuid,
-            records: i64,
+            setup: $crate::support::share::ConsumptionSetup,
         ) -> (String, i32) {
+            let $tid = setup.topic_id;
             $crate::support::share::bootstrap_share_state($broker, $client, "g1").await;
-            $crate::support::share::produce_n($client, "t", $tid, 0, records).await;
+            $crate::support::share::produce_n($client, $crate::support::share::ShareRecordsSetup {topic_id: $tid, count: setup.count, ..Default::default()}).await;
             let ($member, $epoch) = ($join)($client, "g1", "t").await;
             ($wait).await;
             ($member, $epoch)
