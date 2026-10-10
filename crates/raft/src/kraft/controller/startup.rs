@@ -40,6 +40,15 @@ use crate::{
     },
 };
 
+/// Metadata recovered before the controller engine is spawned.
+struct RecoveredMetadata {
+    image: MetadataImage,
+    last_snapshot_end_offset: Offset,
+    last_snapshot_timestamp_ms: i64,
+    last_applied_record_timestamp_ms: i64,
+    downgrade_snapshot_pending: Option<PendingDowngradeSnapshot>,
+}
+
 impl KraftController {
     /// Build the engine over an already-opened [`KraftLog`] and spawn its loop
     /// task. Recovery (snapshot + replay + quorum-state file) is wired by
@@ -59,8 +68,19 @@ impl KraftController {
     pub fn spawn(config: KraftConfig, log: KraftLog, data_dir: PathBuf) -> Self {
         let cluster_id = config.cluster_id;
         let image = MetadataImage::new(cluster_id);
-        Self::spawn_with_image(config, log, data_dir, image, Offset(0), 0, 0, None)
-            .expect("fresh controller cannot have a pending downgrade checkpoint")
+        Self::spawn_with_image(
+            config,
+            log,
+            data_dir,
+            RecoveredMetadata {
+                image,
+                last_snapshot_end_offset: Offset(0),
+                last_snapshot_timestamp_ms: 0,
+                last_applied_record_timestamp_ms: 0,
+                downgrade_snapshot_pending: None,
+            },
+        )
+        .expect("fresh controller cannot have a pending downgrade checkpoint")
     }
 
     /// Spawn the engine starting from an already-recovered [`MetadataImage`]
@@ -70,12 +90,15 @@ impl KraftController {
         config: KraftConfig,
         log: KraftLog,
         data_dir: PathBuf,
-        image: MetadataImage,
-        last_snapshot_end_offset: Offset,
-        last_snapshot_timestamp_ms: i64,
-        last_applied_record_timestamp_ms: i64,
-        downgrade_snapshot_pending: Option<PendingDowngradeSnapshot>,
+        recovered: RecoveredMetadata,
     ) -> Result<Self, RaftError> {
+        let RecoveredMetadata {
+            image,
+            last_snapshot_end_offset,
+            last_snapshot_timestamp_ms,
+            last_applied_record_timestamp_ms,
+            downgrade_snapshot_pending,
+        } = recovered;
         let KraftConfig {
             me,
             cluster_id: _,
@@ -398,11 +421,13 @@ impl KraftController {
             },
             log,
             data_dir,
-            image,
-            last_snapshot_end_offset,
-            last_snapshot_timestamp_ms,
-            last_applied_record_timestamp_ms,
-            downgrade_snapshot_pending,
+            RecoveredMetadata {
+                image,
+                last_snapshot_end_offset,
+                last_snapshot_timestamp_ms,
+                last_applied_record_timestamp_ms,
+                downgrade_snapshot_pending,
+            },
         )
     }
 }
