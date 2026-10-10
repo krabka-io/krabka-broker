@@ -27,24 +27,17 @@ async fn broker_fetch_cap_bounds_consumer_fetch_and_keeps_first_batch_progress()
         },
     )
     .await;
-    crate::handlers::test_support::produce_records(
-        &broker,
-        crate::handlers::test_support::ProduceRecordsSetup {
-            topic,
-            count: crate::handlers::test_support::RecordCount(2),
-            ..Default::default()
-        },
-    )
-    .await;
-    crate::handlers::test_support::produce_records(
-        &broker,
-        crate::handlers::test_support::ProduceRecordsSetup {
-            topic,
-            count: crate::handlers::test_support::RecordCount(2),
-            ..Default::default()
-        },
-    )
-    .await;
+    for _ in 0..2 {
+        crate::handlers::test_support::produce_records(
+            &broker,
+            crate::handlers::test_support::ProduceRecordsSetup {
+                topic,
+                count: crate::handlers::test_support::RecordCount(2),
+                ..Default::default()
+            },
+        )
+        .await;
+    }
 
     let response = super::test_support::fetch_wire(
         &broker,
