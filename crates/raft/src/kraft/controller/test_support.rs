@@ -218,8 +218,7 @@ pub fn build_engine_only_with_metadata_log(
     let (image_tx, _image_rx) = watch::channel(Arc::new(image.clone()));
     let (leader_tx, _leader_rx) = watch::channel(core.quorum_state().leader_id);
     let log_hwm_at_open = log.hwm().0;
-    let initial_snapshot =
-        super::queries::initial_quorum_snapshot(&core, &log, log_hwm_at_open, 0);
+    let initial_snapshot = super::queries::initial_quorum_snapshot(&core, &log, log_hwm_at_open, 0);
     let (quorum_tx, _quorum_rx) = watch::channel(initial_snapshot);
     let (cmd_tx, _cmd_rx) = mpsc::channel(1);
     let held_epoch = core.quorum_state().leader_epoch;

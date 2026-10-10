@@ -21,11 +21,11 @@
 
 use bytes::BytesMut;
 use krabka_log::Offset;
-use krabka_units::convert::ByteSizeExt as _;
 use krabka_protocol::{
     Decode, Encode,
     owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
 };
+use krabka_units::convert::ByteSizeExt as _;
 
 mod node_endpoints;
 mod plan;
@@ -44,9 +44,9 @@ mod broker_limit_tests;
 #[cfg(test)]
 mod follower_authorization_tests;
 #[cfg(test)]
-mod response_budget_tests;
-#[cfg(test)]
 mod follower_watermark_tests;
+#[cfg(test)]
+mod response_budget_tests;
 
 #[cfg(test)]
 mod leader_read_tests;

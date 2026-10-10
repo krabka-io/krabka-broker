@@ -173,7 +173,8 @@ impl Engine {
             leader_epoch: qs.leader_epoch,
             high_watermark: self.log.hwm().0,
             last_applied_record_timestamp_ms: self.last_applied_record_timestamp_ms,
-            pending_record_processing_time_us_avg: if self.pending_record_processing_time_samples == 0
+            pending_record_processing_time_us_avg: if self.pending_record_processing_time_samples
+                == 0
             {
                 0
             } else {

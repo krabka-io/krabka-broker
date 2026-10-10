@@ -200,9 +200,7 @@ pub fn deserialize_metadata_snapshot_image(
 ///
 /// # Errors
 /// Returns an error when the snapshot header is missing or malformed.
-pub fn metadata_snapshot_last_contained_log_timestamp(
-    bytes: &[u8],
-) -> Result<i64, RaftError> {
+pub fn metadata_snapshot_last_contained_log_timestamp(bytes: &[u8]) -> Result<i64, RaftError> {
     snapshot::SnapshotReader::last_contained_log_timestamp(bytes)
 }
 pub use wire::{

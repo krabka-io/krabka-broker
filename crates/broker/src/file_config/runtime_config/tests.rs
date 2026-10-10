@@ -176,7 +176,10 @@ replication_fetch_min = "1B"
             i64::from(cfg.client_metrics_telemetry_max.bytes_i32()),
         ),
         ("observer_fetch_max", cfg.observer_fetch_max.bytes_i64()),
-        ("fetch_max_bytes", i64::from(cfg.fetch_max_bytes.bytes_i32())),
+        (
+            "fetch_max_bytes",
+            i64::from(cfg.fetch_max_bytes.bytes_i32()),
+        ),
         (
             "replication_fetch_max",
             i64::from(cfg.replication.fetch_max.bytes_i32()),

@@ -18,8 +18,8 @@ async fn broker_fetch_cap_bounds_consumer_fetch_and_keeps_first_batch_progress()
     })
     .await;
     let topic = "broker-fetch-cap";
-    let topic_id = crate::handlers::test_support::create_topic(&broker, "fetch-cap-test", topic, 1)
-        .await;
+    let topic_id =
+        crate::handlers::test_support::create_topic(&broker, "fetch-cap-test", topic, 1).await;
     crate::handlers::test_support::produce_records(&broker, topic, 0, 2).await;
     crate::handlers::test_support::produce_records(&broker, topic, 0, 2).await;
 

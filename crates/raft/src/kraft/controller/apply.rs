@@ -183,8 +183,8 @@ impl Engine {
         // applied-record lag metric). Only count a pass that reached the
         // committed boundary; a read failure leaves pending work behind.
         if cursor >= applied_hwm {
-            let elapsed_us = u64::try_from(processing_started.elapsed().as_micros())
-                .unwrap_or(u64::MAX);
+            let elapsed_us =
+                u64::try_from(processing_started.elapsed().as_micros()).unwrap_or(u64::MAX);
             self.pending_record_processing_time_us_total = self
                 .pending_record_processing_time_us_total
                 .saturating_add(u128::from(elapsed_us));
