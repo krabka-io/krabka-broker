@@ -58,7 +58,11 @@ fn add_topic(image: &mut MetadataImage, topic: &str, topic_id: Uuid) {
         replication_factor: 1,
     }));
     image.apply(&MetadataRecord::V1Partition(
-        crate::handlers::test_support::single_replica_partition(topic, 0, krabka_audit::NodeId(1)),
+        crate::handlers::test_support::single_replica_partition(
+            topic,
+            krabka_ids::PartitionIndex(0),
+            krabka_audit::NodeId(1),
+        ),
     ));
 }
 

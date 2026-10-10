@@ -356,7 +356,7 @@ pub(crate) fn replicated_partition(
     krabka_metadata::PartitionRecord {
         replicas: replicas.to_vec(),
         isr: replicas.to_vec(),
-        ..single_replica_partition(topic, partition.0, leader)
+        ..single_replica_partition(topic, partition, leader)
     }
 }
 

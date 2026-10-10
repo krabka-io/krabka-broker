@@ -234,7 +234,7 @@ pub(crate) fn image_with_topics(topics: &[(uuid::Uuid, i32)]) -> krabka_metadata
             records.push(krabka_metadata::MetadataRecord::V1Partition(
                 crate::coordinator::test_support::single_replica_partition(
                     &name,
-                    partition,
+                    krabka_ids::PartitionIndex(partition),
                     krabka_metadata::NodeId(1),
                 ),
             ));

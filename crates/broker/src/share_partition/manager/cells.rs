@@ -409,7 +409,11 @@ mod tests {
                 partitions: 1,
                 replication_factor: 1,
             }),
-            MetadataRecord::V1Partition(partition_record("t", 0, NodeId(1))),
+            MetadataRecord::V1Partition(partition_record(
+                "t",
+                krabka_ids::PartitionIndex(0),
+                NodeId(1),
+            )),
         ];
         for (group, value) in strategies {
             records.push(MetadataRecord::V1GroupConfig(GroupConfigRecord {

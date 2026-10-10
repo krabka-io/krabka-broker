@@ -33,7 +33,7 @@ pub fn image_with(topics: &[(&str, u8, i32)]) -> MetadataImage {
         for p in 0..partitions {
             image.apply(&MetadataRecord::V1Partition(partition_record(
                 name,
-                p,
+                krabka_ids::PartitionIndex(p),
                 krabka_audit::NodeId(1),
             )));
         }

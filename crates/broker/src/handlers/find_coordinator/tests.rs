@@ -506,7 +506,7 @@ fn resolve_image() -> krabka_metadata::MetadataImage {
         image.apply(&MetadataRecord::V1Partition(
             crate::handlers::test_support::single_replica_partition(
                 topic,
-                partition,
+                krabka_ids::PartitionIndex(partition),
                 NodeId(leader),
             ),
         ));

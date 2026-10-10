@@ -392,7 +392,11 @@ pub fn topic_record_named(name: &str, id: u128) -> Vec<krabka_metadata::Metadata
             uuid::Uuid::from_u128(id),
         )),
         krabka_metadata::MetadataRecord::V1Partition(
-            crate::test_support::single_replica_partition(name, 0, NodeId(1)),
+            crate::test_support::single_replica_partition(
+                name,
+                krabka_ids::PartitionIndex(0),
+                NodeId(1),
+            ),
         ),
     ]
 }

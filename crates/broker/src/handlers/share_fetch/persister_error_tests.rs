@@ -272,7 +272,7 @@ async fn state_topic_led_by_an_unknown_broker(broker: &BrokerHandle) {
     records.extend((0..partitions).map(|partition| {
         MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
             crate::share_coordinator::bootstrap::TOPIC,
-            partition,
+            krabka_ids::PartitionIndex(partition),
             NodeId(99),
         ))
     }));

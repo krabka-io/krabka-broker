@@ -68,7 +68,7 @@ pub async fn seed_topic(handle: &BrokerHandle, setup: SeedTopicSetup<'_>) {
         records.push(MetadataRecord::V1Partition(
             crate::handlers::test_support::single_replica_partition(
                 name,
-                partition,
+                krabka_ids::PartitionIndex(partition),
                 NodeId(handle.node_id()),
             ),
         ));

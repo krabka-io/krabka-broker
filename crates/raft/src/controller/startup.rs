@@ -467,7 +467,11 @@ mod tests {
                 ),
                 // No record creates the topic, so the leader refuses this one.
                 krabka_metadata::MetadataRecord::V1Partition(
-                    crate::test_support::single_replica_partition("missing", 0, NodeId(1)),
+                    crate::test_support::single_replica_partition(
+                        "missing",
+                        krabka_ids::PartitionIndex(0),
+                        NodeId(1),
+                    ),
                 ),
             ],
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())

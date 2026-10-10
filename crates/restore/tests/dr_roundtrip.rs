@@ -130,7 +130,7 @@ fn metadata_checkpoint(fixture: &Fixture) -> Vec<u8> {
     for partition in 0..2 {
         image.apply(&MetadataRecord::V1Partition(single_replica_partition(
             TOPIC,
-            partition,
+            krabka_ids::PartitionIndex(partition),
             NodeId(1),
         )));
     }

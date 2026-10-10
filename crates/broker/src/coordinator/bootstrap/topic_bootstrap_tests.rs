@@ -29,7 +29,11 @@ async fn register_offsets_topic(controller: &Arc<dyn crate::metadata_source::Met
                 partitions: 1,
                 replication_factor: 1,
             }),
-            MetadataRecord::V1Partition(partition_record(OFFSETS_TOPIC, OFFSETS_PARTITION, node)),
+            MetadataRecord::V1Partition(partition_record(
+                OFFSETS_TOPIC,
+                krabka_ids::PartitionIndex(OFFSETS_PARTITION),
+                node,
+            )),
         ])
         .await
         .expect("register __consumer_offsets");

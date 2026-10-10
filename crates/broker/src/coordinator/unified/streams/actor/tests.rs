@@ -493,7 +493,9 @@ fn image_of(
         }));
         for partition in 0..partitions {
             records.push(MetadataRecord::V1Partition(partition_record(
-                name, partition, broker,
+                name,
+                krabka_ids::PartitionIndex(partition),
+                broker,
             )));
         }
     }

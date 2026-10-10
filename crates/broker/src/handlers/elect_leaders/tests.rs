@@ -382,7 +382,7 @@ async fn seed_preferred_topic(broker: &Broker) {
     records.extend((0..3).map(|partition| {
         MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
             TOPIC,
-            partition,
+            krabka_ids::PartitionIndex(partition),
             NodeId(1),
         ))
     }));

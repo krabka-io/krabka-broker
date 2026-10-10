@@ -179,7 +179,7 @@ mod tests {
                     partition_epoch: 1,
                     ..crate::handlers::test_support::single_replica_partition(
                         "orders",
-                        0,
+                        krabka_ids::PartitionIndex(0),
                         NodeId(1),
                     )
                 }),

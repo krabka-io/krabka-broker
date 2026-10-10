@@ -474,7 +474,11 @@ mod tests {
         for index in 0..partitions.0 {
             records.push(MetadataRecord::V1Partition(PartitionRecord {
                 directories: vec![uuid::Uuid::nil()],
-                ..crate::handlers::test_support::single_replica_partition(name, index, NodeId(1))
+                ..crate::handlers::test_support::single_replica_partition(
+                    name,
+                    krabka_ids::PartitionIndex(index),
+                    NodeId(1),
+                )
             }));
         }
         handle

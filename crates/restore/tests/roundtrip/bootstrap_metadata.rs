@@ -125,7 +125,7 @@ async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
     for partition in 0..2 {
         image.apply(&MetadataRecord::V1Partition(single_replica_partition(
             ORDERS,
-            partition,
+            krabka_ids::PartitionIndex(partition),
             NodeId(1),
         )));
     }

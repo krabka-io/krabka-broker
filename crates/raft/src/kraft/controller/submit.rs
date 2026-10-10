@@ -990,13 +990,21 @@ mod tests {
         let dir_id = Uuid::from_u128(99);
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
             directories: vec![dir_id],
-            ..crate::test_support::single_replica_partition("test-topic", 0, NodeId(1))
+            ..crate::test_support::single_replica_partition(
+                "test-topic",
+                krabka_ids::PartitionIndex(0),
+                NodeId(1),
+            )
         }));
 
         let new_part = PartitionRecord {
             leader_epoch: krabka_metadata::LeaderEpoch(1),
             partition_epoch: 1,
-            ..crate::test_support::single_replica_partition("test-topic", 0, NodeId(1))
+            ..crate::test_support::single_replica_partition(
+                "test-topic",
+                krabka_ids::PartitionIndex(0),
+                NodeId(1),
+            )
         };
 
         let rebased = rebase_partition_directories(&image, &MetadataRecord::V1Partition(new_part));

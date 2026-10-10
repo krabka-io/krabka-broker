@@ -99,7 +99,9 @@ pub(super) fn topic_with_partitions(
     let mut records = vec![topic_record(name, topic_id, partitions)];
     records.extend((0..partitions).map(|partition| {
         MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
-            name, partition, node,
+            name,
+            krabka_ids::PartitionIndex(partition),
+            node,
         ))
     }));
     records

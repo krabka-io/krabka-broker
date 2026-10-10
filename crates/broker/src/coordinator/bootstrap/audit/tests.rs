@@ -43,7 +43,7 @@ fn audit_batch(topic_id: uuid::Uuid, replicas: &[u64]) -> Vec<MetadataRecord> {
     for (partition, &replica) in (0_i32..).zip(replicas) {
         batch.push(MetadataRecord::V1Partition(partition_record(
             AUDIT_TOPIC,
-            partition,
+            krabka_ids::PartitionIndex(partition),
             NodeId(replica),
         )));
     }

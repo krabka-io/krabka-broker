@@ -159,11 +159,11 @@ pub(crate) fn single_replica_partition(input: TokenStream) -> Result<TokenStream
     crate::fixtures::function(
         input,
         &moxy::template! { pub(crate) },
-        &moxy::template! { topic: &str, partition: i32, node: ::krabka_metadata::NodeId, },
+        &moxy::template! { topic: &str, partition: ::krabka_ids::PartitionIndex, node: ::krabka_metadata::NodeId, },
         &moxy::template! { ::krabka_metadata::PartitionRecord },
         &moxy::template! {
             ::krabka_metadata::PartitionRecord {
-                topic: topic.to_owned(), partition, leader: node, replicas: vec![node], isr: vec![node],
+                topic: topic.to_owned(), partition: partition.0, leader: node, replicas: vec![node], isr: vec![node],
                 leader_epoch: ::krabka_metadata::LeaderEpoch(0), adding_replicas: vec![],
                 removing_replicas: vec![], directories: vec![], partition_epoch: 0,
             }

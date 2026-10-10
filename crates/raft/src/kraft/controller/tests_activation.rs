@@ -437,7 +437,7 @@ fn a_refused_activation_is_a_fatal_fault() {
             feature(METADATA_VERSION_FEATURE, LATEST_PRODUCTION_METADATA_VERSION),
             MetadataRecord::V1Partition(crate::test_support::single_replica_partition(
                 "missing",
-                0,
+                krabka_ids::PartitionIndex(0),
                 NodeId(1),
             )),
         ],

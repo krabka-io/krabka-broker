@@ -486,7 +486,11 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
                 replication_factor: 1,
             }),
             krabka_metadata::MetadataRecord::V1Partition(
-                crate::handlers::test_support::single_replica_partition(topic, 0, elsewhere),
+                crate::handlers::test_support::single_replica_partition(
+                    topic,
+                    krabka_ids::PartitionIndex(0),
+                    elsewhere,
+                ),
             ),
         ])
         .await
