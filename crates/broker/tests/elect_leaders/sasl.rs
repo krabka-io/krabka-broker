@@ -7,10 +7,8 @@
 
 use std::net::SocketAddr;
 
-use krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions};
-
 pub use crate::kafka_wire::create_configured_topic_sasl as create_topic_sasl_plain;
-use crate::{kafka_wire, kafka_wire::PlainAuthenticationSetup, wire::CLIENT_ID};
+use crate::{kafka_wire, kafka_wire::PlainAuthenticationSetup};
 
 /// Drives `ElectLeaders` over a SASL/PLAIN authenticated connection.
 ///
@@ -19,33 +17,16 @@ use crate::{kafka_wire, kafka_wire::PlainAuthenticationSetup, wire::CLIENT_ID};
 /// the caller can examine per-row auth failures.
 pub async fn drive_elect_leaders_sasl_plain(
     addr: SocketAddr,
-    user: &str,
-    password: &[u8],
-    topic: &str,
-    partitions: Vec<i32>,
-    election_type: i8,
+    election: crate::support::admin::ElectionSetup,
+    authentication: &PlainAuthenticationSetup<'_>,
 ) -> Vec<(i32, i16)> {
-    let mut stream = kafka_wire::sasl_plain_authenticate(
-        addr,
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            user,
-            password: (password).to_vec(),
-        },
-    )
-    .await
-    .expect("SASL authenticate for ElectLeaders");
-    let req = ElectLeadersRequest {
-        election_type,
-        topic_partitions: Some(vec![TopicPartitions {
-            topic: topic.to_string(),
-            partitions,
-            ..Default::default()
-        }]),
-        timeout_ms: 30_000,
-        ..Default::default()
-    };
-    let resp = kafka_wire::elect_leaders_response(&mut stream, &req, CLIENT_ID).await;
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, authentication)
+        .await
+        .expect("SASL authenticate for ElectLeaders");
+    let topic = election.topic.clone();
+    let req = crate::support::admin::election_request(election);
+    let resp =
+        kafka_wire::elect_leaders_response(&mut stream, &req, authentication.client_id).await;
 
-    crate::support::admin::election_partition_errors(resp, topic)
+    crate::support::admin::election_partition_errors(resp, &topic)
 }

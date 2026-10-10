@@ -353,7 +353,18 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
     eprintln!("sending ElectLeaders UNCLEAN to raft leader at {elect_addr}");
 
     // ── Trigger offset-aware recovery (election_type = 1 = UNCLEAN). ──
-    let result = drive_elect_leaders(elect_addr, CLIENT_ID, topic, vec![0], 1).await;
+    let result = drive_elect_leaders(
+        elect_addr,
+        crate::kafka_wire::ElectionExchangeSetup {
+            client_id: CLIENT_ID,
+            election: crate::support::admin::ElectionSetup {
+                topic: (topic).to_string(),
+                kind: crate::support::admin::ElectionKind::Unclean,
+                ..Default::default()
+            },
+        },
+    )
+    .await;
     assert!(
         result == vec![(0, 0)],
         "expected error_code=0 for UNCLEAN election; got {result:?}"

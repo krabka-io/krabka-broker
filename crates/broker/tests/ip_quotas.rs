@@ -53,14 +53,14 @@ async fn ip_quota_alter_then_describe_round_trip() {
 
     let alter_resp = drive_alter_client_quotas_sasl(
         addr,
-        crate::CLIENT_ID,
-        "admin",
-        "admin-secret",
         vec![(
             vec![("ip".into(), Some("127.0.0.1".into()))],
             vec![("connection_creation_rate".into(), 2.0, false)],
         )],
-        false,
+        &crate::kafka_wire::quotas::QuotaAlterSetup {
+            authentication: crate::kafka_wire::PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            ..Default::default()
+        },
     )
     .await;
     assert!(alter_resp[0].1 == 0, "alter should succeed");
@@ -78,11 +78,11 @@ async fn ip_quota_alter_then_describe_round_trip() {
 
     let desc = drive_describe_client_quotas_sasl(
         addr,
-        crate::CLIENT_ID,
-        "admin",
-        "admin-secret",
         vec![("ip".into(), /*ANY*/ 2, None)],
-        false,
+        &crate::kafka_wire::quotas::QuotaDescribeSetup {
+            authentication: crate::kafka_wire::PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            ..Default::default()
+        },
     )
     .await;
     assert!(desc.len() == 1);

@@ -29,11 +29,11 @@ pub const CLIENT_ID: &str = "krabka-elect-test";
 /// the broker answered with.
 pub async fn drive_elect_all_partitions(
     addr: SocketAddr,
-    election_type: i8,
+    kind: crate::support::admin::ElectionKind,
 ) -> Vec<(String, i32, i16)> {
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let req = ElectLeadersRequest {
-        election_type,
+        election_type: kind.wire_code(),
         topic_partitions: None,
         timeout_ms: 30_000,
         ..Default::default()

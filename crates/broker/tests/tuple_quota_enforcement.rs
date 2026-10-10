@@ -105,9 +105,6 @@ async fn tuple_quota_throttles_only_matching_client_id() {
     // No (user=alice)-only quota is set, so (alice, other) has no quota at all.
     let alter_resp = drive_alter_client_quotas_sasl(
         addr,
-        crate::CLIENT_ID,
-        "admin",
-        &admin_password,
         vec![(
             vec![
                 ("user".into(), Some("alice".into())),
@@ -115,7 +112,14 @@ async fn tuple_quota_throttles_only_matching_client_id() {
             ],
             vec![("producer_byte_rate".into(), 1024.0, false)],
         )],
-        false,
+        &crate::kafka_wire::quotas::QuotaAlterSetup {
+            authentication: crate::kafka_wire::PlainAuthenticationSetup {
+                client_id: crate::CLIENT_ID,
+                user: "admin",
+                password: admin_password.as_bytes().to_vec(),
+            },
+            ..Default::default()
+        },
     )
     .await;
     assert!(

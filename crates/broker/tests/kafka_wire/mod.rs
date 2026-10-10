@@ -30,12 +30,9 @@ use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        api_versions_request::ApiVersionsRequest,
-        api_versions_response::ApiVersionsResponse,
-        elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
-        elect_leaders_response::ElectLeadersResponse,
-        produce_request::ProduceRequest,
-        produce_response::ProduceResponse,
+        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+        elect_leaders_request::ElectLeadersRequest, elect_leaders_response::ElectLeadersResponse,
+        produce_request::ProduceRequest, produce_response::ProduceResponse,
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
         sasl_handshake_request::SaslHandshakeRequest,
@@ -739,14 +736,44 @@ pub async fn sasl_plain_reauthenticate_on(
     .await
 }
 
+#[derive(Clone, Copy)]
+pub struct ProduceValueBytes(pub usize);
+impl Default for ProduceValueBytes {
+    fn default() -> Self {
+        Self(1024)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ProduceRecordCount(pub usize);
+impl Default for ProduceRecordCount {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+#[derive(Clone, krabka_macros::FieldDefaults)]
+pub struct ZeroFilledRecordsSetup {
+    #[default("quota-topic".to_string())]
+    pub topic: String,
+    pub value_bytes: ProduceValueBytes,
+    pub count: ProduceRecordCount,
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub struct SaslProduceSetup<'a> {
+    pub authentication: PlainAuthenticationSetup<'a>,
+    #[default("krabka-broker-test")]
+    pub produce_client_id: &'a str,
+    pub records: ZeroFilledRecordsSetup,
+}
+
 /// A Produce v11-compatible batch of zero-filled records for quota tests.
 pub fn produce_records(
-    topic: &str,
-    record_bytes: usize,
-    count: usize,
+    setup: ZeroFilledRecordsSetup,
 ) -> krabka_protocol::owned::produce_request::ProduceRequest {
-    let value = vec![0u8; record_bytes];
-    let records: Vec<Record> = (0..count)
+    let value = vec![0u8; setup.value_bytes.0];
+    let records: Vec<Record> = (0..setup.count.0)
         .map(|i| Record {
             offset_delta: i32::try_from(i).unwrap(),
             value: Some(bytes::Bytes::copy_from_slice(&value)),
@@ -756,12 +783,12 @@ pub fn produce_records(
 
     crate::support::produce::batch_request(
         RecordBatch {
-            last_offset_delta: i32::try_from(count - 1).unwrap(),
+            last_offset_delta: i32::try_from(setup.count.0 - 1).unwrap(),
             records,
             ..Default::default()
         },
         crate::support::produce::SinglePartitionProduceSetup {
-            topic: topic.to_string(),
+            topic: setup.topic,
             timeout: crate::support::produce::ProduceTimeoutMillis(30_000),
             ..Default::default()
         },
@@ -812,24 +839,20 @@ pub async fn elect_leaders_response(
     .expect("ElectLeaders round-trip")
 }
 
+#[derive(krabka_macros::FieldDefaults)]
+pub struct ElectionExchangeSetup<'a> {
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    pub election: crate::support::admin::ElectionSetup,
+}
+
 pub async fn elect_leaders(
     stream: &mut TcpStream,
-    client_id: &str,
-    topic: &str,
-    partitions: Vec<i32>,
-    election_type: i8,
+    setup: ElectionExchangeSetup<'_>,
 ) -> Vec<(i32, i16)> {
-    let req = ElectLeadersRequest {
-        election_type,
-        topic_partitions: Some(vec![TopicPartitions {
-            topic: topic.to_string(),
-            partitions,
-            ..Default::default()
-        }]),
-        timeout_ms: 30_000,
-        ..Default::default()
-    };
-    let resp = elect_leaders_response(stream, &req, client_id).await;
+    let topic = setup.election.topic.clone();
+    let req = crate::support::admin::election_request(setup.election);
+    let resp = elect_leaders_response(stream, &req, setup.client_id).await;
 
     assert!(
         resp.error_code == 0,
@@ -837,7 +860,7 @@ pub async fn elect_leaders(
         resp.error_code
     );
 
-    crate::support::admin::election_partition_errors(resp, topic)
+    crate::support::admin::election_partition_errors(resp, &topic)
 }
 
 pub async fn create_topic_plaintext(
@@ -939,13 +962,10 @@ pub async fn create_assigned_topic_plaintext(
 /// Panics if the connection, election round-trip or top-level election check fails.
 pub async fn elect_leaders_plaintext(
     addr: SocketAddr,
-    client_id: &str,
-    topic: &str,
-    partitions: Vec<i32>,
-    election_type: i8,
+    setup: ElectionExchangeSetup<'_>,
 ) -> Vec<(i32, i16)> {
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    elect_leaders(&mut stream, client_id, topic, partitions, election_type).await
+    elect_leaders(&mut stream, setup).await
 }
 
 /// Authenticate with one client id and send Produce v11 with the requested wire id.
@@ -954,22 +974,13 @@ pub async fn elect_leaders_plaintext(
 /// Panics if record construction, SASL authentication, encoding or the wire exchange fails.
 pub async fn produce_sasl_with_ids(
     addr: SocketAddr,
-    client_ids: (&str, &str),
-    credentials: (&str, &[u8]),
-    records: (&str, usize, usize),
+    setup: SaslProduceSetup<'_>,
 ) -> krabka_protocol::owned::produce_response::ProduceResponse {
     const VERSION: i16 = 11;
-    let req = produce_records(records.0, records.1, records.2);
-    let mut stream = sasl_plain_authenticate(
-        addr,
-        &PlainAuthenticationSetup {
-            client_id: client_ids.0,
-            user: credentials.0,
-            password: (credentials.1).to_vec(),
-        },
-    )
-    .await
-    .expect("SASL authenticate for Produce");
+    let req = produce_records(setup.records);
+    let mut stream = sasl_plain_authenticate(addr, &setup.authentication)
+        .await
+        .expect("SASL authenticate for Produce");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode Produce");
     let resp_bytes = round_trip(
@@ -977,7 +988,7 @@ pub async fn produce_sasl_with_ids(
         ExchangeSetup {
             api_key: WireApiKey(0),
             version: WireApiVersion(VERSION),
-            client_id: client_ids.1,
+            client_id: setup.produce_client_id,
             header: frames::HeaderEncoding::Flexible,
             ..Default::default()
         },

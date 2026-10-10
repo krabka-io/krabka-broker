@@ -114,10 +114,13 @@ async fn preferred_election_via_wire_returns_success() {
     // preferred replica (replicas[0]) and is now back in ISR and alive.
     let result = drive_elect_leaders(
         elect_addr,
-        crate::wire::CLIENT_ID,
-        "foo-preferred",
-        vec![0],
-        0,
+        crate::kafka_wire::ElectionExchangeSetup {
+            client_id: crate::wire::CLIENT_ID,
+            election: crate::support::admin::ElectionSetup {
+                topic: ("foo-preferred").to_string(),
+                ..Default::default()
+            },
+        },
     )
     .await;
     assert!(
@@ -167,7 +170,9 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
     .await;
     wait_partition_exists(&cluster[0].0, "foo-all-partitions", 0).await;
 
-    let rows = drive_elect_all_partitions(broker1_addr, 0).await;
+    let rows =
+        drive_elect_all_partitions(broker1_addr, crate::support::admin::ElectionKind::Preferred)
+            .await;
 
     assert!(
         rows.is_empty(),
@@ -178,10 +183,13 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
     // The same partition, named explicitly, still reports why it was skipped.
     let named = drive_elect_leaders(
         broker1_addr,
-        crate::wire::CLIENT_ID,
-        "foo-all-partitions",
-        vec![0],
-        0,
+        crate::kafka_wire::ElectionExchangeSetup {
+            client_id: crate::wire::CLIENT_ID,
+            election: crate::support::admin::ElectionSetup {
+                topic: ("foo-all-partitions").to_string(),
+                ..Default::default()
+            },
+        },
     )
     .await;
     assert!(

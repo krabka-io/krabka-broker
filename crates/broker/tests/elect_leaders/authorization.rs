@@ -95,11 +95,15 @@ async fn non_super_user_without_acl_denied() {
     let resp = loop {
         let r = drive_elect_leaders_sasl_plain(
             addr,
-            "alice",
-            b"alice-secret",
-            "foo-auth-test",
-            vec![0],
-            0,
+            crate::support::admin::ElectionSetup {
+                topic: ("foo-auth-test").to_string(),
+                ..Default::default()
+            },
+            &crate::kafka_wire::PlainAuthenticationSetup {
+                client_id: crate::wire::CLIENT_ID,
+                password: (b"alice-secret").to_vec(),
+                ..Default::default()
+            },
         )
         .await;
         // If we see 31, the shim is off and we're done.

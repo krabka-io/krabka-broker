@@ -109,7 +109,18 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     // Drive ElectLeaders Unclean (election_type=1).
     // The algorithm finds: ISR=[99] — all dead → unclean eligible.
     // First alive in replicas=[1,2] → broker 1 → new leader=1, isr=[1].
-    let result = drive_elect_leaders(addr, crate::wire::CLIENT_ID, "foo-unclean", vec![0], 1).await;
+    let result = drive_elect_leaders(
+        addr,
+        crate::kafka_wire::ElectionExchangeSetup {
+            client_id: crate::wire::CLIENT_ID,
+            election: crate::support::admin::ElectionSetup {
+                topic: ("foo-unclean").to_string(),
+                kind: crate::support::admin::ElectionKind::Unclean,
+                ..Default::default()
+            },
+        },
+    )
+    .await;
     assert!(
         result == vec![(0, 0)],
         "expected error_code=0 for UNCLEAN election; got {result:?}"

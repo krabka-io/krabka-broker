@@ -79,17 +79,16 @@ pub async fn drive_add_offsets_to_txn(
 /// Returns the full `ProduceResponse`.
 pub async fn drive_produce_sasl(
     addr: SocketAddr,
-    user: &str,
-    pass: &[u8],
-    topic: &str,
-    record_bytes: usize,
-    count: usize,
+    records: kafka_wire::ZeroFilledRecordsSetup,
+    authentication: &PlainAuthenticationSetup<'_>,
 ) -> ProduceResponse {
     kafka_wire::produce_sasl_with_ids(
         addr,
-        (CLIENT_ID, CLIENT_ID),
-        (user, pass),
-        (topic, record_bytes, count),
+        kafka_wire::SaslProduceSetup {
+            authentication: authentication.clone(),
+            produce_client_id: CLIENT_ID,
+            records,
+        },
     )
     .await
 }

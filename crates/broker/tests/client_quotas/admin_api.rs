@@ -26,10 +26,10 @@ async fn alter_then_describe_round_trip() {
     // Alter: set producer_byte_rate=1024 for (user=alice).
     let alter_resp = crate::kafka_wire::quotas::alter_user_quota(
         addr,
-        crate::CLIENT_ID,
-        ("admin", "admin-secret"),
-        "alice",
-        ("producer_byte_rate", 1024.0),
+        crate::kafka_wire::quotas::UserQuotaSetup {
+            authentication: crate::kafka_wire::PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            ..Default::default()
+        },
     )
     .await;
     assert!(alter_resp.len() == 1, "one entry in response");
@@ -45,11 +45,11 @@ async fn alter_then_describe_round_trip() {
     // Describe: fetch back the quota.
     let desc = drive_describe_client_quotas_sasl(
         addr,
-        crate::CLIENT_ID,
-        "admin",
-        "admin-secret",
         vec![("user".into(), 2 /* ANY */, None)],
-        false,
+        &crate::kafka_wire::quotas::QuotaDescribeSetup {
+            authentication: crate::kafka_wire::PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -99,14 +99,18 @@ async fn non_super_user_denied() {
     let resp = loop {
         let r = drive_alter_client_quotas_sasl(
             addr,
-            crate::CLIENT_ID,
-            "alice",
-            "alice-secret",
             vec![(
                 vec![("user".into(), Some("alice".into()))],
                 vec![("producer_byte_rate".into(), 999.0, false)],
             )],
-            false,
+            &crate::kafka_wire::quotas::QuotaAlterSetup {
+                authentication: crate::kafka_wire::PlainAuthenticationSetup {
+                    client_id: crate::CLIENT_ID,
+                    password: ("alice-secret").as_bytes().to_vec(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
         )
         .await;
         // CLUSTER_AUTHORIZATION_FAILED = 31.

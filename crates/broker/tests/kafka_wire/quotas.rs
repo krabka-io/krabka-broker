@@ -19,6 +19,53 @@ pub type QuotaEntity = Vec<(String, Option<String>)>;
 pub type QuotaOperations = Vec<(String, f64, bool)>;
 pub type QuotaEntries = Vec<(QuotaEntity, QuotaOperations)>;
 
+#[derive(Clone, Copy, Default)]
+pub enum QuotaValidation {
+    #[default]
+    Apply,
+    ValidateOnly,
+}
+
+#[derive(Clone, Copy, Default)]
+pub enum QuotaFilterMatching {
+    #[default]
+    ContainsComponents,
+    Strict,
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub struct QuotaAlterSetup<'a> {
+    #[default(PlainAuthenticationSetup::admin("krabka-broker-test"))]
+    pub authentication: PlainAuthenticationSetup<'a>,
+    pub validation: QuotaValidation,
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub struct QuotaDescribeSetup<'a> {
+    #[default(PlainAuthenticationSetup::admin("krabka-broker-test"))]
+    pub authentication: PlainAuthenticationSetup<'a>,
+    pub matching: QuotaFilterMatching,
+}
+
+#[derive(Clone, Copy)]
+pub struct QuotaValue(pub f64);
+impl Default for QuotaValue {
+    fn default() -> Self {
+        Self(1024.0)
+    }
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub struct UserQuotaSetup<'a> {
+    #[default(PlainAuthenticationSetup::admin("krabka-broker-test"))]
+    pub authentication: PlainAuthenticationSetup<'a>,
+    #[default("alice")]
+    pub user: &'a str,
+    #[default("producer_byte_rate")]
+    pub key: &'a str,
+    pub value: QuotaValue,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire drivers for AlterClientQuotas and DescribeClientQuotas
 // ─────────────────────────────────────────────────────────────────────────────
@@ -34,11 +81,8 @@ pub type QuotaEntries = Vec<(QuotaEntity, QuotaOperations)>;
 /// Returns the per-entry `(entity, error_code)` pairs.
 pub async fn drive_alter_client_quotas_sasl(
     addr: SocketAddr,
-    client_id: &str,
-    user: &str,
-    pass: &str,
     entries: QuotaEntries,
-    validate_only: bool,
+    setup: &QuotaAlterSetup<'_>,
 ) -> Vec<(Vec<(String, Option<String>)>, i16)> {
     use krabka_protocol::owned::{
         alter_client_quotas_request::{AlterClientQuotasRequest, EntityData, EntryData, OpData},
@@ -69,22 +113,15 @@ pub async fn drive_alter_client_quotas_sasl(
                 ..Default::default()
             })
             .collect(),
-        validate_only,
+        validate_only: matches!(setup.validation, QuotaValidation::ValidateOnly),
         ..Default::default()
     };
 
     let version: i16 = 1; // flexible
 
-    let mut stream = sasl_plain_authenticate(
-        addr,
-        &PlainAuthenticationSetup {
-            client_id,
-            user,
-            password: (pass.as_bytes()).to_vec(),
-        },
-    )
-    .await
-    .expect("SASL authenticate for AlterClientQuotas");
+    let mut stream = sasl_plain_authenticate(addr, &setup.authentication)
+        .await
+        .expect("SASL authenticate for AlterClientQuotas");
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .expect("encode AlterClientQuotas");
@@ -93,7 +130,7 @@ pub async fn drive_alter_client_quotas_sasl(
         WireExchangeSetup {
             api_key: WireApiKey(49),
             version: WireApiVersion(version),
-            client_id,
+            client_id: setup.authentication.client_id,
             header: RequestHeaderEncoding::Flexible,
             ..Default::default()
         },
@@ -126,11 +163,8 @@ pub async fn drive_alter_client_quotas_sasl(
 /// Returns the list of `(entity, values)` pairs from the response.
 pub async fn drive_describe_client_quotas_sasl(
     addr: SocketAddr,
-    client_id: &str,
-    user: &str,
-    pass: &str,
     components: Vec<(String, i8, Option<String>)>,
-    strict: bool,
+    setup: &QuotaDescribeSetup<'_>,
 ) -> Vec<(Vec<(String, Option<String>)>, Vec<(String, f64)>)> {
     use krabka_protocol::owned::{
         describe_client_quotas_request::{ComponentData, DescribeClientQuotasRequest},
@@ -147,22 +181,15 @@ pub async fn drive_describe_client_quotas_sasl(
                 ..Default::default()
             })
             .collect(),
-        strict,
+        strict: matches!(setup.matching, QuotaFilterMatching::Strict),
         ..Default::default()
     };
 
     let version: i16 = 1; // flexible
 
-    let mut stream = sasl_plain_authenticate(
-        addr,
-        &PlainAuthenticationSetup {
-            client_id,
-            user,
-            password: (pass.as_bytes()).to_vec(),
-        },
-    )
-    .await
-    .expect("SASL authenticate for DescribeClientQuotas");
+    let mut stream = sasl_plain_authenticate(addr, &setup.authentication)
+        .await
+        .expect("SASL authenticate for DescribeClientQuotas");
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .expect("encode DescribeClientQuotas");
@@ -171,7 +198,7 @@ pub async fn drive_describe_client_quotas_sasl(
         WireExchangeSetup {
             api_key: WireApiKey(48),
             version: WireApiVersion(version),
-            client_id,
+            client_id: setup.authentication.client_id,
             header: RequestHeaderEncoding::Flexible,
             ..Default::default()
         },
@@ -202,22 +229,21 @@ pub async fn drive_describe_client_quotas_sasl(
 
 /// Set one named user's quota through the authenticated admin API, then await its image.
 pub async fn set_user_quota(
-    client_id: &str,
     broker: &krabka_broker::BrokerHandle,
     addr: SocketAddr,
-    (admin, password): (&str, &str),
-    user: &str,
-    key: &str,
-    value: f64,
+    setup: UserQuotaSetup<'_>,
 ) {
-    let entity: krabka_metadata::EntityKey = vec![("user".into(), Some(user.into()))];
+    let entity: krabka_metadata::EntityKey = vec![("user".into(), Some(setup.user.into()))];
     let response = drive_alter_client_quotas_sasl(
         addr,
-        client_id,
-        admin,
-        password,
-        vec![(entity.clone(), vec![(key.into(), value, false)])],
-        false,
+        vec![(
+            entity.clone(),
+            vec![(setup.key.into(), setup.value.0, false)],
+        )],
+        &QuotaAlterSetup {
+            authentication: setup.authentication,
+            ..Default::default()
+        },
     )
     .await;
     assert!(response[0].1 == 0, "alter quota must succeed");
@@ -226,8 +252,8 @@ pub async fn set_user_quota(
             image
                 .client_quotas()
                 .get(&entity)
-                .and_then(|quota| quota.get(key))
-                == Some(&value)
+                .and_then(|quota| quota.get(setup.key))
+                == Some(&setup.value.0)
         })
         .await;
 }
@@ -238,21 +264,18 @@ pub async fn set_user_quota(
 /// Panics if the original authentication, encoding or wire exchange fails.
 pub async fn alter_user_quota(
     addr: SocketAddr,
-    client_id: &str,
-    admin: (&str, &str),
-    target: &str,
-    quota: (&str, f64),
+    setup: UserQuotaSetup<'_>,
 ) -> Vec<(QuotaEntity, i16)> {
     drive_alter_client_quotas_sasl(
         addr,
-        client_id,
-        admin.0,
-        admin.1,
         vec![(
-            vec![("user".into(), Some(target.into()))],
-            vec![(quota.0.into(), quota.1, false)],
+            vec![("user".into(), Some(setup.user.into()))],
+            vec![(setup.key.into(), setup.value.0, false)],
         )],
-        false,
+        &QuotaAlterSetup {
+            authentication: setup.authentication,
+            ..Default::default()
+        },
     )
     .await
 }

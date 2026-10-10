@@ -37,6 +37,22 @@ use crate::{
     topic_admin::{drive_create_topics_sasl, drive_delete_topics_sasl},
 };
 
+/// Install Alice's shared mutation quota and return its complete wire response.
+async fn set_controller_mutation_quota(
+    addr: std::net::SocketAddr,
+) -> Vec<(crate::kafka_wire::quotas::QuotaEntity, i16)> {
+    crate::kafka_wire::quotas::alter_user_quota(
+        addr,
+        crate::kafka_wire::quotas::UserQuotaSetup {
+            authentication: crate::kafka_wire::PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            key: "controller_mutation_rate",
+            value: crate::kafka_wire::quotas::QuotaValue(2.0),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
 /// Test 1: Set `controller_mutation_rate=2.0` for alice. A strict v7 request
 /// may cross the limit, but the following mutation is rejected while debt
 /// remains.
@@ -58,14 +74,7 @@ async fn controller_mutation_rate_throttles_create_topics() {
         .expect("seed ACL");
 
     // Set controller_mutation_rate=2.0 for (user=alice).
-    let alter = crate::kafka_wire::quotas::alter_user_quota(
-        addr,
-        crate::CLIENT_ID,
-        ("admin", "admin-secret"),
-        "alice",
-        ("controller_mutation_rate", 2.0),
-    )
-    .await;
+    let alter = set_controller_mutation_quota(addr).await;
     assert!(alter[0].1 == 0, "alter should succeed");
 
     // Wait until the controller_mutation_rate quota is committed to this
@@ -170,14 +179,7 @@ async fn controller_mutation_rate_throttles_delete_topics() {
         .await;
 
     // Now set the quota for alice and delete.
-    let alter = crate::kafka_wire::quotas::alter_user_quota(
-        addr,
-        crate::CLIENT_ID,
-        ("admin", "admin-secret"),
-        "alice",
-        ("controller_mutation_rate", 2.0),
-    )
-    .await;
+    let alter = set_controller_mutation_quota(addr).await;
     assert!(alter[0].1 == 0);
     // Wait for alice's controller_mutation_rate quota to land in the image
     // before deleting; DeleteTopics reads the rate from the image on consume.

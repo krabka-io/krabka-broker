@@ -177,11 +177,10 @@ impl StreamsGroupActorHandle {
     pub fn spawn(
         group_id: String,
         config: Arc<StreamsGroupConfig>,
-        offsets_log: Arc<dyn OffsetsLog>,
         coordinator: Arc<super::super::GroupCoordinator>,
     ) -> Self {
         let (tx, task) = crate::task_util::spawn_mailbox(config.actor_mailbox_capacity, |rx| {
-            actor_loop(group_id, config, offsets_log, coordinator, rx)
+            actor_loop(group_id, config, coordinator, rx)
         });
         Self { tx, _task: task }
     }
@@ -541,10 +540,10 @@ fn session_tick(config: &StreamsGroupConfig) -> tokio::time::Interval {
 async fn actor_loop(
     group_id: String,
     default_config: Arc<StreamsGroupConfig>,
-    offsets_log: Arc<dyn OffsetsLog>,
     coordinator: Arc<super::super::GroupCoordinator>,
     mut rx: mpsc::Receiver<StreamsGroupActorMessage>,
 ) {
+    let offsets_log = coordinator.offsets_log.clone();
     let mut metadata = MetadataLink::default();
     let mut config = metadata.attach(&coordinator).map_or_else(
         || (*default_config).clone(),
