@@ -22,7 +22,7 @@ use super::{ElrPublisher, TopicElr, state::PartitionElr};
 use crate::{
     broker::Broker,
     codes,
-    test_support::{peer, principal, request_context, start_broker_with_authorizer},
+    test_support::{peer, principal, request_context},
 };
 
 const TOPIC: &str = "orders";
@@ -295,10 +295,7 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) {
 }
 
 async fn start_orders() -> (crate::BrokerHandle, tempfile::TempDir, Arc<Broker>) {
-    let (handle, dir) =
-        start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    let (handle, dir, broker) = crate::test_support::started_controller_broker().await;
     broker
         .controller
         .submit_change(seed_records())
@@ -352,10 +349,7 @@ async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
 async fn seed_returning_broker(
     min_isr: &str,
 ) -> (crate::BrokerHandle, Arc<Broker>, tempfile::TempDir) {
-    let (handle, dir) =
-        start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    let (handle, dir, broker) = crate::test_support::started_controller_broker().await;
     let mut seed = seed_records_with_min_isr(min_isr);
     seed.push(registration_record(1));
     broker

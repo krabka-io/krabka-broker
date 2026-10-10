@@ -5,7 +5,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord};
+use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
 use krabka_protocol::records::RecordBatch;
 
 use crate::config_keys::MIN_INSYNC_REPLICAS;
@@ -161,17 +161,15 @@ pub(crate) fn image_with_topic(topic: &str, isr: &[u64]) -> MetadataImage {
     crate::test_support::topic_partition_image(
         topic,
         i16::try_from(isr.len().max(1)).unwrap(),
-        || PartitionRecord {
-            topic: topic.into(),
-            partition: 0,
-            leader: krabka_audit::NodeId(*isr.first().unwrap_or(&1)),
-            replicas: isr.iter().copied().map(krabka_audit::NodeId).collect(),
-            isr: isr.iter().copied().map(krabka_audit::NodeId).collect(),
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
+        || {
+            crate::handlers::test_support::replicated_partition(
+                crate::handlers::test_support::ReplicatedPartitionSetup {
+                    topic,
+                    leader: krabka_audit::NodeId(*isr.first().unwrap_or(&1)),
+                    replicas: &crate::test_support::replica_nodes(isr),
+                    ..Default::default()
+                },
+            )
         },
     )
 }

@@ -796,6 +796,10 @@ mod tests {
     }
 
     const U: Uuid = Uuid([2; 16]);
+    const TWO_PARTITIONS_PER_TOPIC: &[(Uuid, &[PartitionIndex])] = &[
+        (T, &[PartitionIndex(0), PartitionIndex(1)]),
+        (U, &[PartitionIndex(0), PartitionIndex(1)]),
+    ];
     const ONE_PARTITION_PER_TOPIC: &[(Uuid, &[PartitionIndex])] =
         &[(T, &[PartitionIndex(0)]), (U, &[PartitionIndex(0)])];
     /// A topic that the metadata does not hold, as one that was deleted.
@@ -818,6 +822,20 @@ mod tests {
         state: MemberAssignmentState,
         assigned: &'a [(Uuid, &'a [PartitionIndex])],
         pending: &'a [(Uuid, &'a [PartitionIndex])],
+    }
+
+    impl<'a> ShapeSetup<'a> {
+        fn revoking_current_epoch(pending: &'a [(Uuid, &'a [PartitionIndex])]) -> Self {
+            Self {
+                epochs: MemberEpochs {
+                    current: MemberEpoch(5),
+                    ..Default::default()
+                },
+                state: MemberAssignmentState::UnrevokedPartitions,
+                assigned: &[(T, &[PartitionIndex(0)])],
+                pending,
+            }
+        }
     }
 
     fn shape(setup: ShapeSetup<'_>) -> Shape {
@@ -922,15 +940,10 @@ mod tests {
                 target: topic_parts(ONE_PARTITION_PER_TOPIC),
                 owned: Some(owning_everything.clone()),
                 subscription: SubscriptionChange::Changed,
-                after: shape(ShapeSetup {
-                    epochs: MemberEpochs {
-                        current: MemberEpoch(5),
-                        ..Default::default()
-                    },
-                    state: UnrevokedPartitions,
-                    assigned: &[(T, &[PartitionIndex(0)])],
-                    pending: &[(T, &[PartitionIndex(1)]), (U, &[PartitionIndex(0)])],
-                }),
+                after: shape(ShapeSetup::revoking_current_epoch(&[
+                    (T, &[PartitionIndex(1)]),
+                    (U, &[PartitionIndex(0)]),
+                ])),
                 ..Default::default()
             },
             SubscriptionRow {
@@ -952,10 +965,7 @@ mod tests {
             SubscriptionRow {
                 name: "a stable member at the target epoch revokes a topic it left and still owns",
                 before: stable_6_5_input(),
-                target: topic_parts(&[
-                    (T, &[PartitionIndex(0), PartitionIndex(1)]),
-                    (U, &[PartitionIndex(0), PartitionIndex(1)]),
-                ]),
+                target: topic_parts(TWO_PARTITIONS_PER_TOPIC),
                 subscription: SubscriptionChange::Changed,
                 after: shape(ShapeSetup {
                     epochs: MemberEpochs {
@@ -971,10 +981,7 @@ mod tests {
             SubscriptionRow {
                 name: "a stable member at the target epoch drops a topic it left and released",
                 before: stable_6_5_input(),
-                target: topic_parts(&[
-                    (T, &[PartitionIndex(0), PartitionIndex(1)]),
-                    (U, &[PartitionIndex(0), PartitionIndex(1)]),
-                ]),
+                target: topic_parts(TWO_PARTITIONS_PER_TOPIC),
                 owned: Some(topic_parts(&[(T, &[PartitionIndex(0), PartitionIndex(1)])])),
                 subscription: SubscriptionChange::Changed,
                 after: shape(ShapeSetup {
@@ -1028,15 +1035,10 @@ mod tests {
                     ..Default::default()
                 }),
                 target: topic_parts(ONE_PARTITION_PER_TOPIC),
-                after: shape(ShapeSetup {
-                    epochs: MemberEpochs {
-                        current: MemberEpoch(5),
-                        ..Default::default()
-                    },
-                    state: UnrevokedPartitions,
-                    assigned: &[(T, &[PartitionIndex(0)])],
-                    pending: &[(U, &[PartitionIndex(0)])],
-                }),
+                after: shape(ShapeSetup::revoking_current_epoch(&[(
+                    U,
+                    &[PartitionIndex(0)],
+                )])),
                 ..Default::default()
             },
             SubscriptionRow {

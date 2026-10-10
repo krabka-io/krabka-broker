@@ -407,18 +407,14 @@ mod tests {
         for partition in 0..=led {
             let leader = if partition < led { 1 } else { 2 };
             image.apply(&krabka_metadata::MetadataRecord::V1Partition(
-                krabka_metadata::PartitionRecord {
-                    topic: "stretch-topic".into(),
-                    partition,
-                    leader: krabka_metadata::NodeId(leader),
-                    replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
-                    isr: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: Vec::new(),
-                    removing_replicas: Vec::new(),
-                    directories: Vec::new(),
-                    partition_epoch: 0,
-                },
+                crate::handlers::test_support::replicated_partition(
+                    crate::handlers::test_support::ReplicatedPartitionSetup {
+                        topic: "stretch-topic",
+                        partition: krabka_ids::PartitionIndex(partition),
+                        leader: krabka_metadata::NodeId(leader),
+                        ..Default::default()
+                    },
+                ),
             ));
         }
         image

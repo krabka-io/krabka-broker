@@ -530,6 +530,13 @@ mod tests {
 
     use super::{test_support::task_map, *};
 
+    fn clean_member_group() -> StreamsGroupState {
+        let mut group = StreamsGroupState::new("g");
+        group.add_or_update_member(StreamsMemberState::joining("m1", "c1", "h1"));
+        group.dirty = false;
+        group
+    }
+
     #[test]
     fn add_member_marks_dirty_first_time() {
         let mut g = StreamsGroupState::new("g");
@@ -541,9 +548,7 @@ mod tests {
 
     #[test]
     fn re_add_identical_member_keeps_clean() {
-        let mut g = StreamsGroupState::new("g");
-        g.add_or_update_member(StreamsMemberState::joining("m1", "c1", "h1"));
-        g.dirty = false;
+        let mut g = clean_member_group();
         // Re-add a member with the same id and same topology epoch.
         let mut m = StreamsMemberState::joining("m1", "c1", "h1");
         m.topology_epoch = 0;
@@ -553,9 +558,7 @@ mod tests {
 
     #[test]
     fn topology_epoch_change_marks_dirty() {
-        let mut g = StreamsGroupState::new("g");
-        g.add_or_update_member(StreamsMemberState::joining("m1", "c1", "h1"));
-        g.dirty = false;
+        let mut g = clean_member_group();
         let mut m = StreamsMemberState::joining("m1", "c1", "h1");
         m.topology_epoch = 3;
         g.add_or_update_member(m);
@@ -564,9 +567,7 @@ mod tests {
 
     #[test]
     fn remove_member_marks_dirty() {
-        let mut g = StreamsGroupState::new("g");
-        g.add_or_update_member(StreamsMemberState::joining("m1", "c1", "h1"));
-        g.dirty = false;
+        let mut g = clean_member_group();
         let removed = g.remove_member("m1");
         assert!(removed.is_some());
         assert!(g.dirty);
@@ -690,6 +691,15 @@ mod tests {
         Expected,
     );
 
+    fn unrevoked_member() -> Member {
+        Member {
+            state: StreamsMemberAssignmentState::UnrevokedTasks,
+            active: &[0],
+            active_pending: &[1],
+            ..stable("m1", "p1", 1)
+        }
+    }
+
     fn builder_rows() -> Vec<BuilderRow> {
         use StreamsMemberAssignmentState::{Stable, UnreleasedTasks, UnrevokedTasks};
 
@@ -732,12 +742,7 @@ mod tests {
             ),
             (
                 "an unrevoked member moves on once it stops reporting the task",
-                Member {
-                    state: UnrevokedTasks,
-                    active: &[0],
-                    active_pending: &[1],
-                    ..stable("m1", "p1", 1)
-                },
+                unrevoked_member(),
                 None,
                 &[0],
                 &[],
@@ -746,12 +751,7 @@ mod tests {
             ),
             (
                 "an unrevoked member that still reports the task waits",
-                Member {
-                    state: UnrevokedTasks,
-                    active: &[0],
-                    active_pending: &[1],
-                    ..stable("m1", "p1", 1)
-                },
+                unrevoked_member(),
                 None,
                 &[0],
                 &[],
@@ -760,12 +760,7 @@ mod tests {
             ),
             (
                 "an unrevoked member without owned tasks waits",
-                Member {
-                    state: UnrevokedTasks,
-                    active: &[0],
-                    active_pending: &[1],
-                    ..stable("m1", "p1", 1)
-                },
+                unrevoked_member(),
                 None,
                 &[0],
                 &[],

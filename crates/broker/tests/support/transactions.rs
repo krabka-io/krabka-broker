@@ -182,3 +182,6 @@ pub fn transaction_marker(
         ..Default::default()
     }
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProducerEpochOffset(pub i16);

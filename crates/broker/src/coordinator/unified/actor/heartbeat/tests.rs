@@ -161,14 +161,13 @@ fn handoff_heartbeat(
 fn handoff_join(state: &mut GroupState, member_id: &str) -> HeartbeatStep {
     handoff_heartbeat(
         state,
-        ConsumerGroupHeartbeatRequest {
-            member_id: member_id.into(),
-            member_epoch: 0,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            rebalance_timeout_ms: 60_000,
-            topic_partitions: Some(vec![]),
-            ..Default::default()
-        },
+        crate::coordinator::unified::test_support::consumer_join_request(
+            crate::coordinator::unified::test_support::ConsumerJoinSetup {
+                group_id: "",
+                member_id,
+                ..Default::default()
+            },
+        ),
     )
 }
 
@@ -880,14 +879,13 @@ fn a_leave_bumps_the_epoch_and_the_next_heartbeat_assigns() {
         id: "client",
         host: "host",
     };
-    let join = |member_id: &str| ConsumerGroupHeartbeatRequest {
-        group_id: "g".into(),
-        member_id: member_id.into(),
-        member_epoch: 0,
-        subscribed_topic_names: Some(vec!["t".into()]),
-        rebalance_timeout_ms: 60_000,
-        topic_partitions: Some(vec![]),
-        ..Default::default()
+    let join = |member_id: &str| {
+        crate::coordinator::unified::test_support::consumer_join_request(
+            crate::coordinator::unified::test_support::ConsumerJoinSetup {
+                member_id,
+                ..Default::default()
+            },
+        )
     };
     let mut state = GroupState::new("g");
     let step = |state: &mut GroupState, req: &ConsumerGroupHeartbeatRequest| {

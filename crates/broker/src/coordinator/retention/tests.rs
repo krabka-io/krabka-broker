@@ -10,7 +10,7 @@ use std::sync::Arc;
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_protocol::owned::{
-    create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
+    create_topics_request::{self},
     leave_group_request::LeaveGroupRequest,
     offset_commit_request::OffsetCommitRequest,
 };
@@ -86,16 +86,12 @@ async fn start() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     let admin = principal("admin");
     let address = peer();
     let ctx = request_context(&admin, &address, "retention-admin");
-    let request = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: TOPIC.to_string(),
-            num_partitions: 1,
-            replication_factor: 1,
+    let request = crate::handlers::test_support::configured_topic_request(
+        crate::handlers::test_support::CreateTopicSetup {
+            topic: TOPIC,
             ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+        },
+    );
     dispatch_context(
         &broker.broker_arc_for_test(),
         create_topics_request::API_KEY,

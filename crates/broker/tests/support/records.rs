@@ -118,3 +118,41 @@ pub fn metadata_batches(mut wire: &[u8]) -> impl Iterator<Item = RecordBatch> + 
         }
     })
 }
+
+/// Number of records in a transaction-version probe batch.
+#[derive(Clone, Copy)]
+pub struct ProbeRecordCount(pub i32);
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum BatchTransaction {
+    #[default]
+    Transactional,
+    Ordinary,
+}
+
+/// The producer headers and record count needed by transaction-version probes.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct TransactionProbeBatchSetup {
+    pub producer: crate::support::transactions::ProducerIdentity,
+    pub sequence: ProducerSequence,
+    #[default(ProbeRecordCount(1))]
+    pub records: ProbeRecordCount,
+    pub transaction: BatchTransaction,
+}
+
+pub fn transaction_probe_batch(setup: TransactionProbeBatchSetup) -> RecordBatch {
+    RecordBatch {
+        attributes: krabka_protocol::records::Attributes::default()
+            .with_transactional(setup.transaction == BatchTransaction::Transactional),
+        producer_id: setup.producer.id.0,
+        producer_epoch: setup.producer.epoch.0,
+        base_sequence: setup.sequence.0,
+        last_offset_delta: setup.records.0 - 1,
+        max_timestamp: 1,
+        ..batch_from_records(
+            (0..setup.records.0)
+                .map(|offset| value_record(offset, Some(Bytes::from_static(b"v"))))
+                .collect(),
+        )
+    }
+}

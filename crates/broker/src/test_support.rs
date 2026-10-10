@@ -1777,6 +1777,14 @@ impl FakeMetadataSource {
             .build()
     }
 
+    /// Use a test-owned publication channel, independently of successful submits.
+    pub(crate) fn published_image_channel(image_tx: watch::Sender<Arc<MetadataImage>>) -> Self {
+        Self {
+            image_tx,
+            ..Self::static_image(MetadataImage::new(uuid::Uuid::nil()))
+        }
+    }
+
     /// A builder over an empty image with no elected leader, no committed
     /// metadata, and an unspecified controller address. Every seam is a
     /// method on the returned builder.
@@ -2818,4 +2826,55 @@ pub(crate) fn voter_image(setup: VoterImageSetup) -> krabka_metadata::MetadataIm
         },
     ));
     image
+}
+
+/// Start the allow-all fixture and wait for its local controller to lead.
+pub(crate) async fn started_controller_broker() -> (BrokerHandle, tempfile::TempDir, Arc<Broker>) {
+    let (handle, dir) =
+        start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = handle.broker_arc_for_test();
+    wait_for_controller_leader(&broker).await;
+    (handle, dir, broker)
+}
+
+/// Append a fixture batch through the partition's real log.
+pub(crate) fn append_partition_batch(
+    partition: &crate::partition::Partition,
+    batch: &mut RecordBatch,
+) {
+    partition
+        .log
+        .lock()
+        .expect("partition log lock")
+        .append(batch)
+        .expect("append");
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum OAuthTokenContents {
+    Nonempty,
+    Empty,
+}
+
+/// Keep the token file's directory alive while callers exercise config parsing or validation.
+pub(crate) fn oauth_token_file(
+    contents: OAuthTokenContents,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let token_path = dir.path().join("token");
+    let bytes = match contents {
+        OAuthTokenContents::Nonempty => "header.payload.\n",
+        OAuthTokenContents::Empty => "\n",
+    };
+    std::fs::write(&token_path, bytes).unwrap();
+    (dir, token_path)
+}
+
+pub(crate) fn listener_time_overrides(
+    overrides: &[(&str, krabka_units::Time)],
+) -> std::collections::BTreeMap<String, krabka_units::Time> {
+    overrides
+        .iter()
+        .map(|(name, value)| ((*name).to_string(), *value))
+        .collect()
 }

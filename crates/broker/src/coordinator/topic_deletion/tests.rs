@@ -119,11 +119,8 @@ async fn on_topics_deleted_tombstones_offsets_in_every_owned_group() {
 async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
     use std::{sync::Arc, time::Duration};
 
-    use krabka_protocol::owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        offset_commit_request::{
-            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-        },
+    use krabka_protocol::owned::offset_commit_request::{
+        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     };
 
     use crate::{
@@ -154,15 +151,13 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         .build()
         .await
         .expect("client build");
-    let create = || CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: TOPIC.to_string(),
-            num_partitions: 1,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
+    let create = || {
+        crate::handlers::test_support::configured_topic_request(
+            crate::handlers::test_support::CreateTopicSetup {
+                topic: TOPIC,
+                ..Default::default()
+            },
+        )
     };
 
     let created = client.send(create()).await.expect("CreateTopics");

@@ -41,15 +41,12 @@ async fn metadata_update(handle: &GroupActorHandle, topics: &[&str]) {
 
 /// The first heartbeat of member `m1`, which subscribes to `orders`.
 fn join() -> ConsumerGroupHeartbeatRequest {
-    ConsumerGroupHeartbeatRequest {
-        group_id: "g".into(),
-        member_id: "m1".into(),
-        member_epoch: 0,
-        rebalance_timeout_ms: 60_000,
-        subscribed_topic_names: Some(vec!["orders".into()]),
-        topic_partitions: Some(vec![]),
-        ..Default::default()
-    }
+    crate::coordinator::unified::test_support::consumer_join_request(
+        crate::coordinator::unified::test_support::ConsumerJoinSetup {
+            topics: &["orders"],
+            ..Default::default()
+        },
+    )
 }
 
 /// A later heartbeat of `m1`, which sends only what changed, as Kafka's

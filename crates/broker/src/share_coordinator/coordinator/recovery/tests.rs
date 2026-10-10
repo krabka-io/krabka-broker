@@ -338,16 +338,16 @@ fn state_partition_image(partition: i32, leader: u64, leader_epoch: i32) -> Meta
                 replication_factor: 2,
             }),
             krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                topic: bootstrap::TOPIC.to_string(),
-                partition,
-                leader: node,
-                replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
-                isr: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
                 leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
                 partition_epoch: leader_epoch,
+                ..crate::handlers::test_support::replicated_partition(
+                    crate::handlers::test_support::ReplicatedPartitionSetup {
+                        topic: bootstrap::TOPIC,
+                        partition: krabka_ids::PartitionIndex(partition),
+                        leader: node,
+                        ..Default::default()
+                    },
+                )
             }),
         ],
     )

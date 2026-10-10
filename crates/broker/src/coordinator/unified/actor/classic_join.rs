@@ -49,14 +49,7 @@ use crate::{
 /// Kafka's `appendGroupMetadataErrorToResponseError`: the `JoinGroup` error
 /// for a group metadata write that failed.
 pub(crate) fn append_error_code(error: &crate::error::BrokerError) -> i16 {
-    match codes::from_broker_error(error) {
-        codes::UNKNOWN_TOPIC_OR_PARTITION
-        | codes::NOT_ENOUGH_REPLICAS
-        | codes::REQUEST_TIMED_OUT => codes::COORDINATOR_NOT_AVAILABLE,
-        codes::NOT_LEADER_OR_FOLLOWER | codes::KAFKA_STORAGE_ERROR => codes::NOT_COORDINATOR,
-        codes::MESSAGE_TOO_LARGE => codes::UNKNOWN_SERVER_ERROR,
-        other => other,
-    }
+    codes::coordinator_append_error(codes::from_broker_error(error))
 }
 
 #[allow(clippy::too_many_arguments)] // Keeps the actor message boundary explicit.

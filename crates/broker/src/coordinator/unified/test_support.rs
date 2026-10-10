@@ -542,3 +542,28 @@ pub(crate) fn plain_streams_member(
         topology_epoch,
     }
 }
+
+/// First consumer heartbeat, with an empty owned assignment and the standard rebalance timeout.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct ConsumerJoinSetup<'a> {
+    #[default("g")]
+    pub group_id: &'a str,
+    #[default("m1")]
+    pub member_id: &'a str,
+    #[default(&["t"])]
+    pub topics: &'a [&'a str],
+}
+
+pub(crate) fn consumer_join_request(
+    setup: ConsumerJoinSetup<'_>,
+) -> krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest {
+    krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest {
+        group_id: setup.group_id.into(),
+        member_id: setup.member_id.into(),
+        member_epoch: 0,
+        subscribed_topic_names: Some(setup.topics.iter().map(|topic| (*topic).into()).collect()),
+        rebalance_timeout_ms: 60_000,
+        topic_partitions: Some(vec![]),
+        ..Default::default()
+    }
+}

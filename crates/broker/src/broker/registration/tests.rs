@@ -11,74 +11,15 @@ use super::*;
 /// controller-registration record; this fixture reproduces the same gap for
 /// the broker-registration record `register_broker` submits.
 mod publish_race {
-    use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
 
     use assert2::assert;
     use krabka_metadata::{MetadataImage, MetadataRecord, NodeId};
-    use krabka_raft::{
-        AddVoter, Node, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
-        SubmitChangeResult, UpdateVoter,
-    };
     use tempfile::tempdir;
     use tokio::sync::watch;
 
     use super::{super::register_broker, self_registration_record};
-    use crate::{config::BrokerConfig, error::BrokerError, metadata_source::MetadataSource};
-
-    /// A `MetadataSource` whose `submit_change` always succeeds immediately,
-    /// but whose published image is driven by the test alone through
-    /// `image_tx`, standing in for the scheduling gap between a leader's
-    /// commit-and-apply and the moment that state reaches `current_image()`.
-    struct DelayedPublishSource {
-        image_tx: watch::Sender<Arc<MetadataImage>>,
-    }
-
-    #[async_trait::async_trait]
-    impl MetadataSource for DelayedPublishSource {
-        fn current_image(&self) -> Arc<MetadataImage> {
-            self.image_tx.borrow().clone()
-        }
-        fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-            self.image_tx.subscribe()
-        }
-        fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-            watch::channel(None).1
-        }
-        fn quorum_state(&self) -> QuorumState {
-            unimplemented!("not exercised by register_broker")
-        }
-        async fn submit_change(
-            &self,
-            _records: Vec<MetadataRecord>,
-        ) -> Result<SubmitChangeResult, RaftError> {
-            Ok(SubmitChangeResult::default())
-        }
-        async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-            unimplemented!("not exercised by register_broker")
-        }
-        async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
-            unimplemented!("not exercised by register_broker")
-        }
-        fn controller_bound_addr(&self) -> SocketAddr {
-            "127.0.0.1:0".parse().expect("static")
-        }
-        fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-            unimplemented!("not exercised by register_broker")
-        }
-        async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-            unimplemented!("not exercised by register_broker")
-        }
-        async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-            unimplemented!("not exercised by register_broker")
-        }
-        async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-            unimplemented!("not exercised by register_broker")
-        }
-        async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-            unimplemented!("not exercised by register_broker")
-        }
-        async fn cancel(&self) {}
-    }
+    use crate::{config::BrokerConfig, error::BrokerError, test_support::FakeMetadataSource};
 
     fn registration_config(log_dir: &std::path::Path) -> BrokerConfig {
         BrokerConfig {
@@ -91,9 +32,7 @@ mod publish_race {
         config: BrokerConfig,
         image_tx: &watch::Sender<Arc<MetadataImage>>,
     ) -> tokio::task::JoinHandle<Result<Option<i64>, BrokerError>> {
-        let source = DelayedPublishSource {
-            image_tx: image_tx.clone(),
-        };
+        let source = FakeMetadataSource::published_image_channel(image_tx.clone());
         tokio::spawn(async move { register_broker(&config, &source).await })
     }
 
@@ -215,7 +154,7 @@ mod publish_race {
         let config = registration_config(log_dir.path());
         let (image_tx, _keep_alive) =
             watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
-        let source = DelayedPublishSource { image_tx };
+        let source = FakeMetadataSource::published_image_channel(image_tx);
 
         let err = register_broker(&config, &source)
             .await
@@ -665,10 +604,7 @@ mod unclean_restart {
     /// one says the broker really does write it on the way down.
     #[tokio::test]
     async fn a_graceful_stop_leaves_the_proof_its_own_restart_spends() {
-        let (handle, dir) =
-            start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
+        let (handle, dir, broker) = crate::test_support::started_controller_broker().await;
         let node_id = broker.config.node_id;
         let log_dir = broker.config.log_dir.clone();
         let epoch = broker

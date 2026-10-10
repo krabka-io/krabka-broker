@@ -100,7 +100,7 @@ async fn rlmm_reconciler_applies_initial_and_changed_assignments() {
 
 #[test]
 fn needed_metadata_partitions_covers_led_and_followed() {
-    use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
     use krabka_remote_storage::TopicIdPartition;
     use krabka_remote_storage_topic::metadata_partition_for;
     use uuid::Uuid;
@@ -119,18 +119,16 @@ fn needed_metadata_partitions_covers_led_and_followed() {
         (1, 8, vec![8, 7]),
         (2, 8, vec![8, 9]),
     ] {
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: "orders".into(),
-            partition,
-            leader: krabka_audit::NodeId(leader),
-            replicas: replicas.iter().copied().map(krabka_audit::NodeId).collect(),
-            isr: replicas.iter().copied().map(krabka_audit::NodeId).collect(),
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
+        image.apply(&MetadataRecord::V1Partition(
+            crate::handlers::test_support::replicated_partition(
+                crate::handlers::test_support::ReplicatedPartitionSetup {
+                    partition: krabka_ids::PartitionIndex(partition),
+                    leader: krabka_audit::NodeId(leader),
+                    replicas: &crate::test_support::replica_nodes(&replicas),
+                    ..Default::default()
+                },
+            ),
+        ));
     }
 
     let got = needed_metadata_partitions(&image, krabka_audit::NodeId(7), 50);

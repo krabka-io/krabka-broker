@@ -464,12 +464,7 @@ async fn tick_all_leaves_a_partition_uncleanable_for_a_record_above_the_decompre
             }],
             ..Default::default()
         };
-        partition
-            .log
-            .lock()
-            .expect("partition log lock")
-            .append(&mut batch)
-            .expect("append");
+        crate::test_support::append_partition_batch(&partition, &mut batch);
     }
     // The pass is bounded at the high watermark, so let it cover what was added.
     partition
