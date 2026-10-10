@@ -218,7 +218,10 @@ mod tests {
 
         let error = S3RemoteStorage::from_s3_config(&s3)
             .unwrap()
-            .with_worm(&worm_config(keys.path(), false))
+            .with_worm(&worm_config(
+                keys.path(),
+                crate::s3::test_support::WormAccess::ReadWrite,
+            ))
             .unwrap_err();
 
         check!(error.to_string().contains("conditional_put = true"));

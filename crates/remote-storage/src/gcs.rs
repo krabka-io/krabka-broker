@@ -96,10 +96,13 @@ mod tests {
         let store =
             S3RemoteStorage::with_store(Arc::new(InMemory::new()), Some("cluster-a".to_string()));
         let src = TempDir::new().unwrap();
-        let md = sample_metadata(10);
+        let md = sample_metadata(uuid::Uuid::from_u128(10));
         tokio::task::spawn_blocking(move || {
             store
-                .copy_log_segment_data(&md, &sample_data(src.path(), false))
+                .copy_log_segment_data(
+                    &md,
+                    &sample_data(src.path(), crate::test_support::TransactionIndex::Omitted),
+                )
                 .unwrap();
             assert!(store.fetch_log_segment(&md, 0, None).unwrap() == b"0123456789");
             assert!(store.fetch_index(&md, IndexType::Offset).unwrap() == b"OFFSET-IDX");
