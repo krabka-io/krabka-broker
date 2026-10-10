@@ -102,7 +102,9 @@ async fn open_transaction(broker: &Broker) -> (i64, i16) {
 
 /// One v2 batch with one record, non-transactional.
 fn plain_batch() -> RecordsPayload {
-    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch(1, 0)])
+    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch(
+        crate::test_support::RepeatedRecordsSetup::default(),
+    )])
 }
 
 /// One v2 batch with one record, marked transactional (KIP-98) under

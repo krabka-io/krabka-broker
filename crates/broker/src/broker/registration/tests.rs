@@ -575,7 +575,7 @@ mod unclean_restart {
             (TOPIC, TOPIC_ID_BYTES),
             (LEADER_EPOCH, ALTER_VERSION),
             new_isr,
-            false,
+            crate::test_support::IsrResponseCheck::PartitionOnly,
         )
         .await;
     }

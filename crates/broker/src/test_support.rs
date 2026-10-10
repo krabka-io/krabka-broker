@@ -293,7 +293,10 @@ pub(crate) async fn start_controller() -> (BrokerHandle, SocketAddr, tempfile::T
 }
 
 /// Builds non-transactional records with explicit values and a shared timestamp.
-pub(crate) fn static_records_batch(values: &[&'static [u8]], timestamp_ms: i64) -> RecordBatch {
+pub(crate) fn static_records_batch(
+    values: &[&'static [u8]],
+    timestamp_ms: UnixMillis,
+) -> RecordBatch {
     let records = values
         .iter()
         .enumerate()
@@ -308,14 +311,36 @@ pub(crate) fn static_records_batch(values: &[&'static [u8]], timestamp_ms: i64) 
         .collect();
     fixture_records_batch(
         records,
-        i32::try_from(values.len()).expect("record count fits i32") - 1,
+        RecordOffsetDelta(i32::try_from(values.len()).expect("record count fits i32") - 1),
         timestamp_ms,
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RecordCount(pub i32);
+
+impl Default for RecordCount {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct RepeatedRecordsSetup {
+    pub count: RecordCount,
+    pub timestamp: UnixMillis,
+}
+
+#[derive(Clone, Copy)]
+struct RecordOffsetDelta(i32);
+
 /// Builds a batch of identical values, preserving the explicit count header.
-pub(crate) fn repeated_records_batch(count: i32, timestamp_ms: i64) -> RecordBatch {
-    let records = (0..count)
+pub(crate) fn repeated_records_batch(setup: RepeatedRecordsSetup) -> RecordBatch {
+    let RepeatedRecordsSetup {
+        count,
+        timestamp: timestamp_ms,
+    } = setup;
+    let records = (0..count.0)
         .map(|offset_delta| Record {
             attributes: 0,
             offset_delta,
@@ -325,22 +350,22 @@ pub(crate) fn repeated_records_batch(count: i32, timestamp_ms: i64) -> RecordBat
             headers: vec![],
         })
         .collect();
-    fixture_records_batch(records, count - 1, timestamp_ms)
+    fixture_records_batch(records, RecordOffsetDelta(count.0 - 1), timestamp_ms)
 }
 
 /// Supplies the common non-transactional header for fixture records.
-pub(crate) fn fixture_records_batch(
+fn fixture_records_batch(
     records: Vec<Record>,
-    last_offset_delta: i32,
-    timestamp_ms: i64,
+    last_offset_delta: RecordOffsetDelta,
+    timestamp_ms: UnixMillis,
 ) -> RecordBatch {
     RecordBatch {
         base_offset: 0,
         partition_leader_epoch: -1,
         attributes: Attributes::default(),
-        last_offset_delta,
-        base_timestamp: timestamp_ms,
-        max_timestamp: timestamp_ms,
+        last_offset_delta: last_offset_delta.0,
+        base_timestamp: timestamp_ms.0,
+        max_timestamp: timestamp_ms.0,
         producer_id: -1,
         producer_epoch: -1,
         base_sequence: -1,
@@ -598,21 +623,40 @@ pub(crate) fn elr_model_image(
 }
 
 /// A single-partition ISR proposal with epochs read explicitly by its caller.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct WireBrokerId(pub i32);
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct BrokerEpoch(pub i64);
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct IsrBrokerIdentity {
+    #[default(WireBrokerId(1))]
+    pub id: WireBrokerId,
+    pub epoch: BrokerEpoch,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct IsrPartitionEpochs {
+    pub leader: krabka_metadata::LeaderEpoch,
+    pub partition: PartitionEpoch,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct IsrProposalSetup<'a> {
     pub topic_id: WireUuid,
-    pub broker: (i32, i64),
-    pub partition: (i32, i32),
-    pub new_isr: &'a [i32],
+    pub broker: IsrBrokerIdentity,
+    pub partition: IsrPartitionEpochs,
+    pub new_isr: &'a [WireBrokerId],
 }
 
 impl Default for IsrProposalSetup<'_> {
     fn default() -> Self {
         Self {
             topic_id: WireUuid::default(),
-            broker: (1, 0),
-            partition: (0, 0),
-            new_isr: &[1],
+            broker: IsrBrokerIdentity::default(),
+            partition: IsrPartitionEpochs::default(),
+            new_isr: &[WireBrokerId(1)],
         }
     }
 }
@@ -625,15 +669,15 @@ pub(crate) fn alter_partition_request(setup: IsrProposalSetup<'_>) -> AlterParti
         new_isr,
     } = setup;
     AlterPartitionRequest {
-        broker_id: broker.0,
-        broker_epoch: broker.1,
+        broker_id: broker.id.0,
+        broker_epoch: broker.epoch.0,
         topics: vec![AlterPartitionTopic {
             topic_id,
             partitions: vec![AlterPartitionPartition {
                 partition_index: 0,
-                leader_epoch: partition.0,
-                partition_epoch: partition.1,
-                new_isr: new_isr.to_vec(),
+                leader_epoch: partition.leader.0,
+                partition_epoch: partition.partition.0,
+                new_isr: new_isr.iter().map(|id| id.0).collect(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -655,24 +699,36 @@ pub(crate) async fn propose_isr(
     let ctx = request_context(&principal, &peer, "broker-client");
     // The controller checks the sender's broker epoch and the row's partition
     // epoch. Keep the two image snapshots in the original request-read order.
+    let wire_isr: Vec<_> = new_isr.iter().copied().map(WireBrokerId).collect();
     let image = broker.controller.current_image();
     let request = alter_partition_request(IsrProposalSetup {
         topic_id,
-        broker: (1, image.broker_epoch(NodeId(1)).unwrap_or(-1)),
-        partition: (
-            leader_epoch,
-            broker
-                .controller
-                .current_image()
-                .partition(topic, 0)
-                .expect("partition")
-                .partition_epoch,
-        ),
-        new_isr,
+        broker: IsrBrokerIdentity {
+            epoch: BrokerEpoch(image.broker_epoch(NodeId(1)).unwrap_or(-1)),
+            ..Default::default()
+        },
+        partition: IsrPartitionEpochs {
+            leader: krabka_metadata::LeaderEpoch(leader_epoch),
+            partition: PartitionEpoch(
+                broker
+                    .controller
+                    .current_image()
+                    .partition(topic, 0)
+                    .expect("partition")
+                    .partition_epoch,
+            ),
+        },
+        new_isr: &wire_isr,
     });
     crate::handlers::alter_partition::handle(broker, request, version, &ctx)
         .await
         .expect("AlterPartition")
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IsrResponseCheck {
+    EnvelopeAndPartition,
+    PartitionOnly,
 }
 
 /// Propose an ISR change and verify its partition result, optionally checking the envelope first.
@@ -681,7 +737,7 @@ pub(crate) async fn accepted_isr_proposal(
     topic: (&str, [u8; 16]),
     epochs: (i32, i16),
     new_isr: &[i32],
-    check_envelope: bool,
+    response_check: IsrResponseCheck,
 ) {
     let response = propose_isr(
         broker,
@@ -690,7 +746,7 @@ pub(crate) async fn accepted_isr_proposal(
         new_isr,
     )
     .await;
-    if check_envelope {
+    if response_check == IsrResponseCheck::EnvelopeAndPartition {
         assert2::assert!(response.error_code == crate::codes::NONE);
     }
     assert2::assert!(

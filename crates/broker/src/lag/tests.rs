@@ -90,7 +90,10 @@ async fn install_isr(partition: &Partition) {
 fn append_records(partition: &Partition, count: i32) {
     let mut batch = RecordBatch {
         partition_leader_epoch: -1,
-        ..crate::test_support::repeated_records_batch(count, 1_700_000_000)
+        ..crate::test_support::repeated_records_batch(crate::test_support::RepeatedRecordsSetup {
+            count: crate::test_support::RecordCount(count),
+            timestamp: crate::test_support::UnixMillis(1_700_000_000),
+        })
     };
     partition
         .log

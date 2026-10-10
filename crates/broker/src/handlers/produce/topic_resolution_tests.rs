@@ -46,7 +46,9 @@ type Outcome = (i16, TopicRef, ProduceResponse);
 /// One v2 batch with one record. A leader of a fresh topic appends it at
 /// offset 0.
 fn one_record_batch() -> RecordsPayload {
-    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch(1, 0)])
+    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch(
+        crate::test_support::RepeatedRecordsSetup::default(),
+    )])
 }
 
 /// The partition row that Kafka's `PartitionResponse(error)` constructor

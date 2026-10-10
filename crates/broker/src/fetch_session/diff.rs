@@ -187,7 +187,7 @@ mod fuzz {
                 let forgotten = if fname == 0 && fid == 0 {
                     vec![]
                 } else {
-                    vec![forgotten_topic(ForgottenTopicSetup { topic: name_of(fname), topic_id: id_of(fid), partitions: vec![fp] })]
+                    vec![forgotten_topic(ForgottenTopicSetup {topic: name_of(fname), topic_id: id_of(fid), partitions: vec![krabka_ids::PartitionIndex(fp)]})]
                 };
                 let subscribe = do_sub && !(sname == 0 && sid == 0);
                 let topics = if subscribe {

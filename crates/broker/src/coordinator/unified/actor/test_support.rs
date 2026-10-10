@@ -439,6 +439,16 @@ pub(super) struct ClassicMemberSetup<'a> {
     pub instance_id: Option<&'a str>,
 }
 
+impl<'a> ClassicMemberSetup<'a> {
+    /// A dynamic member with the default topic subscription and generation.
+    pub(super) fn dynamic(member_id: &'a str) -> Self {
+        Self {
+            member_id,
+            ..Default::default()
+        }
+    }
+}
+
 pub(super) fn seed_classic_member(
     coord: &Arc<GroupCoordinator>,
     setup: ClassicMemberSetup<'_>,
@@ -507,6 +517,37 @@ pub(super) async fn spawn_and_downgrade(
     (handle, view)
 }
 
+/// A bidirectional coordinator whose first actor was spawned from a classic seed.
+pub(super) fn seeded_bidirectional_coordinator(
+    setup: ClassicMemberSetup<'_>,
+) -> (
+    Arc<GroupCoordinator>,
+    Arc<InMemoryOffsetsLog>,
+    Arc<GroupActorHandle>,
+) {
+    let (coordinator, log) = bidirectional_coordinator();
+    let handle = seed_classic_member(&coordinator, setup);
+    (coordinator, log, handle)
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct NativeMemberEpoch(pub i32);
+
+pub(super) struct JoinedNativeConsumer {
+    pub member_id: String,
+    pub epoch: NativeMemberEpoch,
+}
+
+/// Join a group's first native consumer and retain its assigned identity and epoch.
+pub(super) async fn join_native_consumer(handle: &Arc<GroupActorHandle>) -> JoinedNativeConsumer {
+    let response = rpc::consumer_heartbeat(handle, "", 0, Some("t")).await;
+    assert!(response.error_code == codes::NONE);
+    JoinedNativeConsumer {
+        member_id: response.member_id.expect("native member id"),
+        epoch: NativeMemberEpoch(response.member_epoch),
+    }
+}
+
 /// Seed a convertible classic member and join its first native consumer.
 pub(super) async fn seed_classic_with_native(
     coordinator: &Arc<GroupCoordinator>,
@@ -515,8 +556,6 @@ pub(super) async fn seed_classic_with_native(
         coordinator,
         crate::coordinator::unified::actor::test_support::ClassicMemberSetup::default(),
     );
-    let response = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
-    assert!(response.error_code == codes::NONE);
-    let native = response.member_id.expect("native member id");
-    (handle, native)
+    let native = join_native_consumer(&handle).await;
+    (handle, native.member_id)
 }

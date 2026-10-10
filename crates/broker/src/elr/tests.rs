@@ -38,17 +38,13 @@ const DESCRIBE_VERSION: i16 =
     krabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
 const REGISTER_VERSION: i16 = krabka_protocol::owned::broker_registration_request::MAX_VERSION;
 
-fn nodes(ids: &[u64]) -> Vec<NodeId> {
-    ids.iter().copied().map(NodeId).collect()
-}
-
-fn partition_record(isr: &[u64]) -> PartitionRecord {
+fn partition_record(isr: &[NodeId]) -> PartitionRecord {
     PartitionRecord {
         topic: TOPIC.into(),
         partition: 0,
         leader: NodeId(1),
-        replicas: nodes(&[1, 2, 3]),
-        isr: nodes(isr),
+        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+        isr: isr.to_vec(),
         leader_epoch: LeaderEpoch(LEADER_EPOCH),
         adding_replicas: vec![],
         removing_replicas: vec![],
@@ -69,21 +65,24 @@ fn seed_records() -> Vec<MetadataRecord> {
 /// replica cross the threshold on its own.
 fn seed_records_with_min_isr(min_isr: &str) -> Vec<MetadataRecord> {
     crate::test_support::elr_topic_records(
-        partition_record(&[1, 2, 3]),
+        partition_record(&[NodeId(1), NodeId(2), NodeId(3)]),
         uuid::Uuid::from_bytes(TOPIC_ID_BYTES),
         min_isr,
     )
 }
 
+#[derive(Clone, Copy)]
+struct EndpointPort(u16);
+
 /// The endpoint list of a remote broker at `port`: the `PLAINTEXT` listener that
 /// the requests of these tests arrive on. A broker with no endpoint on that
 /// listener is offline in `Metadata` and `DescribeTopicPartitions`, as it is in
 /// Kafka's `KRaftMetadataCache`.
-fn plaintext_endpoints(port: u16) -> Vec<krabka_metadata::BrokerEndpoint> {
+fn plaintext_endpoints(port: EndpointPort) -> Vec<krabka_metadata::BrokerEndpoint> {
     vec![krabka_metadata::BrokerEndpoint {
         name: "PLAINTEXT".into(),
         host: "127.0.0.1".into(),
-        port,
+        port: port.0,
         protocol: krabka_security::ListenerProtocol::Plaintext,
     }]
 }
@@ -96,7 +95,7 @@ fn registration_record(incarnation: u128) -> MetadataRecord {
         broker_epoch: -1,
         incarnation_id: uuid::Uuid::from_u128(incarnation),
         port: 9094,
-        endpoints: plaintext_endpoints(9094),
+        endpoints: plaintext_endpoints(EndpointPort(9094)),
         ..crate::test_support::broker_registration(3)
     })
 }
@@ -124,9 +123,9 @@ async fn activate_followers(broker: &Broker) {
                         broker_epoch: -1,
                         incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
                         port: 9092 + u16::try_from(node).expect("a small node id"),
-                        endpoints: plaintext_endpoints(
+                        endpoints: plaintext_endpoints(EndpointPort(
                             9092 + u16::try_from(node).expect("a small node id"),
-                        ),
+                        )),
                         ..crate::test_support::broker_registration(node)
                     })
                 })
@@ -155,7 +154,7 @@ async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
         (TOPIC, TOPIC_ID_BYTES),
         (LEADER_EPOCH, ALTER_VERSION),
         new_isr,
-        true,
+        crate::test_support::IsrResponseCheck::EnvelopeAndPartition,
     )
     .await;
 }
@@ -188,37 +187,43 @@ async fn describe_partition(broker: &Arc<Broker>) -> DescribeTopicPartitionsResp
 /// reported offline. Comparing the whole struct keeps the ELR assertion
 /// honest: the ELR columns cannot be read as having moved because some
 /// neighbouring field moved instead.
-fn expected_row(isr: &[i32], eligible: &[i32]) -> DescribeTopicPartitionsResponsePartition {
-    row(ExpectedElrSetup {
-        isr,
-        eligible,
-        ..Default::default()
-    })
+/// Read the complete wire row and compare it with the caller's independent expectation.
+async fn check_partition(broker: &Arc<Broker>, expected: DescribeTopicPartitionsResponsePartition) {
+    let actual = describe_partition(broker).await;
+    assert!(actual == expected);
 }
 
 /// Expected row while both followers remain unavailable to the client listener.
-fn offline_followers_row(
-    isr: &[i32],
-    eligible: &[i32],
-) -> DescribeTopicPartitionsResponsePartition {
+fn offline_followers_row(setup: ExpectedElrSetup<'_>) -> DescribeTopicPartitionsResponsePartition {
     row(ExpectedElrSetup {
-        isr,
-        eligible,
-        offline: &[2, 3],
-        ..Default::default()
+        offline: &[ReportedBrokerId(2), ReportedBrokerId(3)],
+        ..setup
     })
 }
 
-/// [`expected_row`] with the last-known ELR and the offline set given too.
+#[derive(Clone, Copy)]
+struct ReportedBrokerId(i32);
+
+/// The expected wire state, including the last-known ELR and offline replicas.
 /// The registration tests need the offline set: they register broker 3, which
 /// takes it out of it.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct ExpectedElrSetup<'a> {
-    #[default(&[1, 2, 3])]
-    isr: &'a [i32],
-    eligible: &'a [i32],
-    last_known: &'a [i32],
-    offline: &'a [i32],
+    #[default(&[ReportedBrokerId(1), ReportedBrokerId(2), ReportedBrokerId(3)])]
+    isr: &'a [ReportedBrokerId],
+    eligible: &'a [ReportedBrokerId],
+    last_known: &'a [ReportedBrokerId],
+    offline: &'a [ReportedBrokerId],
+}
+
+impl ExpectedElrSetup<'_> {
+    /// Brokers one and two in the ISR, with no eligible or last-known replicas.
+    fn two_member_isr() -> Self {
+        Self {
+            isr: &[ReportedBrokerId(1), ReportedBrokerId(2)],
+            ..Default::default()
+        }
+    }
 }
 
 fn row(setup: ExpectedElrSetup<'_>) -> DescribeTopicPartitionsResponsePartition {
@@ -234,10 +239,10 @@ fn row(setup: ExpectedElrSetup<'_>) -> DescribeTopicPartitionsResponsePartition 
         leader_id: 1,
         leader_epoch: LEADER_EPOCH,
         replica_nodes: vec![1, 2, 3],
-        isr_nodes: isr.to_vec(),
-        eligible_leader_replicas: Some(eligible.to_vec()),
-        last_known_elr: Some(last_known.to_vec()),
-        offline_replicas: offline.to_vec(),
+        isr_nodes: isr.iter().map(|id| id.0).collect(),
+        eligible_leader_replicas: Some(eligible.iter().map(|id| id.0).collect()),
+        last_known_elr: Some(last_known.iter().map(|id| id.0).collect()),
+        offline_replicas: offline.iter().map(|id| id.0).collect(),
         ..Default::default()
     }
 }
@@ -310,13 +315,21 @@ async fn start_orders() -> (crate::BrokerHandle, tempfile::TempDir, Arc<Broker>)
 async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
     let (handle, _dir, broker) = start_orders().await;
 
-    assert!(describe_partition(&broker).await == expected_row(&[1, 2, 3], &[]));
+    check_partition(&broker, row(ExpectedElrSetup::default())).await;
 
     alter_isr(&broker, &[1]).await;
-    assert!(describe_partition(&broker).await == expected_row(&[1], &[2, 3]));
+    check_partition(
+        &broker,
+        row(ExpectedElrSetup {
+            isr: &[ReportedBrokerId(1)],
+            eligible: &[ReportedBrokerId(2), ReportedBrokerId(3)],
+            ..Default::default()
+        }),
+    )
+    .await;
 
     alter_isr(&broker, &[1, 2]).await;
-    assert!(describe_partition(&broker).await == expected_row(&[1, 2], &[]));
+    check_partition(&broker, row(ExpectedElrSetup::two_member_isr())).await;
 
     handle.shutdown().await;
 }
@@ -331,7 +344,7 @@ async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
 
     alter_isr(&broker, &[1, 2]).await;
 
-    assert!(describe_partition(&broker).await == expected_row(&[1, 2], &[]));
+    check_partition(&broker, row(ExpectedElrSetup::two_member_isr())).await;
 
     handle.shutdown().await;
 }
@@ -354,19 +367,37 @@ async fn seed_returning_broker(
     (handle, broker, dir)
 }
 
-async fn assert_returning_broker_withdrawal(min_isr: &str, check_initial: bool) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InitialIsrCheck {
+    Required,
+    Skipped,
+}
+
+async fn assert_returning_broker_withdrawal(min_isr: &str, initial_check: InitialIsrCheck) {
     let (handle, broker, _dir) = seed_returning_broker(min_isr).await;
-    if check_initial {
+    if initial_check == InitialIsrCheck::Required {
         // Broker 3 is explicitly fenced so its returning incarnation is
         // deterministic even when coverage instrumentation delays the test.
-        assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2, 3], &[]));
+        check_partition(&broker, offline_followers_row(ExpectedElrSetup::default())).await;
     }
     register_broker_3(&broker, 2).await;
-    assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2], &[]));
+    check_partition(
+        &broker,
+        offline_followers_row(ExpectedElrSetup::two_member_isr()),
+    )
+    .await;
     // Every later derivation still excludes broker 3 while allowing broker 2,
     // which left an ISR whose log was never called into question.
     alter_isr(&broker, &[1]).await;
-    assert!(describe_partition(&broker).await == offline_followers_row(&[1], &[2]));
+    check_partition(
+        &broker,
+        offline_followers_row(ExpectedElrSetup {
+            isr: &[ReportedBrokerId(1)],
+            eligible: &[ReportedBrokerId(2)],
+            ..Default::default()
+        }),
+    )
+    .await;
     handle.shutdown().await;
 }
 
@@ -386,7 +417,7 @@ async fn assert_returning_broker_withdrawal(min_isr: &str, check_initial: bool) 
 /// is the whole point of KIP-966.
 #[tokio::test]
 async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
-    assert_returning_broker_withdrawal("2", true).await;
+    assert_returning_broker_withdrawal("2", InitialIsrCheck::Required).await;
 }
 
 /// The same defect one step earlier: with `min.insync.replicas` at the
@@ -404,7 +435,7 @@ async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
 /// process actually has.
 #[tokio::test]
 async fn the_registration_batch_cannot_publish_the_broker_it_is_withdrawing() {
-    assert_returning_broker_withdrawal("3", false).await;
+    assert_returning_broker_withdrawal("3", InitialIsrCheck::Skipped).await;
 }
 
 /// The state the controller publishes is an ordinary `V1TopicConfig`, so a
@@ -420,7 +451,7 @@ fn the_published_state_round_trips_through_a_snapshot() {
 
     // Shrink to one replica, the way the controller does it, and apply what
     // the publisher decided.
-    let mut changes = vec![MetadataRecord::V1Partition(partition_record(&[1]))];
+    let mut changes = vec![MetadataRecord::V1Partition(partition_record(&[NodeId(1)]))];
     ElrPublisher::new(&image).extend(&mut changes);
     for record in &changes {
         image.apply(record);

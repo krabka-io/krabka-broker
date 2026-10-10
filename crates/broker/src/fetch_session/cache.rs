@@ -183,6 +183,22 @@ mod tests {
         },
     };
 
+    #[derive(Clone, Copy)]
+    struct CachedPartitionCount(usize);
+
+    /// Classification applies the partition diff before the count is inspected.
+    fn check_incremental_count(
+        cache: &FetchSessionCache,
+        request: &krabka_protocol::owned::fetch_request::FetchRequest,
+        expected: CachedPartitionCount,
+    ) {
+        assert!(matches!(
+            cache.classify(request, NAME_FETCH_VERSION),
+            SessionDecision::Incremental { .. }
+        ));
+        assert!(cache.total_partitions_cached() == expected.0);
+    }
+
     #[test]
     fn is_empty_tracks_session_lifecycle() {
         let cache = FetchSessionCache::new(10);
@@ -273,20 +289,24 @@ mod tests {
         // Incremental that forgets partition 1 and adds partitions 2 and 3:
         // net partition count goes 2 -> 3.
         let forgotten = vec![forgotten_topic(ForgottenTopicSetup {
-            partitions: vec![1],
+            partitions: vec![krabka_ids::PartitionIndex(1)],
             ..Default::default()
         })];
         let r = req(SessionRequestSetup {
-            session_id: id,
-            session_epoch: 1,
-            topics: vec![topic("t", &[0, 2, 3])],
+            topics: vec![topic(
+                "t",
+                &[
+                    krabka_ids::PartitionIndex(0),
+                    krabka_ids::PartitionIndex(2),
+                    krabka_ids::PartitionIndex(3),
+                ],
+            )],
             forgotten,
+            ..SessionRequestSetup::incremental(
+                crate::fetch_session::test_support::RequestSessionId(id),
+            )
         });
-        assert!(matches!(
-            cache.classify(&r, NAME_FETCH_VERSION),
-            SessionDecision::Incremental { .. }
-        ));
-        assert!(cache.total_partitions_cached() == 3);
+        check_incremental_count(&cache, &r, CachedPartitionCount(3));
 
         // Close drops the whole session and its partitions.
         cache.close(id);
@@ -305,17 +325,21 @@ mod tests {
         );
 
         let r = req(SessionRequestSetup {
-            session_id: id,
-            session_epoch: 1,
-            topics: vec![topic("t", &[0, 1, 2, 3, 4])],
-            ..Default::default()
+            topics: vec![topic(
+                "t",
+                &[
+                    krabka_ids::PartitionIndex(0),
+                    krabka_ids::PartitionIndex(1),
+                    krabka_ids::PartitionIndex(2),
+                    krabka_ids::PartitionIndex(3),
+                    krabka_ids::PartitionIndex(4),
+                ],
+            )],
+            ..SessionRequestSetup::incremental(
+                crate::fetch_session::test_support::RequestSessionId(id),
+            )
         });
-        assert!(matches!(
-            cache.classify(&r, NAME_FETCH_VERSION),
-            SessionDecision::Incremental { .. }
-        ));
-
-        assert!(cache.total_partitions_cached() == 5);
+        check_incremental_count(&cache, &r, CachedPartitionCount(5));
     }
 
     #[test]
@@ -334,21 +358,20 @@ mod tests {
             ],
         );
         let forgotten = vec![forgotten_topic(ForgottenTopicSetup {
-            partitions: vec![2, 3, 4],
+            partitions: vec![
+                krabka_ids::PartitionIndex(2),
+                krabka_ids::PartitionIndex(3),
+                krabka_ids::PartitionIndex(4),
+            ],
             ..Default::default()
         })];
 
         let r = req(SessionRequestSetup {
-            session_id: id,
-            session_epoch: 1,
             forgotten,
-            ..Default::default()
+            ..SessionRequestSetup::incremental(
+                crate::fetch_session::test_support::RequestSessionId(id),
+            )
         });
-        assert!(matches!(
-            cache.classify(&r, NAME_FETCH_VERSION),
-            SessionDecision::Incremental { .. }
-        ));
-
-        assert!(cache.total_partitions_cached() == 2);
+        check_incremental_count(&cache, &r, CachedPartitionCount(2));
     }
 }

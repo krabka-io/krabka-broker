@@ -193,7 +193,7 @@ pub(crate) async fn open_data_partition(
         let mut batch = RecordBatch {
             partition_leader_epoch: 0,
             last_offset_delta: i32::try_from(values.len() - 1).expect("record count fits"),
-            ..crate::test_support::static_records_batch(values, timestamp.0)
+            ..crate::test_support::static_records_batch(values, timestamp)
         };
         part.log
             .lock()

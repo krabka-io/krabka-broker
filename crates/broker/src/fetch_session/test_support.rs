@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use krabka_ids::PartitionIndex;
 use krabka_protocol::{
     owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic, ForgottenTopic},
     primitives::uuid::Uuid as WireUuid,
@@ -33,12 +34,29 @@ pub(super) const NAME_FETCH_VERSION: i16 = super::FIRST_TOPIC_ID_FETCH_VERSION -
 /// allocation a strictly greater last-use stamp than the previous one.
 pub(super) const TICK: std::time::Duration = std::time::Duration::from_nanos(1);
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct RequestSessionId(pub FetchSessionId);
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct RequestSessionEpoch(pub super::FetchSessionEpoch);
+
 #[derive(Default)]
 pub(super) struct SessionRequestSetup {
-    pub session_id: i32,
-    pub session_epoch: i32,
+    pub session_id: RequestSessionId,
+    pub session_epoch: RequestSessionEpoch,
     pub topics: Vec<FetchTopic>,
     pub forgotten: Vec<ForgottenTopic>,
+}
+
+impl SessionRequestSetup {
+    /// The first incremental request for a session allocated by the cache.
+    pub(super) fn incremental(session_id: RequestSessionId) -> Self {
+        Self {
+            session_id,
+            session_epoch: RequestSessionEpoch(1),
+            ..Default::default()
+        }
+    }
 }
 
 pub(super) fn req(setup: SessionRequestSetup) -> FetchRequest {
@@ -49,8 +67,8 @@ pub(super) fn req(setup: SessionRequestSetup) -> FetchRequest {
         forgotten,
     } = setup;
     FetchRequest {
-        session_id,
-        session_epoch,
+        session_id: session_id.0,
+        session_epoch: session_epoch.0,
         topics,
         forgotten_topics_data: forgotten,
         ..Default::default()
@@ -62,8 +80,8 @@ pub(super) struct ForgottenTopicSetup {
     #[default("t".into())]
     pub topic: String,
     pub topic_id: WireUuid,
-    #[default(vec![0])]
-    pub partitions: Vec<i32>,
+    #[default(vec![PartitionIndex(0)])]
+    pub partitions: Vec<PartitionIndex>,
 }
 
 pub(super) fn forgotten_topic(setup: ForgottenTopicSetup) -> ForgottenTopic {
@@ -75,19 +93,19 @@ pub(super) fn forgotten_topic(setup: ForgottenTopicSetup) -> ForgottenTopic {
     ForgottenTopic {
         topic,
         topic_id,
-        partitions,
+        partitions: partitions.into_iter().map(|index| index.0).collect(),
         ..Default::default()
     }
 }
 
-pub(super) fn topic(name: &str, partitions: &[i32]) -> FetchTopic {
+pub(super) fn topic(name: &str, partitions: &[PartitionIndex]) -> FetchTopic {
     FetchTopic {
         topic: name.to_string(),
         topic_id: WireUuid::ZERO,
         partitions: partitions
             .iter()
             .map(|&p| FetchPartition {
-                partition: p,
+                partition: p.0,
                 fetch_offset: 0,
                 partition_max_bytes: 1024,
                 ..Default::default()

@@ -559,7 +559,7 @@ pub(crate) async fn seed_partition_replicas(
 pub(crate) fn default_records_batch(values: &[&'static [u8]]) -> RecordBatch {
     RecordBatch {
         partition_leader_epoch: 0,
-        ..crate::test_support::static_records_batch(values, 0)
+        ..crate::test_support::static_records_batch(values, crate::test_support::UnixMillis(0))
     }
 }
 

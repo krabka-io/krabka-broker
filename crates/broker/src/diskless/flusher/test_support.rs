@@ -20,7 +20,10 @@ use crate::partition::Partition;
 fn batch(count: i32) -> RecordBatch {
     RecordBatch {
         partition_leader_epoch: 0,
-        ..crate::test_support::repeated_records_batch(count, crate::time_util::now_ms())
+        ..crate::test_support::repeated_records_batch(crate::test_support::RepeatedRecordsSetup {
+            count: crate::test_support::RecordCount(count),
+            timestamp: crate::test_support::UnixMillis(crate::time_util::now_ms()),
+        })
     }
 }
 

@@ -14,6 +14,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials,
 };
+use krabka_raft::NodeId;
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
@@ -27,16 +28,25 @@ fn oauth_token() -> String {
 
 use crate::support::init_tracing;
 
+#[derive(Clone, Copy, Default)]
+struct BrokerSlot(usize);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControllerAuthorization {
+    Allowed,
+    Denied,
+}
+
 /// Build a `SASL_PLAINTEXT` data-plane listener config for broker `i`
 /// (0-indexed) and parameterized `controller_listener_protocol`.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct SaslBrokerSetup<'a> {
-    i: usize,
+    slot: BrokerSlot,
     #[default(data_listen_addr())]
     data_addr: SocketAddr,
     #[default((ListenerProtocol::SaslPlaintext, data_listen_addr()))]
     controller: (ListenerProtocol, SocketAddr),
-    voters: &'a [(u64, SocketAddr)],
+    voters: &'a [(NodeId, SocketAddr)],
     #[default(BootstrapMode::Bootstrap)]
     mode: BootstrapMode,
     #[default(("raft-user", "raft-password"))]
@@ -45,7 +55,7 @@ struct SaslBrokerSetup<'a> {
 
 fn sasl_broker_config(log_dir: &std::path::Path, setup: SaslBrokerSetup<'_>) -> BrokerConfig {
     let SaslBrokerSetup {
-        i,
+        slot,
         data_addr,
         controller,
         voters,
@@ -54,11 +64,14 @@ fn sasl_broker_config(log_dir: &std::path::Path, setup: SaslBrokerSetup<'_>) -> 
     } = setup;
     let (ctrl, ctrl_addr) = controller;
     let (plain_user, plain_pass) = credentials;
-    let mut cfg = crate::support::node_config(i, log_dir);
+    let mut cfg = crate::support::node_config(slot.0, log_dir);
     cfg.listen_addr = data_addr;
     cfg.advertised_listener = data_addr.to_string();
     cfg.controller_listen_addr = ctrl_addr;
-    cfg.controller_quorum_voters = crate::support::controller_voters(voters);
+    cfg.controller_quorum_voters = voters
+        .iter()
+        .map(|(id, address)| (*id, address.to_string()))
+        .collect();
     cfg.bootstrap_mode = mode;
     cfg.listeners = vec![crate::support::listeners::listener(
         "SASL_PLAINTEXT",
@@ -116,7 +129,8 @@ async fn start_two_brokers_with_controller_protocol(
 ) -> (BrokerHandle, BrokerHandle, TempDir, TempDir) {
     init_tracing();
     let (ctrl_addrs, [ctrl_l0, ctrl_l1]) = reserve_ctrl_listeners().await;
-    let voters: Vec<(u64, SocketAddr)> = vec![(1, ctrl_addrs[0]), (2, ctrl_addrs[1])];
+    let voters: Vec<(NodeId, SocketAddr)> =
+        vec![(NodeId(1), ctrl_addrs[0]), (NodeId(2), ctrl_addrs[1])];
 
     let dir0 = TempDir::new().unwrap();
     let dir1 = TempDir::new().unwrap();
@@ -133,7 +147,7 @@ async fn start_two_brokers_with_controller_protocol(
     let cfg1 = sasl_broker_config(
         dir1.path(),
         SaslBrokerSetup {
-            i: 1,
+            slot: BrokerSlot(1),
             controller: (ctrl, ctrl_addrs[1]),
             voters: &voters,
             credentials: (plain_user, plain_pass),
@@ -160,7 +174,7 @@ async fn start_two_brokers_with_controller_protocol(
 /// Start broker 1 then broker 2, retain both directories, and observe the original 3s window.
 async fn assert_disconnected_controllers(
     credentials: [(&str, &str); 2],
-    deny_controller: bool,
+    authorization: ControllerAuthorization,
     failure: &str,
 ) {
     init_tracing();
@@ -173,14 +187,14 @@ async fn assert_disconnected_controllers(
         let mut config = sasl_broker_config(
             dir.path(),
             SaslBrokerSetup {
-                i: index,
+                slot: BrokerSlot(index),
                 controller: (ListenerProtocol::SaslPlaintext, ctrl_addrs[index]),
-                voters: &[(u64::try_from(index).unwrap() + 1, ctrl_addrs[index])],
+                voters: &[(NodeId(u64::try_from(index).unwrap() + 1), ctrl_addrs[index])],
                 credentials: credentials[index],
                 ..Default::default()
             },
         );
-        if deny_controller {
+        if authorization == ControllerAuthorization::Denied {
             // Valid SASL credentials are still denied CLUSTER_ACTION without
             // super users or ACLs. Construct each authorizer independently.
             config.authorizer =
@@ -236,7 +250,10 @@ async fn controller_listener_sasl_plaintext_two_broker_quorum() {
 async fn controller_listener_oauthbearer_two_broker_quorum() {
     init_tracing();
     let (controller_addrs, [controller_0, controller_1]) = reserve_ctrl_listeners().await;
-    let voters = vec![(1, controller_addrs[0]), (2, controller_addrs[1])];
+    let voters = vec![
+        (NodeId(1), controller_addrs[0]),
+        (NodeId(2), controller_addrs[1]),
+    ];
     let dir0 = TempDir::new().unwrap();
     let dir1 = TempDir::new().unwrap();
     let token_dir = TempDir::new().unwrap();
@@ -255,7 +272,7 @@ async fn controller_listener_oauthbearer_two_broker_quorum() {
     let mut cfg1 = sasl_broker_config(
         dir1.path(),
         SaslBrokerSetup {
-            i: 1,
+            slot: BrokerSlot(1),
             controller: (ListenerProtocol::SaslPlaintext, controller_addrs[1]),
             voters: &voters,
             credentials: ("unused", "unused"),
@@ -290,7 +307,7 @@ async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {
     // Neither broker has the other's password, so authentication fails both ways.
     Box::pin(assert_disconnected_controllers(
         [("alice", "wonderland"), ("bob", "burgers")],
-        false,
+        ControllerAuthorization::Allowed,
         "mismatched creds must not converge",
     ))
     .await;
@@ -309,7 +326,7 @@ async fn controller_listener_sasl_denies_unauthorized_principal() {
     // Both credentials authenticate; the empty authorizers deny controller RPCs.
     Box::pin(assert_disconnected_controllers(
         [("broker", "secret"), ("broker", "secret")],
-        true,
+        ControllerAuthorization::Denied,
         "unauthorized principal must not be able to drive controller RPCs",
     ))
     .await;

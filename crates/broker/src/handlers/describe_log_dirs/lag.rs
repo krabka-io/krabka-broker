@@ -71,6 +71,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::test_support::RecordCount;
 
     /// Builds a `Partition` rooted at `<log_dir>/<topic>-<partition>`.
     ///
@@ -82,7 +83,8 @@ mod tests {
         #[default("orders")]
         topic: &'a str,
         partition: krabka_ids::PartitionIndex,
-        count: i32,
+        #[default(RecordCount(0))]
+        count: RecordCount,
     }
 
     fn partition_with_leo(
@@ -102,7 +104,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        if count > 0 {
+        if count.0 > 0 {
             append_n(&part.log, count);
         }
         part
@@ -111,8 +113,13 @@ mod tests {
     /// Appends one batch of `count` records to a `Log` behind a mutex.
     ///
     /// The LEO of the log advances by `count`.
-    fn append_n(log: &std::sync::Mutex<krabka_log::Log>, count: i32) {
-        let mut batch = crate::test_support::repeated_records_batch(count, 1_700_000_000);
+    fn append_n(log: &std::sync::Mutex<krabka_log::Log>, count: RecordCount) {
+        let mut batch = crate::test_support::repeated_records_batch(
+            crate::test_support::RepeatedRecordsSetup {
+                count,
+                timestamp: crate::test_support::UnixMillis(1_700_000_000),
+            },
+        );
         log.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .append(&mut batch)
@@ -130,7 +137,7 @@ mod tests {
             dir.path(),
             PartitionLogSetup {
                 topic: "t",
-                count: 5,
+                count: RecordCount(5),
                 ..Default::default()
             },
         );
@@ -144,13 +151,13 @@ mod tests {
     /// Builds a `FutureLogState` whose future log has LEO `future_count`.
     fn future_state_with_leo(
         dir: &std::path::Path,
-        future_count: i32,
+        future_count: RecordCount,
     ) -> std::sync::Arc<crate::future_log::FutureLogState> {
         let future_path = dir.join("future");
         std::fs::create_dir_all(&future_path).unwrap();
         let flog = krabka_log::Log::open(&future_path, krabka_log::LogConfig::default()).unwrap();
         let future_log = std::sync::Arc::new(std::sync::Mutex::new(flog));
-        if future_count > 0 {
+        if future_count.0 > 0 {
             append_n(&future_log, future_count);
         }
         std::sync::Arc::new(crate::future_log::FutureLogState {
@@ -174,7 +181,7 @@ mod tests {
             PartitionLogSetup {
                 topic: "t",
                 partition: krabka_ids::PartitionIndex(3),
-                count: 5,
+                count: RecordCount(5),
             },
         );
         assert!(part.log_end_offset() == krabka_log::Offset(5));
@@ -189,7 +196,7 @@ mod tests {
             let future_logs = dashmap::DashMap::new();
             future_logs.insert(
                 (topic.to_string(), krabka_ids::PartitionIndex(3)),
-                future_state_with_leo(fut_dir.path(), future_leo),
+                future_state_with_leo(fut_dir.path(), RecordCount(future_leo)),
             );
             let lag = future_offset_lag(&reg, &future_logs, topic, krabka_ids::PartitionIndex(3));
             assert2::check!(lag == expected, "case {name}");

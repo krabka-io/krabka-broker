@@ -196,9 +196,10 @@ mod tests {
         assert!(matches!(
             cache.classify(
                 &req(SessionRequestSetup {
-                    session_id: id,
-                    session_epoch: epoch,
-                    ..Default::default()
+                    session_epoch: crate::fetch_session::test_support::RequestSessionEpoch(epoch),
+                    ..SessionRequestSetup::incremental(
+                        crate::fetch_session::test_support::RequestSessionId(id)
+                    )
                 }),
                 NAME_FETCH_VERSION
             ),
