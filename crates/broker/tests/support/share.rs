@@ -554,7 +554,8 @@ pub async fn start_topic(
     cfg: BrokerConfig,
     setup: ShareTopicSetup<'_>,
 ) -> (krabka_broker::BrokerHandle, Arc<Client>, uuid::Uuid) {
-    let broker = krabka_broker::Broker::start(cfg).await.unwrap();
+    // Keep the growing broker config inside a boxed startup future.
+    let broker = Box::pin(krabka_broker::Broker::start(cfg)).await.unwrap();
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, setup).await;
     let tid = topic_id(&broker, setup.topic);

@@ -15,7 +15,7 @@ use super::{
     control::{ControlBatchKind, check_control_record_versions, control_batch_kind},
 };
 use crate::{
-    config::{DeliveryPolicy, ScheduleOrder},
+    config::{DeliveryPolicy, ScheduleOrder, SegmentAllocation},
     error::LogError,
     producer_snapshot, retention,
     segment::Segment,
@@ -35,7 +35,8 @@ impl Log {
         Ok(())
     }
 
-    /// Read one append policy, roll against this batch, and retain its write settings.
+    /// Read one append policy, roll against this batch, reserve the segment
+    /// the batch lands in, and retain its write settings.
     pub(super) fn roll_for_append(
         &mut self,
         incoming_size: impl FnOnce() -> ByteSize,
@@ -47,6 +48,8 @@ impl Log {
             segment_index_size,
             index_interval,
             flush_on_append,
+            segment_allocation,
+            tail_cache_size,
         ) = {
             let cfg = self.config.read().unwrap();
             (
@@ -55,8 +58,11 @@ impl Log {
                 cfg.segment_index_size,
                 cfg.index_interval,
                 cfg.flush_on_append,
+                cfg.segment_allocation,
+                cfg.tail_cache_size,
             )
         };
+        let segment_roll_interval = self.jittered_roll_interval(segment_roll_interval);
         if self.should_roll_for_incoming(
             incoming_size(),
             max_timestamp,
@@ -65,6 +71,21 @@ impl Log {
             segment_index_size,
         ) {
             self.roll_active_segment()?;
+        }
+        // Kafka's `preallocate`, applied where every append passes rather
+        // than where segments are made: a topic's own config reaches a log
+        // only after it is opened, and a truncate takes a reservation away,
+        // so this is the one place that sees each segment under the config
+        // in force when it is written. A segment asks once for each; see
+        // `Segment::reserve` and `Segment::write_direct`.
+        if let Some(active) = self.active.as_mut() {
+            match segment_allocation {
+                SegmentAllocation::Preallocate => {
+                    active.reserve(segment_size);
+                    active.write_direct(tail_cache_size);
+                }
+                SegmentAllocation::OnWrite => active.write_buffered()?,
+            }
         }
         Ok((index_interval, flush_on_append))
     }
@@ -368,13 +389,20 @@ impl Log {
             Offset(batch.base_offset),
         )?;
         check_control_record_versions(batch)?;
+        let encoded = if verbatim.is_none() {
+            let config = self.config.read().unwrap();
+            let level = config.compression_level(batch.attributes.compression());
+            let mut bytes = bytes::BytesMut::with_capacity(batch.encoded_len());
+            batch.encode_with_compression_level(&mut bytes, level)?;
+            Some(bytes.freeze())
+        } else {
+            None
+        };
+        let stored_bytes = verbatim
+            .or(encoded.as_deref())
+            .expect("owned batches were encoded above");
         let (index_interval, flush_on_append) = self.roll_for_append(
-            || {
-                ByteSize::from_bytes(
-                    u64::try_from(verbatim.map_or_else(|| batch.encoded_len(), <[u8]>::len))
-                        .unwrap_or(u64::MAX),
-                )
-            },
+            || ByteSize::from_bytes(u64::try_from(stored_bytes.len()).unwrap_or(u64::MAX)),
             batch.max_timestamp,
         )?;
 
@@ -393,7 +421,11 @@ impl Log {
                     index_interval,
                 )?;
             } else {
-                active.append(batch, index_interval)?;
+                active.append_encoded(
+                    batch,
+                    index_interval,
+                    encoded.as_ref().expect("owned batches were encoded above"),
+                )?;
             }
 
             let pid = ProducerId(batch.producer_id);
@@ -402,12 +434,10 @@ impl Log {
             let writes_durable_sidecar =
                 matches!(control_kind, Some(ControlBatchKind::Transaction))
                     || (self.stamp_source.is_some() && control_kind.is_none() && !is_transactional);
-            if flush_on_append || writes_durable_sidecar {
-                // Durable outcomes and stamps must not get ahead of records
-                // in an earlier, asynchronously flushed segment.
-                self.rollover_flusher.finish()?;
-                self.active_segment_flush()?;
-            }
+            self.flush_after_append(
+                batch.last_offset_delta,
+                flush_on_append || writes_durable_sidecar,
+            )?;
 
             // Sidecars are written only after the batch bytes. Any failure in
             // this block takes the full-log rollback path below.
@@ -492,7 +522,8 @@ impl Log {
         let size_roll = non_empty && seg.size() + incoming_size > segment_size;
         let time_roll = non_empty
             && seg.first_record_timestamp().is_some_and(|first_timestamp| {
-                incoming_max_timestamp - first_timestamp > segment_roll_interval.millis_i64_trunc()
+                incoming_max_timestamp.saturating_sub(first_timestamp)
+                    > segment_roll_interval.millis_i64_trunc()
             });
         // Below 24 bytes of `segment.index.bytes` the time index is full
         // before it holds an entry. Kafka then rolls an empty segment, which
@@ -563,6 +594,7 @@ impl Log {
         self.sealed_txn_indexes.insert(old_base, old_txn_index);
         let stamp_index_path = new_seg.stamp_index_path();
         self.active = Some(new_seg);
+        self.roll_jitter = None;
         self.dir_sync_needed = true;
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;
         Ok(())

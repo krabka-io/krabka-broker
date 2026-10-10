@@ -145,9 +145,39 @@ impl Segment {
         let to_read = usize::try_from(to_read).unwrap_or(usize::MAX);
         let base = buf.len();
         buf.resize(base + to_read, 0);
-        let n = read_full_at(&self.log_file, start_pos, &mut buf[base..])?;
+        let n = self.read_at(start_pos, &mut buf[base..])?;
         buf.truncate(base + n);
         Ok(())
+    }
+
+    /// Fill `out` from `start_pos`, taking what the segment holds in memory
+    /// from memory and the rest from the file.
+    ///
+    /// An `O_DIRECT` write drops the page cache's copy of what it wrote, so
+    /// the newest bytes of a segment that writes directly are read from its
+    /// tail cache: a consumer reading right behind the producer would
+    /// otherwise wait on the disk for every fetch. The cache runs to
+    /// `log_size`, so a range that starts inside it ends inside it too.
+    fn read_at(&self, start_pos: u64, out: &mut [u8]) -> std::io::Result<usize> {
+        let Some(mode) = self.direct.as_ref() else {
+            return read_full_at(&self.log_file, start_pos, out);
+        };
+        let cached_from = mode.cache.start();
+        let from_file = usize::try_from(cached_from.saturating_sub(start_pos))
+            .unwrap_or(usize::MAX)
+            .min(out.len());
+        let (file_part, cache_part) = out.split_at_mut(from_file);
+        let read = read_full_at(&self.log_file, start_pos, file_part)?;
+        if read < file_part.len() {
+            return Ok(read);
+        }
+        let cache_pos = start_pos.max(cached_from);
+        if mode.cache.read(cache_pos, cache_part) {
+            return Ok(out.len());
+        }
+        // Not where the cache says it is: the file has every byte below
+        // `log_size`, so read it there.
+        Ok(from_file + read_full_at(&self.log_file, cache_pos, cache_part)?)
     }
 }
 

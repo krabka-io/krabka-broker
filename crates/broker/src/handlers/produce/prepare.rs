@@ -151,13 +151,12 @@ impl PreparedBatch {
     /// bytes on the verbatim path, and the measure [`Self::stored_len`] takes
     /// on the owned one. What Kafka's `UnifiedLog.append` holds against the
     /// topic's `segment.bytes`.
-    pub(super) fn appended_len(
-        &self,
-        topic_compression: Option<krabka_compression::CompressionType>,
-    ) -> usize {
+    pub(super) fn appended_len(&self, config: &krabka_log::LogConfig) -> usize {
         match &self.source {
             PreparedSource::Verbatim(bytes) => bytes.len(),
-            PreparedSource::Owned(_) => self.stored_len(topic_compression).unwrap_or(0),
+            PreparedSource::Owned(_) => self
+                .stored_len(config.compression_type, Some(config))
+                .unwrap_or(0),
         }
     }
 
@@ -190,6 +189,7 @@ impl PreparedBatch {
     pub(super) fn stored_len(
         &self,
         topic_compression: Option<krabka_compression::CompressionType>,
+        config: Option<&krabka_log::LogConfig>,
     ) -> Option<usize> {
         let PreparedSource::Owned(batch) = &self.source else {
             return None;
@@ -198,18 +198,22 @@ impl PreparedBatch {
             Some(target) if target != batch.attributes.compression() => {
                 let mut stored = batch.clone();
                 stored.attributes = stored.attributes.with_compression(target);
-                encoded_len(&stored)
+                encoded_len(&stored, config)
             }
-            _ => encoded_len(batch),
+            _ => encoded_len(batch, config),
         }
     }
 }
 
 /// Bytes that [`RecordBatch::encode`] writes, which for a compressed batch
 /// only an encode can answer.
-fn encoded_len(batch: &RecordBatch) -> Option<usize> {
+fn encoded_len(batch: &RecordBatch, config: Option<&krabka_log::LogConfig>) -> Option<usize> {
     let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
-    batch.encode(&mut buf).ok().map(|()| buf.len())
+    let level = config.and_then(|config| config.compression_level(batch.attributes.compression()));
+    batch
+        .encode_with_compression_level(&mut buf, level)
+        .ok()
+        .map(|()| buf.len())
 }
 
 /// Decide the append shape for one partition's records and extract the header

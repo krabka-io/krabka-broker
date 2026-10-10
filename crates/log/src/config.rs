@@ -47,6 +47,10 @@ pub const DEFAULT_READ_BUFFER_CAP: ByteSize = mebibytes(4);
 /// kernel to read ahead.
 pub const DEFAULT_READ_AHEAD_MAX: ByteSize = mebibytes(4);
 
+/// Default for [`LogConfig::tail_cache_size`]: one default
+/// `max.partition.fetch.bytes`.
+pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(1);
+
 /// Default byte window for timestamp scans between sparse index entries.
 pub const DEFAULT_TIMESTAMP_SCAN_WINDOW: ByteSize = kibibytes(64);
 
@@ -103,6 +107,36 @@ impl CleanupPolicy {
     pub const fn contains_delete(self) -> bool {
         matches!(self, Self::Delete | Self::CompactAndDelete)
     }
+}
+
+/// How a new segment's `.log` file gets its disk blocks: Kafka's
+/// `preallocate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SegmentAllocation {
+    /// `preallocate=false`, Kafka's default: the file allocates blocks as
+    /// appends grow it.
+    #[default]
+    OnWrite,
+    /// `preallocate=true`: reserve `segment_size` of disk blocks for a
+    /// segment before the first append into it, so appends do not allocate
+    /// as they grow it, and write its batches through `O_DIRECT`. A truncate
+    /// gives the reservation up, and the segment takes it again.
+    ///
+    /// The `O_DIRECT` writes bypass the page cache. The newest
+    /// [`LogConfig::tail_cache_size`] of the segment stays in memory to serve
+    /// reads, and a direct write covers whole blocks, so the active segment's
+    /// file runs up to a block past its last batch until it is sealed. Where
+    /// the kernel does not report the alignment `O_DIRECT` needs (before Linux
+    /// 6.1, or on tmpfs), the segment writes through the page cache.
+    ///
+    /// Kafka sets the file's length to `segment.bytes` and trims it back when
+    /// the segment closes. krabka reserves the blocks without changing the
+    /// length (`fallocate(FALLOC_FL_KEEP_SIZE)`), so a segment's file is
+    /// never longer than the batches in it, and gives back what is left of
+    /// the reservation when the segment is sealed. The bytes on disk are the
+    /// same either way. Off Linux, or on a filesystem that cannot reserve
+    /// blocks, a segment allocates as it is written.
+    Preallocate,
 }
 
 /// Per-topic policy for when a durable record becomes visible to consumers.
@@ -202,6 +236,31 @@ pub struct LogConfig {
     #[default(DEFAULT_SEGMENT_ROLL_INTERVAL)]
     pub segment_roll_interval: Time,
 
+    /// Maximum random subtraction from the segment roll interval, sampled per segment.
+    pub segment_jitter: Time,
+
+    /// Delay before retired segment files are unlinked. Readers stop seeing them immediately.
+    #[default(krabka_units::secs(60))]
+    pub file_delete_delay: Time,
+
+    /// Offset span between forced syncs. `None` disables the threshold.
+    pub flush_messages: Option<u64>,
+
+    /// Time between forced syncs of dirty data. `None` disables the timer.
+    pub flush_interval: Option<Time>,
+
+    /// Gzip level used when encoding owned batches; -1 selects the codec default.
+    #[default(-1)]
+    pub compression_gzip_level: i32,
+
+    /// Lz4 level used when encoding owned batches.
+    #[default(9)]
+    pub compression_lz4_level: i32,
+
+    /// Zstd level used when encoding owned batches.
+    #[default(3)]
+    pub compression_zstd_level: i32,
+
     /// Delete sealed segments older than this. `None` = unlimited. Kafka's
     /// `retention.ms`; default 7 days.
     #[default(Some(DEFAULT_RETENTION))]
@@ -247,6 +306,20 @@ pub struct LogConfig {
     /// fsync after every `append`. Default off. The broker manages fsync
     /// separately.
     pub flush_on_append: bool,
+
+    /// Kafka's `preallocate`. Defaults to [`SegmentAllocation::OnWrite`],
+    /// Kafka's `false`. See [`SegmentAllocation`].
+    pub segment_allocation: SegmentAllocation,
+
+    /// How much of the newest data an active segment that writes through
+    /// `O_DIRECT` keeps in memory to serve reads with. Those writes bypass
+    /// the page cache and drop what it held of the range, so without this a
+    /// consumer reading right behind the producer reads from disk. Every
+    /// partition under [`SegmentAllocation::Preallocate`] holds up to this
+    /// much, plus one batch; `0` keeps only the newest batch. Default 1 MiB,
+    /// one default `max.partition.fetch.bytes`.
+    #[default(DEFAULT_TAIL_CACHE_SIZE)]
+    pub tail_cache_size: ByteSize,
 
     /// On open, CRC every batch in the active segment and rebuild its sparse indexes.
     #[default(true)]
@@ -352,6 +425,19 @@ pub struct LogConfig {
     pub delivery_clock_uncertainty: Time,
 }
 
+impl LogConfig {
+    /// The configured level for a codec that supports compression levels.
+    #[must_use]
+    pub fn compression_level(&self, codec: CompressionType) -> Option<i32> {
+        match codec {
+            CompressionType::Gzip => Some(self.compression_gzip_level),
+            CompressionType::Lz4 => Some(self.compression_lz4_level),
+            CompressionType::Zstd => Some(self.compression_zstd_level),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -369,6 +455,13 @@ mod tests {
                     timestamp_scan_window: kibibytes(64),
                     segment_size: bytes(1 << 30),
                     segment_roll_interval: days(7),
+                    segment_jitter: Time::ZERO,
+                    file_delete_delay: secs(60),
+                    flush_messages: None,
+                    flush_interval: None,
+                    compression_gzip_level: -1,
+                    compression_lz4_level: 9,
+                    compression_zstd_level: 3,
                     retention: Some(days(7)),
                     retention_size: None,
                     max_message_size: bytes(1_048_588),
@@ -376,6 +469,8 @@ mod tests {
                     index_interval: bytes(4096),
                     segment_index_size: bytes(10 * 1024 * 1024),
                     flush_on_append: false,
+                    segment_allocation: SegmentAllocation::OnWrite,
+                    tail_cache_size: mebibytes(1),
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
                     min_compaction_lag: Time::ZERO,

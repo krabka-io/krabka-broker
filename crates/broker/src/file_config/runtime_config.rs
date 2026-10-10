@@ -103,6 +103,13 @@ pub struct RuntimeFileConfig {
     /// hint to the fetch's own range. The hint has no effect on a host other
     /// than Linux.
     pub log_read_ahead_max: Option<ByteSize>,
+    /// How much of the newest data a partition with `preallocate=true` keeps
+    /// in memory to serve reads with. Such a partition writes its active
+    /// segment through `O_DIRECT`, which bypasses the page cache, so without
+    /// this a consumer reading right behind the producer reads from disk.
+    /// Every such partition holds up to this much, plus one batch. The
+    /// default is 1 MiB, and 0 keeps only the newest batch.
+    pub log_tail_cache_size: Option<ByteSize>,
     /// Size of the window a timestamp search reads the log in.
     pub log_timestamp_scan_window: Option<ByteSize>,
     /// Roll the active segment once it grows past this. Kafka's

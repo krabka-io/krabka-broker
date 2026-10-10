@@ -254,6 +254,14 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = keys! {
         |c| size(c.metadata_max_bytes_between_snapshots);
     "metadata.log.max.snapshot.interval.ms", Some("metadata_max_snapshot_interval"),
         |c| time_ms(c.metadata_max_snapshot_interval);
+    "log.roll.jitter.ms", None, |c| time_ms(c.log_config.segment_jitter);
+    "log.segment.delete.delay.ms", None, |c| time_ms(c.log_config.file_delete_delay);
+    "log.flush.interval.messages", None, |c| c.log_config.flush_messages.map_or_else(|| i64::MAX.to_string(), |n| n.to_string());
+    "log.flush.interval.ms", None, |c| c.log_config.flush_interval.map_or_else(|| i64::MAX.to_string(), time_ms);
+    "compression.gzip.level", None, |c| c.log_config.compression_gzip_level.to_string();
+    "compression.lz4.level", None, |c| c.log_config.compression_lz4_level.to_string();
+    "compression.zstd.level", None, |c| c.log_config.compression_zstd_level.to_string();
+
     "metadata.log.segment.bytes", Some("metadata_log_segment_bytes"),
         |c| size(c.metadata_log.segment_size);
     "metadata.log.segment.ms", Some("metadata_log_segment_roll_interval"),
@@ -293,10 +301,10 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = keys! {
 };
 
 impl KafkaStaticKey {
-    /// Kafka's default of the key: its `KafkaConfig` row's, or, for a group
-    /// synonym that Kafka 4.3.1 does not define, the default of the group key
-    /// it sets.
-    pub(crate) fn kafka_default(&self) -> Option<&'static str> {
+    /// Kafka's effective default, following topic broker synonyms with unit
+    /// conversion when the direct row has no default, or the group default
+    /// for a group synonym that Kafka 4.3.1 does not define.
+    pub(crate) fn kafka_default(&self) -> Option<String> {
         crate::config_keys::kafka_broker::lookup(self.name)
             .and_then(|row| row.default)
             .or_else(|| {
@@ -304,6 +312,17 @@ impl KafkaStaticKey {
                     .iter()
                     .find(|group_key| group_key.broker_synonym == Some(self.name))
                     .and_then(|group_key| group_key.default)
+            })
+            .map(str::to_owned)
+            .or_else(|| {
+                let (_, topic) = crate::config_keys::broker_dynamic::TOPIC_DEFAULT_SYNONYMS
+                    .iter()
+                    .find(|(broker, _)| *broker == self.name)?;
+                crate::config_keys::broker_dynamic::topic_broker_synonyms(topic)
+                    .iter()
+                    .find_map(|synonym| {
+                        crate::config_keys::in_topic_unit(topic, synonym.name, synonym.default?)
+                    })
             })
     }
 
@@ -316,7 +335,7 @@ impl KafkaStaticKey {
             .static_config_origins
             .supplied_kafka_keys
             .contains(self.name);
-        (supplied || self.kafka_default() != Some(value.as_str())).then_some(value)
+        (supplied || self.kafka_default().as_deref() != Some(value.as_str())).then_some(value)
     }
 }
 
