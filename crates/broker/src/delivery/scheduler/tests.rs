@@ -138,11 +138,12 @@ impl Harness {
     ) -> Arc<crate::partition::Partition> {
         let partition = scheduled_partition(
             dir,
-            topic,
-            DeliveryPolicy::Scheduled,
-            timestamps,
-            THIS_BROKER,
             &self.clock,
+            crate::delivery::test_support::ScheduleSetup {
+                topic,
+                activations: timestamps,
+                ..Default::default()
+            },
         );
         register(&self.registry, &partition);
         partition
@@ -178,11 +179,11 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
     // One batch that is already active, then one that comes due in 10s.
     let partition = scheduled_partition(
         &dir,
-        "scheduled",
-        DeliveryPolicy::Scheduled,
-        &[NOW_MS - 60_000, NOW_MS + 10_000],
-        THIS_BROKER,
         &harness.clock,
+        crate::delivery::test_support::ScheduleSetup {
+            activations: &[NOW_MS - 60_000, NOW_MS + 10_000],
+            ..Default::default()
+        },
     );
     register(&harness.registry, &partition);
 
@@ -232,11 +233,13 @@ async fn a_topic_that_delivers_immediately_reports_nothing() {
     let harness = Harness::new();
     let immediate = scheduled_partition(
         &dir,
-        "immediate",
-        DeliveryPolicy::Immediate,
-        &[NOW_MS + 10_000],
-        THIS_BROKER,
         &harness.clock,
+        crate::delivery::test_support::ScheduleSetup {
+            topic: "immediate",
+            policy: DeliveryPolicy::Immediate,
+            activations: &[NOW_MS + 10_000],
+            ..Default::default()
+        },
     );
     register(&harness.registry, &immediate);
 
@@ -258,11 +261,13 @@ async fn a_partition_this_broker_does_not_lead_is_left_alone() {
     let harness = Harness::new();
     let followed = scheduled_partition(
         &dir,
-        "followed",
-        DeliveryPolicy::Scheduled,
-        &[NOW_MS - 60_000],
-        THIS_BROKER + 1,
         &harness.clock,
+        crate::delivery::test_support::ScheduleSetup {
+            topic: "followed",
+            activations: &[NOW_MS - 60_000],
+            leader: THIS_BROKER + 1,
+            ..Default::default()
+        },
     );
     register(&harness.registry, &followed);
 
@@ -284,11 +289,12 @@ async fn the_scheduler_adopts_a_leader_partition_so_a_produce_can_rearm_it() {
     let harness = Harness::new();
     let partition = scheduled_partition(
         &dir,
-        "adopted",
-        DeliveryPolicy::Scheduled,
-        &[NOW_MS - 60_000],
-        THIS_BROKER,
         &harness.clock,
+        crate::delivery::test_support::ScheduleSetup {
+            topic: "adopted",
+            activations: &[NOW_MS - 60_000],
+            ..Default::default()
+        },
     );
     register(&harness.registry, &partition);
 
@@ -376,11 +382,12 @@ async fn the_scheduler_stops_without_sweeping_when_the_first_deadline_is_refused
     let harness = Harness::new();
     let partition = scheduled_partition(
         &dir,
-        "unarmable",
-        DeliveryPolicy::Scheduled,
-        &[NOW_MS + 10_000],
-        THIS_BROKER,
         &harness.clock,
+        crate::delivery::test_support::ScheduleSetup {
+            topic: "unarmable",
+            activations: &[NOW_MS + 10_000],
+            ..Default::default()
+        },
     );
     register(&harness.registry, &partition);
 
@@ -410,11 +417,12 @@ async fn the_scheduler_sweeps_once_and_stops_when_the_next_sleep_cannot_be_armed
     let harness = Harness::new();
     let partition = scheduled_partition(
         &dir,
-        "unrearmable",
-        DeliveryPolicy::Scheduled,
-        &[NOW_MS - 60_000],
-        THIS_BROKER,
         &harness.clock,
+        crate::delivery::test_support::ScheduleSetup {
+            topic: "unrearmable",
+            activations: &[NOW_MS - 60_000],
+            ..Default::default()
+        },
     );
     register(&harness.registry, &partition);
 

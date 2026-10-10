@@ -267,7 +267,13 @@ mod tests {
         // SPAWN classic-kind via a seeded classic member, then UPGRADE by having
         // a native consumer heartbeat in. The handle's spawn-time `kind` stays
         // the stale `Classic`.
-        let handle = seed_classic_member(&coord, "m1", "t", None);
+        let handle = seed_classic_member(
+            &coord,
+            crate::coordinator::unified::actor::test_support::ClassicMemberSetup {
+                member_id: "m1",
+                ..Default::default()
+            },
+        );
         assert!(handle.kind == GroupKindTag::Classic);
         let up = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
         assert!(up.error_code == codes::NONE);

@@ -296,7 +296,7 @@ mod tests {
             let (coord, _log) = make_coordinator(metadata.clone());
             let handle = coord.get_or_create_share("g");
             if let Some(partitions) = initialized {
-                seed_initialized(&handle, id, "t", partitions).await;
+                seed_initialized(&handle, crate::coordinator::unified::share::actor::test_support::InitializedTopicSetup { topic_id: id, partitions, ..Default::default() }).await;
             }
             for (step, (req, expected)) in steps.into_iter().enumerate() {
                 let resp = heartbeat(&handle, req).await;

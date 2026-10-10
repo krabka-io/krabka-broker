@@ -219,6 +219,12 @@ mod tests {
 
     use crate::test_support::allow_acl;
 
+    fn acl_image(setup: crate::test_support::AllowAclSetup<'_>) -> MetadataImage {
+        let mut image = MetadataImage::new(Uuid::nil());
+        image.apply(&MetadataRecord::V1AccessControlEntry(allow_acl(setup)));
+        image
+    }
+
     fn bit(op: AclOperation) -> i32 {
         1_i32 << operation_to_wire(op)
     }
@@ -364,13 +370,10 @@ mod tests {
 
     #[test]
     fn read_allow_on_topic_sets_read_and_describe_bits_only() {
-        let mut img = MetadataImage::new(Uuid::nil());
-        img.apply(&MetadataRecord::V1AccessControlEntry(allow_acl(
-            crate::test_support::AllowAclSetup {
-                resource_name: "foo",
-                ..Default::default()
-            },
-        )));
+        let img = acl_image(crate::test_support::AllowAclSetup {
+            resource_name: "foo",
+            ..Default::default()
+        });
         alice_acl_bits!((auth, p, h, bits), &img, ResourceType::Topic, "foo");
         // Read ACL grants Read directly and Describe via implication.
         // No other supported op should be set.
@@ -380,15 +383,12 @@ mod tests {
 
     #[test]
     fn write_allow_on_topic_sets_write_and_describe_only() {
-        let mut img = MetadataImage::new(Uuid::nil());
-        img.apply(&MetadataRecord::V1AccessControlEntry(allow_acl(
-            crate::test_support::AllowAclSetup {
-                resource_name: "foo",
+        let img = acl_image(crate::test_support::AllowAclSetup {
+            resource_name: "foo",
 
-                operation: AclOperation::Write,
-                ..Default::default()
-            },
-        )));
+            operation: AclOperation::Write,
+            ..Default::default()
+        });
         alice_acl_bits!((auth, p, h, bits), &img, ResourceType::Topic, "foo");
         let expected = bit(AclOperation::Write) | bit(AclOperation::Describe);
         assert!(bits == expected);
@@ -427,16 +427,13 @@ mod tests {
             ),
         ];
         for (granted, expected) in rows {
-            let mut img = MetadataImage::new(Uuid::nil());
-            img.apply(&MetadataRecord::V1AccessControlEntry(allow_acl(
-                crate::test_support::AllowAclSetup {
-                    resource_type: ResourceType::Group,
-                    resource_name: "cg",
+            let img = acl_image(crate::test_support::AllowAclSetup {
+                resource_type: ResourceType::Group,
+                resource_name: "cg",
 
-                    operation: granted,
-                    ..Default::default()
-                },
-            )));
+                operation: granted,
+                ..Default::default()
+            });
             alice_acl_bits!((auth, p, h, bits), &img, ResourceType::Group, "cg");
             assert!(bits == expected, "{granted:?}");
         }
@@ -444,13 +441,10 @@ mod tests {
 
     #[test]
     fn deny_wins_the_exact_operation_but_not_its_implied_describe() {
-        let mut img = MetadataImage::new(Uuid::nil());
-        img.apply(&MetadataRecord::V1AccessControlEntry(allow_acl(
-            crate::test_support::AllowAclSetup {
-                resource_name: "foo",
-                ..Default::default()
-            },
-        )));
+        let mut img = acl_image(crate::test_support::AllowAclSetup {
+            resource_name: "foo",
+            ..Default::default()
+        });
         img.apply(&MetadataRecord::V1AccessControlEntry(AclEntry {
             permission_type: PermissionType::Deny,
             ..allow_acl(crate::test_support::AllowAclSetup {

@@ -25,16 +25,35 @@ fn batch(count: i32) -> RecordBatch {
 }
 
 pub(super) fn orders_partition(root: &Path) -> Arc<Partition> {
-    test_partition(root, "orders", 0, true, NodeId(1))
+    test_partition(root, FlusherPartitionSetup::default())
 }
 
-pub(super) fn test_partition(
-    root: &Path,
-    topic: &str,
-    partition: i32,
-    diskless: bool,
-    leader: NodeId,
-) -> Arc<Partition> {
+#[derive(Clone, Copy)]
+pub(super) struct FlusherPartitionSetup<'a> {
+    pub topic: &'a str,
+    pub partition: i32,
+    pub diskless: bool,
+    pub leader: NodeId,
+}
+
+impl Default for FlusherPartitionSetup<'_> {
+    fn default() -> Self {
+        Self {
+            topic: "orders",
+            partition: 0,
+            diskless: true,
+            leader: NodeId(1),
+        }
+    }
+}
+
+pub(super) fn test_partition(root: &Path, setup: FlusherPartitionSetup<'_>) -> Arc<Partition> {
+    let FlusherPartitionSetup {
+        topic,
+        partition,
+        diskless,
+        leader,
+    } = setup;
     let partition_dir = root.join(format!("{topic}-{partition}"));
     std::fs::create_dir_all(&partition_dir).unwrap();
     let mut log = Log::open(&partition_dir, LogConfig::default()).unwrap();
@@ -61,25 +80,4 @@ pub(super) async fn test_index_log() -> crate::diskless::index_log::DisklessInde
     .unwrap()
 }
 
-/// One keyed range, with each scenario supplying its timestamps and byte size.
-pub(super) fn flush_record(
-    topic_id: uuid::Uuid,
-    object_key: &str,
-    (first_offset, last_offset, max_timestamp_ms): (i64, i64, i64),
-    byte_len: u32,
-) -> crate::diskless::wal_index::WalFlushRecord {
-    use crate::diskless::wal_index::{WalFlushRecord, WalIndexEntry};
-    WalFlushRecord {
-        object_key: object_key.into(),
-        format_version: WalFlushRecord::FORMAT_VERSION,
-        entries: vec![WalIndexEntry {
-            topic_id,
-            partition: 0,
-            first_offset,
-            last_offset,
-            byte_start: 0,
-            byte_len,
-            max_timestamp_ms,
-        }],
-    }
-}
+pub(super) use crate::diskless::index_log::test_support::flush_record;

@@ -139,10 +139,12 @@ mod tests {
     fn image_with_topic(topic: &str, leader: u64) -> MetadataImage {
         crate::test_support::topic_partition_image(topic, 2, || {
             crate::handlers::test_support::replicated_partition(
-                topic,
-                0,
-                krabka_audit::NodeId(leader),
-                &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                crate::handlers::test_support::ReplicatedPartitionSetup {
+                    topic,
+                    leader: krabka_audit::NodeId(leader),
+                    replicas: &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                    ..Default::default()
+                },
             )
         })
     }

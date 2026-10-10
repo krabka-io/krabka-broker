@@ -121,10 +121,11 @@ pub(super) async fn seed_partition(broker: &Broker) {
             MetadataRecord::V1Partition(PartitionRecord {
                 leader_epoch: krabka_metadata::LeaderEpoch(5),
                 ..crate::handlers::test_support::replicated_partition(
-                    "t",
-                    0,
-                    krabka_metadata::NodeId(1),
-                    &[krabka_metadata::NodeId(1)],
+                    crate::handlers::test_support::ReplicatedPartitionSetup {
+                        topic: "t",
+                        replicas: &[krabka_metadata::NodeId(1)],
+                        ..Default::default()
+                    },
                 )
             }),
         ])

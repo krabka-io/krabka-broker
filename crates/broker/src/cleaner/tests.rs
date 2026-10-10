@@ -4,7 +4,6 @@
 
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
-use krabka_metadata::NodeId;
 use krabka_units::secs;
 use qubit_clock::Timer;
 
@@ -22,10 +21,10 @@ async fn run_ticks_until_shutdown() {
     let registry = Arc::new(PartitionRegistry::new());
     let partition = compactable_partition(
         &dir,
-        "run-compact",
-        0,
-        NodeId(7),
-        krabka_log::CleanupPolicy::Compact,
+        crate::cleaner::test_support::CompactionSetup {
+            topic: "run-compact",
+            ..Default::default()
+        },
     )
     .await;
     let before = record_count(&partition);

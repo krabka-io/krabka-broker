@@ -230,12 +230,15 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
     for (topic, topic_id, leader, replicas, leader_epoch, excluded) in leader_changed_cases {
         submit_metadata_topic_partition(
             &handle,
-            (topic, topic_id),
-            0,
-            leader,
-            replicas,
-            replicas,
-            leader_epoch,
+            crate::broker::test_support::MetadataPartitionSetup {
+                topic,
+                topic_id,
+                leader,
+                replicas,
+                isr: replicas,
+                leader_epoch,
+                ..Default::default()
+            },
         )
         .await;
         assert!(
@@ -257,12 +260,13 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
 
     submit_metadata_topic_partition(
         &handle,
-        ("isr-len-mutant-topic", 0xF005),
-        0,
-        1,
-        &[1, 2],
-        &[1, 2],
-        3,
+        crate::broker::test_support::MetadataPartitionSetup {
+            topic: "isr-len-mutant-topic",
+            topic_id: 0xF005,
+            replicas: &[1, 2],
+            isr: &[1, 2],
+            ..Default::default()
+        },
     )
     .await;
     assert!(

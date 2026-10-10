@@ -172,14 +172,15 @@ impl FetchSessionCache {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_protocol::{
-        owned::fetch_request::ForgottenTopic, primitives::uuid::Uuid as WireUuid,
-    };
+    use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
     use super::*;
     use crate::fetch_session::{
         SessionDecision,
-        test_support::{NAME_FETCH_VERSION, req, topic},
+        test_support::{
+            ForgottenTopicSetup, NAME_FETCH_VERSION, SessionRequestSetup, forgotten_topic, req,
+            topic,
+        },
     };
 
     #[test]
@@ -271,13 +272,16 @@ mod tests {
 
         // Incremental that forgets partition 1 and adds partitions 2 and 3:
         // net partition count goes 2 -> 3.
-        let forgotten = vec![ForgottenTopic {
-            topic: "t".into(),
-            topic_id: WireUuid::ZERO,
+        let forgotten = vec![forgotten_topic(ForgottenTopicSetup {
             partitions: vec![1],
             ..Default::default()
-        }];
-        let r = req(id, 1, vec![topic("t", &[0, 2, 3])], forgotten);
+        })];
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            topics: vec![topic("t", &[0, 2, 3])],
+            forgotten,
+        });
         assert!(matches!(
             cache.classify(&r, NAME_FETCH_VERSION),
             SessionDecision::Incremental { .. }
@@ -300,7 +304,12 @@ mod tests {
             vec![cached_partition(0), cached_partition(1)],
         );
 
-        let r = req(id, 1, vec![topic("t", &[0, 1, 2, 3, 4])], vec![]);
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            topics: vec![topic("t", &[0, 1, 2, 3, 4])],
+            ..Default::default()
+        });
         assert!(matches!(
             cache.classify(&r, NAME_FETCH_VERSION),
             SessionDecision::Incremental { .. }
@@ -324,14 +333,17 @@ mod tests {
                 cached_partition(4),
             ],
         );
-        let forgotten = vec![ForgottenTopic {
-            topic: "t".into(),
-            topic_id: WireUuid::ZERO,
+        let forgotten = vec![forgotten_topic(ForgottenTopicSetup {
             partitions: vec![2, 3, 4],
             ..Default::default()
-        }];
+        })];
 
-        let r = req(id, 1, vec![], forgotten);
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            forgotten,
+            ..Default::default()
+        });
         assert!(matches!(
             cache.classify(&r, NAME_FETCH_VERSION),
             SessionDecision::Incremental { .. }

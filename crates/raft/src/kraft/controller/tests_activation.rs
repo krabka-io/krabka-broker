@@ -330,12 +330,17 @@ async fn the_records_of_the_bootstrap_checkpoint_reach_the_image_through_the_log
     // The election timeout is long, so only the injected timeout elects.
     let ctrl = crate::kraft::controller::test_support::open_test_controller_with(
         dir.path().to_path_buf(),
-        uuid::Uuid::nil(),
-        voters.clone(),
-        secs(60),
-        Activation {
-            bootstrap_records: vec![feature(METADATA_VERSION_FEATURE, EARLIER_METADATA_VERSION)],
-            ..Activation::default()
+        crate::kraft::controller::test_support::ControllerOpenSetup {
+            voters: voters.clone(),
+            election_timeout: secs(60),
+            activation: Activation {
+                bootstrap_records: vec![feature(
+                    METADATA_VERSION_FEATURE,
+                    EARLIER_METADATA_VERSION,
+                )],
+                ..Activation::default()
+            },
+            ..Default::default()
         },
     )
     .expect("open");

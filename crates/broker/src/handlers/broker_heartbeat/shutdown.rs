@@ -132,12 +132,14 @@ mod tests {
         ];
         for case in cases {
             let node = |id: &u64| NodeId(*id);
-            let isr: Vec<NodeId> = case.isr.iter().map(node).collect();
             let mut image = image_with_dir_partition(
-                NodeId(case.leader),
-                &[NodeId(1), NodeId(2)],
-                &isr,
-                &[Uuid::nil(), Uuid::nil()],
+                crate::handlers::broker_heartbeat::test_support::ElectionSetup {
+                    leader: case.leader,
+                    replicas: &[1, 2],
+                    isr: case.isr,
+                    dirs: &[Uuid::nil(), Uuid::nil()],
+                    ..Default::default()
+                },
             );
             crate::leader_election::test_support::mark_witnesses_in_image(
                 &mut image,

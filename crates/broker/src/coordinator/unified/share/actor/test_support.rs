@@ -99,16 +99,28 @@ pub(super) async fn heartbeat(
 /// Seeds the group behind `handle` with `partitions` of `topic` already
 /// initialized, as bootstrap replay of a `ShareGroupStatePartitionMetadata`
 /// record would.
+#[derive(krabka_macros::FieldDefaults)]
+pub(super) struct InitializedTopicSetup<'a> {
+    pub topic_id: Uuid,
+    #[default("t")]
+    pub topic_name: &'a str,
+    #[default(vec![0])]
+    pub partitions: Vec<i32>,
+}
+
 pub(super) async fn seed_initialized(
     handle: &ShareGroupActorHandle,
-    topic_id: Uuid,
-    topic_name: &str,
-    partitions: Vec<i32>,
+    setup: InitializedTopicSetup<'_>,
 ) {
     use crate::coordinator::unified::{
         ShareGroupSeed,
         share::persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
     };
+    let InitializedTopicSetup {
+        topic_id,
+        topic_name,
+        partitions,
+    } = setup;
     handle
         .tx
         .send(ShareGroupActorMessage::Seed(ShareGroupSeed {

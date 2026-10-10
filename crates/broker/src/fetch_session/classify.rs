@@ -195,19 +195,23 @@ impl FetchSessionCache {
 mod tests {
     use assert2::{assert, check};
     use krabka_protocol::{
-        owned::fetch_request::{FetchPartition, FetchTopic, ForgottenTopic},
+        owned::fetch_request::{FetchPartition, FetchTopic},
         primitives::uuid::Uuid as WireUuid,
     };
 
     use super::*;
     use crate::fetch_session::test_support::{
-        NAME_FETCH_VERSION, error_code, req, seed_resolved_partition, topic,
+        ForgottenTopicSetup, NAME_FETCH_VERSION, SessionRequestSetup, error_code, forgotten_topic,
+        req, seed_resolved_partition, topic,
     };
 
     #[test]
     fn sessionless_request_is_classified_correctly() {
         let cache = FetchSessionCache::new(10);
-        let r = req(0, FINAL_EPOCH, vec![], vec![]);
+        let r = req(SessionRequestSetup {
+            session_epoch: FINAL_EPOCH,
+            ..Default::default()
+        });
         assert!(matches!(
             cache.classify(&r, NAME_FETCH_VERSION),
             SessionDecision::Sessionless
@@ -217,7 +221,11 @@ mod tests {
     #[test]
     fn new_session_request_is_classified_correctly() {
         let cache = FetchSessionCache::new(10);
-        let r = req(0, INITIAL_EPOCH, vec![topic("t", &[0])], vec![]);
+        let r = req(SessionRequestSetup {
+            session_epoch: INITIAL_EPOCH,
+            topics: vec![topic("t", &[0])],
+            ..Default::default()
+        });
         assert!(matches!(
             cache.classify(&r, NAME_FETCH_VERSION),
             SessionDecision::NewSession
@@ -227,7 +235,11 @@ mod tests {
     #[test]
     fn unknown_session_id_returns_not_found() {
         let cache = FetchSessionCache::new(10);
-        let r = req(12345, 1, vec![], vec![]);
+        let r = req(SessionRequestSetup {
+            session_id: 12345,
+            session_epoch: 1,
+            ..Default::default()
+        });
         assert!(error_code(&cache, &r, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
     }
 
@@ -236,7 +248,11 @@ mod tests {
         let cache = FetchSessionCache::new(10);
         let id = cache.try_allocate(false, false, "alice".into(), vec![]);
         // Session's expected next_epoch is 1; send epoch=99.
-        let r = req(id, 99, vec![], vec![]);
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 99,
+            ..Default::default()
+        });
         assert!(error_code(&cache, &r, NAME_FETCH_VERSION) == codes::INVALID_FETCH_SESSION_EPOCH);
     }
 
@@ -304,7 +320,14 @@ mod tests {
                 "alice".into(),
                 vec![(key, CachedPartitionState::default())],
             );
-            let decision = cache.classify(&req(id, case.epoch, vec![], vec![]), case.version);
+            let decision = cache.classify(
+                &req(SessionRequestSetup {
+                    session_id: id,
+                    session_epoch: case.epoch,
+                    ..Default::default()
+                }),
+                case.version,
+            );
             let code = match decision {
                 SessionDecision::Error { code } => Some(code),
                 SessionDecision::Incremental { .. } => None,
@@ -319,7 +342,11 @@ mod tests {
     fn close_request_closes_the_session_inline() {
         let cache = FetchSessionCache::new(10);
         let id = cache.try_allocate(false, false, "alice".into(), vec![]);
-        let r = req(id, FINAL_EPOCH, vec![], vec![]);
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: FINAL_EPOCH,
+            ..Default::default()
+        });
         assert!(matches!(
             cache.classify(&r, NAME_FETCH_VERSION),
             SessionDecision::Sessionless
@@ -327,7 +354,11 @@ mod tests {
         // classify() already dropped the session; nothing left to close.
         assert!(cache.len() == 0);
         // Subsequent classify with the same id is now NOT_FOUND.
-        let r2 = req(id, 1, vec![], vec![]);
+        let r2 = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            ..Default::default()
+        });
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
     }
 
@@ -398,7 +429,11 @@ mod tests {
                 RequestId::Existing => cache.try_allocate(false, false, "alice".into(), vec![]),
                 RequestId::Fixed(id) => id,
             };
-            let r = req(requested_id, case.epoch, vec![], vec![]);
+            let r = req(SessionRequestSetup {
+                session_id: requested_id,
+                session_epoch: case.epoch,
+                ..Default::default()
+            });
             match (cache.classify(&r, NAME_FETCH_VERSION), case.want) {
                 (SessionDecision::Sessionless, Want::Sessionless)
                 | (SessionDecision::NewSession, Want::NewSession) => {}
@@ -431,7 +466,12 @@ mod tests {
         let id = cache.try_allocate(false, false, "alice".into(), initial);
 
         // Incremental that updates partition 0's fetch_offset and adds partition 1.
-        let r = req(id, 1, vec![topic("t", &[0, 1])], vec![]);
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            topics: vec![topic("t", &[0, 1])],
+            ..Default::default()
+        });
         match cache.classify(&r, NAME_FETCH_VERSION) {
             SessionDecision::Incremental {
                 session_id,
@@ -446,7 +486,11 @@ mod tests {
         }
 
         // Re-sending with the old epoch fails — broker advanced to 2.
-        let r2 = req(id, 1, vec![], vec![]);
+        let r2 = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            ..Default::default()
+        });
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::INVALID_FETCH_SESSION_EPOCH);
     }
 
@@ -507,12 +551,12 @@ mod tests {
         let id = seed_resolved_partition(&cache, tid);
 
         // v ≥ 13 incremental: topic_id set, topic_name empty, new fetch_offset.
-        let r = req(
-            id,
-            1,
-            vec![incremental_topic(String::new(), tid, 42, 2048)],
-            vec![],
-        );
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            topics: vec![incremental_topic(String::new(), tid, 42, 2048)],
+            ..Default::default()
+        });
         let partitions = incremental_partitions(cache.classify(&r, NAME_FETCH_VERSION));
         // No duplicate entry created; the cached (fully-resolved) key is
         // preserved and its desired state updated in place.
@@ -535,12 +579,12 @@ mod tests {
         let tid = WireUuid([9u8; 16]);
         let id = seed_resolved_partition(&cache, tid);
 
-        let r = req(
-            id,
-            1,
-            vec![incremental_topic("t".into(), WireUuid::ZERO, 99, 4096)],
-            vec![],
-        );
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            topics: vec![incremental_topic("t".into(), WireUuid::ZERO, 99, 4096)],
+            ..Default::default()
+        });
         let partitions = incremental_partitions(cache.classify(&r, NAME_FETCH_VERSION));
         let expected = vec![(
             FetchSessionKey {
@@ -584,13 +628,16 @@ mod tests {
         ];
         let id = cache.try_allocate(false, false, "alice".into(), initial);
 
-        let forgotten = vec![ForgottenTopic {
-            topic: "t".into(),
-            topic_id: WireUuid::ZERO,
+        let forgotten = vec![forgotten_topic(ForgottenTopicSetup {
             partitions: vec![1],
             ..Default::default()
-        }];
-        let r = req(id, 1, vec![], forgotten);
+        })];
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            forgotten,
+            ..Default::default()
+        });
         match cache.classify(&r, NAME_FETCH_VERSION) {
             SessionDecision::Incremental { partitions, .. } => {
                 let mut parts: Vec<i32> = partitions.iter().map(|(k, _)| k.partition).collect();
@@ -620,13 +667,13 @@ mod tests {
             vec![(key, CachedPartitionState::default())],
         );
 
-        let forgotten = vec![ForgottenTopic {
-            topic: "t".into(),
-            topic_id: WireUuid::ZERO,
-            partitions: vec![0],
+        let forgotten = vec![forgotten_topic(ForgottenTopicSetup::default())];
+        let r = req(SessionRequestSetup {
+            session_id: id,
+            session_epoch: 1,
+            forgotten,
             ..Default::default()
-        }];
-        let r = req(id, 1, vec![], forgotten);
+        });
         match cache.classify(&r, NAME_FETCH_VERSION) {
             SessionDecision::Incremental {
                 session_id,

@@ -221,7 +221,14 @@ pub(super) fn commit_record_for_group(
     partition: i32,
     offset: i64,
 ) -> krabka_protocol::records::Record {
-    crate::coordinator::test_support::offset_record(group, "t", partition, offset)
+    crate::coordinator::test_support::offset_record(
+        crate::coordinator::test_support::OffsetRecordSetup {
+            group,
+            partition,
+            offset,
+            ..Default::default()
+        },
+    )
 }
 
 /// Write each `(key, value)` record (a `None` value is a tombstone) to a fresh

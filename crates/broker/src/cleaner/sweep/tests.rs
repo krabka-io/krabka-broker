@@ -12,10 +12,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::{
-    cleaner::test_support::{
-        block_compaction_swap, compactable_partition, compactable_partition_in_registry,
-        compactable_partition_with_config, record_count,
-    },
+    cleaner::test_support::{block_compaction_swap, compactable_partition, record_count},
     metrics::{CleanerFailureLabel, CleanerFailureReason},
 };
 
@@ -30,8 +27,14 @@ async fn hosted_compact_partition() -> HostedCompactPartition {
     let dir = tempfile::tempdir().expect("log root");
     let status = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
     let registry = PartitionRegistry::new();
-    let partition =
-        compactable_partition_in_registry(&dir, "orders", NodeId(7), status.clone()).await;
+    let partition = compactable_partition(
+        &dir,
+        crate::cleaner::test_support::CompactionSetup {
+            log_dir_status: status.clone(),
+            ..Default::default()
+        },
+    )
+    .await;
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
     HostedCompactPartition {
         dir,
@@ -96,7 +99,19 @@ async fn tick_all_compacts_every_hosted_compact_topic_whoever_leads_it() {
     ];
     let mut cases = Vec::new();
     for (topic, leader, policy, expect_compacted) in specs {
-        let partition = compactable_partition(&dir, topic, 0, NodeId(leader), policy).await;
+        let partition = compactable_partition(
+            &dir,
+            crate::cleaner::test_support::CompactionSetup {
+                topic,
+                leader: NodeId(leader),
+                cfg: krabka_log::LogConfig {
+                    cleanup_policy: policy,
+                    ..crate::cleaner::test_support::CompactionSetup::default().cfg
+                },
+                ..Default::default()
+            },
+        )
+        .await;
         let before = record_count(&partition);
         registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
         cases.push((topic, partition, before, expect_compacted));
@@ -144,8 +159,15 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
         min_cleanable_dirty_ratio: krabka_units::fraction(1.0),
         ..Default::default()
     };
-    let partition =
-        compactable_partition_with_config(&dir, "too-clean", 0, NodeId(7), base.clone()).await;
+    let partition = compactable_partition(
+        &dir,
+        crate::cleaner::test_support::CompactionSetup {
+            topic: "too-clean",
+            cfg: base.clone(),
+            ..Default::default()
+        },
+    )
+    .await;
     let before = record_count(&partition);
     registry.insert(
         "too-clean".into(),

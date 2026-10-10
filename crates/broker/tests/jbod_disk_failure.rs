@@ -254,7 +254,12 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
     let dir_uuid = uuid::Uuid::from_u128(0xCAFE_BABE);
 
     // for_tests default broker_id; assign partition 0 to the arbitrary directory.
-    let req = assignment_dirs_request(1, broker_epoch, dir_uuid, topic_uuid, &[0]);
+    let req = assignment_dirs_request(DirectoryAssignmentSetup {
+        broker_epoch,
+        dir: dir_uuid,
+        topic: topic_uuid,
+        ..Default::default()
+    });
 
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).unwrap();

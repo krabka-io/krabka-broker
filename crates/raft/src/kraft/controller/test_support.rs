@@ -111,20 +111,34 @@ pub fn open_test_controller(
 ) -> Result<KraftController, RaftError> {
     open_test_controller_with(
         data_dir,
-        cluster_id,
-        voters,
-        TEST_ELECTION_TIMEOUT,
-        crate::kraft::Activation::default(),
+        ControllerOpenSetup {
+            cluster_id,
+            voters,
+            ..Default::default()
+        },
     )
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub struct ControllerOpenSetup {
+    pub cluster_id: uuid::Uuid,
+    #[default(voter_set(&[NodeId(1)]))]
+    pub voters: VoterSet,
+    #[default(TEST_ELECTION_TIMEOUT)]
+    pub election_timeout: krabka_units::Time,
+    pub activation: crate::kraft::Activation,
 }
 
 pub fn open_test_controller_with(
     data_dir: std::path::PathBuf,
-    cluster_id: uuid::Uuid,
-    voters: VoterSet,
-    election_timeout: krabka_units::Time,
-    activation: crate::kraft::Activation,
+    setup: ControllerOpenSetup,
 ) -> Result<KraftController, RaftError> {
+    let ControllerOpenSetup {
+        cluster_id,
+        voters,
+        election_timeout,
+        activation,
+    } = setup;
     KraftController::open(
         data_dir,
         NodeId(1),
@@ -441,13 +455,17 @@ pub fn single_voter_leader_engine() -> (Engine, tempfile::TempDir) {
     (engine, dir)
 }
 
+pub async fn elect_single_voter_controller(ctrl: &KraftController) {
+    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
+    await_leader(ctrl, Some(NodeId(1))).await;
+}
+
 pub async fn single_voter_leader() -> (KraftController, tempfile::TempDir) {
     let (ctrl, dir) = build(ControllerSetup {
         ids: &[NodeId(1)],
         ..Default::default()
     });
-    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-    await_leader(&ctrl, Some(NodeId(1))).await;
+    elect_single_voter_controller(&ctrl).await;
     (ctrl, dir)
 }
 

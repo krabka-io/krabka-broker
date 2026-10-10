@@ -48,6 +48,19 @@ async fn seed_alice_tokens(controller: &ControllerHandle) {
     .await;
 }
 
+async fn seed_admin_minted_token(controller: &ControllerHandle) {
+    seed_token(
+        controller,
+        TokenSetup {
+            token_id: "t-minted",
+            requester: Some(kp("admin")),
+            renewers: vec![kp("bob")],
+            ..Default::default()
+        },
+    )
+    .await;
+}
+
 fn peer() -> SocketAddr {
     "127.0.0.1:0".parse().unwrap()
 }
@@ -505,16 +518,7 @@ async fn requester_of_a_token_minted_for_another_owner_finds_and_sees_it() {
     ];
 
     token_fixture!(dir, controller, secret);
-    seed_token(
-        &controller,
-        TokenSetup {
-            token_id: "t-minted",
-            requester: Some(kp("admin")),
-            renewers: vec![kp("bob")],
-            ..Default::default()
-        },
-    )
-    .await;
+    seed_admin_minted_token(&controller).await;
     seed_token(
         &controller,
         TokenSetup {
@@ -566,16 +570,7 @@ async fn describe_response_reports_the_requester_that_created_the_token() {
     };
 
     token_fixture!(dir, controller, secret);
-    seed_token(
-        &controller,
-        TokenSetup {
-            token_id: "t-minted",
-            requester: Some(kp("admin")),
-            renewers: vec![kp("bob")],
-            ..Default::default()
-        },
-    )
-    .await;
+    seed_admin_minted_token(&controller).await;
 
     let resp = describe(
         &no_owner_filter(),

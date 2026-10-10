@@ -135,12 +135,14 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     let partition_isr = [partition_leader, handle.node_id()];
     submit_metadata_topic_partition(
         &handle,
-        (topic, 0xCAFE),
-        0,
-        partition_leader,
-        &partition_isr,
-        &partition_isr,
-        3,
+        crate::broker::test_support::MetadataPartitionSetup {
+            topic,
+            topic_id: 0xCAFE,
+            leader: partition_leader,
+            replicas: &partition_isr,
+            isr: &partition_isr,
+            ..Default::default()
+        },
     )
     .await;
     handle.wait_until_partition_present(topic, 0).await;
@@ -206,7 +208,14 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     assert!(!snapshot.bytes.is_empty());
 
     let local_topic = "handle-local-log-mutant-topic";
-    let local_part = local_partition_with_records(dir.path(), local_topic, 0, &[b"a", b"b"]);
+    let local_part = local_partition_with_records(
+        dir.path(),
+        crate::broker::test_support::LocalPartitionSetup {
+            topic: local_topic,
+            values: &[b"a", b"b"],
+            ..Default::default()
+        },
+    );
     assert!(!handle.partition_exists_for_test(local_topic, 0));
     broker.partitions.insert(
         local_topic.into(),
@@ -243,7 +252,13 @@ async fn start_default_broker(dir: &std::path::Path) -> (BrokerHandle, Arc<Broke
 async fn start_and_shutdown_clean() {
     let dir = tempdir().unwrap();
     let (handle, broker, addr) = start_default_broker(dir.path()).await;
-    let partition = local_partition_with_records(dir.path(), "shutdown", 0, &[]);
+    let partition = local_partition_with_records(
+        dir.path(),
+        crate::broker::test_support::LocalPartitionSetup {
+            topic: "shutdown",
+            ..Default::default()
+        },
+    );
     broker
         .partitions
         .insert("shutdown".into(), PartitionIndex(0), partition.clone());
@@ -273,7 +288,13 @@ async fn start_and_shutdown_clean() {
 async fn dropping_handle_stops_idle_connections_and_partition_writers() {
     let dir = tempdir().unwrap();
     let (handle, broker, addr) = start_default_broker(dir.path()).await;
-    let partition = local_partition_with_records(dir.path(), "drop-shutdown", 0, &[]);
+    let partition = local_partition_with_records(
+        dir.path(),
+        crate::broker::test_support::LocalPartitionSetup {
+            topic: "drop-shutdown",
+            ..Default::default()
+        },
+    );
     broker
         .partitions
         .insert("drop-shutdown".into(), PartitionIndex(0), partition.clone());

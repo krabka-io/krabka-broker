@@ -96,7 +96,16 @@ async fn partition(
     topic_id: u128,
     leader: u64,
 ) -> Arc<Partition> {
-    crate::handlers::test_support::seed_replicated_topic(broker, topic, topic_id, leader).await;
+    crate::handlers::test_support::seed_partition_replicas(
+        broker,
+        crate::handlers::test_support::ReplicatedTopicSetup {
+            topic,
+            topic_id: uuid::Uuid::from_u128(topic_id),
+            leader: krabka_metadata::NodeId(leader),
+            ..Default::default()
+        },
+    )
+    .await;
 
     wait_for_local_partition!(
         (shared, partition),

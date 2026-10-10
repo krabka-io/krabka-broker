@@ -867,13 +867,50 @@ pub(crate) mod fixture {
         default_scenario(name, krabka_units::bytes(100))
     }
 
-    pub(crate) fn empty_run(
-        scenario: Scenario,
-        stack: Stack,
-        topology: Topology,
-        producer_rate: Frequency,
-        samples: Vec<Sample>,
-    ) -> RunOutput {
+    pub(crate) struct RunSetup<'a> {
+        pub scenario: &'a str,
+        pub stack: Stack,
+        pub topology: Topology,
+        pub producer_rate: Frequency,
+        pub samples: Vec<Sample>,
+        pub broker_samples: Vec<BrokerSample>,
+        pub p99: Time,
+    }
+
+    impl Default for RunSetup<'_> {
+        fn default() -> Self {
+            Self {
+                scenario: "small-msg",
+                stack: Stack::Krabka,
+                topology: Topology {
+                    partitions: 100,
+                    replication_factor: 3,
+                    broker_count: 6,
+                },
+                producer_rate: krabka_units::per_sec(1000),
+                samples: vec![],
+                broker_samples: vec![],
+                p99: Time::ZERO,
+            }
+        }
+    }
+
+    pub(crate) fn empty_run(setup: RunSetup<'_>) -> RunOutput {
+        let RunSetup {
+            scenario: name,
+            stack,
+            topology,
+            producer_rate,
+            samples,
+            broker_samples,
+            p99,
+        } = setup;
+        let scenario = Scenario {
+            mode_tag: ModeTag::Cluster,
+            partitions: topology.partitions,
+            replication_factor: topology.replication_factor,
+            ..scenario(name)
+        };
         RunOutput {
             scenario,
             stack,
@@ -884,7 +921,10 @@ pub(crate) mod fixture {
                 producer_rate,
                 ..Throughput::default()
             },
-            producer_latency: LatencyPercentiles::default(),
+            producer_latency: LatencyPercentiles {
+                p99,
+                ..LatencyPercentiles::default()
+            },
             consumer_e2e_latency: LatencyPercentiles::default(),
             resource: Resource::default(),
             disturbance: None,
@@ -893,7 +933,7 @@ pub(crate) mod fixture {
             errors: vec![],
             notes: vec![],
             samples,
-            broker_samples: vec![],
+            broker_samples,
         }
     }
 

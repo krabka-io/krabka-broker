@@ -53,7 +53,14 @@ fn image_with_freeze(scope: &str) -> MetadataImage {
 async fn a_sweep_deletes_expired_segments_and_the_log_size_follows() {
     let dir = tempfile::tempdir().expect("log root");
     let registry = PartitionRegistry::new();
-    let partition = expired_partition(&dir, "orders", NodeId(7), LogDirRegistry::default()).await;
+    let partition = expired_partition(
+        &dir,
+        crate::test_support::CommittedPartitionSetup {
+            leader: NodeId(7),
+            ..Default::default()
+        },
+    )
+    .await;
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
     let before_files = segment_files(&dir, "orders");
     let before_size = log_size(&partition);
@@ -97,7 +104,15 @@ async fn a_sweep_trims_a_follower_replica_as_well_as_a_led_one() {
     let cases = [("led", NodeId(7)), ("followed", NodeId(8))];
     let mut observed: Vec<(&str, Arc<Partition>, Vec<String>)> = Vec::new();
     for (topic, leader) in cases {
-        let partition = expired_partition(&dir, topic, leader, LogDirRegistry::default()).await;
+        let partition = expired_partition(
+            &dir,
+            crate::test_support::CommittedPartitionSetup {
+                topic,
+                leader,
+                ..Default::default()
+            },
+        )
+        .await;
         let before = segment_files(&dir, topic);
         registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
         observed.push((topic, partition, before));
@@ -127,7 +142,15 @@ async fn a_sweep_trims_a_follower_replica_as_well_as_a_led_one() {
 async fn a_frozen_topic_is_not_trimmed_until_it_thaws() {
     let dir = tempfile::tempdir().expect("log root");
     let registry = PartitionRegistry::new();
-    let partition = expired_partition(&dir, "frozen", NodeId(7), LogDirRegistry::default()).await;
+    let partition = expired_partition(
+        &dir,
+        crate::test_support::CommittedPartitionSetup {
+            topic: "frozen",
+            leader: NodeId(7),
+            ..Default::default()
+        },
+    )
+    .await;
     registry.insert("frozen".into(), PartitionIndex(0), Arc::clone(&partition));
     let before = segment_files(&dir, "frozen");
 
@@ -165,7 +188,15 @@ async fn a_failed_deletion_is_counted_and_takes_the_log_dir_offline() {
     let dir = tempfile::tempdir().expect("log root");
     let status = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
     let registry = PartitionRegistry::new();
-    let partition = expired_partition(&dir, "orders", NodeId(7), status.clone()).await;
+    let partition = expired_partition(
+        &dir,
+        crate::test_support::CommittedPartitionSetup {
+            leader: NodeId(7),
+            registry: status.clone(),
+            ..Default::default()
+        },
+    )
+    .await;
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
     // A directory where the eviction must rename each segment to its
     // `.deleted` tombstone: the rename fails with EISDIR, which is a storage

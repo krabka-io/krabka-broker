@@ -107,10 +107,12 @@ mod tests {
             directories: vec![bad, good],
             partition_epoch: 1,
             ..crate::handlers::test_support::replicated_partition(
-                "t",
-                0,
-                krabka_audit::NodeId(2),
-                &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                crate::handlers::test_support::ReplicatedPartitionSetup {
+                    topic: "t",
+                    leader: krabka_audit::NodeId(2),
+                    replicas: &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                    ..Default::default()
+                },
             )
         })];
         assert!(changes == expected_changes);
@@ -189,10 +191,12 @@ mod tests {
 
     fn two_replica_image(directories: &[Uuid]) -> krabka_metadata::MetadataImage {
         image_with_dir_partition(
-            krabka_audit::NodeId(1),
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            directories,
+            crate::handlers::broker_heartbeat::test_support::ElectionSetup {
+                replicas: &[1, 2],
+                isr: &[1, 2],
+                dirs: directories,
+                ..Default::default()
+            },
         )
     }
 

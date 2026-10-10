@@ -346,24 +346,37 @@ mod tests {
         spool::PendingLosses,
     };
 
+    struct MemoryWriterSetup {
+        capacity: usize,
+        checkpoints: crate::log::test_support::CheckpointSetup,
+    }
+
+    impl Default for MemoryWriterSetup {
+        fn default() -> Self {
+            Self {
+                capacity: 16,
+                checkpoints: crate::log::test_support::CheckpointSetup {
+                    checkpoint_every_n: 1_000_000,
+                    ..Default::default()
+                },
+            }
+        }
+    }
+
     fn memory_writer(
         directory: &std::path::Path,
-        capacity: usize,
-        signer: Option<Arc<FileEd25519Signer>>,
-        checkpoint_every_n: u64,
+        setup: MemoryWriterSetup,
     ) -> (Arc<AuditLog>, Arc<MemorySink>, tokio::task::JoinHandle<()>) {
+        let MemoryWriterSetup {
+            capacity,
+            checkpoints,
+        } = setup;
         let spool = Spool::open(directory, ROOMY_CAP).unwrap();
         let (log, receiver) = AuditLog::new(capacity);
         let sink = Arc::new(MemorySink::default());
         let handle = spawn_writer(
             receiver,
-            crate::log::test_support::quiet_params(
-                sink.clone(),
-                spool,
-                Arc::new(AuditStats::new()),
-                signer,
-                checkpoint_every_n,
-            ),
+            crate::log::test_support::quiet_params(sink.clone(), spool, checkpoints),
         );
         (log, sink, handle)
     }
@@ -377,7 +390,17 @@ mod tests {
     fn signed_writer(capacity: usize, checkpoint_every_n: u64) -> SignedWriterFixture {
         let (signer, public_key) = test_signer();
         let directory = tempfile::tempdir().unwrap();
-        let writer = memory_writer(directory.path(), capacity, Some(signer), checkpoint_every_n);
+        let writer = memory_writer(
+            directory.path(),
+            MemoryWriterSetup {
+                capacity,
+                checkpoints: crate::log::test_support::CheckpointSetup {
+                    signer: Some(signer),
+                    checkpoint_every_n,
+                    ..Default::default()
+                },
+            },
+        );
         (public_key, directory, writer)
     }
 
@@ -415,7 +438,7 @@ mod tests {
     #[tokio::test]
     async fn emitted_events_reach_the_sink_in_order() {
         let dir = tempfile::tempdir().unwrap();
-        let (log, sink, handle) = memory_writer(dir.path(), 16, None, 1_000_000);
+        let (log, sink, handle) = memory_writer(dir.path(), MemoryWriterSetup::default());
 
         log.emit(life(1));
         log.emit(life(2));
@@ -435,7 +458,7 @@ mod tests {
     async fn chained_records_carry_seq_and_prev_hash() {
         let dir = tempfile::tempdir().unwrap();
         // no signer, huge interval => no checkpoints, just chaining
-        let (log, sink, h) = memory_writer(dir.path(), 16, None, 1_000_000);
+        let (log, sink, h) = memory_writer(dir.path(), MemoryWriterSetup::default());
         log.emit(life(1));
         log.emit(life(2));
         finish_writer(log, h).await;

@@ -368,7 +368,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::handlers::alter_partition_reassignments::test_support::{img_with, img_with_epoch};
+    use crate::{
+        handlers::alter_partition_reassignments::test_support::{ReassignmentImageSetup, img_with},
+        test_support::ReassignmentSetup,
+    };
 
     fn nodes(ids: &[u64]) -> Vec<NodeId> {
         ids.iter().copied().map(NodeId).collect()
@@ -519,7 +522,17 @@ mod tests {
         ];
         for (label, (replicas, isr, adding, removing, leader), target, allow_rf, expected) in cases
         {
-            let image = img_with_epoch(replicas, isr, adding, removing, leader, 11);
+            let image = img_with(ReassignmentImageSetup {
+                assignment: ReassignmentSetup {
+                    replicas,
+                    isr,
+                    adding,
+                    removing,
+                    leader,
+                    ..Default::default()
+                },
+                partition_epoch: 11,
+            });
             let planned = process_one_partition(&image, "foo", 0, Some(target), allow_rf, true);
             check!(planned == Ok(expected), "case {label}");
         }
@@ -571,7 +584,17 @@ mod tests {
             ),
         ];
         for (label, (replicas, isr, adding, removing, leader), unclean, expected) in cases {
-            let mut image = img_with_epoch(replicas, isr, adding, removing, leader, 11);
+            let mut image = img_with(ReassignmentImageSetup {
+                assignment: ReassignmentSetup {
+                    replicas,
+                    isr,
+                    adding,
+                    removing,
+                    leader,
+                    ..Default::default()
+                },
+                partition_epoch: 11,
+            });
             if unclean {
                 image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                     topic: "foo".into(),
@@ -693,7 +716,7 @@ mod tests {
                 (NO_REASSIGNMENT_IN_PROGRESS, NO_REASSIGNMENT_MESSAGE.into()),
             ),
         ];
-        let image = img_with(&[1, 2, 3], &[1, 2, 3], &[], &[], 1);
+        let image = img_with(ReassignmentImageSetup::default());
         for (label, topic, partition, target, allow_rf, expected) in cases {
             let planned = process_one_partition(&image, topic, partition, target, allow_rf, true);
             check!(planned == Err(expected), "case {label}");
@@ -703,7 +726,16 @@ mod tests {
     #[test]
     fn the_replication_factor_check_counts_the_set_the_partition_is_headed_for() {
         // replicas [1,2,3,4], adding [4], removing [2]: headed for [1,3,4].
-        let image = img_with(&[1, 2, 3, 4], &[1, 3, 4], &[4], &[2], 1);
+        let image = img_with(ReassignmentImageSetup {
+            assignment: ReassignmentSetup {
+                replicas: &[1, 2, 3, 4],
+                isr: &[1, 3, 4],
+                adding: &[4],
+                removing: &[2],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
 
         let error = process_one_partition(&image, "foo", 0, Some(&[1, 3]), false, true)
             .expect_err("a two-replica target changes the factor");
@@ -719,7 +751,10 @@ mod tests {
 
     #[test]
     fn start_rejects_an_exhausted_partition_epoch() {
-        let image = img_with_epoch(&[1, 2, 3], &[1, 2, 3], &[], &[], 1, i32::MAX);
+        let image = img_with(ReassignmentImageSetup {
+            partition_epoch: i32::MAX,
+            ..Default::default()
+        });
         let error = process_one_partition(&image, "foo", 0, Some(&[1, 4]), true, true)
             .expect_err("exhausted epoch must fail closed");
         assert!(error.0 == INVALID_REQUEST);
@@ -740,7 +775,17 @@ mod tests {
             ),
         ] {
             let (replicas, isr, adding, removing, leader) = state;
-            let mut image = img_with(replicas, isr, adding, removing, leader);
+            let mut image = img_with(ReassignmentImageSetup {
+                assignment: ReassignmentSetup {
+                    replicas,
+                    isr,
+                    adding,
+                    removing,
+                    leader,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
             let mut seeded = image.partition("foo", 0).expect("seeded partition").clone();
             seeded.leader_epoch = LeaderEpoch(i32::MAX);
             image.apply(&MetadataRecord::V1Partition(seeded));
@@ -764,11 +809,18 @@ mod tests {
         let cases = [
             (
                 "a reassignment is in progress",
-                img_with(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1),
+                img_with(ReassignmentImageSetup {
+                    assignment: ReassignmentSetup {
+                        adding: &[3],
+                        removing: &[2],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
             ),
             (
                 "nothing to cancel",
-                img_with(&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
+                img_with(ReassignmentImageSetup::default()),
             ),
         ];
         for (label, img) in cases {
@@ -788,7 +840,7 @@ mod tests {
 
     #[test]
     fn a_start_is_never_gated() {
-        let img = img_with(&[1, 2, 3], &[1, 2, 3], &[], &[], 1);
+        let img = img_with(ReassignmentImageSetup::default());
         let res = process_one_partition(&img, "foo", 0, Some(&[1, 2, 4]), true, false)
             .expect("a start needs no approval")
             .expect("Some");

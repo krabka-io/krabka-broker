@@ -154,7 +154,15 @@ async fn replicated_partition(
     topic: &str,
     topic_id: u128,
 ) -> (Arc<Partition>, RecordBatch) {
-    crate::handlers::test_support::seed_replicated_topic(broker, topic, topic_id, 1).await;
+    crate::handlers::test_support::seed_partition_replicas(
+        broker,
+        crate::handlers::test_support::ReplicatedTopicSetup {
+            topic,
+            topic_id: uuid::Uuid::from_u128(topic_id),
+            ..Default::default()
+        },
+    )
+    .await;
 
     let shared = broker.broker_arc_for_test();
     let follower = krabka_raft::NodeId(2);

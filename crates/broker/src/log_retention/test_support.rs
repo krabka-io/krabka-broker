@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use krabka_metadata::NodeId;
 use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::TempDir;
 
@@ -36,11 +35,9 @@ fn epoch_batch(base: i64, value: &[u8]) -> RecordBatch {
 /// expiry the moment the sweep looks at it.
 pub(super) async fn expired_partition(
     root: &TempDir,
-    topic: &str,
-    leader: NodeId,
-    log_dir_status: crate::log_dir_status::LogDirRegistry,
+    setup: crate::test_support::CommittedPartitionSetup<'_>,
 ) -> Arc<Partition> {
-    let part_dir = crate::log_dir::partition_dir(root.path(), topic, 0);
+    let part_dir = crate::log_dir::partition_dir(root.path(), setup.topic, setup.partition.0);
     std::fs::create_dir_all(&part_dir).expect("create partition dir");
     let cfg = krabka_log::LogConfig {
         segment_size: krabka_units::bytes(64),
@@ -52,17 +49,7 @@ pub(super) async fn expired_partition(
         let mut batch = epoch_batch(idx, format!("value-{idx}").as_bytes());
         log.append(&mut batch).expect("append expired batch");
     }
-    crate::test_support::committed_partition(
-        root.path(),
-        log,
-        crate::test_support::CommittedPartitionSetup {
-            topic,
-            leader,
-            registry: log_dir_status,
-            ..Default::default()
-        },
-    )
-    .await
+    crate::test_support::committed_partition(root.path(), log, setup).await
 }
 
 /// The base offsets of the segment files currently on disk for `topic`.

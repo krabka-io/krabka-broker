@@ -438,35 +438,6 @@ pub(crate) fn topic_partition_image(
     image
 }
 
-/// The directory-aware partition image used by controller failover fixtures.
-pub(crate) fn directory_partition_image(
-    leader: NodeId,
-    replicas: impl ExactSizeIterator<Item = NodeId>,
-    isr: impl Iterator<Item = NodeId>,
-    directories: &[uuid::Uuid],
-) -> MetadataImage {
-    let mut image = MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: "t".into(),
-        topic_id: uuid::Uuid::nil(),
-        partitions: 1,
-        replication_factor: i16::try_from(replicas.len()).unwrap(),
-    }));
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "t".into(),
-        partition: 0,
-        leader,
-        replicas: replicas.collect(),
-        isr: isr.collect(),
-        leader_epoch: krabka_metadata::LeaderEpoch(5),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: directories.to_vec(),
-        partition_epoch: 0,
-    }));
-    image
-}
-
 krabka_macros::topic_record_fixture!(single_partition_topic);
 
 /// Seeds the one-partition reassignment fixtures with the fixed leader epoch.
@@ -493,6 +464,10 @@ impl Default for ReassignmentSetup<'_> {
     }
 }
 
+pub(crate) fn replica_nodes(ids: &[u64]) -> Vec<NodeId> {
+    ids.iter().copied().map(NodeId).collect()
+}
+
 pub(crate) fn reassignment_partition(setup: ReassignmentSetup<'_>) -> PartitionRecord {
     let ReassignmentSetup {
         replicas,
@@ -506,11 +481,11 @@ pub(crate) fn reassignment_partition(setup: ReassignmentSetup<'_>) -> PartitionR
         topic: "foo".into(),
         partition: 0,
         leader: NodeId(leader),
-        replicas: replicas.iter().copied().map(NodeId).collect(),
-        isr: isr.iter().copied().map(NodeId).collect(),
+        replicas: replica_nodes(replicas),
+        isr: replica_nodes(isr),
         leader_epoch: krabka_metadata::LeaderEpoch(5),
-        adding_replicas: adding.iter().copied().map(NodeId).collect(),
-        removing_replicas: removing.iter().copied().map(NodeId).collect(),
+        adding_replicas: replica_nodes(adding),
+        removing_replicas: replica_nodes(removing),
         directories: directories.to_vec(),
         partition_epoch: 0,
     }
@@ -544,12 +519,32 @@ pub(crate) fn elr_model_image(
 }
 
 /// A single-partition ISR proposal with epochs read explicitly by its caller.
-pub(crate) fn alter_partition_request(
-    topic_id: WireUuid,
-    broker: (i32, i64),
-    partition: (i32, i32),
-    new_isr: &[i32],
-) -> AlterPartitionRequest {
+#[derive(Clone, Copy)]
+pub(crate) struct IsrProposalSetup<'a> {
+    pub topic_id: WireUuid,
+    pub broker: (i32, i64),
+    pub partition: (i32, i32),
+    pub new_isr: &'a [i32],
+}
+
+impl Default for IsrProposalSetup<'_> {
+    fn default() -> Self {
+        Self {
+            topic_id: WireUuid::default(),
+            broker: (1, 0),
+            partition: (0, 0),
+            new_isr: &[1],
+        }
+    }
+}
+
+pub(crate) fn alter_partition_request(setup: IsrProposalSetup<'_>) -> AlterPartitionRequest {
+    let IsrProposalSetup {
+        topic_id,
+        broker,
+        partition,
+        new_isr,
+    } = setup;
     AlterPartitionRequest {
         broker_id: broker.0,
         broker_epoch: broker.1,
@@ -582,10 +577,10 @@ pub(crate) async fn propose_isr(
     // The controller checks the sender's broker epoch and the row's partition
     // epoch. Keep the two image snapshots in the original request-read order.
     let image = broker.controller.current_image();
-    let request = alter_partition_request(
+    let request = alter_partition_request(IsrProposalSetup {
         topic_id,
-        (1, image.broker_epoch(NodeId(1)).unwrap_or(-1)),
-        (
+        broker: (1, image.broker_epoch(NodeId(1)).unwrap_or(-1)),
+        partition: (
             leader_epoch,
             broker
                 .controller
@@ -595,7 +590,7 @@ pub(crate) async fn propose_isr(
                 .partition_epoch,
         ),
         new_isr,
-    );
+    });
     crate::handlers::alter_partition::handle(broker, request, version, &ctx)
         .await
         .expect("AlterPartition")

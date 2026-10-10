@@ -240,7 +240,13 @@ mod tests {
         let broker = handle.broker_arc_for_test();
 
         let helper_topic = "handle-partition-helper-mutant-topic";
-        let helper_part = local_partition_with_records(dir.path(), helper_topic, 0, &[]);
+        let helper_part = local_partition_with_records(
+            dir.path(),
+            crate::broker::test_support::LocalPartitionSetup {
+                topic: helper_topic,
+                ..Default::default()
+            },
+        );
         let helper_config = krabka_log::LogConfig {
             retention: Some(secs(123)),
             segment_size: kibibytes(4),

@@ -112,3 +112,46 @@ impl MetadataEventLog for RacingAppendLog {
         self.inner.subscribe(assignment)
     }
 }
+
+/// One input WAL range; timestamps and byte spans vary only where a case needs them.
+#[derive(Clone, Copy)]
+pub(crate) struct WalFlushSetup<'a> {
+    pub topic_id: uuid::Uuid,
+    pub object_key: &'a str,
+    pub offsets: (i64, i64, i64),
+    pub byte_len: u32,
+}
+
+impl Default for WalFlushSetup<'_> {
+    fn default() -> Self {
+        Self {
+            topic_id: uuid::Uuid::from_u128(7),
+            object_key: "object-a",
+            offsets: (0, 3, 0),
+            byte_len: 10,
+        }
+    }
+}
+
+pub(crate) fn flush_record(setup: WalFlushSetup<'_>) -> crate::diskless::wal_index::WalFlushRecord {
+    use crate::diskless::wal_index::{WalFlushRecord, WalIndexEntry};
+    let WalFlushSetup {
+        topic_id,
+        object_key,
+        offsets: (first_offset, last_offset, max_timestamp_ms),
+        byte_len,
+    } = setup;
+    WalFlushRecord {
+        object_key: object_key.into(),
+        format_version: WalFlushRecord::FORMAT_VERSION,
+        entries: vec![WalIndexEntry {
+            topic_id,
+            partition: 0,
+            first_offset,
+            last_offset,
+            byte_start: 0,
+            byte_len,
+            max_timestamp_ms,
+        }],
+    }
+}

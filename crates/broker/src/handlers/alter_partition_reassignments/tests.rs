@@ -18,7 +18,9 @@ use super::*;
 use crate::{
     broker::Broker,
     codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
-    handlers::alter_partition_reassignments::test_support::{request, test_context},
+    handlers::alter_partition_reassignments::test_support::{
+        ReassignmentRequestSetup, request, test_context,
+    },
     test_support::{DenyAll, FreezeSetup, start_broker_with_authorizer as start_broker, test_ctx},
 };
 
@@ -47,10 +49,12 @@ async fn seed_reassignable_partition(broker: &Broker) {
                 leader_epoch: LeaderEpoch(3),
                 partition_epoch: 11,
                 ..crate::handlers::test_support::replicated_partition(
-                    "orders",
-                    7,
-                    NodeId(1),
-                    &[NodeId(1)],
+                    crate::handlers::test_support::ReplicatedPartitionSetup {
+                        partition: 7,
+                        leader: NodeId(1),
+                        replicas: &[NodeId(1)],
+                        ..Default::default()
+                    },
                 )
             }),
         ])
@@ -85,10 +89,12 @@ async fn seed_cancellable_partition(broker: &Broker) {
         adding_replicas: vec![NodeId(3)],
         partition_epoch: 11,
         ..crate::handlers::test_support::replicated_partition(
-            "orders",
-            7,
-            NodeId(1),
-            &[NodeId(1), NodeId(2), NodeId(3)],
+            crate::handlers::test_support::ReplicatedPartitionSetup {
+                partition: 7,
+                leader: NodeId(1),
+                replicas: &[NodeId(1), NodeId(2), NodeId(3)],
+                ..Default::default()
+            },
         )
     }));
     records.push(MetadataRecord::V1TopicConfig(
@@ -124,9 +130,18 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     seed_cancellable_partition(&broker).await;
     test_ctx!(ctx, "admin");
 
-    let resp = handle(&broker, request(true, "orders", 7, None), version, &ctx)
-        .await
-        .expect("handle");
+    let resp = handle(
+        &broker,
+        request(ReassignmentRequestSetup {
+            allow_replication_factor_change: true,
+            replicas: None,
+            ..Default::default()
+        }),
+        version,
+        &ctx,
+    )
+    .await
+    .expect("handle");
     assert!(resp.responses[0].partitions[0].error_code == 0, "{resp:?}");
 
     let image = broker.controller.current_image();
@@ -154,7 +169,11 @@ async fn handle_preserves_unknown_partition_response_shape() {
 
     let resp = handle(
         &broker,
-        request(false, "payments", 8, Some(vec![1, 2])),
+        request(ReassignmentRequestSetup {
+            topic: "payments",
+            partition_index: 8,
+            ..Default::default()
+        }),
         version,
         &ctx,
     )
@@ -197,7 +216,12 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
 
             let resp = handle(
                 &broker,
-                request(allow_rf_change, "payments", 8, Some(vec![1, 2])),
+                request(ReassignmentRequestSetup {
+                    allow_replication_factor_change: allow_rf_change,
+                    topic: "payments",
+                    partition_index: 8,
+                    ..Default::default()
+                }),
                 version,
                 &ctx,
             )
@@ -235,7 +259,10 @@ async fn handle_submits_successful_reassignment_records() {
 
     let resp = handle(
         &broker,
-        request(true, "orders", 7, Some(vec![1, 2])),
+        request(ReassignmentRequestSetup {
+            allow_replication_factor_change: true,
+            ..Default::default()
+        }),
         version,
         &ctx,
     )
@@ -287,7 +314,10 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
 
     let response = handle(
         &broker,
-        request(true, "orders", 7, Some(vec![1, 2])),
+        request(ReassignmentRequestSetup {
+            allow_replication_factor_change: true,
+            ..Default::default()
+        }),
         version,
         &ctx,
     )

@@ -33,17 +33,49 @@ pub(super) const NAME_FETCH_VERSION: i16 = super::FIRST_TOPIC_ID_FETCH_VERSION -
 /// allocation a strictly greater last-use stamp than the previous one.
 pub(super) const TICK: std::time::Duration = std::time::Duration::from_nanos(1);
 
-pub(super) fn req(
-    session_id: i32,
-    session_epoch: i32,
-    topics: Vec<FetchTopic>,
-    forgotten: Vec<ForgottenTopic>,
-) -> FetchRequest {
+#[derive(Default)]
+pub(super) struct SessionRequestSetup {
+    pub session_id: i32,
+    pub session_epoch: i32,
+    pub topics: Vec<FetchTopic>,
+    pub forgotten: Vec<ForgottenTopic>,
+}
+
+pub(super) fn req(setup: SessionRequestSetup) -> FetchRequest {
+    let SessionRequestSetup {
+        session_id,
+        session_epoch,
+        topics,
+        forgotten,
+    } = setup;
     FetchRequest {
         session_id,
         session_epoch,
         topics,
         forgotten_topics_data: forgotten,
+        ..Default::default()
+    }
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub(super) struct ForgottenTopicSetup {
+    #[default("t".into())]
+    pub topic: String,
+    pub topic_id: WireUuid,
+    #[default(vec![0])]
+    pub partitions: Vec<i32>,
+}
+
+pub(super) fn forgotten_topic(setup: ForgottenTopicSetup) -> ForgottenTopic {
+    let ForgottenTopicSetup {
+        topic,
+        topic_id,
+        partitions,
+    } = setup;
+    ForgottenTopic {
+        topic,
+        topic_id,
+        partitions,
         ..Default::default()
     }
 }

@@ -30,7 +30,10 @@ async fn last_consumer_member_leaving_downgrades_to_classic() {
     let (coord, log) = make_coordinator_with_topic("t", 2);
 
     // Seed a classic group with one classic member subscribed to "t".
-    let handle = seed_classic_member(&coord, "m-classic", "t", None);
+    let handle = seed_classic_member(
+        &coord,
+        crate::coordinator::unified::actor::test_support::ClassicMemberSetup::default(),
+    );
 
     // The only native consumer joins and leaves, driving both migration flips.
     crate::coordinator::unified::actor::test_support::upgrade_with_transient_native(&handle, "t")
@@ -64,7 +67,13 @@ async fn last_consumer_member_leaving_downgrades_to_classic() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn upgrade_then_downgrade_round_trip() {
     let (coord, _log) = bidirectional_coordinator();
-    let handle = seed_classic_member(&coord, "m1", "t", None);
+    let handle = seed_classic_member(
+        &coord,
+        crate::coordinator::unified::actor::test_support::ClassicMemberSetup {
+            member_id: "m1",
+            ..Default::default()
+        },
+    );
 
     // A native consumer "c1" heartbeats → in-place UPGRADE; the group is now
     // consumer-kind and hosts both m1 (classic facade) and c1.
@@ -144,7 +153,14 @@ async fn classic_leave_of_last_native_member_triggers_downgrade() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn static_member_identity_survives_both_flips() {
     let (coord, _log) = bidirectional_coordinator();
-    let handle = seed_classic_member(&coord, "m1", "t", Some("inst-a"));
+    let handle = seed_classic_member(
+        &coord,
+        crate::coordinator::unified::actor::test_support::ClassicMemberSetup {
+            member_id: "m1",
+            instance_id: Some("inst-a"),
+            ..Default::default()
+        },
+    );
 
     // Upgrade via a native consumer heartbeat, then downgrade by having that
     // native member leave.
@@ -178,7 +194,13 @@ async fn policy_disabled_keeps_group_classic() {
     use crate::coordinator::unified::config::ConsumerGroupMigrationPolicy;
     let (coord, _log) =
         make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Disabled);
-    let handle = seed_classic_member(&coord, "m1", "t", None);
+    let handle = seed_classic_member(
+        &coord,
+        crate::coordinator::unified::actor::test_support::ClassicMemberSetup {
+            member_id: "m1",
+            ..Default::default()
+        },
+    );
 
     // A native consumer heartbeat must be rejected (no upgrade is allowed).
     let resp = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
@@ -207,7 +229,13 @@ async fn policy_disabled_keeps_group_classic() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn committed_offsets_survive_a_flip() {
     let (coord, _log) = bidirectional_coordinator();
-    let handle = seed_classic_member(&coord, "m1", "t", None);
+    let handle = seed_classic_member(
+        &coord,
+        crate::coordinator::unified::actor::test_support::ClassicMemberSetup {
+            member_id: "m1",
+            ..Default::default()
+        },
+    );
 
     // Record a committed offset for ("t", 0) via the kind-agnostic path.
     let rx = rpc::begin(&handle, |tx| GroupActorMessage::UpdateCommitted {

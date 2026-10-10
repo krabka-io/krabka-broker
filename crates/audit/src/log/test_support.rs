@@ -189,13 +189,24 @@ pub fn params(sink: Arc<dyn AuditSink>, spool: Spool, stats: Arc<AuditStats>) ->
 }
 
 /// Keep time-based work dormant while a test controls count-based checkpoints.
+#[derive(krabka_macros::FieldDefaults)]
+pub struct CheckpointSetup {
+    #[default(Arc::new(AuditStats::new()))]
+    pub stats: Arc<AuditStats>,
+    pub signer: Option<Arc<crate::FileEd25519Signer>>,
+    pub checkpoint_every_n: u64,
+}
+
 pub fn quiet_params(
     sink: Arc<dyn AuditSink>,
     spool: Spool,
-    stats: Arc<AuditStats>,
-    signer: Option<Arc<crate::FileEd25519Signer>>,
-    checkpoint_every_n: u64,
+    setup: CheckpointSetup,
 ) -> AuditWriterParams {
+    let CheckpointSetup {
+        stats,
+        signer,
+        checkpoint_every_n,
+    } = setup;
     let mut params = params(sink, spool, stats);
     params.signer = signer;
     params.checkpoint_every_n = checkpoint_every_n;

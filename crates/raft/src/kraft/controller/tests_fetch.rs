@@ -254,6 +254,25 @@ fn inbound_fetch(
 /// response that matches this node's own leader and epoch, so a node that
 /// ignored the newer epoch would keep fetching from node 1 and reject every
 /// answer. An observer hears of a new leader in no other way.
+#[derive(Clone, Copy, Default)]
+enum TwoVoterRole {
+    #[default]
+    Leader,
+    Follower,
+}
+
+fn two_voter_engine(role: TwoVoterRole) -> (Engine, tempfile::TempDir) {
+    let (mut engine, dir) = build_engine_only(EngineSetup {
+        ids: &[NodeId(1), NodeId(2)],
+        ..Default::default()
+    });
+    match role {
+        TwoVoterRole::Leader => elect_with_peer(&mut engine, NodeId(2)),
+        TwoVoterRole::Follower => become_follower(&mut engine, NodeId(2), 3),
+    }
+    (engine, dir)
+}
+
 #[tokio::test]
 async fn a_fetch_response_from_a_newer_epoch_moves_the_node_to_that_leader() {
     for (case, me) in [
@@ -1028,13 +1047,7 @@ async fn quorum_high_watermark_keeps_the_leader_s_watermark_past_the_local_clamp
 /// the watermark on that path would report the worst laggard as caught up.
 #[tokio::test]
 async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
-    let (mut engine, _dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1), NodeId(2)],
-        ..Default::default()
-    });
-    // Only a response that clears the leader/epoch fence is admitted, so put
-    // the node behind node 2 at the epoch the responses below carry.
-    become_follower(&mut engine, NodeId(2), 3);
+    let (mut engine, _dir) = two_voter_engine(TwoVoterRole::Follower);
 
     let redirect = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
@@ -1058,13 +1071,7 @@ async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
 /// quorum's, and an observer that drew level with it would call itself ready.
 #[tokio::test]
 async fn a_lagging_follower_serves_the_quorums_committed_offset() {
-    let (mut engine, _dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1), NodeId(2)],
-        ..Default::default()
-    });
-    // Only a response that clears the leader/epoch fence is admitted, so put
-    // the node behind node 2 at the epoch the responses below carry.
-    become_follower(&mut engine, NodeId(2), 3);
+    let (mut engine, _dir) = two_voter_engine(TwoVoterRole::Follower);
 
     engine.on_fetch_response(
         NodeId(2),
@@ -1192,11 +1199,7 @@ async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
 
 #[tokio::test]
 async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
-    let (mut engine, _dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1), NodeId(2)],
-        ..Default::default()
-    });
-    elect_with_peer(&mut engine, NodeId(2));
+    let (mut engine, _dir) = two_voter_engine(TwoVoterRole::default());
 
     // 1. Before Node 2 fetches, fetch_ms and caught_up_ms are -1
     let snap1 = engine.quorum_state_snapshot();
@@ -1282,11 +1285,7 @@ fn fetch_at(
 /// A single-voter leader whose clock started 50 ms ago, so a fetch is stamped
 /// with a nonzero time.
 fn leader_with_a_running_clock() -> (Engine, tempfile::TempDir) {
-    let (mut engine, dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1)],
-        ..Default::default()
-    });
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, dir) = super::test_support::single_voter_leader_engine();
     engine.clock_base = Instant::now() - StdDuration::from_millis(50);
     (engine, dir)
 }
@@ -1396,11 +1395,7 @@ async fn kraft_controller_metadata_fetch_returns_slice() {
 
 #[tokio::test]
 async fn quorum_state_snapshot_negative_timestamp_fallback() {
-    let (mut engine, _dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1), NodeId(2)],
-        ..Default::default()
-    });
-    elect_with_peer(&mut engine, NodeId(2));
+    let (mut engine, _dir) = two_voter_engine(TwoVoterRole::default());
 
     // When wall_clock_base is before UNIX_EPOCH, duration_since returns Err,
     // so map_or fallback -1 must be returned for all timestamps.

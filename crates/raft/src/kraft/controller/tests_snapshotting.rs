@@ -125,8 +125,7 @@ async fn single_leader_snapshot_fixture() -> (KraftController, tempfile::TempDir
         snapshot_interval_records: 3,
         ..Default::default()
     });
-    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-    await_leader(&ctrl, Some(NodeId(1))).await;
+    super::test_support::elect_single_voter_controller(&ctrl).await;
     (ctrl, dir)
 }
 

@@ -58,10 +58,12 @@ fn image_with(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
         isr: vec![NodeId(1)],
         leader_epoch: LeaderEpoch(5),
         ..crate::handlers::test_support::replicated_partition(
-            TOPIC,
-            0,
-            NodeId(1),
-            &[NodeId(1), NodeId(2)],
+            crate::handlers::test_support::ReplicatedPartitionSetup {
+                topic: TOPIC,
+                leader: NodeId(1),
+                replicas: &[NodeId(1), NodeId(2)],
+                ..Default::default()
+            },
         )
     }));
     for proposal in proposals {
@@ -78,10 +80,12 @@ fn elected() -> PartitionRecord {
         leader_epoch: LeaderEpoch(6),
         partition_epoch: 1,
         ..crate::handlers::test_support::replicated_partition(
-            TOPIC,
-            0,
-            NodeId(2),
-            &[NodeId(1), NodeId(2)],
+            crate::handlers::test_support::ReplicatedPartitionSetup {
+                topic: TOPIC,
+                leader: NodeId(2),
+                replicas: &[NodeId(1), NodeId(2)],
+                ..Default::default()
+            },
         )
     }
 }

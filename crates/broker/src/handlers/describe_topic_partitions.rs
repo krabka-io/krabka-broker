@@ -439,10 +439,11 @@ mod tests {
                     directories: vec![uuid::Uuid::nil()],
                     partition_epoch: 3,
                     ..crate::handlers::test_support::replicated_partition(
-                        "orders",
-                        0,
-                        NodeId(1),
-                        &[NodeId(1)],
+                        crate::handlers::test_support::ReplicatedPartitionSetup {
+                            leader: NodeId(1),
+                            replicas: &[NodeId(1)],
+                            ..Default::default()
+                        },
                     )
                 }),
             ])
@@ -870,10 +871,12 @@ mod tests {
                 directories: vec![uuid::Uuid::nil(); 3],
                 partition_epoch: 4,
                 ..crate::handlers::test_support::replicated_partition(
-                    "orders",
-                    index,
-                    NodeId(1),
-                    &[NodeId(1), NodeId(2), NodeId(3)],
+                    crate::handlers::test_support::ReplicatedPartitionSetup {
+                        partition: index,
+                        leader: NodeId(1),
+                        replicas: &[NodeId(1), NodeId(2), NodeId(3)],
+                        ..Default::default()
+                    },
                 )
             })
         };

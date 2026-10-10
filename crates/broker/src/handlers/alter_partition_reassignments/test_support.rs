@@ -15,12 +15,24 @@ use krabka_protocol::owned::alter_partition_reassignments_request::{
 
 use crate::test_support::ReassignmentSetup;
 
-pub(super) fn request(
-    allow_replication_factor_change: bool,
-    topic: &str,
-    partition_index: i32,
-    replicas: Option<Vec<i32>>,
-) -> AlterPartitionReassignmentsRequest {
+#[derive(krabka_macros::FieldDefaults)]
+pub(super) struct ReassignmentRequestSetup<'a> {
+    pub allow_replication_factor_change: bool,
+    #[default("orders")]
+    pub topic: &'a str,
+    #[default(7)]
+    pub partition_index: i32,
+    #[default(Some(vec![1, 2]))]
+    pub replicas: Option<Vec<i32>>,
+}
+
+pub(super) fn request(setup: ReassignmentRequestSetup<'_>) -> AlterPartitionReassignmentsRequest {
+    let ReassignmentRequestSetup {
+        allow_replication_factor_change,
+        topic,
+        partition_index,
+        replicas,
+    } = setup;
     AlterPartitionReassignmentsRequest {
         timeout_ms: 30_000,
         allow_replication_factor_change,
@@ -39,28 +51,19 @@ pub(super) fn request(
 
 crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 
-/// An image holding topic `foo` with one partition in the given reassignment
-/// state, at partition epoch 0.
-pub(super) fn img_with(
-    replicas: &[u64],
-    isr: &[u64],
-    adding: &[u64],
-    removing: &[u64],
-    leader: u64,
-) -> MetadataImage {
-    img_with_epoch(replicas, isr, adding, removing, leader, 0)
+/// A registered six-broker image with one partition in the supplied reassignment state.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct ReassignmentImageSetup<'a> {
+    pub assignment: ReassignmentSetup<'a>,
+    pub partition_epoch: i32,
 }
 
-/// [`img_with`], with the partition epoch pinned, for the tests that check the
-/// epoch a planned record bumps to.
-pub(super) fn img_with_epoch(
-    replicas: &[u64],
-    isr: &[u64],
-    adding: &[u64],
-    removing: &[u64],
-    leader: u64,
-    partition_epoch: i32,
-) -> MetadataImage {
+pub(super) fn img_with(setup: ReassignmentImageSetup<'_>) -> MetadataImage {
+    let ReassignmentImageSetup {
+        assignment,
+        partition_epoch,
+    } = setup;
+    let replicas = assignment.replicas;
     let mut img = MetadataImage::new(uuid::Uuid::nil());
     // Register brokers 1..=6 so validate_target accepts target lists.
     for n in 1u64..=6 {
@@ -79,14 +82,7 @@ pub(super) fn img_with_epoch(
     }));
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
         partition_epoch,
-        ..crate::test_support::reassignment_partition(ReassignmentSetup {
-            replicas,
-            isr,
-            adding,
-            removing,
-            leader,
-            ..Default::default()
-        })
+        ..crate::test_support::reassignment_partition(assignment)
     }));
     img
 }

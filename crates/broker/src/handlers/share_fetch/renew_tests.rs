@@ -101,12 +101,14 @@ async fn share_acknowledge(
     batches: &[Batch],
 ) -> ShareAcknowledgeResponse {
     let request = crate::handlers::test_support::acknowledge_batches_request(
-        group,
-        "member",
-        epoch,
-        topic_id,
-        (0, batches),
-        true,
+        crate::handlers::test_support::AcknowledgementSetup {
+            group,
+            epoch,
+            topic_id,
+            partition: (0, batches),
+            is_renew_ack: true,
+            ..Default::default()
+        },
     );
     crate::handlers::test_support::share_acknowledge_wire_as(
         broker,

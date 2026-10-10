@@ -335,30 +335,23 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
 
     use crate::handlers::test_support::acl;
 
-    let cluster_create = acl(
-        ResourceType::Cluster,
-        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        PatternType::Literal,
+    let cluster_create = acl(crate::handlers::test_support::AclSetup::cluster(
         AclOperation::Create,
-    );
-    let cluster_delete = acl(
-        ResourceType::Cluster,
-        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        PatternType::Literal,
+    ));
+    let cluster_delete = acl(crate::handlers::test_support::AclSetup::cluster(
         AclOperation::Delete,
-    );
-    let literal_a_delete = acl(
-        ResourceType::Topic,
-        "a",
-        PatternType::Literal,
-        AclOperation::Delete,
-    );
-    let prefixed_app_delete = acl(
-        ResourceType::Topic,
-        "app-",
-        PatternType::Prefixed,
-        AclOperation::Delete,
-    );
+    ));
+    let literal_a_delete = acl(crate::handlers::test_support::AclSetup {
+        resource_name: "a",
+        operation: AclOperation::Delete,
+        ..Default::default()
+    });
+    let prefixed_app_delete = acl(crate::handlers::test_support::AclSetup {
+        resource_name: "app-",
+        pattern_type: PatternType::Prefixed,
+        operation: AclOperation::Delete,
+        ..Default::default()
+    });
 
     let cases = [
         (

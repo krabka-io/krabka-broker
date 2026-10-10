@@ -32,7 +32,14 @@ fn coordinator(log: Arc<InMemoryOffsetsLog>) -> Arc<GroupCoordinator> {
 }
 
 fn commit(topic: &str, partition: i32, offset: i64) -> Record {
-    crate::coordinator::test_support::offset_record("g", topic, partition, offset)
+    crate::coordinator::test_support::offset_record(
+        crate::coordinator::test_support::OffsetRecordSetup {
+            topic,
+            partition,
+            offset,
+            ..Default::default()
+        },
+    )
 }
 
 fn offset_tombstone(topic: &str, partition: i32) -> (Key, Option<Bytes>) {

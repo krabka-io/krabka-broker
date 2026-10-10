@@ -120,7 +120,7 @@ mod tests {
     use crate::fetch_session::{
         SessionDecision,
         order::MIN_EVICTION,
-        test_support::{NAME_FETCH_VERSION, TICK, manual_cache, req},
+        test_support::{NAME_FETCH_VERSION, SessionRequestSetup, TICK, manual_cache, req},
     };
 
     #[test]
@@ -194,7 +194,14 @@ mod tests {
     /// which is what Kafka's `touch` records.
     fn use_session(cache: &FetchSessionCache, id: FetchSessionId, epoch: i32) {
         assert!(matches!(
-            cache.classify(&req(id, epoch, vec![], vec![]), NAME_FETCH_VERSION),
+            cache.classify(
+                &req(SessionRequestSetup {
+                    session_id: id,
+                    session_epoch: epoch,
+                    ..Default::default()
+                }),
+                NAME_FETCH_VERSION
+            ),
             SessionDecision::Incremental { .. }
         ));
     }

@@ -102,16 +102,23 @@ pub(crate) fn scram_users(input: TokenStream) -> Result<TokenStream, ParseError>
 pub(crate) fn assignment_dirs(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = crate::fixtures::name(input)?;
     Ok(moxy::template! {
-        fn {{ name }}(
-            broker_id: i32,
-            broker_epoch: i64,
-            dir: ::uuid::Uuid,
-            topic: ::uuid::Uuid,
-            partitions: &[i32],
-        ) -> ::krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest {
+        #[derive(Clone, Copy, ::krabka_macros::FieldDefaults)]
+        pub(crate) struct DirectoryAssignmentSetup<'a> {
+            #[default(1)]
+            pub broker_id: i32,
+            pub broker_epoch: i64,
+            pub dir: ::uuid::Uuid,
+            #[default(::uuid::Uuid::from_u128(1))]
+            pub topic: ::uuid::Uuid,
+            #[default(&[0])]
+            pub partitions: &'a [i32],
+        }
+
+        pub(crate) fn {{ name }}(setup: DirectoryAssignmentSetup<'_>) -> ::krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest {
             use ::krabka_protocol::owned::assign_replicas_to_dirs_request::{
                 AssignReplicasToDirsRequest, DirectoryData, TopicData, PartitionData,
             };
+            let DirectoryAssignmentSetup { broker_id, broker_epoch, dir, topic, partitions } = setup;
             use ::krabka_protocol::primitives::uuid::Uuid;
             AssignReplicasToDirsRequest {
                 broker_id,

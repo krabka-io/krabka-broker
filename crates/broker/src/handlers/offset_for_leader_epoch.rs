@@ -480,11 +480,14 @@ mod tests {
         leader: u64,
         leader_epoch: i32,
     ) -> std::sync::Arc<Partition> {
-        crate::handlers::test_support::seed_replicated_topic(
+        crate::handlers::test_support::seed_partition_replicas(
             broker_handle,
-            topic,
-            topic_id,
-            leader,
+            crate::handlers::test_support::ReplicatedTopicSetup {
+                topic,
+                topic_id: uuid::Uuid::from_u128(topic_id),
+                leader: krabka_metadata::NodeId(leader),
+                ..Default::default()
+            },
         )
         .await;
 
@@ -732,11 +735,13 @@ mod tests {
         // Node 1 is not a replica of this partition, so it never hosts it.
         crate::handlers::test_support::seed_partition_replicas(
             &broker,
-            "ofle-moved",
-            uuid::Uuid::from_u128(9),
-            krabka_audit::NodeId(2),
-            &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-            3,
+            crate::handlers::test_support::ReplicatedTopicSetup {
+                topic: "ofle-moved",
+                topic_id: uuid::Uuid::from_u128(9),
+                leader: krabka_audit::NodeId(2),
+                replicas: &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+                leader_epoch: 3,
+            },
         )
         .await;
         tokio::time::timeout(std::time::Duration::from_secs(10), async {

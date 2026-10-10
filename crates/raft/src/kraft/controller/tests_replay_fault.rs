@@ -29,9 +29,7 @@ use crate::{
         control_state::voter_set_from_wire,
         records::{decode_control_record, typed_control_batch},
         recovery::{replay_committed, replay_control_records},
-        test_support::{
-            EngineSetup, build_engine_only, elect_single_voter_engine, one_offset_batch, voter_set,
-        },
+        test_support::{one_offset_batch, voter_set},
     },
 };
 
@@ -191,11 +189,7 @@ fn fault_for(value: &[u8], offset: i64) -> Option<MetadataReplayError> {
 /// cannot take. Each row first commits a topic, so a row can name a topic
 /// the image holds.
 fn elected_replay_engine() -> (Engine, tempfile::TempDir, i32) {
-    let (mut engine, dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1)],
-        ..Default::default()
-    });
-    elect_single_voter_engine(&mut engine);
+    let (engine, dir) = super::test_support::single_voter_leader_engine();
     let epoch = i32::try_from(engine.core.quorum_state().leader_epoch).expect("epoch");
     (engine, dir, epoch)
 }

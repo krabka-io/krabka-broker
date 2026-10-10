@@ -168,12 +168,32 @@ pub(crate) fn coordinator_with_config(
 }
 
 /// A nontransactional offset record with the ordinary unversioned fixture fields.
-pub(crate) fn offset_record(
-    group: &str,
-    topic: &str,
-    partition: i32,
-    offset: i64,
-) -> krabka_protocol::records::Record {
+#[derive(Clone, Copy)]
+pub(crate) struct OffsetRecordSetup<'a> {
+    pub group: &'a str,
+    pub topic: &'a str,
+    pub partition: i32,
+    pub offset: i64,
+}
+
+impl Default for OffsetRecordSetup<'_> {
+    fn default() -> Self {
+        Self {
+            group: "g",
+            topic: "t",
+            partition: 0,
+            offset: 0,
+        }
+    }
+}
+
+pub(crate) fn offset_record(setup: OffsetRecordSetup<'_>) -> krabka_protocol::records::Record {
+    let OffsetRecordSetup {
+        group,
+        topic,
+        partition,
+        offset,
+    } = setup;
     let value = crate::coordinator::persistence::OffsetCommitValue {
         offset: krabka_log::Offset(offset),
         leader_epoch: -1,

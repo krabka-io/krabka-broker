@@ -232,13 +232,15 @@ mod tests {
         let mut state = GroupState::new("g");
         for member_id in ["m1", "m2"] {
             let mut m = subscribed_member(
-                member_id,
-                &["t"],
-                crate::coordinator::unified::ClientIdentity {
-                    id: "client-a",
-                    host: "h",
+                crate::coordinator::unified::actor::test_support::ConsumerMemberSetup {
+                    member_id,
+                    client: crate::coordinator::unified::ClientIdentity {
+                        id: "client-a",
+                        host: "h",
+                    },
+                    now: Instant::now(),
+                    ..Default::default()
                 },
-                Instant::now(),
             );
             m.last_seen = Instant::now()
                 .checked_sub(Duration::from_millis(50))

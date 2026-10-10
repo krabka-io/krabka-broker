@@ -462,10 +462,12 @@ async fn an_unfencing_broker_takes_back_a_partition_with_no_leader() {
         leader_epoch: LeaderEpoch(4),
         directories: vec![uuid::Uuid::nil(); 2],
         ..crate::handlers::test_support::replicated_partition(
-            "t",
-            1,
-            NodeId(2),
-            &[NodeId(2), NodeId(3)],
+            crate::handlers::test_support::ReplicatedPartitionSetup {
+                topic: "t",
+                partition: 1,
+                leader: NodeId(2),
+                replicas: &[NodeId(2), NodeId(3)],
+            },
         )
     };
     cluster

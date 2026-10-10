@@ -379,39 +379,11 @@ mod tests {
     use super::*;
     use crate::{
         ids::TimeOffsetMs,
-        scenario::{LatencyPercentiles, ModeTag, Sample, Scenario, Topology},
+        scenario::{
+            Sample,
+            fixture::{RunSetup, empty_run as run},
+        },
     };
-
-    fn run(
-        stack: Stack,
-        scenario: &str,
-        producer_rate: Frequency,
-        p99: Time,
-        samples: Vec<Sample>,
-    ) -> RunOutput {
-        RunOutput {
-            producer_latency: LatencyPercentiles {
-                p99,
-                ..LatencyPercentiles::default()
-            },
-            ..crate::scenario::fixture::empty_run(
-                Scenario {
-                    mode_tag: ModeTag::Cluster,
-                    partitions: 100,
-                    replication_factor: 3,
-                    ..crate::scenario::fixture::scenario(scenario)
-                },
-                stack,
-                Topology {
-                    partitions: 100,
-                    replication_factor: 3,
-                    broker_count: 6,
-                },
-                producer_rate,
-                samples,
-            )
-        }
-    }
 
     fn sample(t: u64, producer_rate: Frequency) -> Sample {
         Sample {
@@ -427,22 +399,31 @@ mod tests {
     #[test]
     fn render_html_embeds_library_bars_and_timeseries() {
         let runs = vec![
-            run(
-                Stack::Krabka,
-                "small-msg",
-                per_sec(1000),
-                millis(5),
-                vec![sample(0, per_sec(1000)), sample(2000, per_sec(1100))],
-            ),
-            run(
-                Stack::Kafka,
-                "small-msg",
-                per_sec(800),
-                millis(7),
-                vec![sample(0, per_sec(800)), sample(2000, per_sec(820))],
-            ),
-            run(Stack::Krabka, "fan-out", per_sec(500), millis(9), vec![]),
-            run(Stack::Kafka, "fan-out", per_sec(400), millis(11), vec![]),
+            run(RunSetup {
+                samples: vec![sample(0, per_sec(1000)), sample(2000, per_sec(1100))],
+                p99: millis(5),
+                ..Default::default()
+            }),
+            run(RunSetup {
+                stack: Stack::Kafka,
+                producer_rate: per_sec(800),
+                samples: vec![sample(0, per_sec(800)), sample(2000, per_sec(820))],
+                p99: millis(7),
+                ..Default::default()
+            }),
+            run(RunSetup {
+                scenario: "fan-out",
+                producer_rate: per_sec(500),
+                p99: millis(9),
+                ..Default::default()
+            }),
+            run(RunSetup {
+                scenario: "fan-out",
+                stack: Stack::Kafka,
+                producer_rate: per_sec(400),
+                p99: millis(11),
+                ..Default::default()
+            }),
         ];
         let html = render_html(&runs, "Krabka vs Strimzi");
 
@@ -480,13 +461,13 @@ mod tests {
     fn web_fragment_has_per_run_and_mean_for_cpu_mem_throughput() {
         use crate::scenario::BrokerSample;
         let mk = |stack, prod: Frequency, cpu: f64, mem: ByteSize| {
-            let mut r = run(
+            let mut r = run(RunSetup {
                 stack,
-                "small-msg",
-                prod,
-                millis(5),
-                vec![sample(0, prod), sample(2000, prod * 1.1)],
-            );
+                producer_rate: prod,
+                samples: vec![sample(0, prod), sample(2000, prod * 1.1)],
+                p99: millis(5),
+                ..Default::default()
+            });
             r.broker_samples = vec![
                 BrokerSample {
                     t_offset_ms: TimeOffsetMs(0),

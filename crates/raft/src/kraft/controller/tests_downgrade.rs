@@ -27,11 +27,7 @@ fn reopen_single_voter(data_dir: std::path::PathBuf) -> Result<KraftController, 
 }
 
 fn uncheckpointed_downgrade() -> (Engine, tempfile::TempDir) {
-    let (mut engine, dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1)],
-        ..Default::default()
-    });
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, dir) = super::test_support::single_voter_leader_engine();
 
     let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(25));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));

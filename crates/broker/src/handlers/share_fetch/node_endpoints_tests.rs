@@ -90,7 +90,14 @@ fn partition(topic: &str, partition: i32, leader: i32, epoch: i32) -> MetadataRe
     let leader = NodeId(u64::try_from(leader).expect("a node id"));
     MetadataRecord::V1Partition(PartitionRecord {
         leader_epoch: LeaderEpoch(epoch),
-        ..crate::handlers::test_support::replicated_partition(topic, partition, leader, &[leader])
+        ..crate::handlers::test_support::replicated_partition(
+            crate::handlers::test_support::ReplicatedPartitionSetup {
+                topic,
+                partition,
+                leader,
+                replicas: &[leader],
+            },
+        )
     })
 }
 

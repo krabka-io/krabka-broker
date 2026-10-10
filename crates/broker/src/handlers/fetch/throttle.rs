@@ -376,10 +376,12 @@ mod tests {
                     vec![NodeId(1)]
                 },
                 ..crate::handlers::test_support::replicated_partition(
-                    "t",
-                    partition,
-                    NodeId(1),
-                    &[NodeId(1), NodeId(2)],
+                    crate::handlers::test_support::ReplicatedPartitionSetup {
+                        topic: "t",
+                        partition,
+                        leader: NodeId(1),
+                        replicas: &[NodeId(1), NodeId(2)],
+                    },
                 )
             }));
         }

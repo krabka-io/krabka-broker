@@ -294,11 +294,13 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
     let topic_id = uuid::Uuid::from_u128(0x51);
     crate::handlers::test_support::seed_partition_replicas(
         &broker,
-        "moved",
-        topic_id,
-        krabka_audit::NodeId(2),
-        &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-        4,
+        crate::handlers::test_support::ReplicatedTopicSetup {
+            topic: "moved",
+            topic_id,
+            leader: krabka_audit::NodeId(2),
+            replicas: &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+            leader_epoch: 4,
+        },
     )
     .await;
     tokio::time::timeout(std::time::Duration::from_secs(10), async {

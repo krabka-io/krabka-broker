@@ -589,11 +589,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("a log root");
         let scheduled = scheduled_partition(
             &dir,
-            "scheduled",
-            DeliveryPolicy::Scheduled,
-            &activations,
-            0,
             &clock,
+            crate::delivery::test_support::ScheduleSetup {
+                activations: &activations,
+                leader: 0,
+                ..Default::default()
+            },
         );
         let ranges = pending_activation_ranges(&scheduled, Offset(0), Offset(6), NOW_MS)
             .await
@@ -611,11 +612,13 @@ mod tests {
         let immediate_dir = tempfile::tempdir().expect("a log root");
         let immediate = scheduled_partition(
             &immediate_dir,
-            "immediate",
-            DeliveryPolicy::Immediate,
-            &activations,
-            0,
             &clock,
+            crate::delivery::test_support::ScheduleSetup {
+                topic: "immediate",
+                policy: DeliveryPolicy::Immediate,
+                activations: &activations,
+                leader: 0,
+            },
         );
         let none = pending_activation_ranges(&immediate, Offset(0), Offset(6), NOW_MS)
             .await

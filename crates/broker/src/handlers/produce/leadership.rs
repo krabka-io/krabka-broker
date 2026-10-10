@@ -429,14 +429,15 @@ mod tests {
                 isr: vec![krabka_audit::NodeId(1)],
                 partition_epoch: 1,
                 ..crate::handlers::test_support::replicated_partition(
-                    "orders",
-                    0,
-                    krabka_audit::NodeId(1),
-                    &[
-                        krabka_audit::NodeId(1),
-                        krabka_audit::NodeId(2),
-                        krabka_audit::NodeId(3),
-                    ],
+                    crate::handlers::test_support::ReplicatedPartitionSetup {
+                        leader: krabka_audit::NodeId(1),
+                        replicas: &[
+                            krabka_audit::NodeId(1),
+                            krabka_audit::NodeId(2),
+                            krabka_audit::NodeId(3),
+                        ],
+                        ..Default::default()
+                    },
                 )
             },
         ));

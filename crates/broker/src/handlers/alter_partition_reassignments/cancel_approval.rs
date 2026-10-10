@@ -179,7 +179,8 @@ mod tests {
     use super::*;
     use crate::{
         break_glass::gate::tests::{APPROVED_PROPOSAL_ID, approved_proposal},
-        handlers::alter_partition_reassignments::test_support::img_with,
+        handlers::alter_partition_reassignments::test_support::{ReassignmentImageSetup, img_with},
+        test_support::ReassignmentSetup,
     };
 
     const NOW_MS: i64 = 60_000;
@@ -205,7 +206,14 @@ mod tests {
 
     /// A partition mid-reassignment, beside the proposals the registry holds.
     fn img_reassigning(proposals: &[krabka_metadata::BreakGlassProposalRecord]) -> MetadataImage {
-        let mut img = img_with(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1);
+        let mut img = img_with(ReassignmentImageSetup {
+            assignment: ReassignmentSetup {
+                adding: &[3],
+                removing: &[2],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
         for proposal in proposals {
             img.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
         }
@@ -368,7 +376,14 @@ mod tests {
         })
         .await;
         let broker = handle.broker_arc_for_test();
-        let image = img_with(&[1, 2], &[1, 2], &[], &[], 1);
+        let image = img_with(ReassignmentImageSetup {
+            assignment: ReassignmentSetup {
+                replicas: &[1, 2],
+                isr: &[1, 2],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
         reassign_env_fixture!((principal, peer, ctx, env), broker, image);
 
         for (label, replicas, altered) in [

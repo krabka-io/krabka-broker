@@ -166,14 +166,7 @@ mod tests {
     /// (resource name, pattern type) pairs the listing must hold.
     type PatternRow<'a> = (i8, Option<&'a str>, &'a [(&'a str, i8)]);
 
-    fn acl(resource_name: &str, principal: &str, operation: AclOperation) -> AclEntry {
-        crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
-            resource_name,
-            principal,
-            operation,
-            ..Default::default()
-        })
-    }
+    use crate::test_support::{AllowAclSetup, allow_acl as acl};
 
     fn request(
         resource_name: Option<&str>,
@@ -245,7 +238,7 @@ mod tests {
         });
         assert!(err == expected_err);
 
-        let desc = acl_description(&acl("orders", "User:alice", AclOperation::Read));
+        let desc = acl_description(&acl(AllowAclSetup::default()));
         let expected_desc = tagged_wire!(AclDescription {
             principal: "User:alice".into(),
             host: "*".into(),
@@ -411,7 +404,10 @@ mod tests {
                 .iter()
                 .map(|(name, pattern_type)| AclEntry {
                     pattern_type: *pattern_type,
-                    ..acl(name, "User:alice", AclOperation::Read)
+                    ..acl(AllowAclSetup {
+                        resource_name: name,
+                        ..Default::default()
+                    })
                 })
                 .collect(),
         )
@@ -583,7 +579,12 @@ mod tests {
 
     #[test]
     fn acl_description_preserves_non_read_operations() {
-        let desc = acl_description(&acl("payments", "User:bob", AclOperation::Write));
+        let desc = acl_description(&acl(AllowAclSetup {
+            resource_name: "payments",
+            principal: "User:bob",
+            operation: AclOperation::Write,
+            ..Default::default()
+        }));
 
         assert!(desc.principal == "User:bob");
         assert!(desc.operation == OPERATION_WRITE);

@@ -333,12 +333,26 @@ krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
 /// A partition with the supplied leader and replicas, initially all in ISR.
 /// Callers keep differing ISR, epoch, directory, and reassignment values explicit.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct ReplicatedPartitionSetup<'a> {
+    #[default("orders")]
+    pub topic: &'a str,
+    pub partition: i32,
+    #[default(krabka_metadata::NodeId(1))]
+    pub leader: krabka_metadata::NodeId,
+    #[default(&[krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)])]
+    pub replicas: &'a [krabka_metadata::NodeId],
+}
+
 pub(crate) fn replicated_partition(
-    topic: &str,
-    partition: i32,
-    leader: krabka_metadata::NodeId,
-    replicas: &[krabka_metadata::NodeId],
+    setup: ReplicatedPartitionSetup<'_>,
 ) -> krabka_metadata::PartitionRecord {
+    let ReplicatedPartitionSetup {
+        topic,
+        partition,
+        leader,
+        replicas,
+    } = setup;
     krabka_metadata::PartitionRecord {
         replicas: replicas.to_vec(),
         isr: replicas.to_vec(),
@@ -346,12 +360,36 @@ pub(crate) fn replicated_partition(
     }
 }
 
-pub(crate) fn acl(
-    resource_type: krabka_metadata::ResourceType,
-    resource_name: &str,
-    pattern_type: krabka_metadata::PatternType,
-    operation: krabka_metadata::AclOperation,
-) -> krabka_metadata::AclEntry {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct AclSetup<'a> {
+    #[default(krabka_metadata::ResourceType::Topic)]
+    pub resource_type: krabka_metadata::ResourceType,
+    #[default("orders")]
+    pub resource_name: &'a str,
+    #[default(krabka_metadata::PatternType::Literal)]
+    pub pattern_type: krabka_metadata::PatternType,
+    #[default(krabka_metadata::AclOperation::Read)]
+    pub operation: krabka_metadata::AclOperation,
+}
+
+impl AclSetup<'_> {
+    pub fn cluster(operation: krabka_metadata::AclOperation) -> Self {
+        Self {
+            resource_type: krabka_metadata::ResourceType::Cluster,
+            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+            operation,
+            ..Default::default()
+        }
+    }
+}
+
+pub(crate) fn acl(setup: AclSetup<'_>) -> krabka_metadata::AclEntry {
+    let AclSetup {
+        resource_type,
+        resource_name,
+        pattern_type,
+        operation,
+    } = setup;
     krabka_metadata::AclEntry {
         resource_type,
         resource_name: resource_name.into(),
@@ -453,35 +491,32 @@ pub(crate) async fn check_denied_topic_cases<T: std::fmt::Debug + PartialEq>(
     broker.shutdown().await;
 }
 
-/// Publish the two metadata records of a two-replica topic separately, as
-/// the replication and epoch handler fixtures originally seeded them.
-pub(crate) async fn seed_replicated_topic(
-    broker: &BrokerHandle,
-    topic: &str,
-    topic_id: u128,
-    leader: u64,
-) {
-    seed_partition_replicas(
-        broker,
-        topic,
-        uuid::Uuid::from_u128(topic_id),
-        krabka_metadata::NodeId(leader),
-        &[krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
-        0,
-    )
-    .await;
+/// Submit the topic before its replicated partition, retaining each fixture's epochs.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct ReplicatedTopicSetup<'a> {
+    #[default("orders")]
+    pub topic: &'a str,
+    #[default(uuid::Uuid::from_u128(1))]
+    pub topic_id: uuid::Uuid,
+    #[default(krabka_metadata::NodeId(1))]
+    pub leader: krabka_metadata::NodeId,
+    #[default(&[krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)])]
+    pub replicas: &'a [krabka_metadata::NodeId],
+    pub leader_epoch: i32,
 }
 
-/// Submit the topic before its replicated partition, retaining each fixture's epochs.
 pub(crate) async fn seed_partition_replicas(
     broker: &BrokerHandle,
-    topic: &str,
-    topic_id: uuid::Uuid,
-    leader: krabka_metadata::NodeId,
-    replicas: &[krabka_metadata::NodeId],
-    leader_epoch: i32,
+    setup: ReplicatedTopicSetup<'_>,
 ) {
     use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+    let ReplicatedTopicSetup {
+        topic,
+        topic_id,
+        leader,
+        replicas,
+        leader_epoch,
+    } = setup;
     broker
         .submit_metadata_record_for_test(MetadataRecord::V1Topic(TopicRecord {
             name: topic.to_owned(),
@@ -495,7 +530,12 @@ pub(crate) async fn seed_partition_replicas(
         .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
             leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
             directories: vec![uuid::Uuid::nil(); replicas.len()],
-            ..replicated_partition(topic, 0, leader, replicas)
+            ..replicated_partition(crate::handlers::test_support::ReplicatedPartitionSetup {
+                topic,
+                leader,
+                replicas,
+                ..Default::default()
+            })
         }))
         .await
         .expect("submit partition record");
@@ -509,39 +549,38 @@ pub(crate) fn default_records_batch(values: &[&'static [u8]]) -> RecordBatch {
     }
 }
 
-pub(crate) fn acknowledge_request(
-    group: &str,
-    member: &str,
-    epoch: i32,
-    topic_id: WireUuid,
-    (first_offset, last_offset): (i64, i64),
-    acknowledge_type: i8,
-) -> krabka_protocol::owned::share_acknowledge_request::ShareAcknowledgeRequest {
-    acknowledge_batches_request(
-        group,
-        member,
-        epoch,
-        topic_id,
-        (0, &[(first_offset, last_offset, &[acknowledge_type])]),
-        false,
-    )
-}
-
 /// A partition index and its ordered acknowledgement ranges, with independent
 /// lifetimes for the range list and its acknowledgement-type slices.
 pub(crate) type PartitionAcknowledgements<'a, 'b> = (i32, &'a [(i64, i64, &'b [i8])]);
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct AcknowledgementSetup<'a, 'b> {
+    #[default("g")]
+    pub group: &'a str,
+    #[default("member")]
+    pub member: &'a str,
+    #[default(1)]
+    pub epoch: i32,
+    pub topic_id: WireUuid,
+    #[default((0, &[]))]
+    pub partition: PartitionAcknowledgements<'a, 'b>,
+    pub is_renew_ack: bool,
+}
+
 pub(crate) fn acknowledge_batches_request(
-    group: &str,
-    member: &str,
-    epoch: i32,
-    topic_id: WireUuid,
-    (partition_index, batches): PartitionAcknowledgements<'_, '_>,
-    is_renew_ack: bool,
+    setup: AcknowledgementSetup<'_, '_>,
 ) -> krabka_protocol::owned::share_acknowledge_request::ShareAcknowledgeRequest {
     use krabka_protocol::owned::share_acknowledge_request::{
         AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch, ShareAcknowledgeRequest,
     };
+    let AcknowledgementSetup {
+        group,
+        member,
+        epoch,
+        topic_id,
+        partition: (partition_index, batches),
+        is_renew_ack,
+    } = setup;
     ShareAcknowledgeRequest {
         group_id: Some(group.into()),
         member_id: Some(member.into()),

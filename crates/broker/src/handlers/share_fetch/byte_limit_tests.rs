@@ -556,13 +556,15 @@ async fn release(
     (first_offset, last_offset): (i64, i64),
 ) {
     let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
-    let request = crate::handlers::test_support::acknowledge_request(
-        group,
-        member,
-        epoch,
-        topic_id,
-        (first_offset, last_offset),
-        RELEASE,
+    let request = crate::handlers::test_support::acknowledge_batches_request(
+        crate::handlers::test_support::AcknowledgementSetup {
+            group,
+            member,
+            epoch,
+            topic_id,
+            partition: (0, &[(first_offset, last_offset, &[RELEASE])]),
+            ..Default::default()
+        },
     );
     let response =
         crate::handlers::test_support::share_acknowledge_wire(broker, version, &request).await;

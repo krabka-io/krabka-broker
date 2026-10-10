@@ -38,11 +38,13 @@ fn source_with(leader: Option<u64>, image: MetadataImage) -> Arc<FakeMetadataSou
 const NODE: u64 = 10;
 
 fn image_with_partition(leader: u64, replicas: &[u64]) -> MetadataImage {
-    crate::test_support::directory_partition_image(
-        NodeId(leader),
-        replicas.iter().copied().map(NodeId),
-        replicas.iter().copied().map(NodeId),
-        &[],
+    crate::leader_election::test_support::img_with_partition(
+        crate::leader_election::test_support::ElectionSetup {
+            leader,
+            replicas,
+            isr: replicas,
+            ..Default::default()
+        },
     )
 }
 
