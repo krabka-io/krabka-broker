@@ -562,7 +562,7 @@ async fn release(
         crate::handlers::test_support::AcknowledgementSetup {
             group,
             member,
-            epoch,
+            epoch: crate::handlers::test_support::ShareSessionEpoch(epoch),
             topic_id,
             partition: (0, &[(first_offset, last_offset, &[RELEASE])]),
             ..Default::default()

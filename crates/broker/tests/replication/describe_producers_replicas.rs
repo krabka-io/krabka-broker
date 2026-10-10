@@ -272,9 +272,9 @@ async fn every_replica_describes_the_producers_of_its_log() {
             &leader,
             topic_id,
             batch(ProducerBatchSetup {
-                producer: IDEMPOTENT,
-                records: 3,
-                max_timestamp: BASE_TIMESTAMP,
+                producer: BatchProducer::from_wire(IDEMPOTENT),
+                records: BatchRecordCount(3),
+                max_timestamp: BatchTimestamp(BASE_TIMESTAMP),
                 ..Default::default()
             }),
         )
@@ -283,10 +283,10 @@ async fn every_replica_describes_the_producers_of_its_log() {
             &leader,
             topic_id,
             batch(ProducerBatchSetup {
-                producer: IDEMPOTENT,
-                base_sequence: 3,
-                records: 2,
-                max_timestamp: BASE_TIMESTAMP + 1,
+                producer: BatchProducer::from_wire(IDEMPOTENT),
+                base_sequence: BatchSequence(3),
+                records: BatchRecordCount(2),
+                max_timestamp: BatchTimestamp(BASE_TIMESTAMP + 1),
                 ..Default::default()
             }),
         )
@@ -297,10 +297,10 @@ async fn every_replica_describes_the_producers_of_its_log() {
     let committed = produce_transactional(
         &leader,
         batch(ProducerBatchSetup {
-            producer: COMMITTED,
-            records: 2,
-            max_timestamp: BASE_TIMESTAMP + 2,
-            transactional: true,
+            producer: BatchProducer::from_wire(COMMITTED),
+            records: BatchRecordCount(2),
+            max_timestamp: BatchTimestamp(BASE_TIMESTAMP + 2),
+            transaction: BatchTransactionMode::Transactional,
             ..Default::default()
         }),
     )
@@ -316,9 +316,9 @@ async fn every_replica_describes_the_producers_of_its_log() {
     let aborted = produce_transactional(
         &leader,
         batch(ProducerBatchSetup {
-            producer: ABORTED,
-            max_timestamp: BASE_TIMESTAMP + 3,
-            transactional: true,
+            producer: BatchProducer::from_wire(ABORTED),
+            max_timestamp: BatchTimestamp(BASE_TIMESTAMP + 3),
+            transaction: BatchTransactionMode::Transactional,
             ..Default::default()
         }),
     )
@@ -335,10 +335,10 @@ async fn every_replica_describes_the_producers_of_its_log() {
     let open = produce_transactional(
         &leader,
         batch(ProducerBatchSetup {
-            producer: OPEN,
-            records: 2,
-            max_timestamp: BASE_TIMESTAMP + 4,
-            transactional: true,
+            producer: BatchProducer::from_wire(OPEN),
+            records: BatchRecordCount(2),
+            max_timestamp: BatchTimestamp(BASE_TIMESTAMP + 4),
+            transaction: BatchTransactionMode::Transactional,
             ..Default::default()
         }),
     )

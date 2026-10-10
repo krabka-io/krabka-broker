@@ -62,7 +62,14 @@ fn image_with_remote_leader(topic: &str) -> MetadataImage {
 /// A partition backed by a real log under `dir`, registered as led by
 /// `LEADER` with `FOLLOWER` as its one in-sync follower.
 fn led_partition(dir: &Path, topic: &str, partition: i32) -> Arc<Partition> {
-    let part = crate::test_support::open_partition(dir, topic, partition);
+    let part = crate::test_support::open_partition(
+        dir,
+        crate::test_support::StandalonePartitionSetup {
+            topic,
+            partition: krabka_ids::PartitionIndex(partition),
+            ..Default::default()
+        },
+    );
     part.current_leader.store(LEADER.0, Ordering::Release);
     part
 }

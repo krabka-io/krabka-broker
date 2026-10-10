@@ -167,12 +167,18 @@ mod tests {
     #[tokio::test]
     async fn run_bumps_shrink_metric_for_leader_partition() {
         let log_dir = tempdir().unwrap();
-        let part = fixture_partition(log_dir.path(), "t", 0);
+        let part = fixture_partition(
+            log_dir.path(),
+            crate::test_support::StandalonePartitionSetup {
+                topic: "t",
+                ..Default::default()
+            },
+        );
         part.current_leader.store(1, Ordering::Release);
         set_replica_state(
             &part,
             IsrSetup {
-                leader_epoch: 10,
+                leader_epoch: krabka_ids::LeaderEpoch(10),
                 stale_followers: &[(NodeId(2), Duration::from_secs(30))],
                 ..Default::default()
             },
@@ -181,8 +187,8 @@ mod tests {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&topic("t", uuid::Uuid::from_u128(1)));
         image.apply(&partition(IsrSetup {
-            leader_epoch: 10,
-            partition_epoch: 4,
+            leader_epoch: krabka_ids::LeaderEpoch(10),
+            partition_epoch: crate::test_support::PartitionEpoch(4),
             ..Default::default()
         }));
 

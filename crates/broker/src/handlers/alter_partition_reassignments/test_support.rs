@@ -15,32 +15,60 @@ use krabka_protocol::owned::alter_partition_reassignments_request::{
 
 use crate::test_support::ReassignmentSetup;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum ReplicationFactorPolicy {
+    #[default]
+    Maintain,
+    PermitChange,
+}
+
+/// Signed wire broker ids also permit the malformed ids used in refusal fixtures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::From, derive_more::Into)]
+pub(super) struct ReplicaBrokerId(pub i32);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ReassignmentTarget {
+    Replicas(Vec<ReplicaBrokerId>),
+    Cancel,
+}
+
+impl Default for ReassignmentTarget {
+    fn default() -> Self {
+        Self::Replicas(vec![ReplicaBrokerId(1), ReplicaBrokerId(2)])
+    }
+}
+
 #[derive(krabka_macros::FieldDefaults)]
 pub(super) struct ReassignmentRequestSetup<'a> {
-    pub allow_replication_factor_change: bool,
+    pub replication_factor_policy: ReplicationFactorPolicy,
     #[default("orders")]
     pub topic: &'a str,
-    #[default(7)]
-    pub partition_index: i32,
-    #[default(Some(vec![1, 2]))]
-    pub replicas: Option<Vec<i32>>,
+    #[default(krabka_ids::PartitionIndex(7))]
+    pub partition_index: krabka_ids::PartitionIndex,
+    pub target: ReassignmentTarget,
 }
 
 pub(super) fn request(setup: ReassignmentRequestSetup<'_>) -> AlterPartitionReassignmentsRequest {
     let ReassignmentRequestSetup {
-        allow_replication_factor_change,
+        replication_factor_policy,
         topic,
         partition_index,
-        replicas,
+        target,
     } = setup;
     AlterPartitionReassignmentsRequest {
         timeout_ms: 30_000,
-        allow_replication_factor_change,
+        allow_replication_factor_change: replication_factor_policy
+            == ReplicationFactorPolicy::PermitChange,
         topics: vec![ReassignableTopic {
             name: topic.into(),
             partitions: vec![ReassignablePartition {
-                partition_index,
-                replicas,
+                partition_index: partition_index.0,
+                replicas: match target {
+                    ReassignmentTarget::Replicas(ids) => {
+                        Some(ids.into_iter().map(|id| id.0).collect())
+                    }
+                    ReassignmentTarget::Cancel => None,
+                },
                 ..Default::default()
             }],
             ..Default::default()
@@ -55,7 +83,7 @@ crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(super) struct ReassignmentImageSetup<'a> {
     pub assignment: ReassignmentSetup<'a>,
-    pub partition_epoch: i32,
+    pub partition_epoch: crate::test_support::PartitionEpoch,
 }
 
 pub(super) fn img_with(setup: ReassignmentImageSetup<'_>) -> MetadataImage {
@@ -81,7 +109,7 @@ pub(super) fn img_with(setup: ReassignmentImageSetup<'_>) -> MetadataImage {
         replication_factor: i16::try_from(replicas.len()).expect("replication factor fits i16"),
     }));
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        partition_epoch,
+        partition_epoch: partition_epoch.0,
         ..crate::test_support::reassignment_partition(assignment)
     }));
     img

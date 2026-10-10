@@ -123,7 +123,7 @@ async fn share_acknowledge(
     let request = crate::handlers::test_support::acknowledge_batches_request(
         crate::handlers::test_support::AcknowledgementSetup {
             group,
-            epoch,
+            epoch: crate::handlers::test_support::ShareSessionEpoch(epoch),
             topic_id,
             partition: (0, &[(first_offset, last_offset, &[ACCEPT])]),
             ..Default::default()

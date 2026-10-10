@@ -143,7 +143,13 @@ async fn seeded_coordinator(entry: TxnEntry, leader: NodeId) -> (Arc<TxnCoordina
     partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),
-        crate::test_support::open_partition(dir.path(), bootstrap::TOPIC, 0),
+        crate::test_support::open_partition(
+            dir.path(),
+            crate::test_support::StandalonePartitionSetup {
+                topic: bootstrap::TOPIC,
+                ..Default::default()
+            },
+        ),
     );
     let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),

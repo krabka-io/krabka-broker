@@ -77,12 +77,12 @@ pub(crate) fn batch_at(activation_ms: i64) -> RecordBatch {
 /// `policy` decides whether the topic schedules delivery. The partition's
 /// [`DeliveryHandles`] read `clock`, so an append and the scheduler agree on
 /// one timeline.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ScheduleSetup<'a> {
     pub topic: &'a str,
     pub policy: DeliveryPolicy,
-    pub activations: &'a [i64],
-    pub leader: u64,
+    pub activations: Vec<crate::test_support::UnixMillis>,
+    pub leader: krabka_ids::NodeId,
 }
 
 impl Default for ScheduleSetup<'_> {
@@ -90,8 +90,8 @@ impl Default for ScheduleSetup<'_> {
         Self {
             topic: "scheduled",
             policy: DeliveryPolicy::Scheduled,
-            activations: &[],
-            leader: 7,
+            activations: vec![],
+            leader: krabka_ids::NodeId(7),
         }
     }
 }
@@ -113,7 +113,7 @@ pub(crate) fn scheduled_partition(
     };
     let batches = activations
         .iter()
-        .map(|activation_ms| batch_at(*activation_ms));
+        .map(|activation_ms| batch_at(activation_ms.0));
     partition_with_batches(
         dir,
         clock,
@@ -133,7 +133,7 @@ pub(crate) struct DeliveryPartitionSetup<'a> {
     pub topic: &'a str,
     pub config: LogConfig,
     pub batches: Vec<RecordBatch>,
-    pub leader: u64,
+    pub leader: krabka_ids::NodeId,
 }
 
 impl Default for DeliveryPartitionSetup<'_> {
@@ -142,7 +142,7 @@ impl Default for DeliveryPartitionSetup<'_> {
             topic: "orders",
             config: LogConfig::default(),
             batches: vec![],
-            leader: 7,
+            leader: krabka_ids::NodeId(7),
         }
     }
 }
@@ -194,7 +194,7 @@ pub(crate) fn partition_with_batches(
         replica_state: Arc::new(tokio::sync::Mutex::new(replica_state)),
         hw_advance_notify: Arc::new(Notify::new()),
         delivery,
-        current_leader: Arc::new(AtomicU64::new(leader)),
+        current_leader: Arc::new(AtomicU64::new(leader.0)),
         current_leader_epoch: Arc::new(AtomicI32::new(0)),
         replication_target: initial_replication_target(None),
         diskless: false,

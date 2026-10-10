@@ -93,7 +93,7 @@ fn partition(topic: &str, partition: i32, leader: i32, epoch: i32) -> MetadataRe
         ..crate::handlers::test_support::replicated_partition(
             crate::handlers::test_support::ReplicatedPartitionSetup {
                 topic,
-                partition,
+                partition: krabka_ids::PartitionIndex(partition),
                 leader,
                 replicas: &[leader],
             },

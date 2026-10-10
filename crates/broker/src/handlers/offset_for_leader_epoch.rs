@@ -437,7 +437,10 @@ mod tests {
         let image = crate::handlers::produce::test_support::image_with_topic("orders", &[1, 2]);
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let partition = crate::test_support::open_partition(dir.path(), "orders", 0);
+        let partition = crate::test_support::open_partition(
+            dir.path(),
+            crate::test_support::StandalonePartitionSetup::default(),
+        );
 
         // (this node, installed leader, refused)
         let cases = [
@@ -740,7 +743,7 @@ mod tests {
                 topic_id: uuid::Uuid::from_u128(9),
                 leader: krabka_audit::NodeId(2),
                 replicas: &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-                leader_epoch: 3,
+                leader_epoch: krabka_ids::LeaderEpoch(3),
             },
         )
         .await;

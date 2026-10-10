@@ -5,7 +5,6 @@
 
 use std::path::Path;
 
-use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig};
 use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 use uuid::Uuid;
@@ -46,11 +45,11 @@ pub(crate) fn open_partition(
 ) {
     let topic = setup.topic;
     let index = setup.partition;
-    let partition_dir = crate::log_dir::partition_dir(dir, topic, index);
+    let partition_dir = crate::log_dir::partition_dir(dir, topic, index.0);
     std::fs::create_dir_all(&partition_dir).expect("create the partition directory");
     let log = Log::open(&partition_dir, LogConfig::default()).expect("open the log");
     let partition = crate::test_support::spawn_standalone_partition(dir, log, setup);
-    registry.insert(topic.into(), PartitionIndex(index), partition);
+    registry.insert(topic.into(), index, partition);
 }
 
 /// A metadata source over `records` that fails the test if the code under test

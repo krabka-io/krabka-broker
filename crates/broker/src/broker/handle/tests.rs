@@ -137,10 +137,18 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
         &handle,
         crate::broker::test_support::MetadataPartitionSetup {
             topic,
-            topic_id: 0xCAFE,
-            leader: partition_leader,
-            replicas: &partition_isr,
-            isr: &partition_isr,
+            topic_id: uuid::Uuid::from_u128(0xCAFE),
+            leader: krabka_ids::NodeId(partition_leader),
+            replicas: partition_isr
+                .iter()
+                .copied()
+                .map(krabka_ids::NodeId)
+                .collect(),
+            isr: partition_isr
+                .iter()
+                .copied()
+                .map(krabka_ids::NodeId)
+                .collect(),
             ..Default::default()
         },
     )

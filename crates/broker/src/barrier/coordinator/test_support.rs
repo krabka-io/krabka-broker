@@ -80,7 +80,7 @@ impl Fixture {
                 dir.path(),
                 crate::test_support::StandalonePartitionSetup {
                     topic: STATE_TOPIC,
-                    partition: p,
+                    partition: krabka_ids::PartitionIndex(p),
                     ..Default::default()
                 },
             );
@@ -92,7 +92,7 @@ impl Fixture {
                     dir.path(),
                     crate::test_support::StandalonePartitionSetup {
                         topic,
-                        partition: p,
+                        partition: krabka_ids::PartitionIndex(p),
                         ..Default::default()
                     },
                 );

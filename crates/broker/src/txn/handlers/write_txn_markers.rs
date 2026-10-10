@@ -309,7 +309,7 @@ mod tests {
     struct PendingOffsetsSetup<'a> {
         group_id: &'a str,
         topic: &'a str,
-        partition: i32,
+        partition: krabka_ids::PartitionIndex,
     }
 
     impl Default for PendingOffsetsSetup<'_> {
@@ -317,7 +317,7 @@ mod tests {
             Self {
                 group_id: "marker-materialization-group",
                 topic: "orders",
-                partition: 2,
+                partition: krabka_ids::PartitionIndex(2),
             }
         }
     }
@@ -338,7 +338,7 @@ mod tests {
         let ack = rpc::begin(&handle, |reply| GroupActorMessage::AddPendingTxnOffsets {
             producer_id: 91,
             written_at: 0,
-            keys: vec![(topic.to_string(), partition)],
+            keys: vec![(topic.to_string(), partition.0)],
             reply,
         })
         .await;
@@ -444,7 +444,14 @@ mod tests {
             let part = match hosting {
                 Hosting::NotHosted => None,
                 Hosting::Led | Hosting::Followed | Hosting::LedInOfflineLogDir => {
-                    let part = open_partition(&broker, &log_dir, "orders", 1);
+                    let part = open_partition(
+                        &broker,
+                        &log_dir,
+                        crate::test_support::StandalonePartitionSetup {
+                            partition: krabka_ids::PartitionIndex(1),
+                            ..Default::default()
+                        },
+                    );
                     let leader = if matches!(hosting, Hosting::Followed) {
                         node_id + 1
                     } else {
@@ -514,7 +521,14 @@ mod tests {
             let broker = broker_handle.broker_arc_for_test();
             let node_id = broker.config.node_id;
             let follower = krabka_metadata::NodeId(node_id.0 + 1);
-            let part = open_partition(&broker, &dir.path().join("markers"), "orders", 1);
+            let part = open_partition(
+                &broker,
+                &dir.path().join("markers"),
+                crate::test_support::StandalonePartitionSetup {
+                    partition: krabka_ids::PartitionIndex(1),
+                    ..Default::default()
+                },
+            );
             part.install_replication_target(None, node_id.0, 3).await;
             // The follower has not fetched, so it holds the high watermark at
             // zero.
@@ -578,9 +592,16 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let node_id = broker.config.node_id.0;
         for partition in [1, 2] {
-            open_partition(&broker, dir.path(), "orders", partition)
-                .install_replication_target(None, node_id, 3)
-                .await;
+            open_partition(
+                &broker,
+                dir.path(),
+                crate::test_support::StandalonePartitionSetup {
+                    partition: krabka_ids::PartitionIndex(partition),
+                    ..Default::default()
+                },
+            )
+            .install_replication_target(None, node_id, 3)
+            .await;
         }
 
         let bytes = handle_allowed(
@@ -791,7 +812,7 @@ mod tests {
                 PendingOffsetsSetup {
                     group_id,
                     topic,
-                    partition,
+                    partition: krabka_ids::PartitionIndex(partition),
                 },
             )
             .await;

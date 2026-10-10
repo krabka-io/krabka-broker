@@ -581,7 +581,13 @@ mod tests {
         }));
 
         let partitions = Arc::new(PartitionRegistry::new());
-        let part = crate::test_support::open_partition(dir, bootstrap::TOPIC, 0);
+        let part = crate::test_support::open_partition(
+            dir,
+            crate::test_support::StandalonePartitionSetup {
+                topic: bootstrap::TOPIC,
+                ..Default::default()
+            },
+        );
         partitions.insert(
             bootstrap::TOPIC.into(),
             PartitionIndex(0),

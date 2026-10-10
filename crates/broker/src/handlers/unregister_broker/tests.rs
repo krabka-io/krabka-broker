@@ -275,7 +275,7 @@ fn replicated_partition(setup: UnregisterPartitionSetup<'_>) -> krabka_metadata:
         ..crate::handlers::test_support::replicated_partition(
             crate::handlers::test_support::ReplicatedPartitionSetup {
                 topic: "t",
-                partition: index,
+                partition: krabka_ids::PartitionIndex(index),
                 leader: NodeId(leader),
                 replicas: &[NodeId(1), NodeId(2)],
             },

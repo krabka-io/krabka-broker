@@ -586,7 +586,7 @@ mod tests {
                     leader,
                     ..Default::default()
                 },
-                partition_epoch: 11,
+                partition_epoch: crate::test_support::PartitionEpoch(11),
             });
             let planned = process_one_partition(&image, "foo", 0, Some(target), allow_rf, true);
             check!(planned == Ok(expected), "case {label}");
@@ -669,7 +669,7 @@ mod tests {
                     leader,
                     ..Default::default()
                 },
-                partition_epoch: 11,
+                partition_epoch: crate::test_support::PartitionEpoch(11),
             });
             if unclean {
                 image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn start_rejects_an_exhausted_partition_epoch() {
         let image = img_with(ReassignmentImageSetup {
-            partition_epoch: i32::MAX,
+            partition_epoch: crate::test_support::PartitionEpoch(i32::MAX),
             ..Default::default()
         });
         let error = process_one_partition(&image, "foo", 0, Some(&[1, 4]), true, true)

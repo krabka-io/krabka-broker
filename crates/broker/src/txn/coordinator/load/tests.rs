@@ -26,7 +26,13 @@ fn image(leader: NodeId, leader_epoch: i32) -> MetadataImage {
 }
 
 fn open_state_partition(dir: &Path) -> Arc<crate::partition::Partition> {
-    crate::test_support::open_partition(dir, bootstrap::TOPIC, 0)
+    crate::test_support::open_partition(
+        dir,
+        crate::test_support::StandalonePartitionSetup {
+            topic: bootstrap::TOPIC,
+            ..Default::default()
+        },
+    )
 }
 
 fn coordinator(node: NodeId, partitions: &Arc<PartitionRegistry>) -> Arc<TxnCoordinator> {

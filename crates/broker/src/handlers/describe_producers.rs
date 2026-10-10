@@ -658,8 +658,8 @@ mod tests {
             .expect("log lock")
             .append(&mut data_batch(DataBatchSetup {
                 batch: ProducerBatchSetup {
-                    producer: (10, 0),
-                    records: 3,
+                    producer: BatchProducer::from_wire((10, 0)),
+                    records: BatchRecordCount(3),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -668,10 +668,10 @@ mod tests {
         follows
             .replicate_batch(data_batch(DataBatchSetup {
                 batch: ProducerBatchSetup {
-                    producer: (20, 3),
-                    records: 2,
-                    max_timestamp: 2_000,
-                    transactional: true,
+                    producer: BatchProducer::from_wire((20, 3)),
+                    records: BatchRecordCount(2),
+                    max_timestamp: BatchTimestamp(2_000),
+                    transaction: BatchTransactionMode::Transactional,
                     ..Default::default()
                 },
                 ..Default::default()
@@ -694,9 +694,9 @@ mod tests {
         follows
             .replicate_batch(data_batch(DataBatchSetup {
                 batch: ProducerBatchSetup {
-                    producer: (21, 0),
-                    max_timestamp: 4_000,
-                    transactional: true,
+                    producer: BatchProducer::from_wire((21, 0)),
+                    max_timestamp: BatchTimestamp(4_000),
+                    transaction: BatchTransactionMode::Transactional,
                     ..Default::default()
                 },
                 base_offset: 3,

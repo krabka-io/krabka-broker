@@ -114,16 +114,20 @@ fn image(leader: NodeId, leader_epoch: i32) -> MetadataImage {
     super::super::test_support::state_image(leader, leader_epoch, &[leader])
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum DataPartitionPresence {
+    #[default]
+    Absent,
+    Hosted,
+}
+
 async fn loaded_coordinator(
     dir: &std::path::Path,
-    with_data_partition: bool,
+    data_partition: DataPartitionPresence,
 ) -> Arc<TxnCoordinator> {
     let partitions = super::super::test_support::state_registry(dir);
-    if with_data_partition {
-        let data = crate::test_support::open_partition(dir, DATA_TOPIC, 0);
-        // The metadata reconcile installs this broker, node 1, as the leader.
-        data.install_leader_change(1, 0).await;
-        partitions.insert(DATA_TOPIC.into(), PartitionIndex(0), data);
+    if data_partition == DataPartitionPresence::Hosted {
+        super::super::test_support::hosted_data_partition(dir, &partitions).await;
     }
     let coordinator = Arc::new(super::super::test_support::coordinator_with_registry(
         NodeId(1),
@@ -140,15 +144,15 @@ async fn loaded_coordinator(
 
 /// A coordinator that persisted `entry` as the leader of
 /// `__transaction_state-0`, after which `leader` was elected at a higher
-/// leader epoch. `with_data_partition` hosts the data partition locally, so a
+/// leader epoch. `data_partition` hosts the data partition locally, so a
 /// local marker fan-out can succeed.
 async fn coordinator(
     entry: TxnEntry,
     leader: NodeId,
-    with_data_partition: bool,
+    data_partition: DataPartitionPresence,
 ) -> (Arc<TxnCoordinator>, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let coordinator = loaded_coordinator(dir.path(), with_data_partition).await;
+    let coordinator = loaded_coordinator(dir.path(), data_partition).await;
     coordinator
         .put(entry, TxnVersion::Verified)
         .await
@@ -176,7 +180,7 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
         name: &'static str,
         entry: TxnEntry,
         leader: NodeId,
-        with_data_partition: bool,
+        data_partition: DataPartitionPresence,
         attempt: CompletionAttempt,
         /// The state after the attempt, or `None` when this broker unloaded
         /// the transaction.
@@ -187,7 +191,7 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             name: "prepared commit completes",
             entry: prepared_entry(TxnState::PrepareCommit),
             leader: NodeId(1),
-            with_data_partition: true,
+            data_partition: DataPartitionPresence::Hosted,
             attempt: CompletionAttempt::Completed,
             state: Some(TxnState::CompleteCommit),
         },
@@ -195,7 +199,7 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             name: "prepared abort completes",
             entry: prepared_entry(TxnState::PrepareAbort),
             leader: NodeId(1),
-            with_data_partition: true,
+            data_partition: DataPartitionPresence::Hosted,
             attempt: CompletionAttempt::Completed,
             state: Some(TxnState::CompleteAbort),
         },
@@ -203,7 +207,7 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             name: "a failed marker fan-out retries",
             entry: prepared_entry(TxnState::PrepareCommit),
             leader: NodeId(1),
-            with_data_partition: false,
+            data_partition: DataPartitionPresence::Absent,
             attempt: CompletionAttempt::Retry,
             state: Some(TxnState::PrepareCommit),
         },
@@ -211,7 +215,7 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             name: "another coordinator owns it, and this broker unloaded it",
             entry: prepared_entry(TxnState::PrepareCommit),
             leader: NodeId(2),
-            with_data_partition: true,
+            data_partition: DataPartitionPresence::Hosted,
             attempt: CompletionAttempt::NothingToComplete,
             state: None,
         },
@@ -219,14 +223,14 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             name: "an ongoing transaction is not prepared",
             entry: prepared_entry(TxnState::Ongoing),
             leader: NodeId(1),
-            with_data_partition: true,
+            data_partition: DataPartitionPresence::Hosted,
             attempt: CompletionAttempt::NothingToComplete,
             state: Some(TxnState::Ongoing),
         },
     ];
     for case in cases {
         let (coordinator, _dir) =
-            coordinator(case.entry.clone(), case.leader, case.with_data_partition).await;
+            coordinator(case.entry.clone(), case.leader, case.data_partition).await;
         let attempt = coordinator
             .complete_prepared_transaction(TID, TxnVersion::Verified)
             .await;
@@ -265,7 +269,7 @@ async fn a_client_transaction_version_zero_completion_stays_classic() {
     let epoch_before = entry.producer_epoch;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let coordinator = loaded_coordinator(dir.path(), true).await;
+    let coordinator = loaded_coordinator(dir.path(), DataPartitionPresence::Hosted).await;
     coordinator
         .put(entry, TxnVersion::Classic)
         .await
@@ -284,8 +288,12 @@ async fn a_client_transaction_version_zero_completion_stays_classic() {
 
 #[tokio::test]
 async fn recovery_queues_every_prepared_transaction_for_completion() {
-    let (coordinator, _dir) =
-        coordinator(prepared_entry(TxnState::PrepareCommit), NodeId(1), true).await;
+    let (coordinator, _dir) = coordinator(
+        prepared_entry(TxnState::PrepareCommit),
+        NodeId(1),
+        DataPartitionPresence::Hosted,
+    )
+    .await;
     // The second load of the fixture queued the prepared transaction already.
     check!(coordinator.take_completion_requests() == vec![TID.to_owned()]);
     let mut ongoing = TxnEntry::new_empty("tid-ongoing".to_owned(), ProducerId(3000), 0, 60_000, 0);

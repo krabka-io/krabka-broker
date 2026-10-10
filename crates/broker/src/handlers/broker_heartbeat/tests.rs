@@ -464,7 +464,7 @@ async fn an_unfencing_broker_takes_back_a_partition_with_no_leader() {
         ..crate::handlers::test_support::replicated_partition(
             crate::handlers::test_support::ReplicatedPartitionSetup {
                 topic: "t",
-                partition: 1,
+                partition: krabka_ids::PartitionIndex(1),
                 leader: NodeId(2),
                 replicas: &[NodeId(2), NodeId(3)],
             },

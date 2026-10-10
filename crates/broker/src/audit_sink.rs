@@ -122,7 +122,13 @@ mod tests {
         path: &std::path::Path,
     ) -> (Arc<crate::partition::Partition>, Arc<PartitionRegistry>) {
         let partitions = Arc::new(PartitionRegistry::new());
-        let partition = fixture_partition(path, "__audit", 0);
+        let partition = fixture_partition(
+            path,
+            crate::test_support::StandalonePartitionSetup {
+                topic: "__audit",
+                ..Default::default()
+            },
+        );
         partitions.insert("__audit".into(), PartitionIndex(0), Arc::clone(&partition));
         (partition, partitions)
     }

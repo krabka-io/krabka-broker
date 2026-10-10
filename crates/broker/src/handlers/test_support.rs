@@ -337,7 +337,7 @@ krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 pub(crate) struct ReplicatedPartitionSetup<'a> {
     #[default("orders")]
     pub topic: &'a str,
-    pub partition: i32,
+    pub partition: krabka_ids::PartitionIndex,
     #[default(krabka_metadata::NodeId(1))]
     pub leader: krabka_metadata::NodeId,
     #[default(&[krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)])]
@@ -356,7 +356,7 @@ pub(crate) fn replicated_partition(
     krabka_metadata::PartitionRecord {
         replicas: replicas.to_vec(),
         isr: replicas.to_vec(),
-        ..single_replica_partition(topic, partition, leader)
+        ..single_replica_partition(topic, partition.0, leader)
     }
 }
 
@@ -502,7 +502,7 @@ pub(crate) struct ReplicatedTopicSetup<'a> {
     pub leader: krabka_metadata::NodeId,
     #[default(&[krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)])]
     pub replicas: &'a [krabka_metadata::NodeId],
-    pub leader_epoch: i32,
+    pub leader_epoch: krabka_ids::LeaderEpoch,
 }
 
 pub(crate) async fn seed_partition_replicas(
@@ -528,7 +528,7 @@ pub(crate) async fn seed_partition_replicas(
         .expect("submit topic record");
     broker
         .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-            leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+            leader_epoch,
             directories: vec![uuid::Uuid::nil(); replicas.len()],
             ..replicated_partition(crate::handlers::test_support::ReplicatedPartitionSetup {
                 topic,
@@ -549,6 +549,22 @@ pub(crate) fn default_records_batch(values: &[&'static [u8]]) -> RecordBatch {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::From, derive_more::Into)]
+pub(crate) struct ShareSessionEpoch(pub i32);
+
+impl Default for ShareSessionEpoch {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum AcknowledgementMode {
+    #[default]
+    Settle,
+    Renew,
+}
+
 /// A partition index and its ordered acknowledgement ranges, with independent
 /// lifetimes for the range list and its acknowledgement-type slices.
 pub(crate) type PartitionAcknowledgements<'a, 'b> = (i32, &'a [(i64, i64, &'b [i8])]);
@@ -559,12 +575,11 @@ pub(crate) struct AcknowledgementSetup<'a, 'b> {
     pub group: &'a str,
     #[default("member")]
     pub member: &'a str,
-    #[default(1)]
-    pub epoch: i32,
+    pub epoch: ShareSessionEpoch,
     pub topic_id: WireUuid,
     #[default((0, &[]))]
     pub partition: PartitionAcknowledgements<'a, 'b>,
-    pub is_renew_ack: bool,
+    pub mode: AcknowledgementMode,
 }
 
 pub(crate) fn acknowledge_batches_request(
@@ -579,13 +594,13 @@ pub(crate) fn acknowledge_batches_request(
         epoch,
         topic_id,
         partition: (partition_index, batches),
-        is_renew_ack,
+        mode,
     } = setup;
     ShareAcknowledgeRequest {
         group_id: Some(group.into()),
         member_id: Some(member.into()),
-        share_session_epoch: epoch,
-        is_renew_ack,
+        share_session_epoch: epoch.0,
+        is_renew_ack: mode == AcknowledgementMode::Renew,
         topics: vec![AcknowledgeTopic {
             topic_id,
             partitions: vec![AcknowledgePartition {
@@ -801,7 +816,7 @@ pub(crate) fn partition(
     let crate::test_support::StandalonePartitionSetup {
         topic,
         partition: index,
-        diskless,
+        storage,
     } = setup;
     spawn_partition(
         root,
@@ -810,7 +825,7 @@ pub(crate) fn partition(
             index,
             log_dir_status: broker.log_dir_status.clone(),
             producer_state: Arc::clone(&broker.producer_state),
-            diskless,
+            storage,
             ..Default::default()
         },
     )
@@ -820,11 +835,11 @@ pub(crate) fn partition(
 pub(crate) struct PartitionSpawnSetup<'a> {
     #[default("orders")]
     pub topic: &'a str,
-    pub index: i32,
+    pub index: krabka_ids::PartitionIndex,
     pub log_dir_status: crate::log_dir_status::LogDirRegistry,
     #[default(Arc::new(crate::producer_state::ProducerState::new()))]
     pub producer_state: Arc<crate::producer_state::ProducerState>,
-    pub diskless: bool,
+    pub storage: crate::test_support::StorageMode,
     pub log_config: krabka_log::LogConfig,
 }
 
@@ -837,19 +852,19 @@ pub(crate) fn spawn_partition(
         index,
         log_dir_status,
         producer_state,
-        diskless,
+        storage,
         log_config,
     } = setup;
-    let partition_dir = crate::log_dir::partition_dir(root, topic, index);
+    let partition_dir = crate::log_dir::partition_dir(root, topic, index.0);
     std::fs::create_dir_all(&partition_dir).expect("partition directory");
     crate::broker::spawn_partition(
         topic.to_string(),
-        krabka_ids::PartitionIndex(index),
+        index,
         root.to_path_buf(),
         krabka_log::Log::open(&partition_dir, log_config).expect("open partition log"),
         log_dir_status,
         producer_state,
-        diskless,
+        storage == crate::test_support::StorageMode::Diskless,
     )
 }
 

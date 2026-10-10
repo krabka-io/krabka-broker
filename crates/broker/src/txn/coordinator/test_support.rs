@@ -56,7 +56,13 @@ pub(super) fn state_registry(dir: &Path) -> Arc<PartitionRegistry> {
     partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),
-        crate::test_support::open_partition(dir, bootstrap::TOPIC, 0),
+        crate::test_support::open_partition(
+            dir,
+            crate::test_support::StandalonePartitionSetup {
+                topic: bootstrap::TOPIC,
+                ..Default::default()
+            },
+        ),
     );
     partitions
 }
@@ -75,17 +81,35 @@ pub(super) fn coordinator_with_registry(
     )
 }
 
+/// The live transaction fixtures host the same locally led `orders-0` log.
+pub(super) async fn hosted_data_partition(
+    dir: &Path,
+    partitions: &PartitionRegistry,
+) -> Arc<Partition> {
+    let data = crate::test_support::open_partition(
+        dir,
+        crate::test_support::StandalonePartitionSetup {
+            topic: DATA_TOPIC,
+            ..Default::default()
+        },
+    );
+    // The metadata reconcile installs this broker, node 1, as the leader.
+    data.install_leader_change(1, 0).await;
+    partitions.insert(
+        DATA_TOPIC.into(),
+        PartitionIndex::default(),
+        Arc::clone(&data),
+    );
+    data
+}
+
 /// A coordinator that leads its one `__transaction_state` partition and hosts
 /// the data partition `orders-0`, both as real logs under `dir`, so a marker
 /// fan-out and an append succeed. It returns the data partition too, for a test
 /// that reads the markers.
 pub(super) async fn live_coordinator(dir: &Path) -> (Arc<TxnCoordinator>, Arc<Partition>) {
     let partitions = state_registry(dir);
-    let data = crate::test_support::open_partition(dir, DATA_TOPIC, 0);
-    // The metadata reconcile installs this broker, node 1, as the leader, so
-    // the partition takes markers.
-    data.install_leader_change(1, 0).await;
-    partitions.insert(DATA_TOPIC.into(), PartitionIndex(0), Arc::clone(&data));
+    let data = hosted_data_partition(dir, &partitions).await;
     let coordinator = Arc::new(coordinator_with_registry(NodeId(1), partitions, 1));
     let image = state_image(NodeId(1), 0, &[NodeId(1)]);
     coordinator

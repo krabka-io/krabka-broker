@@ -378,7 +378,7 @@ mod tests {
                 ..crate::handlers::test_support::replicated_partition(
                     crate::handlers::test_support::ReplicatedPartitionSetup {
                         topic: "t",
-                        partition,
+                        partition: krabka_ids::PartitionIndex(partition),
                         leader: NodeId(1),
                         replicas: &[NodeId(1), NodeId(2)],
                     },

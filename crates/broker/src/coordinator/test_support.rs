@@ -172,8 +172,8 @@ pub(crate) fn coordinator_with_config(
 pub(crate) struct OffsetRecordSetup<'a> {
     pub group: &'a str,
     pub topic: &'a str,
-    pub partition: i32,
-    pub offset: i64,
+    pub partition: krabka_ids::PartitionIndex,
+    pub offset: Offset,
 }
 
 impl Default for OffsetRecordSetup<'_> {
@@ -181,8 +181,8 @@ impl Default for OffsetRecordSetup<'_> {
         Self {
             group: "g",
             topic: "t",
-            partition: 0,
-            offset: 0,
+            partition: krabka_ids::PartitionIndex::default(),
+            offset: Offset::ZERO,
         }
     }
 }
@@ -195,7 +195,7 @@ pub(crate) fn offset_record(setup: OffsetRecordSetup<'_>) -> krabka_protocol::re
         offset,
     } = setup;
     let value = crate::coordinator::persistence::OffsetCommitValue {
-        offset: krabka_log::Offset(offset),
+        offset,
         leader_epoch: -1,
         metadata: String::new(),
         commit_timestamp_ms: 0,
@@ -204,8 +204,12 @@ pub(crate) fn offset_record(setup: OffsetRecordSetup<'_>) -> krabka_protocol::re
     };
     krabka_protocol::records::Record {
         key: Some(
-            crate::coordinator::persistence::OffsetCommitValue::encode_key(group, topic, partition)
-                .unwrap(),
+            crate::coordinator::persistence::OffsetCommitValue::encode_key(
+                group,
+                topic,
+                partition.0,
+            )
+            .unwrap(),
         ),
         value: Some(value.encode_value()),
         ..Default::default()

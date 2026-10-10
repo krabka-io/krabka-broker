@@ -118,8 +118,10 @@ impl MetadataEventLog for RacingAppendLog {
 pub(crate) struct WalFlushSetup<'a> {
     pub topic_id: uuid::Uuid,
     pub object_key: &'a str,
-    pub offsets: (i64, i64, i64),
-    pub byte_len: u32,
+    pub first_offset: krabka_log::Offset,
+    pub last_offset: krabka_log::Offset,
+    pub max_timestamp: crate::test_support::UnixMillis,
+    pub byte_len: krabka_units::ByteSize,
 }
 
 impl Default for WalFlushSetup<'_> {
@@ -127,18 +129,35 @@ impl Default for WalFlushSetup<'_> {
         Self {
             topic_id: uuid::Uuid::from_u128(7),
             object_key: "object-a",
-            offsets: (0, 3, 0),
-            byte_len: 10,
+            first_offset: krabka_log::Offset(0),
+            last_offset: krabka_log::Offset(3),
+            max_timestamp: crate::test_support::UnixMillis(0),
+            byte_len: krabka_units::bytes(10),
+        }
+    }
+}
+
+impl WalFlushSetup<'_> {
+    /// Offsets zero through two in the six-byte object used by reclaimer tests.
+    pub(crate) fn three_records() -> Self {
+        Self {
+            last_offset: krabka_log::Offset(2),
+            byte_len: krabka_units::bytes(6),
+            ..Default::default()
         }
     }
 }
 
 pub(crate) fn flush_record(setup: WalFlushSetup<'_>) -> crate::diskless::wal_index::WalFlushRecord {
+    use krabka_units::convert::ByteSizeExt;
+
     use crate::diskless::wal_index::{WalFlushRecord, WalIndexEntry};
     let WalFlushSetup {
         topic_id,
         object_key,
-        offsets: (first_offset, last_offset, max_timestamp_ms),
+        first_offset,
+        last_offset,
+        max_timestamp,
         byte_len,
     } = setup;
     WalFlushRecord {
@@ -147,11 +166,12 @@ pub(crate) fn flush_record(setup: WalFlushSetup<'_>) -> crate::diskless::wal_ind
         entries: vec![WalIndexEntry {
             topic_id,
             partition: 0,
-            first_offset,
-            last_offset,
+            first_offset: first_offset.0,
+            last_offset: last_offset.0,
             byte_start: 0,
-            byte_len,
-            max_timestamp_ms,
+            byte_len: u32::try_from(byte_len.bytes_u64())
+                .expect("fixture byte span fits WAL format"),
+            max_timestamp_ms: max_timestamp.0,
         }],
     }
 }

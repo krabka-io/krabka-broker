@@ -103,7 +103,7 @@ mod tests {
     fn whole_request_error_preserves_request_shape() {
         let req = request(ReassignmentRequestSetup {
             topic: "payments",
-            partition_index: 8,
+            partition_index: krabka_ids::PartitionIndex(8),
             ..Default::default()
         });
 

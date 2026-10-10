@@ -741,7 +741,7 @@ mod tests {
                     body_flexible: true,
                 },
                 request_frame(EmbeddedFrameSetup {
-                    correlation_id: 5,
+                    correlation_id: EmbeddedCorrelationId(5),
                     client_id: Some("c"),
                     body: &create_topics,
                     ..Default::default()
@@ -758,10 +758,10 @@ mod tests {
                     body_flexible: false,
                 },
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 33,
-                    api_version: 0,
-                    correlation_id: -3,
-                    flexible: false,
+                    api_key: krabka_ids::ApiKey(33),
+                    api_version: krabka_ids::ApiVersion(0),
+                    correlation_id: EmbeddedCorrelationId(-3),
+                    header: EmbeddedHeader::Legacy,
                     body: &alter_configs,
                     ..Default::default()
                 }),
@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn a_built_envelope_request_carries_what_the_receive_side_reads() {
         let request_data = request_frame(EmbeddedFrameSetup {
-            correlation_id: 5,
+            correlation_id: EmbeddedCorrelationId(5),
             client_id: Some("c"),
             body: b"topics",
             ..Default::default()
@@ -885,24 +885,42 @@ mod tests {
 
     krabka_macros::request_frame_fixture!(wire_request_frame);
 
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        derive_more::Display,
+        derive_more::From,
+        derive_more::Into,
+    )]
+    struct EmbeddedCorrelationId(i32);
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum EmbeddedHeader {
+        Legacy,
+        Flexible,
+    }
+
     #[derive(Clone, Copy)]
     struct EmbeddedFrameSetup<'a> {
-        api_key: i16,
-        api_version: i16,
-        correlation_id: i32,
+        api_key: krabka_ids::ApiKey,
+        api_version: krabka_ids::ApiVersion,
+        correlation_id: EmbeddedCorrelationId,
         client_id: Option<&'a str>,
-        flexible: bool,
+        header: EmbeddedHeader,
         body: &'a [u8],
     }
 
     impl Default for EmbeddedFrameSetup<'_> {
         fn default() -> Self {
             Self {
-                api_key: 19,
-                api_version: 7,
-                correlation_id: 1,
+                api_key: krabka_ids::ApiKey(19),
+                api_version: krabka_ids::ApiVersion(7),
+                correlation_id: EmbeddedCorrelationId(1),
                 client_id: None,
-                flexible: true,
+                header: EmbeddedHeader::Flexible,
                 body: &[],
             }
         }
@@ -914,15 +932,15 @@ mod tests {
             api_version,
             correlation_id,
             client_id,
-            flexible,
+            header,
             body,
         } = setup;
         wire_request_frame(RequestFrameSetup {
-            api_key,
-            api_version,
-            correlation_id,
+            api_key: api_key.0,
+            api_version: api_version.0,
+            correlation_id: correlation_id.0,
             client_id: client_id.map(str::as_bytes),
-            tagged: flexible.then_some(&[0][..]),
+            tagged: (header == EmbeddedHeader::Flexible).then_some(&[0][..]),
             body,
         })
         .freeze()
@@ -942,9 +960,9 @@ mod tests {
             (
                 "flexible IncrementalAlterConfigs",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 44,
-                    api_version: 1,
-                    correlation_id: 77,
+                    api_key: krabka_ids::ApiKey(44),
+                    api_version: krabka_ids::ApiVersion(1),
+                    correlation_id: EmbeddedCorrelationId(77),
                     client_id: Some("adminclient-1"),
                     body: &incremental,
                     ..Default::default()
@@ -962,10 +980,10 @@ mod tests {
             (
                 "non-flexible AlterConfigs with a null client id",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 33,
-                    api_version: 0,
-                    correlation_id: 3,
-                    flexible: false,
+                    api_key: krabka_ids::ApiKey(33),
+                    api_version: krabka_ids::ApiVersion(0),
+                    correlation_id: EmbeddedCorrelationId(3),
+                    header: EmbeddedHeader::Legacy,
                     body: &alter_configs,
                     ..Default::default()
                 }),
@@ -1022,8 +1040,8 @@ mod tests {
             (
                 "Produce is not forwardable",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 0,
-                    api_version: 9,
+                    api_key: krabka_ids::ApiKey(0),
+                    api_version: krabka_ids::ApiVersion(9),
                     body: b"",
                     ..Default::default()
                 }),
@@ -1033,8 +1051,8 @@ mod tests {
             (
                 "a nested Envelope is not forwardable",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 58,
-                    api_version: 0,
+                    api_key: krabka_ids::ApiKey(58),
+                    api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
@@ -1044,8 +1062,8 @@ mod tests {
             (
                 "a non-forwardable key is refused before its body is read",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 3,
-                    api_version: 12,
+                    api_key: krabka_ids::ApiKey(3),
+                    api_version: krabka_ids::ApiVersion(12),
                     body: b"garbage",
                     ..Default::default()
                 }),
@@ -1055,8 +1073,8 @@ mod tests {
             (
                 "the removed LeaderAndIsr has no valid version",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 4,
-                    api_version: 0,
+                    api_key: krabka_ids::ApiKey(4),
+                    api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
@@ -1066,8 +1084,8 @@ mod tests {
             (
                 "the removed ControlledShutdown has no valid version",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 7,
-                    api_version: 0,
+                    api_key: krabka_ids::ApiKey(7),
+                    api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
@@ -1077,8 +1095,8 @@ mod tests {
             (
                 "an api key past the release's last is unknown",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 93,
-                    api_version: 0,
+                    api_key: krabka_ids::ApiKey(93),
+                    api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
@@ -1088,8 +1106,8 @@ mod tests {
             (
                 "a negative api key is unknown",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: -1,
-                    api_version: 0,
+                    api_key: krabka_ids::ApiKey(-1),
+                    api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
@@ -1099,8 +1117,8 @@ mod tests {
             (
                 "trunk's UnregisterController is unknown to 4.3.1",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 94,
-                    api_version: 0,
+                    api_key: krabka_ids::ApiKey(94),
+                    api_version: krabka_ids::ApiVersion(0),
                     body: &unregister_controller,
                     ..Default::default()
                 }),
@@ -1110,8 +1128,8 @@ mod tests {
             (
                 "trunk's UnregisterController is known under the flag",
                 request_frame(EmbeddedFrameSetup {
-                    api_key: 94,
-                    api_version: 0,
+                    api_key: krabka_ids::ApiKey(94),
+                    api_version: krabka_ids::ApiVersion(0),
                     body: &unregister_controller,
                     ..Default::default()
                 }),
@@ -1139,7 +1157,7 @@ mod tests {
             (
                 "a version the request type does not have",
                 request_frame(EmbeddedFrameSetup {
-                    api_version: 99,
+                    api_version: krabka_ids::ApiVersion(99),
                     body: &create_topics,
                     ..Default::default()
                 }),
@@ -1243,7 +1261,7 @@ mod tests {
     fn an_envelope_request_round_trips_and_a_malformed_one_is_refused() {
         let request = EnvelopeRequest {
             request_data: request_frame(EmbeddedFrameSetup {
-                correlation_id: 5,
+                correlation_id: EmbeddedCorrelationId(5),
                 client_id: Some("c"),
                 body: b"topics",
                 ..Default::default()

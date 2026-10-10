@@ -306,7 +306,7 @@ mod tests {
                 &registry,
                 dir.path(),
                 crate::test_support::StandalonePartitionSetup {
-                    partition: p,
+                    partition: krabka_ids::PartitionIndex(p),
                     ..Default::default()
                 },
             );

@@ -130,37 +130,87 @@ pub(crate) async fn loopback_tls_listener()
 /// Opens a local replica with a running writer in the supplied log directory.
 pub(crate) fn open_partition(
     log_dir: &std::path::Path,
-    topic: &str,
-    partition: i32,
+    setup: StandalonePartitionSetup<'_>,
 ) -> Arc<crate::partition::Partition> {
-    let path = crate::log_dir::partition_dir(log_dir, topic, partition);
+    let path = crate::log_dir::partition_dir(log_dir, setup.topic, setup.partition.0);
     std::fs::create_dir_all(&path).expect("create partition directory");
     let log = krabka_log::Log::open(&path, krabka_log::LogConfig::default()).expect("open log");
-    spawn_standalone_partition(
-        log_dir,
-        log,
-        crate::test_support::StandalonePartitionSetup {
-            topic,
-            partition,
-            ..Default::default()
-        },
-    )
+    spawn_standalone_partition(log_dir, log, setup)
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum StorageMode {
+    #[default]
+    Local,
+    Diskless,
+}
+
+impl StorageMode {
+    pub(crate) fn from_wire(diskless: bool) -> Self {
+        if diskless {
+            Self::Diskless
+        } else {
+            Self::Local
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum FreezeState {
+    #[default]
+    Frozen,
+    Thawed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::From, derive_more::Into)]
+pub(crate) struct PartitionCount(pub i32);
+
+impl Default for PartitionCount {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::From, derive_more::Into)]
+pub(crate) struct ReplicationFactor(pub i16);
+
+impl Default for ReplicationFactor {
+    fn default() -> Self {
+        Self(3)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, derive_more::From, derive_more::Into)]
+pub(crate) struct PartitionEpoch(pub i32);
+
+/// A wall-clock coordinate, distinct from a record offset or a duration.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    derive_more::Display,
+    derive_more::From,
+    derive_more::Into,
+)]
+pub(crate) struct UnixMillis(pub i64);
 
 /// Start a standalone writer over the caller's already-opened log.
 #[derive(Clone, Copy)]
 pub(crate) struct StandalonePartitionSetup<'a> {
     pub topic: &'a str,
-    pub partition: i32,
-    pub diskless: bool,
+    pub partition: krabka_ids::PartitionIndex,
+    pub storage: StorageMode,
 }
 
 impl Default for StandalonePartitionSetup<'_> {
     fn default() -> Self {
         Self {
             topic: "orders",
-            partition: 0,
-            diskless: false,
+            partition: krabka_ids::PartitionIndex::default(),
+            storage: StorageMode::Local,
         }
     }
 }
@@ -173,16 +223,16 @@ pub(crate) fn spawn_standalone_partition(
     let StandalonePartitionSetup {
         topic,
         partition,
-        diskless,
+        storage,
     } = setup;
     crate::broker::spawn_partition(
         topic.to_owned(),
-        krabka_ids::PartitionIndex(partition),
+        partition,
         log_dir.to_path_buf(),
         log,
         crate::log_dir_status::LogDirRegistry::default(),
         Arc::new(crate::producer_state::ProducerState::new()),
-        diskless,
+        storage == StorageMode::Diskless,
     )
 }
 
@@ -315,7 +365,7 @@ pub(crate) fn string_pairs(values: &[(&str, &str)]) -> std::collections::BTreeMa
 pub(crate) struct FreezeSetup<'a> {
     pub scope: &'a str,
     pub pattern_type: krabka_metadata::PatternType,
-    pub frozen: bool,
+    pub state: FreezeState,
     pub reason: &'a str,
 }
 
@@ -324,7 +374,7 @@ impl Default for FreezeSetup<'_> {
         Self {
             scope: "orders",
             pattern_type: krabka_metadata::PatternType::Literal,
-            frozen: true,
+            state: FreezeState::Frozen,
             reason: "DR cutover",
         }
     }
@@ -334,13 +384,13 @@ pub(crate) fn topic_freeze_record(setup: FreezeSetup<'_>) -> krabka_metadata::To
     let FreezeSetup {
         scope,
         pattern_type,
-        frozen,
+        state,
         reason,
     } = setup;
     krabka_metadata::TopicFreezeRecord {
         scope: scope.to_owned(),
         pattern_type,
-        frozen,
+        frozen: state == FreezeState::Frozen,
         reason: reason.to_owned(),
         set_by: "User:alice".to_owned(),
         set_at_ms: 1_770_000_000_000,
@@ -378,7 +428,7 @@ pub(crate) fn topic_thaw_record(
         ..topic_freeze_record(FreezeSetup {
             scope,
             pattern_type,
-            frozen: false,
+            state: crate::test_support::FreezeState::Thawed,
             reason: "",
         })
     }
@@ -389,8 +439,8 @@ pub(crate) fn topic_thaw_record(
 pub(crate) struct TopicSetup<'a> {
     pub topic: &'a str,
     pub topic_id: uuid::Uuid,
-    pub partitions: i32,
-    pub replication_factor: i16,
+    pub partitions: PartitionCount,
+    pub replication_factor: ReplicationFactor,
 }
 
 impl Default for TopicSetup<'_> {
@@ -398,8 +448,8 @@ impl Default for TopicSetup<'_> {
         Self {
             topic: "orders",
             topic_id: uuid::Uuid::from_u128(1),
-            partitions: 1,
-            replication_factor: 3,
+            partitions: PartitionCount::default(),
+            replication_factor: ReplicationFactor::default(),
         }
     }
 }
@@ -415,8 +465,8 @@ pub(crate) fn topic_image(setup: TopicSetup<'_>) -> MetadataImage {
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: topic.into(),
         topic_id,
-        partitions,
-        replication_factor,
+        partitions: partitions.0,
+        replication_factor: replication_factor.0,
     }));
     image
 }
@@ -2605,4 +2655,38 @@ pub(crate) async fn expired_broker_fixture(
     clock.advance(std::time::Duration::from_millis(11));
     let transitions = liveness.tick().await;
     (clock, liveness, transitions)
+}
+
+/// A controller voter, independent of broker registrations.
+pub(crate) struct VoterImageSetup {
+    pub node: krabka_ids::NodeId,
+    pub endpoints: Vec<krabka_metadata::VoterEndpoint>,
+}
+
+impl Default for VoterImageSetup {
+    fn default() -> Self {
+        Self {
+            node: krabka_ids::NodeId(1),
+            endpoints: vec![krabka_metadata::VoterEndpoint {
+                name: "CONTROLLER".to_owned(),
+                host: "127.0.0.1".to_owned(),
+                port: 9093,
+            }],
+        }
+    }
+}
+
+pub(crate) fn voter_image(setup: VoterImageSetup) -> krabka_metadata::MetadataImage {
+    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&krabka_metadata::MetadataRecord::V1Voters(
+        krabka_metadata::VotersRecord {
+            voters: krabka_metadata::VoterSet::from_voters([krabka_metadata::Voter {
+                id: setup.node,
+                directory_id: uuid::Uuid::nil(),
+                endpoints: setup.endpoints,
+                kraft_version: krabka_metadata::KRaftVersionRange::default(),
+            }]),
+        },
+    ));
+    image
 }

@@ -35,8 +35,8 @@ fn commit(topic: &str, partition: i32, offset: i64) -> Record {
     crate::coordinator::test_support::offset_record(
         crate::coordinator::test_support::OffsetRecordSetup {
             topic,
-            partition,
-            offset,
+            partition: krabka_ids::PartitionIndex(partition),
+            offset: krabka_log::Offset(offset),
             ..Default::default()
         },
     )

@@ -263,11 +263,11 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
             &handle,
             crate::broker::test_support::MetadataPartitionSetup {
                 topic,
-                topic_id,
-                leader,
-                replicas,
-                isr: replicas,
-                leader_epoch,
+                topic_id: uuid::Uuid::from_u128(topic_id),
+                leader: krabka_ids::NodeId(leader),
+                replicas: (replicas).iter().copied().map(krabka_ids::NodeId).collect(),
+                isr: (replicas).iter().copied().map(krabka_ids::NodeId).collect(),
+                leader_epoch: krabka_ids::LeaderEpoch(leader_epoch),
                 ..Default::default()
             },
         )
@@ -293,9 +293,9 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
         &handle,
         crate::broker::test_support::MetadataPartitionSetup {
             topic: "isr-len-mutant-topic",
-            topic_id: 0xF005,
-            replicas: &[1, 2],
-            isr: &[1, 2],
+            topic_id: uuid::Uuid::from_u128(0xF005),
+            replicas: [1, 2].iter().copied().map(krabka_ids::NodeId).collect(),
+            isr: [1, 2].iter().copied().map(krabka_ids::NodeId).collect(),
             ..Default::default()
         },
     )

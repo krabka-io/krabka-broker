@@ -1286,7 +1286,7 @@ mod tests {
             dir.path(),
             crate::test_support::StandalonePartitionSetup {
                 topic: "cold",
-                diskless: true,
+                storage: crate::test_support::StorageMode::Diskless,
                 ..Default::default()
             },
         );

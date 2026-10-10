@@ -188,13 +188,34 @@ pub fn params(sink: Arc<dyn AuditSink>, spool: Spool, stats: Arc<AuditStats>) ->
     }
 }
 
+/// A count of accepted audit events.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    derive_more::Display,
+    derive_more::From,
+    derive_more::Into,
+)]
+pub struct AuditEventCount(pub u64);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CheckpointFrequency {
+    #[default]
+    Disabled,
+    Every(AuditEventCount),
+}
+
 /// Keep time-based work dormant while a test controls count-based checkpoints.
 #[derive(krabka_macros::FieldDefaults)]
 pub struct CheckpointSetup {
     #[default(Arc::new(AuditStats::new()))]
     pub stats: Arc<AuditStats>,
     pub signer: Option<Arc<crate::FileEd25519Signer>>,
-    pub checkpoint_every_n: u64,
+    pub frequency: CheckpointFrequency,
 }
 
 pub fn quiet_params(
@@ -205,11 +226,14 @@ pub fn quiet_params(
     let CheckpointSetup {
         stats,
         signer,
-        checkpoint_every_n,
+        frequency,
     } = setup;
     let mut params = params(sink, spool, stats);
     params.signer = signer;
-    params.checkpoint_every_n = checkpoint_every_n;
+    params.checkpoint_every_n = match frequency {
+        CheckpointFrequency::Disabled => 0,
+        CheckpointFrequency::Every(count) => count.0,
+    };
     params.replay_every = DORMANT;
     params
 }

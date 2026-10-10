@@ -42,12 +42,26 @@ pub fn empty_record_batch(n: i32) -> RecordBatch {
 ///
 /// # Panics
 /// Panics if the count or an index does not fit its original i32 field.
+/// A producer's sequence coordinate, independent of log offsets.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    derive_more::Display,
+    derive_more::From,
+    derive_more::Into,
+)]
+pub struct ProducerSequence(pub i32);
+
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub struct ProducerValuesSetup<'a> {
-    #[default(7)]
-    pub pid: i64,
-    pub epoch: i16,
-    pub base_seq: i32,
+    #[default(krabka_ids::ProducerId(7))]
+    pub pid: krabka_ids::ProducerId,
+    pub epoch: crate::support::transactions::ProducerEpoch,
+    pub base_seq: ProducerSequence,
     #[default(&["v"])]
     pub values: &'a [&'a str],
 }
@@ -68,9 +82,9 @@ pub fn producer_values_batch(setup: ProducerValuesSetup<'_>) -> RecordBatch {
         ));
     }
     RecordBatch {
-        producer_id: pid,
-        producer_epoch: epoch,
-        base_sequence: base_seq,
+        producer_id: pid.0,
+        producer_epoch: epoch.0,
+        base_sequence: base_seq.0,
         last_offset_delta: n - 1,
         max_timestamp: i64::from(n),
         ..batch_from_records(records)

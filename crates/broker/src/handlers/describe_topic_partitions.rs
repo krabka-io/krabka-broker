@@ -872,7 +872,7 @@ mod tests {
                 partition_epoch: 4,
                 ..crate::handlers::test_support::replicated_partition(
                     crate::handlers::test_support::ReplicatedPartitionSetup {
-                        partition: index,
+                        partition: krabka_ids::PartitionIndex(index),
                         leader: NodeId(1),
                         replicas: &[NodeId(1), NodeId(2), NodeId(3)],
                         ..Default::default()

@@ -150,7 +150,14 @@ pub(crate) async fn open_data_partition(
     batches: &[(i64, &[&'static [u8]])],
     hw: Offset,
 ) {
-    let part = crate::test_support::open_partition(log_dir, topic, partition);
+    let part = crate::test_support::open_partition(
+        log_dir,
+        crate::test_support::StandalonePartitionSetup {
+            topic,
+            partition: krabka_ids::PartitionIndex(partition),
+            ..Default::default()
+        },
+    );
     for (timestamp_ms, values) in batches {
         let mut batch = RecordBatch {
             partition_leader_epoch: 0,

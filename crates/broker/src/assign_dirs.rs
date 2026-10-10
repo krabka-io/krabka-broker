@@ -275,22 +275,14 @@ mod tests {
     /// `register_broker` skips a node whose `process.roles` exclude `broker`,
     /// so `image.broker(leader)` stays empty however long the cluster runs.
     fn voter_only_image(leader: NodeId, controller_addr: SocketAddr) -> MetadataImage {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&krabka_metadata::MetadataRecord::V1Voters(
-            krabka_metadata::VotersRecord {
-                voters: krabka_metadata::VoterSet::from_voters([krabka_metadata::Voter {
-                    id: leader,
-                    directory_id: uuid::Uuid::nil(),
-                    endpoints: vec![krabka_metadata::VoterEndpoint {
-                        name: "CONTROLLER".to_owned(),
-                        host: controller_addr.ip().to_string(),
-                        port: controller_addr.port(),
-                    }],
-                    kraft_version: krabka_metadata::KRaftVersionRange::default(),
-                }]),
-            },
-        ));
-        image
+        crate::test_support::voter_image(crate::test_support::VoterImageSetup {
+            node: leader,
+            endpoints: vec![krabka_metadata::VoterEndpoint {
+                name: "CONTROLLER".to_owned(),
+                host: controller_addr.ip().to_string(),
+                port: controller_addr.port(),
+            }],
+        })
     }
 
     /// Boot a single-node broker that leads the metadata quorum, and hand back

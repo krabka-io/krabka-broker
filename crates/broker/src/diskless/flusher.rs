@@ -544,7 +544,7 @@ mod tests {
                 test_partition(
                     root,
                     crate::diskless::flusher::test_support::FlusherPartitionSetup {
-                        partition,
+                        partition: krabka_ids::PartitionIndex(partition),
                         ..Default::default()
                     },
                 ),
@@ -664,8 +664,7 @@ mod tests {
                     crate::diskless::index_log::test_support::WalFlushSetup {
                         topic_id,
                         object_key: key,
-                        offsets: (0, 2, 0),
-                        byte_len: 6,
+                        ..crate::diskless::index_log::test_support::WalFlushSetup::three_records()
                     },
                 ))
                 .await
@@ -724,8 +723,7 @@ mod tests {
                 crate::diskless::index_log::test_support::WalFlushSetup {
                     topic_id,
                     object_key,
-                    offsets: (0, 2, 0),
-                    byte_len: 6,
+                    ..crate::diskless::index_log::test_support::WalFlushSetup::three_records()
                 },
             ))
             .await
@@ -780,8 +778,10 @@ mod tests {
             let record = flush_record(crate::diskless::index_log::test_support::WalFlushSetup {
                 topic_id,
                 object_key,
-                offsets: (first_offset, last_offset, max_timestamp_ms),
-                byte_len: 6,
+                first_offset: krabka_log::Offset(first_offset),
+                last_offset: krabka_log::Offset(last_offset),
+                max_timestamp: crate::test_support::UnixMillis(max_timestamp_ms),
+                byte_len: krabka_units::bytes(6),
             });
             index.publish_flush(&record).await.unwrap();
             assert!(
@@ -1062,7 +1062,9 @@ mod tests {
             crate::diskless::index_log::test_support::WalFlushSetup {
                 topic_id,
                 object_key: "diskless-wal/7/seed.ckwl",
-                offsets: (0, 2, 0),
+                first_offset: krabka_log::Offset(0),
+                last_offset: krabka_log::Offset(2),
+                max_timestamp: crate::test_support::UnixMillis(0),
                 ..Default::default()
             },
         ))
@@ -1256,7 +1258,7 @@ mod tests {
         let follower = test_partition(
             dir.path(),
             crate::diskless::flusher::test_support::FlusherPartitionSetup {
-                partition: 1,
+                partition: krabka_ids::PartitionIndex(1),
                 leader: NodeId(2),
                 ..Default::default()
             },
@@ -1264,8 +1266,8 @@ mod tests {
         let local = test_partition(
             dir.path(),
             crate::diskless::flusher::test_support::FlusherPartitionSetup {
-                partition: 2,
-                diskless: false,
+                partition: krabka_ids::PartitionIndex(2),
+                storage: crate::test_support::StorageMode::Local,
                 ..Default::default()
             },
         );

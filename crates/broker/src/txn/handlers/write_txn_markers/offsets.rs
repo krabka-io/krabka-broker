@@ -242,8 +242,8 @@ mod tests {
             crate::coordinator::test_support::OffsetRecordSetup {
                 group,
                 topic,
-                partition,
-                offset,
+                partition: krabka_ids::PartitionIndex(partition),
+                offset: krabka_log::Offset(offset),
             },
         )
     }

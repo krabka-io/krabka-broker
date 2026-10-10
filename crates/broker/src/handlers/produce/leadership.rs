@@ -334,7 +334,7 @@ mod tests {
             dir.path(),
             log,
             crate::test_support::StandalonePartitionSetup {
-                diskless: true,
+                storage: crate::test_support::StorageMode::Diskless,
                 ..Default::default()
             },
         );
@@ -390,7 +390,7 @@ mod tests {
                 dir.path(),
                 log,
                 crate::test_support::StandalonePartitionSetup {
-                    diskless,
+                    storage: crate::test_support::StorageMode::from_wire(diskless),
                     ..Default::default()
                 },
             ),

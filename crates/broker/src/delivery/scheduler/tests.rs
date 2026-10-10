@@ -141,7 +141,11 @@ impl Harness {
             &self.clock,
             crate::delivery::test_support::ScheduleSetup {
                 topic,
-                activations: timestamps,
+                activations: timestamps
+                    .iter()
+                    .copied()
+                    .map(crate::test_support::UnixMillis)
+                    .collect(),
                 ..Default::default()
             },
         );
@@ -181,7 +185,10 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
         &dir,
         &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
-            activations: &[NOW_MS - 60_000, NOW_MS + 10_000],
+            activations: vec![
+                crate::test_support::UnixMillis(NOW_MS - 60_000),
+                crate::test_support::UnixMillis(NOW_MS + 10_000),
+            ],
             ..Default::default()
         },
     );
@@ -237,7 +244,7 @@ async fn a_topic_that_delivers_immediately_reports_nothing() {
         crate::delivery::test_support::ScheduleSetup {
             topic: "immediate",
             policy: DeliveryPolicy::Immediate,
-            activations: &[NOW_MS + 10_000],
+            activations: vec![crate::test_support::UnixMillis(NOW_MS + 10_000)],
             ..Default::default()
         },
     );
@@ -264,8 +271,8 @@ async fn a_partition_this_broker_does_not_lead_is_left_alone() {
         &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             topic: "followed",
-            activations: &[NOW_MS - 60_000],
-            leader: THIS_BROKER + 1,
+            activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
+            leader: krabka_ids::NodeId(THIS_BROKER + 1),
             ..Default::default()
         },
     );
@@ -292,7 +299,7 @@ async fn the_scheduler_adopts_a_leader_partition_so_a_produce_can_rearm_it() {
         &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             topic: "adopted",
-            activations: &[NOW_MS - 60_000],
+            activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
             ..Default::default()
         },
     );
@@ -385,7 +392,7 @@ async fn the_scheduler_stops_without_sweeping_when_the_first_deadline_is_refused
         &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             topic: "unarmable",
-            activations: &[NOW_MS + 10_000],
+            activations: vec![crate::test_support::UnixMillis(NOW_MS + 10_000)],
             ..Default::default()
         },
     );
@@ -420,7 +427,7 @@ async fn the_scheduler_sweeps_once_and_stops_when_the_next_sleep_cannot_be_armed
         &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             topic: "unrearmable",
-            activations: &[NOW_MS - 60_000],
+            activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
             ..Default::default()
         },
     );

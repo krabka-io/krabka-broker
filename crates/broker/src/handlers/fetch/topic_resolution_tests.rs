@@ -307,7 +307,7 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
             topic_id,
             leader: krabka_audit::NodeId(2),
             replicas: &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-            leader_epoch: 4,
+            leader_epoch: krabka_ids::LeaderEpoch(4),
         },
     )
     .await;

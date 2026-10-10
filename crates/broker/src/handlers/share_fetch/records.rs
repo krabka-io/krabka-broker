@@ -591,8 +591,12 @@ mod tests {
             &dir,
             &clock,
             crate::delivery::test_support::ScheduleSetup {
-                activations: &activations,
-                leader: 0,
+                activations: activations
+                    .iter()
+                    .copied()
+                    .map(crate::test_support::UnixMillis)
+                    .collect(),
+                leader: krabka_ids::NodeId(0),
                 ..Default::default()
             },
         );
@@ -616,8 +620,12 @@ mod tests {
             crate::delivery::test_support::ScheduleSetup {
                 topic: "immediate",
                 policy: DeliveryPolicy::Immediate,
-                activations: &activations,
-                leader: 0,
+                activations: activations
+                    .iter()
+                    .copied()
+                    .map(crate::test_support::UnixMillis)
+                    .collect(),
+                leader: krabka_ids::NodeId(0),
             },
         );
         let none = pending_activation_ranges(&immediate, Offset(0), Offset(6), NOW_MS)

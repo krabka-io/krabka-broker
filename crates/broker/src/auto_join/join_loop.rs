@@ -170,20 +170,11 @@ mod tests {
     /// fire (failing the test).
     fn voter_params(source: Arc<dyn crate::metadata_source::MetadataSource>) -> AutoJoinParams {
         AutoJoinParams {
-            auto_join: true,
             retry_backoff: millis(7),
             voter_request_timeout: secs(30),
             node_id: NodeId(7),
             directory_id: uuid::Uuid::from_u128(7),
-            cluster_id: None,
-            bootstrap_servers: vec!["127.0.0.1:1".to_string()],
-            advertised_controller: None,
-            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            inter_broker_server_name: "broker.internal".to_string(),
-            controller: source,
-            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                None, None,
-            )),
+            ..crate::auto_join::test_support::params(source, vec!["127.0.0.1:1".to_string()])
         }
     }
 
@@ -196,18 +187,11 @@ mod tests {
 
         let params = AutoJoinParams {
             auto_join: false,
-            retry_backoff: millis(7),
-            voter_request_timeout: secs(30),
             node_id: krabka_raft::NodeId(999),
             directory_id: uuid::Uuid::from_u128(1),
-            cluster_id: None,
-            // Unroutable: would hang the loop if `run` ignored auto_join=false.
-            bootstrap_servers: vec!["127.0.0.1:1".to_string()],
-            advertised_controller: None,
-            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            inter_broker_server_name: "broker.internal".to_string(),
-            controller: broker.controller_for_test(),
             inter_broker_client: broker.inter_broker_client_for_test(),
+            // The fixture's bootstrap is unreachable if the disabled flag regresses.
+            ..voter_params(broker.controller_for_test())
         };
 
         tokio::time::timeout(Duration::from_secs(2), run(params))

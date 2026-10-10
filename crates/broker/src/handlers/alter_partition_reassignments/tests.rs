@@ -19,7 +19,8 @@ use crate::{
     broker::Broker,
     codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
     handlers::alter_partition_reassignments::test_support::{
-        ReassignmentRequestSetup, request, test_context,
+        ReassignmentRequestSetup, ReassignmentTarget, ReplicationFactorPolicy, request,
+        test_context,
     },
     test_support::{DenyAll, FreezeSetup, start_broker_with_authorizer as start_broker, test_ctx},
 };
@@ -50,7 +51,7 @@ async fn seed_reassignable_partition(broker: &Broker) {
                 partition_epoch: 11,
                 ..crate::handlers::test_support::replicated_partition(
                     crate::handlers::test_support::ReplicatedPartitionSetup {
-                        partition: 7,
+                        partition: krabka_ids::PartitionIndex(7),
                         leader: NodeId(1),
                         replicas: &[NodeId(1)],
                         ..Default::default()
@@ -90,7 +91,7 @@ async fn seed_cancellable_partition(broker: &Broker) {
         partition_epoch: 11,
         ..crate::handlers::test_support::replicated_partition(
             crate::handlers::test_support::ReplicatedPartitionSetup {
-                partition: 7,
+                partition: krabka_ids::PartitionIndex(7),
                 leader: NodeId(1),
                 replicas: &[NodeId(1), NodeId(2), NodeId(3)],
                 ..Default::default()
@@ -133,8 +134,8 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     let resp = handle(
         &broker,
         request(ReassignmentRequestSetup {
-            allow_replication_factor_change: true,
-            replicas: None,
+            replication_factor_policy: ReplicationFactorPolicy::PermitChange,
+            target: ReassignmentTarget::Cancel,
             ..Default::default()
         }),
         version,
@@ -171,7 +172,7 @@ async fn handle_preserves_unknown_partition_response_shape() {
         &broker,
         request(ReassignmentRequestSetup {
             topic: "payments",
-            partition_index: 8,
+            partition_index: krabka_ids::PartitionIndex(8),
             ..Default::default()
         }),
         version,
@@ -207,7 +208,10 @@ async fn handle_preserves_unknown_partition_response_shape() {
 #[tokio::test]
 async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed() {
     for version in 0..=1 {
-        for allow_rf_change in [false, true] {
+        for allow_rf_change in [
+            ReplicationFactorPolicy::Maintain,
+            ReplicationFactorPolicy::PermitChange,
+        ] {
             broker_fixture!(
                 (broker_handle, _dir, broker),
                 deny_all,
@@ -217,9 +221,9 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
             let resp = handle(
                 &broker,
                 request(ReassignmentRequestSetup {
-                    allow_replication_factor_change: allow_rf_change,
+                    replication_factor_policy: allow_rf_change,
                     topic: "payments",
-                    partition_index: 8,
+                    partition_index: krabka_ids::PartitionIndex(8),
                     ..Default::default()
                 }),
                 version,
@@ -243,7 +247,7 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
             });
             assert!(
                 resp == expected,
-                "version={version} allow_rf_change={allow_rf_change}"
+                "version={version} allow_rf_change={allow_rf_change:?}"
             );
             broker_handle.shutdown().await;
         }
@@ -260,7 +264,7 @@ async fn handle_submits_successful_reassignment_records() {
     let resp = handle(
         &broker,
         request(ReassignmentRequestSetup {
-            allow_replication_factor_change: true,
+            replication_factor_policy: ReplicationFactorPolicy::PermitChange,
             ..Default::default()
         }),
         version,
@@ -315,7 +319,7 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
     let response = handle(
         &broker,
         request(ReassignmentRequestSetup {
-            allow_replication_factor_change: true,
+            replication_factor_policy: ReplicationFactorPolicy::PermitChange,
             ..Default::default()
         }),
         version,

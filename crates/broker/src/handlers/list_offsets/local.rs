@@ -137,8 +137,12 @@ mod tests {
             crate::delivery::test_support::ScheduleSetup {
                 topic,
                 policy,
-                activations: &ACTIVATIONS,
-                leader: broker.config.node_id.get(),
+                activations: ACTIVATIONS
+                    .iter()
+                    .copied()
+                    .map(crate::test_support::UnixMillis)
+                    .collect(),
+                leader: krabka_ids::NodeId(broker.config.node_id.get()),
             },
         );
         crate::delivery::test_support::register(&broker.partitions, &partition);
@@ -301,8 +305,11 @@ mod tests {
             &clock,
             crate::delivery::test_support::ScheduleSetup {
                 topic: TOPIC,
-                activations: &[NOW_MS - 60_000, NOW_MS + 10_000],
-                leader: OTHER_BROKER,
+                activations: vec![
+                    crate::test_support::UnixMillis(NOW_MS - 60_000),
+                    crate::test_support::UnixMillis(NOW_MS + 10_000),
+                ],
+                leader: krabka_ids::NodeId(OTHER_BROKER),
                 ..Default::default()
             },
         );

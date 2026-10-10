@@ -224,8 +224,8 @@ pub(super) fn commit_record_for_group(
     crate::coordinator::test_support::offset_record(
         crate::coordinator::test_support::OffsetRecordSetup {
             group,
-            partition,
-            offset,
+            partition: krabka_ids::PartitionIndex(partition),
+            offset: krabka_log::Offset(offset),
             ..Default::default()
         },
     )

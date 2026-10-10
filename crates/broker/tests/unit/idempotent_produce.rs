@@ -31,7 +31,7 @@ async fn idempotent_produce_dedups_duplicate_batch() {
         0,
         Some(
             one_batch_with_producer(crate::support::records::ProducerValuesSetup {
-                pid,
+                pid: krabka_ids::ProducerId(pid),
                 values: &["a", "b", "c"],
                 ..Default::default()
             })
@@ -69,8 +69,8 @@ async fn out_of_order_returns_45() {
             0,
             Some(
                 one_batch_with_producer(crate::support::records::ProducerValuesSetup {
-                    pid,
-                    base_seq,
+                    pid: krabka_ids::ProducerId(pid),
+                    base_seq: crate::support::records::ProducerSequence(base_seq),
                     values: &["x", "y"],
                     ..Default::default()
                 })

@@ -722,7 +722,7 @@ mod tests {
                 crate::delivery::test_support::DeliveryPartitionSetup {
                     topic: "txn",
                     batches: transaction_then_record(commit),
-                    leader: 0,
+                    leader: krabka_ids::NodeId(0),
                     ..Default::default()
                 },
             );

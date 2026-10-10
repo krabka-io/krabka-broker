@@ -45,7 +45,7 @@ pub(super) fn block_compaction_swap(root: &TempDir, topic: &str) -> Vec<std::pat
 
 pub(super) struct CompactionSetup<'a> {
     pub topic: &'a str,
-    pub partition_id: i32,
+    pub partition_id: PartitionIndex,
     pub leader: NodeId,
     pub cfg: krabka_log::LogConfig,
     pub log_dir_status: crate::log_dir_status::LogDirRegistry,
@@ -55,7 +55,7 @@ impl Default for CompactionSetup<'_> {
     fn default() -> Self {
         Self {
             topic: "orders",
-            partition_id: 0,
+            partition_id: PartitionIndex(0),
             leader: NodeId(7),
             cfg: krabka_log::LogConfig {
                 cleanup_policy: krabka_log::CleanupPolicy::Compact,
@@ -79,7 +79,7 @@ pub(super) async fn compactable_partition(
         cfg,
         log_dir_status,
     } = setup;
-    let part_dir = crate::log_dir::partition_dir(root.path(), topic, partition_id);
+    let part_dir = crate::log_dir::partition_dir(root.path(), topic, partition_id.0);
     std::fs::create_dir_all(&part_dir).expect("create partition dir");
     let mut log = krabka_log::Log::open(&part_dir, cfg).expect("open compactable log");
     for idx in 0..12 {
@@ -94,7 +94,7 @@ pub(super) async fn compactable_partition(
         log,
         crate::test_support::CommittedPartitionSetup {
             topic,
-            partition: PartitionIndex(partition_id),
+            partition: partition_id,
             leader,
             registry: log_dir_status,
         },

@@ -94,7 +94,14 @@ mod tests {
             partition,
             count,
         } = setup;
-        let part = crate::test_support::open_partition(log_dir, topic, partition.get());
+        let part = crate::test_support::open_partition(
+            log_dir,
+            crate::test_support::StandalonePartitionSetup {
+                topic,
+                partition: krabka_ids::PartitionIndex(partition.get()),
+                ..Default::default()
+            },
+        );
         if count > 0 {
             append_n(&part.log, count);
         }

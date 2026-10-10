@@ -490,7 +490,7 @@ mod tests {
         let second = test_partition(
             dir.path(),
             crate::diskless::flusher::test_support::FlusherPartitionSetup {
-                partition: 1,
+                partition: krabka_ids::PartitionIndex(1),
                 ..Default::default()
             },
         );

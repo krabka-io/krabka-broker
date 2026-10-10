@@ -237,8 +237,7 @@ mod authorize_by_resource_type {
         );
     }
 
-    #[test]
-    fn allow_fully_covered_by_a_broader_deny_denies() {
+    fn allow_orders_with_deny(denied_resource: &str, expected: AuthorizationResult) {
         let img = acl_image([
             topic_acl(AclSetup {
                 op: AclOperation::Write,
@@ -248,39 +247,21 @@ mod authorize_by_resource_type {
             topic_acl(AclSetup {
                 permission: PermissionType::Deny,
                 op: AclOperation::Write,
-                name: "*",
+                name: denied_resource,
                 ..Default::default()
             }),
         ]);
-        check_resource_type_access(
-            &img,
-            ResourceType::Topic,
-            AclOperation::Write,
-            AuthorizationResult::Deny,
-        );
+        check_resource_type_access(&img, ResourceType::Topic, AclOperation::Write, expected);
+    }
+
+    #[test]
+    fn allow_fully_covered_by_a_broader_deny_denies() {
+        allow_orders_with_deny("*", AuthorizationResult::Deny);
     }
 
     #[test]
     fn allow_on_one_resource_with_deny_on_a_different_resource_still_allows() {
-        let img = acl_image([
-            topic_acl(AclSetup {
-                op: AclOperation::Write,
-                name: "orders",
-                ..Default::default()
-            }),
-            topic_acl(AclSetup {
-                permission: PermissionType::Deny,
-                op: AclOperation::Write,
-                name: "payments",
-                ..Default::default()
-            }),
-        ]);
-        check_resource_type_access(
-            &img,
-            ResourceType::Topic,
-            AclOperation::Write,
-            AuthorizationResult::Allow,
-        );
+        allow_orders_with_deny("payments", AuthorizationResult::Allow);
     }
 
     /// A literal DENY on the bare prefix string must not shadow a prefixed

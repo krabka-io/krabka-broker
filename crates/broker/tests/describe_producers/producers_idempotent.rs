@@ -59,8 +59,8 @@ async fn after_idempotent_produce_describe_returns_the_producer() {
             0,
             Some(
                 batch(crate::support::records::ProducerValuesSetup {
-                    pid,
-                    epoch,
+                    pid: krabka_ids::ProducerId(pid),
+                    epoch: crate::support::transactions::ProducerEpoch(epoch),
                     values: &["a", "b", "c"],
                     ..Default::default()
                 })
@@ -124,8 +124,8 @@ async fn multiple_producers_on_same_partition_all_surfaced() {
                 0,
                 Some(
                     batch(crate::support::records::ProducerValuesSetup {
-                        pid,
-                        epoch,
+                        pid: krabka_ids::ProducerId(pid),
+                        epoch: crate::support::transactions::ProducerEpoch(epoch),
                         values: &["x"],
                         ..Default::default()
                     })

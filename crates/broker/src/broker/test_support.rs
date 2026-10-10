@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use krabka_ids::PartitionIndex;
+use krabka_ids::{LeaderEpoch, NodeId, PartitionIndex};
 
 use crate::{
     broker::{BrokerHandle, partition_spawn::spawn_partition},
@@ -31,7 +31,7 @@ pub(super) fn fake_source(
 #[derive(Clone, Copy)]
 pub(super) struct LocalPartitionSetup<'a> {
     pub topic: &'a str,
-    pub partition: i32,
+    pub partition: PartitionIndex,
     pub values: &'a [&'static [u8]],
 }
 
@@ -39,7 +39,7 @@ impl Default for LocalPartitionSetup<'_> {
     fn default() -> Self {
         Self {
             topic: "orders",
-            partition: 0,
+            partition: PartitionIndex::default(),
             values: &[],
         }
     }
@@ -54,13 +54,13 @@ pub(super) fn local_partition_with_records(
         partition,
         values,
     } = setup;
-    let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition);
+    let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition.0);
     std::fs::create_dir_all(&part_dir).expect("create partition dir");
     let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default())
         .expect("open partition log");
     let part = spawn_partition(
         topic.to_string(),
-        PartitionIndex(partition),
+        partition,
         log_dir.to_path_buf(),
         log,
         crate::log_dir_status::LogDirRegistry::default(),
@@ -92,35 +92,34 @@ pub(super) fn local_partition_with_records(
 
 pub(super) fn metadata_topic_record(
     topic: &str,
-    topic_id: u128,
+    topic_id: uuid::Uuid,
 ) -> krabka_metadata::MetadataRecord {
     krabka_metadata::MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
-        topic,
-        uuid::Uuid::from_u128(topic_id),
+        topic, topic_id,
     ))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct MetadataPartitionSetup<'a> {
     pub topic: &'a str,
-    pub topic_id: u128,
-    pub partition: i32,
-    pub leader: u64,
-    pub replicas: &'a [u64],
-    pub isr: &'a [u64],
-    pub leader_epoch: i32,
+    pub topic_id: uuid::Uuid,
+    pub partition: PartitionIndex,
+    pub leader: NodeId,
+    pub replicas: Vec<NodeId>,
+    pub isr: Vec<NodeId>,
+    pub leader_epoch: LeaderEpoch,
 }
 
 impl Default for MetadataPartitionSetup<'_> {
     fn default() -> Self {
         Self {
             topic: "orders",
-            topic_id: 1,
-            partition: 0,
-            leader: 1,
-            replicas: &[1],
-            isr: &[1],
-            leader_epoch: 3,
+            topic_id: uuid::Uuid::from_u128(1),
+            partition: PartitionIndex::default(),
+            leader: NodeId(1),
+            replicas: vec![NodeId(1)],
+            isr: vec![NodeId(1)],
+            leader_epoch: LeaderEpoch(3),
         }
     }
 }
@@ -137,16 +136,17 @@ pub(super) fn metadata_partition_record(
         leader_epoch,
         ..
     } = setup;
+    let directories = vec![uuid::Uuid::nil(); replicas.len()];
     krabka_metadata::PartitionRecord {
         topic: topic.to_string(),
-        partition,
-        leader: krabka_audit::NodeId(leader),
-        replicas: replicas.iter().copied().map(krabka_audit::NodeId).collect(),
-        isr: isr.iter().copied().map(krabka_audit::NodeId).collect(),
-        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+        partition: partition.0,
+        leader,
+        replicas,
+        isr,
+        leader_epoch,
         adding_replicas: Vec::new(),
         removing_replicas: Vec::new(),
-        directories: vec![uuid::Uuid::nil(); replicas.len()],
+        directories,
         partition_epoch: 0,
     }
 }
@@ -175,5 +175,5 @@ pub(super) async fn submit_metadata_topic_partition(
 
     let image = handle.controller_image_for_test();
     assert!(image.topic(topic).is_some());
-    assert!(image.partition(topic, partition) == Some(&partition_record));
+    assert!(image.partition(topic, partition.0) == Some(&partition_record));
 }

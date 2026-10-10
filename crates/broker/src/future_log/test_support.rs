@@ -43,7 +43,14 @@ pub(super) fn fixture_partition(
     topic: &str,
     partition: PartitionIndex,
 ) -> Arc<Partition> {
-    crate::test_support::open_partition(log_dir, topic, partition.get())
+    crate::test_support::open_partition(
+        log_dir,
+        crate::test_support::StandalonePartitionSetup {
+            topic,
+            partition: krabka_ids::PartitionIndex(partition.get()),
+            ..Default::default()
+        },
+    )
 }
 
 pub(super) fn append_records(part: &Arc<Partition>, count: i32) {

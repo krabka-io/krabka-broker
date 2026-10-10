@@ -544,7 +544,9 @@ mod tests {
             seed.publish_flush(&flush_record(WalFlushSetup {
                 object_key: key,
                 topic_id,
-                offsets: (first, last, 0),
+                first_offset: krabka_log::Offset(first),
+                last_offset: krabka_log::Offset(last),
+                max_timestamp: crate::test_support::UnixMillis(0),
                 ..Default::default()
             }))
             .await
@@ -738,7 +740,9 @@ mod tests {
         let racing = flush_record(WalFlushSetup {
             object_key: "object-b",
             topic_id,
-            offsets: (4, 7, 0),
+            first_offset: krabka_log::Offset(4),
+            last_offset: krabka_log::Offset(7),
+            max_timestamp: crate::test_support::UnixMillis(0),
             ..Default::default()
         });
         let racing_key = WalIndexKey::from(&racing.entries[0]).to_bytes();
@@ -892,7 +896,9 @@ mod tests {
             .publish_flush(&flush_record(WalFlushSetup {
                 object_key: "object-b",
                 topic_id,
-                offsets: (4, 7, 0),
+                first_offset: krabka_log::Offset(4),
+                last_offset: krabka_log::Offset(7),
+                max_timestamp: crate::test_support::UnixMillis(0),
                 ..Default::default()
             }))
             .await

@@ -332,7 +332,13 @@ mod tests {
         let client = plaintext_client();
         let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
-        let part = crate::test_support::open_partition(dir.path(), "t", 0);
+        let part = crate::test_support::open_partition(
+            dir.path(),
+            crate::test_support::StandalonePartitionSetup {
+                topic: "t",
+                ..Default::default()
+            },
+        );
         part.install_leader_change(2, 0).await;
         partitions.insert("t".into(), PartitionIndex(0), part.clone());
         let mut entry = marker_entry();
@@ -395,7 +401,13 @@ mod tests {
         let client = plaintext_client();
         let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
-        let local_partition = crate::test_support::open_partition(dir.path(), "local-topic", 0);
+        let local_partition = crate::test_support::open_partition(
+            dir.path(),
+            crate::test_support::StandalonePartitionSetup {
+                topic: "local-topic",
+                ..Default::default()
+            },
+        );
         local_partition.install_leader_change(1, 0).await;
         partitions.insert("local-topic".into(), PIdx(0), local_partition.clone());
 
@@ -476,7 +488,13 @@ mod tests {
             let partitions =
                 std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
             let dir = tempfile::tempdir().expect("tempdir");
-            let part = crate::test_support::open_partition(dir.path(), "t", 0);
+            let part = crate::test_support::open_partition(
+                dir.path(),
+                crate::test_support::StandalonePartitionSetup {
+                    topic: "t",
+                    ..Default::default()
+                },
+            );
             part.install_leader_change(1, 0).await;
             // The follower has not fetched, so it holds the high watermark at
             // zero.

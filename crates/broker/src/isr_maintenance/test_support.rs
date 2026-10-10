@@ -52,8 +52,8 @@ pub(super) struct IsrSetup<'a> {
     pub replicas: &'a [NodeId],
     #[default(NodeId(1))]
     pub leader: NodeId,
-    pub leader_epoch: i32,
-    pub partition_epoch: i32,
+    pub leader_epoch: LeaderEpoch,
+    pub partition_epoch: crate::test_support::PartitionEpoch,
     pub stale_followers: &'a [(NodeId, Duration)],
 }
 
@@ -69,7 +69,7 @@ pub(super) async fn set_replica_state(part: &Partition, setup: IsrSetup<'_>) {
     let now = Instant::now();
     let mut st = part.replica_state.lock().await;
     st.install_isr(isr, replicas, leader, now);
-    st.current_leader_epoch = LeaderEpoch(leader_epoch);
+    st.current_leader_epoch = leader_epoch;
     for &(follower, last_caught_up_age) in stale_followers {
         st.per_follower.insert(
             follower,
@@ -105,11 +105,11 @@ pub(super) fn partition(setup: IsrSetup<'_>) -> MetadataRecord {
         leader,
         replicas: replicas.to_vec(),
         isr: isr.to_vec(),
-        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+        leader_epoch,
         adding_replicas: vec![],
         removing_replicas: vec![],
         directories: vec![],
-        partition_epoch,
+        partition_epoch: partition_epoch.0,
     })
 }
 

@@ -162,7 +162,8 @@ mod tests {
                 .on_submit(|_| Err(krabka_raft::RaftError::Unsupported("adapter test")))
                 .build(),
         );
-        let record = metadata_topic_record("adapter-submit-mutant-topic", 0xADAD);
+        let record =
+            metadata_topic_record("adapter-submit-mutant-topic", uuid::Uuid::from_u128(0xADAD));
         let adapter = adapter(&source, 1);
 
         let results = [

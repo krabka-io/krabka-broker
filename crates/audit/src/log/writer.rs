@@ -346,17 +346,31 @@ mod tests {
         spool::PendingLosses,
     };
 
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        derive_more::Display,
+        derive_more::From,
+        derive_more::Into,
+    )]
+    struct QueueCapacity(usize);
+
     struct MemoryWriterSetup {
-        capacity: usize,
+        capacity: QueueCapacity,
         checkpoints: crate::log::test_support::CheckpointSetup,
     }
 
     impl Default for MemoryWriterSetup {
         fn default() -> Self {
             Self {
-                capacity: 16,
+                capacity: QueueCapacity(16),
                 checkpoints: crate::log::test_support::CheckpointSetup {
-                    checkpoint_every_n: 1_000_000,
+                    frequency: crate::log::test_support::CheckpointFrequency::Every(
+                        crate::log::test_support::AuditEventCount(1_000_000),
+                    ),
                     ..Default::default()
                 },
             }
@@ -372,7 +386,7 @@ mod tests {
             checkpoints,
         } = setup;
         let spool = Spool::open(directory, ROOMY_CAP).unwrap();
-        let (log, receiver) = AuditLog::new(capacity);
+        let (log, receiver) = AuditLog::new(capacity.0);
         let sink = Arc::new(MemorySink::default());
         let handle = spawn_writer(
             receiver,
@@ -387,16 +401,26 @@ mod tests {
         (Arc<AuditLog>, Arc<MemorySink>, tokio::task::JoinHandle<()>),
     );
 
-    fn signed_writer(capacity: usize, checkpoint_every_n: u64) -> SignedWriterFixture {
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct SignedWriterSetup {
+        #[default(QueueCapacity(16))]
+        capacity: QueueCapacity,
+        #[default(crate::log::test_support::CheckpointFrequency::Every(
+            crate::log::test_support::AuditEventCount(1_000_000)
+        ))]
+        frequency: crate::log::test_support::CheckpointFrequency,
+    }
+
+    fn signed_writer(setup: SignedWriterSetup) -> SignedWriterFixture {
         let (signer, public_key) = test_signer();
         let directory = tempfile::tempdir().unwrap();
         let writer = memory_writer(
             directory.path(),
             MemoryWriterSetup {
-                capacity,
+                capacity: setup.capacity,
                 checkpoints: crate::log::test_support::CheckpointSetup {
                     signer: Some(signer),
-                    checkpoint_every_n,
+                    frequency: setup.frequency,
                     ..Default::default()
                 },
             },
@@ -488,7 +512,12 @@ mod tests {
     #[tokio::test]
     async fn checkpoints_emitted_by_count_and_verify_against_recomputed_head() {
         // checkpoint every 2 records; long interval so only count triggers
-        let (pubkey, _dir, (log, sink, h)) = signed_writer(64, 2);
+        let (pubkey, _dir, (log, sink, h)) = signed_writer(SignedWriterSetup {
+            capacity: QueueCapacity(64),
+            frequency: crate::log::test_support::CheckpointFrequency::Every(
+                crate::log::test_support::AuditEventCount(2),
+            ),
+        });
         for i in 0..4 {
             log.emit(life(i));
         }
@@ -522,7 +551,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_emits_final_checkpoint_for_pending_tail() {
         // every_n large so only the shutdown path emits
-        let (pubkey, _dir, (log, sink, h)) = signed_writer(16, 1_000_000);
+        let (pubkey, _dir, (log, sink, h)) = signed_writer(SignedWriterSetup::default());
         log.emit(life(1));
         log.emit(life(2));
         log.emit(life(3));

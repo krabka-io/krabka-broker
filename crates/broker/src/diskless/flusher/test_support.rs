@@ -31,8 +31,8 @@ pub(super) fn orders_partition(root: &Path) -> Arc<Partition> {
 #[derive(Clone, Copy)]
 pub(super) struct FlusherPartitionSetup<'a> {
     pub topic: &'a str,
-    pub partition: i32,
-    pub diskless: bool,
+    pub partition: krabka_ids::PartitionIndex,
+    pub storage: crate::test_support::StorageMode,
     pub leader: NodeId,
 }
 
@@ -40,8 +40,8 @@ impl Default for FlusherPartitionSetup<'_> {
     fn default() -> Self {
         Self {
             topic: "orders",
-            partition: 0,
-            diskless: true,
+            partition: krabka_ids::PartitionIndex(0),
+            storage: crate::test_support::StorageMode::Diskless,
             leader: NodeId(1),
         }
     }
@@ -51,7 +51,7 @@ pub(super) fn test_partition(root: &Path, setup: FlusherPartitionSetup<'_>) -> A
     let FlusherPartitionSetup {
         topic,
         partition,
-        diskless,
+        storage,
         leader,
     } = setup;
     let partition_dir = root.join(format!("{topic}-{partition}"));
@@ -60,12 +60,12 @@ pub(super) fn test_partition(root: &Path, setup: FlusherPartitionSetup<'_>) -> A
     log.append(&mut batch(3)).unwrap();
     let handle = crate::broker::spawn_partition(
         topic.to_owned(),
-        krabka_ids::PartitionIndex(partition),
+        partition,
         root.to_path_buf(),
         log,
         crate::log_dir_status::LogDirRegistry::default(),
         Arc::new(crate::producer_state::ProducerState::new()),
-        diskless,
+        storage == crate::test_support::StorageMode::Diskless,
     );
     handle.current_leader.store(leader.0, Ordering::Relaxed);
     handle

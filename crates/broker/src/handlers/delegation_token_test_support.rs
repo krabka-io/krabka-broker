@@ -42,8 +42,8 @@ macro_rules! seeded_token_fixture {
             $controller,
             crate::handlers::delegation_token_test_support::TokenSetup {
                 token_id: &$token_id,
-                expiry_timestamp_ms: $seeded_at + $expiry_delta,
-                max_timestamp_ms: $maximum,
+                expires_at: crate::test_support::UnixMillis($seeded_at + $expiry_delta),
+                max_expires_at: crate::test_support::UnixMillis($maximum),
                 ..crate::handlers::delegation_token_test_support::TokenSetup::for_mutation()
             },
         )
@@ -143,9 +143,9 @@ pub(super) struct TokenSetup<'a> {
     pub token_id: &'a str,
     pub owner: KafkaPrincipal,
     pub requester: Option<KafkaPrincipal>,
-    pub issue_timestamp_ms: i64,
-    pub expiry_timestamp_ms: i64,
-    pub max_timestamp_ms: i64,
+    pub issued_at: crate::test_support::UnixMillis,
+    pub expires_at: crate::test_support::UnixMillis,
+    pub max_expires_at: crate::test_support::UnixMillis,
     pub renewers: Vec<KafkaPrincipal>,
 }
 
@@ -155,9 +155,9 @@ impl Default for TokenSetup<'_> {
             token_id: "t-a",
             owner: kp("alice"),
             requester: None,
-            issue_timestamp_ms: 1_000,
-            expiry_timestamp_ms: 2_000,
-            max_timestamp_ms: 3_000,
+            issued_at: crate::test_support::UnixMillis(1_000),
+            expires_at: crate::test_support::UnixMillis(2_000),
+            max_expires_at: crate::test_support::UnixMillis(3_000),
             renewers: vec![],
         }
     }
@@ -168,7 +168,7 @@ impl TokenSetup<'_> {
     pub(super) fn for_mutation() -> Self {
         Self {
             requester: Some(kp("minter")),
-            issue_timestamp_ms: 0,
+            issued_at: crate::test_support::UnixMillis(0),
             renewers: vec![kp("bob")],
             ..Self::default()
         }
@@ -180,18 +180,18 @@ pub(super) async fn seed_token(controller: &ControllerHandle, setup: TokenSetup<
         token_id,
         owner,
         requester,
-        issue_timestamp_ms,
-        expiry_timestamp_ms,
-        max_timestamp_ms,
+        issued_at,
+        expires_at,
+        max_expires_at,
         renewers,
     } = setup;
     let token = DelegationTokenRecord {
         token_id: token_id.into(),
         requester: requester.unwrap_or_else(|| owner.clone()),
         owner,
-        issue_timestamp_ms,
-        expiry_timestamp_ms,
-        max_timestamp_ms,
+        issue_timestamp_ms: issued_at.0,
+        expiry_timestamp_ms: expires_at.0,
+        max_timestamp_ms: max_expires_at.0,
         renewers,
     };
     controller
@@ -212,8 +212,8 @@ pub(super) async fn refusal_tokens(
             controller,
             crate::handlers::delegation_token_test_support::TokenSetup {
                 token_id,
-                expiry_timestamp_ms: *expiry,
-                max_timestamp_ms: now + DAY_MS,
+                expires_at: crate::test_support::UnixMillis(*expiry),
+                max_expires_at: crate::test_support::UnixMillis(now + DAY_MS),
                 ..crate::handlers::delegation_token_test_support::TokenSetup::for_mutation()
             },
         )

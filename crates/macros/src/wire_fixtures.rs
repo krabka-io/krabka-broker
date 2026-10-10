@@ -35,23 +35,53 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
         }
     };
     Ok(moxy::template! {
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+        pub(crate) struct BatchProducerEpoch(pub i16);
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+        pub(crate) struct BatchSequence(pub i32);
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) struct BatchRecordCount(pub i32);
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) struct BatchTimestamp(pub i64);
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) struct BatchProducer {
+            pub id: ::krabka_ids::ProducerId,
+            pub epoch: BatchProducerEpoch,
+        }
+        impl BatchProducer {
+            /// Wrap a producer identity returned by the wire codec.
+            pub(crate) fn from_wire((id, epoch): (i64, i16)) -> Self {
+                Self { id: ::krabka_ids::ProducerId(id), epoch: BatchProducerEpoch(epoch) }
+            }
+        }
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+        pub(crate) enum BatchTransactionMode {
+            #[default]
+            Ordinary,
+            Transactional,
+        }
         #[derive(Clone, Copy)]
         pub(crate) struct ProducerBatchSetup {
-            pub producer: (i64, i16),
-            pub base_sequence: i32,
-            pub records: i32,
-            pub max_timestamp: i64,
-            pub transactional: bool,
+            pub producer: BatchProducer,
+            pub base_sequence: BatchSequence,
+            pub records: BatchRecordCount,
+            pub max_timestamp: BatchTimestamp,
+            pub transaction: BatchTransactionMode,
         }
         impl Default for ProducerBatchSetup {
             fn default() -> Self {
-                Self { producer: (7, 0), base_sequence: 0, records: 1, max_timestamp: 1_000, transactional: false }
+                Self { producer: BatchProducer::from_wire((7, 0)), base_sequence: BatchSequence::default(), records: BatchRecordCount(1), max_timestamp: BatchTimestamp(1_000), transaction: BatchTransactionMode::Ordinary }
             }
         }
         pub(crate) fn {{ name }}(setup: ProducerBatchSetup) -> ::krabka_protocol::records::RecordBatch {
-            let ProducerBatchSetup { producer: (producer_id, producer_epoch), base_sequence, records, max_timestamp, transactional } = setup;
+            let ProducerBatchSetup { producer, base_sequence, records, max_timestamp, transaction } = setup;
+            let producer_id = producer.id.0;
+            let producer_epoch = producer.epoch.0;
+            let base_sequence = base_sequence.0;
+            let records = records.0;
+            let max_timestamp = max_timestamp.0;
             ::krabka_protocol::records::RecordBatch {
-                attributes: ::krabka_protocol::records::Attributes::default().with_transactional(transactional),
+                attributes: ::krabka_protocol::records::Attributes::default().with_transactional(transaction == BatchTransactionMode::Transactional),
                 last_offset_delta: records - 1, base_timestamp: max_timestamp, max_timestamp,
                 producer_id, producer_epoch, base_sequence,
                 records: (0..records).map(|offset_delta| ::krabka_protocol::records::Record {
