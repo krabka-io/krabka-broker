@@ -9,7 +9,6 @@ use krabka_broker::BrokerConfig;
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        incremental_alter_configs_request::IncrementalAlterConfigsRequest,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         share_acknowledge_request::{
             AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AckAckBatch,
@@ -33,7 +32,6 @@ use crate::support::{
 const SHARE_STATE_PARTITIONS: i32 = 1;
 const MAX_CONCURRENT_TEST_BROKERS: usize = 3;
 const RESOURCE_TYPE_GROUP: i8 = 32;
-const CONFIG_OP_SET: i8 = 0;
 pub fn topic_id(broker: &krabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
     let image = broker.controller_image_for_test();
     image
@@ -77,16 +75,18 @@ pub async fn bootstrap_share_state(
 pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
     let resp = client
         .send(incremental_request(
-            vec![incremental_resource(
-                RESOURCE_TYPE_GROUP,
-                group,
-                vec![incremental_config(
-                    "share.auto.offset.reset",
-                    Some("earliest".into()),
-                    CONFIG_OP_SET,
+            crate::support::configs::IncrementalConfigsSetup {
+                resources: vec![incremental_resource(
+                    RESOURCE_TYPE_GROUP,
+                    group,
+                    vec![incremental_config(
+                        "share.auto.offset.reset",
+                        Some("earliest".into()),
+                        crate::support::configs::ConfigOperation::Set,
+                    )],
                 )],
-            )],
-            IncrementalAlterConfigsRequest::default().validate_only,
+                ..Default::default()
+            },
         ))
         .await
         .expect("IncrementalAlterConfigs(group)");

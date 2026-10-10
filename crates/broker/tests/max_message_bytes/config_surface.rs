@@ -12,9 +12,6 @@ use crate::{
     wire::{MAX_MESSAGE_BYTES, accepted, create_topic, produce_batch_of_wire_len, too_large},
 };
 
-/// `IncrementalAlterConfigs` `config_operation` SET.
-const CONFIG_OP_SET: i8 = 0;
-
 /// `ConfigSource::DYNAMIC_TOPIC_CONFIG`, which is what a stored topic
 /// override reports.
 const CONFIG_SOURCE_DYNAMIC_TOPIC: i8 = 1;
@@ -128,10 +125,12 @@ async fn describe_max_message_bytes(client: &Client, topic: &str) -> DescribeCon
 async fn set_max_message_bytes(client: &Client, topic: &str, value: &str) -> (i16, Option<String>) {
     crate::support::configs::alter_topic_config(
         client,
-        topic,
-        MAX_MESSAGE_BYTES,
-        CONFIG_OP_SET,
-        Some(value),
+        crate::support::configs::TopicConfigMutationSetup {
+            topic,
+            name: MAX_MESSAGE_BYTES,
+            value: Some(value),
+            ..Default::default()
+        },
     )
     .await
 }

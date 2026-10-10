@@ -1420,6 +1420,26 @@ pub(crate) fn allow_acl(setup: AllowAclSetup<'_>) -> krabka_metadata::AclEntry {
     }
 }
 
+/// Independent cluster `DescribeConfigs` implication cases shared by configuration APIs.
+pub(crate) fn describe_configs_acl_cases<'a, R>(
+    allowed: &'a R,
+    denied: &'a R,
+) -> Vec<(&'static str, Option<krabka_metadata::AclOperation>, &'a R)> {
+    use krabka_metadata::AclOperation;
+    vec![
+        ("no-grant", None, denied),
+        ("describe", Some(AclOperation::Describe), denied),
+        ("alter", Some(AclOperation::Alter), denied),
+        (
+            "describe-configs",
+            Some(AclOperation::DescribeConfigs),
+            allowed,
+        ),
+        ("alter-configs", Some(AclOperation::AlterConfigs), allowed),
+        ("all", Some(AclOperation::All), allowed),
+    ]
+}
+
 /// Commit one literal `Allow` ACL for `User:<user>` on the cluster resource.
 ///
 /// A test that starts its broker with a [`crate::authorizer::SimpleAclAuthorizer`]

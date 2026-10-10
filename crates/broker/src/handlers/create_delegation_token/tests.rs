@@ -19,7 +19,7 @@ use super::{
     *,
 };
 use crate::handlers::delegation_token_test_support::{
-    DAY_MS as RENEW_24H_MS, anonymous, authed, authed_with_token, test_controller,
+    DAY_MS as RENEW_24H_MS, anonymous, authed, test_controller, token_authed,
 };
 
 fn principal(principal_type: &str, name: &str) -> KafkaPrincipal {
@@ -119,10 +119,7 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
         // requester gets the generic error response.
         (
             "owner name without a type",
-            authed_with_token(
-                "admin",
-                crate::handlers::delegation_token_test_support::CredentialSource::DelegationToken,
-            ),
+            token_authed("admin"),
             crate::handlers::delegation_token_test_support::SecretProvision::Configured,
             name_only.clone(),
             super_users_with(&["admin"]),
@@ -138,10 +135,7 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
         ),
         (
             "token-authenticated requester",
-            authed_with_token(
-                "alice",
-                crate::handlers::delegation_token_test_support::CredentialSource::DelegationToken,
-            ),
+            token_authed("alice"),
             crate::handlers::delegation_token_test_support::SecretProvision::Configured,
             self_mint.clone(),
             empty_super_users(),
@@ -152,10 +146,7 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
         ),
         (
             "token-authenticated super user acting as another owner",
-            authed_with_token(
-                "admin",
-                crate::handlers::delegation_token_test_support::CredentialSource::DelegationToken,
-            ),
+            token_authed("admin"),
             crate::handlers::delegation_token_test_support::SecretProvision::Configured,
             act_as("User", "alice"),
             super_users_with(&["admin"]),
@@ -180,10 +171,7 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
         ),
         (
             "token-authenticated requester with tokens disabled",
-            authed_with_token(
-                "alice",
-                crate::handlers::delegation_token_test_support::CredentialSource::DelegationToken,
-            ),
+            token_authed("alice"),
             crate::handlers::delegation_token_test_support::SecretProvision::Absent,
             self_mint.clone(),
             empty_super_users(),

@@ -224,10 +224,13 @@ fn request(setup: FetchRequestSetup<'_>) -> FetchRequest {
             } else {
                 WireUuid::ZERO
             },
-            partitions: vec![super::test_support::request_partition(offset.0)],
+            partitions: vec![super::test_support::request_partition(Offset(offset.0))],
             ..Default::default()
         }],
-        ..super::test_support::sessionless_request(version.0, replica_id)
+        ..super::test_support::sessionless_request(super::test_support::SessionlessFetchSetup {
+            version: krabka_ids::ApiVersion(version.0),
+            replica: super::test_support::FetchReplicaId(replica_id),
+        })
     }
 }
 
@@ -238,7 +241,16 @@ async fn fetch(
     caller: Caller,
     request: &FetchRequest,
 ) -> FetchResponse {
-    super::test_support::fetch_wire(broker, version.0, caller.name(), "fetch-client", request).await
+    super::test_support::fetch_wire(
+        broker,
+        request,
+        super::test_support::FetchWireSetup {
+            version: krabka_ids::ApiVersion(version.0),
+            user: caller.name(),
+            client_id: "fetch-client",
+        },
+    )
+    .await
 }
 
 /// The one-row response of `case` for partition 0 of `topic`.
@@ -248,7 +260,7 @@ fn response(
     partition: PartitionData,
 ) -> FetchResponse {
     super::test_support::expected_single_topic(
-        version.0 >= FIRST_TOPIC_ID_VERSION,
+        super::test_support::TopicRepresentation::for_version(krabka_ids::ApiVersion(version.0)),
         topic,
         partition,
     )
@@ -256,23 +268,7 @@ fn response(
 
 /// The partition row of Kafka's `FetchResponse.partitionResponse`.
 fn refused(error_code: KafkaErrorCode) -> PartitionData {
-    super::test_support::expected_refused_partition(0, error_code.0)
-}
-
-/// A partition row that the fetch read, with `watermark` as its high watermark
-/// and last stable offset.
-fn read(watermark: i64, records: RecordsPayload) -> PartitionData {
-    PartitionData {
-        partition_index: 0,
-        error_code: codes::NONE,
-        high_watermark: watermark,
-        last_stable_offset: watermark,
-        log_start_offset: 0,
-        aborted_transactions: None,
-        preferred_read_replica: -1,
-        records: Some(records),
-        ..Default::default()
-    }
+    super::test_support::expected_refused_partition(krabka_ids::PartitionIndex(0), error_code)
 }
 
 /// The record set of a row that carries nothing, as a client decodes it.
@@ -289,12 +285,28 @@ fn expected(case: Case, label: String, topic: (&str, WireUuid), batch: RecordBat
         // records that position, so the second answer still carries 0, and
         // only the partition's high watermark moves to the log end.
         Expect::FollowerRead => (
-            read(0, RecordsPayload::V2(vec![batch])),
-            read(0, no_records()),
+            super::test_support::expected_read(super::test_support::ExpectedReadSetup {
+                watermark: Offset(0),
+                records: RecordsPayload::V2(vec![batch]),
+            }),
+            super::test_support::expected_read(super::test_support::ExpectedReadSetup {
+                watermark: Offset(0),
+                records: no_records(),
+            }),
             Offset(LOG_END),
         ),
         Expect::Refused(error_code) => (refused(error_code), refused(error_code), Offset(0)),
-        Expect::ConsumerRead => (read(0, no_records()), read(0, no_records()), Offset(0)),
+        Expect::ConsumerRead => (
+            super::test_support::expected_read(super::test_support::ExpectedReadSetup {
+                watermark: Offset(0),
+                records: no_records(),
+            }),
+            super::test_support::expected_read(super::test_support::ExpectedReadSetup {
+                watermark: Offset(0),
+                records: no_records(),
+            }),
+            Offset(0),
+        ),
     };
     Outcome {
         case: label,

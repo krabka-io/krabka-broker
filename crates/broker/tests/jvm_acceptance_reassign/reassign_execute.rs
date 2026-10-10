@@ -304,12 +304,12 @@ async fn reassign_partitions_additional_keeps_the_reassignment_already_running()
         bootstrap: &advertised,
     };
 
-    side.create_assigned_topic(
-        TOPIC,
-        "1,1",
-        CLIENT_PROPS,
-        &[ToolFile::new(CLIENT_PROPS, &props)],
-    );
+    side.create_assigned_topic(crate::oracle::AssignedTopicCommandSetup {
+        topic: TOPIC,
+        assignment: "1,1",
+        props_path: CLIENT_PROPS,
+        files: &[ToolFile::new(CLIENT_PROPS, &props)],
+    });
     for partition in 0..2 {
         brokers
             .h1

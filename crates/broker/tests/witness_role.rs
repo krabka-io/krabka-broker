@@ -66,7 +66,6 @@ const LEADER_ID: i32 = 1;
 /// Kafka's `BROKER` config-resource type.
 const RESOURCE_TYPE_BROKER: i8 = 4;
 /// `IncrementalAlterConfigs` SET.
-const CONFIG_OP_SET: i8 = 0;
 /// `config_source` `DYNAMIC_BROKER_CONFIG`.
 const CONFIG_SOURCE_DYNAMIC_BROKER: i8 = 2;
 /// `config_source` `DYNAMIC_DEFAULT_BROKER_CONFIG`.

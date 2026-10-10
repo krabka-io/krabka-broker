@@ -435,9 +435,7 @@ async fn handle_success_persists_topic_config_and_success_fields() {
     creation_fixture!((broker_handle, _dir, broker), (p, peer), allow_all, "admin");
     let req = request(vec![topic_with_config("configured")]);
 
-    let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
-
-    assert!(resp.topics.len() == 1);
+    let resp = drive_single_topic(&broker, &req, &test_context(&p, &peer)).await;
     assert!(resp.topics[0].topic_id != ProtoUuid([0; 16]));
     let expected = unthrottled_wire!(CreateTopicsResponse {
         topics: vec![
@@ -478,9 +476,7 @@ async fn handle_creates_a_topic_whose_cleanup_policy_names_both_halves() {
         ],
     )]);
 
-    let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
-
-    assert!(resp.topics.len() == 1);
+    let resp = drive_single_topic(&broker, &req, &test_context(&p, &peer)).await;
     assert!(resp.topics[0].error_code == codes::NONE);
     let image = broker_handle.controller_image_for_test();
     let configs = image
@@ -2122,4 +2118,15 @@ async fn too_many_partitions_message_follows_the_unstable_flag() {
         );
         broker_handle.shutdown().await;
     }
+}
+
+/// Single-topic cases must receive exactly one row before inspecting its fields.
+async fn drive_single_topic(
+    broker: &Broker,
+    request: &CreateTopicsRequest,
+    context: &crate::handlers::RequestContext<'_>,
+) -> CreateTopicsResponse {
+    let response = drive(broker, request, context).await;
+    assert!(response.topics.len() == 1);
+    response
 }

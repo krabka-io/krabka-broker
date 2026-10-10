@@ -472,19 +472,9 @@ mod tests {
             config_resources: vec![],
         });
 
-        for (user, grant, expected) in [
-            ("no-grant", None, &denied),
-            ("describe", Some(AclOperation::Describe), &denied),
-            ("alter", Some(AclOperation::Alter), &denied),
-            ("read", Some(AclOperation::Read), &denied),
-            (
-                "describe-configs",
-                Some(AclOperation::DescribeConfigs),
-                &allowed,
-            ),
-            ("alter-configs", Some(AclOperation::AlterConfigs), &allowed),
-            ("all", Some(AclOperation::All), &allowed),
-        ] {
+        let mut cases = crate::test_support::describe_configs_acl_cases(&allowed, &denied);
+        cases.insert(3, ("read", Some(AclOperation::Read), &denied));
+        for (user, grant, expected) in cases {
             if let Some(operation) = grant {
                 crate::test_support::grant_cluster_operation(&broker_handle, user, operation).await;
             }

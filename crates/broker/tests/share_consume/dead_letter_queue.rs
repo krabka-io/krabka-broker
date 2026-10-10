@@ -20,9 +20,8 @@ use krabka_broker::{
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::CreateTopicsRequest,
-        incremental_alter_configs_request::IncrementalAlterConfigsRequest,
-        list_offsets_request::ListOffsetsRequest, share_acknowledge_request::AcknowledgementBatch,
+        create_topics_request::CreateTopicsRequest, list_offsets_request::ListOffsetsRequest,
+        share_acknowledge_request::AcknowledgementBatch,
         update_features_request::UpdateFeaturesRequest,
     },
     records::{Record, RecordBatch, RecordsPayload},
@@ -39,9 +38,6 @@ use crate::{
         share::{acknowledge_partition, acknowledge_request, acknowledge_topic},
     },
 };
-
-/// `config_operation` SET = 0 in the `IncrementalAlterConfigs` wire protocol.
-const CONFIG_OP_SET: i8 = 0;
 
 const GROUP: &str = "g1";
 const DLQ_TOPIC: &str = "dlq.g1";
@@ -122,22 +118,28 @@ struct DeadLetterConfigSetup<'a> {
 async fn set_configs(client: &Client, setup: DeadLetterConfigSetup<'_>) {
     let response = client
         .send(incremental_request(
-            vec![incremental_resource(
-                match setup.target {
-                    DeadLetterConfigTarget::Group => 32,
-                    DeadLetterConfigTarget::Broker => 4,
-                    DeadLetterConfigTarget::Topic => 2,
-                },
-                setup.name,
-                setup
-                    .values
-                    .iter()
-                    .map(|(name, value)| {
-                        incremental_config(*name, Some((*value).into()), CONFIG_OP_SET)
-                    })
-                    .collect(),
-            )],
-            IncrementalAlterConfigsRequest::default().validate_only,
+            crate::support::configs::IncrementalConfigsSetup {
+                resources: vec![incremental_resource(
+                    match setup.target {
+                        DeadLetterConfigTarget::Group => 32,
+                        DeadLetterConfigTarget::Broker => 4,
+                        DeadLetterConfigTarget::Topic => 2,
+                    },
+                    setup.name,
+                    setup
+                        .values
+                        .iter()
+                        .map(|(name, value)| {
+                            incremental_config(
+                                *name,
+                                Some((*value).into()),
+                                crate::support::configs::ConfigOperation::Set,
+                            )
+                        })
+                        .collect(),
+                )],
+                ..Default::default()
+            },
         ))
         .await
         .expect("IncrementalAlterConfigs");

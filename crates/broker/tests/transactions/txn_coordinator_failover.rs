@@ -69,23 +69,6 @@ async fn data_leader_client(cluster: &Cluster) -> Client {
     client(&handle.listen_addr().to_string()).await
 }
 
-/// Create the data topic with `leader` leading its one partition on all three
-/// brokers. The test stops the broker that coordinates the transaction and
-/// expects the data partition to change leaders with it, so the two must
-/// share a broker: an automatic placement starts at a random broker.
-async fn create_topic(client: &Client, leader: u64) {
-    let leader = i32::try_from(leader).expect("node id fits an i32");
-    let mut replicas = vec![leader];
-    replicas.extend((1..=3).filter(|node| *node != leader));
-    crate::support::transaction_wire::create_assigned_topic(
-        client,
-        TOPIC,
-        &replicas,
-        Some("CreateTopics"),
-    )
-    .await;
-}
-
 /// Create `__transaction_state` with `FindCoordinator`.
 async fn find_coordinator(client: &Client) {
     let deadline = Instant::now() + SETTLE;
@@ -192,7 +175,17 @@ async fn a_transaction_commits_through_the_next_coordinator() {
     let admin = client(&cluster[0].0.listen_addr().to_string()).await;
     find_coordinator(&admin).await;
     let coordinator = leader_of(&cluster[0].0, STATE_TOPIC).await;
-    create_topic(&admin, coordinator).await;
+    crate::support::transaction_wire::create_assigned_topic(
+        &admin,
+        crate::support::transaction_wire::AssignedTransactionTopicSetup {
+            topic: crate::support::topics::AssignedTopicSetup::leader_first(
+                TOPIC,
+                krabka_metadata::NodeId(coordinator),
+            ),
+            context: Some("CreateTopics"),
+        },
+    )
+    .await;
     cluster[0].0.wait_until_isr_len(STATE_TOPIC, 0, 3).await;
     cluster[0].0.wait_until_isr_len(TOPIC, 0, 3).await;
 

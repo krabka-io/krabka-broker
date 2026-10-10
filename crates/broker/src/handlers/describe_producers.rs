@@ -234,13 +234,12 @@ fn producer_state(producer: krabka_log::ActiveProducer) -> ProducerState {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use bytes::Bytes;
     use krabka_metadata::NodeId;
     use krabka_protocol::owned::describe_producers_request::TopicRequest;
-    use krabka_security::Principal;
 
     use super::*;
     use crate::{
@@ -269,11 +268,9 @@ mod tests {
     fn drive(
         broker: &Broker,
         req: &DescribeProducersRequest,
-        principal: &Principal,
-        peer: &SocketAddr,
+        ctx: &crate::handlers::RequestContext<'_>,
     ) -> DescribeProducersResponse {
-        let ctx = test_context(principal, peer);
-        handle(broker, req, VERSION, &ctx).expect("handle")
+        handle(broker, req, VERSION, ctx).expect("handle")
     }
 
     /// Kafka's `checkValidTopic` answers `INVALID_TOPIC_EXCEPTION` (17) for
@@ -351,7 +348,7 @@ mod tests {
             request_identity!((p, peer), principal("alice"));
             let req = request(name, &[0]);
 
-            let resp = drive(&broker, &req, &p, &peer);
+            let resp = drive(&broker, &req, &test_context(&p, &peer));
 
             let expected = empty_producer_response(EmptyProducerResponseSetup {
                 topic: name,
@@ -432,7 +429,7 @@ mod tests {
             ),
         ];
         for (name, error_message) in cases {
-            let resp = drive(&broker, &request(name, &[5]), &p, &peer);
+            let resp = drive(&broker, &request(name, &[5]), &test_context(&p, &peer));
             let expected = empty_producer_response(EmptyProducerResponseSetup {
                 topic: name,
                 partition: krabka_ids::PartitionIndex(5),
@@ -455,7 +452,7 @@ mod tests {
         request_identity!((p, peer), principal("alice"));
         let req = request("a/b", &[0, 1, 4]);
 
-        let resp = drive(&broker, &req, &p, &peer);
+        let resp = drive(&broker, &req, &test_context(&p, &peer));
 
         let message =
             krabka_log::topic_name::InvalidTopicName::IllegalCharacter("a/b".into()).to_string();
@@ -759,7 +756,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = drive(&broker, &request, &p, &peer);
+        let resp = drive(&broker, &request, &test_context(&p, &peer));
 
         let expected = DescribeProducersResponse {
             throttle_time_ms: 0,
@@ -810,7 +807,7 @@ mod tests {
         broker
             .log_dir_status
             .mark_offline(&leads.log_dir.load(), "test: EIO");
-        let offline = drive(&broker, &request, &p, &peer);
+        let offline = drive(&broker, &request, &test_context(&p, &peer));
         let expected = DescribeProducersResponse {
             topics: vec![
                 topic(

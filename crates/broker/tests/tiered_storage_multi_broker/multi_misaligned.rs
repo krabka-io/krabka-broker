@@ -82,9 +82,15 @@ fn remote_segments(root: &Path) -> Vec<RemoteSegment> {
 /// Produces `count` single-record batches through `client`, one request each,
 /// so both replicas see many small batches and roll on their own byte budget.
 async fn produce_records(client: &Client, topic_id: WireUuid, prefix: &str, count: usize) {
-    crate::topic_fixture::produce_records(client, TOPIC, topic_id, count, |index| {
-        bytes::Bytes::from(format!("{prefix}-record-{index}"))
-    })
+    crate::topic_fixture::produce_records(
+        client,
+        |index| bytes::Bytes::from(format!("{prefix}-record-{index}")),
+        crate::topic_fixture::TieredRecordsSetup {
+            topic: TOPIC,
+            topic_id,
+            count: crate::topic_fixture::TieredRecordCount(count),
+        },
+    )
     .await;
 }
 
@@ -99,7 +105,18 @@ async fn produce_records(client: &Client, topic_id: WireUuid, prefix: &str, coun
 /// its `CopySegmentStarted` write before it uploaded anything. Kafka reads a
 /// manual assignment as `num_partitions = -1, replication_factor = -1`.
 async fn create_misaligned_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandle) {
-    crate::topic_fixture::create_assigned_topic(admin, TOPIC, &[2, 1], None).await;
+    let assignment = crate::support::topics::AssignedTopicSetup::on_replicas(
+        TOPIC,
+        vec![krabka_metadata::NodeId(2), krabka_metadata::NodeId(1)],
+    );
+    crate::topic_fixture::create_assigned_topic(
+        admin,
+        crate::topic_fixture::AssignedTieredTopicSetup {
+            topic: assignment,
+            segment_bytes: None,
+        },
+    )
+    .await;
 
     crate::topic_fixture::await_tiered_replicas(
         &[b1, b2],

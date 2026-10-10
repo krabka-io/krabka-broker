@@ -135,8 +135,8 @@ async fn incremental_alter_configs_on(stream: &mut TcpStream, resources: ConfigR
 
     use krabka_protocol::owned::incremental_alter_configs_response::IncrementalAlterConfigsResponse;
 
-    let req = incremental_request(
-        resources
+    let req = incremental_request(crate::support::configs::IncrementalConfigsSetup {
+        resources: resources
             .into_iter()
             .map(|(resource_type, resource_name, configs)| {
                 incremental_resource(
@@ -145,14 +145,20 @@ async fn incremental_alter_configs_on(stream: &mut TcpStream, resources: ConfigR
                     configs
                         .into_iter()
                         .map(|(name, value, config_operation)| {
-                            incremental_config(name, value, config_operation)
+                            incremental_config(
+                                name,
+                                value,
+                                crate::support::configs::ConfigOperation::from_wire(
+                                    config_operation,
+                                ),
+                            )
                         })
                         .collect(),
                 )
             })
             .collect(),
-        false,
-    );
+        ..Default::default()
+    });
 
     let resp: IncrementalAlterConfigsResponse = kafka_wire::exchange(
         stream,

@@ -110,23 +110,20 @@ pub(crate) async fn set_broker_config(
     name: &str,
     value: &str,
 ) -> (i16, Option<String>) {
-    use krabka_protocol::owned::{
-        incremental_alter_configs_request::IncrementalAlterConfigsRequest,
-        incremental_alter_configs_response::IncrementalAlterConfigsResponse,
-    };
+    use krabka_protocol::owned::incremental_alter_configs_response::IncrementalAlterConfigsResponse;
     let version: i16 = 1;
-    let req = incremental_request(
-        vec![incremental_resource(
+    let req = incremental_request(crate::support::configs::IncrementalConfigsSetup {
+        resources: vec![incremental_resource(
             4,
             broker.to_string(),
             vec![incremental_config(
                 name.to_string(),
                 Some(value.to_string()),
-                0,
+                crate::support::configs::ConfigOperation::Set,
             )],
         )],
-        IncrementalAlterConfigsRequest::default().validate_only,
-    );
+        ..Default::default()
+    });
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let resp: IncrementalAlterConfigsResponse = flexible_exchange(
         &mut stream,

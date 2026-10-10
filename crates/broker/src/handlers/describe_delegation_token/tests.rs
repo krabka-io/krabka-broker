@@ -23,7 +23,7 @@ use tempfile::TempDir;
 
 use super::handle;
 use crate::handlers::delegation_token_test_support::{
-    TokenSetup, anonymous, authed, authed_with_token, kp, seed_token, test_controller,
+    TokenSetup, anonymous, authed, kp, seed_token, test_controller, token_authed,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -48,6 +48,24 @@ fn describe(
         &peer(),
         authorizer,
     )
+}
+
+fn describe_unrestricted(
+    controller: &dyn crate::metadata_source::MetadataSource,
+    setup: DescribeTokenSetup<'_>,
+) -> krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse {
+    describe(controller, &crate::authorizer::AllowAllAuthorizer, setup)
+}
+
+fn check_refused_token_description(
+    response: &krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse,
+) {
+    assert!(response.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    assert!(
+        response.tokens.is_empty(),
+        "refused caller must never see any token HMAC, got {:?}",
+        token_ids(response)
+    );
 }
 
 async fn seed_alice_tokens(controller: &ControllerHandle) {
@@ -153,9 +171,8 @@ async fn anonymous_caller_is_rejected_without_exposing_token_hmacs() {
     token_fixture!(dir, controller, secret);
     seed_token(&controller, TokenSetup::default()).await;
 
-    let resp = describe(
+    let resp = describe_unrestricted(
         &*controller,
-        &crate::authorizer::AllowAllAuthorizer,
         DescribeTokenSetup {
             authentication: Some(&anonymous()),
             secret: Some(&secret),
@@ -163,8 +180,7 @@ async fn anonymous_caller_is_rejected_without_exposing_token_hmacs() {
         },
     );
 
-    assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
-    assert!(resp.tokens.is_empty());
+    check_refused_token_description(&resp);
     controller.cancel().await;
 }
 
@@ -180,25 +196,16 @@ async fn token_authed_caller_is_refused_entirely() {
     // to read either one, including its own token's sibling.
     seed_alice_tokens(&controller).await;
 
-    let resp = describe(
+    let resp = describe_unrestricted(
         &*controller,
-        &crate::authorizer::AllowAllAuthorizer,
         DescribeTokenSetup {
-            authentication: Some(&authed_with_token(
-                "alice",
-                crate::handlers::delegation_token_test_support::CredentialSource::DelegationToken,
-            )),
+            authentication: Some(&token_authed("alice")),
             secret: Some(&secret),
             ..Default::default()
         },
     );
 
-    assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
-    assert!(
-        resp.tokens.is_empty(),
-        "token-authed caller must never see any token's HMAC, got {:?}",
-        token_ids(&resp)
-    );
+    check_refused_token_description(&resp);
     controller.cancel().await;
 }
 
@@ -210,14 +217,10 @@ async fn token_authed_caller_gets_request_not_allowed_before_auth_disabled() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
 
-    let resp = describe(
+    let resp = describe_unrestricted(
         &*controller,
-        &crate::authorizer::AllowAllAuthorizer,
         DescribeTokenSetup {
-            authentication: Some(&authed_with_token(
-                "alice",
-                crate::handlers::delegation_token_test_support::CredentialSource::DelegationToken,
-            )),
+            authentication: Some(&token_authed("alice")),
             ..Default::default()
         },
     );
@@ -237,9 +240,8 @@ async fn empty_owners_list_returns_no_tokens_without_error() {
         owners: Some(vec![]),
         ..Default::default()
     };
-    let resp = describe(
+    let resp = describe_unrestricted(
         &*controller,
-        &crate::authorizer::AllowAllAuthorizer,
         DescribeTokenSetup {
             request: Some(&req),
             secret: Some(&secret),

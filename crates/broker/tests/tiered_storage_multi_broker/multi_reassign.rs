@@ -79,18 +79,37 @@ fn local_log_bytes(partition_dir: &Path) -> u64 {
 
 /// Produces `count` single-record batches through `client`, one request each.
 async fn produce_records(client: &Client, topic_id: WireUuid, count: usize) {
-    crate::topic_fixture::produce_records(client, TOPIC, topic_id, count, |index| {
-        let mut value = format!("record-{index}-").into_bytes();
-        value.resize(PAYLOAD, b'x');
-        bytes::Bytes::from(value)
-    })
+    crate::topic_fixture::produce_records(
+        client,
+        |index| {
+            let mut value = format!("record-{index}-").into_bytes();
+            value.resize(PAYLOAD, b'x');
+            bytes::Bytes::from(value)
+        },
+        crate::topic_fixture::TieredRecordsSetup {
+            topic: TOPIC,
+            topic_id,
+            count: crate::topic_fixture::TieredRecordCount(count),
+        },
+    )
     .await;
 }
 
 /// Creates the tiered topic on broker 1 alone, with local retention set so
 /// tight that every sealed segment is evicted as soon as it is archived.
 async fn create_single_replica_tiered_topic(admin: &Client, leader: &BrokerHandle) {
-    crate::topic_fixture::create_assigned_topic(admin, TOPIC, &[1], None).await;
+    let assignment = crate::support::topics::AssignedTopicSetup::on_replicas(
+        TOPIC,
+        vec![krabka_metadata::NodeId(1)],
+    );
+    crate::topic_fixture::create_assigned_topic(
+        admin,
+        crate::topic_fixture::AssignedTieredTopicSetup {
+            topic: assignment,
+            segment_bytes: None,
+        },
+    )
+    .await;
     leader
         .wait_for_image(|img| img.partition(TOPIC, 0).is_some())
         .await;

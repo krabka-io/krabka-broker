@@ -159,6 +159,17 @@ pub(crate) enum Side<'a> {
     Oracle(&'a Oracle),
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct AssignedTopicCommandSetup<'a> {
+    #[default("orders")]
+    pub topic: &'a str,
+    #[default("1")]
+    pub assignment: &'a str,
+    #[default("/tmp/client.properties")]
+    pub props_path: &'a str,
+    pub files: &'a [ToolFile],
+}
+
 impl Side<'_> {
     /// A label for the panic message, so a failure says which side failed.
     pub(crate) fn label(&self) -> &'static str {
@@ -177,13 +188,13 @@ impl Side<'_> {
     }
 
     /// Create a fixed assignment through this side's own JVM admin client.
-    pub(crate) fn create_assigned_topic(
-        &self,
-        topic: &str,
-        assignment: &str,
-        props_path: &str,
-        files: &[ToolFile],
-    ) {
+    pub(crate) fn create_assigned_topic(&self, setup: AssignedTopicCommandSetup<'_>) {
+        let AssignedTopicCommandSetup {
+            topic,
+            assignment,
+            props_path,
+            files,
+        } = setup;
         self.run_with_files(
             "kafka-topics",
             &[

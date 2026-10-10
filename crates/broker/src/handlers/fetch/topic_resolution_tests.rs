@@ -111,7 +111,16 @@ async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
 /// Send one `Fetch` at `version` and return the response as a client decodes
 /// it.
 async fn fetch(broker: &BrokerHandle, version: i16, request: &FetchRequest) -> FetchResponse {
-    super::test_support::fetch_wire(broker, version, "consumer", "consumer-client", request).await
+    super::test_support::fetch_wire(
+        broker,
+        request,
+        super::test_support::FetchWireSetup {
+            version: krabka_ids::ApiVersion(version),
+            user: "consumer",
+            client_id: "consumer-client",
+        },
+    )
+    .await
 }
 
 /// Send one sessionless single-row `Fetch` at `case.version` for `case.topic`.
@@ -142,10 +151,15 @@ async fn drive(
     let partition = if case.error_code == codes::NONE {
         empty_partition(case.version)
     } else {
-        refused_partition(0, case.error_code)
+        refused_partition(
+            krabka_ids::PartitionIndex(0),
+            crate::test_support::KafkaErrorCode(case.error_code),
+        )
     };
-    let id_only = case.version >= FIRST_TOPIC_ID_VERSION;
-    let expected = super::test_support::expected_single_topic(id_only, (name, topic_id), partition);
+    let representation =
+        super::test_support::TopicRepresentation::for_version(krabka_ids::ApiVersion(case.version));
+    let expected =
+        super::test_support::expected_single_topic(representation, (name, topic_id), partition);
     (
         (case.version, case.topic, actual),
         (case.version, case.topic, expected),
@@ -214,7 +228,10 @@ async fn every_unresolved_id_keeps_its_own_topic_row() {
     let refused_topic = |topic_id| FetchableTopicResponse {
         topic: String::new(),
         topic_id,
-        partitions: vec![refused_partition(0, codes::UNKNOWN_TOPIC_ID)],
+        partitions: vec![refused_partition(
+            krabka_ids::PartitionIndex(0),
+            crate::test_support::KafkaErrorCode(codes::UNKNOWN_TOPIC_ID),
+        )],
         ..Default::default()
     };
     let expected = FetchResponse {
@@ -269,7 +286,10 @@ async fn a_fetch_session_repeats_unknown_topic_id() {
         responses: vec![FetchableTopicResponse {
             topic: String::new(),
             topic_id: UNKNOWN_ID,
-            partitions: vec![refused_partition(0, codes::UNKNOWN_TOPIC_ID)],
+            partitions: vec![refused_partition(
+                krabka_ids::PartitionIndex(0),
+                crate::test_support::KafkaErrorCode(codes::UNKNOWN_TOPIC_ID),
+            )],
             ..Default::default()
         }],
         ..Default::default()
@@ -380,7 +400,10 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
                 topic_id: id,
                 partitions: vec![
                     hosted_elsewhere,
-                    refused_partition(ABSENT, codes::UNKNOWN_TOPIC_OR_PARTITION),
+                    refused_partition(
+                        krabka_ids::PartitionIndex(ABSENT),
+                        crate::test_support::KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
+                    ),
                 ],
                 ..Default::default()
             }],

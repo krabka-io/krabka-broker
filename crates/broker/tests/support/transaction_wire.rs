@@ -337,19 +337,23 @@ pub(crate) async fn settled_produce(
     .await
 }
 
+#[derive(krabka_macros::FieldDefaults)]
+pub(crate) struct AssignedTransactionTopicSetup<'a> {
+    pub topic: crate::support::topics::AssignedTopicSetup,
+    pub context: Option<&'a str>,
+}
+
 pub(crate) async fn create_assigned_topic(
     client: &krabka_client_core::Client,
-    name: &str,
-    replicas: &[i32],
-    context: Option<&str>,
+    setup: AssignedTransactionTopicSetup<'_>,
 ) -> Uuid {
     let created = client
         .send(crate::support::topics::create_topic_request(
-            crate::support::topic_on(name, &[replicas]),
+            crate::support::topics::assigned_topic(setup.topic),
         ))
         .await
         .expect("CreateTopics");
-    match context {
+    match setup.context {
         Some(context) => assert!(created.topics[0].error_code == 0, "{context}: {created:?}"),
         None => assert!(created.topics[0].error_code == 0, "{created:?}"),
     }

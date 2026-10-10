@@ -104,7 +104,18 @@ pub(crate) async fn await_follower_local_eviction(log_dir: &std::path::Path) {
 }
 
 pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandle) {
-    crate::topic_fixture::create_assigned_topic(admin, TOPIC, &[1, 2], Some("1024")).await;
+    let assignment = crate::support::topics::AssignedTopicSetup::on_replicas(
+        TOPIC,
+        vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+    );
+    crate::topic_fixture::create_assigned_topic(
+        admin,
+        crate::topic_fixture::AssignedTieredTopicSetup {
+            topic: assignment,
+            segment_bytes: Some("1024"),
+        },
+    )
+    .await;
 
     crate::topic_fixture::await_tiered_replicas(
         &[b1, b2],

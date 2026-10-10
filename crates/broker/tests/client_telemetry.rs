@@ -32,8 +32,7 @@
 use assert2::{assert, check};
 
 use crate::support::{
-    client::connect_owned,
-    configs::{incremental_config, incremental_request, incremental_resource},
+    client::connect_owned, configs::client_metrics_subscription,
     discovery::api_versions_request_for,
 };
 mod support;
@@ -49,12 +48,6 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 use support::start_n_node_with;
-
-/// Kafka resource type id for `CLIENT_METRICS` (KIP-714).
-const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
-
-/// `config_operation` SET = 0 in the `IncrementalAlterConfigs` wire protocol.
-const CONFIG_OP_SET: i8 = 0;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -113,21 +106,12 @@ async fn configure_match_all_subscription(
     name: &str,
     interval_ms: &str,
 ) {
-    let alter_req = incremental_request(
-        vec![incremental_resource(
-            RESOURCE_TYPE_CLIENT_METRICS,
-            name.to_string(),
-            vec![
-                incremental_config("metrics".to_string(), Some("*".to_string()), CONFIG_OP_SET),
-                incremental_config(
-                    "interval.ms".to_string(),
-                    Some(interval_ms.to_string()),
-                    CONFIG_OP_SET,
-                ),
-            ],
-        )],
-        false,
-    );
+    let alter_req =
+        client_metrics_subscription(crate::support::configs::ClientMetricsSubscriptionSetup {
+            name,
+            interval: interval_ms,
+            ..Default::default()
+        });
 
     let alter_resp: IncrementalAlterConfigsResponse = client
         .send(alter_req)

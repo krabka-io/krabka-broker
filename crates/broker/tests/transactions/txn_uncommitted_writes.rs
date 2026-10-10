@@ -86,14 +86,18 @@ async fn leader_of(handle: &BrokerHandle, topic: &str) -> u64 {
     crate::support::transaction_wire::partition_leader(handle, topic, SETTLE).await
 }
 
-/// Create the one-partition data topic on `replicas`, the first of them its
-/// preferred leader, and return its id.
-async fn create_topic(client: &Client, replicas: &[u64]) -> WireUuid {
-    let replicas: Vec<i32> = replicas
-        .iter()
-        .map(|node| i32::try_from(*node).expect("node id fits an i32"))
-        .collect();
-    crate::support::transaction_wire::create_assigned_topic(client, TOPIC, &replicas, None).await
+async fn create_topic(
+    client: &Client,
+    topic: crate::support::topics::AssignedTopicSetup,
+) -> WireUuid {
+    crate::support::transaction_wire::create_assigned_topic(
+        client,
+        crate::support::transaction_wire::AssignedTransactionTopicSetup {
+            topic,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 async fn init_producer(connection: &Connection) -> (i64, i16) {
@@ -421,7 +425,14 @@ async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
     let data_node = (1..=3)
         .find(|node| *node != coordinator)
         .expect("another broker");
-    let topic_id = create_topic(&admin, &[data_node]).await;
+    let topic_id = create_topic(
+        &admin,
+        crate::support::topics::AssignedTopicSetup::on_replicas(
+            TOPIC,
+            vec![krabka_metadata::NodeId(data_node)],
+        ),
+    )
+    .await;
     admin.close();
     cluster
         .handle(data_node)
@@ -519,7 +530,17 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
     let follower = (1..=3)
         .find(|node| *node != coordinator)
         .expect("another broker");
-    let topic_id = create_topic(&admin, &[coordinator, follower]).await;
+    let topic_id = create_topic(
+        &admin,
+        crate::support::topics::AssignedTopicSetup::on_replicas(
+            TOPIC,
+            vec![
+                krabka_metadata::NodeId(coordinator),
+                krabka_metadata::NodeId(follower),
+            ],
+        ),
+    )
+    .await;
     admin.close();
     cluster
         .handle(coordinator)
@@ -612,7 +633,14 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
             .node_id,
     )
     .expect("a node id");
-    let topic_id = create_topic(&admin, &[group_node]).await;
+    let topic_id = create_topic(
+        &admin,
+        crate::support::topics::AssignedTopicSetup::on_replicas(
+            TOPIC,
+            vec![krabka_metadata::NodeId(group_node)],
+        ),
+    )
+    .await;
     admin.close();
     // The group coordinator resolves the offsets below by topic id, so its
     // broker has to hold the topic first.

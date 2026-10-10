@@ -132,6 +132,24 @@ pub struct AssignedTopicSetup {
 }
 
 impl AssignedTopicSetup {
+    /// An explicitly ordered assignment, without converting identities back to wire integers.
+    pub fn on_replicas(name: impl Into<String>, replicas: Vec<MetadataNodeId>) -> Self {
+        Self {
+            name: name.into(),
+            replicas,
+        }
+    }
+
+    /// Three replicas in preferred-leader order for coordinated failover fixtures.
+    pub fn leader_first(name: impl Into<String>, leader: MetadataNodeId) -> Self {
+        let mut replicas = vec![leader];
+        replicas.extend((1..=3).map(MetadataNodeId).filter(|node| *node != leader));
+        Self {
+            name: name.into(),
+            replicas,
+        }
+    }
+
     /// The replication fixtures' ordered three-node assignment.
     pub fn three_replicas(name: impl Into<String>) -> Self {
         Self {

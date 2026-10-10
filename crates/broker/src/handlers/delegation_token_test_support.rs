@@ -235,6 +235,11 @@ pub(super) fn authed_with_token(name: &str, source: CredentialSource) -> Connect
     }
 }
 
+/// An authenticated SCRAM connection established with a delegation-token credential.
+pub(super) fn token_authed(name: &str) -> ConnectionAuth {
+    authed_with_token(name, CredentialSource::DelegationToken)
+}
+
 pub(super) fn authed(name: &str) -> ConnectionAuth {
     authed_with_token(name, CredentialSource::Password)
 }

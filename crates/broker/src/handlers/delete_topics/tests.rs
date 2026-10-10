@@ -1,7 +1,7 @@
 //! Tests for the `DeleteTopics` handler driven over the wire against a live
 //! in-process broker.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_metadata::{AclEntry, AclOperation, MetadataRecord, PatternType, ResourceType};
@@ -12,7 +12,6 @@ use krabka_protocol::{
     },
     primitives::uuid::Uuid as WireUuid,
 };
-use krabka_security::Principal;
 
 use super::{
     test_support::{DOOMED, gated_config, id_state, named_state, request},
@@ -39,12 +38,10 @@ crate::test_support::context_helper!(client_id = "admin-client");
 async fn drive(
     broker: &Broker,
     req: &DeleteTopicsRequest,
-    principal: &Principal,
-    peer: &SocketAddr,
+    ctx: &crate::handlers::RequestContext<'_>,
 ) -> DeleteTopicsResponse {
-    let ctx = test_context(principal, peer);
     sorted(
-        handle(broker, req.clone(), VERSION, &ctx)
+        handle(broker, req.clone(), VERSION, ctx)
             .await
             .expect("handle"),
     )
@@ -70,7 +67,7 @@ async fn handle_denied_topic_returns_authorization_failure() {
     request_identity!((p, peer), principal("alice"));
     let req = request(vec![named_state("secret")]);
 
-    let resp = drive(&broker, &req, &p, &peer).await;
+    let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
 
     let expected = unthrottled_wire!(DeleteTopicsResponse {
         responses: vec![tagged_wire!(DeletableTopicResult {
@@ -91,7 +88,7 @@ async fn handle_unknown_name_and_id_preserve_error_rows() {
     let bogus_id = WireUuid([8; 16]);
     let req = request(vec![named_state("missing"), id_state(bogus_id)]);
 
-    let resp = drive(&broker, &req, &p, &peer).await;
+    let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
 
     let expected = unthrottled_wire!(DeleteTopicsResponse {
         responses: vec![
@@ -292,7 +289,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
     for (label, rows, responses) in cases {
-        let resp = drive(&broker, &request(rows), &p, &peer).await;
+        let resp = drive(&broker, &request(rows), &test_context(&p, &peer)).await;
         let still_there = broker.controller.current_image().topic(TOPIC).is_some();
         actual.push((label, resp, still_there));
         expected.push((
@@ -470,7 +467,7 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
             )
         };
         let req = request(vec![named_state("a"), named_state("app-x")]);
-        let resp = drive(&broker, &req, &p, &peer).await;
+        let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
 
         // A deleted topic's row carries its id. A refused name row carries
         // the zero id: `Delete` implies `Describe`, so a principal with no
@@ -638,7 +635,7 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
             rows.push(id_state(topic_id));
         }
         rows.push(id_state(unknown_id));
-        let resp = drive(&broker, &request(rows), &p, &peer).await;
+        let resp = drive(&broker, &request(rows), &test_context(&p, &peer)).await;
         let still_there = broker.controller.current_image().topic(TOPIC).is_some();
 
         let responses = case

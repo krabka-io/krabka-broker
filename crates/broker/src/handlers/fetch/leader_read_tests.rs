@@ -147,38 +147,45 @@ fn request(version: i16, sender: Sender, topic: &str) -> FetchRequest {
             topic: topic.to_owned(),
             partitions: vec![FetchPartition {
                 current_leader_epoch,
-                ..super::test_support::request_partition(fetch_offset)
+                ..super::test_support::request_partition(Offset(fetch_offset))
             }],
             ..Default::default()
         }],
-        ..super::test_support::sessionless_request(version, replica_id)
+        ..super::test_support::sessionless_request(super::test_support::SessionlessFetchSetup {
+            version: krabka_ids::ApiVersion(version),
+            replica: super::test_support::FetchReplicaId(replica_id),
+        })
     }
 }
 
 async fn fetch(broker: &BrokerHandle, version: i16, request: &FetchRequest) -> FetchResponse {
-    super::test_support::fetch_wire(broker, version, "client", "fetch-client", request).await
+    super::test_support::fetch_wire(
+        broker,
+        request,
+        super::test_support::FetchWireSetup {
+            version: krabka_ids::ApiVersion(version),
+            user: "client",
+            client_id: "fetch-client",
+        },
+    )
+    .await
 }
 
 fn expected(case: Case, label: String, topic: &str) -> Outcome {
-    let read = |watermark: i64, records: RecordsPayload| PartitionData {
-        partition_index: 0,
-        error_code: codes::NONE,
-        high_watermark: watermark,
-        last_stable_offset: watermark,
-        log_start_offset: 0,
-        aborted_transactions: None,
-        preferred_read_replica: -1,
-        records: Some(records),
-        ..Default::default()
-    };
     let (row, high_watermark, tracked_followers) = match case.expect {
         Expect::FollowerRead => (
-            read(0, RecordsPayload::Legacy(Bytes::new())),
+            super::test_support::expected_read(super::test_support::ExpectedReadSetup {
+                watermark: Offset(0),
+                records: RecordsPayload::Legacy(Bytes::new()),
+            }),
             Offset(LOG_END),
             vec![OTHER_NODE],
         ),
         Expect::ConsumerRead => (
-            read(0, RecordsPayload::Legacy(Bytes::new())),
+            super::test_support::expected_read(super::test_support::ExpectedReadSetup {
+                watermark: Offset(0),
+                records: RecordsPayload::Legacy(Bytes::new()),
+            }),
             Offset(0),
             if case.leader == THIS_NODE {
                 vec![OTHER_NODE]
