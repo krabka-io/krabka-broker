@@ -558,8 +558,7 @@ mod tests {
         let next_out_of_sync = throttle_leader_fetch(&bucket, "*", &[(300, false)]);
 
         check!(
-            (kept, first_out_of_sync, next_out_of_sync)
-                == (vec![5_000, 300], vec![300], vec![0])
+            (kept, first_out_of_sync, next_out_of_sync) == (vec![5_000, 300], vec![300], vec![0])
         );
     }
 
@@ -602,15 +601,17 @@ mod tests {
     }
 
     /// A partition that does not fit the budget goes back to the bucket
-    /// unspent, so the next fetch still has it to draw.
+    /// unspent, so the next fetch still has it to draw. Both chunks are below
+    /// the burst; the first partition consumes part of this round's grant and
+    /// the second partition is dropped without incurring oversized-batch debt.
     #[test]
     fn the_budget_of_a_dropped_partition_goes_back_to_the_bucket() {
         let bucket = leader_bucket(500);
 
-        let first = throttle_leader_fetch(&bucket, "*", &[(800, false)]);
-        let second = throttle_leader_fetch(&bucket, "*", &[(500, false)]);
+        let first = throttle_leader_fetch(&bucket, "*", &[(400, false), (400, false)]);
+        let second = throttle_leader_fetch(&bucket, "*", &[(100, false)]);
 
-        check!((first, second) == (vec![0], vec![500]));
+        check!((first, second) == (vec![400, 0], vec![100]));
     }
 
     /// A rate of zero is no throttle, in sync or not.

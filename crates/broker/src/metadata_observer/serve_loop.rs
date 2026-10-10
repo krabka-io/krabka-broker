@@ -214,10 +214,10 @@ pub(super) async fn run_loop(
                     .store(timestamp_ms, Ordering::Release);
                 store.record_applied_timestamp(timestamp_ms);
             }
-            if new_offset > fetch_offset {
-                if let Some(processing_us) = outcome.pending_record_processing_time_us {
-                    observer.record_pending_record_processing_time_us(processing_us);
-                }
+            if new_offset > fetch_offset
+                && let Some(processing_us) = outcome.pending_record_processing_time_us
+            {
+                observer.record_pending_record_processing_time_us(processing_us);
             }
             observer.metadata_offset.store(
                 i64::try_from(new_offset).unwrap_or(i64::MAX) - 1,

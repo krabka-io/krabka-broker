@@ -187,7 +187,8 @@ impl MetadataObserver {
     /// in Unix epoch milliseconds, or zero before any batch is applied.
     #[must_use]
     pub fn last_applied_record_timestamp_ms(&self) -> i64 {
-        self.last_applied_record_timestamp_ms.load(Ordering::Acquire)
+        self.last_applied_record_timestamp_ms
+            .load(Ordering::Acquire)
     }
 
     /// Committed metadata records this observer could not decode and
@@ -201,16 +202,16 @@ impl MetadataObserver {
     /// returned by [`Self::pending_record_processing_time_us`] is a
     /// process-lifetime average and maximum in microseconds.
     pub fn record_pending_record_processing_time_us(&self, elapsed_us: u64) {
-        let _ = self
-            .pending_processing_total_us
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
-                Some(old.saturating_add(elapsed_us))
-            });
-        let _ = self
-            .pending_processing_samples
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
-                Some(old.saturating_add(1))
-            });
+        let _ = self.pending_processing_total_us.try_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |old| Some(old.saturating_add(elapsed_us)),
+        );
+        let _ = self.pending_processing_samples.try_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |old| Some(old.saturating_add(1)),
+        );
         self.pending_processing_max_us
             .fetch_max(elapsed_us, Ordering::AcqRel);
     }
@@ -219,7 +220,7 @@ impl MetadataObserver {
     pub fn pending_record_processing_time_us(&self) -> (u64, u64) {
         let samples = self.pending_processing_samples.load(Ordering::Acquire);
         let total = self.pending_processing_total_us.load(Ordering::Acquire);
-        let average = if samples == 0 { 0 } else { total / samples };
+        let average = total.checked_div(samples).unwrap_or_default();
         (
             average,
             self.pending_processing_max_us.load(Ordering::Acquire),

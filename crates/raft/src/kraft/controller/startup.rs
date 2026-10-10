@@ -22,7 +22,7 @@ use super::{
     activation::{Activation, check_bootstrap_records},
     checkpoint::{BOOTSTRAP_SNAPSHOT_ID, latest_checkpoint_id, load_latest_checkpoint},
     quorum_state_file::load_quorum_state,
-    recovery::{control_state_at, replay_committed, replay_control_records},
+    recovery::{control_state_at, replay_committed_with_timestamp, replay_control_records},
     timing::initial_election_at,
 };
 use crate::{
@@ -59,7 +59,7 @@ impl KraftController {
     pub fn spawn(config: KraftConfig, log: KraftLog, data_dir: PathBuf) -> Self {
         let cluster_id = config.cluster_id;
         let image = MetadataImage::new(cluster_id);
-        Self::spawn_with_image(config, log, data_dir, image, Offset(0), 0, None)
+        Self::spawn_with_image(config, log, data_dir, image, Offset(0), 0, 0, None)
             .expect("fresh controller cannot have a pending downgrade checkpoint")
     }
 
@@ -73,6 +73,7 @@ impl KraftController {
         image: MetadataImage,
         last_snapshot_end_offset: Offset,
         last_snapshot_timestamp_ms: i64,
+        last_applied_record_timestamp_ms: i64,
         downgrade_snapshot_pending: Option<PendingDowngradeSnapshot>,
     ) -> Result<Self, RaftError> {
         let KraftConfig {
@@ -185,7 +186,7 @@ impl KraftController {
             clean_at: clock_base + METADATA_LOG_CLEAN_INTERVAL,
             last_snapshot_end_offset,
             last_snapshot_timestamp_ms,
-            last_applied_record_timestamp_ms: last_snapshot_timestamp_ms,
+            last_applied_record_timestamp_ms,
             pending_record_processing_time_us_total: 0,
             pending_record_processing_time_samples: 0,
             pending_record_processing_time_us_max: 0,
@@ -326,12 +327,15 @@ impl KraftController {
             // rename but before prefix pruning.
         }
         check_bootstrap_records(&activation.bootstrap_records, bootstrap_source)?;
-        let mut downgrade_snapshot_pending = replay_committed(
-            &log,
-            &mut image,
-            log.log_start_offset(),
-            metadata_raft_fetch_max,
-        )?;
+        let (mut downgrade_snapshot_pending, replayed_timestamp_ms) =
+            replay_committed_with_timestamp(
+                &log,
+                &mut image,
+                log.log_start_offset(),
+                metadata_raft_fetch_max,
+            )?;
+        let last_applied_record_timestamp_ms =
+            replayed_timestamp_ms.unwrap_or(last_snapshot_timestamp_ms);
 
         let mut boundary_state = QuorumState::bootstrap(cluster_id, bootstrap_voters.clone());
         if let Some(control) = &snapshot_control {
@@ -397,6 +401,7 @@ impl KraftController {
             image,
             last_snapshot_end_offset,
             last_snapshot_timestamp_ms,
+            last_applied_record_timestamp_ms,
             downgrade_snapshot_pending,
         )
     }

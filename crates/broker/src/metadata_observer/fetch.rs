@@ -144,31 +144,33 @@ async fn fetch_over(
         return None;
     }
 
-    let (applied, pending_record_processing_time_us) = match resp.snapshot_id {
-        Some(snapshot_id) => (Applied {
-            next_offset: install_snapshot(
-                config,
-                conn,
-                (target, resp.leader_epoch),
-                snapshot_id,
-                image_tx,
-                store,
-            )
-            .await?,
-            load_errors: 0,
-            fatal: None,
-            last_applied_record_timestamp_ms: Some(store.last_applied_record_timestamp_ms()),
-        }, None),
-        None => {
-            let started = std::time::Instant::now();
-            let applied = apply_fetch_records(fetch_offset, &resp.records, image_tx);
-            let processing_us = if applied.next_offset > fetch_offset {
-                Some(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX))
-            } else {
-                None
-            };
-            (applied, processing_us)
-        }
+    let (applied, pending_record_processing_time_us) = if let Some(snapshot_id) = resp.snapshot_id {
+        (
+            Applied {
+                next_offset: install_snapshot(
+                    config,
+                    conn,
+                    (target, resp.leader_epoch),
+                    snapshot_id,
+                    image_tx,
+                    store,
+                )
+                .await?,
+                load_errors: 0,
+                fatal: None,
+                last_applied_record_timestamp_ms: Some(store.last_applied_record_timestamp_ms()),
+            },
+            None,
+        )
+    } else {
+        let started = std::time::Instant::now();
+        let applied = apply_fetch_records(fetch_offset, &resp.records, image_tx);
+        let processing_us = if applied.next_offset > fetch_offset {
+            Some(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX))
+        } else {
+            None
+        };
+        (applied, processing_us)
     };
     Some(FetchOutcome {
         next_fetch_offset: applied.next_offset,
@@ -353,7 +355,9 @@ fn apply_fetch_records(
         if batch.attributes.is_control_batch() {
             match krabka_raft::control_batch_image_records(&batch) {
                 Ok(controls) => {
-                    controls.iter().for_each(|control| next.apply(control));
+                    for control in &controls {
+                        next.apply(control);
+                    }
                     last_applied_record_timestamp_ms = Some(batch.max_timestamp);
                 }
                 Err(fault) => {

@@ -135,8 +135,7 @@ impl ObserverStore {
     /// Persist the exact checkpoint bytes fetched from a controller under the
     /// id the controller named them by.
     pub(super) fn save_fetched_snapshot(&mut self, id: (i64, i32), bytes: &[u8]) {
-        if let Ok(timestamp_ms) =
-            krabka_raft::metadata_snapshot_last_contained_log_timestamp(bytes)
+        if let Ok(timestamp_ms) = krabka_raft::metadata_snapshot_last_contained_log_timestamp(bytes)
         {
             self.last_applied_record_timestamp_ms = timestamp_ms;
         }
@@ -170,10 +169,8 @@ impl ObserverStore {
         if u64::try_from(advanced).unwrap_or(0) < self.interval {
             return;
         }
-        match krabka_raft::serialize_metadata_snapshot(
-            image,
-            self.last_applied_record_timestamp_ms,
-        ) {
+        match krabka_raft::serialize_metadata_snapshot(image, self.last_applied_record_timestamp_ms)
+        {
             Ok(bytes) => self.write((end_offset, OBSERVER_EPOCH), &bytes),
             Err(error) => warn!(%error, end_offset, "observer failed to serialize its checkpoint"),
         }

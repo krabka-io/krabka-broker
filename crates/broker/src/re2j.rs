@@ -80,6 +80,9 @@ pub(crate) const INVALID_REPEAT_OP: &str = "invalid nested repetition operator";
 /// RE2J's `ERR_INVALID_CHAR_RANGE`.
 const INVALID_CHAR_RANGE: &str = "invalid character class range";
 
+/// Kafka's `String` protocol type is bounded by a signed 16-bit byte length.
+const MAX_PATTERN_BYTES: usize = i16::MAX as usize;
+
 /// Translate RE2J's literal quoting and character-class behavior to syntax
 /// accepted by Rust's non-backtracking `regex` engine.
 fn translate(pattern: &str) -> Result<String, String> {
@@ -88,6 +91,7 @@ fn translate(pattern: &str) -> Result<String, String> {
     let mut index = 0;
     let mut in_class = false;
     let mut class_first = false;
+    let mut class_first_member = false;
 
     while index < chars.len() {
         let current = chars[index];
@@ -118,18 +122,30 @@ fn translate(pattern: &str) -> Result<String, String> {
             if in_class && class_first {
                 class_first = false;
             }
+            if in_class {
+                class_first_member = false;
+            }
             continue;
         }
 
         if in_class {
+            if current == ']' && class_first_member {
+                out.push(current);
+                class_first = false;
+                class_first_member = false;
+                index += 1;
+                continue;
+            }
             if current == ']' && !class_first {
                 in_class = false;
+                class_first_member = false;
                 out.push(current);
                 index += 1;
                 continue;
             }
             if current == '^' && class_first {
                 out.push(current);
+                class_first = false;
                 index += 1;
                 continue;
             }
@@ -144,10 +160,19 @@ fn translate(pattern: &str) -> Result<String, String> {
                 class_first = false;
                 continue;
             } else if current == '-' && chars.get(index + 1) == Some(&'-') {
-                if class_first {
+                if class_first_member {
                     // At the beginning RE2J accepts `--a` as the range `-` to
-                    // `a`. Force that same interpretation in Rust's parser.
-                    out.push_str(r"\x2d");
+                    // `a`, and `[---]` as the range `-` to `-`.
+                    out.push_str(r"\x2d-");
+                    if chars.get(index + 2) == Some(&'-') && chars.get(index + 3) == Some(&']') {
+                        out.push_str(r"\x2d");
+                        index += 3;
+                    } else {
+                        index += 2;
+                    }
+                    class_first = false;
+                    class_first_member = false;
+                    continue;
                 } else {
                     // Rust accepts this as set subtraction; RE2J parses it as
                     // a descending range and refuses it.
@@ -157,6 +182,7 @@ fn translate(pattern: &str) -> Result<String, String> {
                 out.push(current);
             }
             class_first = false;
+            class_first_member = false;
             index += 1;
             continue;
         }
@@ -164,6 +190,7 @@ fn translate(pattern: &str) -> Result<String, String> {
         if current == '[' {
             in_class = true;
             class_first = true;
+            class_first_member = true;
         }
         out.push(current);
         index += 1;
@@ -248,6 +275,11 @@ pub(crate) fn check(pattern: &str) -> Result<(), String> {
 /// Returns the reason, in the wording Kafka puts in its
 /// `INVALID_REGULAR_EXPRESSION` message.
 pub(crate) fn compile_full_match(pattern: &str) -> Result<regex::Regex, String> {
+    if pattern.len() > MAX_PATTERN_BYTES {
+        return Err(format!(
+            "pattern exceeds Kafka string limit of {MAX_PATTERN_BYTES} bytes"
+        ));
+    }
     let translated = translate(pattern)?;
     if unsupported_inline_flag(&translated).is_some() {
         return Err(INVALID_PERL_OP.to_owned());
@@ -258,8 +290,7 @@ pub(crate) fn compile_full_match(pattern: &str) -> Result<regex::Regex, String> 
     // Compile the pattern on its own first, so the error text names what the
     // client sent rather than the anchors around it.
     regex::Regex::new(&translated).map_err(|error| flatten_error(&error))?;
-    regex::Regex::new(&format!(r"\A(?:{translated})\z"))
-        .map_err(|error| flatten_error(&error))
+    regex::Regex::new(&format!(r"\A(?:{translated})\z")).map_err(|error| flatten_error(&error))
 }
 
 #[cfg(test)]
@@ -344,11 +375,40 @@ mod tests {
         check!(leading_hyphens.is_match("0"));
         check!(leading_hyphens.is_match("a"));
 
+        let negated_leading_hyphens =
+            compile_full_match("[^--a]").expect("negated leading range compiles");
+        check!(!negated_leading_hyphens.is_match("-"));
+        check!(!negated_leading_hyphens.is_match("0"));
+        check!(!negated_leading_hyphens.is_match("a"));
+        check!(negated_leading_hyphens.is_match("z"));
+
+        let hyphen_to_hyphen = compile_full_match("[---]").expect("hyphen range compiles");
+        check!(hyphen_to_hyphen.is_match("-"));
+        check!(!hyphen_to_hyphen.is_match("a"));
+
         check!(compile_full_match("[a-z--b]").err() == Some(INVALID_CHAR_RANGE.to_owned()));
         // An unescaped '[' inside a class is a member, not a nested set.
         let literal_open_bracket = compile_full_match("[[a]").expect("class compiles");
         check!(literal_open_bracket.is_match("["));
         check!(literal_open_bracket.is_match("a"));
+    }
+
+    #[test]
+    fn negated_class_prefix_and_initial_close_bracket_are_preserved() {
+        let pattern = compile_full_match("[^^][a]").expect("classes compile");
+        check!(pattern.is_match("xa"));
+        check!(!pattern.is_match("^a"));
+
+        let initial_close = compile_full_match("[^]]").expect("initial close bracket compiles");
+        check!(!initial_close.is_match("]"));
+        check!(initial_close.is_match("a"));
+    }
+
+    #[test]
+    fn rejects_patterns_over_kafka_string_bound_before_translation() {
+        let pattern = format!("\\Q{}\\E", "x".repeat(MAX_PATTERN_BYTES));
+        let error = compile_full_match(&pattern).expect_err("oversized pattern rejected");
+        check!(error.contains("Kafka string limit"));
     }
 
     /// `Matcher.matches()` matches the whole input, and an inline `(?m)` does
