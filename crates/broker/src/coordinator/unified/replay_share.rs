@@ -337,7 +337,7 @@ mod tests {
             ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
             ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo,
         },
-        test_support::{proto_uuid, share_member},
+        test_support::{proto_uuid, replay_tombstone_constructor, share_member},
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -449,7 +449,7 @@ mod tests {
     /// exception that fails the load.
     #[test]
     fn share_records_replay_as_kafka() {
-        let tombstone = |kind: &str, id: &str| Record::Tombstone(key(kind, id));
+        let tombstone = replay_tombstone_constructor(key, Record::Tombstone);
         // Kafka's `ShareGroup.createGroupTombstoneRecords` for member `m`.
         let (group, kafka_deletion) = crate::coordinator::unified::test_support::replay_fixtures(
             ShareGroupSeed::new_group,
@@ -521,18 +521,11 @@ mod tests {
                         .into(),
                 ),
             ),
-            (
-                "a member tombstone while the member has a target",
-                crate::coordinator::unified::test_support::undeleted_target_records(
-                    Record::Member("m"),
-                    Record::Target("m"),
-                    tombstone,
-                ),
-                Err(
-                    "Received a tombstone record to delete member m but member exists in \
-                     target assignment."
-                        .into(),
-                ),
+            crate::coordinator::unified::test_support::member_deletion_with_target_case(
+                (Record::Member("m"), Record::Target("m")),
+                tombstone,
+                "Received a tombstone record to delete member m but member exists in \
+                     target assignment.",
             ),
             (
                 "a group tombstone while a target is left",

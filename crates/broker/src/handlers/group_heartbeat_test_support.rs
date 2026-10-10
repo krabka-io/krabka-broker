@@ -213,24 +213,15 @@ pub(super) struct StreamsTopologySetup<'a> {
 pub(super) fn streams_request_with_topology(
     setup: StreamsTopologySetup<'_>,
 ) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
-    use krabka_protocol::owned::streams_group_heartbeat_request::{
-        StreamsGroupHeartbeatRequest, Subtopology, Topology,
-    };
+    use krabka_protocol::owned::streams_group_heartbeat_request::{Subtopology, Topology};
     let StreamsTopologySetup {
         group_id,
         member_id,
         source_topic,
         state_changelog_topics,
     } = setup;
-    StreamsGroupHeartbeatRequest {
-        group_id: group_id.into(),
-        member_id: member_id.into(),
-        member_epoch: 0,
-        rebalance_timeout_ms: 1_000,
-        active_tasks: Some(vec![]),
-        standby_tasks: Some(vec![]),
-        warmup_tasks: Some(vec![]),
-        topology: Some(Topology {
+    crate::test_support::streams_join_request(
+        Topology {
             epoch: 1,
             subtopologies: vec![Subtopology {
                 subtopology_id: "0".into(),
@@ -239,7 +230,10 @@ pub(super) fn streams_request_with_topology(
                 ..Default::default()
             }],
             ..Default::default()
-        }),
-        ..Default::default()
-    }
+        },
+        crate::test_support::StreamsJoinSetup {
+            group_id,
+            member_id,
+        },
+    )
 }

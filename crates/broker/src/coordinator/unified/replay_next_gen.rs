@@ -382,7 +382,7 @@ mod tests {
             TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
         },
         share::persistence::ShareGroupMetadataValue,
-        test_support::{next_current, next_member, proto_uuid},
+        test_support::{next_current, next_member, proto_uuid, replay_tombstone_constructor},
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -518,7 +518,7 @@ mod tests {
                 Record::Regex("r"),
             ]
         };
-        let tombstone = |kind: &str, id: &str| Record::Tombstone(key(kind, id));
+        let tombstone = replay_tombstone_constructor(key, Record::Tombstone);
         let mut rows: Vec<(&str, Vec<Record>, Outcome)> = vec![
             (
                 "a member record creates the group and the member",
@@ -600,18 +600,11 @@ mod tests {
                         .into(),
                 ),
             ),
-            (
-                "a member tombstone while the member has a target",
-                crate::coordinator::unified::test_support::undeleted_target_records(
-                    Record::Member("m"),
-                    Record::Target("m"),
-                    tombstone,
-                ),
-                Err(
-                    "Received a tombstone record to delete member m but did not receive \
-                     ConsumerGroupTargetAssignmentMetadataValue tombstone."
-                        .into(),
-                ),
+            crate::coordinator::unified::test_support::member_deletion_with_target_case(
+                (Record::Member("m"), Record::Target("m")),
+                tombstone,
+                "Received a tombstone record to delete member m but did not receive \
+                     ConsumerGroupTargetAssignmentMetadataValue tombstone.",
             ),
             (
                 "a target metadata tombstone while a member has a target",

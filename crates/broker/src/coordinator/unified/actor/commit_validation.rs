@@ -124,7 +124,9 @@ mod tests {
     use crate::coordinator::unified::{
         actor::{
             GroupKindTag,
-            test_support::{bidirectional_coordinator, make_coordinator, rpc},
+            test_support::{
+                BidirectionalClassicSetup, bidirectional_coordinator, make_coordinator, rpc,
+            },
         },
         classic_state::OffsetEntry,
     };
@@ -264,7 +266,7 @@ mod tests {
     async fn upgraded_group_fences_stale_native_consumer_commit() {
         let (_coord, _log, handle) =
             crate::coordinator::unified::actor::test_support::seeded_bidirectional_coordinator(
-                crate::coordinator::unified::actor::test_support::ClassicMemberSetup::dynamic("m1"),
+                BidirectionalClassicSetup::default(),
             );
         assert!(handle.kind == GroupKindTag::Classic);
         let joined =

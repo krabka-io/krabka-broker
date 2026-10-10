@@ -352,7 +352,7 @@ mod tests {
             StreamsGroupTargetAssignmentMetadataValue, StreamsGroupTopologyValue,
             StreamsMemberWireState,
         },
-        test_support::streams_member,
+        test_support::{replay_tombstone_constructor, streams_member},
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -472,7 +472,7 @@ mod tests {
     /// exception that fails the load.
     #[test]
     fn streams_records_replay_as_kafka() {
-        let tombstone = |kind: &str, id: &str| Record::Tombstone(key(kind, id));
+        let tombstone = replay_tombstone_constructor(key, Record::Tombstone);
         // Kafka's `StreamsGroup.createGroupTombstoneRecords` for member `m`:
         // the topology tombstone comes after the group's, and is ignored.
         let (group, kafka_deletion) = crate::coordinator::unified::test_support::replay_fixtures(

@@ -616,13 +616,19 @@ fn an_unclean_restart_of_the_last_leader_leaves_an_empty_elr_and_the_last_leader
     );
 }
 
+/// A full ISR shrinking to one member under the two-replica minimum.
+fn shrunken_isr_changes() -> (MetadataImage, Vec<MetadataRecord>) {
+    let before = three_replica_partition(&[1, 2, 3]);
+    let image = image(Some("2"), None, &before);
+    let changes = vec![MetadataRecord::V1Partition(three_replica_partition(&[1]))];
+    (image, changes)
+}
+
 /// The published record replaces a topic's whole override map, so it has to
 /// carry the topic's other overrides forward alongside the ELR value.
 #[test]
 fn the_published_record_keeps_the_topics_other_overrides() {
-    let before = three_replica_partition(&[1, 2, 3]);
-    let image = image(Some("2"), None, &before);
-    let mut changes = vec![MetadataRecord::V1Partition(three_replica_partition(&[1]))];
+    let (image, mut changes) = shrunken_isr_changes();
 
     ElrPublisher::new(&image).extend(&mut changes);
 
@@ -746,12 +752,10 @@ fn the_appended_record_builds_on_a_topic_config_the_batch_already_carries() {
 /// topic's config map, and a record after it would resurrect one.
 #[test]
 fn a_deleted_topic_publishes_nothing() {
-    let before = three_replica_partition(&[1, 2, 3]);
-    let image = image(Some("2"), None, &before);
-    let mut changes = vec![
-        MetadataRecord::V1Partition(three_replica_partition(&[1])),
-        MetadataRecord::V1DeleteTopic(krabka_metadata::DeleteTopicRecord { name: TOPIC.into() }),
-    ];
+    let (image, mut changes) = shrunken_isr_changes();
+    changes.push(MetadataRecord::V1DeleteTopic(
+        krabka_metadata::DeleteTopicRecord { name: TOPIC.into() },
+    ));
 
     ElrPublisher::new(&image).extend(&mut changes);
 

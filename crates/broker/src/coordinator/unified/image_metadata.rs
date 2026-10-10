@@ -138,7 +138,7 @@ mod tests {
     /// replicas on one rack included.
     #[test]
     fn the_snapshot_hashes_a_topic_as_the_image_does() {
-        use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, NodeId, PartitionRecord};
+        use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, NodeId};
 
         use crate::coordinator::unified::topic_hash::image_topic_hash;
 
@@ -162,15 +162,15 @@ mod tests {
             ));
         }
         for (partition, replicas) in [(0, vec![1, 2, 3]), (1, vec![3])] {
-            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-                topic: "input".into(),
-                partition,
-                leader: NodeId(replicas[0]),
-                replicas: replicas.iter().copied().map(NodeId).collect(),
-                isr: replicas.iter().copied().map(NodeId).collect(),
-                directories: replicas.iter().map(|_| real_uuid(1)).collect(),
-                ..Default::default()
-            }));
+            image.apply(&MetadataRecord::V1Partition(
+                crate::test_support::in_sync_partition(crate::test_support::InSyncPartitionSetup {
+                    topic: "input",
+                    partition: krabka_ids::PartitionIndex(partition),
+                    directories: replicas.iter().map(|_| real_uuid(1)).collect(),
+                    replicas: replicas.iter().copied().map(NodeId).collect(),
+                    ..Default::default()
+                }),
+            ));
         }
         let snapshot = ImageMetadataProvider {
             controller: fixed_source(image.clone()),

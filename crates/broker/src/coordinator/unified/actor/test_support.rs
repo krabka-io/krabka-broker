@@ -512,16 +512,30 @@ pub(super) async fn spawn_and_downgrade(
     (handle, view)
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct BidirectionalClassicSetup<'a> {
+    #[default("m1")]
+    pub member_id: &'a str,
+    pub instance_id: Option<&'a str>,
+}
+
 /// A bidirectional coordinator whose first actor was spawned from a classic seed.
 pub(super) fn seeded_bidirectional_coordinator(
-    setup: ClassicMemberSetup<'_>,
+    setup: BidirectionalClassicSetup<'_>,
 ) -> (
     Arc<GroupCoordinator>,
     Arc<InMemoryOffsetsLog>,
     Arc<GroupActorHandle>,
 ) {
     let (coordinator, log) = bidirectional_coordinator();
-    let handle = seed_classic_member(&coordinator, setup);
+    let handle = seed_classic_member(
+        &coordinator,
+        ClassicMemberSetup {
+            member_id: setup.member_id,
+            instance_id: setup.instance_id,
+            ..Default::default()
+        },
+    );
     (coordinator, log, handle)
 }
 

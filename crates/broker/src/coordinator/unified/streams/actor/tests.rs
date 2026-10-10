@@ -502,10 +502,22 @@ fn image_of(
     krabka_metadata::MetadataImage::from_records(uuid::Uuid::nil(), &records)
 }
 
-/// A topology with one subtopology `0` that reads `in` and, when `stateful`,
+#[derive(Clone, Copy, Default)]
+enum TopologyStorage {
+    #[default]
+    Stateless,
+    StoreChangelog,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SingleSubtopologySetup {
+    storage: TopologyStorage,
+}
+
+/// A topology with one subtopology `0` that reads `in` and, with a state store,
 /// keeps the changelog topic `store-changelog`.
 fn one_subtopology(
-    stateful: bool,
+    setup: SingleSubtopologySetup,
 ) -> krabka_protocol::owned::streams_group_heartbeat_request::Topology {
     use krabka_protocol::owned::{
         common::streams_group_heartbeat_request::topic_info::TopicInfo,
@@ -517,7 +529,7 @@ fn one_subtopology(
         subtopologies: vec![Subtopology {
             subtopology_id: "0".into(),
             source_topics: vec!["in".into()],
-            state_changelog_topics: if stateful {
+            state_changelog_topics: if matches!(setup.storage, TopologyStorage::StoreChangelog) {
                 vec![TopicInfo {
                     name: "store-changelog".into(),
                     ..Default::default()
@@ -553,7 +565,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
     struct Row {
         name: &'static str,
         initial: krabka_metadata::MetadataImage,
-        stateful: bool,
+        storage: TopologyStorage,
         change: Change,
         /// The owned active tasks of the heartbeat, when it reports them.
         owned_active: Option<Vec<i32>>,
@@ -566,7 +578,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         Row {
             name: "the missing source topic is created",
             initial: image_of(None, &[]),
-            stateful: false,
+            storage: TopologyStorage::Stateless,
             change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
             owned_active: None,
             epoch: 3,
@@ -576,7 +588,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         Row {
             name: "partitions are added to the source topic",
             initial: image_of(None, &[("in", 1, 1)]),
-            stateful: false,
+            storage: TopologyStorage::Stateless,
             change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
             owned_active: Some(vec![0]),
             epoch: 3,
@@ -586,7 +598,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         Row {
             name: "the source topic is deleted",
             initial: image_of(None, &[("in", 1, 2)]),
-            stateful: false,
+            storage: TopologyStorage::Stateless,
             change: Change::Image(Box::new(image_of(None, &[]))),
             owned_active: Some(vec![]),
             epoch: 3,
@@ -600,7 +612,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         Row {
             name: "the member sends a new rack id",
             initial: image_of(None, &[("in", 1, 1)]),
-            stateful: false,
+            storage: TopologyStorage::Stateless,
             change: Change::Rack("rack-b"),
             owned_active: Some(vec![0]),
             epoch: 3,
@@ -610,7 +622,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         Row {
             name: "the member sends a new process id",
             initial: image_of(None, &[("in", 1, 1)]),
-            stateful: false,
+            storage: TopologyStorage::Stateless,
             change: Change::Process("process-b"),
             owned_active: Some(vec![0]),
             epoch: 3,
@@ -620,7 +632,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         Row {
             name: "the internal topic is created",
             initial: image_of(None, &[("in", 1, 1)]),
-            stateful: true,
+            storage: TopologyStorage::StoreChangelog,
             change: Change::Image(Box::new(image_of(
                 None,
                 &[("in", 1, 1), ("store-changelog", 2, 1)],
@@ -649,7 +661,9 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         let joined = heartbeat(
             &handle,
             StreamsGroupHeartbeatRequest {
-                topology: Some(one_subtopology(row.stateful)),
+                topology: Some(one_subtopology(SingleSubtopologySetup {
+                    storage: row.storage,
+                })),
                 ..request(0, "rack-a", "process-a")
             },
         )
@@ -726,7 +740,7 @@ async fn a_new_target_persists_the_target_of_every_member() {
         member_id: member_id.into(),
         member_epoch,
         rebalance_timeout_ms: 1_000,
-        topology: (member_epoch == 0).then(|| one_subtopology(false)),
+        topology: (member_epoch == 0).then(|| one_subtopology(SingleSubtopologySetup::default())),
         ..Default::default()
     };
     let m1 = heartbeat(&handle, request("m1", 0)).await;
@@ -781,7 +795,9 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
             member_id: "m1".into(),
             member_epoch: 0,
             rebalance_timeout_ms: 1_000,
-            topology: Some(one_subtopology(true)),
+            topology: Some(one_subtopology(SingleSubtopologySetup {
+                storage: TopologyStorage::StoreChangelog,
+            })),
             ..Default::default()
         },
     )
@@ -858,7 +874,7 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
         member_epoch,
         process_id: Some(format!("process-{member_id}")),
         rebalance_timeout_ms: 60_000,
-        topology: (member_epoch == 0).then(|| one_subtopology(false)),
+        topology: (member_epoch == 0).then(|| one_subtopology(SingleSubtopologySetup::default())),
         active_tasks: Some(if owned.is_empty() {
             vec![]
         } else {
@@ -1452,7 +1468,8 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
                         port,
                         ..Default::default()
                     }),
-                    topology: (member_epoch == 0).then(|| one_subtopology(false)),
+                    topology: (member_epoch == 0)
+                        .then(|| one_subtopology(SingleSubtopologySetup::default())),
                     ..Default::default()
                 },
             )
@@ -1522,7 +1539,8 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
                 member_id: member_id.into(),
                 member_epoch,
                 rebalance_timeout_ms,
-                topology: (member_epoch == 0).then(|| one_subtopology(false)),
+                topology: (member_epoch == 0)
+                    .then(|| one_subtopology(SingleSubtopologySetup::default())),
                 active_tasks: owned.map(|partitions| {
                     vec![OwnedTaskIds {
                         subtopology_id: "0".into(),
@@ -1579,20 +1597,16 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
     use crate::test_support::FakeMetadataSource;
 
     let join = |member_id: &str, epoch, source: &str| {
-        let mut topology = one_subtopology(false);
+        let mut topology = one_subtopology(SingleSubtopologySetup::default());
         topology.epoch = epoch;
         topology.subtopologies[0].source_topics = vec![source.into()];
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: member_id.into(),
-            member_epoch: 0,
-            rebalance_timeout_ms: 1_000,
-            active_tasks: Some(vec![]),
-            standby_tasks: Some(vec![]),
-            warmup_tasks: Some(vec![]),
-            topology: Some(topology),
-            ..Default::default()
-        }
+        crate::test_support::streams_join_request(
+            topology,
+            crate::test_support::StreamsJoinSetup {
+                member_id,
+                ..Default::default()
+            },
+        )
     };
     let owning = |subtopology: &str, partition| StreamsGroupHeartbeatRequest {
         group_id: "g".into(),
@@ -1685,7 +1699,7 @@ async fn a_static_member_follows_kafka_static_membership() {
         active_tasks: Some(vec![]),
         standby_tasks: Some(vec![]),
         warmup_tasks: Some(vec![]),
-        topology: Some(one_subtopology(false)),
+        topology: Some(one_subtopology(SingleSubtopologySetup::default())),
         ..Default::default()
     };
     let beat = |member_id: &str, member_epoch, instance_id: &str| StreamsGroupHeartbeatRequest {
@@ -2131,7 +2145,12 @@ async fn a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1
         let mut last = None;
         for beat in row.beats {
             let (version, member_epoch, tags, topology) = match *beat {
-                Beat::Join(version, tags) => (version, 0, tags, Some(one_subtopology(false))),
+                Beat::Join(version, tags) => (
+                    version,
+                    0,
+                    tags,
+                    Some(one_subtopology(SingleSubtopologySetup::default())),
+                ),
                 Beat::Heartbeat(version, tags) => (version, epoch, tags, None),
                 Beat::Leave(version) => (version, -1, None, None),
             };
@@ -2691,7 +2710,7 @@ async fn a_bump_records_the_validated_topology_epoch() {
                 member_id: "m1".into(),
                 member_epoch: 0,
                 rebalance_timeout_ms: 1_000,
-                topology: Some(one_subtopology(false)),
+                topology: Some(one_subtopology(SingleSubtopologySetup::default())),
                 ..Default::default()
             },
         )

@@ -514,6 +514,27 @@ pub(crate) fn undeleted_target_records<R>(
     ]
 }
 
+/// Bind protocol-specific keys to a test record without sharing the replay implementation.
+pub(crate) fn replay_tombstone_constructor<K, R>(
+    key: fn(&str, &str) -> K,
+    record: fn(K) -> R,
+) -> impl Fn(&str, &str) -> R + Copy {
+    move |kind, id| record(key(kind, id))
+}
+
+/// Independent rejection case when a member tombstone leaves its target assignment behind.
+pub(crate) fn member_deletion_with_target_case<R, S>(
+    (member, target): (R, R),
+    tombstone: impl FnMut(&str, &str) -> R,
+    error: &str,
+) -> ReplayCase<'static, R, S> {
+    (
+        "a member tombstone while the member has a target",
+        undeleted_target_records(member, target, tombstone),
+        Err(error.into()),
+    )
+}
+
 /// Independent Kafka expectation for deleting a group while its member remains.
 pub(crate) fn group_deletion_with_member_case<R, S>(
     member: R,

@@ -3002,3 +3002,60 @@ pub(crate) async fn park_manual_timer(clock: &Arc<qubit_clock::ManualMonotonicCl
         .await
         .unwrap()
 }
+
+use krabka_metadata::NodeId as InSyncReplicaId;
+use uuid::Uuid as ReplicaDirectory;
+
+#[derive(krabka_macros::FieldDefaults)]
+pub(crate) struct InSyncPartitionSetup<'a> {
+    #[default("t")]
+    pub topic: &'a str,
+    pub partition: krabka_ids::PartitionIndex,
+    #[default(krabka_metadata::LeaderEpoch(0))]
+    pub leader_epoch: krabka_metadata::LeaderEpoch,
+    #[default(vec![InSyncReplicaId(1), InSyncReplicaId(2)])]
+    pub replicas: Vec<InSyncReplicaId>,
+    pub directories: Vec<ReplicaDirectory>,
+}
+
+/// A fully in-sync assignment whose first replica leads, retaining exact directory slots.
+pub(crate) fn in_sync_partition(setup: InSyncPartitionSetup<'_>) -> PartitionRecord {
+    PartitionRecord {
+        topic: setup.topic.to_string(),
+        partition: setup.partition.0,
+        leader: setup.replicas[0],
+        isr: setup.replicas.clone(),
+        replicas: setup.replicas,
+        leader_epoch: setup.leader_epoch,
+        directories: setup.directories,
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        partition_epoch: 0,
+    }
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct StreamsJoinSetup<'a> {
+    #[default("g")]
+    pub group_id: &'a str,
+    #[default("m1")]
+    pub member_id: &'a str,
+}
+
+/// A streams join reporting empty owned task sets and its complete topology.
+pub(crate) fn streams_join_request(
+    topology: krabka_protocol::owned::streams_group_heartbeat_request::Topology,
+    setup: StreamsJoinSetup<'_>,
+) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
+    krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
+        group_id: setup.group_id.into(),
+        member_id: setup.member_id.into(),
+        member_epoch: 0,
+        rebalance_timeout_ms: 1_000,
+        active_tasks: Some(vec![]),
+        standby_tasks: Some(vec![]),
+        warmup_tasks: Some(vec![]),
+        topology: Some(topology),
+        ..Default::default()
+    }
+}

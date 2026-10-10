@@ -10,9 +10,9 @@ use crate::{
         actor::{
             GroupActorMessage, GroupKindTag,
             test_support::{
-                bidirectional_coordinator, decode_assignment, log_has_classic_group_metadata_write,
-                make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc,
-                seed_classic_member,
+                BidirectionalClassicSetup, bidirectional_coordinator, decode_assignment,
+                log_has_classic_group_metadata_write, make_coordinator_with_topic,
+                make_coordinator_with_topic_policy, rpc, seed_classic_member,
             },
         },
         classic_state::OffsetEntry,
@@ -68,7 +68,7 @@ async fn last_consumer_member_leaving_downgrades_to_classic() {
 async fn upgrade_then_downgrade_round_trip() {
     let (coord, _log, handle) =
         crate::coordinator::unified::actor::test_support::seeded_bidirectional_coordinator(
-            crate::coordinator::unified::actor::test_support::ClassicMemberSetup::dynamic("m1"),
+            BidirectionalClassicSetup::default(),
         );
 
     // A native consumer "c1" heartbeats → in-place UPGRADE; the group is now
@@ -149,8 +149,7 @@ async fn classic_leave_of_last_native_member_triggers_downgrade() {
 async fn static_member_identity_survives_both_flips() {
     let (_coord, _log, handle) =
         crate::coordinator::unified::actor::test_support::seeded_bidirectional_coordinator(
-            crate::coordinator::unified::actor::test_support::ClassicMemberSetup {
-                member_id: "m1",
+            BidirectionalClassicSetup {
                 instance_id: Some("inst-a"),
                 ..Default::default()
             },
@@ -221,7 +220,7 @@ async fn policy_disabled_keeps_group_classic() {
 async fn committed_offsets_survive_a_flip() {
     let (_coord, _log, handle) =
         crate::coordinator::unified::actor::test_support::seeded_bidirectional_coordinator(
-            crate::coordinator::unified::actor::test_support::ClassicMemberSetup::dynamic("m1"),
+            BidirectionalClassicSetup::default(),
         );
 
     // Record a committed offset for ("t", 0) via the kind-agnostic path.

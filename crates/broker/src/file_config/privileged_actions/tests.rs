@@ -183,15 +183,25 @@ fn background_unclean_recovery_accepts_exactly_three_spellings() {
     }
 }
 
+/// Apply privileged-action sections beside the fixture's Alice operator key.
+fn configured_privileged_actions(
+    directory: &TempDir,
+    sections: &str,
+) -> crate::config::BrokerConfig {
+    let source = format!(
+        "{}\n{sections}",
+        operator_key_fixture(directory, "alice-yubi", "User:alice")
+    );
+    crate::file_config::test_support::configured(&source, "parse config").expect("apply config")
+}
+
 #[test]
 fn freeze_and_break_glass_sections_apply_their_documented_defaults() {
     let dir = TempDir::new().expect("tempdir");
-    let toml = format!(
-        "{}\n[freeze]\n[break_glass]\napprovers = [\"User:alice\", \"User:bob\"]\n",
-        operator_key_fixture(&dir, "alice-yubi", "User:alice")
+    let cfg = configured_privileged_actions(
+        &dir,
+        "[freeze]\n[break_glass]\napprovers = [\"User:alice\", \"User:bob\"]\n",
     );
-    let cfg =
-        crate::file_config::test_support::configured(&toml, "parse config").expect("apply config");
 
     check!(cfg.freeze == crate::config::FreezeConfig::default());
     check!(
@@ -229,16 +239,14 @@ fn absent_privileged_action_sections_retain_the_broker_defaults() {
 #[test]
 fn freeze_and_break_glass_values_replace_the_broker_defaults() {
     let dir = TempDir::new().expect("tempdir");
-    let toml = format!(
-        "{}\n[freeze]\nmax_entries = 25\nrequire_signature = true\n\
+    let cfg = configured_privileged_actions(
+        &dir,
+        "[freeze]\nmax_entries = 25\nrequire_signature = true\n\
          signature_max_skew = \"90s\"\n\
          [break_glass]\napprovers = [\"User:alice\", \"User:bob\", \"User:carol\"]\n\
          required_approvals = 3\nproposal_ttl = \"2h\"\n\
          signed_actions = [\"delete_topic\"]\nbackground_unclean_recovery = \"require\"\n",
-        operator_key_fixture(&dir, "alice-yubi", "User:alice")
     );
-    let cfg =
-        crate::file_config::test_support::configured(&toml, "parse config").expect("apply config");
 
     check!(
         cfg.freeze
