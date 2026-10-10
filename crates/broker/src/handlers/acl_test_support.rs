@@ -27,6 +27,29 @@ pub(super) fn configured_authorizer() -> Arc<dyn Authorizer> {
     ))
 }
 
+/// The matching orders ACL shared by live ACL handler fixtures.
+pub(super) fn alice_orders_acl() -> AclEntry {
+    crate::test_support::allow_acl(
+        krabka_metadata::ResourceType::Topic,
+        "orders",
+        "User:alice",
+        krabka_metadata::AclOperation::Read,
+    )
+}
+
+/// Two independent topic ACLs for matching and deletion fixtures.
+pub(super) fn orders_payments_acls() -> Vec<AclEntry> {
+    vec![
+        alice_orders_acl(),
+        crate::test_support::allow_acl(
+            krabka_metadata::ResourceType::Topic,
+            "payments",
+            "User:bob",
+            krabka_metadata::AclOperation::Write,
+        ),
+    ]
+}
+
 pub(super) async fn seed_acls(handle: &BrokerHandle, entries: Vec<AclEntry>) {
     handle
         .broker_arc_for_test()

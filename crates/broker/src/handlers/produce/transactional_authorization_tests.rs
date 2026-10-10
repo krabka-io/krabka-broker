@@ -11,8 +11,6 @@
 //! whose authorizer grants ACLs by the principal's name, so each case names
 //! exactly the resource-type/operation pairs it holds.
 
-use std::sync::Arc;
-
 use assert2::assert;
 use bytes::Bytes;
 use krabka_protocol::{
@@ -30,10 +28,7 @@ use super::{FIRST_TOPIC_ID_VERSION, handle};
 use crate::{
     broker::Broker,
     codes,
-    test_support::{
-        GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
-        start_broker_no_audit_with,
-    },
+    test_support::{decode_response, dispatch_context, encode_request, peer, principal},
 };
 
 const TOPIC: &str = "orders";
@@ -43,15 +38,7 @@ const TXN_ID: &str = "t1";
 const ADMIN_GRANTS: &str = "Cluster:Create";
 
 async fn boot() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = start_broker_no_audit_with(|cfg| {
-        crate::test_support::configure_single_partition_transactions(
-            cfg,
-            Arc::new(crate::test_support::ControllerPeerAllowed(
-                GrantsInPrincipalName,
-            )),
-        );
-    })
-    .await;
+    let (handle, dir) = crate::test_support::start_transaction_grant_broker().await;
     handle.wait_until_controller_leader().await;
     handle.wait_until_brokers_registered(1).await;
     let broker = handle.broker_arc_for_test();

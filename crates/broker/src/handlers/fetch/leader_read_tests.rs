@@ -142,11 +142,8 @@ fn request(version: i16, sender: Sender, topic: &str) -> FetchRequest {
         topics: vec![FetchTopic {
             topic: topic.to_owned(),
             partitions: vec![FetchPartition {
-                partition: 0,
                 current_leader_epoch,
-                fetch_offset,
-                partition_max_bytes: 1_048_576,
-                ..Default::default()
+                ..super::test_support::request_partition(fetch_offset)
             }],
             ..Default::default()
         }],

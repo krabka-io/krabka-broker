@@ -41,7 +41,7 @@ async fn handle_denies_cluster_alter_for_each_filter() {
     seeded_acl_fixture!(
         (broker_handle, _dir, broker, ctx),
         start_broker(Arc::new(DenyAll)),
-        vec![acl("orders", "User:alice", AclOperation::Read)],
+        vec![crate::handlers::acl_test_support::alice_orders_acl()],
         "alice"
     );
     let req = named_filters(&[("orders", "User:alice"), ("payments", "User:bob")]);
@@ -66,10 +66,7 @@ async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
     seeded_acl_fixture!(
         (broker_handle, _dir, broker, ctx),
         start_broker(configured_authorizer()),
-        vec![
-            acl("orders", "User:alice", AclOperation::Read),
-            acl("payments", "User:bob", AclOperation::Write),
-        ],
+        crate::handlers::acl_test_support::orders_payments_acls(),
         "admin"
     );
     let req = request(vec![filter(Some("orders"), Some("User:alice"))]);
@@ -109,7 +106,7 @@ async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_
     seeded_acl_fixture!(
         (broker_handle, _dir, broker, ctx),
         start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)),
-        vec![acl("orders", "User:alice", AclOperation::Read)],
+        vec![crate::handlers::acl_test_support::alice_orders_acl()],
         "admin"
     );
     let req = named_filters(&[("orders", "User:alice"), ("payments", "User:bob")]);
@@ -125,7 +122,9 @@ async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_
         filter_results: vec![disabled.clone(), disabled],
     });
     assert!(resp == expected);
-    assert!(all_acls(&broker_handle) == vec![acl("orders", "User:alice", AclOperation::Read)]);
+    assert!(
+        all_acls(&broker_handle) == vec![crate::handlers::acl_test_support::alice_orders_acl()]
+    );
     broker_handle.shutdown().await;
 }
 
@@ -411,7 +410,7 @@ async fn handle_closes_the_connection_on_an_unknown_element() {
     seeded_acl_fixture!(
         (broker_handle, _dir, broker, ctx),
         start_broker(configured_authorizer()),
-        vec![acl("orders", "User:alice", AclOperation::Read)],
+        vec![crate::handlers::acl_test_support::alice_orders_acl()],
         "admin"
     );
     let mut unknown = filter(Some("payments"), None);
@@ -425,7 +424,9 @@ async fn handle_closes_the_connection_on_an_unknown_element() {
             "Filters contain UNKNOWN elements"
         ))) = result
     );
-    assert!(all_acls(&broker_handle) == vec![acl("orders", "User:alice", AclOperation::Read)]);
+    assert!(
+        all_acls(&broker_handle) == vec![crate::handlers::acl_test_support::alice_orders_acl()]
+    );
     broker_handle.shutdown().await;
 }
 

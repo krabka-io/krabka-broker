@@ -188,15 +188,20 @@ pub struct CellAgg {
     pub kafka: StackAgg,
 }
 
+fn runs_by_cell(runs: &[RunOutput]) -> BTreeMap<CellKey, Vec<&RunOutput>> {
+    let mut cells: BTreeMap<CellKey, Vec<&RunOutput>> = BTreeMap::new();
+    for run in runs {
+        cells.entry(CellKey::of(run)).or_default().push(run);
+    }
+    cells
+}
+
 /// Groups runs by [`CellKey`] and reduces each stack's runs to a per-metric
 /// [`Stat`]. This returns the cells in key order.
 #[must_use]
 pub fn aggregate_cells(runs: &[RunOutput]) -> Vec<CellAgg> {
     let metrics = scalar_metrics();
-    let mut by_cell: BTreeMap<CellKey, Vec<&RunOutput>> = BTreeMap::new();
-    for r in runs {
-        by_cell.entry(CellKey::of(r)).or_default().push(r);
-    }
+    let by_cell = runs_by_cell(runs);
 
     let mut out = Vec::with_capacity(by_cell.len());
     for (key, cell_runs) in by_cell {
@@ -276,10 +281,7 @@ pub fn averaged_timeseries(runs: &[RunOutput]) -> Vec<TsSeries> {
     let client_metrics = client_ts_metrics();
     let broker_metrics = broker_ts_metrics();
 
-    let mut by_cell: BTreeMap<CellKey, Vec<&RunOutput>> = BTreeMap::new();
-    for r in runs {
-        by_cell.entry(CellKey::of(r)).or_default().push(r);
-    }
+    let by_cell = runs_by_cell(runs);
 
     let mut out = Vec::new();
     for (key, cell_runs) in by_cell {
@@ -354,13 +356,7 @@ fn series_from_buckets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ids::WallclockMs,
-        scenario::{
-            Acks, Compression, LatencyPercentiles, LoadMode, ModeTag, Resource, Scenario,
-            Throughput, Topology,
-        },
-    };
+    use crate::scenario::{ModeTag, Scenario, Topology};
 
     fn run(
         stack: Stack,
@@ -393,42 +389,19 @@ mod tests {
         broker_samples: Vec<BrokerSample>,
     ) -> RunOutput {
         RunOutput {
-            scenario: Scenario {
-                name: scenario.into(),
-                mode_tag: ModeTag::Cluster,
-                msg_size: bytes(100),
-                key_size: ByteSize::ZERO,
-                partitions: topology.partitions,
-                replication_factor: topology.replication_factor,
-                producers: 1,
-                consumers: 1,
-                mode: LoadMode::Saturate,
-                acks: Acks::Leader,
-                compression: Compression::None,
-                linger: millis(5),
-                batch_size: kibibytes(16),
-                duration: secs(60),
-                warmup: secs(10),
-                failover: None,
-            },
-            stack,
-            topology,
-            wallclock_start_unix_ms: WallclockMs(0),
-            wallclock_end_unix_ms: WallclockMs(60_000),
-            throughput: Throughput {
-                producer_rate,
-                ..Throughput::default()
-            },
-            producer_latency: LatencyPercentiles::default(),
-            consumer_e2e_latency: LatencyPercentiles::default(),
-            resource: Resource::default(),
-            disturbance: None,
-            startup: None,
-            first_ack: Time::ZERO,
-            errors: vec![],
-            notes: vec![],
-            samples,
             broker_samples,
+            ..crate::scenario::fixture::empty_run(
+                Scenario {
+                    mode_tag: ModeTag::Cluster,
+                    partitions: topology.partitions,
+                    replication_factor: topology.replication_factor,
+                    ..crate::scenario::fixture::scenario(scenario)
+                },
+                stack,
+                topology,
+                producer_rate,
+                samples,
+            )
         }
     }
 

@@ -309,48 +309,24 @@ fn broker_witness_record(node_id: u64, value: Option<&str>) -> krabka_metadata::
 }
 
 #[test]
-fn a_witness_registration_batch_publishes_the_witness_role() {
-    let log_dir = tempdir().expect("temp log dir");
-    let config = node_with_roles(
-        log_dir.path(),
-        vec![
-            crate::config::NodeRole::Controller,
-            crate::config::NodeRole::Broker,
-            crate::config::NodeRole::Witness,
-        ],
-    );
-
-    assert!(
-        broker_registration_batch(&config)
-            == vec![
-                krabka_metadata::MetadataRecord::V1BrokerRegistration(self_registration_record(
-                    &config
-                )),
-                broker_witness_record(4, Some("true")),
-            ]
-    );
-}
-
-#[test]
-fn a_plain_broker_registration_batch_clears_the_witness_role() {
-    let log_dir = tempdir().expect("temp log dir");
-    let config = node_with_roles(
-        log_dir.path(),
-        vec![
-            crate::config::NodeRole::Controller,
-            crate::config::NodeRole::Broker,
-        ],
-    );
-
-    assert!(
-        broker_registration_batch(&config)
-            == vec![
-                krabka_metadata::MetadataRecord::V1BrokerRegistration(self_registration_record(
-                    &config
-                )),
-                broker_witness_record(4, None),
-            ]
-    );
+fn registration_batch_publishes_or_clears_the_witness_role() {
+    use crate::config::NodeRole::{Broker, Controller, Witness};
+    for (roles, expected_witness) in [
+        (vec![Controller, Broker, Witness], Some("true")),
+        (vec![Controller, Broker], None),
+    ] {
+        let log_dir = tempdir().expect("temp log dir");
+        let config = node_with_roles(log_dir.path(), roles);
+        assert!(
+            broker_registration_batch(&config)
+                == vec![
+                    krabka_metadata::MetadataRecord::V1BrokerRegistration(
+                        self_registration_record(&config)
+                    ),
+                    broker_witness_record(4, expected_witness),
+                ]
+        );
+    }
 }
 
 #[test]
@@ -547,15 +523,11 @@ mod unclean_restart {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::{
-        LeaderEpoch, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord,
-    };
+    use krabka_metadata::{LeaderEpoch, MetadataRecord, NodeId, PartitionRecord};
 
     use crate::{
         broker::{Broker, registration::register_broker},
-        codes,
         config::BrokerConfig,
-        config_keys::MIN_INSYNC_REPLICAS,
         elr::{TopicElr, state::PartitionElr},
         test_support::start_broker_with_authorizer,
     };
@@ -577,21 +549,8 @@ mod unclean_restart {
     /// One RF=3 partition with a full ISR, and a `min.insync.replicas` of 2,
     /// which is what gives the partition an ELR to fall below.
     fn seed_records() -> Vec<MetadataRecord> {
-        vec![
-            // KIP-966 ELR maintenance is gated on the feature, whose release
-            // default is 0, so the seed finalizes it the way an operator's
-            // `kafka-features upgrade` would.
-            MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-                name: crate::features::ELR_VERSION.into(),
-                level: 1,
-            }),
-            MetadataRecord::V1Topic(TopicRecord {
-                name: TOPIC.into(),
-                topic_id: uuid::Uuid::from_bytes(TOPIC_ID_BYTES),
-                partitions: 1,
-                replication_factor: 3,
-            }),
-            MetadataRecord::V1Partition(PartitionRecord {
+        crate::test_support::elr_topic_records(
+            PartitionRecord {
                 topic: TOPIC.into(),
                 partition: 0,
                 leader: NodeId(1),
@@ -602,34 +561,23 @@ mod unclean_restart {
                 removing_replicas: vec![],
                 directories: vec![uuid::Uuid::nil(); 3],
                 partition_epoch: 4,
-            }),
-            MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: TOPIC.into(),
-                overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
-                    .into_iter()
-                    .collect(),
-            }),
-        ]
+            },
+            uuid::Uuid::from_bytes(TOPIC_ID_BYTES),
+            "2",
+        )
     }
 
     /// Shrink the ISR to `new_isr` through the real `AlterPartition` handler,
     /// which is how a real partition's ELR comes to exist at all.
     async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
-        let response = crate::test_support::propose_isr(
+        crate::test_support::accepted_isr_proposal(
             broker,
-            TOPIC,
-            (
-                krabka_protocol::primitives::uuid::Uuid(TOPIC_ID_BYTES),
-                LEADER_EPOCH,
-                ALTER_VERSION,
-            ),
+            (TOPIC, TOPIC_ID_BYTES),
+            (LEADER_EPOCH, ALTER_VERSION),
             new_isr,
+            false,
         )
         .await;
-        assert!(
-            response.topics[0].partitions[0].error_code == codes::NONE,
-            "AlterPartition refused the proposal: {response:?}"
-        );
     }
 
     /// The published ELR of partition 0.

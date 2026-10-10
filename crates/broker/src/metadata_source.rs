@@ -23,7 +23,10 @@ mod quorum_forwarder;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::{fatal_fault::or_fatal_fault, image_watch::watch_image_loop};
+pub(crate) use self::{
+    fatal_fault::or_fatal_fault,
+    image_watch::{wait_for_image_change, watch_image_loop},
+};
 pub use self::{observer_source::ObserverSource, quorum_forwarder::QuorumForwarder};
 
 #[async_trait::async_trait]

@@ -84,3 +84,23 @@ pub async fn await_tiered_replicas(
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
+
+/// Produce one acknowledged single-record request for every caller-generated value.
+pub async fn produce_records(
+    client: &krabka_client_core::Client,
+    topic: &str,
+    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    count: usize,
+    value: impl Fn(usize) -> bytes::Bytes,
+) {
+    for index in 0..count {
+        let batch =
+            crate::support::records::batch_from_records(vec![krabka_protocol::records::Record {
+                value: Some(value(index)),
+                ..Default::default()
+            }]);
+        let response =
+            crate::support::client::produce_batch(client, topic, topic_id, batch, 1, 10_000).await;
+        assert2::assert!(response.error_code == 0, "Produce failed: {response:?}");
+    }
+}

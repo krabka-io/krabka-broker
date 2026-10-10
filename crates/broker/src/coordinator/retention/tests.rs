@@ -188,12 +188,7 @@ async fn commit_offset(broker: &Broker, offset: i64, retention_time_ms: i64) {
         retention_time_ms,
         ..crate::coordinator::test_support::commit_request(GROUP, TOPIC, offset)
     };
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = request_context(&principal, &peer, "consumer");
-    let response = crate::handlers::offset_commit::handle(broker, request, COMMIT_VERSION, &ctx)
-        .await
-        .expect("OffsetCommit");
+    let response = commit_request(broker, request).await;
     let code = response.topics[0].partitions[0].error_code;
     assert!(code == codes::NONE, "commit failed with error_code {code}");
 }
@@ -286,10 +281,7 @@ async fn empty_group_loses_its_offsets_after_the_retention() {
     let swept = sweep_at(&broker, now_ms).await;
 
     assert!(swept == deleted_group(vec![(TOPIC.to_string(), 0)]));
-    // The group left the directory, rather than merely being emptied. Check it
-    // before the fetch, which re-creates an actor for an unknown id.
-    check!(broker.group_coordinator.find(GROUP).is_none());
-    check!(fetched_offset(&broker).await == -1);
+    check_group_deleted(&broker).await;
     let records = offsets_log_records(&broker);
     check!(has_tombstone(&records, &committed_offset_key()));
     // The group held nothing else, so its own record went in the same pass.
@@ -556,8 +548,7 @@ async fn a_simple_group_expires_from_its_commit_not_from_the_restart() {
     let swept = sweep_at(&broker, restarted_at).await;
 
     assert!(swept == deleted_group(vec![(TOPIC.to_string(), 0)]));
-    check!(broker.group_coordinator.find(GROUP).is_none());
-    check!(fetched_offset(&broker).await == -1);
+    check_group_deleted(&broker).await;
 }
 
 /// The other half of that rule. A classic group some consumer joined carries a
@@ -668,16 +659,29 @@ async fn an_acknowledged_commit_is_never_reaped_by_a_concurrent_sweep() {
 /// simple consumer, and return the per-partition error code.
 async fn simple_commit(broker: &Broker, group: &str, offset: i64) -> i16 {
     let request = crate::coordinator::test_support::commit_request(group, TOPIC, offset);
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = request_context(&principal, &peer, "consumer");
-    let response = crate::handlers::offset_commit::handle(broker, request, COMMIT_VERSION, &ctx)
-        .await
-        .expect("OffsetCommit");
+    let response = commit_request(broker, request).await;
     response.topics[0].partitions[0].error_code
 }
 
 /// The committed offset `OffsetFetch` reports for `group`, `-1` for none.
 async fn simple_fetch(broker: &Broker, group: &str) -> i64 {
     crate::coordinator::test_support::fetch_offset(broker, group, TOPIC, FETCH_VERSION).await
+}
+
+async fn commit_request(
+    broker: &Broker,
+    request: krabka_protocol::owned::offset_commit_request::OffsetCommitRequest,
+) -> krabka_protocol::owned::offset_commit_response::OffsetCommitResponse {
+    let principal = principal("admin");
+    let peer = peer();
+    let ctx = request_context(&principal, &peer, "consumer");
+    crate::handlers::offset_commit::handle(broker, request, COMMIT_VERSION, &ctx)
+        .await
+        .expect("OffsetCommit")
+}
+
+/// Check the directory before fetching: an unknown id creates another actor.
+async fn check_group_deleted(broker: &Broker) {
+    check!(broker.group_coordinator.find(GROUP).is_none());
+    check!(fetched_offset(broker).await == -1);
 }

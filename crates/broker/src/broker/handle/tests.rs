@@ -231,13 +231,18 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     handle.shutdown().await;
 }
 
-#[tokio::test]
-async fn start_and_shutdown_clean() {
-    let dir = tempdir().unwrap();
-    let config = BrokerConfig::for_tests(dir.path().to_path_buf());
+async fn start_default_broker(dir: &std::path::Path) -> (BrokerHandle, Arc<Broker>, SocketAddr) {
+    let config = BrokerConfig::for_tests(dir.to_path_buf());
     let handle = Broker::start(config).await.unwrap();
     let broker = handle.broker_arc_for_test();
     let addr = handle.listen_addr();
+    (handle, broker, addr)
+}
+
+#[tokio::test]
+async fn start_and_shutdown_clean() {
+    let dir = tempdir().unwrap();
+    let (handle, broker, addr) = start_default_broker(dir.path()).await;
     let partition = local_partition_with_records(dir.path(), "shutdown", 0, &[]);
     broker
         .partitions
@@ -267,10 +272,7 @@ async fn start_and_shutdown_clean() {
 #[tokio::test]
 async fn dropping_handle_stops_idle_connections_and_partition_writers() {
     let dir = tempdir().unwrap();
-    let config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    let handle = Broker::start(config).await.unwrap();
-    let broker = handle.broker_arc_for_test();
-    let addr = handle.listen_addr();
+    let (handle, broker, addr) = start_default_broker(dir.path()).await;
     let partition = local_partition_with_records(dir.path(), "drop-shutdown", 0, &[]);
     broker
         .partitions
@@ -322,18 +324,7 @@ async fn a_fatal_controller_fault_latches_self_shutdown_and_names_its_reason() {
     check!(!*should_shutdown.borrow());
     check!(handle.fatal_fault().is_none());
 
-    handle
-        .submit_metadata_record_for_test(finalize_unstable_metadata_version())
-        .await
-        .expect("the unsupported level commits before the controller stops");
-
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        should_shutdown.wait_for(|down| *down),
-    )
-    .await
-    .expect("the fault did not latch the self-shutdown flag within 30s")
-    .expect("the self-shutdown flag closed");
+    latch_unsupported_fault(&handle, &mut should_shutdown).await;
     check!(handle.fatal_fault().as_deref() == Some(UNSUPPORTED_LEVEL_FAULT));
 
     // The flag is latched, so there is no leadership drain to wait for.
@@ -413,17 +404,7 @@ async fn only_a_stop_without_a_fatal_fault_leaves_a_clean_shutdown_proof() {
             .expect("broker start");
         if faulted {
             let mut should_shutdown = handle.should_shutdown_rx();
-            handle
-                .submit_metadata_record_for_test(finalize_unstable_metadata_version())
-                .await
-                .expect("the unsupported level commits before the controller stops");
-            tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                should_shutdown.wait_for(|down| *down),
-            )
-            .await
-            .expect("the fault did not latch the self-shutdown flag within 30s")
-            .expect("the self-shutdown flag closed");
+            latch_unsupported_fault(&handle, &mut should_shutdown).await;
         }
 
         handle.shutdown().await;
@@ -433,4 +414,22 @@ async fn only_a_stop_without_a_fatal_fault_leaves_a_clean_shutdown_proof() {
             "{name}"
         );
     }
+}
+
+async fn latch_unsupported_fault(
+    handle: &BrokerHandle,
+    should_shutdown: &mut tokio::sync::watch::Receiver<bool>,
+) {
+    handle
+        .submit_metadata_record_for_test(finalize_unstable_metadata_version())
+        .await
+        .expect("the unsupported level commits before the controller stops");
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        should_shutdown.wait_for(|down| *down),
+    )
+    .await
+    .expect("the fault did not latch the self-shutdown flag within 30s")
+    .expect("the self-shutdown flag closed");
 }

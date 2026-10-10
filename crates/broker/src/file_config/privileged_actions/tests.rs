@@ -12,6 +12,14 @@ use crate::{
     file_config::{FileConfig, FileConfigError},
 };
 
+fn check_operator_key_refusal(file: FileConfig, cfg: &mut crate::config::BrokerConfig, case: &str) {
+    assert!(let Err(error) = file.apply_to(cfg), "case {case}");
+    check!(
+        matches!(error, FileConfigError::OperatorKeys(_)),
+        "case {case}"
+    );
+}
+
 // A well-formed 32-byte Ed25519 public key file plus the TOML
 // `[[operator_keys]]` entry that points at it. The bytes never verify a
 // signature here; only the length is checked at load.
@@ -326,11 +334,7 @@ fn demanding_a_signature_with_no_operator_key_is_a_startup_error() {
         let file: FileConfig = toml::from_str(toml).expect("parse config");
         let mut cfg = crate::config::BrokerConfig::default();
 
-        assert!(let Err(error) = file.apply_to(&mut cfg), "case {name}");
-        check!(
-            matches!(error, FileConfigError::OperatorKeys(_)),
-            "case {name}"
-        );
+        check_operator_key_refusal(file, &mut cfg, name);
     }
 }
 
@@ -459,11 +463,7 @@ fn an_unloadable_operator_key_is_a_startup_error() {
         let file: FileConfig = toml::from_str(&toml).expect("parse operator_keys section");
         let mut cfg = crate::config::BrokerConfig::default();
 
-        assert!(let Err(error) = file.apply_to(&mut cfg), "case {name}");
-        check!(
-            matches!(error, FileConfigError::OperatorKeys(_)),
-            "case {name}"
-        );
+        check_operator_key_refusal(file, &mut cfg, name);
         check!(cfg.operator_keys.is_empty(), "case {name}");
     }
 }

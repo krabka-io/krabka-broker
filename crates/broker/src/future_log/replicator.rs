@@ -356,6 +356,15 @@ mod tests {
         (part, future_log, future_path)
     }
 
+    async fn truncated_copied_future(
+        primary: &std::path::Path,
+        target: &std::path::Path,
+    ) -> (Arc<Partition>, Arc<Mutex<Log>>, PathBuf) {
+        let copied = partition_with_copied_future_log(primary, target);
+        copied.0.truncate_to(Offset(3)).await.unwrap();
+        copied
+    }
+
     /// The value size of each record of `log` from offset 0.
     fn value_sizes(log: &Mutex<Log>) -> Vec<usize> {
         log.lock()
@@ -368,6 +377,17 @@ mod tests {
             .collect()
     }
 
+    async fn finish_replaced_move(
+        part: &Arc<Partition>,
+        future_log: Arc<Mutex<Log>>,
+        future_path: PathBuf,
+        target: &std::path::Path,
+    ) {
+        finish_move(part, future_log, future_path, target).await;
+        assert!(canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target));
+        assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
+    }
+
     /// KIP-113 with a leader change: a follower truncates its current log to 3
     /// and takes five records again, two of them from the new leader. The
     /// future log still holds the old records 3 and 4 and ends where the
@@ -378,20 +398,14 @@ mod tests {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
         let (part, future_log, future_path) =
-            partition_with_copied_future_log(primary.path(), target.path());
-        part.truncate_to(Offset(3)).await.unwrap();
+            truncated_copied_future(primary.path(), target.path()).await;
         for _ in 0..2 {
             append_value_batch(&part, 20);
         }
         assert!(part.log_end_offset() == Offset(5));
         assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
 
-        finish_move(&part, future_log, future_path, target.path()).await;
-
-        assert!(
-            canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target.path())
-        );
-        assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
+        finish_replaced_move(&part, future_log, future_path, target.path()).await;
     }
 
     /// The truncation mark is in memory, so a move that resumes after a restart
@@ -405,8 +419,7 @@ mod tests {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
         let (part, future_log, future_path) =
-            partition_with_copied_future_log(primary.path(), target.path());
-        part.truncate_to(Offset(3)).await.unwrap();
+            truncated_copied_future(primary.path(), target.path()).await;
         // The restart: nothing remembers the cut.
         assert!(part.take_future_truncation().await.unwrap() == Some(Offset(3)));
         for _ in 0..2 {
@@ -414,12 +427,7 @@ mod tests {
         }
         assert!(part.log_end_offset() == future_log.lock().unwrap().log_end_offset());
 
-        finish_move(&part, future_log, future_path, target.path()).await;
-
-        assert!(
-            canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target.path())
-        );
-        assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
+        finish_replaced_move(&part, future_log, future_path, target.path()).await;
     }
 
     /// The writer reports the lowest offset the log was cut to once, and

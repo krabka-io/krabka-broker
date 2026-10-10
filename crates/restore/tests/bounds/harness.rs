@@ -57,3 +57,25 @@ pub(crate) fn check_batches(
         .expect("read back");
     assert2::check!(read.batches == expected);
 }
+
+/// A filtered first batch still claims its offsets; the following batch is unchanged.
+pub(crate) fn empty_first_batch(
+    fixture: &[krabka_protocol::records::RecordBatch],
+) -> Vec<krabka_protocol::records::RecordBatch> {
+    vec![
+        krabka_protocol::records::RecordBatch {
+            records: Vec::new(),
+            ..fixture[0].clone()
+        },
+        fixture[1].clone(),
+    ]
+}
+
+/// Keep both archive and restore directories alive while checking key-filtered bytes.
+pub(crate) async fn restore_excluding_keys(
+    fixture: &mut [krabka_protocol::records::RecordBatch],
+) -> (TempDir, TempDir, PathBuf) {
+    let archive = crate::archive::build_archive("orders", 0, fixture);
+    let (target, dir) = run_restore(archive.path(), &["--exclude-key", "^drop"]).await;
+    (archive, target, dir)
+}

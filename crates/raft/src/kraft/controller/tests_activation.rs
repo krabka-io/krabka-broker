@@ -15,14 +15,11 @@ use krabka_units::prelude::secs;
 use super::*;
 use crate::{
     config::{DEFAULT_METADATA_RAFT_FETCH_MAX, LATEST_PRODUCTION_METADATA_VERSION},
-    kraft::{
-        controller::{
-            activation::{Activation, activation_records, check_bootstrap_records},
-            checkpoint::write_checkpoint,
-            records::metadata_record_batch,
-            test_support::{await_leader, build_engine_only, test_metadata_log, voter_set},
-        },
-        transport::NullPeerSender,
+    kraft::controller::{
+        activation::{Activation, activation_records, check_bootstrap_records},
+        checkpoint::write_checkpoint,
+        records::metadata_record_batch,
+        test_support::{await_leader, build_engine_only, voter_set},
     },
 };
 
@@ -328,23 +325,11 @@ async fn the_records_of_the_bootstrap_checkpoint_reach_the_image_through_the_log
     write_checkpoint(dir.path(), 0, 0, &bytes).expect("write the bootstrap checkpoint");
 
     // The election timeout is long, so only the injected timeout elects.
-    let ctrl = KraftController::open(
+    let ctrl = crate::kraft::controller::test_support::open_test_controller_with(
         dir.path().to_path_buf(),
-        NodeId(1),
-        uuid::Uuid::nil(),
         uuid::Uuid::nil(),
         voters.clone(),
         secs(60),
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        krabka_units::prelude::bytes(0),
-        krabka_units::prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        test_metadata_log(),
         Activation {
             bootstrap_records: vec![feature(METADATA_VERSION_FEATURE, EARLIER_METADATA_VERSION)],
             ..Activation::default()

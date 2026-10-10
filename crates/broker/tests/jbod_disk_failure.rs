@@ -217,6 +217,14 @@ async fn all_log_dirs_offline_triggers_self_shutdown() {
 ///
 /// This exercises the real async `handle` path: decode, the leader gate,
 /// `plan_assignments`, `submit_change`, and encode.
+async fn single_directory_broker() -> (tempfile::TempDir, BrokerHandle, SocketAddr) {
+    let primary = tempfile::tempdir().unwrap();
+    let config = BrokerConfig::for_tests(primary.path().to_path_buf());
+    let broker = Box::pin(Broker::start(config)).await.expect("broker start");
+    let address = broker.listen_addr();
+    (primary, broker, address)
+}
+
 #[tokio::test]
 async fn assign_replicas_to_dirs_reports_and_echoes() {
     const VERSION: i16 = 0; // AssignReplicasToDirs only has version 0
@@ -224,10 +232,7 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
     const TOPIC: &str = "kip112-assign";
     const N: i32 = 2;
     // Use a single-dir broker so the broker IS the controller leader.
-    let primary = tempfile::tempdir().unwrap();
-    let cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    let handle = Broker::start(cfg).await.expect("broker start");
-    let addr = handle.listen_addr();
+    let (_primary, handle, addr) = single_directory_broker().await;
 
     create_topic(addr, TOPIC, N).await;
     wait_all_partitions(&handle, TOPIC, N).await;
@@ -288,10 +293,7 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
 #[tokio::test]
 async fn heartbeat_with_offline_log_dirs_is_accepted() {
     use krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION as HB_MAX_VERSION;
-    let primary = tempfile::tempdir().unwrap();
-    let cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    let handle = Broker::start(cfg).await.expect("broker start");
-    let addr = handle.listen_addr();
+    let (_primary, handle, addr) = single_directory_broker().await;
 
     // Wait until the broker has registered itself and elected a raft leader
     // (so the heartbeat handler reaches the leader branch, not NOT_CONTROLLER).

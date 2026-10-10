@@ -117,9 +117,7 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
     );
     type LeaderChangedCase<'a> = (&'a str, u128, u64, &'a [u64], i32, u64);
 
-    let dir = tempfile::tempdir().unwrap();
-    let config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    let handle = Broker::start(config).await.expect("broker start");
+    let (handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
     let timeout = std::time::Duration::from_millis(75);
     let topic_id = uuid::Uuid::from_u128(0xFEED);
 

@@ -35,6 +35,17 @@ fn waiter_offsets(engine: &super::Engine) -> Vec<Offset> {
         .collect()
 }
 
+fn check_future_waiter(
+    engine: &super::Engine,
+    receiver: &mut oneshot::Receiver<Result<SubmitChangeResult, RaftError>>,
+) {
+    assert2::assert!(matches!(
+        receiver.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    assert2::assert!(waiter_offsets(engine) == vec![Offset(6)]);
+}
+
 fn park_waiter(
     engine: &mut super::Engine,
     base: i64,
@@ -157,32 +168,47 @@ async fn pending_offset_reservations_are_contiguous_before_commit() {
     ctrl.shutdown().await;
 }
 
-#[tokio::test]
-async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
-    use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataRecord};
-    use uuid::Uuid;
+async fn check_rejected_without_append(
+    ctrl: &crate::kraft::KraftController,
+    record: krabka_metadata::MetadataRecord,
+    log_end: i64,
+) {
+    let result = ctrl.submit_change(vec![record]).await;
+    assert2::assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
+    assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+}
 
-    let (ctrl, _dir) = super::test_support::three_voter_leader().await;
-    let proposal = BreakGlassProposalRecord {
-        proposal_id: Uuid::from_u128(0x271),
-        action: BreakGlassAction::DeleteRecords,
-        target: "orders-3".to_owned(),
+fn break_glass_proposal(
+    id: u128,
+    action: krabka_metadata::BreakGlassAction,
+    target: &str,
+    expires_at_ms: i64,
+) -> krabka_metadata::BreakGlassProposalRecord {
+    krabka_metadata::BreakGlassProposalRecord {
+        proposal_id: uuid::Uuid::from_u128(id),
+        action,
+        target: target.to_owned(),
         proposer: "User:alice".to_owned(),
         reason: "incident".to_owned(),
         created_at_ms: 1,
-        expires_at_ms: 1_000,
+        expires_at_ms,
         approvals: Vec::new(),
         consumed_at_ms: 0,
         withdrawn: false,
-    };
+    }
+}
 
-    let create_ctrl = ctrl.clone();
-    let proposed = proposal.clone();
-    let create = tokio::spawn(async move {
-        create_ctrl
-            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(proposed)])
-            .await
-    });
+#[tokio::test]
+async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
+    use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataRecord};
+
+    let (ctrl, _dir) = super::test_support::three_voter_leader().await;
+    let proposal = break_glass_proposal(0x271, BreakGlassAction::DeleteRecords, "orders-3", 1_000);
+
+    let create = super::test_support::spawn_submit(
+        &ctrl,
+        vec![MetadataRecord::V1BreakGlassProposal(proposal.clone())],
+    );
     acknowledge_tip(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
@@ -198,24 +224,22 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
             ..proposal.clone()
         },
     ] {
-        let result = ctrl
-            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(malformed)])
-            .await;
-        assert2::assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
-        assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+        check_rejected_without_append(
+            &ctrl,
+            MetadataRecord::V1BreakGlassProposal(malformed),
+            log_end,
+        )
+        .await;
     }
 
     let consumed = BreakGlassProposalRecord {
         consumed_at_ms: i64::MAX,
         ..proposal.clone()
     };
-    let first_ctrl = ctrl.clone();
-    let first_record = consumed.clone();
-    let first = tokio::spawn(async move {
-        first_ctrl
-            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(first_record)])
-            .await
-    });
+    let first = super::test_support::spawn_submit(
+        &ctrl,
+        vec![MetadataRecord::V1BreakGlassProposal(consumed.clone())],
+    );
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
     let concurrent = tokio::time::timeout(
@@ -254,29 +278,14 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
 #[tokio::test]
 async fn a_new_leader_refuses_a_consume_until_its_own_epoch_commits() {
     use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataRecord};
-    use uuid::Uuid;
 
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
-    let proposal = BreakGlassProposalRecord {
-        proposal_id: Uuid::from_u128(0x591),
-        action: BreakGlassAction::DeleteTopic,
-        target: "doomed".to_owned(),
-        proposer: "User:alice".to_owned(),
-        reason: "incident".to_owned(),
-        created_at_ms: 1,
-        expires_at_ms: i64::MAX,
-        approvals: Vec::new(),
-        consumed_at_ms: 0,
-        withdrawn: false,
-    };
-    let create_ctrl = ctrl.clone();
-    let proposed = proposal.clone();
-    let create = tokio::spawn(async move {
-        create_ctrl
-            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(proposed)])
-            .await
-    });
+    let proposal = break_glass_proposal(0x591, BreakGlassAction::DeleteTopic, "doomed", i64::MAX);
+    let create = super::test_support::spawn_submit(
+        &ctrl,
+        vec![MetadataRecord::V1BreakGlassProposal(proposal.clone())],
+    );
     tokio::time::sleep(StdDuration::from_millis(20)).await;
     commit_pending(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
@@ -326,7 +335,6 @@ async fn a_new_leader_refuses_a_consume_until_its_own_epoch_commits() {
 #[tokio::test]
 async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit() {
     use krabka_metadata::{MetadataRecord, PatternType, TopicFreezeRecord};
-    use uuid::Uuid;
 
     fn freeze(scope: &str, set_at_ms: i64, frozen: bool) -> TopicFreezeRecord {
         TopicFreezeRecord {
@@ -336,7 +344,7 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
             reason: "incident".to_owned(),
             set_by: "User:alice".to_owned(),
             set_at_ms,
-            proposal_id: Uuid::nil(),
+            proposal_id: uuid::Uuid::nil(),
             key_id: String::new(),
             signature: Vec::new(),
         }
@@ -345,14 +353,10 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
 
-    let create_ctrl = ctrl.clone();
-    let create = tokio::spawn(async move {
-        create_ctrl
-            .submit_change(vec![MetadataRecord::V1TopicFreeze(freeze(
-                "orders", 10, true,
-            ))])
-            .await
-    });
+    let create = super::test_support::spawn_submit(
+        &ctrl,
+        vec![MetadataRecord::V1TopicFreeze(freeze("orders", 10, true))],
+    );
     acknowledge_tip(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
@@ -362,11 +366,8 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
         freeze("orders", 9, true),
         freeze("missing", 11, false),
     ] {
-        let result = ctrl
-            .submit_change(vec![MetadataRecord::V1TopicFreeze(rejected)])
+        check_rejected_without_append(&ctrl, MetadataRecord::V1TopicFreeze(rejected), log_end)
             .await;
-        assert2::assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
-        assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
     }
     let batch = ctrl
         .submit_change(vec![
@@ -378,13 +379,10 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
     assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
 
     let replacement = freeze("orders", i64::MAX, true);
-    let replace_ctrl = ctrl.clone();
-    let first = replacement.clone();
-    let replace = tokio::spawn(async move {
-        replace_ctrl
-            .submit_change(vec![MetadataRecord::V1TopicFreeze(first)])
-            .await
-    });
+    let replace = super::test_support::spawn_submit(
+        &ctrl,
+        vec![MetadataRecord::V1TopicFreeze(replacement.clone())],
+    );
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
     let concurrent = tokio::time::timeout(
@@ -446,13 +444,10 @@ async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
 
-    let create_ctrl = ctrl.clone();
-    let create_record = original.clone();
-    let create = tokio::spawn(async move {
-        create_ctrl
-            .submit_change(vec![MetadataRecord::V1DelegationToken(create_record)])
-            .await
-    });
+    let create = super::test_support::spawn_submit(
+        &ctrl,
+        vec![MetadataRecord::V1DelegationToken(original.clone())],
+    );
     tokio::time::sleep(StdDuration::from_millis(20)).await;
     commit_pending(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
@@ -610,11 +605,7 @@ fn try_resolve_waiters_resolves_at_exact_hwm_and_keeps_future_waiter() {
     engine.try_resolve_waiters();
 
     assert!(matches!(ready_rx.try_recv(), Ok(Ok(_))));
-    assert!(matches!(
-        future_rx.try_recv(),
-        Err(oneshot::error::TryRecvError::Empty)
-    ));
-    assert2::assert!(waiter_offsets(&engine) == vec![Offset(6)]);
+    check_future_waiter(&engine, &mut future_rx);
 }
 
 #[test]
@@ -629,11 +620,7 @@ fn fail_waiters_reached_by_fails_only_waiters_at_or_below_target_hwm() {
         ready_rx.try_recv(),
         Ok(Err(RaftError::ChangeRejected(_)))
     ));
-    assert2::assert!(matches!(
-        future_rx.try_recv(),
-        Err(oneshot::error::TryRecvError::Empty)
-    ));
-    assert2::assert!(waiter_offsets(&engine) == vec![Offset(6)]);
+    check_future_waiter(&engine, &mut future_rx);
 }
 
 #[tokio::test]
@@ -814,14 +801,19 @@ fn elect_three_voter_engine(engine: &mut super::Engine, epoch: u32) {
     assert!(engine.core.role().is_leader());
 }
 
+fn elected_three_voter_engine() -> (Engine, tempfile::TempDir) {
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_three_voter_engine(&mut engine, 0);
+    (engine, dir)
+}
+
 /// Kafka's `QuorumController` replays a record before it commits, so
 /// `ReplicationControlManager.createTopics` sees a pending topic name as an
 /// existing topic. A second create of a name that has not committed gets
 /// `TOPIC_ALREADY_EXISTS`, and no second `TopicRecord` goes into the log.
 #[tokio::test]
 async fn second_create_of_uncommitted_topic_is_refused_before_append() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    elect_three_voter_engine(&mut engine, 0);
+    let (mut engine, _dir) = elected_three_voter_engine();
 
     let mut first_rx =
         super::test_support::submit_on_engine(&mut engine, &topic_record_named("first", 1));
@@ -868,8 +860,7 @@ async fn second_create_of_uncommitted_topic_is_refused_before_append() {
 /// record commits, the name exists, and only one `TopicRecord` is in the log.
 #[tokio::test]
 async fn create_of_a_name_left_uncommitted_by_an_earlier_epoch_is_refused() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    elect_three_voter_engine(&mut engine, 0);
+    let (mut engine, _dir) = elected_three_voter_engine();
 
     let mut first_rx =
         super::test_support::submit_on_engine(&mut engine, &topic_record_named("first", 1));

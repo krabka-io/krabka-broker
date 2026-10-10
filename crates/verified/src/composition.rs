@@ -134,6 +134,33 @@ use wal_copy::{checked_wal_copy_replays_exactly, covering_copy_preserves_logical
 mod wal_recovery;
 use wal_recovery::{checkpoint_truncation_bounds_fetch, published_trim_bounds_recovery};
 
+// The row kernels supply their own validity predicates and prefix invariants.
+macro_rules! validate_archive_rows {
+    ($(#[$function_attr:meta])* $visibility:vis fn $name:ident($($arguments:tt)*) -> $result:ty;
+        $entries:ident, $index:ident, $previous:ident, $first:ident, $second:ident;
+        $(#[$invariant:meta])*;
+        $valid:expr;
+        $($after:tt)*
+    ) => {
+        $(#[$function_attr])*
+        $visibility fn $name($($arguments)*) -> $result {
+        let mut $index = 0usize;
+        #[invariant($index@ <= $entries@.len())]
+        $(#[$invariant])*
+        #[variant($entries@.len() - $index@)]
+        while $index < $entries.len() {
+            let $previous = if $index == 0 { None } else { Some($entries[$index - 1]) };
+            let ($first, $second) = $entries[$index];
+            if !$valid {
+                return Err(());
+            }
+            $index += 1;
+        }
+        $($after)*
+        }
+    };
+}
+
 mod offset_index;
 use offset_index::validated_index_bounds_lookup;
 

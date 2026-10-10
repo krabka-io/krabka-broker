@@ -55,6 +55,56 @@ pub fn broker_config(
     cfg
 }
 
+/// Listener addresses and node identity common to formatted bootstrap nodes.
+pub fn addressed_node_config(
+    id: u64,
+    log_dir: &std::path::Path,
+    client: SocketAddr,
+    controller: SocketAddr,
+) -> BrokerConfig {
+    let mut config = BrokerConfig::for_tests(log_dir.to_path_buf());
+    config.broker_id = i32::try_from(id).expect("node id");
+    config.node_id = NodeId(id);
+    config.listen_addr = client;
+    config.advertised_listener = client.to_string();
+    config.controller_listen_addr = controller;
+    config
+}
+
+/// Address and voter configuration kept alive independently of the adopted listeners.
+pub struct RoleEndpoints {
+    clients: Vec<SocketAddr>,
+    controllers: Vec<SocketAddr>,
+    voters: Vec<(u64, SocketAddr)>,
+}
+
+impl RoleEndpoints {
+    pub fn topology(&self) -> RoleTopology<'_> {
+        RoleTopology::new(&self.clients, &self.controllers, &self.voters)
+    }
+}
+
+pub async fn single_controller_endpoints(
+    nodes: usize,
+) -> (
+    RoleEndpoints,
+    std::vec::IntoIter<tokio::net::TcpListener>,
+    std::vec::IntoIter<tokio::net::TcpListener>,
+) {
+    let (clients, controllers, client_listeners, controller_listeners) =
+        super::bind_and_hold_ports(nodes).await;
+    let voters = vec![(1, controllers[0])];
+    (
+        RoleEndpoints {
+            clients,
+            controllers,
+            voters,
+        },
+        client_listeners.into_iter(),
+        controller_listeners.into_iter(),
+    )
+}
+
 /// The held endpoints and voter map shared by the nodes of a role-separated cluster.
 pub struct RoleTopology<'a> {
     clients: &'a [SocketAddr],
@@ -141,18 +191,27 @@ pub async fn start_n_node(
 /// split-vote on slow runners. A fresh tempdir and port set on retry
 /// clears the openraft state and usually succeeds within 2 attempts.
 pub async fn start_n_node_with_retry(n: u64) -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
+    start_n_node_customized_with_retry(n, |_, _| {}, "cluster").await
+}
+
+/// Retry startup with the same per-node customization on each fresh cluster.
+pub async fn start_n_node_customized_with_retry(
+    n: u64,
+    mut customize: impl FnMut(usize, &mut BrokerConfig),
+    label: &str,
+) -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
     let mut last_err = None;
     for attempt in 1..=3 {
-        match start_n_node(n).await {
+        match start_n_node_with(n, &mut customize).await {
             Ok(cluster) => return cluster,
-            Err(e) => {
-                tracing::warn!(attempt, error = %e, "cluster start failed; retrying");
-                last_err = Some(e);
+            Err(error) => {
+                tracing::warn!(attempt, %error, "{label} start failed; retrying");
+                last_err = Some(error);
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
     }
-    panic!("cluster start failed after 3 attempts; last error: {last_err:?}");
+    panic!("{label} start failed after 3 attempts; last error: {last_err:?}");
 }
 
 /// Boot a static-voter cluster and await its registration on every broker.
@@ -257,4 +316,17 @@ pub async fn start_first_held(
     Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
         .await
         .expect(context)
+}
+
+/// Wait for this survivor's leader watch to replace the departed node.
+pub async fn await_controller_replacement(handle: &BrokerHandle, departed: NodeId, context: &str) {
+    let mut leaders = handle.watch_leader_for_test();
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        leaders
+            .wait_for(|leader| matches!(leader, Some(id) if *id != NodeId(0) && *id != departed)),
+    )
+    .await
+    .expect(context)
+    .expect("leader channel closed");
 }

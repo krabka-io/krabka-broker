@@ -868,9 +868,7 @@ mod tests {
                 }
         );
         let view = rpc::classic_inspect(&handle).await;
-        check!(view.state == ClassicGroupState::Stable);
-        check!(view.members.len() == 1);
-        check!(view.members[0].member_id == "m1");
+        rpc::check_stable_classic_member(&view, "m1");
         check!(view.members[0].protocol_metadata == Bytes::from_static(b"subscription"));
         check!(view.members[0].assignment.as_deref() == Some(&b"assignment"[..]));
         check!(log.batches().await.is_empty());
@@ -1477,6 +1475,10 @@ mod tests {
         );
     }
 
+    fn fixed_topic_resolver() -> std::sync::Arc<FixedRegexResolver> {
+        std::sync::Arc::new(FixedRegexResolver::new(&[("t.*", &["t"])]))
+    }
+
     /// Kafka's `classicGroupJoinToConsumerGroup` runs
     /// `maybeUpdateRegularExpressions` with the request context of the join:
     /// a classic member's join refreshes the stale resolutions of a group
@@ -1495,7 +1497,7 @@ mod tests {
             },
         );
         let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
-        let native_resolver = std::sync::Arc::new(FixedRegexResolver::new(&[("t.*", &["t"])]));
+        let native_resolver = fixed_topic_resolver();
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle
             .tx
@@ -1517,7 +1519,7 @@ mod tests {
             .unwrap();
         assert!(rx.await.unwrap().error_code == codes::NONE);
         assert!(native_resolver.calls() == 1);
-        let classic_resolver = std::sync::Arc::new(FixedRegexResolver::new(&[("t.*", &["t"])]));
+        let classic_resolver = fixed_topic_resolver();
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle

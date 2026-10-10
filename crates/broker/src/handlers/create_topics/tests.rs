@@ -986,25 +986,12 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
     let resp = drive(&broker, &req, &p, &peer).await;
 
     let image = broker_handle.controller_image_for_test();
-    let described: Vec<CreatableTopicConfigs> =
-        crate::handlers::describe_configs::effective_topic_configs(
-            &image,
-            broker.config.node_id,
-            "mirrored",
-            image.topic_config("mirrored").expect("stored overrides"),
-            crate::api_catalog::UnstableApiVersions::Disabled,
-            &std::collections::BTreeMap::new(),
-        )
-        .into_iter()
-        .map(|entry| CreatableTopicConfigs {
-            name: entry.name,
-            value: entry.value,
-            read_only: entry.read_only,
-            config_source: entry.config_source,
-            is_sensitive: entry.is_sensitive,
-            ..Default::default()
-        })
-        .collect();
+    let described = crate::test_support::described_creation_configs(
+        &image,
+        broker.config.node_id,
+        "mirrored",
+        image.topic_config("mirrored").expect("stored overrides"),
+    );
     assert!(resp.topics[0].configs.clone().expect("configs") == described);
     broker_handle.shutdown().await;
 }

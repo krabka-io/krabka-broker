@@ -84,11 +84,8 @@ async fn fetch_metadata_and_the_metrics_endpoint_still_answer_for_a_frozen_topic
     let metrics_addr = broker
         .metrics_addr()
         .expect("the metrics listener is bound");
-    let (frozen, control) = crate::wire::create_controlled_topic(&broker, &client, "orders").await;
-    crate::wire::check_produce!(&broker, &client, "orders", frozen => accepted(1));
-
-    freeze_scope(&client, PATTERN_TYPE_LITERAL, "orders", "cutover").await;
-    crate::wire::check_produce!(&broker, &client, "orders", frozen => refused("literal", "orders", "cutover", 1));
+    let (frozen, control) =
+        crate::wire::frozen_topic_with_record(&broker, &client, "orders", "cutover").await;
 
     // The record written before the freeze is still readable, and the topic is
     // still in the metadata a client routes on.

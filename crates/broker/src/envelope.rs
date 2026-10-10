@@ -503,14 +503,10 @@ mod tests {
     /// "alice"))` in `mirror.gcr.io/apache/kafka:4.3.1`, captured verbatim:
     /// int16 version 0, compact string "User", compact string "alice",
     /// `token_authenticated = false`, empty tagged fields.
-    const JVM_USER_ALICE: &[u8] = &[
-        0x00, 0x00, 0x05, b'U', b's', b'e', b'r', 0x06, b'a', b'l', b'i', b'c', b'e', 0x00, 0x00,
-    ];
+    const JVM_USER_ALICE: &[u8] = krabka_macros::jvm_principal_golden!(alice, false);
     /// The same call for `new KafkaPrincipal("User", "bob", true)`, whose
     /// `token_authenticated` byte is `0x01`.
-    const JVM_USER_BOB_TOKEN: &[u8] = &[
-        0x00, 0x00, 0x05, b'U', b's', b'e', b'r', 0x04, b'b', b'o', b'b', 0x01, 0x00,
-    ];
+    const JVM_USER_BOB_TOKEN: &[u8] = krabka_macros::jvm_principal_golden!(bob, true);
 
     fn forwarded_principal(name: &str, token_authenticated: bool) -> ForwardedPrincipal {
         ForwardedPrincipal {

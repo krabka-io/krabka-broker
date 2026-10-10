@@ -204,3 +204,23 @@ macro_rules! check_produce {
     };
 }
 pub(super) use check_produce;
+
+/// Create a topic with one accepted record, freeze it and verify refusal.
+pub(super) async fn frozen_topic_with_record(
+    broker: &BrokerHandle,
+    client: &Client,
+    topic: &str,
+    reason: &str,
+) -> (WireUuid, WireUuid) {
+    let (frozen, control) = create_controlled_topic(broker, client, topic).await;
+    check_produce!(broker, client, topic, frozen => accepted(1));
+    crate::control_plane::freeze_scope(
+        client,
+        krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL,
+        topic,
+        reason,
+    )
+    .await;
+    check_produce!(broker, client, topic, frozen => refused("literal", topic, reason, 1));
+    (frozen, control)
+}

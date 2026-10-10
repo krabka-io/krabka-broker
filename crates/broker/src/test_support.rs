@@ -77,10 +77,30 @@ use crate::{
 
 /// The localhost ECDSA pair used by reload and socket-drain tests.
 pub(crate) fn localhost_ecdsa_pair() -> (rcgen::Certificate, rcgen::KeyPair) {
+    ecdsa_pair_for_host("localhost")
+}
+
+/// A fresh self-signed ECDSA fixture with the caller's exact host SAN.
+pub(crate) fn ecdsa_pair_for_host(host: &str) -> (rcgen::Certificate, rcgen::KeyPair) {
+    let params = rcgen::CertificateParams::new(vec![host.to_string()]).unwrap();
     let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-    let params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
     let cert = params.self_signed(&key).unwrap();
     (cert, key)
+}
+
+/// Stage an operator public key while returning the private signing pair to its owner.
+pub(crate) fn ed25519_public_key_file(
+    dir: &std::path::Path,
+    name: &str,
+    context: &str,
+) -> (ring::signature::Ed25519KeyPair, std::path::PathBuf) {
+    use ring::signature::{Ed25519KeyPair, KeyPair as _};
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate pkcs8");
+    let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse pkcs8");
+    let path = dir.join(name);
+    std::fs::write(&path, pair.public_key().as_ref()).expect(context);
+    (pair, path)
 }
 
 /// Binds an HTTPS fixture with a fresh loopback certificate and returns the
@@ -88,9 +108,7 @@ pub(crate) fn localhost_ecdsa_pair() -> (rcgen::Certificate, rcgen::KeyPair) {
 pub(crate) async fn loopback_tls_listener()
 -> (tokio::net::TcpListener, TlsAcceptor, std::path::PathBuf) {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
-    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-    let cert = params.self_signed(&key).unwrap();
+    let (cert, key) = ecdsa_pair_for_host("127.0.0.1");
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let cert_path = dir.path().join("cert.pem");
     std::fs::write(&cert_path, cert.pem()).unwrap();
@@ -284,6 +302,48 @@ pub(crate) fn topic_freeze_record(
     }
 }
 
+/// One live DR-cutover freeze per scope, in the sweep/transaction test image.
+pub(crate) fn frozen_topics_image(
+    scopes: &[(&str, krabka_metadata::PatternType)],
+) -> MetadataImage {
+    let mut image = MetadataImage::new(uuid::Uuid::from_u128(0x5150));
+    for &(scope, pattern_type) in scopes {
+        image.apply(&krabka_metadata::MetadataRecord::V1TopicFreeze(
+            topic_freeze_record(scope, pattern_type, true, "DR cutover"),
+        ));
+    }
+    image
+}
+
+pub(crate) fn topic_thaw_record(
+    scope: &str,
+    pattern_type: krabka_metadata::PatternType,
+) -> krabka_metadata::TopicFreezeRecord {
+    krabka_metadata::TopicFreezeRecord {
+        set_by: "User:bob".to_owned(),
+        set_at_ms: 1_770_000_100_000,
+        proposal_id: uuid::Uuid::from_u128(7),
+        ..topic_freeze_record(scope, pattern_type, false, "")
+    }
+}
+
+/// A topic-only image for policy tests, before any partitions are installed.
+pub(crate) fn topic_image(
+    topic: &str,
+    topic_id: uuid::Uuid,
+    partitions: i32,
+    replication_factor: i16,
+) -> MetadataImage {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&MetadataRecord::V1Topic(TopicRecord {
+        name: topic.into(),
+        topic_id,
+        partitions,
+        replication_factor,
+    }));
+    image
+}
+
 /// Apply one topic before constructing its partition fixture.
 pub(crate) fn topic_partition_image(
     topic: &str,
@@ -437,6 +497,30 @@ pub(crate) async fn propose_isr(
     crate::handlers::alter_partition::handle(broker, request, version, &ctx)
         .await
         .expect("AlterPartition")
+}
+
+/// Propose an ISR change and verify its partition result, optionally checking the envelope first.
+pub(crate) async fn accepted_isr_proposal(
+    broker: &Arc<Broker>,
+    topic: (&str, [u8; 16]),
+    epochs: (i32, i16),
+    new_isr: &[i32],
+    check_envelope: bool,
+) {
+    let response = propose_isr(
+        broker,
+        topic.0,
+        (WireUuid(topic.1), epochs.0, epochs.1),
+        new_isr,
+    )
+    .await;
+    if check_envelope {
+        assert2::assert!(response.error_code == crate::codes::NONE);
+    }
+    assert2::assert!(
+        response.topics[0].partitions[0].error_code == crate::codes::NONE,
+        "AlterPartition refused the proposal: {response:?}"
+    );
 }
 
 /// Authorizer that denies every request. It drives the authorization-failure
@@ -786,6 +870,16 @@ pub(crate) fn broker_registration(node_id: u64) -> krabka_metadata::BrokerRegist
         log_dirs: vec![],
         endpoints: vec![],
         features: std::collections::BTreeMap::new(),
+    }
+}
+
+/// A named plaintext endpoint using the caller's host and port.
+pub(crate) fn plaintext_broker_endpoint(host: &str, port: u16) -> krabka_metadata::BrokerEndpoint {
+    krabka_metadata::BrokerEndpoint {
+        name: "PLAINTEXT".into(),
+        host: host.into(),
+        port,
+        protocol: krabka_security::ListenerProtocol::Plaintext,
     }
 }
 
@@ -1359,11 +1453,18 @@ pub(crate) async fn await_until(what: &str, mut cond: impl FnMut() -> bool) {
 
 /// Plaintext controller transport for fixtures with no configured voters.
 pub(crate) fn plaintext_controller_dialer() -> crate::controller_endpoint::ControllerDialer {
+    plaintext_controller_dialer_with_voters(Vec::new())
+}
+
+/// The same transport with a statically configured controller quorum.
+pub(crate) fn plaintext_controller_dialer_with_voters(
+    voters: Vec<(krabka_raft::NodeId, String)>,
+) -> crate::controller_endpoint::ControllerDialer {
     crate::controller_endpoint::ControllerDialer {
         outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
         listener_protocol: krabka_security::ListenerProtocol::Plaintext,
         server_name: "localhost".to_owned(),
-        quorum_voters: Vec::new(),
+        quorum_voters: voters,
     }
 }
 
@@ -2122,4 +2223,244 @@ pub(crate) fn default_records_batch(n: i32) -> RecordBatch {
         });
     }
     batch
+}
+
+/// Spawn a caught-up replica whose entire local log is committed.
+/// Cleaner and retention fixtures must advance the high watermark through
+/// the follower path, which clamps it to the local log end.
+pub(crate) async fn committed_partition(
+    root: &std::path::Path,
+    topic: &str,
+    partition: krabka_ids::PartitionIndex,
+    leader: krabka_metadata::NodeId,
+    log: krabka_log::Log,
+    registry: crate::log_dir_status::LogDirRegistry,
+) -> Arc<crate::partition::Partition> {
+    let part = crate::broker::spawn_partition(
+        topic.to_owned(),
+        partition,
+        root.to_path_buf(),
+        log,
+        registry,
+        Arc::new(crate::producer_state::ProducerState::new()),
+        false,
+    );
+    part.current_leader.store(leader.0, Ordering::Relaxed);
+    part.set_follower_hw(krabka_log::Offset(i64::MAX)).await;
+    part
+}
+
+/// Finalize ELR and seed a topic, its partition and minimum ISR together.
+pub(crate) fn elr_topic_records(
+    partition: PartitionRecord,
+    topic_id: uuid::Uuid,
+    min_isr: &str,
+) -> Vec<MetadataRecord> {
+    let topic = partition.topic.clone();
+    vec![
+        MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+            name: crate::features::ELR_VERSION.into(),
+            level: 1,
+        }),
+        MetadataRecord::V1Topic(TopicRecord {
+            name: topic.clone(),
+            topic_id,
+            partitions: 1,
+            replication_factor: i16::try_from(partition.replicas.len()).unwrap(),
+        }),
+        MetadataRecord::V1Partition(partition),
+        MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic,
+            overrides: [(
+                crate::config_keys::MIN_INSYNC_REPLICAS.to_owned(),
+                min_isr.to_owned(),
+            )]
+            .into_iter()
+            .collect(),
+        }),
+    ]
+}
+
+/// Keep both temporary directories alive while callers use their paths.
+pub(crate) fn two_log_dirs() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Vec<std::path::PathBuf>,
+) {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let paths = vec![a.path().to_path_buf(), b.path().to_path_buf()];
+    (a, b, paths)
+}
+
+/// Wire topology edge shared by authorization and actor cases.
+pub(crate) fn source_to_repartition()
+-> krabka_protocol::owned::streams_group_heartbeat_request::Subtopology {
+    krabka_protocol::owned::streams_group_heartbeat_request::Subtopology {
+        subtopology_id: "0".into(),
+        source_topics: vec!["orders".into()],
+        repartition_sink_topics: vec!["rp".into()],
+        ..Default::default()
+    }
+}
+
+/// Describe a topic independently of the create response's config conversion.
+pub(crate) fn described_creation_configs(
+    image: &krabka_metadata::MetadataImage,
+    node: krabka_metadata::NodeId,
+    topic: &str,
+    overrides: &std::collections::BTreeMap<String, String>,
+) -> Vec<krabka_protocol::owned::create_topics_response::CreatableTopicConfigs> {
+    crate::handlers::describe_configs::effective_topic_configs(
+        image,
+        node,
+        topic,
+        overrides,
+        crate::api_catalog::UnstableApiVersions::Disabled,
+        &std::collections::BTreeMap::new(),
+    )
+    .into_iter()
+    .map(
+        |entry| krabka_protocol::owned::create_topics_response::CreatableTopicConfigs {
+            name: entry.name,
+            value: entry.value,
+            read_only: entry.read_only,
+            config_source: entry.config_source,
+            is_sensitive: entry.is_sensitive,
+            ..Default::default()
+        },
+    )
+    .collect()
+}
+
+/// A fresh log and deterministic timestamps bracketing its segment age limit.
+pub(crate) struct SegmentAgeFixture {
+    pub(crate) log: krabka_log::Log,
+    pub(crate) config: krabka_log::LogConfig,
+    pub(crate) dir: tempfile::TempDir,
+    pub(crate) roll_ms: i64,
+    pub(crate) first_ms: i64,
+}
+
+pub(crate) fn segment_age_fixture() -> SegmentAgeFixture {
+    use krabka_units::convert::TimeExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let config = krabka_log::LogConfig::default();
+    let roll_ms = config.segment_roll_interval.millis_i64_trunc();
+    let log = krabka_log::Log::open(dir.path(), config.clone()).unwrap();
+    SegmentAgeFixture {
+        dir,
+        config,
+        log,
+        roll_ms,
+        first_ms: 1_700_000_000_000,
+    }
+}
+
+/// Owned configuration values from the same key/value table used by each test.
+pub(crate) fn config_map(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+/// Wait for spawned tasks to enter their bodies before testing their cleanup.
+pub(crate) async fn wait_tasks_started(ready: impl Fn() -> bool, context: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !ready() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect(context);
+}
+
+/// Describe the partitions of a single topic with the standard fixture page limit.
+pub(crate) fn topic_partitions_request(
+    topic: &str,
+) -> krabka_protocol::owned::describe_topic_partitions_request::DescribeTopicPartitionsRequest {
+    use krabka_protocol::owned::describe_topic_partitions_request::{
+        DescribeTopicPartitionsRequest, TopicRequest,
+    };
+    DescribeTopicPartitionsRequest {
+        topics: vec![TopicRequest {
+            name: topic.into(),
+            ..Default::default()
+        }],
+        response_partition_limit: 2000,
+        ..Default::default()
+    }
+}
+
+/// Start the one-partition transaction fixture with grants encoded in principal names.
+pub(crate) async fn start_transaction_grant_broker() -> (BrokerHandle, tempfile::TempDir) {
+    start_broker_no_audit_with(|cfg| {
+        configure_single_partition_transactions(
+            cfg,
+            Arc::new(ControllerPeerAllowed(GrantsInPrincipalName)),
+        );
+    })
+    .await
+}
+
+/// A scripted wire response after its correlation id, including flexible header tags.
+pub(crate) fn scripted_response_body(body: &impl Encode, version: i16, flexible: bool) -> Vec<u8> {
+    let mut out = bytes::BytesMut::new();
+    if flexible {
+        bytes::BufMut::put_u8(&mut out, 0);
+    }
+    body.encode(&mut out, version)
+        .expect("encode the scripted answer");
+    out.to_vec()
+}
+
+/// Kafka's common offset/transaction append-error translations, independent of either mapper.
+pub(crate) const COORDINATOR_WRITE_ERROR_CASES: [(i16, i16); 7] = [
+    (
+        crate::codes::NOT_ENOUGH_REPLICAS,
+        crate::codes::COORDINATOR_NOT_AVAILABLE,
+    ),
+    (
+        crate::codes::REQUEST_TIMED_OUT,
+        crate::codes::COORDINATOR_NOT_AVAILABLE,
+    ),
+    (
+        crate::codes::NOT_LEADER_OR_FOLLOWER,
+        crate::codes::NOT_COORDINATOR,
+    ),
+    (
+        crate::codes::KAFKA_STORAGE_ERROR,
+        crate::codes::NOT_COORDINATOR,
+    ),
+    (
+        crate::codes::MESSAGE_TOO_LARGE,
+        crate::codes::UNKNOWN_SERVER_ERROR,
+    ),
+    (
+        crate::codes::RECORD_LIST_TOO_LARGE,
+        crate::codes::UNKNOWN_SERVER_ERROR,
+    ),
+    (
+        crate::codes::UNKNOWN_SERVER_ERROR,
+        crate::codes::UNKNOWN_SERVER_ERROR,
+    ),
+];
+
+/// One heartbeat expiring after the fixed ten-millisecond test window.
+pub(crate) async fn expired_broker_fixture(
+    broker: u64,
+) -> (
+    crate::heartbeat::controller_state::TestClock,
+    crate::heartbeat::controller_state::ControllerLivenessState,
+    Vec<crate::heartbeat::controller_state::LivenessTransition>,
+) {
+    use crate::heartbeat::controller_state::{ControllerLivenessState, TestClock};
+    let clock = TestClock::new();
+    let liveness =
+        ControllerLivenessState::with_test_clock(std::time::Duration::from_millis(10), &clock);
+    liveness.record_heartbeat(broker).await;
+    clock.advance(std::time::Duration::from_millis(11));
+    let transitions = liveness.tick().await;
+    (clock, liveness, transitions)
 }

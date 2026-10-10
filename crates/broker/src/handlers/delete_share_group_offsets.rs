@@ -353,6 +353,21 @@ mod tests {
         assert!(resp == expected);
     }
 
+    async fn create_share_topics(
+        handle: &crate::broker::BrokerHandle,
+        broker: &crate::broker::Broker,
+        names: &[&str],
+        ctx: &crate::handlers::RequestContext<'_>,
+    ) -> Arc<crate::share_coordinator::persister_client::SharePersister> {
+        create_topics(handle, broker, names, ctx).await;
+        crate::share_coordinator::handlers::test_support::lead_share_state_partitions(broker).await;
+        broker
+            .group_coordinator
+            .share_persister()
+            .cloned()
+            .expect("share persister")
+    }
+
     #[tokio::test]
     async fn handle_error_scenarios_preserve_expected_rows() {
         type Case<'a> = (
@@ -514,20 +529,13 @@ mod tests {
             share_allow_all,
             context(ctx, "alice")
         );
-        create_topics(
+        let persister = create_share_topics(
             &broker_handle,
             &broker,
             &["delete-topic", "kept-topic"],
             &ctx,
         )
         .await;
-        crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
-            .await;
-        let persister = broker
-            .group_coordinator
-            .share_persister()
-            .cloned()
-            .expect("share persister");
         let image = broker.controller.current_image();
         let deleted_id = image
             .topic("delete-topic")
@@ -647,21 +655,13 @@ mod tests {
             .await;
             let broker = broker_handle.broker_arc_for_test();
             test_ctx!(ctx, "alice");
-            create_topics(
+            let persister = create_share_topics(
                 &broker_handle,
                 &broker,
                 &["allow-topic", "deny-topic"],
                 &ctx,
             )
             .await;
-            crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
-                .await;
-
-            let persister = broker
-                .group_coordinator
-                .share_persister()
-                .cloned()
-                .expect("share persister");
             let image = broker.controller.current_image();
             let allow_id = image.topic("allow-topic").expect("allow topic").topic_id;
             let deny_id = image.topic("deny-topic").expect("deny topic").topic_id;

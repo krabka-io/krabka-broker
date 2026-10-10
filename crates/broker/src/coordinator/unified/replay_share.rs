@@ -10,8 +10,8 @@
 use super::{
     group_coordinator::GroupCoordinator,
     replay_policy::{
-        GroupLookup, LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone, member_tombstone,
-        persisted_group, target_metadata, target_metadata_tombstone,
+        GroupLookup, LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone, persisted_group,
+        target_metadata, target_metadata_tombstone,
     },
     seeds::ShareGroupSeed,
     share,
@@ -197,10 +197,7 @@ impl GroupCoordinator {
     ) -> Result<(), BrokerError> {
         self.persisted_share_group(group_id, true)?;
         self.update_share_seed_with(group_id, v, |seed, v| {
-            seed.members
-                .entry(member_id.into())
-                .or_insert_with(uninitialized_member);
-            seed.current_per_member.insert(member_id.into(), v);
+            seed.install_current_member(member_id, v, uninitialized_member);
         });
         Ok(())
     }
@@ -285,22 +282,10 @@ impl GroupCoordinator {
                 self.group_types.remove(group_id);
             }
             K::MemberMetadata { member_id, .. } => {
-                let remove = self.share_seed(group_id, |seed| {
-                    member_tombstone(
-                        ModernGroupType::Share,
-                        member_id,
-                        seed.members.contains_key(member_id).then(|| {
-                            seed.current_per_member
-                                .get(member_id)
-                                .map_or(0, |current| current.member_epoch)
-                        }),
-                        seed.target_per_member.contains_key(member_id),
-                    )
-                })?;
+                let remove = self.share_seed(group_id, |seed| seed.member_tombstone(member_id))?;
                 if remove {
                     self.update_share_seed(group_id, |seed| {
-                        seed.members.remove(member_id);
-                        seed.current_per_member.remove(member_id);
+                        seed.remove_replayed_member(member_id);
                     });
                 }
             }
@@ -343,7 +328,6 @@ impl GroupCoordinator {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
 
     use super::*;
     use crate::coordinator::unified::{
@@ -353,7 +337,7 @@ mod tests {
             ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
             ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo,
         },
-        test_support::{make_coord, proto_uuid, share_member},
+        test_support::{proto_uuid, share_member},
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -465,22 +449,16 @@ mod tests {
     /// exception that fails the load.
     #[test]
     fn share_records_replay_as_kafka() {
-        let group = |update: &dyn Fn(&mut ShareGroupSeed)| {
-            let mut seed = ShareGroupSeed::new_group();
-            update(&mut seed);
-            Ok(Some(seed))
-        };
+        let group =
+            crate::coordinator::unified::test_support::expected_seed(ShareGroupSeed::new_group);
         let tombstone = |kind: &str, id: &str| Record::Tombstone(key(kind, id));
         // Kafka's `ShareGroup.createGroupTombstoneRecords` for member `m`.
         let kafka_deletion = || {
-            vec![
-                tombstone("current", "m"),
-                tombstone("target", "m"),
-                tombstone("target-epoch", ""),
-                tombstone("member", "m"),
-                tombstone("state", ""),
-                tombstone("group", ""),
-            ]
+            crate::coordinator::unified::test_support::assignment_tombstones(
+                tombstone,
+                "m",
+                &["state", "group"],
+            )
         };
         let rows: Vec<(&str, Vec<Record>, Outcome)> = vec![
             (
@@ -585,20 +563,11 @@ mod tests {
                 Err("Group g is not a share group.".into()),
             ),
         ];
-        for (case, log, expected) in rows {
-            let coord = make_coord();
-            let outcome = log
-                .iter()
-                .try_for_each(|record| replay(&coord, record))
-                .map(|()| coord.share_seeds.get("g").map(|seed| seed.value().clone()))
-                .map_err(|error| match error {
-                    BrokerError::Startup(message) => message,
-                    other => other.to_string(),
-                });
-            check!(outcome == expected, "{case}");
-            if let Ok(seed) = outcome {
-                check!(coord.cached_share_seed("g") == seed, "{case}");
-            }
-        }
+        crate::coordinator::unified::test_support::check_replay_cases(
+            &rows,
+            replay,
+            |coord| coord.share_seeds.get("g").map(|seed| seed.value().clone()),
+            |coord| coord.cached_share_seed("g"),
+        );
     }
 }

@@ -27,14 +27,11 @@ use krabka_metadata::{
     BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
     metadata_version::ELR_VERSION_FEATURE,
 };
-use krabka_protocol::{
-    owned::{
-        describe_configs_request::DescribeConfigsRequest,
-        describe_configs_response::{
-            DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
-        },
+use krabka_protocol::owned::{
+    describe_configs_request::DescribeConfigsRequest,
+    describe_configs_response::{
+        DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
     },
-    records::RecordBatch,
 };
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -126,12 +123,12 @@ fn config(
         None,
     )
     .expect("krabka-format wrote meta.properties");
-    let mut config = BrokerConfig::for_tests(node.log_dir.clone());
-    config.broker_id = i32::try_from(node.id).expect("node id");
-    config.node_id = NodeId(node.id);
-    config.listen_addr = node.client_addr;
-    config.advertised_listener = node.client_addr.to_string();
-    config.controller_listen_addr = node.controller_addr;
+    let mut config = crate::support::addressed_node_config(
+        node.id,
+        &node.log_dir,
+        node.client_addr,
+        node.controller_addr,
+    );
     config.roles = node.roles.to_vec();
     config.bootstrap_mode = BootstrapMode::Bootstrap;
     config.cluster_id = Some(meta.cluster_id);
@@ -195,10 +192,8 @@ async fn committed_batches(controller: SocketAddr) -> Vec<Batch> {
         crate::support::client::metadata_fetch(controller, "bootstrap-activation-test", 0).await;
 
     let mut image = MetadataImage::new(uuid::Uuid::nil());
-    let mut bytes: &[u8] = &response.records;
     let mut batches = Vec::new();
-    while !bytes.is_empty() {
-        let batch = RecordBatch::decode(&mut bytes).expect("decode a metadata batch");
+    for batch in crate::support::records::metadata_batches(&response.records) {
         if batch.attributes.is_control_batch() {
             batches.push(Batch::Control);
             continue;

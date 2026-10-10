@@ -52,6 +52,18 @@ impl DisklessCluster {
         self.brokers[Self::index_of(node)].as_ref()
     }
 
+    /// Wait on the selected surviving voter for the departure's promoted leader.
+    pub(crate) async fn promoted_leader(&self, survivor: NodeId, former: NodeId) -> NodeId {
+        let broker = self.handle_for_node(survivor).expect("the survivor is up");
+        broker
+            .wait_until_partition_leader_changed(crate::TOPIC, 0, former)
+            .await;
+        broker
+            .partition_leader_for_test(crate::TOPIC, 0)
+            .map(NodeId)
+            .expect("a promoted leader")
+    }
+
     /// The `host:port` a client bootstraps against to talk to `node`. This
     /// reads the config rather than the handle, so it answers for a broker
     /// that is currently down as well as one that is up.

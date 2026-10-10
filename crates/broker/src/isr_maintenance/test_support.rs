@@ -2,13 +2,9 @@
 //! image, a real on-disk partition, a way to force a replica state, and the
 //! `MetadataSource` the ISR code reads its image and leader from.
 
-use std::{
-    path::Path,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use krabka_ids::{LeaderEpoch, PartitionIndex};
+use krabka_ids::LeaderEpoch;
 use krabka_log::Offset;
 use krabka_metadata::{
     BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
@@ -41,20 +37,7 @@ pub(super) fn topic(name: &str, topic_id: uuid::Uuid) -> MetadataRecord {
     })
 }
 
-pub(super) fn fixture_partition(log_dir: &Path, topic: &str, partition: i32) -> Arc<Partition> {
-    let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition);
-    std::fs::create_dir_all(&part_dir).unwrap();
-    let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
-    crate::broker::spawn_partition(
-        topic.to_string(),
-        PartitionIndex(partition),
-        log_dir.to_path_buf(),
-        log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    )
-}
+pub(super) use crate::test_support::open_partition as fixture_partition;
 
 /// Install `isr` and `replicas` with `leader` at `leader_epoch` on `part`.
 /// Each `(follower, age)` in `stale_followers` has not fetched from this

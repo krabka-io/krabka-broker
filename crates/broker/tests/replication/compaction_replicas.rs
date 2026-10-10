@@ -28,10 +28,7 @@ use krabka_protocol::{
 
 use crate::{
     support,
-    support::{
-        produce::single_partition_produce, records::batch_from_records,
-        topics::create_topic_request,
-    },
+    support::{produce::single_partition_produce, records::batch_from_records},
 };
 
 const TOPIC: &str = "compaction-replicas";
@@ -165,12 +162,7 @@ async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
         ..Default::default()
     })
     .collect();
-    let created = admin
-        .send(create_topic_request(topic, 5_000))
-        .await
-        .expect("CreateTopics");
-    assert!(created.topics[0].error_code == codes::NONE);
-    let topic_id = created.topics[0].topic_id;
+    let topic_id = support::client::create_topic_spec(&admin, topic, 5_000).await;
     for (handle, _, _) in &cluster {
         handle.wait_until_partition_present(TOPIC, 0).await;
         wait_for_the_topic_config(handle).await;

@@ -33,11 +33,7 @@ async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_before_first_poll_resumes_from_sought_offset() {
-    let (_dir, broker) = crate::support::standalone_broker().await;
-    let bootstrap = broker.listen_addr().to_string();
-
-    let admin = connect_client(&bootstrap, None).await;
-    crate::support::client::create_topic(&admin, "s", 1).await;
+    let (_dir, _broker, bootstrap, _admin) = crate::support::client::standalone_topic("s").await;
 
     // Offsets 0..=4 on partition 0.
     produce_n(&bootstrap, "s", 5).await;

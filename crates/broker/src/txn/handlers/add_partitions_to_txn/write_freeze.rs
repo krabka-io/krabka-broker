@@ -81,7 +81,6 @@ mod tests {
         add_partitions_to_txn_response::AddPartitionsToTxnResponse,
         common::add_partitions_to_txn_response::add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
     };
-    use uuid::Uuid;
 
     use super::*;
     use crate::{
@@ -109,16 +108,7 @@ mod tests {
         crate::test_support::topic_freeze_record(scope, pattern_type, true, "DR cutover")
     }
 
-    fn image_with_freezes(scopes: &[(&str, PatternType)]) -> MetadataImage {
-        let mut image = MetadataImage::new(Uuid::from_u128(0x5150));
-        for &(scope, pattern_type) in scopes {
-            image.apply(&MetadataRecord::V1TopicFreeze(freeze_record(
-                scope,
-                pattern_type,
-            )));
-        }
-        image
-    }
+    use crate::test_support::frozen_topics_image as image_with_freezes;
 
     #[test]
     fn frozen_topics_keeps_the_covered_names_and_nothing_else() {
@@ -344,6 +334,16 @@ mod tests {
         }
     }
 
+    async fn anonymous_freeze_request(
+        broker: &crate::broker::Broker,
+        version: i16,
+    ) -> AddPartitionsToTxnResponse {
+        test_ctx!(ctx, "ANONYMOUS");
+        handle(broker, freeze_case_request(version), version, &ctx)
+            .await
+            .expect("handle")
+    }
+
     #[tokio::test]
     async fn handle_refuses_every_partition_row_of_a_frozen_topic_and_adds_the_unfrozen_one() {
         // (label, wire version, freeze scope, pattern type). A prefix scope
@@ -371,10 +371,7 @@ mod tests {
             )
             .await;
             let broker = broker_handle.broker_arc_for_test();
-            test_ctx!(ctx, "ANONYMOUS");
-            let resp = handle(&broker, freeze_case_request(version), version, &ctx)
-                .await
-                .expect("handle");
+            let resp = anonymous_freeze_request(&broker, version).await;
 
             let expected = vec![
                 topic_result(
@@ -416,10 +413,7 @@ mod tests {
             )
             .await;
             let broker = broker_handle.broker_arc_for_test();
-            test_ctx!(ctx, "ANONYMOUS");
-            let resp = handle(&broker, freeze_case_request(version), version, &ctx)
-                .await
-                .expect("handle");
+            let resp = anonymous_freeze_request(&broker, version).await;
 
             // Both topics report the ACL deny. The frozen one reports 29 and
             // not 44: its freeze state never reaches a caller with no right

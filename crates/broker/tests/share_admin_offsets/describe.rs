@@ -27,7 +27,7 @@ use krabka_protocol::{
 use crate::{
     harness::{
         ACCEPT, NONE, ShareAck, UNSUPPORTED_VERSION, acquired_count, bootstrap_share_state,
-        broker_config, broker_test_permit, connect, create_topic, fetch_until_acquired, share_ack,
+        broker_config, broker_test_permit, connect, create_topic, share_ack,
     },
     support::configs::feature_update,
 };
@@ -119,12 +119,8 @@ pub async fn describe_until(
 /// reports to `ListOffsets`, is 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_reflects_spso_after_consume() {
-    let (_permit, broker, client, _dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
-    let (member, _epoch) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
-
     // Acquire 0..2, Accept all → SPSO advances to 3.
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
+    let (_permit, _broker, client, _dir, tid, member, row) = crate::harness::acquired_topic().await;
     assert!(acquired_count(&row) == 3, "must acquire all 3 offsets");
     let ack = share_ack(
         &client,

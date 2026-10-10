@@ -24,7 +24,7 @@ use krabka_log::Offset;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        fetch_request::{FetchRequest, FetchTopic},
         fetch_response::{FetchResponse, PartitionData},
     },
     primitives::uuid::Uuid as WireUuid,
@@ -205,12 +205,7 @@ fn request(
             } else {
                 WireUuid::ZERO
             },
-            partitions: vec![FetchPartition {
-                partition: 0,
-                fetch_offset,
-                partition_max_bytes: 1_048_576,
-                ..Default::default()
-            }],
+            partitions: vec![super::test_support::request_partition(fetch_offset)],
             ..Default::default()
         }],
         ..super::test_support::sessionless_request(version, replica_id)

@@ -90,42 +90,37 @@ impl ReqwestIntrospectionClient {
 #[async_trait]
 impl IntrospectionClient for ReqwestIntrospectionClient {
     async fn introspect(&self, token: &str) -> Result<serde_json::Value, IntrospectionError> {
-        let resp = self
-            .client
-            .post(&self.introspection_endpoint)
-            .basic_auth(&self.client_id, Some(&self.client_secret))
-            .form(&[("token", token)])
-            .send()
-            .await
-            .map_err(|e| IntrospectionError::Transport(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(IntrospectionError::Status(resp.status().as_u16()));
-        }
-        resp.json::<serde_json::Value>()
-            .await
-            .map_err(|_| IntrospectionError::Parse)
+        request_json(
+            self.client
+                .post(&self.introspection_endpoint)
+                .basic_auth(&self.client_id, Some(&self.client_secret))
+                .form(&[("token", token)]),
+        )
+        .await
     }
 
     async fn userinfo(&self, token: &str) -> Result<Option<serde_json::Value>, IntrospectionError> {
         let Some(endpoint) = &self.userinfo_endpoint else {
             return Ok(None);
         };
-        let resp = self
-            .client
-            .get(endpoint)
-            .bearer_auth(token)
-            .send()
+        request_json(self.client.get(endpoint).bearer_auth(token))
             .await
-            .map_err(|e| IntrospectionError::Transport(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(IntrospectionError::Status(resp.status().as_u16()));
-        }
-        let json = resp
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|_| IntrospectionError::Parse)?;
-        Ok(Some(json))
+            .map(Some)
     }
+}
+
+/// Both identity-provider endpoints use the same transport/status/JSON error mapping.
+async fn request_json(
+    request: reqwest::RequestBuilder,
+) -> Result<serde_json::Value, IntrospectionError> {
+    let response = request
+        .send()
+        .await
+        .map_err(|error| IntrospectionError::Transport(error.to_string()))?;
+    if !response.status().is_success() {
+        return Err(IntrospectionError::Status(response.status().as_u16()));
+    }
+    response.json().await.map_err(|_| IntrospectionError::Parse)
 }
 
 #[cfg(test)]
@@ -374,9 +369,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
-        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-        let cert = params.self_signed(&key).unwrap();
+        let (cert, _key) = crate::test_support::ecdsa_pair_for_host("127.0.0.1");
         let ca_path = dir.path().join("ca.pem");
         std::fs::write(&ca_path, cert.pem()).unwrap();
         drop(listener);

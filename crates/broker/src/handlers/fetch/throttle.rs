@@ -344,22 +344,14 @@ mod tests {
     fn a_fractional_consumer_byte_rate_throttles() {
         // `(consumer_byte_rate, response bytes, expected throttle)`. The
         // one-second window gives the bucket a burst of exactly its rate.
-        let cases = crate::quota::test_support::fractional_bandwidth_cases();
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for (rate, bytes, delay) in cases {
-            let img = crate::quota::test_support::image_with_quota(
-                vec![("user", Some("alice"))],
-                "consumer_byte_rate",
-                rate,
-            );
-            let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
-            let (throttle, _) =
-                super::consume_consumer_quota(&img, &buckets, "alice", Some("app"), bytes);
-            actual.push((rate.to_string(), bytes, throttle.delay));
-            expected.push((rate.to_string(), bytes, delay));
-        }
-        assert!(actual == expected);
+        crate::quota::test_support::check_fractional_bandwidth(
+            "consumer_byte_rate",
+            |image, buckets, bytes| {
+                super::consume_consumer_quota(image, buckets, "alice", Some("app"), bytes)
+                    .0
+                    .delay
+            },
+        );
     }
 
     /// The image of leader broker 1 with topic `t`, whose partition `i` has

@@ -100,15 +100,7 @@ async fn produce_then_fetch_round_trip() {
     );
     let fresp = p.client.send(fetch).await.expect("Fetch");
     assert!(fresp.responses.len() == 1);
-    let part = &fresp.responses[0].partitions[0];
-    assert!(part.error_code == 0);
-    let batches = part
-        .records
-        .as_ref()
-        .and_then(|p| p.as_v2())
-        .expect("v2 records must be present after produce");
-    let total: usize = batches.iter().map(|b| b.records.len()).sum();
-    assert!(total == 3);
+    crate::support::fetch::check_record_count(&fresp.responses[0].partitions[0], 3);
 
     p.broker.shutdown().await;
 }

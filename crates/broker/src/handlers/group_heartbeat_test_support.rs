@@ -57,6 +57,21 @@ pub(super) async fn set_group_version(broker: &crate::broker::Broker, level: i16
         .expect("set group.version");
 }
 
+/// Start the coordinator fixture with an explicit finalized group version.
+pub(super) async fn versioned_group_broker(
+    authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+    level: i16,
+) -> (
+    crate::BrokerHandle,
+    tempfile::TempDir,
+    std::sync::Arc<crate::broker::Broker>,
+) {
+    let (handle, dir) = crate::test_support::start_group_broker(authorizer).await;
+    let broker = handle.broker_arc_for_test();
+    set_group_version(&broker, level).await;
+    (handle, dir, broker)
+}
+
 /// A bare `V1Topic` record of `partitions` partitions.
 fn topic_record(name: &str, topic_id: uuid::Uuid, partitions: i32) -> MetadataRecord {
     MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
@@ -141,7 +156,7 @@ pub(super) fn subscribed_names_describe_denied_table() {
                 .collect::<Vec<_>>()
         });
         assert!(
-            crate::handlers::subscribed_names_describe_denied(
+            crate::handlers::acl_gates::subscribed_names_describe_denied(
                 &authorizer,
                 &image,
                 &ctx,

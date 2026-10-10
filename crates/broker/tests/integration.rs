@@ -194,15 +194,7 @@ async fn end_to_end_create_produce_fetch_delete() {
         ))
         .await
         .unwrap();
-    let part = &fr.responses[0].partitions[0];
-    assert!(part.error_code == 0);
-    let batches = part
-        .records
-        .as_ref()
-        .and_then(|p| p.as_v2())
-        .expect("v2 records present after produce");
-    let total: usize = batches.iter().map(|b| b.records.len()).sum();
-    assert!(total == 3);
+    crate::support::fetch::check_record_count(&fr.responses[0].partitions[0], 3);
 
     p.broker.shutdown().await;
 }

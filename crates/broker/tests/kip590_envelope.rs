@@ -48,24 +48,18 @@ mod support;
 /// `"User"`, compact string `"alice"`, `token_authenticated = false`, empty
 /// tagged fields. A forwarding JVM broker puts exactly these bytes in
 /// `EnvelopeRequest.request_principal`.
-const JVM_USER_ALICE: &[u8] = &[
-    0x00, 0x00, 0x05, b'U', b's', b'e', b'r', 0x06, b'a', b'l', b'i', b'c', b'e', 0x00, 0x00,
-];
+const JVM_USER_ALICE: &[u8] = krabka_macros::jvm_principal_golden!(alice, false);
 
 /// The same serialization for `new KafkaPrincipal("User", "bob")`. It differs
 /// from [`JVM_USER_ALICE`] only in the compact string and its length prefix;
 /// the `token_authenticated` byte is `0x00` in both.
-const JVM_USER_BOB: &[u8] = &[
-    0x00, 0x00, 0x05, b'U', b's', b'e', b'r', 0x04, b'b', b'o', b'b', 0x00, 0x00,
-];
+const JVM_USER_BOB: &[u8] = krabka_macros::jvm_principal_golden!(bob, false);
 
 /// `JVM_USER_ALICE` with its `token_authenticated` byte set, which is what
 /// `DefaultKafkaPrincipalBuilder.serialize` writes for a client that
 /// authenticated with a delegation token. The two constants differ in that one
 /// byte and nothing else, so a test that sends both isolates the flag.
-const JVM_USER_ALICE_VIA_TOKEN: &[u8] = &[
-    0x00, 0x00, 0x05, b'U', b's', b'e', b'r', 0x06, b'a', b'l', b'i', b'c', b'e', 0x01, 0x00,
-];
+const JVM_USER_ALICE_VIA_TOKEN: &[u8] = krabka_macros::jvm_principal_golden!(alice, true);
 
 /// The address a forwarding broker copies out of its own client's connection
 /// into `client_host_address`. `EnvelopeRequest.Builder` is handed

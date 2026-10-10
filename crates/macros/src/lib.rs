@@ -474,6 +474,9 @@ function_macros! {
     /// Generate the bounded exhaustive Stateright runner under the supplied function name.
     bounded_bfs => fixtures::bounded_bfs;
 
+    /// Generate the single-topic delete request fixture with a five-second timeout.
+    delete_topic_request => fixtures::delete_topic_request;
+
     /// Generate the compacted-batch test projection under the supplied struct name.
     compacted_batch => fixtures::compacted_batch;
 
@@ -491,6 +494,19 @@ pub fn gcs_fields(meta: TokenStream, item: TokenStream) -> Result<TokenStream, P
 function_macros! {
     /// Generate action-to-message/log/timer adaptation inside a simulation impl.
     simulation_actions => fixtures::simulation_actions;
+    /// Generate the shared simulation bus routing and replication preconditions.
+    simulation_transport => fixtures::simulation_transport;
+    /// Generate simulation leader heartbeats with the caller's interval.
+    simulation_heartbeat => fixtures::simulation_heartbeat;
+    /// Generate a saturating CI benchmark scenario with a caller-supplied name and size.
+    benchmark_scenario_fixture => fixtures::benchmark_scenario;
+
+    /// Generate the benchmark report's representative latency percentiles.
+    benchmark_latency_fixture => fixtures::benchmark_latency;
+
+    /// Generate the synthetic S3 archive config used by argument-mapping assertions.
+    s3_archive_config_fixture => fixtures::s3_archive_config;
+
 }
 
 /// Delegate unchanged metadata-log operations through `self.inner`, before `async_trait`.
@@ -537,6 +553,9 @@ function_macros! {
 
     /// Generate the initial single-replica metadata partition record builder.
     single_replica_partition_fixture => wire_fixtures::single_replica_partition;
+
+    /// Generate the version-zero control-marker key and value fixture encoders.
+    control_marker_fixture => wire_fixtures::control_marker;
 
     /// Generate a topic record builder for one partition and one replica.
     topic_record_fixture => wire_fixtures::topic_record;
@@ -619,6 +638,9 @@ function_macros! {
 
     /// Generate deterministic patterned bytes for framing tests and benchmarks.
     patterned_bytes_fixture => network_fixtures::patterned_bytes;
+
+    /// Literal Kafka 4.3.1 principal bytes: alice or bob, token flag.
+    jvm_principal_golden => network_fixtures::jvm_principal_golden;
 
     /// Generate a response frame prefix independently of production framing.
     frame_prefix_fixture => network_fixtures::frame_prefix;
@@ -722,6 +744,9 @@ function_macros! {
     /// Generate a registry-rendering macro that retains the caller's lock guard.
     metric_registry_fixture => bound_start_fixture::metric_registry;
 
+    /// Generate indexed WORM segment metadata with an explicit segment-id namespace.
+    worm_segment_fixture => remote_metadata_fixtures::worm_segment;
+
     /// Generate the started remote-segment fixture with an explicit metadata crate.
     remote_started_segment => remote_metadata_fixtures::remote_started_segment;
 
@@ -750,6 +775,15 @@ pub fn partition_spawn_parameters(
 function_macros! {
     /// Generate a checkpoint writer with a caller-selected failure kind.
     epoch_checkpoint_failure => network_fixtures::epoch_checkpoint_failure;
+
+    /// Generate a JVM checkpoint decoder fixture with explicit bytes, name and image.
+    jvm_checkpoint_dump_fixture => network_fixtures::jvm_checkpoint_dump;
+
+    /// Compose a compile-time Java string-producer probe with shared imports and setup.
+    java_string_producer_source => network_fixtures::java_string_producer;
+
+    /// Define a wall-clock reader preserving caller attributes and overflow behavior.
+    epoch_millis_fn => network_fixtures::epoch_millis;
 }
 
 /// Gate original items or expressions on the supported sendfile platforms.

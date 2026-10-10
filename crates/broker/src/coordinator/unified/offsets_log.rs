@@ -320,8 +320,31 @@ pub mod fake {
     }
 
     impl InMemoryOffsetsLog {
+        /// Refuse the next append with the selected error, or the default failure.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the failure mutex is poisoned.
+        pub fn fail_next_append(&self, failure: Option<BrokerError>) {
+            match failure {
+                Some(error) => *self.fail_next_with.lock().expect("not poisoned") = Some(error),
+                None => self
+                    .fail_next
+                    .store(true, std::sync::atomic::Ordering::SeqCst),
+            }
+        }
+
         pub async fn batches(&self) -> Vec<RecordBatch> {
             self.appended.lock().await.clone()
+        }
+
+        /// Snapshot the records grouped by their original append batch.
+        pub async fn record_batches(&self) -> Vec<Vec<krabka_protocol::records::Record>> {
+            self.batches()
+                .await
+                .into_iter()
+                .map(|batch| batch.records)
+                .collect()
         }
 
         /// Returns `true` if and only if an appended record tombstones the

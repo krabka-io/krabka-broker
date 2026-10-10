@@ -33,6 +33,25 @@ use crate::support::{
     client::connect_owned,
 };
 
+fn sync_request(
+    group_id: &str,
+    generation_id: i32,
+    member_id: &str,
+    assignment: &'static [u8],
+) -> krabka_protocol::owned::sync_group_request::SyncGroupRequest {
+    classic_sync_request(
+        group_id.to_owned(),
+        generation_id,
+        member_id.to_owned(),
+        Some("consumer".into()),
+        Some("range".into()),
+        vec![sync_assignment(
+            member_id.to_owned(),
+            Bytes::from_static(assignment),
+        )],
+    )
+}
+
 fn assert_described_group(resp: &DescribeGroupsResponse) {
     assert!(
         resp.groups.len() == 1,
@@ -171,17 +190,7 @@ async fn describe_groups_reports_member_metadata_and_protocol_name() {
 
     // ── SyncGroup: leader supplies its own assignment. ──
     let r3 = client
-        .send(classic_sync_request(
-            group_id.to_string(),
-            generation_id,
-            member_id.clone(),
-            Some("consumer".into()),
-            Some("range".into()),
-            vec![sync_assignment(
-                member_id.clone(),
-                Bytes::from_static(ASSIGN),
-            )],
-        ))
+        .send(sync_request(group_id, generation_id, &member_id, ASSIGN))
         .await
         .expect("SyncGroup must round-trip");
     assert!(
@@ -253,16 +262,11 @@ async fn describe_groups_matches_real_kafka_range_subscription() {
 
     // SyncGroup: leader supplies the REAL captured assignment bytes.
     let r3 = client
-        .send(classic_sync_request(
-            group_id.to_string(),
+        .send(sync_request(
+            group_id,
             generation_id,
-            member_id.clone(),
-            Some("consumer".into()),
-            Some("range".into()),
-            vec![sync_assignment(
-                member_id.clone(),
-                Bytes::from_static(REAL_KAFKA_ASSIGNMENT),
-            )],
+            &member_id,
+            REAL_KAFKA_ASSIGNMENT,
         ))
         .await
         .expect("SyncGroup must round-trip");

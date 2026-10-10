@@ -44,10 +44,22 @@ pub(super) fn metadata_with_topic(name: &str, parts: i32) -> (Arc<dyn MetadataPr
 pub(super) fn make_coordinator(
     metadata: Arc<dyn MetadataProvider>,
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
-    let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = Arc::new(GroupCoordinator::new(
+    make_coordinator_with_config(
+        metadata,
         NextGenConfig::assigning_at_once(),
         ShareGroupConfig::assigning_at_once(),
+    )
+}
+
+pub(super) fn make_coordinator_with_config(
+    metadata: Arc<dyn MetadataProvider>,
+    next_gen: NextGenConfig,
+    share: ShareGroupConfig,
+) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
+    let log = Arc::new(InMemoryOffsetsLog::default());
+    let coord = Arc::new(GroupCoordinator::new(
+        next_gen,
+        share,
         metadata,
         log.clone(),
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),

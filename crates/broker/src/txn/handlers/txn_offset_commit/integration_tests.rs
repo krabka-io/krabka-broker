@@ -65,15 +65,7 @@ pub(super) async fn seed_topic_a(broker: &crate::broker::Broker) {
 /// Starts a broker that grants what the principal name says, waits until its
 /// group and transaction coordinators serve, and seeds topic `a`.
 async fn start_seeded_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = start_broker_no_audit_with(|cfg| {
-        crate::test_support::configure_single_partition_transactions(
-            cfg,
-            Arc::new(crate::test_support::ControllerPeerAllowed(
-                GrantsInPrincipalName,
-            )),
-        );
-    })
-    .await;
+    let (handle, dir) = crate::test_support::start_transaction_grant_broker().await;
     wait_for_coordinators(&handle).await;
     seed_topic_a(&handle.broker_arc_for_test()).await;
     (handle, dir)
@@ -905,16 +897,8 @@ async fn a_v5_commit_adds_the_offsets_partition_on_a_transaction_version_1_clust
         (crate::txn::state::TxnState::Ongoing, None),
     )
     .await;
-    let request = TxnOffsetCommitRequest {
-        generation_id_or_member_epoch: -1,
-        ..super::test_support::request_for(
-            "tid-tv1".to_string(),
-            group_id,
-            (700, 5),
-            vec![topic("a", &[0])],
-        )
-    };
-    let response = commit_response(&broker, &request, 5, &ctx).await;
+    let response =
+        commit_topic_a_without_membership(&broker, "tid-tv1", group_id, (700, 5), &ctx).await;
     check!(response.topics[0].partitions[0].error_code == codes::NONE);
     check!(log_holds_key(&broker, group_id, "a", 0));
 
@@ -967,16 +951,9 @@ async fn a_v5_commit_records_the_topic_id_only_under_unstable_api_versions() {
 
         let group_id = "group-topic-id";
         open_transaction_for_group(&broker, "tid-topic-id", (800, 0), group_id).await;
-        let request = TxnOffsetCommitRequest {
-            generation_id_or_member_epoch: -1,
-            ..super::test_support::request_for(
-                "tid-topic-id".to_string(),
-                group_id,
-                (800, 0),
-                vec![topic("a", &[0])],
-            )
-        };
-        let response = commit_response(&broker, &request, 5, &ctx).await;
+        let response =
+            commit_topic_a_without_membership(&broker, "tid-topic-id", group_id, (800, 0), &ctx)
+                .await;
         check!(
             response.topics[0].partitions[0].error_code == codes::NONE,
             "unstable={unstable}"
@@ -996,6 +973,25 @@ async fn a_v5_commit_records_the_topic_id_only_under_unstable_api_versions() {
 
         handle.shutdown().await;
     }
+}
+
+async fn commit_topic_a_without_membership(
+    broker: &crate::broker::Broker,
+    transactional_id: &str,
+    group_id: &str,
+    producer: (i64, i16),
+    context: &crate::handlers::RequestContext<'_>,
+) -> TxnOffsetCommitResponse {
+    let request = TxnOffsetCommitRequest {
+        generation_id_or_member_epoch: -1,
+        ..super::test_support::request_for(
+            transactional_id.to_owned(),
+            group_id,
+            producer,
+            vec![topic("a", &[0])],
+        )
+    };
+    commit_response(broker, &request, 5, context).await
 }
 
 async fn commit_response(

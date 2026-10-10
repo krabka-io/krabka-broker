@@ -132,9 +132,7 @@ impl DisklessIndexLog {
                     *key != REPLAY_FENCE_KEY && floor_key.is_none() && range_key.is_none()
                 });
                 if let Some(key) = unknown_key {
-                    metrics.diskless_wal_index_decode_failures_total.inc();
-                    pump_valid.store(false, Ordering::Release);
-                    progress_tx.send_modify(|progress| progress.invalid = true);
+                    invalidate_projection(&metrics, &pump_valid, &progress_tx);
                     tracing::error!(
                         partition = event.partition,
                         offset = event.offset,
@@ -177,9 +175,7 @@ impl DisklessIndexLog {
                                     *generation = generation.wrapping_add(1);
                                 });
                             } else {
-                                metrics.diskless_wal_index_decode_failures_total.inc();
-                                pump_valid.store(false, Ordering::Release);
-                                progress_tx.send_modify(|progress| progress.invalid = true);
+                                invalidate_projection(&metrics, &pump_valid, &progress_tx);
                                 tracing::error!(
                                     partition = event.partition,
                                     offset = event.offset,
@@ -188,9 +184,7 @@ impl DisklessIndexLog {
                             }
                         }
                         Err(error) => {
-                            metrics.diskless_wal_index_decode_failures_total.inc();
-                            pump_valid.store(false, Ordering::Release);
-                            progress_tx.send_modify(|progress| progress.invalid = true);
+                            invalidate_projection(&metrics, &pump_valid, &progress_tx);
                             tracing::error!(
                                 partition = event.partition,
                                 offset = event.offset,
@@ -387,6 +381,22 @@ impl DisklessIndexLog {
         })
     }
 
+    async fn publish_tombstone(
+        &self,
+        bytes: Bytes,
+        context: &str,
+    ) -> Result<(), crate::error::BrokerError> {
+        self.log
+            .publish_keyed(
+                index_partition(&bytes, self.log.partition_count()),
+                bytes,
+                None,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| crate::error::BrokerError::Txn(format!("{context}: {error}")))
+    }
+
     /// Tombstone one partition's floor, so a deleted topic leaves none behind.
     pub(crate) async fn tombstone_delete_floor(
         &self,
@@ -397,17 +407,8 @@ impl DisklessIndexLog {
             topic_id,
             partition,
         };
-        let bytes = key.to_bytes();
-        self.log
-            .publish_keyed(
-                index_partition(&bytes, self.log.partition_count()),
-                bytes,
-                None,
-            )
-            .await
-            .map_err(|error| {
-                crate::error::BrokerError::Txn(format!("diskless delete floor tombstone: {error}"))
-            })?;
+        self.publish_tombstone(key.to_bytes(), "diskless delete floor tombstone")
+            .await?;
         self.cache.lock().await.clear_delete_floor(key);
         Ok(())
     }
@@ -433,21 +434,22 @@ impl DisklessIndexLog {
         keys: &[WalIndexKey],
     ) -> Result<(), crate::error::BrokerError> {
         for key in keys {
-            let bytes = key.to_bytes();
-            self.log
-                .publish_keyed(
-                    index_partition(&bytes, self.log.partition_count()),
-                    bytes,
-                    None,
-                )
-                .await
-                .map_err(|error| {
-                    crate::error::BrokerError::Txn(format!("diskless index tombstone: {error}"))
-                })?;
+            self.publish_tombstone(key.to_bytes(), "diskless index tombstone")
+                .await?;
             self.cache.lock().await.remove(*key);
         }
         Ok(())
     }
+}
+
+fn invalidate_projection(
+    metrics: &crate::metrics::BrokerMetrics,
+    valid: &AtomicBool,
+    progress: &watch::Sender<ReplayProgress>,
+) {
+    metrics.diskless_wal_index_decode_failures_total.inc();
+    valid.store(false, Ordering::Release);
+    progress.send_modify(|progress| progress.invalid = true);
 }
 
 fn index_partition(key: &[u8], partitions: i32) -> i32 {
@@ -560,24 +562,40 @@ mod tests {
         seed
     }
 
-    #[tokio::test]
-    async fn catch_up_resolves_only_once_the_topic_backlog_is_projected() {
-        let event_log = InProcessMetadataEventLog::new(2);
+    async fn two_range_backlog(
+        partitions: i32,
+    ) -> (Arc<InProcessMetadataEventLog>, Uuid, DisklessIndexLog) {
+        let event_log = InProcessMetadataEventLog::new(partitions);
         let topic_id = Uuid::from_u128(7);
-        let _seed = seeded_index(
+        let seed = seeded_index(
             event_log.clone(),
             topic_id,
             &[("object-a", 0, 3), ("object-b", 4, 7)],
         )
         .await;
+        (event_log, topic_id, seed)
+    }
+
+    async fn check_replayed_backlog(index: &DisklessIndexLog, topic_id: Uuid, context: &str) {
+        assert!(index.wait_until_caught_up(Duration::from_secs(5)).await);
+        assert!(
+            index.cache().lock().await.flushed_frontier(topic_id, 0) == Some(8),
+            "{context}"
+        );
+    }
+
+    #[tokio::test]
+    async fn catch_up_resolves_only_once_the_topic_backlog_is_projected() {
+        let (event_log, topic_id, _seed) = two_range_backlog(2).await;
 
         // A restart against the now-populated topic.
         let restarted = DisklessIndexLog::start(event_log).await.unwrap();
-        assert!(restarted.wait_until_caught_up(Duration::from_secs(5)).await);
-        assert!(
-            restarted.cache().lock().await.flushed_frontier(topic_id, 0) == Some(8),
-            "catch-up must not resolve before the whole backlog is projected"
-        );
+        check_replayed_backlog(
+            &restarted,
+            topic_id,
+            "catch-up must not resolve before the whole backlog is projected",
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -605,6 +623,30 @@ mod tests {
         assert!(failures.get() == 1);
     }
 
+    async fn check_invalid_index_log(event_log: Arc<InProcessMetadataEventLog>, case: &str) {
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let failures = metrics.diskless_wal_index_decode_failures_total.clone();
+        let cache = Arc::new(Mutex::new(WalIndexCache::default()));
+        let index = DisklessIndexLog::start_with_cache(event_log, cache.clone(), metrics)
+            .await
+            .unwrap();
+
+        assert!(
+            !index.wait_until_caught_up(Duration::from_secs(1)).await,
+            "case {case}"
+        );
+        assert!(!index.is_valid(), "case {case}");
+        assert!(failures.get() == 1, "case {case}");
+        assert!(
+            cache
+                .lock()
+                .await
+                .lookup(Uuid::from_u128(7), 0, 0)
+                .is_none(),
+            "case {case}"
+        );
+    }
+
     #[tokio::test]
     async fn an_index_record_of_an_unknown_key_version_fails_replay_and_increments_metric() {
         let record = flush_record("future-key", Uuid::from_u128(7), 0, 3);
@@ -620,27 +662,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let metrics = crate::metrics::BrokerMetrics::new();
-            let failures = metrics.diskless_wal_index_decode_failures_total.clone();
-            let cache = Arc::new(Mutex::new(WalIndexCache::default()));
-            let index = DisklessIndexLog::start_with_cache(event_log, cache.clone(), metrics)
-                .await
-                .unwrap();
-
-            assert!(
-                !index.wait_until_caught_up(Duration::from_secs(1)).await,
-                "case {name}"
-            );
-            assert!(!index.is_valid(), "case {name}");
-            assert!(failures.get() == 1, "case {name}");
-            assert!(
-                cache
-                    .lock()
-                    .await
-                    .lookup(Uuid::from_u128(7), 0, 0)
-                    .is_none(),
-                "case {name}"
-            );
+            check_invalid_index_log(event_log, name).await;
         }
     }
 
@@ -653,23 +675,7 @@ mod tests {
             .await
             .unwrap();
 
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let failures = metrics.diskless_wal_index_decode_failures_total.clone();
-        let cache = Arc::new(Mutex::new(WalIndexCache::default()));
-        let index = DisklessIndexLog::start_with_cache(event_log, cache.clone(), metrics)
-            .await
-            .unwrap();
-
-        assert!(!index.wait_until_caught_up(Duration::from_secs(1)).await);
-        assert!(!index.is_valid());
-        assert!(failures.get() == 1);
-        assert!(
-            cache
-                .lock()
-                .await
-                .lookup(Uuid::from_u128(7), 0, 0)
-                .is_none()
-        );
+        check_invalid_index_log(event_log, "unkeyed").await;
     }
 
     #[tokio::test]
@@ -705,14 +711,7 @@ mod tests {
 
     #[tokio::test]
     async fn catch_up_keeps_waiting_while_a_slow_replay_still_advances() {
-        let event_log = InProcessMetadataEventLog::new(1);
-        let topic_id = Uuid::from_u128(7);
-        let _seed = seeded_index(
-            event_log.clone(),
-            topic_id,
-            &[("object-a", 0, 3), ("object-b", 4, 7)],
-        )
-        .await;
+        let (event_log, topic_id, _seed) = two_range_backlog(1).await;
 
         // Every record lands well inside the stall window, but the replay as a
         // whole outlasts it: progress, not elapsed time, is what the gate
@@ -747,11 +746,12 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(restarted.wait_until_caught_up(Duration::from_secs(5)).await);
-        assert!(
-            restarted.cache().lock().await.flushed_frontier(topic_id, 0) == Some(8),
-            "the racing append must be part of the replay target"
-        );
+        check_replayed_backlog(
+            &restarted,
+            topic_id,
+            "the racing append must be part of the replay target",
+        )
+        .await;
     }
 
     /// The floor has to be a durable record, not a per-broker mirror.

@@ -43,6 +43,16 @@ pub(crate) async fn watch_image_loop(
     }
 }
 
+/// Wait for a subscribed image update; no subscription leaves that select arm pending.
+pub(crate) async fn wait_for_image_change(
+    images: Option<&mut watch::Receiver<Arc<MetadataImage>>>,
+) -> bool {
+    match images {
+        Some(images) => images.changed().await.is_ok(),
+        None => std::future::pending().await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

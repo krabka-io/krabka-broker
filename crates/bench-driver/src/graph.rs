@@ -378,11 +378,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        ids::{TimeOffsetMs, WallclockMs},
-        scenario::{
-            Acks, Compression, LatencyPercentiles, LoadMode, ModeTag, Resource, Sample, Scenario,
-            Throughput, Topology,
-        },
+        ids::TimeOffsetMs,
+        scenario::{LatencyPercentiles, ModeTag, Sample, Scenario, Topology},
     };
 
     fn run(
@@ -393,49 +390,26 @@ mod tests {
         samples: Vec<Sample>,
     ) -> RunOutput {
         RunOutput {
-            scenario: Scenario {
-                name: scenario.into(),
-                mode_tag: ModeTag::Cluster,
-                msg_size: bytes(100),
-                key_size: ByteSize::ZERO,
-                partitions: 100,
-                replication_factor: 3,
-                producers: 1,
-                consumers: 1,
-                mode: LoadMode::Saturate,
-                acks: Acks::Leader,
-                compression: Compression::None,
-                linger: millis(5),
-                batch_size: kibibytes(16),
-                duration: secs(60),
-                warmup: secs(10),
-                failover: None,
-            },
-            stack,
-            topology: Topology {
-                partitions: 100,
-                replication_factor: 3,
-                broker_count: 6,
-            },
-            wallclock_start_unix_ms: WallclockMs(0),
-            wallclock_end_unix_ms: WallclockMs(60_000),
-            throughput: Throughput {
-                producer_rate,
-                ..Throughput::default()
-            },
             producer_latency: LatencyPercentiles {
                 p99,
                 ..LatencyPercentiles::default()
             },
-            consumer_e2e_latency: LatencyPercentiles::default(),
-            resource: Resource::default(),
-            disturbance: None,
-            startup: None,
-            first_ack: Time::ZERO,
-            errors: vec![],
-            notes: vec![],
-            samples,
-            broker_samples: vec![],
+            ..crate::scenario::fixture::empty_run(
+                Scenario {
+                    mode_tag: ModeTag::Cluster,
+                    partitions: 100,
+                    replication_factor: 3,
+                    ..crate::scenario::fixture::scenario(scenario)
+                },
+                stack,
+                Topology {
+                    partitions: 100,
+                    replication_factor: 3,
+                    broker_count: 6,
+                },
+                producer_rate,
+                samples,
+            )
         }
     }
 

@@ -1,8 +1,10 @@
 use assert2::assert;
-use krabka_ids::PartitionIndex;
 use krabka_protocol::records::{Record, RecordBatch};
 
-use super::{Decision, ProducerState, RetainedBatch, snapshot_tail::check};
+use super::{
+    Decision, RetainedBatch,
+    snapshot_tail::{check, check_duplicate, rebuilt},
+};
 
 #[tokio::test]
 async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
@@ -41,11 +43,7 @@ async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
             _ => 5,
         };
         assert!(end == expected_end);
-        let state = ProducerState::new();
-        state
-            .rebuild_from_log("t", PartitionIndex(0), &log)
-            .await
-            .unwrap();
+        let state = rebuilt(&log).await;
         for sequence in [0, 2] {
             let checked = check(&state, (42, 7), (sequence, 1)).await;
             if i64::from(sequence) + 2 <= end {
@@ -72,11 +70,7 @@ async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
         }
         drop(log);
         let reopened = krabka_log::Log::open(dir.path(), config).unwrap();
-        let state = ProducerState::new();
-        state
-            .rebuild_from_log("t", PartitionIndex(0), &reopened)
-            .await
-            .unwrap();
+        let state = rebuilt(&reopened).await;
         // A snapshot-only reopen retains just the latest batch metadata.
         // Qualify that actual recovered window without assuming earlier slots.
         let recovered = reopened.recovered_producers();
@@ -117,11 +111,7 @@ async fn deleting_the_tail_reintroduces_an_older_sequence_alias() {
         })
         .unwrap();
     }
-    let state = ProducerState::new();
-    state
-        .rebuild_from_log("t", PartitionIndex(0), &log)
-        .await
-        .unwrap();
+    let state = rebuilt(&log).await;
     let checked = check(&state, (42, 7), (0, 0)).await;
     assert!(
         checked.decision
@@ -133,23 +123,9 @@ async fn deleting_the_tail_reintroduces_an_older_sequence_alias() {
     // the oldest alias that the previous five-slot window had evicted.
     let cut = log.log_end_offset().0 - 1;
     log.truncate_to(krabka_log::Offset(cut)).unwrap();
-    let state = ProducerState::new();
-    state
-        .rebuild_from_log("t", PartitionIndex(0), &log)
-        .await
-        .unwrap();
+    let state = rebuilt(&log).await;
     let checked = check(&state, (42, 7), (0, 0)).await;
-    assert!(checked.decision == Decision::Duplicate { base_offset: 0 });
-    assert!(
-        checked.duplicate
-            == Some(RetainedBatch {
-                base_sequence: 0,
-                last_sequence: 0,
-                base_offset: 0,
-                last_offset: 0,
-                timestamp: 0,
-            })
-    );
+    check_duplicate(&checked, (0, 0), (0, 0));
 }
 
 #[tokio::test]
@@ -173,30 +149,12 @@ async fn deleting_a_newer_epoch_restores_the_surviving_epoch() {
         })
         .unwrap();
     }
-    let state = ProducerState::new();
-    state
-        .rebuild_from_log("t", PartitionIndex(0), &log)
-        .await
-        .unwrap();
+    let state = rebuilt(&log).await;
     let checked = check(&state, (42, 6), (0, 1)).await;
     assert!(checked.decision == Decision::Fenced);
     log.truncate_to(krabka_log::Offset(3)).unwrap();
     assert!(log.log_end_offset().0 == 2);
-    let state = ProducerState::new();
-    state
-        .rebuild_from_log("t", PartitionIndex(0), &log)
-        .await
-        .unwrap();
+    let state = rebuilt(&log).await;
     let checked = check(&state, (42, 6), (0, 1)).await;
-    assert!(checked.decision == Decision::Duplicate { base_offset: 0 });
-    assert!(
-        checked.duplicate
-            == Some(RetainedBatch {
-                base_sequence: 0,
-                last_sequence: 1,
-                base_offset: 0,
-                last_offset: 1,
-                timestamp: 0,
-            })
-    );
+    check_duplicate(&checked, (0, 1), (0, 1));
 }

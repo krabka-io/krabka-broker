@@ -23,6 +23,16 @@ use crate::{
     time_util::now_ms,
 };
 
+fn signature_requirement(base: &BrokerConfig, require_signature: bool) -> BrokerConfig {
+    BrokerConfig {
+        freeze: FreezeConfig {
+            require_signature,
+            ..FreezeConfig::default()
+        },
+        ..base.clone()
+    }
+}
+
 #[test]
 fn a_signature_is_named_by_either_half_of_the_pair() {
     for (label, key_id, signature, expected) in [
@@ -89,13 +99,7 @@ fn an_unsigned_freeze_is_accepted_by_default_and_refused_under_require_signature
             Some(codes::OPERATOR_SIGNATURE_REQUIRED),
         ),
     ] {
-        let config = BrokerConfig {
-            freeze: FreezeConfig {
-                require_signature,
-                ..FreezeConfig::default()
-            },
-            ..base.clone()
-        };
+        let config = signature_requirement(&base, require_signature);
         let env = FreezeEnv {
             config: &config,
             image: &image,
@@ -124,13 +128,7 @@ fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
     freeze_fixture!(image, principal, peer, ctx; &[("orders", PatternType::Literal)]);
 
     for require_signature in [false, true] {
-        let config = BrokerConfig {
-            freeze: FreezeConfig {
-                require_signature,
-                ..FreezeConfig::default()
-            },
-            ..base.clone()
-        };
+        let config = signature_requirement(&base, require_signature);
         let env = FreezeEnv {
             config: &config,
             image: &image,

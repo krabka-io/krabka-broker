@@ -203,6 +203,15 @@ mod tests {
         record
     }
 
+    fn check_spool_within_capacity(directory: &std::path::Path, capacity: krabka_units::ByteSize) {
+        check!(
+            std::fs::metadata(directory.join("audit.spool"))
+                .unwrap()
+                .len()
+                <= capacity.bytes_u64() + u64::try_from(crate::spool::FILE_HEADER_LEN).unwrap()
+        );
+    }
+
     fn record_size(directory: &std::path::Path, record: &AuditRecord) -> krabka_units::ByteSize {
         let mut spool = Spool::open(directory, ROOMY_CAP).unwrap();
         check!(spool.append(record).unwrap());
@@ -456,12 +465,7 @@ mod tests {
         log.emit(life(1));
         log.emit(life(2));
         await_until("one spooled and two lost", || stats.dropped() == 2).await;
-        check!(
-            std::fs::metadata(dir.path().join("audit.spool"))
-                .unwrap()
-                .len()
-                <= one.bytes_u64() + u64::try_from(crate::spool::FILE_HEADER_LEN).unwrap()
-        );
+        check_spool_within_capacity(dir.path(), one);
 
         sink.set_fail(false);
         clock
@@ -486,12 +490,7 @@ mod tests {
             })
             .sum();
         check!(lost == 2);
-        check!(
-            std::fs::metadata(dir.path().join("audit.spool"))
-                .unwrap()
-                .len()
-                <= one.bytes_u64() + u64::try_from(crate::spool::FILE_HEADER_LEN).unwrap()
-        );
+        check_spool_within_capacity(dir.path(), one);
 
         finish_writer(log, handle).await;
     }

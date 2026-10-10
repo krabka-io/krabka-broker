@@ -69,9 +69,7 @@ async fn classic_leave_legacy_append_failure_rolls_back_and_reports_error() {
     check!(result.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
     check!(result.members.is_empty());
     let view = rpc::classic_inspect(&handle).await;
-    check!(view.state == ClassicGroupState::Stable);
-    check!(view.members.len() == 1);
-    check!(view.members[0].member_id == "m1");
+    rpc::check_stable_classic_member(&view, "m1");
     check!(log.batches().await.is_empty());
 }
 

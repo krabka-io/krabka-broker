@@ -3,16 +3,9 @@ mod support;
 use krabka_client_consumer::{AutoOffsetReset, Consumer, Header as ConsumerHeader};
 use krabka_client_producer::{Header, ProducerRecord};
 
-use crate::support::client::connect_client;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_record_carries_headers() {
-    let (_dir, broker) = crate::support::standalone_broker().await;
-    let bootstrap = broker.listen_addr().to_string();
-
-    // Create the topic before producing.
-    let admin = connect_client(&bootstrap, None).await;
-    crate::support::client::create_topic(&admin, "h", 1).await;
+    let (_dir, _broker, bootstrap, _admin) = crate::support::client::standalone_topic("h").await;
 
     let producer = crate::support::producer::default_producer(&bootstrap).await;
     producer

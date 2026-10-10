@@ -40,15 +40,7 @@ async fn alter_then_describe_round_trip() {
     );
 
     // Await until the quota is visible in the committed metadata image.
-    handle
-        .wait_for_image(|img| {
-            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-            img.client_quotas()
-                .get(&key)
-                .and_then(|cfgs| cfgs.get("producer_byte_rate"))
-                == Some(&1024.0)
-        })
-        .await;
+    crate::cluster::wait_alice_quota(&handle, "producer_byte_rate", 1024.0).await;
 
     // Describe: fetch back the quota.
     let desc = drive_describe_client_quotas_sasl(

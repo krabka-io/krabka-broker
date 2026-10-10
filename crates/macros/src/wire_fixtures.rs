@@ -53,12 +53,13 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
 }
 
 pub(crate) fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = crate::fixtures::name(input)?;
-    Ok(moxy::template! {
-        pub(crate) fn {{ name }}(
-            topic: &str, configs: &[(&str, &str)], num_partitions: i32,
-            replication_factor: i16, timeout_ms: i32,
-        ) -> ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+    crate::fixtures::function(
+        input,
+        &moxy::template! { pub(crate) },
+        &moxy::template! { topic: &str, configs: &[(&str, &str)], num_partitions: i32,
+        replication_factor: i16, timeout_ms: i32, },
+        &moxy::template! { ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest },
+        &moxy::template! {
             ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
                 topics: vec![::krabka_protocol::owned::create_topics_request::CreatableTopic {
                     name: topic.to_owned(), num_partitions, replication_factor,
@@ -68,14 +69,17 @@ pub(crate) fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError
                     ..Default::default()
                 }], timeout_ms, ..Default::default()
             }
-        }
-    })
+        },
+    )
 }
 
 pub(crate) fn consumer_fetch(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = crate::fixtures::name(input)?;
-    Ok(moxy::template! {
-        pub(crate) fn {{ name }}(topic: &str) -> ::krabka_protocol::owned::fetch_request::FetchRequest {
+    crate::fixtures::function(
+        input,
+        &moxy::template! { pub(crate) },
+        &moxy::template! { topic: &str },
+        &moxy::template! { ::krabka_protocol::owned::fetch_request::FetchRequest },
+        &moxy::template! {
             ::krabka_protocol::owned::fetch_request::FetchRequest {
                 replica_id: -1, max_wait_ms: 0, min_bytes: 1, max_bytes: 1 << 20,
                 topics: vec![::krabka_protocol::owned::fetch_request::FetchTopic {
@@ -84,21 +88,44 @@ pub(crate) fn consumer_fetch(input: TokenStream) -> Result<TokenStream, ParseErr
                     }], ..Default::default()
                 }], ..Default::default()
             }
-        }
-    })
+        },
+    )
 }
 
 pub(crate) fn single_replica_partition(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = crate::fixtures::name(input)?;
-    Ok(moxy::template! {
-        pub(crate) fn {{ name }}(
-            topic: &str, partition: i32, node: ::krabka_metadata::NodeId,
-        ) -> ::krabka_metadata::PartitionRecord {
+    crate::fixtures::function(
+        input,
+        &moxy::template! { pub(crate) },
+        &moxy::template! { topic: &str, partition: i32, node: ::krabka_metadata::NodeId, },
+        &moxy::template! { ::krabka_metadata::PartitionRecord },
+        &moxy::template! {
             ::krabka_metadata::PartitionRecord {
                 topic: topic.to_owned(), partition, leader: node, replicas: vec![node], isr: vec![node],
                 leader_epoch: ::krabka_metadata::LeaderEpoch(0), adding_replicas: vec![],
                 removing_replicas: vec![], directories: vec![], partition_epoch: 0,
             }
+        },
+    )
+}
+
+/// The version-zero Kafka control-record key and value fixture bytes.
+pub(crate) fn control_marker(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(tokens)?;
+    Ok(moxy::template! {
+        mod {{ name }} {
+            fn versioned(payload: &[u8]) -> ::bytes::Bytes {
+                let mut bytes = Vec::with_capacity(2 + payload.len());
+                bytes.extend_from_slice(&0i16.to_be_bytes());
+                bytes.extend_from_slice(payload);
+                ::bytes::Bytes::from(bytes)
+            }
+            pub fn control_key(marker_type: i16) -> ::bytes::Bytes {
+                versioned(&marker_type.to_be_bytes())
+            }
+            pub fn control_value(coordinator_epoch: i32) -> ::bytes::Bytes {
+                versioned(&coordinator_epoch.to_be_bytes())
+            }
         }
+        pub use {{ name }}::{control_key, control_value};
     })
 }

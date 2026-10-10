@@ -11,7 +11,9 @@ use crate::{
     backend::open_archive,
     discover::{
         inventory,
-        test_support::{args_from, snapshot_segment, write_full_segment, write_snapshot},
+        test_support::{
+            args_from, single_segment_archive, snapshot_segment, write_full_segment, write_snapshot,
+        },
     },
 };
 
@@ -80,18 +82,10 @@ fn two_segment_snapshot(
     (archive, snapshot_dir, snapshot, first)
 }
 
-fn single_segment_archive() -> (tempfile::TempDir, Uuid, Uuid) {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let segment_id = Uuid::from_u128(10);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
-    (archive, topic_id, segment_id)
-}
-
 fn authenticated_snapshot(
     state: RemoteLogSegmentState,
 ) -> (tempfile::TempDir, std::path::PathBuf, RestoreArgs) {
-    let (archive, topic_id, segment_id) = single_segment_archive();
+    let (archive, topic_id, segment_id) = single_segment_archive(0);
     let snapshot = archive.path().join("snapshot");
     snapshot_of(&snapshot, "orders", topic_id, &[(segment_id, 0, state)]);
     let mut args = args_from(
@@ -174,16 +168,7 @@ async fn authenticated_rlmm_excludes_objects_retained_after_completed_deletion()
 
 #[tokio::test]
 async fn a_segment_the_snapshot_does_not_mention_is_a_disagreement() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    write_full_segment(
-        archive.path(),
-        "orders",
-        0,
-        topic_id,
-        0,
-        Uuid::from_u128(10),
-    );
+    let (archive, topic_id, _) = single_segment_archive(0);
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -202,10 +187,7 @@ async fn a_delete_finished_segment_with_bytes_still_present_is_a_disagreement() 
     // being in the archive is a real inconsistency, unlike
     // `DeleteSegmentStarted`, where a deletion still in flight leaving
     // bytes behind is routine and gets dropped silently instead.
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let seg = Uuid::from_u128(10);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 0, seg);
+    let (archive, topic_id, seg) = single_segment_archive(0);
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -265,16 +247,7 @@ async fn a_live_partition_missing_from_the_scan_entirely_is_a_disagreement() {
 
 #[tokio::test]
 async fn a_missing_snapshot_file_is_reported_as_io_not_found() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    write_full_segment(
-        archive.path(),
-        "orders",
-        0,
-        topic_id,
-        0,
-        Uuid::from_u128(10),
-    );
+    let (archive, _topic_id, _) = single_segment_archive(0);
 
     let missing = archive.path().join("does-not-exist-snapshot");
     let args = args_from(
@@ -291,7 +264,7 @@ async fn a_missing_snapshot_file_is_reported_as_io_not_found() {
 
 #[tokio::test]
 async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
-    let (archive, topic_id, segment_id) = single_segment_archive();
+    let (archive, topic_id, segment_id) = single_segment_archive(0);
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -313,7 +286,7 @@ async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
 
 #[tokio::test]
 async fn duplicate_partition_keys_in_the_snapshot_are_a_disagreement() {
-    let (archive, topic_id, segment_id) = single_segment_archive();
+    let (archive, topic_id, segment_id) = single_segment_archive(0);
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -337,10 +310,7 @@ async fn duplicate_partition_keys_in_the_snapshot_are_a_disagreement() {
 
 #[tokio::test]
 async fn maximum_offset_reconciliation_is_stable_across_retry() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let segment_id = Uuid::from_u128(10);
-    write_full_segment(archive.path(), "orders", 0, topic_id, i64::MAX, segment_id);
+    let (archive, topic_id, segment_id) = single_segment_archive(i64::MAX);
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");

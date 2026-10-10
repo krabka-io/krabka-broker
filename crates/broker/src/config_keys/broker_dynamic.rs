@@ -478,13 +478,7 @@ mod tests {
     use assert2::check;
 
     use super::*;
-
-    fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect()
-    }
+    use crate::test_support::config_map as map;
 
     #[test]
     fn broker_resource_names_follow_kafkas_node_id_rule() {

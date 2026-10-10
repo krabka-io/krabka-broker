@@ -212,9 +212,20 @@ fn elect_with_peer(engine: &mut super::Engine, peer: NodeId) {
 }
 
 fn fetch_at_tip(
-    engine: &mut super::Engine,
+    engine: &mut Engine,
     peer: NodeId,
     fetch_epoch: u32,
+) -> oneshot::Receiver<bytes::Bytes> {
+    let offset = engine.log.log_end_offset().0;
+    inbound_fetch(engine, peer, fetch_epoch, offset, uuid::Uuid::nil())
+}
+
+fn inbound_fetch(
+    engine: &mut Engine,
+    peer: NodeId,
+    fetch_epoch: u32,
+    fetch_offset: i64,
+    directory: uuid::Uuid,
 ) -> oneshot::Receiver<bytes::Bytes> {
     let (reply, receiver) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
@@ -226,8 +237,8 @@ fn fetch_at_tip(
             from: peer,
             current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
             fetch_epoch,
-            fetch_offset: engine.log.log_end_offset().0,
-            replica_directory_id: uuid::Uuid::nil(),
+            fetch_offset,
+            replica_directory_id: directory,
         }
         .encode(),
         reply,
@@ -406,8 +417,7 @@ async fn a_leader_refuses_a_fetch_from_another_epoch_and_names_itself() {
 /// id and the successors in the core's order.
 #[tokio::test]
 async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let mut sends = record_peer_sends(&mut engine, wire::PeerResponse::Ack { epoch: 4 }.encode());
+    let (engine, _dir, mut sends) = broadcast_fixture();
 
     engine.broadcast_end_quorum_epoch(4, &[NodeId(3), NodeId(2)]);
 
@@ -433,12 +443,21 @@ async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
     assert2::assert!(peers == vec![NodeId(2), NodeId(3)]);
 }
 
+fn broadcast_fixture() -> (
+    Engine,
+    tempfile::TempDir,
+    tokio::sync::mpsc::UnboundedReceiver<crate::kraft::controller::test_support::CapturedPeerSend>,
+) {
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let sends = record_peer_sends(&mut engine, wire::PeerResponse::Ack { epoch: 4 }.encode());
+    (engine, dir, sends)
+}
+
 /// Kafka's `buildBeginQuorumEpochRequest`: each other voter gets the cluster
 /// id, its own voter key, and the leader's listeners in `LeaderEndpoints`.
 #[tokio::test]
 async fn broadcast_begin_quorum_epoch_names_each_recipient_and_the_leader_endpoints() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let mut sends = record_peer_sends(&mut engine, wire::PeerResponse::Ack { epoch: 4 }.encode());
+    let (engine, _dir, mut sends) = broadcast_fixture();
 
     engine.broadcast_begin_quorum_epoch(4);
 
@@ -587,6 +606,25 @@ async fn quorum_epoch_requests_teach_the_leader_endpoints() {
     }
 }
 
+async fn check_sent_fetch(
+    engine: &mut Engine,
+    sends: &mut mpsc::UnboundedReceiver<super::test_support::CapturedPeerSend>,
+    expected: (u32, i64),
+) {
+    engine.send_fetch(NodeId(2));
+    let send = recv_peer_send(sends).await;
+    match wire::decode_fetch(&send.body) {
+        Some(wire::PeerRequest::Fetch {
+            fetch_epoch,
+            fetch_offset,
+            ..
+        }) => {
+            assert2::assert!((fetch_epoch, fetch_offset) == expected);
+        }
+        other => panic!("unexpected fetch request: {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
@@ -605,38 +643,14 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
     .encode();
     let mut sends = record_peer_sends(&mut engine, fetch_response.clone());
 
-    engine.send_fetch(NodeId(2));
-    let send = recv_peer_send(&mut sends).await;
-    match wire::decode_fetch(&send.body) {
-        Some(wire::PeerRequest::Fetch {
-            fetch_epoch,
-            fetch_offset,
-            ..
-        }) => {
-            assert2::assert!(fetch_epoch == 7);
-            assert2::assert!(fetch_offset == 10);
-        }
-        other => panic!("unexpected fetch request: {other:?}"),
-    }
+    check_sent_fetch(&mut engine, &mut sends, (7, 10)).await;
 
     let mut batch = one_offset_batch(10, 9, b"after-snapshot");
     engine
         .log
         .append_at(&mut batch, Offset(10))
         .expect("append after snapshot");
-    engine.send_fetch(NodeId(2));
-    let send = recv_peer_send(&mut sends).await;
-    match wire::decode_fetch(&send.body) {
-        Some(wire::PeerRequest::Fetch {
-            fetch_epoch,
-            fetch_offset,
-            ..
-        }) => {
-            assert2::assert!(fetch_epoch == 9);
-            assert2::assert!(fetch_offset == 11);
-        }
-        other => panic!("unexpected fetch request: {other:?}"),
-    }
+    check_sent_fetch(&mut engine, &mut sends, (9, 11)).await;
 }
 
 #[test]
@@ -1124,22 +1138,7 @@ async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
     let log_end = engine.log.log_end_offset();
     assert!(log_end > Offset(5), "the leader appended in its own epoch");
 
-    let (reply, mut response) = oneshot::channel();
-    engine.on_inbound(Inbound::Fetch {
-        version: crate::kraft::transport::wire::FETCH_VERSION,
-        req: wire::PeerRequest::Fetch {
-            cluster_id: None,
-            max_wait_ms: 0,
-            high_watermark: -1,
-            from: NodeId(2),
-            current_leader_epoch: i32::try_from(leader_epoch).unwrap(),
-            fetch_epoch: 1,
-            fetch_offset: 8,
-            replica_directory_id: uuid::Uuid::nil(),
-        }
-        .encode(),
-        reply,
-    });
+    let mut response = inbound_fetch(&mut engine, NodeId(2), 1, 8, uuid::Uuid::nil());
 
     let body = response.try_recv().expect("the leader answered the Fetch");
     let diverging = match wire::PeerResponse::decode_fetch(&body) {
@@ -1200,22 +1199,7 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
     assert2::check!(peer_caught_ms > 1_700_000_000_000);
 
     // 3. Observer (Node 99) fetches via inbound
-    let (reply_obs, _rx_obs) = oneshot::channel();
-    engine.on_inbound(Inbound::Fetch {
-        version: crate::kraft::transport::wire::FETCH_VERSION,
-        req: wire::PeerRequest::Fetch {
-            cluster_id: None,
-            max_wait_ms: 0,
-            high_watermark: -1,
-            from: NodeId(99),
-            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
-            fetch_epoch: 1,
-            fetch_offset: 0,
-            replica_directory_id: uuid::Uuid::from_u128(99),
-        }
-        .encode(),
-        reply: reply_obs,
-    });
+    let _rx_obs = inbound_fetch(&mut engine, NodeId(99), 1, 0, uuid::Uuid::from_u128(99));
 
     // The leader's log holds its `LeaderChange`, so a fetch at offset 0 is a
     // valid fetch that has not reached the log end: the observer is listed with

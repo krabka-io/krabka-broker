@@ -57,6 +57,15 @@ pub(super) async fn create_topic(
     crate::support::topic_id_for(client, name).await
 }
 
+/// Start the boundary-test topic while keeping the broker's directory alive.
+pub(super) async fn orders_fixture(
+    configs: &[(&str, &str)],
+) -> (crate::support::InProcess, WireUuid) {
+    let process = Box::pin(crate::support::start()).await;
+    let topic = create_topic(&process.broker, &process.client, "orders", configs).await;
+    (process, topic)
+}
+
 /// A single-record batch whose complete v2 wire encoding is exactly
 /// `target` bytes.
 ///

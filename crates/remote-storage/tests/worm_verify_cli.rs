@@ -14,11 +14,9 @@ use std::{
 use assert2::check;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_audit::signing::FileEd25519Signer;
-use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
-    ChainHead, ChainStamp, EpochId, MANIFEST_SUFFIX, ManifestSeq, ObjectEntry,
-    RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState,
-    Sha256Digest, TopicIdPartition, WormArchiver, WormChainRecord, manifest_head,
+    ChainHead, ChainStamp, EpochId, MANIFEST_SUFFIX, ManifestSeq, ObjectEntry, Sha256Digest,
+    WormArchiver, WormChainRecord, manifest_head,
 };
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 use tempfile::TempDir;
@@ -36,26 +34,14 @@ fn uuid_b64(uuid: Uuid) -> String {
     URL_SAFE_NO_PAD.encode(uuid.as_bytes())
 }
 
-fn metadata(index: usize) -> RemoteLogSegmentMetadata {
-    let start = i64::try_from(index).unwrap() * SEGMENT_SPAN;
-    RemoteLogSegmentMetadata::new(
-        RemoteLogSegmentId::new(
-            TopicIdPartition::new(Uuid::from_u128(1), TOPIC, PARTITION),
-            Uuid::from_u128(0x2000 + u128::try_from(index).unwrap()),
-        ),
-        start,
-        start + SEGMENT_SPAN - 1,
-        1_713_000_000_000,
-        1,
-        1_713_000_001_000,
-        RemoteLogSegmentDetails::new(
-            4096,
-            RemoteLogSegmentState::CopySegmentStarted,
-            maplit::btreemap! {LeaderEpoch(0) => start},
-        ),
-    )
-    .unwrap()
-}
+krabka_macros::worm_segment_fixture!(
+    metadata,
+    krabka_remote_storage,
+    0x2000,
+    TOPIC,
+    PARTITION,
+    SEGMENT_SPAN
+);
 
 /// An archive on disk, plus the paths a test needs to damage it.
 ///

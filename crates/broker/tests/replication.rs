@@ -239,18 +239,13 @@ async fn delete_records_moves_every_replica_log_start_before_it_answers() {
     // cluster[0] is node 1, and the topic pins it as the leader of partition 0.
     let leader_addr = cluster[0].1.listen_addr.to_string();
     let client = connect_client(leader_addr, None).await;
-    let resp = client
-        .send(create_topic_request(
-            support::topic_on("trimmed", &[&[1, 2, 3]]),
-            5_000,
-        ))
-        .await
-        .unwrap();
-    assert!(resp.topics[0].error_code == 0);
-    let topic_id = resp.topics[0].topic_id;
-    for (h, _, _) in &cluster {
-        h.wait_until_partition_present("trimmed", 0).await;
-    }
+    let topic_id = support::topics::create_assigned_partition(
+        &client,
+        "trimmed",
+        &[1, 2, 3],
+        cluster.iter().map(|(broker, _, _)| broker),
+    )
+    .await;
 
     let batch = support::client::value_batch(20);
     produce_replicated(&client, "trimmed", topic_id, batch).await;

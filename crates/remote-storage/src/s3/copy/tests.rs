@@ -36,6 +36,18 @@ async fn copy_then_fetch_full_segment() {
     .await;
 }
 
+fn copied_segment(
+    store: &S3RemoteStorage,
+    metadata: &RemoteLogSegmentMetadata,
+    data: &LogSegmentData,
+    expected_len: usize,
+) -> Vec<u8> {
+    store.copy_log_segment_data(metadata, data).unwrap();
+    let fetched = store.fetch_log_segment(metadata, 0, None).unwrap();
+    assert!(fetched.len() == expected_len);
+    fetched
+}
+
 fn write_log_segment(dir: &std::path::Path, len: usize) -> PathBuf {
     let p = dir.join("00.log");
     let mut f = std::fs::File::create(&p).unwrap();
@@ -62,19 +74,10 @@ async fn put_path_uses_multipart_above_threshold_and_round_trips() {
         .with_multipart_tuning(kibibytes(8), kibibytes(4));
     let src = TempDir::new().unwrap();
     let md = sample_metadata(40);
-    let log_path = write_log_segment(src.path(), seg_len);
-    let data = LogSegmentData {
-        log_segment: log_path,
-        offset_index: write_file(src.path(), "00.index", b"OFFSET-IDX"),
-        time_index: write_file(src.path(), "00.timeindex", b"TIME-IDX"),
-        transaction_index: None,
-        producer_snapshot_index: Some(write_file(src.path(), "00.snapshot", b"SNAP")),
-        leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
-    };
+    let mut data = multipart_data(src.path(), seg_len);
+    data.producer_snapshot_index = Some(write_file(src.path(), "00.snapshot", b"SNAP"));
     tokio::task::spawn_blocking(move || {
-        store.copy_log_segment_data(&md, &data).unwrap();
-        let fetched = store.fetch_log_segment(&md, 0, None).unwrap();
-        assert!(fetched.len() == seg_len);
+        let fetched = copied_segment(&store, &md, &data, seg_len);
         for (i, b) in fetched.iter().enumerate() {
             assert!(*b == u8::try_from(i % 251).unwrap(), "byte mismatch at {i}");
         }
@@ -108,9 +111,7 @@ async fn multipart_flushes_partial_tail_chunk() {
     let md = sample_metadata(41);
     let data = multipart_data(src.path(), seg_len);
     tokio::task::spawn_blocking(move || {
-        store.copy_log_segment_data(&md, &data).unwrap();
-        let fetched = store.fetch_log_segment(&md, 0, None).unwrap();
-        assert!(fetched.len() == seg_len);
+        let fetched = copied_segment(&store, &md, &data, seg_len);
         assert!(
             fetched.last().copied() == Some(u8::try_from((seg_len - 1) % 251).unwrap()),
             "tail byte was dropped"

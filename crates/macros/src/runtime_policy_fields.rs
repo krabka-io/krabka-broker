@@ -63,6 +63,30 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
     /// Maximum bytes fetched by one metadata observer request.
     pub observer_fetch_max: Option<ByteSize>,
     };
+    let share_timings = moxy::template! {
+    /// Default share-group session timeout, Kafka's
+    /// `group.share.session.timeout.ms`.
+    pub share_group_session_timeout: Option<Time>,
+    /// Default share-group heartbeat interval, Kafka's
+    /// `group.share.heartbeat.interval.ms`.
+    pub share_group_heartbeat_interval: Option<Time>,
+    /// Lower bound on the share-group session timeout, and on a group's
+    /// `share.session.timeout.ms`, Kafka's
+    /// `group.share.min.session.timeout.ms`.
+    pub share_group_min_session_timeout: Option<Time>,
+    /// Upper bound on the share-group session timeout, and on a group's
+    /// `share.session.timeout.ms`, Kafka's
+    /// `group.share.max.session.timeout.ms`.
+    pub share_group_max_session_timeout: Option<Time>,
+    /// Lower bound on the share-group heartbeat interval, and on a group's
+    /// `share.heartbeat.interval.ms`, Kafka's
+    /// `group.share.min.heartbeat.interval.ms`.
+    pub share_group_min_heartbeat_interval: Option<Time>,
+    /// Upper bound on the share-group heartbeat interval, and on a group's
+    /// `share.heartbeat.interval.ms`, Kafka's
+    /// `group.share.max.heartbeat.interval.ms`.
+    pub share_group_max_heartbeat_interval: Option<Time>,
+    };
     let share_limits = moxy::template! {
     /// How long an acquired share record stays locked before it is released
     /// for redelivery, Kafka's `group.share.record.lock.duration.ms`: a whole
@@ -219,6 +243,7 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
         (startup_before, startup),
         ("audit_event_queue_capacity", operations),
         ("streams_group_max_size", streams),
+        ("share_group_max_size", share_timings),
         (
             if cli {
                 "streams_group_enable"

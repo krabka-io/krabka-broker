@@ -10,7 +10,6 @@
 
 use std::sync::Arc;
 
-use assert2::assert;
 use krabka_protocol::{
     owned::{
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
@@ -175,17 +174,16 @@ async fn topic_row_error_follows_version_and_topic_reference() {
     ];
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
 
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for (row, case) in cases.into_iter().enumerate() {
-        // Every row gets its own topic, so an appended row starts at offset 0.
-        let known = format!("resolution-{row}");
-        create_topic(&broker, &known).await;
-        let (got, want) = drive(&broker, Some(&known), case).await;
-        actual.push(got);
-        expected.push(want);
-    }
-    assert!(actual == expected);
+    crate::handlers::test_support::check_cases(
+        cases.into_iter().enumerate(),
+        async |(row, case)| {
+            // Each row retains its own topic so an appended row starts at offset 0.
+            let known = format!("resolution-{row}");
+            create_topic(&broker, &known).await;
+            drive(&broker, Some(&known), case).await
+        },
+    )
+    .await;
     broker.shutdown().await;
 }
 

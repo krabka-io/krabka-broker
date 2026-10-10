@@ -25,6 +25,16 @@ use super::{
 };
 use crate::config_keys::registry::ConfigType;
 
+fn seed_metrics_subscription(image: &mut MetadataImage) {
+    image.apply(&MetadataRecord::V1ClientMetricsConfig(
+        krabka_metadata::ClientMetricsConfigRecord {
+            name: "sub-1".to_owned(),
+            configs: maplit::btreemap! {
+            crate::client_metrics::config::KEY_METRICS.to_string() => "org.apache.kafka".to_string()},
+        },
+    ));
+}
+
 /// A request that asks for everything, the way `kafka-configs --describe
 /// --all` does.
 pub(super) const EVERYTHING: EntryOptions = EntryOptions {
@@ -925,13 +935,7 @@ fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
         overrides: maplit::btreemap! {
         config_keys::RETENTION_MS.to_string() => "60000".to_string()},
     }));
-    image.apply(&MetadataRecord::V1ClientMetricsConfig(
-        krabka_metadata::ClientMetricsConfigRecord {
-            name: "sub-1".to_owned(),
-            configs: maplit::btreemap! {
-            crate::client_metrics::config::KEY_METRICS.to_string() => "org.apache.kafka".to_string()},
-        },
-    ));
+    seed_metrics_subscription(&mut image);
     image.apply(&MetadataRecord::V1GroupConfig(
         krabka_metadata::GroupConfigRecord {
             group_id: "streams-1".to_owned(),
@@ -1165,13 +1169,7 @@ fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
 #[test]
 fn a_client_metrics_subscription_reports_all_three_keys_typed() {
     let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1ClientMetricsConfig(
-        krabka_metadata::ClientMetricsConfigRecord {
-            name: "sub-1".to_owned(),
-            configs: maplit::btreemap! {
-                crate::client_metrics::config::KEY_METRICS.to_string() => "org.apache.kafka".to_string()},
-        },
-    ));
+    seed_metrics_subscription(&mut image);
 
     let result = describe(
         &image,

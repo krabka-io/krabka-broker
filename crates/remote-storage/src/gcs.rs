@@ -31,12 +31,11 @@
 //! through [`S3RemoteStorage::from_s3_config`]. That shim cannot use Workload
 //! Identity and needs HMAC interoperability keys.
 
-use krabka_object_store::{GcsConfig, ObjectStoreConfig, build_object_store};
-use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
+use krabka_object_store::{GcsConfig, ObjectStoreConfig};
 
 use crate::{
     error::RemoteStorageError,
-    s3::{S3RemoteStorage, WormBucket, size_from_usize},
+    s3::{S3RemoteStorage, WormBucket},
 };
 
 impl S3RemoteStorage {
@@ -53,14 +52,13 @@ impl S3RemoteStorage {
     /// example, the caller supplied both a service-account path and a key, a
     /// credential file is unreadable, or the bucket name is empty.
     pub fn from_gcs_config(cfg: &GcsConfig) -> Result<Self, RemoteStorageError> {
-        let store = build_object_store(&ObjectStoreConfig::Gcs(cfg.clone()))
-            .map_err(|e| RemoteStorageError::InvalidArgument(e.to_string()))?;
-        let mut storage = Self::with_store(store, cfg.prefix.clone()).with_multipart_tuning(
-            ByteSize::from_bytes(cfg.multipart_threshold),
-            size_from_usize(cfg.multipart_chunk_size),
-        );
-        storage.worm_bucket = WormBucket::Gcs(cfg.clone());
-        Ok(storage)
+        Self::from_backend_config(
+            &ObjectStoreConfig::Gcs(cfg.clone()),
+            cfg.prefix.clone(),
+            cfg.multipart_threshold,
+            cfg.multipart_chunk_size,
+            WormBucket::Gcs(cfg.clone()),
+        )
     }
 }
 

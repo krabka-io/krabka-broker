@@ -27,7 +27,6 @@ use krabka_broker::{
     RemoteStorageBackend, RlmmKind, config::ListenerSpec,
 };
 use krabka_metadata::MetadataRecord;
-use krabka_protocol::owned::create_topics_request::{CreatableTopicConfig, CreateTopicsRequest};
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
@@ -280,20 +279,7 @@ pub(crate) async fn await_brokers_registered(cluster: &[TestNode]) {
 pub(crate) async fn create_diskless_topic(bootstrap: &str) {
     let client = connect_owned(bootstrap, "diskless-jepsen-admin", "admin client").await;
     let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![crate::support::topics::creatable_topic_with_configs(
-                TOPIC.into(),
-                1,
-                1,
-                vec![CreatableTopicConfig {
-                    name: "krabka.diskless".into(),
-                    value: Some("true".into()),
-                    ..Default::default()
-                }],
-            )],
-            timeout_ms: 10_000,
-            ..Default::default()
-        })
+        .send(crate::support::topics::diskless_topic_request(TOPIC, 1))
         .await
         .expect("CreateTopics");
     assert!(

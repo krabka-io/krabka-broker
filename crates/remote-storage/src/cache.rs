@@ -327,13 +327,25 @@ mod tests {
         assert!(got.remote_log_segment_id().id == Uuid::from_u128(10));
     }
 
-    #[test]
-    fn offset_lookup_across_segments_one_epoch() {
+    fn one_finished_segment() -> RemoteLogMetadataCache {
+        let mut c = RemoteLogMetadataCache::default();
+        c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
+        c.update(&finish(10)).unwrap();
+        c
+    }
+
+    fn two_finished_segments() -> RemoteLogMetadataCache {
         let mut c = RemoteLogMetadataCache::default();
         c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
         c.add(seg(11, &[(0, 100)], 100, 199)).unwrap();
         c.update(&finish(10)).unwrap();
         c.update(&finish(11)).unwrap();
+        c
+    }
+
+    #[test]
+    fn offset_lookup_across_segments_one_epoch() {
+        let c = two_finished_segments();
         for (offset, want) in [
             (0, Some(Uuid::from_u128(10))),
             (99, Some(Uuid::from_u128(10))),
@@ -393,9 +405,7 @@ mod tests {
 
     #[test]
     fn deindex_removes_epoch_slot() {
-        let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
-        c.update(&finish(10)).unwrap();
+        let mut c = one_finished_segment();
         assert!(c.highest_offset_for_epoch(LeaderEpoch(0)) == Some(99));
         // DeleteSegmentStarted deindexes the epoch slot (but the metadata is
         // still present until DeleteSegmentFinished). highest_offset_for_epoch
@@ -440,20 +450,14 @@ mod tests {
 
     #[test]
     fn highest_offset_for_epoch_is_max_end() {
-        let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
-        c.add(seg(11, &[(0, 100)], 100, 199)).unwrap();
-        c.update(&finish(10)).unwrap();
-        c.update(&finish(11)).unwrap();
+        let c = two_finished_segments();
         assert!(c.highest_offset_for_epoch(LeaderEpoch(0)) == Some(199));
         assert!(c.highest_offset_for_epoch(LeaderEpoch(7)) == None);
     }
 
     #[test]
     fn delete_started_hides_segment_delete_finished_drops_it() {
-        let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
-        c.update(&finish(10)).unwrap();
+        let mut c = one_finished_segment();
         assert!(c.segment_for(LeaderEpoch(0), 50).is_some());
 
         c.update(&transition(10, RemoteLogSegmentState::DeleteSegmentStarted))
@@ -516,9 +520,7 @@ mod tests {
 
     #[test]
     fn stale_update_cannot_reindex_a_deleting_segment() {
-        let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
-        c.update(&finish(10)).unwrap();
+        let mut c = one_finished_segment();
         c.update(&transition(10, RemoteLogSegmentState::DeleteSegmentStarted))
             .unwrap();
         check!(c.update(&finish(10)).is_err());
@@ -547,11 +549,7 @@ mod tests {
 
     #[test]
     fn dump_then_seed_rebuilds_epoch_index() {
-        let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
-        c.add(seg(11, &[(0, 100)], 100, 199)).unwrap();
-        c.update(&finish(10)).unwrap();
-        c.update(&finish(11)).unwrap();
+        let mut c = two_finished_segments();
         c.update(&transition(11, RemoteLogSegmentState::DeleteSegmentStarted))
             .unwrap();
         c.set_delete_state(RemotePartitionDeleteState::DeletePartitionMarked);

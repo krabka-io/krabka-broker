@@ -646,11 +646,24 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
         check!(value["dry_run"] == serde_json::json!(false));
-        check!(value["cluster_id"] == serde_json::json!(report.cluster_id.to_string()));
-        check!(value["partitions"][0]["topic"] == serde_json::json!("orders"));
-        check!(value["partitions"][0]["partition"] == serde_json::json!(0));
-        check!(value["partitions"][0]["segments"][0]["records_kept"] == serde_json::json!(4995));
-        check!(value["partitions"][0]["segments"][1]["batches_emptied"] == serde_json::json!(1));
+        for (pointer, expected) in [
+            (
+                "/cluster_id",
+                serde_json::json!(report.cluster_id.to_string()),
+            ),
+            ("/partitions/0/topic", serde_json::json!("orders")),
+            ("/partitions/0/partition", serde_json::json!(0)),
+            (
+                "/partitions/0/segments/0/records_kept",
+                serde_json::json!(4995),
+            ),
+            (
+                "/partitions/0/segments/1/batches_emptied",
+                serde_json::json!(1),
+            ),
+        ] {
+            check!(value.pointer(pointer) == Some(&expected), "{pointer}");
+        }
         check!(
             value["skipped"][0]["reason"]
                 == serde_json::json!("checksum mismatch in batch at offset 900")

@@ -8,12 +8,32 @@ use krabka_remote_storage::kafka_uuid;
 
 use super::{
     test_support::{
-        FULL_SEGMENT_SUFFIXES, PartitionKey, args_from, expected_full_segment, write_artifact,
-        write_full_segment,
+        FULL_SEGMENT_SUFFIXES, PartitionKey, args_from, expected_full_segment,
+        single_segment_archive, write_artifact, write_full_segment,
     },
     *,
 };
 use crate::backend::open_archive;
+
+async fn scan_archive(root: &std::path::Path) -> ArchiveInventory {
+    let args = args_from(root, &[]);
+    let store = open_archive(&args).expect("store");
+    inventory(&store, &args).await.expect("inventory")
+}
+
+fn torn_archive(prefix: Option<&str>) -> tempfile::TempDir {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let key = PartitionKey {
+        topic: "orders",
+        partition: 0,
+        topic_id: Uuid::from_u128(1),
+    };
+    let segment = Uuid::from_u128(10);
+    for suffix in [".log", ".index"] {
+        write_artifact(archive.path(), prefix, key, 0, segment, suffix);
+    }
+    archive
+}
 
 #[tokio::test]
 async fn a_clean_archive_groups_and_sorts_by_topic_partition_and_base_offset() {
@@ -111,16 +131,7 @@ async fn a_topic_filter_narrows_the_selection_and_the_rest_lands_in_unrecognized
 
 #[tokio::test]
 async fn malformed_keys_land_in_unrecognized_not_dropped_and_not_an_error() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    write_full_segment(
-        archive.path(),
-        "orders",
-        0,
-        topic_id,
-        0,
-        Uuid::from_u128(10),
-    );
+    let (archive, _topic_id, _) = single_segment_archive(0);
     // Wrong number of path components: a key directly under the root.
     std::fs::write(archive.path().join("not-a-valid-key.log"), b"junk").expect("write");
     // Two components, but the directory name does not decode.
@@ -134,9 +145,7 @@ async fn malformed_keys_land_in_unrecognized_not_dropped_and_not_an_error() {
     )
     .expect("write");
 
-    let args = args_from(archive.path(), &[]);
-    let store = open_archive(&args).expect("store");
-    let result = inventory(&store, &args).await.expect("inventory");
+    let result = scan_archive(archive.path()).await;
 
     check!(result.partitions.len() == 1);
     check!(result.unrecognized.total() == 2);
@@ -192,19 +201,7 @@ fn unrecognized_keys_keep_a_bounded_sample_and_count_the_rest() {
 
 #[tokio::test]
 async fn a_torn_copy_still_appears_with_the_missing_artifact_as_none() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let seg = Uuid::from_u128(10);
-    let key = PartitionKey {
-        topic: "orders",
-        partition: 0,
-        topic_id,
-    };
-    // Only `.log` and `.index` land; the rest of the copy never arrives.
-    // Discovery reports presence and leaves judging completeness to
-    // `verify`, so this must not become a `TornCopy` error here.
-    write_artifact(archive.path(), None, key, 0, seg, ".log");
-    write_artifact(archive.path(), None, key, 0, seg, ".index");
+    let archive = torn_archive(None);
 
     let args = args_from(archive.path(), &[]);
     let store = open_archive(&args).expect("store");
@@ -222,16 +219,7 @@ async fn a_torn_copy_still_appears_with_the_missing_artifact_as_none() {
 
 #[tokio::test]
 async fn a_key_prefix_does_not_confuse_the_relative_path_split() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let seg = Uuid::from_u128(10);
-    let key = PartitionKey {
-        topic: "orders",
-        partition: 0,
-        topic_id,
-    };
-    write_artifact(archive.path(), Some("tier"), key, 0, seg, ".log");
-    write_artifact(archive.path(), Some("tier"), key, 0, seg, ".index");
+    let archive = torn_archive(Some("tier"));
 
     let args = args_from(archive.path(), &["--archive-prefix", "tier"]);
     let store = open_archive(&args).expect("store");
@@ -248,16 +236,7 @@ async fn a_key_prefix_does_not_confuse_the_relative_path_split() {
 /// is the case the bound exists for.
 #[tokio::test]
 async fn a_scan_past_the_sample_limit_keeps_the_sample_and_the_exact_total() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    write_full_segment(
-        archive.path(),
-        "orders",
-        0,
-        topic_id,
-        0,
-        Uuid::from_u128(10),
-    );
+    let (archive, _topic_id, _) = single_segment_archive(0);
 
     let junk = UNRECOGNIZED_SAMPLE_LIMIT + 6;
     let dir = archive.path().join("not-a-partition-dir");
@@ -266,9 +245,7 @@ async fn a_scan_past_the_sample_limit_keeps_the_sample_and_the_exact_total() {
         std::fs::write(dir.join(format!("{index:04}.log")), b"junk").expect("write a junk key");
     }
 
-    let args = args_from(archive.path(), &[]);
-    let store = open_archive(&args).expect("store");
-    let result = inventory(&store, &args).await.expect("inventory");
+    let result = scan_archive(archive.path()).await;
 
     check!(result.partitions.len() == 1);
     check!(result.unrecognized.sample.len() == UNRECOGNIZED_SAMPLE_LIMIT);
@@ -294,16 +271,7 @@ async fn an_archive_with_nothing_in_it_is_an_empty_archive_error() {
 
 #[tokio::test]
 async fn a_topic_filter_that_selects_nothing_is_also_an_empty_archive_error() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    write_full_segment(
-        archive.path(),
-        "orders",
-        0,
-        topic_id,
-        0,
-        Uuid::from_u128(10),
-    );
+    let (archive, _topic_id, _) = single_segment_archive(0);
 
     let args = args_from(archive.path(), &["--topic", "bogus"]);
     let store = open_archive(&args).expect("store");

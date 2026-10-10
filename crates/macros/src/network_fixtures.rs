@@ -255,3 +255,76 @@ pub(crate) fn partition_spawn_parameters(
     *arguments = replacement;
     Ok(tokens.into_iter().collect())
 }
+
+/// Stage checkpoint bytes under the JVM decoder's caller-chosen file name.
+pub(crate) fn jvm_checkpoint_dump(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        fn {{ name }}(dir: &::std::path::Path, filename: &str, bytes: &[u8], image: &str) -> ::std::process::Output {
+            use ::std::io::Write as _;
+            ::std::fs::File::create(dir.join(filename)).unwrap().write_all(bytes).unwrap();
+            ::std::process::Command::new("docker")
+                .args([
+                    "run", "--rm", "-v", &format!("{}:/work", dir.display()),
+                    image, "/opt/kafka/bin/kafka-dump-log.sh", "--cluster-metadata-decoder",
+                    "--files", &format!("/work/{filename}"),
+                ])
+                .output().expect("docker run kafka-dump-log")
+        }
+    })
+}
+
+/// Compose a literal Java probe with the standard string-producer imports and properties.
+pub(crate) fn java_string_producer(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [before, bootstrap, after]: [TokenStream; 3] = crate::meta::arguments(input, 3)?
+        .try_into()
+        .expect("three arguments");
+    Ok(moxy::template! {
+        concat!(
+            "import java.util.Properties;\nimport org.apache.kafka.clients.producer.KafkaProducer;\nimport org.apache.kafka.clients.producer.ProducerConfig;\nimport org.apache.kafka.clients.producer.ProducerRecord;\n",
+            {{ before }},
+            "    Properties config = new Properties();\n    config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, ",
+            {{ bootstrap }},
+            r#");
+    config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+        "org.apache.kafka.common.serialization.StringSerializer");
+    config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+        "org.apache.kafka.common.serialization.StringSerializer");
+"#,
+            {{ after }}
+        )
+    })
+}
+
+/// Define an epoch-millisecond reader with the caller's attributes and overflow fallback.
+pub(crate) fn epoch_millis(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [signature, overflow]: [TokenStream; 2] = crate::meta::arguments(input, 2)?
+        .try_into()
+        .expect("two arguments");
+    Ok(moxy::template! {
+        {{ signature }}() -> i64 {
+            use ::std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now().duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or({{ overflow }}))
+        }
+    })
+}
+
+/// Literal bytes captured from Kafka 4.3.1's principal serializer.
+/// Keep this oracle independent of the broker's principal encoder.
+pub(crate) fn jvm_principal_golden(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let (user, token) = crate::fixtures::named_root(input)?;
+    let name = match user.to_string().as_str() {
+        "alice" => moxy::template! { 0x06, b'a', b'l', b'i', b'c', b'e' },
+        "bob" => moxy::template! { 0x04, b'b', b'o', b'b' },
+        _ => {
+            return Err(ParseError::new(
+                moxy::token::Spanner::span(&user),
+                "expected alice or bob JVM fixture",
+            ));
+        }
+    };
+    Ok(moxy::template! {
+        &[0x00, 0x00, 0x05, b'U', b's', b'e', b'r', {{ name }}, if {{ token }} { 0x01 } else { 0x00 }, 0x00]
+    })
+}

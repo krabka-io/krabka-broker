@@ -69,11 +69,10 @@ pub struct StreamsTargetAssignment {
 
 /// Kafka's `TasksTuple`: a member's active, standby and warmup tasks, each by
 /// subtopology.
-pub type TasksTuple = (
-    BTreeMap<String, Vec<i32>>,
-    BTreeMap<String, Vec<i32>>,
-    BTreeMap<String, Vec<i32>>,
-);
+pub type TasksTuple = (TaskMap, TaskMap, TaskMap);
+
+/// Tasks of one role, keyed by subtopology with sorted partition lists.
+pub type TaskMap = BTreeMap<String, Vec<i32>>;
 
 /// A minimal handle for the resolved topology that lives in `topology.rs`.
 ///
@@ -209,19 +208,7 @@ impl StreamsGroupState {
         m
     }
 
-    /// The members whose session expired at `now`, without removing them:
-    /// each one is fenced on its own, as each of Kafka's session timers fences
-    /// its member.
-    #[must_use]
-    pub fn expired_members(&self, now: Instant, session_timeout: Duration) -> Vec<String> {
-        crate::coordinator::unified::expired_member_ids(
-            self.members
-                .iter()
-                .map(|(id, member)| (id.as_str(), member.last_seen)),
-            now,
-            session_timeout,
-        )
-    }
+    crate::coordinator::unified::member_helpers::expired_members_method!();
 
     crate::coordinator::unified::member_helpers::evict_expired! {
         /// Removes members whose `last_seen` is older than `session_timeout` and
@@ -437,16 +424,11 @@ impl StreamsGroupState {
             .min()
     }
 
+    crate::coordinator::unified::member_helpers::fence_rebalance_timeouts_method! {
     /// Removes every member whose rebalance timeout fired at `now` while it
     /// was still at the epoch that armed it, and returns the removed ids,
     /// sorted. This is the fence of Kafka's
     /// `scheduleStreamsGroupRebalanceTimeout`.
-    pub fn fence_rebalance_timeouts(&mut self, now: Instant) -> Vec<String> {
-        let fenced = self.rebalance_timeouts_due(now);
-        for member_id in &fenced {
-            self.remove_member(member_id);
-        }
-        fenced
     }
 
     /// The members whose rebalance timeout fired at `now`, sorted, without

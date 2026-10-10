@@ -43,18 +43,9 @@ use crate::support::topics::{creatable_topic, create_topic_request};
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-mtls-test";
 
-const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
-const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
-const DEV_CLIENT_CA: &str = include_str!("fixtures/security/dev_client_ca.pem");
-const DEV_CLIENT_CERT: &str = include_str!("fixtures/security/dev_client_cert.pem");
-const DEV_CLIENT_KEY: &str = include_str!("fixtures/security/dev_client_key.pem");
-
-/// Subject DN of the fixture client cert in RFC 2253 form, as Kafka's
-/// `X500Principal.getName()` gives it. The fixture's Subject is one CN whose
-/// value holds the commas and equals signs, which the JDK escapes (openssl's
-/// RFC 2253 output leaves `=` bare). Operators pin this string in
-/// ACLs and `super_users`.
-const CLIENT_PRINCIPAL: &str = r"CN=test-client\,OU\=integration\,O\=krabka";
+use crate::support::tls::{
+    CLIENT_PRINCIPAL, DEV_CERT, DEV_CLIENT_CA, DEV_CLIENT_CERT, DEV_CLIENT_KEY, DEV_KEY,
+};
 
 fn write_fixture(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
     let p = dir.join(name);
@@ -118,14 +109,9 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     let resp_bytes = kafka_wire::round_trip(&mut tls, 19, 7, 1, CLIENT_ID, true, &body)
         .await
         .unwrap();
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
-
-    assert!(resp.topics.len() == 1);
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics must succeed for the cert-DN super-user — got {:?}",
-        resp.topics[0]
+    check_create_topics_success(
+        &resp_bytes,
+        "CreateTopics must succeed for the cert-DN super-user",
     );
 
     handle.shutdown().await;
@@ -230,17 +216,21 @@ async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
     .await
     .expect("the broker must not hang")
     .expect("the broker must answer a certificate-less TLS connection");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
-
-    assert!(resp.topics.len() == 1);
-    assert!(
-        resp.topics[0].error_code == 0,
-        "the ANONYMOUS session must be served — got {:?}",
-        resp.topics[0]
-    );
+    check_create_topics_success(&resp_bytes, "the ANONYMOUS session must be served");
 
     handle.shutdown().await;
+}
+
+fn check_create_topics_success(bytes: &[u8], context: &str) {
+    let mut cursor = bytes;
+    let response =
+        CreateTopicsResponse::decode(&mut cursor, 7).expect("decode CreateTopicsResponse");
+    assert!(response.topics.len() == 1);
+    assert!(
+        response.topics[0].error_code == 0,
+        "{context} — got {:?}",
+        response.topics[0]
+    );
 }
 
 fn mtls_fixture(

@@ -318,15 +318,13 @@ krabka_macros::timer_hooks! {
     fired("the armed audit timer failed; stopping the writer");
 }
 
+krabka_macros::epoch_millis_fn!(
 /// Epoch-millisecond clock for the checkpoint timestamps.
 // cargo-mutants: wall-clock read; no deterministic assertion.
 #[cfg_attr(test, mutants::skip)]
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+fn now_ms,
+i64::MAX
+);
 
 #[cfg(test)]
 mod tests {

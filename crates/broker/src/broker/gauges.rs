@@ -302,9 +302,7 @@ mod tests {
                 partition_epoch: 0,
             },
         ));
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
-        config.gauge_poll_interval = millis(1);
+        let (metrics, mut config) = gauge_fixture();
         config.default_min_insync_replicas = 2;
         let shutdown = CancellationToken::new();
         spawn_broker_gauge_updater(
@@ -336,6 +334,13 @@ mod tests {
         shutdown.cancel();
     }
 
+    fn gauge_fixture() -> (crate::metrics::BrokerMetrics, BrokerConfig) {
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
+        config.gauge_poll_interval = millis(1);
+        (metrics, config)
+    }
+
     /// A dir that goes offline under live traffic has to reach the scrape.
     /// The registry is the only thing that knows about the flip, and
     /// `DescribeLogDirs` reports it only to a client that asks.
@@ -343,9 +348,7 @@ mod tests {
     async fn broker_gauge_publishes_the_offline_log_dir_count() {
         let dir = tempfile::tempdir().expect("log root");
         let log_dirs = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
-        config.gauge_poll_interval = millis(1);
+        let (metrics, config) = gauge_fixture();
         let shutdown = CancellationToken::new();
         spawn_broker_gauge_updater(
             (Arc::new(PartitionRegistry::new()), log_dirs.clone()),

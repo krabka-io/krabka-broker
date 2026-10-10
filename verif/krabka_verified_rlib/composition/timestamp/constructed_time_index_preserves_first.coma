@@ -1,38 +1,38 @@
-(* #"/workspace/crates/verified/src/composition/timestamp.rs" 200 0 205 37 *)
+(* #"/workspace/crates/verified/src/composition/timestamp.rs" 198 0 203 37 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 206 39 206 49
-let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 207 16 207 22
-let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 217 14 217 30
-let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 218 14 218 24
-let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 215 16 216 79
-let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 214 16 214 47
-let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 212 16 213 45
-let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 210 16 211 84
-let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 209 16 209 90
-let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 208 16 208 57
-let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 219 33 219 40
-let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 219 13 219 20
-let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 219 22 219 29
-let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 220 21 222 9
-let%span stimestamp'13 = "/workspace/crates/verified/src/composition/timestamp.rs" 220 8 222 10
-let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 223 13 223 14
-let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 223 8 223 14
-let%span stimestamp'16 = "/workspace/crates/verified/src/composition/timestamp.rs" 225 54 225 62
-let%span stimestamp'17 = "/workspace/crates/verified/src/composition/timestamp.rs" 225 19 225 92
-let%span stimestamp'18 = "/workspace/crates/verified/src/composition/timestamp.rs" 183 11 183 46
-let%span stimestamp'19 = "/workspace/crates/verified/src/composition/timestamp.rs" 184 11 184 43
-let%span stimestamp'20 = "/workspace/crates/verified/src/composition/timestamp.rs" 185 11 186 69
-let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 187 11 188 63
-let%span stimestamp'22 = "/workspace/crates/verified/src/composition/timestamp.rs" 189 10 189 40
-let%span stimestamp'23 = "/workspace/crates/verified/src/composition/timestamp.rs" 190 10 193 93
-let%span stimestamp'24 = "/workspace/crates/verified/src/composition/timestamp.rs" 194 10 195 79
-let%span stimestamp'25 = "/workspace/crates/verified/src/composition/timestamp.rs" 196 10 198 42
-let%span stimestamp'26 = "/workspace/crates/verified/src/composition/timestamp.rs" 199 10 199 63
-let%span stimestamp'27 = "/workspace/crates/verified/src/composition/timestamp.rs" 232 16 233 85
+let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 204 39 204 49
+let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 205 16 205 22
+let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 215 14 215 30
+let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 216 14 216 24
+let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 213 16 214 79
+let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 212 16 212 47
+let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 210 16 211 45
+let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 208 16 209 84
+let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 207 16 207 90
+let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 206 16 206 57
+let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 217 33 217 40
+let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 217 13 217 20
+let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 217 22 217 29
+let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 218 21 220 9
+let%span stimestamp'13 = "/workspace/crates/verified/src/composition/timestamp.rs" 218 8 220 10
+let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 221 13 221 14
+let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 221 8 221 14
+let%span stimestamp'16 = "/workspace/crates/verified/src/composition/timestamp.rs" 223 54 223 62
+let%span stimestamp'17 = "/workspace/crates/verified/src/composition/timestamp.rs" 223 19 223 92
+let%span stimestamp'18 = "/workspace/crates/verified/src/composition/timestamp.rs" 181 11 181 46
+let%span stimestamp'19 = "/workspace/crates/verified/src/composition/timestamp.rs" 182 11 182 43
+let%span stimestamp'20 = "/workspace/crates/verified/src/composition/timestamp.rs" 183 11 184 69
+let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 185 11 186 63
+let%span stimestamp'22 = "/workspace/crates/verified/src/composition/timestamp.rs" 187 10 187 40
+let%span stimestamp'23 = "/workspace/crates/verified/src/composition/timestamp.rs" 188 10 191 93
+let%span stimestamp'24 = "/workspace/crates/verified/src/composition/timestamp.rs" 192 10 193 79
+let%span stimestamp'25 = "/workspace/crates/verified/src/composition/timestamp.rs" 194 10 196 42
+let%span stimestamp'26 = "/workspace/crates/verified/src/composition/timestamp.rs" 197 10 197 63
+let%span stimestamp'27 = "/workspace/crates/verified/src/composition/timestamp.rs" 230 16 231 85
 let%span stimestamp'28 = "/workspace/crates/verified/src/composition/timestamp.rs" 21 11 21 46
 let%span stimestamp'29 = "/workspace/crates/verified/src/composition/timestamp.rs" 22 11 22 63
 let%span stimestamp'30 = "/workspace/crates/verified/src/composition/timestamp.rs" 23 11 23 43
@@ -47,7 +47,7 @@ let%span stimestamp'38 = "/workspace/crates/verified/src/composition/timestamp.r
 let%span stimestamp'39 = "/workspace/crates/verified/src/composition/timestamp.rs" 14 8 14 53
 let%span stimestamp'40 = "/workspace/crates/verified/src/timestamp.rs" 15 8 20 9
 let%span stimestamp'41 = "/workspace/crates/verified/src/composition/timestamp.rs" 52 8 53 68
-let%span stimestamp'42 = "/workspace/crates/verified/src/composition/timestamp.rs" 252 16 253 65
+let%span stimestamp'42 = "/workspace/crates/verified/src/composition/timestamp.rs" 250 16 251 65
 let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 14 16 14 72
 let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
 let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
@@ -102,7 +102,7 @@ let len_tup2_usize_usize (self_: Slice64.slice tup2_usize_usize) (return (x: UIn
     = UInt64.t'int result}
     (! return {result}) ]
 
-predicate time_rows_ordered [#"/workspace/crates/verified/src/composition/timestamp.rs" 231 0 231 70] (entries: Seq.seq tup2_i64_u32) (count: int) =
+predicate time_rows_ordered [#"/workspace/crates/verified/src/composition/timestamp.rs" 229 0 229 70] (entries: Seq.seq tup2_i64_u32) (count: int) =
   [%#stimestamp'27] forall left: int, right: int. 0 <= left /\ left < right /\ right < count
     -> Int64.to_int (Seq.get entries left).f0 <= Int64.to_int (Seq.get entries right).f0
     /\ UInt32.t'int (Seq.get entries left).f1 < UInt32.t'int (Seq.get entries right).f1
@@ -154,7 +154,7 @@ let deref_Vec_tup2_i64_u32_Global (self_: t_Vec_tup2_i64_u32_Global) (return (x:
 
 type t_Option_usize = None | Some UInt64.t
 
-predicate sparse_rows_bound_records [#"/workspace/crates/verified/src/composition/timestamp.rs" 247 0 251 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (times: Seq.seq Int64.t) =
+predicate sparse_rows_bound_records [#"/workspace/crates/verified/src/composition/timestamp.rs" 245 0 249 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (times: Seq.seq Int64.t) =
   [%#stimestamp'42] forall i: int, j: int. 0 <= i
       /\ i < Seq.length entries
       /\ 0 <= j /\ j < Seq.length offsets /\ UInt32.t'int (Seq.get offsets j) < UInt32.t'int (Seq.get entries i).f1
@@ -190,7 +190,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let constructed_time_index_preserves_first [#"/workspace/crates/verified/src/composition/timestamp.rs" 200 0 205 37]
+let constructed_time_index_preserves_first [#"/workspace/crates/verified/src/composition/timestamp.rs" 198 0 203 37]
   (offsets: Slice64.slice UInt32.t) (timestamps: Slice64.slice Int64.t) (rows: Slice64.slice tup2_usize_usize)
   (target: Int64.t) (return (x: tup2_Vec_tup2_i64_u32_Global_Option_usize)) =
 {[@stop_split] [@expl:constructed_time_index_preserves_first requires] ([@stop_split] [@expl:constructed_time_index_preserves_first requires #0] [%#stimestamp'18] Seq.length (Slice64.view offsets)

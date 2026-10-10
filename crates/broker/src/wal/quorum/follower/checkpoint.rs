@@ -208,6 +208,15 @@ mod tests {
     /// here is a change to the 1.x on-disk contract.
     const GOLDEN_CHECKPOINT: &str = "0\n3 7\n";
 
+    fn checkpoint_log(records: i32) -> (tempfile::TempDir, std::path::PathBuf, Log) {
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoint = dir.path().join(DURABLE_OFFSET_FILE);
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut batch = crate::wal::quorum::test_support::batch(records);
+        log.append(&mut batch).unwrap();
+        (dir, checkpoint, log)
+    }
+
     #[test]
     fn durable_offset_checkpoint_matches_the_golden_bytes() {
         let range = DurableRange {
@@ -340,20 +349,7 @@ mod tests {
             (Some("0\n1 1\n"), true, 1, 1),
             (None, true, 1, 1),
         ] {
-            let dir = tempfile::tempdir().unwrap();
-            let checkpoint = dir.path().join(DURABLE_OFFSET_FILE);
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-            let mut batch = RecordBatch {
-                last_offset_delta: 2,
-                records: (0..3)
-                    .map(|offset_delta| Record {
-                        offset_delta,
-                        ..Record::default()
-                    })
-                    .collect(),
-                ..RecordBatch::default()
-            };
-            log.append(&mut batch).unwrap();
+            let (dir, checkpoint, mut log) = checkpoint_log(3);
             if let Some(value) = value {
                 std::fs::write(&checkpoint, value).unwrap();
             } else {
@@ -399,14 +395,7 @@ mod tests {
             ("0 1\n", "predates krabka 1.0"),
             ("1\n0 1\n", "unsupported checkpoint version \"1\""),
         ] {
-            let dir = tempfile::tempdir().unwrap();
-            let checkpoint = dir.path().join(DURABLE_OFFSET_FILE);
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-            let mut batch = RecordBatch {
-                records: vec![Record::default()],
-                ..RecordBatch::default()
-            };
-            log.append(&mut batch).unwrap();
+            let (_dir, checkpoint, mut log) = checkpoint_log(1);
             log.sync().unwrap();
             std::fs::write(&checkpoint, checkpoint_value).unwrap();
 

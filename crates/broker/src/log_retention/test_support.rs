@@ -3,7 +3,7 @@
 //! segment files on disk behind it, and the block that makes their deletion
 //! fail with a real `io::Error`.
 
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
@@ -53,24 +53,15 @@ pub(super) async fn expired_partition(
         let mut batch = epoch_batch(idx, format!("value-{idx}").as_bytes());
         log.append(&mut batch).expect("append expired batch");
     }
-    let part = crate::broker::spawn_partition(
-        topic.to_string(),
+    crate::test_support::committed_partition(
+        root.path(),
+        topic,
         PartitionIndex(0),
-        root.path().to_path_buf(),
+        leader,
         log,
         log_dir_status,
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    );
-    part.current_leader.store(leader.0, Ordering::Relaxed);
-    // Retention now bounds every eviction reason at the high watermark
-    // (Kafka's `deletableSegments`), so a fixture whose replica state never
-    // advanced past 0 would see nothing evicted. A replica that has caught
-    // up: `set_follower_hw` clamps to the local log end, so this leaves the
-    // whole log committed, the same fixture pattern
-    // `cleaner::test_support::compactable_partition` uses.
-    part.set_follower_hw(krabka_log::Offset(i64::MAX)).await;
-    part
+    )
+    .await
 }
 
 /// The base offsets of the segment files currently on disk for `topic`.

@@ -9,9 +9,7 @@
 
 use assert2::assert;
 
-use crate::harness::{
-    ACCEPT, NONE, ShareAck, acquired_count, broker_test_permit, fetch_until_acquired, share_ack,
-};
+use crate::harness::{ACCEPT, NONE, ShareAck, acquired_count, fetch_until_acquired, share_ack};
 
 /// Lag restore: `delivery_complete_count` survives a broker restart.
 ///
@@ -23,9 +21,7 @@ use crate::harness::{
 async fn delivery_complete_count_restored_across_restart() {
     const N: i64 = 4;
     const COMPLETE: i32 = 3; // N - 1
-    let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let log_dir = dir.path().to_path_buf();
+    let (_permit, _dir, log_dir) = crate::harness::restart_directory().await;
 
     let tid;
     {

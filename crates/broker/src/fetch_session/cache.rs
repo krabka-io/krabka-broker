@@ -223,39 +223,49 @@ mod tests {
         assert!(s.last_log_start_offset == 7);
     }
 
+    fn cached_partition(partition: i32) -> (FetchSessionKey, CachedPartitionState) {
+        (
+            FetchSessionKey {
+                topic_name: "t".into(),
+                topic_id: WireUuid::ZERO,
+                partition,
+            },
+            CachedPartitionState::default(),
+        )
+    }
+
     #[test]
     fn total_partitions_cached_sums_across_sessions() {
         let cache = FetchSessionCache::new(10);
-        let mk = |p| {
-            (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: p,
-                },
-                CachedPartitionState::default(),
-            )
-        };
-        cache.try_allocate(false, false, "a".into(), vec![mk(0), mk(1)]);
-        cache.try_allocate(false, false, "b".into(), vec![mk(2), mk(3), mk(4)]);
+        cache.try_allocate(
+            false,
+            false,
+            "a".into(),
+            vec![cached_partition(0), cached_partition(1)],
+        );
+        cache.try_allocate(
+            false,
+            false,
+            "b".into(),
+            vec![
+                cached_partition(2),
+                cached_partition(3),
+                cached_partition(4),
+            ],
+        );
         assert!(cache.total_partitions_cached() == 5);
     }
 
     #[test]
     fn counters_track_merge_forget_and_close() {
         let cache = FetchSessionCache::new(10);
-        let mk = |p| {
-            (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: p,
-                },
-                CachedPartitionState::default(),
-            )
-        };
         // Two partitions on allocate.
-        let id = cache.try_allocate(false, false, "a".into(), vec![mk(0), mk(1)]);
+        let id = cache.try_allocate(
+            false,
+            false,
+            "a".into(),
+            vec![cached_partition(0), cached_partition(1)],
+        );
         assert!(cache.len() == 1);
         assert!(cache.total_partitions_cached() == 2);
 
@@ -283,17 +293,12 @@ mod tests {
     #[test]
     fn counters_track_large_incremental_add_delta() {
         let cache = FetchSessionCache::new(10);
-        let mk = |p| {
-            (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: p,
-                },
-                CachedPartitionState::default(),
-            )
-        };
-        let id = cache.try_allocate(false, false, "a".into(), vec![mk(0), mk(1)]);
+        let id = cache.try_allocate(
+            false,
+            false,
+            "a".into(),
+            vec![cached_partition(0), cached_partition(1)],
+        );
 
         let r = req(id, 1, vec![topic("t", &[0, 1, 2, 3, 4])], vec![]);
         assert!(matches!(
@@ -307,21 +312,17 @@ mod tests {
     #[test]
     fn counters_track_large_incremental_forget_delta() {
         let cache = FetchSessionCache::new(10);
-        let mk = |p| {
-            (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: p,
-                },
-                CachedPartitionState::default(),
-            )
-        };
         let id = cache.try_allocate(
             false,
             false,
             "a".into(),
-            vec![mk(0), mk(1), mk(2), mk(3), mk(4)],
+            vec![
+                cached_partition(0),
+                cached_partition(1),
+                cached_partition(2),
+                cached_partition(3),
+                cached_partition(4),
+            ],
         );
         let forgotten = vec![ForgottenTopic {
             topic: "t".into(),

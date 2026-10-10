@@ -6,9 +6,9 @@
 //! waiting for agreement, so both halves of that shape are kept here rather
 //! than repeated per test module.
 
-use std::{sync::Arc, time::Duration};
+pub(crate) use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use krabka_raft::{
+pub(crate) use krabka_raft::{
     ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
     kraft::{
         KraftConfig, KraftController, KraftLog, NodeId, QuorumState,

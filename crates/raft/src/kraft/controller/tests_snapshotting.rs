@@ -119,6 +119,14 @@ fn ordinary_snapshot_does_not_reload_the_live_image() {
     );
 }
 
+/// Elect the single-voter fixture before snapshot submissions.
+async fn single_leader_snapshot_fixture() -> (KraftController, tempfile::TempDir) {
+    let (ctrl, dir) = build_with_snapshot_interval(NodeId(1), &[NodeId(1)], 3);
+    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
+    await_leader(&ctrl, Some(NodeId(1))).await;
+    (ctrl, dir)
+}
+
 /// A single-voter leader with `snapshot_interval_records = 3` snapshots each
 /// time the committed offset advances past the threshold. The test engine
 /// keeps no log beyond its newest snapshot, so the cleaning after the second
@@ -126,9 +134,7 @@ fn ordinary_snapshot_does_not_reload_the_live_image() {
 /// exists on disk and the log start has risen above 0.
 #[tokio::test]
 async fn leader_snapshots_and_prunes_at_threshold() {
-    let (ctrl, dir) = build_with_snapshot_interval(NodeId(1), &[NodeId(1)], 3);
-    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-    await_leader(&ctrl, Some(NodeId(1))).await;
+    let (ctrl, dir) = single_leader_snapshot_fixture().await;
 
     // Four distinct topics, each committed immediately (single voter). Each
     // commit advances the HWM well past the 3-record interval, so a snapshot
@@ -197,6 +203,14 @@ fn latest_checkpoint_id_picks_highest_offset_then_epoch() {
     assert2::assert!(latest == b"eleven-one");
 }
 
+fn checkpoint_entry_count(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .expect("read checkpoint dir")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read entries")
+        .len()
+}
+
 #[test]
 fn retain_recent_checkpoints_keeps_the_two_newest_ids_and_deletes_the_rest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -216,11 +230,7 @@ fn retain_recent_checkpoints_keeps_the_two_newest_ids_and_deletes_the_rest() {
             load_checkpoint_by_id(&cp_dir, end_offset, epoch).is_some() == want_present
         );
     }
-    let entries: Vec<_> = std::fs::read_dir(&cp_dir)
-        .expect("read checkpoint dir")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("read entries");
-    assert2::assert!(entries.len() == 2);
+    assert2::assert!(checkpoint_entry_count(&cp_dir) == 2);
 }
 
 #[test]
@@ -247,11 +257,7 @@ fn retain_latest_checkpoint_keeps_only_the_single_newest_id() {
     assert2::assert!(load_checkpoint_by_id(&cp_dir, 6, 1) == Some(b"newest".to_vec()));
     assert2::assert!(load_checkpoint_by_id(&cp_dir, 6, 0).is_none());
     assert2::assert!(load_checkpoint_by_id(&cp_dir, 5, 1).is_none());
-    let entries: Vec<_> = std::fs::read_dir(&cp_dir)
-        .expect("read checkpoint dir")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("read entries");
-    assert2::assert!(entries.len() == 1);
+    assert2::assert!(checkpoint_entry_count(&cp_dir) == 1);
 
     // Empty dir no-ops
     let empty_dir = tempfile::tempdir().expect("tempdir");
@@ -428,9 +434,7 @@ async fn a_restart_recovers_the_header_timestamp_from_the_checkpoint() {
 /// over it names that instant rather than the epoch.
 #[tokio::test]
 async fn a_submitted_change_stamps_its_checkpoint_with_the_append_wall_clock() {
-    let (ctrl, dir) = build_with_snapshot_interval(NodeId(1), &[NodeId(1)], 3);
-    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-    await_leader(&ctrl, Some(NodeId(1))).await;
+    let (ctrl, dir) = single_leader_snapshot_fixture().await;
 
     let before = KraftController::wall_clock_ms();
     for name in ["a", "b", "c", "d"] {

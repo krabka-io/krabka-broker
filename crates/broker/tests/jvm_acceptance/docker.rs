@@ -548,21 +548,14 @@ pub(crate) fn tool_output(out: &std::process::Output) -> String {
     crate::support::combined_output(out)
 }
 
-pub(crate) const TRANSACTIONAL_PRODUCER_JAVA: &str = r#"
-import java.util.Properties;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
+pub(crate) const TRANSACTIONAL_PRODUCER_JAVA: &str = krabka_macros::java_string_producer_source!(
+    r#"
 
 public final class TransactionalProducer {
   public static void main(String[] args) throws Exception {
-    Properties config = new Properties();
-    config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, args[0]);
-    config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-        "org.apache.kafka.common.serialization.StringSerializer");
-    config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-        "org.apache.kafka.common.serialization.StringSerializer");
-    config.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "eos-tid");
+"#,
+    "args[0]",
+    r#"    config.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "eos-tid");
 
     try (KafkaProducer<String, String> producer = new KafkaProducer<>(config)) {
       producer.initTransactions();
@@ -591,7 +584,8 @@ public final class TransactionalProducer {
     System.out.println("TXNPROBE OK");
   }
 }
-"#;
+"#
+);
 
 /// A compiled `KafkaStreams` topology, for the suite that runs the real
 /// Streams runtime against krabka (`tests/jvm_streams_app.rs`).
@@ -634,16 +628,13 @@ public final class TransactionalProducer {
 /// It prints `STREAMSPROBE OK` once the topology has emitted every expected
 /// output record, and `STREAMSPROBE TIMEOUT remaining=<n>` (exit 1) if it has
 /// not within the latch budget.
-pub(crate) const STREAMS_APP_JAVA: &str = r#"
+pub(crate) const STREAMS_APP_JAVA: &str = krabka_macros::java_string_producer_source!(
+    r#"
 import java.time.Duration;
 import java.util.List;
-import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.KeyValue;
@@ -744,13 +735,9 @@ public final class StreamsApp {
   // the topology starts. `auto.offset.reset` defaults to `earliest` under
   // Streams, so the run sees every one of them.
   private static void seed(String bootstrap, String input) throws Exception {
-    Properties config = new Properties();
-    config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
-    config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-        "org.apache.kafka.common.serialization.StringSerializer");
-    config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-        "org.apache.kafka.common.serialization.StringSerializer");
-    try (KafkaProducer<String, String> producer = new KafkaProducer<>(config)) {
+"#,
+    "bootstrap",
+    r#"    try (KafkaProducer<String, String> producer = new KafkaProducer<>(config)) {
       for (int i = 0; i < WORDS.size(); i++) {
         producer.send(new ProducerRecord<>(
             input, null, BASE_TIMESTAMP + i, "seed-" + i, WORDS.get(i))).get();
@@ -759,7 +746,8 @@ public final class StreamsApp {
     System.out.println("STREAMSPROBE seeded=" + WORDS.size());
   }
 }
-"#;
+"#
+);
 
 /// Write `props` to a `tempfile::NamedTempFile` and chmod it to `0644` on
 /// unix, so the non-root user of the cp-kafka container can read it once it

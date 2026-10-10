@@ -35,19 +35,49 @@ async fn register_offsets_topic(controller: &Arc<dyn crate::metadata_source::Met
         .expect("register __consumer_offsets");
 }
 
+struct BootstrapFixture {
+    controller: Arc<dyn crate::metadata_source::MetadataSource>,
+    config: BrokerConfig,
+    _dir: tempfile::TempDir,
+}
+
+async fn bootstrap_fixture() -> BootstrapFixture {
+    let dir = tempdir().unwrap();
+    let config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    let controller = controller_with_leader(dir.path().join("__cluster_metadata_test")).await;
+    BootstrapFixture {
+        config,
+        controller,
+        _dir: dir,
+    }
+}
+
+fn bootstrap_components(
+    config: &BrokerConfig,
+    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+) -> (
+    Arc<PartitionRegistry>,
+    Arc<crate::coordinator::GroupCoordinator>,
+    crate::log_dir_status::LogDirRegistry,
+) {
+    let partitions = Arc::new(PartitionRegistry::new());
+    let coordinator = test_coordinator(controller, &partitions);
+    let status = crate::log_dir_status::LogDirRegistry::probe(&config.all_log_dirs());
+    (partitions, coordinator, status)
+}
+
 /// The startup bootstrap creates no topic. Kafka creates `__consumer_offsets`
 /// on the first `FindCoordinator(GROUP)`, with its configured replication
 /// factor, and a broker that started alone must not create it with fewer
 /// replicas.
 #[tokio::test]
 async fn bootstrap_creates_no_offsets_topic() {
-    let dir = tempdir().unwrap();
-    let config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    let controller: Arc<dyn crate::metadata_source::MetadataSource> =
-        controller_with_leader(dir.path().join("__cluster_metadata_test")).await;
-    let partitions: Arc<PartitionRegistry> = Arc::new(PartitionRegistry::new());
-    let coordinator = test_coordinator(&controller, &partitions);
-    let log_dir_status = crate::log_dir_status::LogDirRegistry::probe(&config.all_log_dirs());
+    let BootstrapFixture {
+        config,
+        controller,
+        _dir,
+    } = bootstrap_fixture().await;
+    let (partitions, coordinator, log_dir_status) = bootstrap_components(&config, &controller);
     bootstrap(
         &config,
         &controller,
@@ -66,14 +96,13 @@ async fn bootstrap_creates_no_offsets_topic() {
 /// local partition, and a second bootstrap keeps the one it opened.
 #[tokio::test]
 async fn bootstrap_opens_the_local_partitions_of_an_existing_offsets_topic() {
-    let dir = tempdir().unwrap();
-    let config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    let controller: Arc<dyn crate::metadata_source::MetadataSource> =
-        controller_with_leader(dir.path().join("__cluster_metadata_test")).await;
+    let BootstrapFixture {
+        config,
+        controller,
+        _dir,
+    } = bootstrap_fixture().await;
     register_offsets_topic(&controller).await;
-    let partitions: Arc<PartitionRegistry> = Arc::new(PartitionRegistry::new());
-    let coordinator = test_coordinator(&controller, &partitions);
-    let log_dir_status = crate::log_dir_status::LogDirRegistry::probe(&config.all_log_dirs());
+    let (partitions, coordinator, log_dir_status) = bootstrap_components(&config, &controller);
     for _boot in 0..2 {
         bootstrap(
             &config,

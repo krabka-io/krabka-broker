@@ -19,6 +19,12 @@ use crate::{
     },
 };
 
+fn unclean_single_isr_image() -> krabka_metadata::MetadataImage {
+    let mut image = img_with_partition("t", 0, 1, &[1, 2, 3], &[1]);
+    set_topic_config(&mut image, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
+    image
+}
+
 #[tokio::test]
 async fn failover_picks_alive_isr_member_when_available() {
     // Leader 1 dies, ISR {1, 2, 3}, both 2 and 3 alive — pick 2.
@@ -93,8 +99,7 @@ async fn failover_elects_unclean_when_topic_opts_in() {
     // Same setup, but `unclean.leader.election.enable=true` on the
     // topic. Controller must elect the first alive out-of-ISR replica
     // (broker 2) as leader with singleton ISR.
-    let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
-    set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
+    let img = unclean_single_isr_image();
     let l = liveness_with_alive(&[2u64, 3]).await;
     let metrics = crate::metrics::BrokerMetrics::new();
     let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
@@ -123,8 +128,7 @@ async fn failover_clean_does_not_bump_unclean_counter() {
 #[tokio::test]
 async fn failover_unclean_skips_when_no_alive_replica() {
     // Unclean opt-in but ALL replicas dead — no election possible.
-    let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
-    set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
+    let img = unclean_single_isr_image();
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     // No heartbeats — nobody alive.
     let plan = failover(&img, /*dead=*/ NodeId(1), &l).await;
@@ -153,8 +157,7 @@ async fn failover_unclean_false_string_keeps_default_safe_behavior() {
 async fn failover_unclean_does_not_pick_dead_broker_itself() {
     // Edge case: `dead` is in `replicas`. The unclean fallback must
     // skip it — otherwise we'd re-elect the dead broker.
-    let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
-    set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
+    let img = unclean_single_isr_image();
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     // Only broker 3 alive — broker 2 also dead.
     l.record_heartbeat(3).await;
@@ -243,8 +246,7 @@ async fn failover_strategy_none_still_uses_legacy_enable_flag() {
     // No recovery strategy set (defaults to None), but the legacy
     // `unclean.leader.election.enable=true` flag is on. The scan keeps
     // the KIP-841 behavior: blind pick of the first alive replica.
-    let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
-    set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
+    let img = unclean_single_isr_image();
     let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(
         plan.recoveries.is_empty(),

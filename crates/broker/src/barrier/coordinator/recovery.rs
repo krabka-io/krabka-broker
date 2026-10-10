@@ -353,6 +353,35 @@ mod tests {
         assert!(third.epoch == 3);
     }
 
+    async fn append_interrupted_start(
+        coordinator: &crate::barrier::coordinator::BarrierCoordinator,
+        epoch: i64,
+        start: &InjectionStartValue,
+        context: &str,
+    ) {
+        coordinator
+            .append_records(
+                GROUP,
+                vec![(
+                    RecordKey::injection_start(GROUP, epoch),
+                    Some(encode_injection_start(start).expect("encodes").into()),
+                )],
+            )
+            .await
+            .expect(context);
+    }
+
+    fn interrupted_injection(partition_count: i32) -> InjectionStartValue {
+        InjectionStartValue {
+            coordinator_epoch: 3,
+            triggered_at: 1_000,
+            targets: vec![crate::barrier::persistence::TopicTarget {
+                topic: "orders".to_owned(),
+                partition_count,
+            }],
+        }
+    }
+
     #[tokio::test]
     async fn recovery_finalises_an_interrupted_injection_as_partial() {
         let fixture = Fixture::new();
@@ -362,24 +391,8 @@ mod tests {
 
         // A coordinator that crashed after the injection-start record leaves
         // exactly this behind.
-        let start = InjectionStartValue {
-            coordinator_epoch: 3,
-            triggered_at: 1_000,
-            targets: vec![crate::barrier::persistence::TopicTarget {
-                topic: "orders".to_owned(),
-                partition_count: 2,
-            }],
-        };
-        coordinator
-            .append_records(
-                GROUP,
-                vec![(
-                    RecordKey::injection_start(GROUP, 1),
-                    Some(encode_injection_start(&start).expect("encodes").into()),
-                )],
-            )
-            .await
-            .expect("the injection-start record lands");
+        let start = interrupted_injection(2);
+        append_interrupted_start(&coordinator, 1, &start, "the injection-start record lands").await;
 
         let replayed = fixture.recovered().await;
         let cuts = replayed.list_cuts(GROUP).await.expect("the group is live");
@@ -472,24 +485,14 @@ mod tests {
         let coordinator = fixture
             .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
             .await;
-        let start = InjectionStartValue {
-            coordinator_epoch: 3,
-            triggered_at: 1_000,
-            targets: vec![crate::barrier::persistence::TopicTarget {
-                topic: "orders".to_owned(),
-                partition_count: 1,
-            }],
-        };
-        coordinator
-            .append_records(
-                GROUP,
-                vec![(
-                    RecordKey::injection_start(GROUP, i64::MAX),
-                    Some(encode_injection_start(&start).expect("encodes").into()),
-                )],
-            )
-            .await
-            .expect("the maximum-epoch start lands");
+        let start = interrupted_injection(1);
+        append_interrupted_start(
+            &coordinator,
+            i64::MAX,
+            &start,
+            "the maximum-epoch start lands",
+        )
+        .await;
 
         let replayed = fixture.recovered().await;
         let cuts = replayed.list_cuts(GROUP).await.expect("the group is live");
@@ -510,24 +513,8 @@ mod tests {
             .create_group(GROUP, spec(&["orders"], None, 4))
             .await
             .expect("the group is created");
-        let start = InjectionStartValue {
-            coordinator_epoch: 3,
-            triggered_at: 1_000,
-            targets: vec![crate::barrier::persistence::TopicTarget {
-                topic: "orders".to_owned(),
-                partition_count: 1,
-            }],
-        };
-        writer
-            .append_records(
-                GROUP,
-                vec![(
-                    RecordKey::injection_start(GROUP, 1),
-                    Some(encode_injection_start(&start).expect("encodes").into()),
-                )],
-            )
-            .await
-            .expect("the injection-start record lands");
+        let start = interrupted_injection(1);
+        append_interrupted_start(&writer, 1, &start, "the injection-start record lands").await;
 
         let recovering = fixture.coordinator().await;
         for (group, entry) in recovering.replay_led_partitions().await {

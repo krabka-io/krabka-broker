@@ -24,6 +24,21 @@ const INVALID_FETCH_SESSION_EPOCH: i16 = 71;
 
 use crate::support::records::empty_record_batch as one_record_batch;
 
+async fn incremental_after_produce(
+    process: &support::InProcess,
+    session: i32,
+) -> krabka_protocol::owned::fetch_response::FetchResponse {
+    process
+        .client
+        .send(crate::support::fetch::session_fetch_request(
+            (session, 2),
+            vec![],
+            fetch_request_for(vec![], (200, 1, FetchRequest::default().max_bytes)),
+        ))
+        .await
+        .expect("Fetch incremental after produce")
+}
+
 async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
     crate::support::client::create_topic(&p.client, name, num_partitions).await;
 }
@@ -88,15 +103,7 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
 
     // (3) Produce one batch to t-0 → next incremental returns only t-0.
     produce(&p, "t", 0, 5).await;
-    let r3 = p
-        .client
-        .send(crate::support::fetch::session_fetch_request(
-            (sid, 2),
-            vec![],
-            fetch_request_for(vec![], (200, 1, FetchRequest::default().max_bytes)),
-        ))
-        .await
-        .expect("Fetch incremental after produce");
+    let r3 = incremental_after_produce(&p, sid).await;
     check!(r3.error_code == 0);
     check!(r3.session_id == sid);
     assert!(r3.responses.len() == 1);
@@ -144,15 +151,7 @@ async fn forgotten_topics_drop_partitions_from_subscription() {
     // Also produce to t-2 — that one SHOULD appear.
     produce(&p, "t", 2, 2).await;
 
-    let r3 = p
-        .client
-        .send(crate::support::fetch::session_fetch_request(
-            (sid, 2),
-            vec![],
-            fetch_request_for(vec![], (200, 1, FetchRequest::default().max_bytes)),
-        ))
-        .await
-        .expect("after produce");
+    let r3 = incremental_after_produce(&p, sid).await;
     assert!(r3.error_code == 0);
     let mut seen_partitions: Vec<i32> = r3
         .responses

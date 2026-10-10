@@ -77,3 +77,14 @@ pub fn record_count(payload: Option<&krabka_protocol::records::RecordsPayload>) 
 krabka_macros::unix_millis_fixture!(
     pub now_ms, "clock after the epoch", "milliseconds fit an i64"
 );
+
+/// Lazily decode each metadata batch so callers retain their image-application order.
+pub fn metadata_batches(mut wire: &[u8]) -> impl Iterator<Item = RecordBatch> + '_ {
+    std::iter::from_fn(move || {
+        if wire.is_empty() {
+            None
+        } else {
+            Some(RecordBatch::decode(&mut wire).expect("decode a metadata batch"))
+        }
+    })
+}

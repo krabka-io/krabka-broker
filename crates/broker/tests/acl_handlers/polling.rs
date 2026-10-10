@@ -90,6 +90,19 @@ pub async fn retry_metadata_until_topic_visible(
     .await
 }
 
+/// Ask for one named topic as Alice, retaining the commit/application retry.
+pub async fn named_metadata_as_alice(addr: SocketAddr, topic: &str) -> MetadataResponse {
+    retry_metadata_until_topic_visible(
+        addr,
+        "alice",
+        b"wonderland",
+        topic,
+        Some(vec![topic.to_string()]),
+    )
+    .await
+    .expect("Metadata must round-trip")
+}
+
 /// Retry `drive_join_group_as_plain` against `group_id` with an empty
 /// `member_id` until the response is no longer `GROUP_AUTHORIZATION_FAILED`,
 /// that is, until the Allow Read ACL is applied, or until a 10 s deadline

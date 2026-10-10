@@ -216,3 +216,10 @@ pub(crate) async fn token_session(
 }
 
 krabka_macros::scram_client_proof_fixture!(scram_client_proof);
+
+/// Open the suite's super-user PLAIN session with its shared authentication diagnostic.
+pub async fn admin_plain(addr: SocketAddr) -> Result<TcpStream, String> {
+    sasl_plain_authenticate(addr, "admin", b"admin-pw")
+        .await
+        .map_err(|error| format!("admin PLAIN auth: {error}"))
+}

@@ -323,6 +323,17 @@ fn file_runtime_with_nondefault_values() -> krabka_broker::file_config::FileConf
     .expect("parse runtime file config")
 }
 
+fn nondefault_runtime_config() -> (BrokerConfig, Option<krabka_units::Time>) {
+    let mut config = BrokerConfig::default();
+    let file = file_runtime_with_nondefault_values();
+    let shutdown = file
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.controlled_shutdown_drain_timeout);
+    file.apply_to(&mut config).expect("apply file runtime");
+    (config, shutdown)
+}
+
 #[test]
 fn explicit_cli_default_runtime_values_override_file() {
     let _guard = env_guard();
@@ -337,13 +348,7 @@ fn explicit_cli_default_runtime_values_override_file() {
         "--offsets-topic-replication-factor=3",
     ])
     .expect("parse explicit CLI defaults");
-    let mut config = BrokerConfig::default();
-    let file = file_runtime_with_nondefault_values();
-    let file_shutdown = file
-        .runtime
-        .as_ref()
-        .and_then(|runtime| runtime.controlled_shutdown_drain_timeout);
-    file.apply_to(&mut config).expect("apply file runtime");
+    let (mut config, file_shutdown) = nondefault_runtime_config();
 
     let shutdown = args
         .apply_runtime_to(&mut config, file_shutdown)
@@ -376,13 +381,7 @@ fn explicit_env_default_runtime_values_override_file() {
         ],
         || {
             let args = Args::try_parse_from(["krabka-broker"]).expect("parse env defaults");
-            let mut config = BrokerConfig::default();
-            let file = file_runtime_with_nondefault_values();
-            let file_shutdown = file
-                .runtime
-                .as_ref()
-                .and_then(|runtime| runtime.controlled_shutdown_drain_timeout);
-            file.apply_to(&mut config).expect("apply file runtime");
+            let (mut config, file_shutdown) = nondefault_runtime_config();
 
             let shutdown = args
                 .apply_runtime_to(&mut config, file_shutdown)

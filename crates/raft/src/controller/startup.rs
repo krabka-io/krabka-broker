@@ -610,35 +610,35 @@ mod tests {
         ctrl.shutdown().await;
     }
 
-    #[tokio::test]
-    async fn bootstrap_with_empty_voters_and_no_auto_join_errors() {
+    async fn check_empty_voter_startup_refused(
+        mode: BootstrapMode,
+        auto_join: bool,
+        message: &str,
+    ) {
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Bootstrap,
+            bootstrap_mode: mode,
             initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
-            auto_join: false,
+            auto_join,
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
         };
         let res = Controller::start(cfg).await;
-        assert2::assert!(matches!(
-            res,
-            Err(RaftError::Startup(ref msg)) if msg.contains("initial_voters set")
-        ));
+        assert2::assert!(matches!(res, Err(RaftError::Startup(ref msg)) if msg.contains(message)));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_with_empty_voters_and_no_auto_join_errors() {
+        check_empty_voter_startup_refused(BootstrapMode::Bootstrap, false, "initial_voters set")
+            .await;
     }
 
     #[tokio::test]
     async fn rejoin_with_auto_join_on_empty_log_errors() {
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Rejoin,
-            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
-            auto_join: true,
-            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
-        };
-        let res = Controller::start(cfg).await;
-        assert2::assert!(matches!(
-            res,
-            Err(RaftError::Startup(ref msg)) if msg.contains("Rejoin mode requires non-empty")
-        ));
+        check_empty_voter_startup_refused(
+            BootstrapMode::Rejoin,
+            true,
+            "Rejoin mode requires non-empty",
+        )
+        .await;
     }
 }

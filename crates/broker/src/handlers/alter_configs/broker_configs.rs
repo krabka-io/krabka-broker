@@ -145,6 +145,23 @@ mod tests {
         )
     }
 
+    fn replace_follower_throttle_with_leader(
+        image: &mut krabka_metadata::MetadataImage,
+    ) -> Vec<MetadataRecord> {
+        image.apply(&record(
+            SERVING,
+            crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
+            Some("512"),
+        ));
+
+        replacement_records(
+            image,
+            "1",
+            &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")],
+        )
+        .expect("valid broker replacement")
+    }
+
     #[test]
     fn broker_full_replacement_sets_requested_and_deletes_omitted_configs() {
         let mut image = image_with_broker(1);
@@ -153,18 +170,7 @@ mod tests {
             crate::throttle::LEADER_THROTTLED_RATE_KEY,
             Some("1024"),
         ));
-        image.apply(&record(
-            SERVING,
-            crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
-            Some("512"),
-        ));
-
-        let records = replacement_records(
-            &image,
-            "1",
-            &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")],
-        )
-        .expect("valid broker replacement");
+        let records = replace_follower_throttle_with_leader(&mut image);
 
         let expected = vec![
             record(
@@ -342,18 +348,7 @@ mod tests {
             crate::config_keys::BROKER_WITNESS,
             Some(crate::config_keys::WITNESS_TRUE),
         ));
-        image.apply(&record(
-            SERVING,
-            crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
-            Some("512"),
-        ));
-
-        let records = replacement_records(
-            &image,
-            "1",
-            &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")],
-        )
-        .expect("valid broker replacement");
+        let records = replace_follower_throttle_with_leader(&mut image);
 
         assert!(
             records

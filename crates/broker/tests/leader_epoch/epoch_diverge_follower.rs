@@ -12,9 +12,7 @@ use crate::{
     cluster_lock,
     epoch_harness::record,
     support,
-    support::{
-        client::connect_client, produce::single_partition_produce, topics::create_topic_request,
-    },
+    support::{client::connect_client, produce::single_partition_produce},
 };
 
 /// KIP-320 follower side, end to end. A follower whose local log has a
@@ -49,20 +47,13 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
     // (the same placement the replication tests use).
     let leader_addr = cluster[0].1.listen_addr.to_string();
     let admin = connect_client(leader_addr.clone(), None).await;
-    let resp = admin
-        .send(create_topic_request(
-            support::topic_on("divtrunc", &[&[1, 2, 3]]),
-            5_000,
-        ))
-        .await
-        .unwrap();
-    assert!(resp.topics[0].error_code == 0);
-    let topic_id = resp.topics[0].topic_id;
-
-    // Wait for the partition to materialize on every broker.
-    for (h, _, _) in &cluster {
-        h.wait_until_partition_present("divtrunc", 0).await;
-    }
+    let topic_id = support::topics::create_assigned_partition(
+        &admin,
+        "divtrunc",
+        &[1, 2, 3],
+        cluster.iter().map(|(broker, _, _)| broker),
+    )
+    .await;
 
     // Produce k = 8 records to the leader at epoch 0 (acks=-1 so it lands
     // on the followers too). One record per batch keeps offsets dense.

@@ -103,9 +103,10 @@ pub use self::{
         node_config, start_n_node_client, start_n_node_with,
     },
     cluster_boot::{
-        RoleTopology, broker_config, registered_cluster, shutdown_cluster, start_first_held,
-        start_held_node, start_n_node, start_n_node_with_retry, start_reusing_addrs,
-        two_controller_followers, wait_for_all_brokers_registered,
+        RoleTopology, addressed_node_config, await_controller_replacement, broker_config,
+        registered_cluster, shutdown_cluster, single_controller_endpoints, start_first_held,
+        start_held_node, start_n_node, start_n_node_customized_with_retry, start_n_node_with_retry,
+        start_reusing_addrs, two_controller_followers, wait_for_all_brokers_registered,
     },
     containers::{
         JvmListeners, bridge_gateway, combined_output, docker, docker_exec, docker_logs,

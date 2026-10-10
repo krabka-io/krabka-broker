@@ -166,3 +166,19 @@ pub(super) fn write_snapshot(path: &std::path::Path, dump: RlmmCacheDump) {
     .write_atomic(path)
     .expect("write snapshot");
 }
+
+/// One complete orders-0 segment with caller-chosen base offset.
+pub(super) fn single_segment_archive(base_offset: i64) -> (tempfile::TempDir, Uuid, Uuid) {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    let segment_id = Uuid::from_u128(10);
+    write_full_segment(
+        archive.path(),
+        "orders",
+        0,
+        topic_id,
+        base_offset,
+        segment_id,
+    );
+    (archive, topic_id, segment_id)
+}

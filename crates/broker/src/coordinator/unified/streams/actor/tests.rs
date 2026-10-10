@@ -2,8 +2,6 @@
 //! heartbeat epoch sequence with no connected `MetadataSource`, and the
 //! resolution of a persisted per-group config override.
 
-use std::sync::atomic::Ordering;
-
 use assert2::{assert, check};
 
 use super::{
@@ -18,6 +16,16 @@ use crate::coordinator::unified::{
 };
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
+
+fn epoch_five_member() -> crate::coordinator::unified::streams::state::StreamsMemberState {
+    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
+        "m1",
+        "client",
+        "/127.0.0.1",
+    );
+    member.member_epoch = 5;
+    member
+}
 
 #[test]
 fn persisted_group_config_overrides_actor_defaults() {
@@ -306,12 +314,7 @@ async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
     {
         let (coord, log) = make_coordinator();
         let handle = coord.get_or_create_streams("g");
-        match failure {
-            Some(error) => {
-                *log.fail_next_with.lock().expect("not poisoned") = Some(error);
-            }
-            None => log.fail_next.store(true, Ordering::SeqCst),
-        }
+        log.fail_next_append(failure);
 
         let response = heartbeat(&handle, member_request("m1", 0)).await;
 
@@ -981,12 +984,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
         let topology = Topology {
             epoch: 1,
             subtopologies: vec![
-                Subtopology {
-                    subtopology_id: "0".into(),
-                    source_topics: vec!["orders".into()],
-                    repartition_sink_topics: vec!["rp".into()],
-                    ..Default::default()
-                },
+                crate::test_support::source_to_repartition(),
                 Subtopology {
                     subtopology_id: "1".into(),
                     source_topics: vec!["customers".into()],
@@ -1799,12 +1797,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
     let offset = |api_version| CommitFence::Offset { api_version };
     let txn = CommitFence::Transactional;
     let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
-    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
-        "m1",
-        "client",
-        "/127.0.0.1",
-    );
-    member.member_epoch = 5;
+    let member = epoch_five_member();
     group.members.insert("m1".into(), member);
     let empty = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
 
@@ -1935,12 +1928,7 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
         ],
     };
     let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
-    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
-        "m1",
-        "client",
-        "/127.0.0.1",
-    );
-    member.member_epoch = 5;
+    let mut member = epoch_five_member();
     member.active = maplit::btreemap! {"0".to_string() => vec![0, 1, 3]};
     member.active_pending_revocation = maplit::btreemap! {"0".to_string() => vec![2]};
     member.active_epochs = maplit::btreemap! {

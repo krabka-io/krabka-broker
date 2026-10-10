@@ -123,6 +123,21 @@ mod tests {
     use super::*;
     use crate::future_log::test_support::{append_records, fixture_partition};
 
+    fn first_catch_up(
+        part: &Arc<Partition>,
+        target: &std::path::Path,
+    ) -> (Arc<Mutex<Log>>, CatchUpProgress) {
+        let (_future_path, future) = crate::future_log::test_support::open_future_log(target);
+        let progress = catch_up(
+            part,
+            &future,
+            mebibytes(1),
+            &crate::throttle::TokenBucket::new(),
+        )
+        .expect("catch up");
+        (future, progress)
+    }
+
     #[tokio::test]
     async fn catch_up_resets_after_source_retention_without_dropping_batch_data() {
         let primary = tempdir().unwrap();
@@ -134,16 +149,7 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .set_log_start_offset(Offset(2))
             .expect("advance source start");
-        let (_future_path, future) =
-            crate::future_log::test_support::open_future_log(target.path());
-
-        let progress = catch_up(
-            &part,
-            &future,
-            mebibytes(1),
-            &crate::throttle::TokenBucket::new(),
-        )
-        .expect("catch up");
+        let (future, progress) = first_catch_up(&part, target.path());
         assert!(!progress.caught_up);
         let future = future
             .lock()
@@ -165,16 +171,7 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .reset_to(Offset(5))
             .expect("reset source");
-        let (_future_path, future) =
-            crate::future_log::test_support::open_future_log(target.path());
-
-        let progress = catch_up(
-            &part,
-            &future,
-            mebibytes(1),
-            &crate::throttle::TokenBucket::new(),
-        )
-        .expect("catch up");
+        let (future, progress) = first_catch_up(&part, target.path());
         assert!(progress.caught_up);
         let future = future
             .lock()

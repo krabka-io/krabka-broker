@@ -34,17 +34,13 @@ use krabka_protocol::{
         AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::Record,
 };
 
 use crate::{
     multi_client::topic_id_for,
-    multi_cluster::{
-        await_all_brokers_registered, await_all_rlmm_active,
-        start_three_tiered_brokers_with_segment_sizes,
-    },
+    multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes},
     multi_workload::local_segment_bases,
-    support::{client::connect_owned, records::batch_from_records},
+    support::client::connect_owned,
 };
 
 /// The topic this suite produces into.
@@ -83,17 +79,12 @@ fn local_log_bytes(partition_dir: &Path) -> u64 {
 
 /// Produces `count` single-record batches through `client`, one request each.
 async fn produce_records(client: &Client, topic_id: WireUuid, count: usize) {
-    for index in 0..count {
+    crate::topic_fixture::produce_records(client, TOPIC, topic_id, count, |index| {
         let mut value = format!("record-{index}-").into_bytes();
         value.resize(PAYLOAD, b'x');
-        let batch = batch_from_records(vec![Record {
-            value: Some(bytes::Bytes::from(value)),
-            ..Default::default()
-        }]);
-        let response =
-            crate::support::client::produce_batch(client, TOPIC, topic_id, batch, 1, 10_000).await;
-        assert!(response.error_code == 0, "Produce failed: {response:?}");
-    }
+        bytes::Bytes::from(value)
+    })
+    .await;
 }
 
 /// Creates the tiered topic on broker 1 alone, with local retention set so
@@ -164,11 +155,7 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
         krabka_units::kibibytes(1),
     ])
     .await;
-    await_all_brokers_registered(&b1, &b2, &b3).await;
-    await_all_rlmm_active(&b1, &b2, &b3).await;
-
-    let b1_bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
-    let admin = connect_owned(&b1_bootstrap, "tiered-reassign-admin", "admin client").await;
+    let admin = ready_admin([&b1, &b2, &b3], "tiered-reassign-admin").await;
     create_single_replica_tiered_topic(&admin, &b1).await;
     assert!(
         b1.partition_leader_for_test(TOPIC, 0) == Some(b1.node_id()),

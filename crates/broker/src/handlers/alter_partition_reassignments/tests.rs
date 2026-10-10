@@ -272,15 +272,13 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
-            scope: "orders".into(),
-            pattern_type: PatternType::Literal,
-            frozen: true,
-            reason: "DR cutover".into(),
-            set_by: "User:alice".into(),
             set_at_ms: 10,
-            proposal_id: Uuid::nil(),
-            key_id: String::new(),
-            signature: Vec::new(),
+            ..crate::test_support::topic_freeze_record(
+                "orders",
+                PatternType::Literal,
+                true,
+                "DR cutover",
+            )
         })])
         .await
         .expect("seed topic freeze");

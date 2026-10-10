@@ -249,7 +249,8 @@ mod tests {
     use krabka_log::Offset;
     use krabka_metadata::{MetadataImage, MetadataRecord};
     use krabka_protocol::krabka::barrier::{
-        WritableBarrierPartition, WritableBarrierTopic, WrittenBarrierTopic,
+        WritableBarrierPartition, WritableBarrierTopic, WrittenBarrierPartition,
+        WrittenBarrierTopic,
     };
     use krabka_units::mebibytes;
     use tempfile::tempdir;
@@ -270,6 +271,23 @@ mod tests {
     };
 
     const LOCAL: NodeId = NodeId(1);
+
+    async fn mark_orders_zero(
+        registry: &PartitionRegistry,
+        image: &MetadataImage,
+        leader_epoch: i32,
+    ) -> WrittenBarrierPartition {
+        mark(
+            registry,
+            image,
+            LOCAL,
+            &marker(),
+            "orders",
+            PartitionIndex(0),
+            leader_epoch,
+        )
+        .await
+    }
 
     fn marker() -> BarrierMarker {
         BarrierMarker {
@@ -301,15 +319,25 @@ mod tests {
         registry
     }
 
+    async fn led_orders_fixture() -> (tempfile::TempDir, PartitionRegistry, MetadataImage) {
+        let dir = tempdir().expect("tempdir");
+        let registry = registry_with_leader(dir.path(), LOCAL, 3).await;
+        let image = image(&topic_records("orders", 1, LOCAL));
+        (dir, registry, image)
+    }
+
+    async fn check_not_led_here(registry: &PartitionRegistry, image: &MetadataImage) {
+        let written = mark_orders_zero(registry, image, 3).await;
+        check!(written == row(PartitionIndex(0), codes::NOT_LEADER_OR_FOLLOWER, NO_OFFSET));
+    }
+
     /// The coordinator froze its target set against one leadership and this
     /// broker has since installed another. The marker would carry an epoch
     /// that is already superseded, so the request is refused and the
     /// coordinator comes back with a fresh image.
     #[tokio::test]
     async fn a_stale_expected_leader_epoch_is_fenced() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let registry = registry_with_leader(dir.path(), LOCAL, 3).await;
-        let image = image(&topic_records("orders", 1, LOCAL));
+        let (_dir, registry, image) = led_orders_fixture().await;
 
         let cases = [
             (
@@ -348,17 +376,7 @@ mod tests {
     async fn a_partition_that_is_not_open_here_is_not_led_here() {
         let registry = PartitionRegistry::new();
         let image = image(&topic_records("orders", 1, LOCAL));
-        let written = mark(
-            &registry,
-            &image,
-            LOCAL,
-            &marker(),
-            "orders",
-            PartitionIndex(0),
-            3,
-        )
-        .await;
-        check!(written == row(PartitionIndex(0), codes::NOT_LEADER_OR_FOLLOWER, NO_OFFSET));
+        check_not_led_here(&registry, &image).await;
     }
 
     #[tokio::test]
@@ -366,17 +384,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let registry = registry_with_leader(dir.path(), NodeId(2), 3).await;
         let image = image(&topic_records("orders", 1, NodeId(2)));
-        let written = mark(
-            &registry,
-            &image,
-            LOCAL,
-            &marker(),
-            "orders",
-            PartitionIndex(0),
-            3,
-        )
-        .await;
-        check!(written == row(PartitionIndex(0), codes::NOT_LEADER_OR_FOLLOWER, NO_OFFSET));
+        check_not_led_here(&registry, &image).await;
     }
 
     #[tokio::test]
@@ -386,34 +394,14 @@ mod tests {
         // still carries epoch 2.
         let registry = registry_with_leader(dir.path(), LOCAL, 2).await;
         let image = image(&topic_records("orders", 1, LOCAL));
-        let written = mark(
-            &registry,
-            &image,
-            LOCAL,
-            &marker(),
-            "orders",
-            PartitionIndex(0),
-            NO_EXPECTED_LEADER_EPOCH,
-        )
-        .await;
+        let written = mark_orders_zero(&registry, &image, NO_EXPECTED_LEADER_EPOCH).await;
         check!(written == row(PartitionIndex(0), codes::FENCED_LEADER_EPOCH, NO_OFFSET));
     }
 
     #[tokio::test]
     async fn a_led_partition_takes_the_marker_and_returns_its_offset() {
-        let dir = tempdir().expect("tempdir");
-        let registry = registry_with_leader(dir.path(), LOCAL, 3).await;
-        let image = image(&topic_records("orders", 1, LOCAL));
-        let written = mark(
-            &registry,
-            &image,
-            LOCAL,
-            &marker(),
-            "orders",
-            PartitionIndex(0),
-            3,
-        )
-        .await;
+        let (_dir, registry, image) = led_orders_fixture().await;
+        let written = mark_orders_zero(&registry, &image, 3).await;
         check!(written == row(PartitionIndex(0), codes::NONE, 0));
 
         // The record at the returned offset is the marker the request named.
@@ -467,9 +455,7 @@ mod tests {
     /// group still cannot be written is an error row and appends nothing.
     #[tokio::test]
     async fn a_marker_that_cannot_be_encoded_is_an_error_row_and_appends_nothing() {
-        let dir = tempdir().expect("tempdir");
-        let registry = registry_with_leader(dir.path(), LOCAL, 3).await;
-        let image = image(&topic_records("orders", 1, LOCAL));
+        let (_dir, registry, image) = led_orders_fixture().await;
         let marker = BarrierMarker {
             group: "g".repeat(MAX_STRING_BYTES + 1),
             ..marker()

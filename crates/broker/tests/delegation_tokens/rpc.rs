@@ -99,3 +99,17 @@ pub(crate) async fn send_describe_delegation_token(
     DescribeDelegationTokenResponse::decode(&mut cur, DESCRIBE_DT_VERSION)
         .map_err(|e| io::Error::other(format!("DescribeDelegationToken decode: {e}")))
 }
+
+/// Independent wire expectations for a freshly created token's identity and HMAC.
+pub fn check_created_identity(
+    response: &CreateDelegationTokenResponse,
+    owner: &str,
+    requester: &str,
+) {
+    assert2::check!(response.principal_type == "User");
+    assert2::check!(response.principal_name == owner);
+    assert2::check!(response.token_requester_principal_type == "User");
+    assert2::check!(response.token_requester_principal_name == requester);
+    assert2::check!(!response.token_id.is_empty(), "token_id must be set");
+    assert2::check!(response.hmac.len() == 64, "HMAC length must be 64 bytes");
+}

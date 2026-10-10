@@ -16,6 +16,17 @@ use crate::{
     partition_registry::PartitionRegistry,
 };
 
+async fn check_retained_epochs(coordinator: &BarrierCoordinator, expected: &[i64]) {
+    let epochs: Vec<i64> = coordinator
+        .list_cuts(GROUP)
+        .await
+        .expect("the group is live")
+        .iter()
+        .map(|cut| cut.epoch)
+        .collect();
+    assert!(epochs == expected);
+}
+
 fn marker_at(
     registry: &PartitionRegistry,
     topic: &str,
@@ -198,25 +209,11 @@ async fn the_group_keeps_only_its_retained_cuts() {
             .expect("the injection runs");
     }
 
-    let epochs: Vec<i64> = coordinator
-        .list_cuts(GROUP)
-        .await
-        .expect("the group is live")
-        .iter()
-        .map(|c| c.epoch)
-        .collect();
-    assert!(epochs == vec![3, 4]);
+    check_retained_epochs(&coordinator, &[3, 4]).await;
 
     // The tombstones are durable, so a replay agrees.
     let replayed = fixture.recovered().await;
-    let after: Vec<i64> = replayed
-        .list_cuts(GROUP)
-        .await
-        .expect("the group is live")
-        .iter()
-        .map(|c| c.epoch)
-        .collect();
-    assert!(after == vec![3, 4]);
+    check_retained_epochs(&replayed, &[3, 4]).await;
 }
 
 #[tokio::test]
@@ -240,24 +237,10 @@ async fn a_smaller_retention_drops_every_cut_below_the_new_window() {
         .await
         .expect("the injection runs");
 
-    let epochs: Vec<i64> = coordinator
-        .list_cuts(GROUP)
-        .await
-        .expect("the group is live")
-        .iter()
-        .map(|c| c.epoch)
-        .collect();
-    assert!(epochs == vec![5]);
+    check_retained_epochs(&coordinator, &[5]).await;
 
     let replayed = fixture.recovered().await;
-    let after: Vec<i64> = replayed
-        .list_cuts(GROUP)
-        .await
-        .expect("the group is live")
-        .iter()
-        .map(|c| c.epoch)
-        .collect();
-    assert!(after == vec![5]);
+    check_retained_epochs(&replayed, &[5]).await;
 }
 
 #[tokio::test]

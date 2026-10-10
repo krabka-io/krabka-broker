@@ -162,14 +162,10 @@ async fn topic_row_error_follows_version_and_topic_reference() {
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
     let known_id = create_topic(&broker, "resolution").await;
 
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for case in cases {
-        let (got, want) = drive(&broker, Some(("resolution", known_id)), case).await;
-        actual.push(got);
-        expected.push(want);
-    }
-    assert!(actual == expected);
+    crate::handlers::test_support::check_cases(cases, async |case| {
+        drive(&broker, Some(("resolution", known_id)), case).await
+    })
+    .await;
     broker.shutdown().await;
 }
 

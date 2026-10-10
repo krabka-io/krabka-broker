@@ -280,12 +280,7 @@ mod tests {
             .unwrap()
             .records
         };
-        let written: Vec<_> = log
-            .batches()
-            .await
-            .into_iter()
-            .map(|batch| batch.records)
-            .collect();
+        let written: Vec<_> = log.record_batches().await;
         let mut expected = vec![fence("m1", 3), fence("m2", 4)];
         if written.first().is_some_and(|batch| batch != &expected[0]) {
             // The members expire together: either may be fenced first.

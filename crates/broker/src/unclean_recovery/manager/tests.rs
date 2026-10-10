@@ -113,13 +113,7 @@ fn info(broker_id: u64, log_end_offset: i64) -> ReplicaLogInfo {
     }
 }
 
-async fn liveness_with_alive(alive: &[u64]) -> Arc<ControllerLivenessState> {
-    let l = ControllerLivenessState::new(krabka_units::secs(10));
-    for &n in alive {
-        l.record_heartbeat(n).await;
-    }
-    Arc::new(l)
-}
+use crate::leader_election::test_support::liveness_with_alive;
 
 fn manager(
     source: Arc<FakeMetadataSource>,
@@ -140,6 +134,25 @@ fn gated(mode: BackgroundUncleanRecovery) -> BreakGlassConfig {
         background_unclean_recovery: mode,
         ..BreakGlassConfig::default()
     }
+}
+
+async fn audited_candidate(
+    mode: BackgroundUncleanRecovery,
+) -> (
+    krabka_audit::AuditReceiver,
+    Arc<MetadataImage>,
+    UncleanRecoveryManager,
+) {
+    let (audit_log, events) = AuditLog::new(8);
+    let source = source_with(Some(NODE), image_with_partition(1, &[1, 2]));
+    let image = source.current_image();
+    let manager = manager_with(
+        source,
+        liveness_with_alive(&[2]).await,
+        &gated(mode),
+        audit_log,
+    );
+    (events, image, manager)
 }
 
 /// A manager whose break-glass configuration and audit log the caller picks.
@@ -580,15 +593,7 @@ async fn a_recovery_that_nobody_bypassed_is_applied_rather_than_bypassed() {
         ),
     ];
     for (label, mode, job, expected_phase) in cases {
-        let (audit_log, mut events) = AuditLog::new(8);
-        let source = source_with(Some(NODE), image_with_partition(1, &[1, 2]));
-        let image = source.current_image();
-        let mgr = manager_with(
-            source,
-            liveness_with_alive(&[2]).await,
-            &gated(mode),
-            audit_log,
-        );
+        let (mut events, image, mgr) = audited_candidate(mode).await;
         let outcome = commit_fixture_election(&mgr, &image, &job, fallback_to(2)).await;
 
         check!(
@@ -885,15 +890,8 @@ async fn an_applied_election_names_the_proposal_that_authorized_it() {
         ("a background recovery names none", job(), String::new()),
     ];
     for (label, job, expected) in cases {
-        let (audit_log, mut events) = AuditLog::new(8);
-        let source = source_with(Some(NODE), image_with_partition(1, &[1, 2]));
-        let image = source.current_image();
-        let mgr = manager_with(
-            source,
-            liveness_with_alive(&[2]).await,
-            &gated(BackgroundUncleanRecovery::AuditOnly),
-            audit_log,
-        );
+        let (mut events, image, mgr) =
+            audited_candidate(BackgroundUncleanRecovery::AuditOnly).await;
         let outcome = commit_fixture_election(
             &mgr,
             &image,

@@ -34,10 +34,7 @@ use krabka_protocol::{
 };
 use tempfile::TempDir;
 
-use crate::{
-    support,
-    support::{produce::single_partition_produce, topics::create_topic_request},
-};
+use crate::{support, support::produce::single_partition_produce};
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 
@@ -248,15 +245,9 @@ async fn every_replica_describes_the_producers_of_its_log() {
         "admin client",
     )
     .await;
-    let created = admin
-        .send(create_topic_request(
-            support::topic_on(TOPIC, &[&[1, 2, 3]]),
-            5_000,
-        ))
-        .await
-        .expect("CreateTopics");
-    assert!(created.topics[0].error_code == codes::NONE);
-    let topic_id = created.topics[0].topic_id;
+    let topic_id =
+        support::client::create_topic_spec(&admin, support::topic_on(TOPIC, &[&[1, 2, 3]]), 5_000)
+            .await;
     for (handle, _, _) in &cluster {
         handle.wait_until_partition_present(TOPIC, 0).await;
     }

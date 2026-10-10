@@ -135,9 +135,7 @@ fn leader_count(observer: &BrokerHandle, topic: &str, partitions: i32, target: u
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn controlled_shutdown_drains_leadership_and_returns_ok() {
-    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    let lock = LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
-    let _g = lock.lock().await;
+    let _g = support::cluster_lock().lock().await;
 
     support::init_tracing();
 

@@ -26,9 +26,14 @@ use crate::{
 /// The read must fall back to the request-level `max_bytes`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acquire_past_leading_batch_returns_bytes() {
-    let (_permit, broker, client, _dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
+    let crate::harness::ConsumptionFixture {
+        _permit,
+        broker: _broker,
+        client,
+        _dir,
+        tid,
+        member,
+    } = crate::harness::consumption_fixture(3).await;
 
     // Acquire 0..2 and Reject them → archived, SPSO advances to 3.
     let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;

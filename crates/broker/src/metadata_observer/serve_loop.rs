@@ -650,6 +650,12 @@ mod tests {
         assert!(observer.current_metadata_offset() == 11);
     }
 
+    fn check_unanswered_shutdown(observer: &MetadataObserver, timer: &BrokenTimer) {
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(observer.watch_leader().borrow().is_none());
+        assert!(timer.registrations() == 1);
+    }
+
     #[tokio::test]
     async fn the_loop_stops_when_a_voterless_park_cannot_be_armed() {
         // No voters: the loop's only move is to park, and the park cannot be
@@ -659,9 +665,7 @@ mod tests {
         let timer = BrokenTimer::dead(TimerFailure::Registration);
         let observer = run_until_it_stops(config_on(vec![], timer.injectable(), dir.path())).await;
 
-        assert!(observer.current_metadata_offset() == -1);
-        assert!(observer.watch_leader().borrow().is_none());
-        assert!(timer.registrations() == 1);
+        check_unanswered_shutdown(&observer, &timer);
     }
 
     #[tokio::test]
@@ -690,9 +694,7 @@ mod tests {
         ))
         .await;
 
-        assert!(observer.current_metadata_offset() == -1);
-        assert!(observer.watch_leader().borrow().is_none());
-        assert!(timer.registrations() == 1);
+        check_unanswered_shutdown(&observer, &timer);
     }
 
     #[tokio::test]
@@ -707,6 +709,40 @@ mod tests {
             api_versions_response_v0,
         )
         .await;
+        let (observer, parks) = observe_with_broken_timer(mock).await;
+
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(*observer.watch_leader().borrow() == Some(NodeId(1)));
+        assert!(parks == 1);
+    }
+
+    /// Serve selected metadata bodies while counting every fetch attempt.
+    async fn metadata_broker(
+        fetches: Arc<AtomicUsize>,
+        body: impl Fn(usize) -> Bytes + Send + Sync + 'static,
+        high_watermark: i64,
+    ) -> krabka_client_core::MockBroker {
+        krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+            if api_key == api_versions_request::API_KEY {
+                return Some(api_versions_response_v0());
+            }
+            if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                let fetch = fetches.fetch_add(1, Ordering::SeqCst);
+                return Some(metadata_fetch_response_body(
+                    body(fetch),
+                    high_watermark,
+                    high_watermark,
+                ));
+            }
+            None
+        })
+        .await
+    }
+
+    /// Observe one mock controller until registration of the first park fails.
+    async fn observe_with_broken_timer(
+        mock: krabka_client_core::MockBroker,
+    ) -> (Arc<MetadataObserver>, usize) {
         let dir = tempfile::tempdir().unwrap();
         let timer = BrokenTimer::dead(TimerFailure::Registration);
         let observer = run_until_it_stops(config_on(
@@ -715,11 +751,8 @@ mod tests {
             dir.path(),
         ))
         .await;
-
-        assert!(observer.current_metadata_offset() == -1);
-        assert!(*observer.watch_leader().borrow() == Some(NodeId(1)));
-        assert!(timer.registrations() == 1);
         mock.stop();
+        (observer, timer.registrations())
     }
 
     /// The serve loop over a controller whose first answer carries
@@ -729,33 +762,22 @@ mod tests {
     /// through, and the number of parks it tried.
     async fn serve_once(records: Bytes) -> (crate::metadata_source::ObserverSource, usize) {
         let served = Arc::new(AtomicUsize::new(0));
-        let mock = {
-            let served = Arc::clone(&served);
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
+        let mock = metadata_broker(
+            Arc::clone(&served),
+            move |fetch| {
+                if fetch == 0 {
+                    records.clone()
+                } else {
+                    Bytes::new()
                 }
-                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
-                    let first = served.fetch_add(1, Ordering::SeqCst) == 0;
-                    let body = if first { records.clone() } else { Bytes::new() };
-                    return Some(metadata_fetch_response_body(body, 10, 10));
-                }
-                None
-            })
-            .await
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let timer = BrokenTimer::dead(TimerFailure::Registration);
-        let observer = run_until_it_stops(config_on(
-            vec![(NodeId(1), mock.addr.to_string())],
-            timer.injectable(),
-            dir.path(),
-        ))
+            },
+            10,
+        )
         .await;
-        mock.stop();
+        let (observer, parks) = observe_with_broken_timer(mock).await;
         (
             crate::metadata_source::ObserverSource::new(observer, Arc::new(NoWrites)),
-            timer.registrations(),
+            parks,
         )
     }
 
@@ -821,37 +843,15 @@ mod tests {
         *corrupt.last_mut().expect("a batch has bytes") ^= 0xff;
         let corrupt = Bytes::from(corrupt);
         let fetches = Arc::new(AtomicUsize::new(0));
-        let mock = {
-            let fetches = Arc::clone(&fetches);
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
-                    fetches.fetch_add(1, Ordering::SeqCst);
-                    return Some(metadata_fetch_response_body(corrupt.clone(), 1, 1));
-                }
-                None
-            })
-            .await
-        };
-        let dir = tempfile::tempdir().unwrap();
-        // The park after the corrupt answer is the loop's only wait; a timer
-        // that cannot be armed turns it into the loop's exit, so a loop that
-        // fetched again without parking would show more than one fetch.
-        let timer = BrokenTimer::dead(TimerFailure::Registration);
-        let observer = run_until_it_stops(config_on(
-            vec![(NodeId(1), mock.addr.to_string())],
-            timer.injectable(),
-            dir.path(),
-        ))
-        .await;
-        mock.stop();
+        let mock = metadata_broker(Arc::clone(&fetches), move |_| corrupt.clone(), 1).await;
+        // Failure of the first park stops the observer and exposes a spin
+        // as multiple fetches before that park.
+        let (observer, parks) = observe_with_broken_timer(mock).await;
 
         assert!(
             (
                 fetches.load(Ordering::SeqCst),
-                timer.registrations(),
+                parks,
                 observer.current_metadata_offset(),
                 observer.metadata_load_error_count(),
                 observer.watch_fatal().borrow().clone(),

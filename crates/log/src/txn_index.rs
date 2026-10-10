@@ -156,18 +156,20 @@ impl TxnIndex {
     /// Returns an I/O error if the transaction-index sidecar cannot be
     /// rewritten or synchronized.
     pub fn truncate_from(&mut self, offset: Offset) -> Result<(), LogError> {
-        let Some(entries) =
-            crate::index::changed_entries(&self.entries, |entry| entry.last_offset < offset)
-        else {
-            return Ok(());
-        };
-        let mut file = crate::index::rewrite_sidecar_file(&self.path)?;
-        for entry in &entries {
-            let raw = AbortedTxnRaw::new(*entry);
-            file.write_all(raw.as_bytes()).map_err(LogError::Io)?;
+        if let Some(entries) = crate::index::rewrite_retained_entries(
+            &self.entries,
+            |entry| entry.last_offset < offset,
+            |entries| {
+                let mut file = crate::index::rewrite_sidecar_file(&self.path)?;
+                for entry in entries {
+                    let raw = AbortedTxnRaw::new(*entry);
+                    file.write_all(raw.as_bytes()).map_err(LogError::Io)?;
+                }
+                file.sync_data().map_err(LogError::Io)
+            },
+        )? {
+            self.entries = entries;
         }
-        file.sync_data().map_err(LogError::Io)?;
-        self.entries = entries;
         Ok(())
     }
 

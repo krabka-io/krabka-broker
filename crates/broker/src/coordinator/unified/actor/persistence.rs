@@ -202,17 +202,12 @@ impl Recorder {
                 assignment_epoch: state.target.epoch,
                 assignment_timestamp_ms: state.assignment_timestamp_ms(),
             });
-            for member_id in changed {
-                let target = state
-                    .target
-                    .per_member
-                    .get(member_id)
-                    .cloned()
-                    .unwrap_or_default();
-                pending
-                    .target_per_member
-                    .push((member_id.clone(), Some(target_assignment_value(&target))));
-            }
+            crate::coordinator::unified::member_records::append_target_records(
+                &mut pending.target_per_member,
+                changed,
+                &state.target.per_member,
+                target_assignment_value,
+            );
         }
         pending
     }

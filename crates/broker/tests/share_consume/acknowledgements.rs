@@ -89,9 +89,14 @@ async fn consume_accept_restart() {
 /// Release re-delivers the same offsets with an incremented `delivery_count`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn release_redelivers() {
-    let (_permit, broker, client, _dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 2).await;
+    let crate::harness::ConsumptionFixture {
+        _permit,
+        broker: _broker,
+        client,
+        _dir,
+        tid,
+        member,
+    } = crate::harness::consumption_fixture(2).await;
 
     let row = acquire_both(&client, &member, tid).await;
     assert!(row.acquired_records.iter().all(|r| r.delivery_count == 1));
@@ -119,9 +124,14 @@ async fn release_redelivers() {
 /// acquires.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reject_archives() {
-    let (_permit, broker, client, _dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 2).await;
+    let crate::harness::ConsumptionFixture {
+        _permit,
+        broker: _broker,
+        client,
+        _dir,
+        tid,
+        member,
+    } = crate::harness::consumption_fixture(2).await;
 
     let _row = acquire_both(&client, &member, tid).await;
 

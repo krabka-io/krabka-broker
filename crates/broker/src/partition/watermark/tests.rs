@@ -39,50 +39,31 @@ async fn install_isr_populates_replica_state() {
 }
 
 #[tokio::test]
-async fn install_isr_notifies_when_high_watermark_advances() {
-    let hw_advance_notify = Arc::new(Notify::new());
-    let (p, _td) = test_partition(hw_advance_notify.clone());
-    append_records(&p, 3);
-    assert!(p.high_watermark().await == 0);
+async fn install_isr_advances_and_notifies_only_synced_storage() {
+    for diskless in [false, true] {
+        let hw_advance_notify = Arc::new(Notify::new());
+        let (mut partition, _dir) = test_partition(hw_advance_notify.clone());
+        partition.diskless = diskless;
+        append_records(&partition, 3);
+        assert!(partition.high_watermark().await == 0);
 
-    let waiter = hw_advance_notify.notified();
-    tokio::pin!(waiter);
-    assert!(
-        futures_util::poll!(&mut waiter).is_pending(),
-        "waiter registers on first poll"
-    );
-
-    install_local_isr(&p).await;
-
-    assert!(p.high_watermark().await == 3);
-    assert!(
-        futures_util::poll!(&mut waiter).is_ready(),
-        "notify should fire when ISR install advances HW"
-    );
-}
-
-#[tokio::test]
-async fn install_isr_does_not_advance_diskless_hw_from_unsynced_leo() {
-    let hw_advance_notify = Arc::new(Notify::new());
-    let (mut p, _td) = test_partition(hw_advance_notify.clone());
-    p.diskless = true;
-    append_records(&p, 3);
-    assert!(p.high_watermark().await == 0);
-
-    let waiter = hw_advance_notify.notified();
-    tokio::pin!(waiter);
-    assert!(
-        futures_util::poll!(&mut waiter).is_pending(),
-        "waiter registers on first poll"
-    );
-
-    install_local_isr(&p).await;
-
-    assert!(p.high_watermark().await == 0);
-    assert!(
-        futures_util::poll!(&mut waiter).is_pending(),
-        "diskless ISR install must not release HW before WAL sync"
-    );
+        let waiter = hw_advance_notify.notified();
+        tokio::pin!(waiter);
+        assert!(
+            futures_util::poll!(&mut waiter).is_pending(),
+            "waiter registers on first poll"
+        );
+        install_local_isr(&partition).await;
+        let expected_watermark = if diskless { 0 } else { 3 };
+        assert!(
+            partition.high_watermark().await == expected_watermark,
+            "diskless={diskless}"
+        );
+        assert!(
+            futures_util::poll!(&mut waiter).is_ready() == !diskless,
+            "only synced storage may advance HW and release waiters; diskless={diskless}"
+        );
+    }
 }
 
 #[tokio::test]

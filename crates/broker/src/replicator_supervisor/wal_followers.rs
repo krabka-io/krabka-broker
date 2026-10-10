@@ -93,6 +93,7 @@ impl ReplicatorSupervisor {
                         &target.topic,
                         shard.topic_id,
                         shard.partition,
+                        crate::wal::quorum::ShardRemoval::All,
                     ) {
                         warn!(
                             topic = %target.topic,

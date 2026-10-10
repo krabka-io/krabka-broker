@@ -271,9 +271,7 @@ async fn offline_partition_with_diverged_logs(
 /// published as partition 0's eligible-leader-replica set, and asserts that
 /// `expected_leader` wins the `ElectLeaders(UNCLEAN)` that follows.
 async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_leader: u64) {
-    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    let lock = LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
-    let _g = lock.lock().await;
+    let _g = support::cluster_lock().lock().await;
 
     let cluster = crate::support::registered_cluster(3).await;
 

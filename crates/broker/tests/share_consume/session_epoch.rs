@@ -17,9 +17,14 @@ use crate::{
 /// The share-session epoch state machine rejects stale and unknown epochs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_epoch_validation() {
-    let (_permit, broker, client, _dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
+    let crate::harness::ConsumptionFixture {
+        _permit,
+        broker: _broker,
+        client,
+        _dir,
+        tid,
+        member,
+    } = crate::harness::consumption_fixture(1).await;
 
     // Open (epoch 0) succeeds: top-level error_code 0.
     let opened: ShareFetchResponse = client
@@ -63,9 +68,14 @@ async fn session_epoch_validation() {
 /// removed on later empty incremental requests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn incremental_session_uses_cached_and_forgotten_partitions() {
-    let (_permit, broker, client, _dir, tid) =
-        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
-    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
+    let crate::harness::ConsumptionFixture {
+        _permit,
+        broker: _broker,
+        client,
+        _dir,
+        tid,
+        member,
+    } = crate::harness::consumption_fixture(1).await;
 
     let first = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
     assert!(acquired_count(&first) == 1);

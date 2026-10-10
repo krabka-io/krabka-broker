@@ -586,6 +586,17 @@ fn coordinator_for_topic(
     (coordinator, state_partition)
 }
 
+async fn check_empty_active_partition(
+    coordinator: &Arc<ShareCoordinator>,
+    image: &MetadataImage,
+    state_partition: PartitionIndex,
+    topic_id: uuid::Uuid,
+) {
+    refresh_and_wait(coordinator, image).await;
+    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
+    check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
+}
+
 /// A broker that the image names as leader, but whose state partition log is
 /// not open yet, answers `COORDINATOR_LOAD_IN_PROGRESS`. The refresh after the
 /// log opens loads the partition.
@@ -605,9 +616,7 @@ async fn led_partition_without_a_local_log_loads_once_the_log_opens() {
     );
 
     open_state_partition(&registry, dir.path(), state_partition.get());
-    refresh_and_wait(&coordinator, &image).await;
-    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
-    check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
+    check_empty_active_partition(&coordinator, &image, state_partition, topic_id).await;
 }
 
 /// A failed replay installs no partial state: the partition answers
@@ -637,9 +646,7 @@ async fn failed_load_serves_nothing_and_the_next_refresh_loads_again() {
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Failed));
     check!(coordinator.read_summary("g", topic_id, 0).await == Err(crate::codes::NOT_COORDINATOR));
 
-    refresh_and_wait(&coordinator, &image).await;
-    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
-    check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
+    check_empty_active_partition(&coordinator, &image, state_partition, topic_id).await;
 }
 
 fn state_keys(topic_id: uuid::Uuid) -> (bytes::Bytes, bytes::Bytes) {

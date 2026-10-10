@@ -65,3 +65,51 @@ pub fn creatable_topic_with_configs(
         ..creatable_topic(name, partitions, replicas)
     }
 }
+
+/// A single-partition diskless topic created through the ordinary admin handler.
+pub fn diskless_topic_request(name: impl Into<String>, replication: i16) -> CreateTopicsRequest {
+    create_topic_request(
+        creatable_topic_with_configs(
+            name.into(),
+            1,
+            replication,
+            topic_configs([("krabka.diskless", "true")]),
+        ),
+        10_000,
+    )
+}
+
+/// KIP-516 distinguishes a missing nonzero UUID from the all-zero sentinel.
+pub fn unresolved_topic_ids(
+    id: u128,
+) -> [(&'static str, krabka_protocol::primitives::uuid::Uuid); 2] {
+    [
+        (
+            "non-zero id",
+            krabka_protocol::primitives::uuid::Uuid(uuid::Uuid::from_u128(id).into_bytes()),
+        ),
+        ("zero id", krabka_protocol::primitives::uuid::Uuid::ZERO),
+    ]
+}
+
+/// Create an explicitly assigned partition and wait for every replica to install it.
+pub async fn create_assigned_partition<'a>(
+    client: &krabka_client_core::Client,
+    topic: &str,
+    replicas: &[i32],
+    brokers: impl IntoIterator<Item = &'a krabka_broker::BrokerHandle>,
+) -> krabka_protocol::primitives::uuid::Uuid {
+    let response = client
+        .send(create_topic_request(
+            super::topic_on(topic, &[replicas]),
+            5_000,
+        ))
+        .await
+        .unwrap();
+    assert2::assert!(response.topics[0].error_code == 0);
+    let topic_id = response.topics[0].topic_id;
+    for broker in brokers {
+        broker.wait_until_partition_present(topic, 0).await;
+    }
+    topic_id
+}

@@ -121,6 +121,16 @@ struct Row {
     expected: ConsumerGroupHeartbeatResponse,
 }
 
+fn grows_to_three(name: &'static str, before: ReconcileInput) -> Row {
+    Row {
+        name,
+        before,
+        after: snapshot_of(&[("orders", 1, 3)]),
+        update: &["orders"],
+        expected: answer(3, Some(vec![(1, vec![0, 1, 2])])),
+    }
+}
+
 /// Kafka's `GroupMetadataManager.onMetadataUpdate` requests a metadata
 /// refresh of every group that subscribes to a created, changed or deleted
 /// topic. The next heartbeat of the group computes the metadata hash again
@@ -130,20 +140,11 @@ struct Row {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
     let rows = [
-        Row {
-            name: "the subscribed topic is created",
-            before: snapshot_of(&[]),
-            after: snapshot_of(&[("orders", 1, 3)]),
-            update: &["orders"],
-            expected: answer(3, Some(vec![(1, vec![0, 1, 2])])),
-        },
-        Row {
-            name: "the subscribed topic grows",
-            before: snapshot_of(&[("orders", 1, 1)]),
-            after: snapshot_of(&[("orders", 1, 3)]),
-            update: &["orders"],
-            expected: answer(3, Some(vec![(1, vec![0, 1, 2])])),
-        },
+        grows_to_three("the subscribed topic is created", snapshot_of(&[])),
+        grows_to_three(
+            "the subscribed topic grows",
+            snapshot_of(&[("orders", 1, 1)]),
+        ),
         // The target loses the partitions. Kafka's `CurrentAssignmentBuilder`
         // keeps the member at epoch 2 until it acknowledges the revocation, and
         // its heartbeat answer already carries the smaller assignment.
@@ -329,15 +330,9 @@ async fn the_written_metadata_hash_is_kafkas() {
 async fn the_replayed_assignment_timestamp_holds_the_interval() {
     use crate::coordinator::unified::{GroupSeed, wall_clock_ms};
 
-    // (case, milliseconds before now of the stored timestamp, or `None` for
-    // 0, the expected (member epoch, whether the group wrote a new timestamp))
-    let rows = [
-        ("no stored time", None, (3, true)),
-        ("an assignment a second ago", Some(1_000), (2, false)),
-        ("an assignment two minutes ago", Some(120_000), (3, true)),
-    ];
-    let mut answers = Vec::new();
-    let mut expected = Vec::new();
+    let rows = crate::coordinator::unified::test_support::ASSIGNMENT_INTERVAL_CASES;
+    let mut cases = crate::coordinator::unified::test_support::AssignmentIntervalResults::default();
+
     for (case, ago, wanted) in rows {
         let coordinator = Arc::new(GroupCoordinator::new(
             NextGenConfig {
@@ -368,12 +363,7 @@ async fn the_replayed_assignment_timestamp_holds_the_interval() {
             .cached_seed("g")
             .unwrap()
             .assignment_timestamp_ms;
-        answers.push((
-            case,
-            joined.member_epoch,
-            (before..=after).contains(&written),
-        ));
-        expected.push((case, wanted.0, wanted.1));
+        cases.record(case, joined.member_epoch, (before, after), written, wanted);
     }
-    check!(answers == expected);
+    cases.check();
 }

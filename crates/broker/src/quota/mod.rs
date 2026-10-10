@@ -214,6 +214,19 @@ pub(crate) mod test_support {
     use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
     use krabka_units::{Time, convert::TimeExt, secs};
 
+    /// A named input builder for one quota kind's rate tests.
+    macro_rules! image_builder {
+        ($name:ident, $key:literal) => {
+            fn $name(
+                entity: Vec<(&str, Option<&str>)>,
+                rate: f64,
+            ) -> krabka_metadata::MetadataImage {
+                crate::quota::test_support::image_with_quota(entity, $key, rate)
+            }
+        };
+    }
+    pub(crate) use image_builder;
+
     /// Independent expected throttles for producer and consumer quotas.
     pub(crate) fn fractional_bandwidth_cases() -> [(f64, u64, Time); 7] {
         [
@@ -225,6 +238,22 @@ pub(crate) mod test_support {
             (1.5, 1, <Time as TimeExt>::ZERO),
             (1.5, 3, secs(1)),
         ]
+    }
+
+    /// Apply the independent fractional-rate table to one byte-charging API.
+    pub(crate) fn check_fractional_bandwidth(
+        key: &str,
+        consume: impl Fn(&MetadataImage, &super::QuotaBuckets, u64) -> Time,
+    ) {
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (rate, bytes, delay) in fractional_bandwidth_cases() {
+            let image = image_with_quota(vec![("user", Some("alice"))], key, rate);
+            let buckets = super::QuotaBuckets::with_window(secs(1));
+            actual.push((rate.to_string(), bytes, consume(&image, &buckets, bytes)));
+            expected.push((rate.to_string(), bytes, delay));
+        }
+        assert2::assert!(actual == expected);
     }
 
     pub(crate) fn image_with_quota(

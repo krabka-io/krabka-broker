@@ -168,6 +168,25 @@ mod tests {
     /// `run` honoured the flag it never dials; if it regressed and dialed, the
     /// loop would spin against the unreachable address and the timeout would
     /// fire (failing the test).
+    fn voter_params(source: Arc<dyn crate::metadata_source::MetadataSource>) -> AutoJoinParams {
+        AutoJoinParams {
+            auto_join: true,
+            retry_backoff: millis(7),
+            voter_request_timeout: secs(30),
+            node_id: NodeId(7),
+            directory_id: uuid::Uuid::from_u128(7),
+            cluster_id: None,
+            bootstrap_servers: vec!["127.0.0.1:1".to_string()],
+            advertised_controller: None,
+            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+            inter_broker_server_name: "broker.internal".to_string(),
+            controller: source,
+            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
+                None, None,
+            )),
+        }
+    }
+
     #[tokio::test]
     async fn run_returns_immediately_when_auto_join_disabled() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -206,22 +225,7 @@ mod tests {
                 .controller_bound_addr("127.0.0.1:19093".parse().expect("bound controller addr"))
                 .build(),
         );
-        let params = AutoJoinParams {
-            auto_join: true,
-            retry_backoff: millis(7),
-            voter_request_timeout: secs(30),
-            node_id: krabka_raft::NodeId(7),
-            directory_id: uuid::Uuid::from_u128(7),
-            cluster_id: None,
-            bootstrap_servers: vec!["127.0.0.1:1".to_string()],
-            advertised_controller: None,
-            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            inter_broker_server_name: "broker.internal".to_string(),
-            controller: source.clone(),
-            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                None, None,
-            )),
-        };
+        let params = voter_params(source.clone());
 
         tokio::time::timeout(Duration::from_secs(2), run(params))
             .await
@@ -293,20 +297,10 @@ mod tests {
         );
 
         let params = AutoJoinParams {
-            auto_join: true,
-            retry_backoff: millis(7),
             voter_request_timeout: secs(1),
-            node_id: NodeId(7),
             directory_id: uuid::Uuid::from_u128(42), // differs from image_with_voter's 7
-            cluster_id: None,
             bootstrap_servers: vec![addr.to_string()],
-            advertised_controller: None,
-            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            inter_broker_server_name: "broker.internal".to_string(),
-            controller: source.clone(),
-            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                None, None,
-            )),
+            ..voter_params(source.clone())
         };
 
         let join = tokio::spawn(run(params));

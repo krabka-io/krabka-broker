@@ -9,8 +9,8 @@
 use super::{
     group_coordinator::GroupCoordinator,
     replay_policy::{
-        GroupLookup, LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone, member_tombstone,
-        persisted_group, target_metadata, target_metadata_tombstone,
+        GroupLookup, LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone, persisted_group,
+        target_metadata, target_metadata_tombstone,
     },
     seeds::StreamsGroupSeed,
     streams,
@@ -242,10 +242,7 @@ impl GroupCoordinator {
     ) -> Result<(), BrokerError> {
         self.persisted_streams_group(group_id, true)?;
         self.update_streams_seed_with(group_id, v, |seed, v| {
-            seed.members
-                .entry(member_id.into())
-                .or_insert_with(uninitialized_member);
-            seed.current_per_member.insert(member_id.into(), v);
+            seed.install_current_member(member_id, v, uninitialized_member);
         });
         Ok(())
     }
@@ -295,22 +292,11 @@ impl GroupCoordinator {
                 self.group_types.remove(group_id);
             }
             K::MemberMetadata { member_id, .. } => {
-                let remove = self.streams_seed(group_id, |seed| {
-                    member_tombstone(
-                        ModernGroupType::Streams,
-                        member_id,
-                        seed.members.contains_key(member_id).then(|| {
-                            seed.current_per_member
-                                .get(member_id)
-                                .map_or(0, |current| current.member_epoch)
-                        }),
-                        seed.target_per_member.contains_key(member_id),
-                    )
-                })?;
+                let remove =
+                    self.streams_seed(group_id, |seed| seed.member_tombstone(member_id))?;
                 if remove {
                     self.update_streams_seed(group_id, |seed| {
-                        seed.members.remove(member_id);
-                        seed.current_per_member.remove(member_id);
+                        seed.remove_replayed_member(member_id);
                     });
                 }
             }
@@ -357,8 +343,6 @@ impl GroupCoordinator {
 mod tests {
     use std::collections::BTreeMap;
 
-    use assert2::check;
-
     use super::*;
     use crate::coordinator::unified::{
         persistence_next_gen::GroupMetadataValue,
@@ -368,7 +352,7 @@ mod tests {
             StreamsGroupTargetAssignmentMetadataValue, StreamsGroupTopologyValue,
             StreamsMemberWireState,
         },
-        test_support::{make_coord, streams_member},
+        test_support::streams_member,
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -488,23 +472,17 @@ mod tests {
     /// exception that fails the load.
     #[test]
     fn streams_records_replay_as_kafka() {
-        let group = |update: &dyn Fn(&mut StreamsGroupSeed)| {
-            let mut seed = StreamsGroupSeed::new_group();
-            update(&mut seed);
-            Ok(Some(seed))
-        };
+        let group =
+            crate::coordinator::unified::test_support::expected_seed(StreamsGroupSeed::new_group);
         let tombstone = |kind: &str, id: &str| Record::Tombstone(key(kind, id));
         // Kafka's `StreamsGroup.createGroupTombstoneRecords` for member `m`:
         // the topology tombstone comes after the group's, and is ignored.
         let kafka_deletion = || {
-            vec![
-                tombstone("current", "m"),
-                tombstone("target", "m"),
-                tombstone("target-epoch", ""),
-                tombstone("member", "m"),
-                tombstone("group", ""),
-                tombstone("topology", ""),
-            ]
+            crate::coordinator::unified::test_support::assignment_tombstones(
+                tombstone,
+                "m",
+                &["group", "topology"],
+            )
         };
         let every_record = || {
             vec![
@@ -516,7 +494,7 @@ mod tests {
                 Record::Current("m", 7),
             ]
         };
-        let rows: Vec<(&str, Vec<Record>, Outcome)> = vec![
+        let mut rows: Vec<(&str, Vec<Record>, Outcome)> = vec![
             (
                 "every record of a group",
                 every_record(),
@@ -546,16 +524,6 @@ mod tests {
                 "a topology creates the group, and its tombstone removes the topology",
                 vec![Record::Topology, tombstone("topology", "")],
                 group(&|_| {}),
-            ),
-            (
-                "Kafka's deletion order removes the whole group",
-                [every_record(), kafka_deletion()].concat(),
-                Ok(None),
-            ),
-            (
-                "tombstones of a group the log does not hold are ignored",
-                kafka_deletion(),
-                Ok(None),
             ),
             (
                 "the tombstone of a current assignment leaves the member at epoch -1",
@@ -631,25 +599,23 @@ mod tests {
                 Err("Group g is not a streams group.".into()),
             ),
         ];
-        for (case, log, expected) in rows {
-            let coord = make_coord();
-            let outcome = log
-                .iter()
-                .try_for_each(|record| replay(&coord, record))
-                .map(|()| {
-                    coord
-                        .streams_seeds
-                        .get("g")
-                        .map(|seed| seed.value().clone())
-                })
-                .map_err(|error| match error {
-                    BrokerError::Startup(message) => message,
-                    other => other.to_string(),
-                });
-            check!(outcome == expected, "{case}");
-            if let Ok(seed) = outcome {
-                check!(coord.cached_streams_seed("g") == seed, "{case}");
-            }
-        }
+        rows.splice(
+            3..3,
+            crate::coordinator::unified::test_support::deletion_replay_cases(
+                every_record(),
+                kafka_deletion(),
+            ),
+        );
+        crate::coordinator::unified::test_support::check_replay_cases(
+            &rows,
+            replay,
+            |coord| {
+                coord
+                    .streams_seeds
+                    .get("g")
+                    .map(|seed| seed.value().clone())
+            },
+            |coord| coord.cached_streams_seed("g"),
+        );
     }
 }

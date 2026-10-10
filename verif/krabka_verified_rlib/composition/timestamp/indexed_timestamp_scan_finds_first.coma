@@ -36,7 +36,7 @@ let%span stimestamp'20 = "/workspace/crates/verified/src/timestamp.rs" 26 10 26 
 let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 14 8 14 53
 let%span stimestamp'22 = "/workspace/crates/verified/src/composition/timestamp.rs" 52 8 53 68
 let%span stimestamp'23 = "/workspace/crates/verified/src/timestamp.rs" 15 8 20 9
-let%span stimestamp'24 = "/workspace/crates/verified/src/composition/timestamp.rs" 252 16 253 65
+let%span stimestamp'24 = "/workspace/crates/verified/src/composition/timestamp.rs" 250 16 251 65
 let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 14 16 14 72
 let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
 let%span slog_index = "/workspace/crates/verified/src/log_index.rs" 59 11 60 40
@@ -193,7 +193,7 @@ predicate strictly_increasing_u32 [#"/workspace/crates/verified/src/sequence.rs"
 predicate record_offsets_ordered [#"/workspace/crates/verified/src/composition/timestamp.rs" 12 0 12 63] (offsets: Seq.seq UInt32.t) =
   [%#stimestamp'21] strictly_increasing_u32 offsets
 
-predicate sparse_rows_bound_records [#"/workspace/crates/verified/src/composition/timestamp.rs" 247 0 251 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (times: Seq.seq Int64.t) =
+predicate sparse_rows_bound_records [#"/workspace/crates/verified/src/composition/timestamp.rs" 245 0 249 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (times: Seq.seq Int64.t) =
   [%#stimestamp'24] forall i: int, j: int. 0 <= i
       /\ i < Seq.length entries
       /\ 0 <= j /\ j < Seq.length offsets /\ UInt32.t'int (Seq.get offsets j) < UInt32.t'int (Seq.get entries i).f1

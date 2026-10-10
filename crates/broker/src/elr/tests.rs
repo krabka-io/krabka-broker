@@ -12,11 +12,9 @@ use std::sync::Arc;
 use assert2::assert;
 use krabka_metadata::{
     BrokerRegistrationRecord, LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord,
-    TopicConfigRecord, TopicRecord,
 };
 use krabka_protocol::owned::{
     broker_registration_request::{BrokerRegistrationRequest, Feature, Listener},
-    describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
     describe_topic_partitions_response::DescribeTopicPartitionsResponsePartition,
 };
 
@@ -24,7 +22,6 @@ use super::{ElrPublisher, TopicElr, state::PartitionElr};
 use crate::{
     broker::Broker,
     codes,
-    config_keys::MIN_INSYNC_REPLICAS,
     test_support::{peer, principal, request_context, start_broker_with_authorizer},
 };
 
@@ -71,28 +68,11 @@ fn seed_records() -> Vec<MetadataRecord> {
 /// equal to the replication factor is what makes the ISR shrink of a single
 /// replica cross the threshold on its own.
 fn seed_records_with_min_isr(min_isr: &str) -> Vec<MetadataRecord> {
-    vec![
-        // KIP-966 maintenance is gated on the feature, whose release default
-        // is 0, so every seed here finalizes it the way an operator's
-        // `kafka-features upgrade` would.
-        MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-            name: crate::features::ELR_VERSION.into(),
-            level: 1,
-        }),
-        MetadataRecord::V1Topic(TopicRecord {
-            name: TOPIC.into(),
-            topic_id: uuid::Uuid::from_bytes(TOPIC_ID_BYTES),
-            partitions: 1,
-            replication_factor: 3,
-        }),
-        MetadataRecord::V1Partition(partition_record(&[1, 2, 3])),
-        MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: TOPIC.into(),
-            overrides: [(MIN_INSYNC_REPLICAS.to_string(), min_isr.to_string())]
-                .into_iter()
-                .collect(),
-        }),
-    ]
+    crate::test_support::elr_topic_records(
+        partition_record(&[1, 2, 3]),
+        uuid::Uuid::from_bytes(TOPIC_ID_BYTES),
+        min_isr,
+    )
 }
 
 /// The endpoint list of a remote broker at `port`: the `PLAINTEXT` listener that
@@ -170,23 +150,14 @@ async fn activate_followers(broker: &Broker) {
 /// Propose `new_isr` for partition 0 through the real `AlterPartition`
 /// handler, and assert the controller accepted it.
 async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
-    let response = crate::test_support::propose_isr(
+    crate::test_support::accepted_isr_proposal(
         broker,
-        TOPIC,
-        (
-            krabka_protocol::primitives::uuid::Uuid(TOPIC_ID_BYTES),
-            LEADER_EPOCH,
-            ALTER_VERSION,
-        ),
+        (TOPIC, TOPIC_ID_BYTES),
+        (LEADER_EPOCH, ALTER_VERSION),
         new_isr,
+        true,
     )
     .await;
-
-    assert!(response.error_code == codes::NONE);
-    assert!(
-        response.topics[0].partitions[0].error_code == codes::NONE,
-        "AlterPartition refused the proposal: {response:?}"
-    );
 }
 
 /// The partition row `DescribeTopicPartitions` answers with for partition 0.
@@ -194,14 +165,7 @@ async fn describe_partition(broker: &Arc<Broker>) -> DescribeTopicPartitionsResp
     let principal = principal("replica");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "admin-client");
-    let request = DescribeTopicPartitionsRequest {
-        topics: vec![TopicRequest {
-            name: TOPIC.into(),
-            ..Default::default()
-        }],
-        response_partition_limit: 2000,
-        ..Default::default()
-    };
+    let request = crate::test_support::topic_partitions_request(TOPIC);
     let response =
         crate::handlers::describe_topic_partitions::handle(broker, request, DESCRIBE_VERSION, &ctx)
             .await
@@ -306,12 +270,8 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) {
     assert!(response.error_code == codes::NONE, "{response:?}");
 }
 
-/// The issue's acceptance path: shrink the ISR below `min.insync.replicas`
-/// and the replicas it dropped are reported eligible; expand it back to
-/// `min.insync.replicas` and the set clears.
-#[tokio::test]
-async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
-    let (handle, _dir) =
+async fn start_orders() -> (crate::BrokerHandle, tempfile::TempDir, Arc<Broker>) {
+    let (handle, dir) =
         start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
@@ -321,6 +281,15 @@ async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
         .await
         .expect("seed orders");
     activate_followers(&broker).await;
+    (handle, dir, broker)
+}
+
+/// The issue's acceptance path: shrink the ISR below `min.insync.replicas`
+/// and the replicas it dropped are reported eligible; expand it back to
+/// `min.insync.replicas` and the set clears.
+#[tokio::test]
+async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
+    let (handle, _dir, broker) = start_orders().await;
 
     assert!(describe_partition(&broker).await == expected_row(&[1, 2, 3], &[]));
 
@@ -339,16 +308,7 @@ async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
 /// eligible.
 #[tokio::test]
 async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
-    let (handle, _dir) =
-        start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
-    broker
-        .controller
-        .submit_change(seed_records())
-        .await
-        .expect("seed orders");
-    activate_followers(&broker).await;
+    let (handle, _dir, broker) = start_orders().await;
 
     alter_isr(&broker, &[1, 2]).await;
 

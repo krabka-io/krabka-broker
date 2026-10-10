@@ -445,6 +445,15 @@ mod tests {
         }
     }
 
+    async fn completed_target(image: &MetadataImage) -> PartitionRecord {
+        let alive = liveness(&[1, 2, 3]).await;
+        let updates = compute_reassignment_progress(image, &alive).await;
+        assert!(updates.len() == 1);
+        let partition = first_partition(&updates[0]);
+        check!(partition.replicas == vec![NodeId(1), NodeId(3)]);
+        partition.clone()
+    }
+
     #[tokio::test]
     async fn completion_preserves_directory_slot_alignment() {
         // replicas=[1,2,3], adding=[3], removing=[2], all in ISR.
@@ -454,12 +463,8 @@ mod tests {
         let db = Uuid::from_u128(0xB);
         let dc = Uuid::from_u128(0xC);
         let image = img_with_dirs(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1, &[da, db, dc]);
-        let l = liveness(&[1, 2, 3]).await;
-        let updates = compute_reassignment_progress(&image, &l).await;
-        assert!(updates.len() == 1);
-        let pr = first_partition(&updates[0]);
+        let pr = completed_target(&image).await;
         // Slot 0 → broker 1 → dA; slot 1 → broker 3 → dC (NOT dB).
-        check!(pr.replicas == vec![NodeId(1), NodeId(3)]);
         check!(pr.directories == vec![da, dc]);
         check!(pr.partition_epoch == 1);
     }
@@ -467,12 +472,8 @@ mod tests {
     #[tokio::test]
     async fn complete_when_adding_in_isr_writes_target() {
         let img = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1);
-        let l = liveness(&[1, 2, 3]).await;
-        let updates = compute_reassignment_progress(&img, &l).await;
-        assert!(updates.len() == 1);
-        let pr = first_partition(&updates[0]);
+        let pr = completed_target(&img).await;
         // leader and leader_epoch are unchanged (leader didn't change).
-        check!(pr.replicas == vec![NodeId(1), NodeId(3)]);
         check!(pr.adding_replicas == Vec::<NodeId>::new());
         check!(pr.removing_replicas == Vec::<NodeId>::new());
         check!(pr.isr == vec![NodeId(1), NodeId(3)]);
@@ -570,15 +571,13 @@ mod tests {
     async fn freeze_allows_completion_of_an_already_accepted_reassignment() {
         let mut image = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1);
         Arc::make_mut(&mut image).apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
-            scope: "foo".into(),
-            pattern_type: PatternType::Literal,
-            frozen: true,
-            reason: "DR cutover".into(),
-            set_by: "User:alice".into(),
             set_at_ms: 10,
-            proposal_id: Uuid::nil(),
-            key_id: String::new(),
-            signature: Vec::new(),
+            ..crate::test_support::topic_freeze_record(
+                "foo",
+                PatternType::Literal,
+                true,
+                "DR cutover",
+            )
         }));
         let l = liveness(&[1, 2, 3]).await;
 

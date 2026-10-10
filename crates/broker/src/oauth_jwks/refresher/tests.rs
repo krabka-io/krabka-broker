@@ -15,6 +15,20 @@ use crate::{
     test_support::{BrokenTimer, TimerFailure},
 };
 
+async fn check_first_fetch_and_stop(
+    label: &str,
+    handle: &JwksHandle,
+    shutdown: &CancellationToken,
+    task: tokio::task::JoinHandle<()>,
+    server_shutdown: &CancellationToken,
+) {
+    await_until(label, || !handle.load().is_empty()).await;
+    assert!(handle.load().len() == 1);
+    shutdown.cancel();
+    task.await.unwrap();
+    server_shutdown.cancel();
+}
+
 #[tokio::test]
 async fn refresher_populates_handle_then_stops_on_shutdown() {
     let (addr, srv_shutdown) = serve_jwks(JWKS_BODY).await;
@@ -34,15 +48,14 @@ async fn refresher_populates_handle_then_stops_on_shutdown() {
     let task = tokio::spawn(refresher.run());
 
     // Poll until the immediate first fetch lands.
-    await_until("first JWKS fetch populates handle", || {
-        !handle.load().is_empty()
-    })
+    check_first_fetch_and_stop(
+        "first JWKS fetch populates handle",
+        &handle,
+        &shutdown,
+        task,
+        &srv_shutdown,
+    )
     .await;
-    assert!(handle.load().len() == 1);
-
-    shutdown.cancel();
-    task.await.unwrap();
-    srv_shutdown.cancel();
 }
 
 #[tokio::test]
@@ -61,14 +74,14 @@ async fn refresher_fetches_jwks_over_https_with_custom_trust() {
         dormant_timer(),
     );
     let task = tokio::spawn(refresher.run());
-    await_until("first HTTPS JWKS fetch populates handle", || {
-        !handle.load().is_empty()
-    })
+    check_first_fetch_and_stop(
+        "first HTTPS JWKS fetch populates handle",
+        &handle,
+        &shutdown,
+        task,
+        &srv_shutdown,
+    )
     .await;
-    assert!(handle.load().len() == 1);
-    shutdown.cancel();
-    task.await.unwrap();
-    srv_shutdown.cancel();
 }
 
 #[tokio::test]
@@ -411,20 +424,28 @@ async fn refresher_stops_when_the_first_deadline_is_armed_but_never_completes() 
     check_first_deadline_failure(TimerFailure::Completion).await;
 }
 
-async fn check_first_deadline_failure(failure: TimerFailure) {
-    let (addr, srv_shutdown, requests) = serve_jwks_counting(JWKS_BODY).await;
-    let handle = JwksHandle::default();
-    let timer = BrokenTimer::dead(failure);
-    // No caller cancels this token. A refused registration or a failed first
-    // deadline is therefore the only reason the refresher can stop.
-    let refresher = test_refresher(
+fn dead_timer_refresher(
+    addr: std::net::SocketAddr,
+    handle: &JwksHandle,
+    timer: &Arc<BrokenTimer>,
+) -> JwksRefresher {
+    test_refresher(
         format!("http://{addr}/jwks"),
         handle.clone(),
         millis(50),
         CancellationToken::new(),
         None,
         timer.injectable(),
-    );
+    )
+}
+
+async fn check_first_deadline_failure(failure: TimerFailure) {
+    let (addr, srv_shutdown, requests) = serve_jwks_counting(JWKS_BODY).await;
+    let handle = JwksHandle::default();
+    let timer = BrokenTimer::dead(failure);
+    // No caller cancels this token. A refused registration or a failed first
+    // deadline is therefore the only reason the refresher can stop.
+    let refresher = dead_timer_refresher(addr, &handle, &timer);
     tokio::spawn(refresher.run())
         .await
         .expect("refresher task exits");
@@ -439,14 +460,7 @@ async fn refresher_fetches_once_and_stops_when_the_interval_cannot_be_re_armed()
     let (addr, srv_shutdown, requests) = serve_jwks_counting(JWKS_BODY).await;
     let handle = JwksHandle::default();
     let timer = BrokenTimer::dead_after(1, TimerFailure::Registration);
-    let refresher = test_refresher(
-        format!("http://{addr}/jwks"),
-        handle.clone(),
-        millis(50),
-        CancellationToken::new(),
-        None,
-        timer.injectable(),
-    );
+    let refresher = dead_timer_refresher(addr, &handle, &timer);
 
     // The start-up deadline is honoured, so the t=0 fetch lands and the keys
     // reach the handle. The interval the loop re-arms afterwards is refused,

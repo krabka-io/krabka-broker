@@ -162,3 +162,14 @@ pub(crate) fn arguments(input: TokenStream, count: usize) -> Result<Vec<TokenStr
     }
     Ok(arguments)
 }
+
+/// Reject arguments on an attribute macro that accepts only its annotated item.
+pub(crate) fn no_arguments(tokens: TokenStream, macro_name: &str) -> Result<(), ParseError> {
+    if let Some(token) = tokens.into_iter().next() {
+        return Err(ParseError::new(
+            token.span(),
+            format!("{macro_name} takes no arguments"),
+        ));
+    }
+    Ok(())
+}

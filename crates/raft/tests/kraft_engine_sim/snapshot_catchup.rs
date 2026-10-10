@@ -48,6 +48,18 @@ fn start_snapshot_pair(
         .collect()
 }
 
+async fn elected_snapshot_pair(
+    net: &SimNet,
+    ids: &[NodeId],
+    cluster_id: uuid::Uuid,
+    interval: u64,
+) -> (HashMap<NodeId, tempfile::TempDir>, NodeId, u32) {
+    let dirs = start_snapshot_pair(net, ids, cluster_id, interval);
+    let (leader, epoch) =
+        await_single_leader(net, &[NodeId(1), NodeId(2)], Duration::from_secs(10)).await;
+    (dirs, leader, epoch)
+}
+
 fn fetch_from_zero(epoch: u32) -> bytes::Bytes {
     wire::PeerRequest::Fetch {
         cluster_id: None,
@@ -198,10 +210,8 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
     let cid = uuid::Uuid::from_u128(501);
     let interval = 5u64;
 
-    let dirs = start_snapshot_pair(&net, &ids, cid, interval);
-
+    let (dirs, leader, epoch) = elected_snapshot_pair(&net, &ids, cid, interval).await;
     let live = [NodeId(1), NodeId(2)];
-    let (leader, epoch) = await_single_leader(&net, &live, Duration::from_secs(10)).await;
     assert2::assert!(leader == NodeId(1));
     let follower = NodeId(2);
 
@@ -318,9 +328,8 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
     let cid = uuid::Uuid::from_u128(502);
     let interval = 5u64;
 
-    let dirs = start_snapshot_pair(&net, &ids, cid, interval);
+    let (dirs, leader, epoch) = elected_snapshot_pair(&net, &ids, cid, interval).await;
     let live = [NodeId(1), NodeId(2)];
-    let (leader, epoch) = await_single_leader(&net, &live, Duration::from_secs(10)).await;
     let leader_dir = dirs[&leader].path().to_path_buf();
 
     let submit = async |name: String, id: u128| {

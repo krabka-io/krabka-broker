@@ -71,6 +71,24 @@ pub async fn start_admin_alice() -> (BrokerHandle, tempfile::TempDir, std::net::
     crate::support::sasl::start_broker(cfg, dir).await
 }
 
+/// A single foo partition with Alice's exact topic operation grant.
+pub async fn start_alice_topic_grant(
+    operation: krabka_metadata::AclOperation,
+) -> (BrokerHandle, tempfile::TempDir, std::net::SocketAddr) {
+    let (handle, dir, _) = start_admin_alice().await;
+    let addr = handle.listen_addr();
+    crate::acl_admin::create_topic_as_admin(addr, "foo", 1).await;
+    handle
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "foo",
+            "User:alice",
+            operation,
+        ))
+        .await
+        .expect("seed Alice's topic operation ACL");
+    (handle, dir, addr)
+}
+
 /// Provisioning fixture with the caller's exact credential set and the admin super-user.
 pub async fn start_admin_with(
     creds: &[(&str, &str)],

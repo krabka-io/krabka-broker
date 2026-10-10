@@ -71,14 +71,7 @@ async fn create_topics_accepts_the_key_and_describe_configs_echoes_it() {
 /// produce, which is the failure an operator would be least able to explain.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_incremental_alter_raises_the_cap_for_the_next_produce() {
-    let p = support::start().await;
-    let topic = create_topic(
-        &p.broker,
-        &p.client,
-        "orders",
-        &[(MAX_MESSAGE_BYTES, &CAP.to_string())],
-    )
-    .await;
+    let (p, topic) = crate::wire::orders_fixture(&[(MAX_MESSAGE_BYTES, &CAP.to_string())]).await;
 
     check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP + 1).await == too_large());
 

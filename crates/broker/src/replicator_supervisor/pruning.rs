@@ -74,23 +74,19 @@ impl ReplicatorSupervisor {
         self.hot_tail.remove_partition(topic_id, index);
         self.reported_dirs.remove(&(topic.clone(), index.get()));
         let owning_dir = removed.log_dir.load_full();
-        let remove = if preserve_follower {
-            crate::wal::quorum::remove_leader_shard(
-                self.wal_shards.as_ref(),
-                &owning_dir,
-                topic,
-                topic_id,
-                index,
-            )
+        let scope = if preserve_follower {
+            crate::wal::quorum::ShardRemoval::Leader
         } else {
-            crate::wal::quorum::remove_shard(
-                self.wal_shards.as_ref(),
-                &owning_dir,
-                topic,
-                topic_id,
-                index,
-            )
+            crate::wal::quorum::ShardRemoval::All
         };
+        let remove = crate::wal::quorum::remove_shard(
+            self.wal_shards.as_ref(),
+            &owning_dir,
+            topic,
+            topic_id,
+            index,
+            scope,
+        );
         if let Err(error) = remove {
             warn!(
                 topic = %topic,

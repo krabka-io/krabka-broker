@@ -139,13 +139,29 @@ pub fn open_test_controller(
     cluster_id: uuid::Uuid,
     voters: VoterSet,
 ) -> Result<KraftController, RaftError> {
+    open_test_controller_with(
+        data_dir,
+        cluster_id,
+        voters,
+        TEST_ELECTION_TIMEOUT,
+        crate::kraft::Activation::default(),
+    )
+}
+
+pub fn open_test_controller_with(
+    data_dir: std::path::PathBuf,
+    cluster_id: uuid::Uuid,
+    voters: VoterSet,
+    election_timeout: krabka_units::Time,
+    activation: crate::kraft::Activation,
+) -> Result<KraftController, RaftError> {
     KraftController::open(
         data_dir,
         NodeId(1),
         cluster_id,
         uuid::Uuid::nil(),
         voters,
-        TEST_ELECTION_TIMEOUT,
+        election_timeout,
         None,
         ControllerFetchMissLimit::default(),
         MetadataRaftCommandQueueCapacity::default(),
@@ -156,7 +172,7 @@ pub fn open_test_controller(
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
-        crate::kraft::Activation::default(),
+        activation,
     )
 }
 

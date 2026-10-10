@@ -15,6 +15,36 @@ use crate::{
     },
 };
 
+struct SweepFixture {
+    liveness: Arc<ControllerLivenessState>,
+    metrics: crate::metrics::BrokerMetrics,
+    recovery: crate::unclean_recovery::UncleanRecoveryHandle,
+    state: LivenessTickState,
+}
+
+impl SweepFixture {
+    async fn new(dead: &[u64], alive: &[u64]) -> Self {
+        Self {
+            liveness: liveness_with_dead(dead, alive).await,
+            metrics: crate::metrics::BrokerMetrics::new(),
+            recovery: recovery_handle_for_tests(),
+            state: LivenessTickState::default(),
+        }
+    }
+
+    async fn sweep(&mut self, controller: &Arc<dyn crate::metadata_source::MetadataSource>) {
+        sweep_dead_leaders(
+            controller,
+            NodeId(7),
+            &self.liveness,
+            &self.metrics,
+            &self.recovery,
+            &mut self.state,
+        )
+        .await;
+    }
+}
+
 #[tokio::test]
 async fn on_broker_dead_submits_failover_when_this_controller_is_leader() {
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
@@ -211,20 +241,8 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         let img = img_with_partition("t", 0, case.leader, &[1, 2, 3], case.isr);
         let source = fake_source(img, case.controller_leader);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
-        let liveness = liveness_with_dead(case.dead, case.alive).await;
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let recovery = recovery_handle_for_tests();
-        let mut state = LivenessTickState::default();
-
-        sweep_dead_leaders(
-            &controller,
-            NodeId(7),
-            &liveness,
-            &metrics,
-            &recovery,
-            &mut state,
-        )
-        .await;
+        let mut fixture = SweepFixture::new(case.dead, case.alive).await;
+        fixture.sweep(&controller).await;
 
         let batches = source.submitted();
         let submitted = batches
@@ -247,21 +265,10 @@ async fn sweep_walks_the_image_once_per_change_while_a_dead_broker_stays_resolve
     register_brokers(&mut img, &[1, 2, 3]);
     let source = fake_source(img, Some(NodeId(7)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
-    let liveness = liveness_with_dead(&[1], &[2, 3]).await;
-    let metrics = crate::metrics::BrokerMetrics::new();
-    let recovery = recovery_handle_for_tests();
-    let mut state = LivenessTickState::default();
-
-    sweep_dead_leaders(
-        &controller,
-        NodeId(7),
-        &liveness,
-        &metrics,
-        &recovery,
-        &mut state,
-    )
-    .await;
-    let memo = state
+    let mut fixture = SweepFixture::new(&[1], &[2, 3]).await;
+    fixture.sweep(&controller).await;
+    let memo = fixture
+        .state
         .clean_sweep
         .as_ref()
         .expect("a clean sweep is remembered");
@@ -270,15 +277,7 @@ async fn sweep_walks_the_image_once_per_change_while_a_dead_broker_stays_resolve
     assert!(source.submitted().is_empty());
 
     // Broker 1 comes back: the dead set changes and the memo is dropped.
-    liveness.record_heartbeat(1).await;
-    sweep_dead_leaders(
-        &controller,
-        NodeId(7),
-        &liveness,
-        &metrics,
-        &recovery,
-        &mut state,
-    )
-    .await;
-    assert!(state.clean_sweep.is_none());
+    fixture.liveness.record_heartbeat(1).await;
+    fixture.sweep(&controller).await;
+    assert!(fixture.state.clean_sweep.is_none());
 }

@@ -39,16 +39,12 @@ async fn wait_for_controller_leader_other_than(
     victim: krabka_broker::NodeId,
 ) {
     for (h, _, _) in cluster {
-        let mut rx = h.watch_leader_for_test();
-        tokio::time::timeout(
-            Duration::from_secs(30),
-            rx.wait_for(
-                |l| matches!(l, Some(id) if *id != krabka_broker::NodeId(0) && *id != victim),
-            ),
+        support::await_controller_replacement(
+            h,
+            victim,
+            "no new controller leader within 30s after kill",
         )
-        .await
-        .expect("no new controller leader within 30s after kill")
-        .expect("leader channel closed");
+        .await;
     }
 }
 

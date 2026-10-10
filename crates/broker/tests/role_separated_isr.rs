@@ -44,12 +44,9 @@ impl RoleSeparated {
 /// the two broker-only nodes and waits until both are registered.
 async fn start_role_separated() -> RoleSeparated {
     const NODES: usize = 3;
-    let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
-        support::bind_and_hold_ports(NODES).await;
-    let voters = [(1u64, controller_addrs[0])];
-    let topology = support::RoleTopology::new(&client_addrs, &controller_addrs, &voters);
-    let mut data_listeners = client_listeners.into_iter();
-    let mut ctrl_listeners = controller_listeners.into_iter();
+    let (endpoints, mut data_listeners, mut ctrl_listeners) =
+        support::single_controller_endpoints(NODES).await;
+    let topology = endpoints.topology();
     let mut dirs = Vec::with_capacity(NODES);
 
     let ctrl_dir = TempDir::new().unwrap();

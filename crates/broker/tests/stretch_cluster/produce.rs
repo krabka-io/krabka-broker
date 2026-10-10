@@ -74,3 +74,19 @@ pub async fn initialize_topic(addr: &str, handles: [&krabka_broker::BrokerHandle
     .await;
     topic_id
 }
+
+/// Initialize the three sites in their configured node order.
+pub async fn initialize_sites<'a>(
+    addr: String,
+    handle: impl Fn(usize) -> &'a krabka_broker::BrokerHandle,
+) -> WireUuid {
+    initialize_topic(
+        &addr,
+        [
+            handle(crate::NODE_A),
+            handle(crate::NODE_B),
+            handle(crate::NODE_C),
+        ],
+    )
+    .await
+}

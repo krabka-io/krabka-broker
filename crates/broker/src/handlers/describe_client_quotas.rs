@@ -203,7 +203,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use krabka_metadata::{ClientQuotaRecord, MetadataRecord, QuotaEntity};
+    use krabka_metadata::MetadataRecord;
 
     use super::*;
     use crate::{broker::BrokerHandle, test_support::DenyAll};
@@ -247,17 +247,9 @@ mod tests {
         handle
             .broker_arc_for_test()
             .controller
-            .submit_change(vec![MetadataRecord::V1ClientQuota(ClientQuotaRecord {
-                entity: entity
-                    .into_iter()
-                    .map(|(entity_type, entity_name)| QuotaEntity {
-                        entity_type: entity_type.into(),
-                        entity_name: entity_name.map(Into::into),
-                    })
-                    .collect(),
-                config_key: key.into(),
-                config_value: Some(value),
-            })])
+            .submit_change(vec![MetadataRecord::V1ClientQuota(
+                crate::quota::test_support::quota_record(entity, key, value),
+            )])
             .await
             .expect("seed quota");
     }

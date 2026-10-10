@@ -162,16 +162,24 @@ impl BarrierCoordinator {
             self.config.max_retained_cuts,
             self.config.min_injection_interval,
         )?;
+        let mut entry = self.lock_defined_group(group).await?;
+
+        self.persist_group_definition(group, &mut entry, spec).await
+    }
+
+    /// Keep the definition check under the same group lock as the ensuing mutation.
+    async fn lock_defined_group(
+        &self,
+        group: &str,
+    ) -> Result<tokio::sync::OwnedMutexGuard<GroupEntry>, BarrierError> {
         self.require_coordinator(group).await?;
-        let handle = self.live_entry(group)?;
-        let mut entry = handle.lock().await;
+        let entry = self.live_entry(group)?.lock_owned().await;
         if !entry.is_defined() {
             return Err(BarrierError::UnknownGroup {
                 group: group.to_owned(),
             });
         }
-
-        self.persist_group_definition(group, &mut entry, spec).await
+        Ok(entry)
     }
 
     /// Persist the replacement before publishing it to the locked group entry.
@@ -212,14 +220,7 @@ impl BarrierCoordinator {
     /// group, [`BarrierError::UnknownGroup`] when no group of that name is
     /// live, and [`BarrierError::Persist`] when the append fails.
     pub(crate) async fn delete_group(&self, group: &str) -> Result<(), BarrierError> {
-        self.require_coordinator(group).await?;
-        let handle = self.live_entry(group)?;
-        let mut entry = handle.lock().await;
-        if !entry.is_defined() {
-            return Err(BarrierError::UnknownGroup {
-                group: group.to_owned(),
-            });
-        }
+        let mut entry = self.lock_defined_group(group).await?;
 
         let mut records = vec![(RecordKey::group(group), None)];
         for epoch in entry.cuts.keys().copied() {

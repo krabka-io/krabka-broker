@@ -15,7 +15,9 @@ use crate::{
     ERR_TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
     acl_admin::create_topic_as_admin,
     client_api::{drive_init_producer_id_as_plain, drive_join_group_as_plain, join_group_request},
-    polling::{retry_join_group_until_allowed, retry_metadata_until_topic_visible},
+    polling::{
+        named_metadata_as_alice, retry_join_group_until_allowed, retry_metadata_until_topic_visible,
+    },
     support::transactions::init_producer_request,
 };
 
@@ -74,15 +76,7 @@ async fn metadata_explicit_deny_on_named_topic() {
     // Ask Metadata for t2 *by name*. The named-topic path returns an
     // error row instead of silently filtering. Use the retry helper so
     // we don't race the raft commit-then-apply gap on the seeded ACL.
-    let resp = retry_metadata_until_topic_visible(
-        addr,
-        "alice",
-        b"wonderland",
-        "t2",
-        Some(vec!["t2".to_string()]),
-    )
-    .await
-    .expect("Metadata must round-trip");
+    let resp = named_metadata_as_alice(addr, "t2").await;
     handle.shutdown().await;
 
     assert!(resp.topics.len() == 1, "one topic row in response");

@@ -179,3 +179,15 @@ pub(crate) async fn await_all_rlmm_active(b1: &BrokerHandle, b2: &BrokerHandle, 
     })
     .await;
 }
+
+/// Connect the admin only once registration and the topic-backed RLMM are ready.
+pub(crate) async fn ready_admin(
+    brokers: [&BrokerHandle; 3],
+    client_id: &str,
+) -> krabka_client_core::Client {
+    let [b1, b2, b3] = brokers;
+    await_all_brokers_registered(b1, b2, b3).await;
+    await_all_rlmm_active(b1, b2, b3).await;
+    let bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
+    support::client::connect_owned(&bootstrap, client_id, "admin client").await
+}

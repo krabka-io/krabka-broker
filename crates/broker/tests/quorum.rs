@@ -16,8 +16,6 @@
 // ids, and topics are built with `..Default::default()`. Hoisting these into
 // named helpers would obscure the per-test narrative.
 
-use std::time::Duration;
-
 use assert2::assert;
 use krabka_broker::{BrokerConfig, BrokerHandle};
 
@@ -45,20 +43,22 @@ async fn wait_for_leader(cluster: &[(BrokerHandle, BrokerConfig, TempDir)]) {
     }
 }
 
+fn controller_leaders(
+    cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
+) -> std::collections::HashSet<krabka_broker::NodeId> {
+    cluster
+        .iter()
+        .filter_map(|(handle, _, _)| handle.controller_leader_id())
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_node_cluster_elects_leader() {
     let _g = cluster_lock().lock().await;
     let cluster = support::start_n_node_with_retry(3).await;
     // Each node's controller leader channel converges to the same elected id.
-    for (h, _, _) in &cluster {
-        h.wait_until_controller_leader().await;
-    }
-    let mut leaders = std::collections::HashSet::new();
-    for (h, _, _) in &cluster {
-        if let Some(l) = h.controller_leader_id() {
-            leaders.insert(l);
-        }
-    }
+    wait_for_leader(&cluster).await;
+    let leaders = controller_leaders(&cluster);
     assert!(
         leaders.len() == 1 && !leaders.contains(&krabka_broker::NodeId(0)),
         "leader not converged: {leaders:?}"
@@ -118,21 +118,14 @@ async fn leader_kill_recovers() {
     // Survivors elect a new leader (id != killed). Await each survivor's leader
     // channel, then assert convergence to a single new leader.
     for (h, _, _) in &cluster {
-        let mut rx = h.watch_leader_for_test();
-        tokio::time::timeout(
-            Duration::from_secs(30),
-            rx.wait_for(|l| matches!(l, Some(id) if *id != krabka_broker::NodeId(0) && *id != killed_node_id)),
+        support::await_controller_replacement(
+            h,
+            killed_node_id,
+            "no new leader within 30s after kill",
         )
-        .await
-        .expect("no new leader within 30s after kill")
-        .expect("leader channel closed");
+        .await;
     }
-    let mut leaders = std::collections::HashSet::new();
-    for (h, _, _) in &cluster {
-        if let Some(l) = h.controller_leader_id() {
-            leaders.insert(l);
-        }
-    }
+    let leaders = controller_leaders(&cluster);
     assert!(
         leaders.len() == 1
             && !leaders.contains(&krabka_broker::NodeId(0))

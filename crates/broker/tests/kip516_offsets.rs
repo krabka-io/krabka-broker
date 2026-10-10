@@ -93,13 +93,7 @@ async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
     const UNKNOWN_TOPIC_ID: i16 = 100;
 
     let p = start().await;
-    let cases = [
-        (
-            "non-zero id",
-            WireUuid(uuid::Uuid::from_u128(0xabad_1dea).into_bytes()),
-        ),
-        ("zero id", WireUuid::ZERO),
-    ];
+    let cases = support::topics::unresolved_topic_ids(0xabad_1dea);
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
     for (label, topic_id) in cases {

@@ -74,3 +74,12 @@ pub fn session_fetch_request(
         ..request
     }
 }
+
+/// Check a successful partition's v2 record count against the caller's expected count.
+pub fn check_record_count(
+    partition: &krabka_protocol::owned::fetch_response::PartitionData,
+    expected: usize,
+) {
+    assert2::assert!(partition.error_code == 0);
+    assert2::assert!(crate::support::records::record_count(partition.records.as_ref()) == expected);
+}

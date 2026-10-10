@@ -261,6 +261,20 @@ mod tests {
             .await
     }
 
+    async fn check_remote_placement(
+        registry: &PartitionRegistry,
+        controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+        remote: MockRemoteMarkerWriter,
+        metrics: &BrokerBarrierMetrics,
+        config: &BarrierConfig,
+        offset: Offset,
+    ) {
+        let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
+        let fanout = test_fanout(registry, controller, Some(&remote), metrics, config);
+        let placed = place_one(fanout).await;
+        assert!(placed == maplit::btreemap! {at("orders", 0) => offset});
+    }
+
     macro_rules! remote_fixture {
         ($registry:ident, $controller:ident, $metrics:ident, $config:ident = $configuration:expr) => {
             let $registry = PartitionRegistry::new();
@@ -341,11 +355,15 @@ mod tests {
                 assert!(leader == NodeId(2));
                 Ok(placements(targets, Offset(77)))
             });
-        let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
-
-        let fanout = test_fanout(&registry, &controller, Some(&remote), &metrics, &config);
-        let placed = place_one(fanout).await;
-        assert!(placed == maplit::btreemap! {at("orders", 0) => Offset(77)});
+        check_remote_placement(
+            &registry,
+            &controller,
+            remote,
+            &metrics,
+            &config,
+            Offset(77),
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -405,11 +423,15 @@ mod tests {
                 }
                 Ok(placements(targets, Offset(12)))
             });
-        let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
-
-        let fanout = test_fanout(&registry, &controller, Some(&remote), &metrics, &config);
-        let placed = place_one(fanout).await;
-        assert!(placed == maplit::btreemap! {at("orders", 0) => Offset(12)});
+        check_remote_placement(
+            &registry,
+            &controller,
+            remote,
+            &metrics,
+            &config,
+            Offset(12),
+        )
+        .await;
     }
 
     #[tokio::test]

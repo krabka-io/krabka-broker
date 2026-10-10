@@ -400,28 +400,6 @@ pub struct RuntimeFileConfig {
     /// task. Kafka's `remote.log.manager.task.interval.ms`.
     pub remote_log_manager_interval: Option<Time>,
 
-    /// Default share-group session timeout, Kafka's
-    /// `group.share.session.timeout.ms`.
-    pub share_group_session_timeout: Option<Time>,
-    /// Default share-group heartbeat interval, Kafka's
-    /// `group.share.heartbeat.interval.ms`.
-    pub share_group_heartbeat_interval: Option<Time>,
-    /// Lower bound on the share-group session timeout, and on a group's
-    /// `share.session.timeout.ms`, Kafka's
-    /// `group.share.min.session.timeout.ms`.
-    pub share_group_min_session_timeout: Option<Time>,
-    /// Upper bound on the share-group session timeout, and on a group's
-    /// `share.session.timeout.ms`, Kafka's
-    /// `group.share.max.session.timeout.ms`.
-    pub share_group_max_session_timeout: Option<Time>,
-    /// Lower bound on the share-group heartbeat interval, and on a group's
-    /// `share.heartbeat.interval.ms`, Kafka's
-    /// `group.share.min.heartbeat.interval.ms`.
-    pub share_group_min_heartbeat_interval: Option<Time>,
-    /// Upper bound on the share-group heartbeat interval, and on a group's
-    /// `share.heartbeat.interval.ms`, Kafka's
-    /// `group.share.max.heartbeat.interval.ms`.
-    pub share_group_max_heartbeat_interval: Option<Time>,
     /// Maximum number of members in one share group, Kafka's
     /// `group.share.max.size`: from 1 to 1000.
     pub share_group_max_size: Option<usize>,

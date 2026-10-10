@@ -12,7 +12,7 @@ use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use tempfile::TempDir;
 
 use crate::{
-    NODE_A, NODE_B, NODE_C,
+    NODE_A,
     profile::{apply_stretch_config, wait_for_stretch_metadata},
     support,
     support::relay::SiteLink,
@@ -155,14 +155,7 @@ impl LinkedCluster {
 /// Bring a relayed cluster up with the topic and all three replicas in sync.
 pub async fn linked_cluster_with_topic() -> (LinkedCluster, WireUuid) {
     let cluster = LinkedCluster::start().await;
-    let topic_id = crate::produce::initialize_topic(
-        &cluster.addr(NODE_A),
-        [
-            cluster.handle(NODE_A),
-            cluster.handle(NODE_B),
-            cluster.handle(NODE_C),
-        ],
-    )
-    .await;
+    let topic_id =
+        crate::produce::initialize_sites(cluster.addr(NODE_A), |node| cluster.handle(node)).await;
     (cluster, topic_id)
 }

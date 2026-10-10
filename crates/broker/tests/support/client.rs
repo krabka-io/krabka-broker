@@ -110,11 +110,22 @@ pub async fn create_topic_with(
     replication_factor: i16,
     timeout_ms: i32,
 ) -> WireUuid {
+    create_topic_spec(
+        client,
+        creatable_topic(topic, partitions, replication_factor),
+        timeout_ms,
+    )
+    .await
+}
+
+/// Create the caller's complete topic specification and return its wire identity.
+pub async fn create_topic_spec(
+    client: &Client,
+    topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
+    timeout_ms: i32,
+) -> WireUuid {
     let resp = client
-        .send(create_topic_request(
-            creatable_topic(topic, partitions, replication_factor),
-            timeout_ms,
-        ))
+        .send(create_topic_request(topic, timeout_ms))
         .await
         .expect("CreateTopics");
     assert!(
@@ -299,4 +310,13 @@ async fn configured_broker(config: BrokerConfig, context: Option<&str>) -> Broke
         Some(context) => result.expect(context),
         None => result.unwrap(),
     }
+}
+
+/// A standalone broker with its default admin client and a created topic.
+pub async fn standalone_topic(topic: &str) -> (tempfile::TempDir, BrokerHandle, String, Client) {
+    let (dir, broker) = super::standalone_broker().await;
+    let bootstrap = broker.listen_addr().to_string();
+    let admin = connect_client(&bootstrap, None).await;
+    create_topic(&admin, topic, 1).await;
+    (dir, broker, bootstrap, admin)
 }

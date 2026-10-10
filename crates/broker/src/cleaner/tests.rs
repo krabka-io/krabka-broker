@@ -6,6 +6,7 @@ use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_metadata::NodeId;
 use krabka_units::secs;
+use qubit_clock::Timer;
 
 use super::*;
 use crate::{
@@ -108,10 +109,8 @@ async fn spawn_on(
     usize,
 ) {
     let registry = Arc::new(PartitionRegistry::new());
-    let partition =
-        compactable_partition(dir, topic, 0, NodeId(7), krabka_log::CleanupPolicy::Compact).await;
-    let before = record_count(&partition);
-    registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
+    let (partition, before) =
+        super::test_support::register_compactable(dir, &registry, topic).await;
     let task = tokio::spawn(run(
         registry,
         CleanerConfig {

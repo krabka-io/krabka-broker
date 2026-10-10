@@ -322,6 +322,30 @@ mod tests {
         out
     }
 
+    type DecodedFrame = (
+        ApiKey,
+        ApiVersion,
+        CorrelationId,
+        Option<String>,
+        Bytes,
+        bool,
+    );
+
+    async fn decode_frame(
+        frame: Vec<u8>,
+        router: Option<&dyn crate::ControllerAdminRouter>,
+    ) -> DecodedFrame {
+        let (mut client, mut server) = tokio::io::duplex(128);
+        let writer = tokio::spawn(async move {
+            client.write_all(&frame).await.unwrap();
+        });
+        let request = super::read_one_request(&mut server, router, MAX_REQUEST_BYTES)
+            .await
+            .expect("decode");
+        writer.await.unwrap();
+        request
+    }
+
     fn request_frame(
         api_key: ApiKey,
         api_version: ApiVersion,
@@ -329,15 +353,16 @@ mod tests {
         client_id: &str,
         body: &[u8],
     ) -> Vec<u8> {
-        let mut frame = bytes::BytesMut::new();
-        frame.put_i16(api_key.get());
-        frame.put_i16(api_version.get());
-        frame.put_i32(correlation_id);
-        frame.put_i16(i16::try_from(client_id.len()).unwrap());
-        frame.put_slice(client_id.as_bytes());
-        frame.put_u8(0);
-        frame.put_slice(body);
-        length_prefixed(&frame)
+        let mut tagged_body = vec![0];
+        tagged_body.extend_from_slice(body);
+        raw_request_frame(
+            api_key,
+            api_version,
+            correlation_id,
+            i16::try_from(client_id.len()).unwrap(),
+            client_id.as_bytes(),
+            &tagged_body,
+        )
     }
 
     fn raw_request_frame(
@@ -400,15 +425,8 @@ mod tests {
             ),
         ];
         for (case, frame, want_body) in cases {
-            let (mut client, mut server) = tokio::io::duplex(128);
-            let writer = tokio::spawn(async move {
-                client.write_all(&frame).await.unwrap();
-            });
-
             let (api_key, api_version, correlation_id, client_id, body, flexible) =
-                super::read_one_request(&mut server, None, MAX_REQUEST_BYTES)
-                    .await
-                    .expect("decode");
+                decode_frame(frame, None).await;
 
             check!(
                 (
@@ -432,7 +450,6 @@ mod tests {
                 ),
                 "case: {case}"
             );
-            writer.await.unwrap();
         }
     }
 
@@ -603,15 +620,8 @@ mod tests {
         ];
 
         for (case, want_key, want_version, frame, want_flexible) in cases {
-            let (mut client, mut server) = tokio::io::duplex(128);
-            let writer = tokio::spawn(async move {
-                client.write_all(&frame).await.unwrap();
-            });
-
             let (api_key, api_version, correlation_id, decoded_client_id, body, flexible) =
-                super::read_one_request(&mut server, Some(&router), MAX_REQUEST_BYTES)
-                    .await
-                    .expect("decode");
+                decode_frame(frame, Some(&router)).await;
 
             check!(
                 (
@@ -631,7 +641,6 @@ mod tests {
                 ),
                 "case: {case}"
             );
-            writer.await.unwrap();
         }
     }
 }

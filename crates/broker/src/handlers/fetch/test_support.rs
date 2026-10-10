@@ -99,3 +99,15 @@ pub(super) fn expected_refused_partition(
         ..Default::default()
     }
 }
+
+/// Default partition-zero row shared by sessionless fetch fixtures.
+pub(super) fn request_partition(
+    fetch_offset: i64,
+) -> krabka_protocol::owned::fetch_request::FetchPartition {
+    krabka_protocol::owned::fetch_request::FetchPartition {
+        partition: 0,
+        fetch_offset,
+        partition_max_bytes: 1_048_576,
+        ..Default::default()
+    }
+}

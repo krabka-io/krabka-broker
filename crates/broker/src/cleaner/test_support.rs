@@ -2,7 +2,7 @@
 //! whose log holds compactable duplicates, and the record count that shows
 //! whether a sweep compacted one.
 
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
@@ -126,22 +126,15 @@ async fn open_compactable_partition(
     let mut active = keyed_batch(12, b"active-key", b"active");
     log.append(&mut active).expect("append active batch");
 
-    let part = crate::broker::spawn_partition(
-        topic.to_string(),
+    crate::test_support::committed_partition(
+        root.path(),
+        topic,
         PartitionIndex(partition_id),
-        root.path().to_path_buf(),
+        leader,
         log,
         log_dir_status,
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    );
-    part.current_leader.store(leader.0, Ordering::Relaxed);
-    // A replica that has caught up: compaction is bounded at the high
-    // watermark, and `set_follower_hw` clamps to the local log end, so this
-    // leaves the whole log committed. It is also how a real follower learns
-    // the watermark — from the leader's Fetch response.
-    part.set_follower_hw(krabka_log::Offset(i64::MAX)).await;
-    part
+    )
+    .await
 }
 
 pub(super) fn record_count(partition: &Partition) -> usize {
@@ -152,4 +145,23 @@ pub(super) fn record_count(partition: &Partition) -> usize {
         .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
         .expect("read partition log");
     read.batches.iter().map(|batch| batch.records.len()).sum()
+}
+
+/// Register a compactable partition and capture its original record count.
+pub(super) async fn register_compactable(
+    root: &TempDir,
+    registry: &crate::partition_registry::PartitionRegistry,
+    topic: &str,
+) -> (Arc<Partition>, usize) {
+    let partition = compactable_partition(
+        root,
+        topic,
+        0,
+        NodeId(7),
+        krabka_log::CleanupPolicy::Compact,
+    )
+    .await;
+    let before = record_count(&partition);
+    registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
+    (partition, before)
 }
