@@ -361,12 +361,19 @@ mod tests {
         fixture::{RunSetup, empty_run as run},
     };
 
-    fn sample(t: u64, producer_rate: Frequency) -> Sample {
+    fn sample(t: TimeOffsetMs, producer_rate: Frequency) -> Sample {
         Sample {
-            t_offset_ms: TimeOffsetMs(t),
+            t_offset_ms: t,
             producer_rate,
             ..Sample::default()
         }
+    }
+
+    fn producer_series(series: &[TsSeries], stack: Stack) -> &TsSeries {
+        series
+            .iter()
+            .find(|s| s.metric == "producer_msgs_per_sec" && s.stack == stack)
+            .expect("producer series present")
     }
 
     #[test]
@@ -533,14 +540,14 @@ mod tests {
                 scenario: "sat",
                 topology: topology(12),
                 producer_rate: Frequency::ZERO,
-                samples: vec![sample(0, per_sec(100))],
+                samples: vec![sample(TimeOffsetMs(0), per_sec(100))],
                 ..Default::default()
             }),
             run(RunSetup {
                 scenario: "sat",
                 topology: topology(100),
                 producer_rate: Frequency::ZERO,
-                samples: vec![sample(0, per_sec(900))],
+                samples: vec![sample(TimeOffsetMs(0), per_sec(900))],
                 ..Default::default()
             }),
         ];
@@ -563,7 +570,10 @@ mod tests {
             run(RunSetup {
                 scenario: "sat",
                 producer_rate: Frequency::ZERO,
-                samples: vec![sample(0, per_sec(1000)), sample(2000, per_sec(2000))],
+                samples: vec![
+                    sample(TimeOffsetMs(0), per_sec(1000)),
+                    sample(TimeOffsetMs(2000), per_sec(2000)),
+                ],
                 broker_samples: vec![BrokerSample {
                     t_offset_ms: TimeOffsetMs(0),
                     cpu_cores: 2.0,
@@ -574,7 +584,10 @@ mod tests {
             run(RunSetup {
                 scenario: "sat",
                 producer_rate: Frequency::ZERO,
-                samples: vec![sample(0, per_sec(3000)), sample(2000, per_sec(4000))],
+                samples: vec![
+                    sample(TimeOffsetMs(0), per_sec(3000)),
+                    sample(TimeOffsetMs(2000), per_sec(4000)),
+                ],
                 broker_samples: vec![BrokerSample {
                     t_offset_ms: TimeOffsetMs(0),
                     cpu_cores: 4.0,
@@ -584,10 +597,7 @@ mod tests {
             }),
         ];
         let series = averaged_timeseries(&runs);
-        let prod = series
-            .iter()
-            .find(|s| s.metric == "producer_msgs_per_sec" && s.stack == Stack::Krabka)
-            .expect("producer series present");
+        let prod = producer_series(&series, Stack::Krabka);
         assert2::assert!(
             prod.points
                 == vec![
@@ -630,22 +640,22 @@ mod tests {
                 scenario: "sat",
                 stack: Stack::Kafka,
                 producer_rate: Frequency::ZERO,
-                samples: vec![sample(0, per_sec(10)), sample(2000, per_sec(20))],
+                samples: vec![
+                    sample(TimeOffsetMs(0), per_sec(10)),
+                    sample(TimeOffsetMs(2000), per_sec(20)),
+                ],
                 ..Default::default()
             }),
             run(RunSetup {
                 scenario: "sat",
                 stack: Stack::Kafka,
                 producer_rate: Frequency::ZERO,
-                samples: vec![sample(0, per_sec(30))],
+                samples: vec![sample(TimeOffsetMs(0), per_sec(30))],
                 ..Default::default()
             }),
         ];
         let series = averaged_timeseries(&runs);
-        let prod = series
-            .iter()
-            .find(|s| s.metric == "producer_msgs_per_sec" && s.stack == Stack::Kafka)
-            .expect("series");
+        let prod = producer_series(&series, Stack::Kafka);
         assert2::assert!(
             prod.points[0]
                 == TsPoint {

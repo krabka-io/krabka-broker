@@ -290,7 +290,7 @@ mod tests {
             STATE_TOPIC,
             coordinator::{
                 GroupDescription, RetainedCut,
-                test_support::{Fixture, GROUP, spec},
+                test_support::{Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec},
             },
             error::BarrierError,
             persistence::{
@@ -305,7 +305,14 @@ mod tests {
     async fn recovery_rebuilds_the_group_and_its_cuts() {
         let fixture = Fixture::new();
         let coordinator = fixture
-            .coordinator_with_group(GROUP, spec(&["orders", "payments"], None, 8))
+            .coordinator_with_group(
+                GROUP,
+                spec(GroupSpecSetup {
+                    topics: &["orders", "payments"],
+                    retained_cuts: RetainedCutCount(8),
+                    ..Default::default()
+                }),
+            )
             .await;
         let first = coordinator
             .trigger_injection(GROUP, None)
@@ -353,9 +360,27 @@ mod tests {
         assert!(third.epoch == 3);
     }
 
+    async fn recover_one_cut(
+        fixture: &Fixture,
+        epoch: InjectionEpoch,
+    ) -> (crate::barrier::coordinator::BarrierCoordinator, RetainedCut) {
+        let replayed = fixture.recovered().await;
+        let mut cuts = replayed.list_cuts(GROUP).await.expect("the group is live");
+        assert!(cuts.len() == 1);
+        let cut = cuts.remove(0);
+        assert!(cut.epoch == epoch.0);
+        (replayed, cut)
+    }
+
+    #[derive(Clone, Copy)]
+    struct InjectionEpoch(i64);
+
+    #[derive(Clone, Copy)]
+    struct BarrierPartitionCount(i32);
+
     async fn append_interrupted_start(
         coordinator: &crate::barrier::coordinator::BarrierCoordinator,
-        epoch: i64,
+        epoch: InjectionEpoch,
         start: &InjectionStartValue,
         context: &str,
     ) {
@@ -363,7 +388,7 @@ mod tests {
             .append_records(
                 GROUP,
                 vec![(
-                    RecordKey::injection_start(GROUP, epoch),
+                    RecordKey::injection_start(GROUP, epoch.0),
                     Some(encode_injection_start(start).expect("encodes").into()),
                 )],
             )
@@ -371,13 +396,13 @@ mod tests {
             .expect(context);
     }
 
-    fn interrupted_injection(partition_count: i32) -> InjectionStartValue {
+    fn interrupted_injection(partition_count: BarrierPartitionCount) -> InjectionStartValue {
         InjectionStartValue {
             coordinator_epoch: 3,
             triggered_at: 1_000,
             targets: vec![crate::barrier::persistence::TopicTarget {
                 topic: "orders".to_owned(),
-                partition_count,
+                partition_count: partition_count.0,
             }],
         }
     }
@@ -386,22 +411,25 @@ mod tests {
     async fn recovery_finalises_an_interrupted_injection_as_partial() {
         let fixture = Fixture::new();
         let coordinator = fixture
-            .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+            .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
             .await;
 
         // A coordinator that crashed after the injection-start record leaves
         // exactly this behind.
-        let start = interrupted_injection(2);
-        append_interrupted_start(&coordinator, 1, &start, "the injection-start record lands").await;
+        let start = interrupted_injection(BarrierPartitionCount(2));
+        append_interrupted_start(
+            &coordinator,
+            InjectionEpoch(1),
+            &start,
+            "the injection-start record lands",
+        )
+        .await;
 
-        let replayed = fixture.recovered().await;
-        let cuts = replayed.list_cuts(GROUP).await.expect("the group is live");
-        assert!(cuts.len() == 1);
-        assert!(cuts[0].epoch == 1);
-        assert!(cuts[0].cut.status == CutStatus::Partial);
-        assert!(cuts[0].cut.triggered_at == 1_000);
+        let (replayed, cut) = recover_one_cut(&fixture, InjectionEpoch(1)).await;
+        assert!(cut.cut.status == CutStatus::Partial);
+        assert!(cut.cut.triggered_at == 1_000);
         assert!(
-            cuts[0].cut.missing
+            cut.cut.missing
                 == vec![
                     MissingPartition {
                         topic: "orders".to_owned(),
@@ -452,7 +480,7 @@ mod tests {
         ] {
             let fixture = Fixture::new();
             let coordinator = fixture
-                .coordinator_with_group(group, spec(&["orders"], None, 4))
+                .coordinator_with_group(group, spec(GroupSpecSetup::default()))
                 .await;
             coordinator
                 .append_records(
@@ -483,22 +511,19 @@ mod tests {
     async fn recovery_consumes_the_maximum_epoch_without_wrapping() {
         let fixture = Fixture::new();
         let coordinator = fixture
-            .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+            .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
             .await;
-        let start = interrupted_injection(1);
+        let start = interrupted_injection(BarrierPartitionCount(1));
         append_interrupted_start(
             &coordinator,
-            i64::MAX,
+            InjectionEpoch(i64::MAX),
             &start,
             "the maximum-epoch start lands",
         )
         .await;
 
-        let replayed = fixture.recovered().await;
-        let cuts = replayed.list_cuts(GROUP).await.expect("the group is live");
-        assert!(cuts.len() == 1);
-        assert!(cuts[0].epoch == i64::MAX);
-        assert!(cuts[0].cut.status == CutStatus::Partial);
+        let (replayed, cut) = recover_one_cut(&fixture, InjectionEpoch(i64::MAX)).await;
+        assert!(cut.cut.status == CutStatus::Partial);
         assert!(matches!(
             replayed.trigger_injection(GROUP, None).await,
             Err(BarrierError::EpochExhausted { .. })
@@ -510,11 +535,17 @@ mod tests {
         let fixture = Fixture::new();
         let writer = fixture.coordinator().await;
         writer
-            .create_group(GROUP, spec(&["orders"], None, 4))
+            .create_group(GROUP, spec(GroupSpecSetup::default()))
             .await
             .expect("the group is created");
-        let start = interrupted_injection(1);
-        append_interrupted_start(&writer, 1, &start, "the injection-start record lands").await;
+        let start = interrupted_injection(BarrierPartitionCount(1));
+        append_interrupted_start(
+            &writer,
+            InjectionEpoch(1),
+            &start,
+            "the injection-start record lands",
+        )
+        .await;
 
         let recovering = fixture.coordinator().await;
         for (group, entry) in recovering.replay_led_partitions().await {

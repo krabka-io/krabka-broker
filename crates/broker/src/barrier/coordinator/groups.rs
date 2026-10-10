@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use crate::{
         barrier::{
-            coordinator::test_support::{Fixture, GROUP, spec},
+            coordinator::test_support::{Fixture, GROUP, GroupSpecSetup, spec},
             test_support::topic_records,
         },
         coordinator::unified::persistence::MAX_STRING_BYTES,
@@ -319,7 +319,13 @@ mod tests {
         let fixture = Fixture::new();
         let coordinator = fixture.coordinator().await;
         let definition = coordinator
-            .create_group(GROUP, spec(&["orders", "payments"], None, 4))
+            .create_group(
+                GROUP,
+                spec(GroupSpecSetup {
+                    topics: &["orders", "payments"],
+                    ..Default::default()
+                }),
+            )
             .await
             .expect("the group is created");
 
@@ -351,7 +357,13 @@ mod tests {
         let group = "g".repeat(MAX_STRING_BYTES);
         let topic = "t".repeat(MAX_STRING_BYTES);
         let definition = coordinator
-            .create_group(&group, spec(&["orders", &topic], None, 4))
+            .create_group(
+                &group,
+                spec(GroupSpecSetup {
+                    topics: &["orders", &topic],
+                    ..Default::default()
+                }),
+            )
             .await
             .expect("the group is created");
         let outcome = coordinator
@@ -383,7 +395,7 @@ mod tests {
         let coordinator = fixture.coordinator().await;
         let long = "n".repeat(MAX_STRING_BYTES + 1);
         coordinator
-            .create_group(GROUP, spec(&["orders"], None, 4))
+            .create_group(GROUP, spec(GroupSpecSetup::default()))
             .await
             .expect("the group is created");
         let before = coordinator.groups.len();
@@ -392,19 +404,31 @@ mod tests {
             (
                 "group name on create",
                 coordinator
-                    .create_group(&long, spec(&["orders"], None, 4))
+                    .create_group(&long, spec(GroupSpecSetup::default()))
                     .await,
             ),
             (
                 "topic name on create",
                 coordinator
-                    .create_group("other", spec(&["orders", &long], None, 4))
+                    .create_group(
+                        "other",
+                        spec(GroupSpecSetup {
+                            topics: &["orders", &long],
+                            ..Default::default()
+                        }),
+                    )
                     .await,
             ),
             (
                 "topic name on update",
                 coordinator
-                    .update_group(GROUP, spec(&[&long], None, 4))
+                    .update_group(
+                        GROUP,
+                        spec(GroupSpecSetup {
+                            topics: &[&long],
+                            ..Default::default()
+                        }),
+                    )
                     .await,
             ),
         ];
@@ -428,10 +452,16 @@ mod tests {
     async fn a_second_create_of_the_same_name_is_refused() {
         let fixture = Fixture::new();
         let coordinator = fixture
-            .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+            .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
             .await;
         let again = coordinator
-            .create_group(GROUP, spec(&["payments"], None, 4))
+            .create_group(
+                GROUP,
+                spec(GroupSpecSetup {
+                    topics: &["payments"],
+                    ..Default::default()
+                }),
+            )
             .await;
         assert!(let Err(BarrierError::GroupExists { .. }) = again);
     }
@@ -453,7 +483,7 @@ mod tests {
             .await;
 
         let created = coordinator
-            .create_group(GROUP, spec(&["orders"], None, 4))
+            .create_group(GROUP, spec(GroupSpecSetup::default()))
             .await;
         assert!(let Err(BarrierError::NotCoordinator { .. }) = created);
     }
@@ -462,7 +492,7 @@ mod tests {
     async fn a_deleted_group_leaves_no_state_behind() {
         let fixture = Fixture::new();
         let coordinator = fixture
-            .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+            .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
             .await;
         coordinator
             .trigger_injection(GROUP, None)
@@ -498,11 +528,11 @@ mod tests {
         // Limit max_groups to 1
         coordinator.config.max_groups = 1;
         coordinator
-            .create_group("g1", spec(&["orders"], None, 4))
+            .create_group("g1", spec(GroupSpecSetup::default()))
             .await
             .expect("first group created");
         let second = coordinator
-            .create_group("g2", spec(&["orders"], None, 4))
+            .create_group("g2", spec(GroupSpecSetup::default()))
             .await;
         assert!(let Err(BarrierError::InvalidDefinition(msg)) = second);
         assert!(msg.contains("barrier groups limit reached"));

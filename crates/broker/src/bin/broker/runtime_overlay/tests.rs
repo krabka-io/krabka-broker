@@ -354,16 +354,7 @@ fn explicit_cli_default_runtime_values_override_file() {
         .apply_runtime_to(&mut config, file_shutdown)
         .expect("overlay CLI runtime");
 
-    assert!(
-        (
-            config.cleaner_interval,
-            shutdown,
-            config.auto_join_voter_request_timeout,
-            config.share_coordinator.state_topic_replication_factor,
-            config.transaction_state_replication_factor,
-            config.offsets_topic_replication_factor,
-        ) == (secs(30), secs(20), secs(30), 3, 3, 3)
-    );
+    check_default_runtime_overlay(&config, shutdown);
 }
 
 #[test]
@@ -387,16 +378,7 @@ fn explicit_env_default_runtime_values_override_file() {
                 .apply_runtime_to(&mut config, file_shutdown)
                 .expect("overlay env runtime");
 
-            assert!(
-                (
-                    config.cleaner_interval,
-                    shutdown,
-                    config.auto_join_voter_request_timeout,
-                    config.share_coordinator.state_topic_replication_factor,
-                    config.transaction_state_replication_factor,
-                    config.offsets_topic_replication_factor,
-                ) == (secs(30), secs(20), secs(30), 3, 3, 3)
-            );
+            check_default_runtime_overlay(&config, shutdown);
         },
     );
 }
@@ -552,5 +534,18 @@ fn queued_max_requests_flag_reaches_the_runtime_config() {
             .queued_max_requests
             .map(krabka_broker::config_value::PositiveCount::into_value)
             == Some(5)
+    );
+}
+
+fn check_default_runtime_overlay(config: &BrokerConfig, shutdown: krabka_units::Time) {
+    assert!(
+        (
+            config.cleaner_interval,
+            shutdown,
+            config.auto_join_voter_request_timeout,
+            config.share_coordinator.state_topic_replication_factor,
+            config.transaction_state_replication_factor,
+            config.offsets_topic_replication_factor,
+        ) == (secs(30), secs(20), secs(30), 3, 3, 3)
     );
 }

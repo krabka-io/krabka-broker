@@ -119,22 +119,23 @@ pub(super) fn seed_resolved_partition(
     cache: &FetchSessionCache,
     topic_id: WireUuid,
 ) -> FetchSessionId {
-    cache.try_allocate(
-        false,
-        false,
-        "alice".into(),
-        vec![(
-            FetchSessionKey {
-                topic_name: "t".into(),
-                topic_id,
-                partition: 0,
-            },
-            CachedPartitionState {
-                fetch_offset: 5,
-                max_bytes: 1024,
-                ..Default::default()
-            },
-        )],
+    allocate_session(
+        cache,
+        SessionAllocationSetup {
+            partitions: vec![(
+                FetchSessionKey {
+                    topic_name: "t".into(),
+                    topic_id,
+                    partition: 0,
+                },
+                CachedPartitionState {
+                    fetch_offset: 5,
+                    max_bytes: 1024,
+                    ..Default::default()
+                },
+            )],
+            ..Default::default()
+        },
     )
 }
 
@@ -142,5 +143,74 @@ pub(super) fn error_code(cache: &FetchSessionCache, request: &FetchRequest, vers
     match cache.classify(request, version) {
         SessionDecision::Error { code } => code,
         other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) enum SessionPrivilege {
+    #[default]
+    Consumer,
+    Follower,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) enum TopicAddressing {
+    #[default]
+    Name,
+    Id,
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub(super) struct SessionAllocationSetup {
+    pub privilege: SessionPrivilege,
+    pub addressing: TopicAddressing,
+    #[default("alice".into())]
+    pub principal: String,
+    pub partitions: Vec<(FetchSessionKey, CachedPartitionState)>,
+}
+
+pub(super) fn allocate_session(
+    cache: &FetchSessionCache,
+    setup: SessionAllocationSetup,
+) -> FetchSessionId {
+    cache.try_allocate(
+        matches!(setup.privilege, SessionPrivilege::Follower),
+        matches!(setup.addressing, TopicAddressing::Id),
+        setup.principal,
+        setup.partitions,
+    )
+}
+
+/// A ten-slot cache with the case's initial session already installed.
+pub(super) fn allocated_cache(
+    setup: SessionAllocationSetup,
+) -> (FetchSessionCache, FetchSessionId) {
+    let cache = FetchSessionCache::new(10);
+    let id = allocate_session(&cache, setup);
+    (cache, id)
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub(super) struct SessionKeySetup {
+    #[default("t".into())]
+    pub topic: String,
+    pub topic_id: WireUuid,
+    pub partition: PartitionIndex,
+}
+
+pub(super) fn session_key(setup: SessionKeySetup) -> FetchSessionKey {
+    FetchSessionKey {
+        topic_name: setup.topic,
+        topic_id: setup.topic_id,
+        partition: setup.partition.0,
+    }
+}
+
+impl SessionRequestSetup {
+    pub(super) fn forgetting(session_id: RequestSessionId, forgotten: Vec<ForgottenTopic>) -> Self {
+        Self {
+            forgotten,
+            ..Self::incremental(session_id)
+        }
     }
 }

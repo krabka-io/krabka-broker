@@ -201,8 +201,9 @@ mod tests {
 
     use super::*;
     use crate::fetch_session::test_support::{
-        ForgottenTopicSetup, NAME_FETCH_VERSION, SessionRequestSetup, error_code, forgotten_topic,
-        req, seed_resolved_partition, topic,
+        ForgottenTopicSetup, NAME_FETCH_VERSION, SessionAllocationSetup, SessionKeySetup,
+        SessionRequestSetup, TopicAddressing, allocate_session, allocated_cache, error_code,
+        forgotten_topic, req, seed_resolved_partition, session_key, topic,
     };
 
     #[test]
@@ -235,18 +236,15 @@ mod tests {
     #[test]
     fn unknown_session_id_returns_not_found() {
         let cache = FetchSessionCache::new(10);
-        let r = req(SessionRequestSetup {
-            ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(12345),
-            )
-        });
+        let r = req(SessionRequestSetup::incremental(
+            crate::fetch_session::test_support::RequestSessionId(12345),
+        ));
         assert!(error_code(&cache, &r, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
     }
 
     #[test]
     fn stale_epoch_returns_invalid_epoch() {
-        let cache = FetchSessionCache::new(10);
-        let id = cache.try_allocate(false, false, "alice".into(), vec![]);
+        let (cache, id) = allocated_cache(SessionAllocationSetup::default());
         // Session's expected next_epoch is 1; send epoch=99.
         let r = req(SessionRequestSetup {
             session_epoch: crate::fetch_session::test_support::RequestSessionEpoch(99),
@@ -266,7 +264,7 @@ mod tests {
     fn an_incremental_fetch_must_match_the_topic_id_use_of_its_session() {
         struct Case {
             name: &'static str,
-            created_with_topic_ids: bool,
+            created_with_topic_ids: TopicAddressing,
             epoch: i32,
             version: i16,
             want: (Option<i16>, i32),
@@ -274,35 +272,35 @@ mod tests {
         let cases = [
             Case {
                 name: "name session, v12 incremental",
-                created_with_topic_ids: false,
+                created_with_topic_ids: TopicAddressing::Name,
                 epoch: 1,
                 version: 12,
                 want: (None, 2),
             },
             Case {
                 name: "name session, v13 incremental",
-                created_with_topic_ids: false,
+                created_with_topic_ids: TopicAddressing::Name,
                 epoch: 1,
                 version: 13,
                 want: (Some(codes::FETCH_SESSION_TOPIC_ID_ERROR), 1),
             },
             Case {
                 name: "id session, v17 incremental",
-                created_with_topic_ids: true,
+                created_with_topic_ids: TopicAddressing::Id,
                 epoch: 1,
                 version: 17,
                 want: (None, 2),
             },
             Case {
                 name: "id session, v12 incremental",
-                created_with_topic_ids: true,
+                created_with_topic_ids: TopicAddressing::Id,
                 epoch: 1,
                 version: 12,
                 want: (Some(codes::FETCH_SESSION_TOPIC_ID_ERROR), 1),
             },
             Case {
                 name: "id session, v12 incremental at a stale epoch",
-                created_with_topic_ids: true,
+                created_with_topic_ids: TopicAddressing::Id,
                 epoch: 7,
                 version: 12,
                 want: (Some(codes::INVALID_FETCH_SESSION_EPOCH), 1),
@@ -315,11 +313,13 @@ mod tests {
                 topic_id: WireUuid([1; 16]),
                 partition: 0,
             };
-            let id = cache.try_allocate(
-                false,
-                case.created_with_topic_ids,
-                "alice".into(),
-                vec![(key, CachedPartitionState::default())],
+            let id = allocate_session(
+                &cache,
+                SessionAllocationSetup {
+                    addressing: case.created_with_topic_ids,
+                    partitions: vec![(key, CachedPartitionState::default())],
+                    ..Default::default()
+                },
             );
             let decision = cache.classify(
                 &req(SessionRequestSetup {
@@ -344,8 +344,7 @@ mod tests {
 
     #[test]
     fn close_request_closes_the_session_inline() {
-        let cache = FetchSessionCache::new(10);
-        let id = cache.try_allocate(false, false, "alice".into(), vec![]);
+        let (cache, id) = allocated_cache(SessionAllocationSetup::default());
         let r = req(SessionRequestSetup {
             session_epoch: crate::fetch_session::test_support::RequestSessionEpoch(FINAL_EPOCH),
             ..SessionRequestSetup::incremental(
@@ -359,11 +358,9 @@ mod tests {
         // classify() already dropped the session; nothing left to close.
         assert!(cache.len() == 0);
         // Subsequent classify with the same id is now NOT_FOUND.
-        let r2 = req(SessionRequestSetup {
-            ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
-            )
-        });
+        let r2 = req(SessionRequestSetup::incremental(
+            crate::fetch_session::test_support::RequestSessionId(id),
+        ));
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
     }
 
@@ -431,7 +428,7 @@ mod tests {
         for case in cases {
             let cache = FetchSessionCache::new(10);
             let requested_id = match case.request_id {
-                RequestId::Existing => cache.try_allocate(false, false, "alice".into(), vec![]),
+                RequestId::Existing => allocate_session(&cache, SessionAllocationSetup::default()),
                 RequestId::Fixed(id) => id,
             };
             let r = req(SessionRequestSetup {
@@ -469,7 +466,13 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let id = cache.try_allocate(false, false, "alice".into(), initial);
+        let id = allocate_session(
+            &cache,
+            SessionAllocationSetup {
+                partitions: initial,
+                ..Default::default()
+            },
+        );
 
         // Incremental that updates partition 0's fetch_offset and adds partition 1.
         let r = req(SessionRequestSetup {
@@ -495,11 +498,9 @@ mod tests {
         }
 
         // Re-sending with the old epoch fails — broker advanced to 2.
-        let r2 = req(SessionRequestSetup {
-            ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
-            )
-        });
+        let r2 = req(SessionRequestSetup::incremental(
+            crate::fetch_session::test_support::RequestSessionId(id),
+        ));
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::INVALID_FETCH_SESSION_EPOCH);
     }
 
@@ -545,12 +546,15 @@ mod tests {
         partitions
     }
 
-    fn expected_incremental_state(fetch_offset: i64, max_bytes: i32) -> CachedPartitionState {
+    fn expected_incremental_state(
+        fetch_offset: krabka_ids::Offset,
+        max_bytes: FetchByteLimit,
+    ) -> CachedPartitionState {
         CachedPartitionState {
-            fetch_offset,
+            fetch_offset: fetch_offset.0,
             last_fetched_epoch: -1,
             current_leader_epoch: -1,
-            max_bytes,
+            max_bytes: max_bytes.0,
             log_start_offset: -1,
             last_high_watermark: 0,
             last_last_stable_offset: 0,
@@ -574,6 +578,16 @@ mod tests {
             },
             state,
         )]
+    }
+
+    fn check_resolved_incremental(
+        cache: &FetchSessionCache,
+        request: &krabka_protocol::owned::fetch_request::FetchRequest,
+        topic_id: WireUuid,
+        expected: CachedPartitionState,
+    ) {
+        let partitions = incremental_partitions(cache.classify(request, NAME_FETCH_VERSION));
+        assert!(partitions == resolved_incremental_partition(topic_id, expected));
     }
 
     #[test]
@@ -600,11 +614,15 @@ mod tests {
                 crate::fetch_session::test_support::RequestSessionId(id),
             )
         });
-        let partitions = incremental_partitions(cache.classify(&r, NAME_FETCH_VERSION));
+
         // No duplicate entry created; the cached (fully-resolved) key is
         // preserved and its desired state updated in place.
-        let expected = resolved_incremental_partition(tid, expected_incremental_state(42, 2048));
-        assert!(partitions == expected);
+        check_resolved_incremental(
+            &cache,
+            &r,
+            tid,
+            expected_incremental_state(krabka_ids::Offset(42), FetchByteLimit(2048)),
+        );
     }
 
     #[test]
@@ -625,9 +643,13 @@ mod tests {
                 crate::fetch_session::test_support::RequestSessionId(id),
             )
         });
-        let partitions = incremental_partitions(cache.classify(&r, NAME_FETCH_VERSION));
-        let expected = resolved_incremental_partition(tid, expected_incremental_state(99, 4096));
-        assert!(partitions == expected);
+
+        check_resolved_incremental(
+            &cache,
+            &r,
+            tid,
+            expected_incremental_state(krabka_ids::Offset(99), FetchByteLimit(4096)),
+        );
     }
 
     #[test]
@@ -659,18 +681,22 @@ mod tests {
                 CachedPartitionState::default(),
             ),
         ];
-        let id = cache.try_allocate(false, false, "alice".into(), initial);
+        let id = allocate_session(
+            &cache,
+            SessionAllocationSetup {
+                partitions: initial,
+                ..Default::default()
+            },
+        );
 
         let forgotten = vec![forgotten_topic(ForgottenTopicSetup {
             partitions: vec![krabka_ids::PartitionIndex(1)],
             ..Default::default()
         })];
-        let r = req(SessionRequestSetup {
+        let r = req(SessionRequestSetup::forgetting(
+            crate::fetch_session::test_support::RequestSessionId(id),
             forgotten,
-            ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
-            )
-        });
+        ));
         match cache.classify(&r, NAME_FETCH_VERSION) {
             SessionDecision::Incremental { partitions, .. } => {
                 let mut parts: Vec<i32> = partitions.iter().map(|(k, _)| k.partition).collect();
@@ -688,25 +714,20 @@ mod tests {
     #[test]
     fn incremental_that_empties_the_session_drops_it_and_reports_no_session() {
         let cache = FetchSessionCache::new(10);
-        let key = FetchSessionKey {
-            topic_name: "t".into(),
-            topic_id: WireUuid::ZERO,
-            partition: 0,
-        };
-        let id = cache.try_allocate(
-            false,
-            false,
-            "alice".into(),
-            vec![(key, CachedPartitionState::default())],
+        let key = session_key(SessionKeySetup::default());
+        let id = allocate_session(
+            &cache,
+            SessionAllocationSetup {
+                partitions: vec![(key, CachedPartitionState::default())],
+                ..Default::default()
+            },
         );
 
         let forgotten = vec![forgotten_topic(ForgottenTopicSetup::default())];
-        let r = req(SessionRequestSetup {
+        let r = req(SessionRequestSetup::forgetting(
+            crate::fetch_session::test_support::RequestSessionId(id),
             forgotten,
-            ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
-            )
-        });
+        ));
         match cache.classify(&r, NAME_FETCH_VERSION) {
             SessionDecision::Incremental {
                 session_id,
