@@ -102,7 +102,7 @@ pub(super) fn log_size(partition: &Partition) -> u64 {
         .bytes_u64()
 }
 
-/// Make every segment deletion on `topic`'s log fail with a real `io::Error`,
+/// With `file_delete_delay` set to zero, make every segment deletion fail with a real `io::Error`,
 /// by putting a directory where the eviction must rename the segment to its
 /// `.deleted` tombstone. Renaming a file onto a directory fails with `EISDIR`
 /// for every user including root, so this is a storage failure the filesystem

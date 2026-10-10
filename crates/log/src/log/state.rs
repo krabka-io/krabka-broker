@@ -201,6 +201,7 @@ impl Log {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn reset_to(&mut self, new_base: Offset) -> Result<(), LogError> {
         self.rollover_flusher.finish()?;
+        self.roll_jitter = None;
         if new_base < 0 {
             return Err(LogError::OffsetMismatch {
                 expected: Offset(0),
@@ -212,17 +213,18 @@ impl Log {
         self.invalidate_delivery_schedule(new_base);
 
         // Drop every sealed segment + its on-disk files.
-        while let Some(popped) = self.segments.pop() {
-            let base = popped.base_offset();
-            drop(popped);
-            self.remove_truncated_segment_files(base);
+        while let Some(segment) = self.segments.last() {
+            let base = segment.base_offset();
+            self.remove_truncated_segment_files(base)?;
+            self.segments.pop();
+            self.sealed_txn_indexes.remove(&base);
+            self.stamp_indexes.remove(&base);
         }
 
         // Drop the active segment + its on-disk files.
-        if let Some(active) = self.active.take() {
+        if let Some(active) = &self.active {
             let base = active.base_offset();
-            drop(active);
-            self.remove_truncated_segment_files(base);
+            self.remove_truncated_segment_files(base)?;
         }
 
         // A hard reset re-bases the local log after a divergence or a
@@ -261,7 +263,7 @@ impl Log {
         if new_base.0 > 0 {
             producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
         }
-        Ok(())
+        self.reap_deleted_files(std::time::SystemTime::now())
     }
 
     /// Kafka's `ProducerStateManager.takeSnapshot`: write the producer state at

@@ -35,6 +35,7 @@ mod delivery;
 mod direct_writes;
 #[cfg(test)]
 mod faults;
+mod maintenance;
 mod open;
 #[cfg(test)]
 mod preallocation;
@@ -82,6 +83,10 @@ pub struct Log {
     active: Option<Segment>,
     dir_sync_needed: bool,
     rollover_flusher: rollover_flush::Flusher,
+    unflushed_messages: u64,
+    last_flush: std::time::Instant,
+    roll_jitter: Option<(Offset, u64)>,
+    pending_deletes: Vec<(std::time::SystemTime, Vec<PathBuf>)>,
     /// The global log start (Kafka's `logStartOffset`): the first offset any
     /// reader may ask for, wherever the records for it live.
     ///

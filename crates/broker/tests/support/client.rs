@@ -294,7 +294,8 @@ pub async fn start_client(
 }
 
 async fn configured_broker(config: BrokerConfig, context: Option<&str>) -> BrokerHandle {
-    let result = krabka_broker::Broker::start(config).await;
+    // Keep startup off the fixture's stack as LogConfig grows.
+    let result = Box::pin(krabka_broker::Broker::start(config)).await;
     match context {
         Some(context) => result.expect(context),
         None => result.unwrap(),

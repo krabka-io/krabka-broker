@@ -359,6 +359,7 @@ fn a_failed_segment_deletion_keeps_the_bytes_accounted_for_and_the_next_tick_ret
         let dir = tempdir().unwrap();
         let config = LogConfig {
             retention_size: Some(ByteSize::ZERO),
+            file_delete_delay: krabka_units::millis(0),
             ..tiny_segments()
         };
         let mut log = crate::log::test_support::synced_sample_log(dir.path(), config, 4, 2);

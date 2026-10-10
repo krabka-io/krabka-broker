@@ -170,6 +170,14 @@ async fn a_failed_deletion_is_counted_and_takes_the_log_dir_offline() {
     let status = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
     let registry = PartitionRegistry::new();
     let partition = expired_partition(&dir, "orders", NodeId(7), status.clone()).await;
+    {
+        // This fault blocks the immediate-deletion tombstone path. Delayed
+        // reclamation uses unique names and runs through writer maintenance.
+        let log = partition.log.lock().expect("partition log lock");
+        let mut config = log.config_snapshot();
+        config.file_delete_delay = krabka_units::millis(0);
+        log.set_config(config);
+    }
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
     // A directory where the eviction must rename each segment to its
     // `.deleted` tombstone: the rename fails with EISDIR, which is a storage

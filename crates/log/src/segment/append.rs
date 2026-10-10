@@ -87,12 +87,24 @@ impl Segment {
         batch.encode(&mut buf)?;
         let bytes = buf.freeze();
 
+        self.append_encoded(batch, index_interval, &bytes)
+    }
+
+    /// Write an owned batch encoded at the caller's chosen compression level.
+    pub(crate) fn append_encoded(
+        &mut self,
+        batch: &RecordBatch,
+        index_interval: ByteSize,
+        bytes: &Bytes,
+    ) -> Result<u64, LogError> {
+        self.ensure_writable()?;
+        // Owned appends retain the single-buffer write path and its I/O seam.
         self.write_batch(
             batch.base_offset,
             batch.last_offset_delta,
             batch.max_timestamp,
             index_interval,
-            BatchBytes::Whole(&bytes),
+            BatchBytes::Whole(bytes),
         )
     }
 

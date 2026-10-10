@@ -319,7 +319,7 @@ impl TopicDefaults {
 /// A broker synonym's `value` in the unit of `topic_key`: minutes and hours
 /// become milliseconds, and a negative `retention.ms` is `-1`. `None` when a
 /// value that needs converting is not a number.
-fn in_topic_unit(topic_key: &str, broker_key: &str, value: &str) -> Option<String> {
+pub(crate) fn in_topic_unit(topic_key: &str, broker_key: &str, value: &str) -> Option<String> {
     let per_unit = match broker_key {
         "log.retention.hours" | "log.roll.hours" | "log.roll.jitter.hours" => 3_600_000,
         "log.retention.minutes" => 60_000,

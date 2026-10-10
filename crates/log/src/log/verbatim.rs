@@ -267,10 +267,10 @@ impl Log {
             )?;
 
             let is_transactional = batch.is_transactional && batch.producer_id.get() >= 0;
-            if flush_on_append || (self.stamp_source.is_some() && !is_transactional) {
-                self.rollover_flusher.finish()?;
-                self.active_segment_flush()?;
-            }
+            self.flush_after_append(
+                batch.last_offset_delta,
+                flush_on_append || (self.stamp_source.is_some() && !is_transactional),
+            )?;
 
             if !is_transactional {
                 self.record_stamp(base_offset, last_offset)?;

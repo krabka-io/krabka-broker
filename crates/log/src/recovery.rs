@@ -86,6 +86,14 @@ fn is_deleted_tombstone(value: &str) -> bool {
     let Some(rest) = rest.strip_suffix('.') else {
         return false;
     };
+    // Deferred deletion adds a numeric generation to avoid collisions when
+    // a compaction replaces the same base more than once before reclamation.
+    let rest = rest
+        .rsplit_once('.')
+        .filter(|(_, generation)| {
+            !generation.is_empty() && generation.bytes().all(|b| b.is_ascii_digit())
+        })
+        .map_or(rest, |(path, _)| path);
     ["log"]
         .into_iter()
         .chain(SIDECAR_EXTENSIONS)

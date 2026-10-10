@@ -109,11 +109,12 @@ pub async fn start_held_node(
     clients: &mut std::vec::IntoIter<tokio::net::TcpListener>,
     context: &str,
 ) -> BrokerHandle {
-    Broker::start_with_listeners(
+    // Keep node startup off the cluster fixture's stack as LogConfig grows.
+    Box::pin(Broker::start_with_listeners(
         config,
         Some(controllers.next().unwrap()),
         Some(clients.next().unwrap()),
-    )
+    ))
     .await
     .expect(context)
 }
