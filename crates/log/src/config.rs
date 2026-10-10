@@ -114,8 +114,9 @@ pub enum SegmentAllocation {
     #[default]
     OnWrite,
     /// `preallocate=true`: reserve `segment_size` of disk blocks for a
-    /// segment when it becomes the active one, so appends do not allocate as
-    /// they grow it.
+    /// segment before the first append into it, so appends do not allocate
+    /// as they grow it. A truncate gives the reservation up, and the segment
+    /// takes it again.
     ///
     /// Kafka sets the file's length to `segment.bytes` and trims it back when
     /// the segment closes. krabka reserves the blocks without changing the

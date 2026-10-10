@@ -239,10 +239,6 @@ impl Log {
         // Recovery needs no durable watermark: the schedule is in the records,
         // so the first advance rebuilds it from the log start.
         log.delivery_watermark = log.log_start_offset();
-        // A fresh active segment needs its reservation, and a reopened one
-        // keeps whatever an earlier run reserved: reserving it again only
-        // asks for the part that is missing.
-        log.reserve_active_segment();
         Ok(log)
     }
 

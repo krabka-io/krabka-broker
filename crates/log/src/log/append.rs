@@ -15,7 +15,7 @@ use super::{
     control::{ControlBatchKind, check_control_record_versions, control_batch_kind},
 };
 use crate::{
-    config::{DeliveryPolicy, ScheduleOrder},
+    config::{DeliveryPolicy, ScheduleOrder, SegmentAllocation},
     error::LogError,
     producer_snapshot, retention,
     segment::Segment,
@@ -35,7 +35,8 @@ impl Log {
         Ok(())
     }
 
-    /// Read one append policy, roll against this batch, and retain its write settings.
+    /// Read one append policy, roll against this batch, reserve the segment
+    /// the batch lands in, and retain its write settings.
     pub(super) fn roll_for_append(
         &mut self,
         incoming_size: impl FnOnce() -> ByteSize,
@@ -47,6 +48,7 @@ impl Log {
             segment_index_size,
             index_interval,
             flush_on_append,
+            segment_allocation,
         ) = {
             let cfg = self.config.read().unwrap();
             (
@@ -55,6 +57,7 @@ impl Log {
                 cfg.segment_index_size,
                 cfg.index_interval,
                 cfg.flush_on_append,
+                cfg.segment_allocation,
             )
         };
         if self.should_roll_for_incoming(
@@ -65,6 +68,17 @@ impl Log {
             segment_index_size,
         ) {
             self.roll_active_segment()?;
+        }
+        // Kafka's `preallocate`, applied where every append passes rather
+        // than where segments are made: a topic's own config reaches a log
+        // only after it is opened, and a truncate takes a reservation away,
+        // so this is the one place that sees each segment under the config
+        // in force when it is written. A segment asks once; see
+        // `Segment::reserve`.
+        if segment_allocation == SegmentAllocation::Preallocate
+            && let Some(active) = self.active.as_mut()
+        {
+            active.reserve(segment_size);
         }
         Ok((index_interval, flush_on_append))
     }
@@ -563,7 +577,6 @@ impl Log {
         self.sealed_txn_indexes.insert(old_base, old_txn_index);
         let stamp_index_path = new_seg.stamp_index_path();
         self.active = Some(new_seg);
-        self.reserve_active_segment();
         self.dir_sync_needed = true;
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;
         Ok(())

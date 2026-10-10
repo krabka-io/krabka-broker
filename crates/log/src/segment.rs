@@ -79,6 +79,10 @@ pub struct Segment {
     /// range `log_size..reserved_end`. It is `0` when there is nothing to
     /// give back.
     reserved_end: u64,
+    /// The end the last [`Segment::reserve`] asked for, granted or not, so
+    /// a filesystem that refuses is asked once per segment rather than once
+    /// per append. `0` when nothing has been asked.
+    reserve_requested: u64,
 }
 
 /// Verbatim, decode-free output of [`Segment::read_raw`].

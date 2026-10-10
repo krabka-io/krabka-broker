@@ -13,7 +13,7 @@ use tracing::instrument;
 
 use super::Log;
 use crate::{
-    config::{LogConfig, SegmentAllocation},
+    config::LogConfig,
     error::LogError,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
     log_start_offset_checkpoint,
@@ -243,7 +243,6 @@ impl Log {
         self.stamp_indexes.clear();
         self.lso = new_active.last_offset() + 1; // = new_base (empty segment)
         self.active = Some(new_active);
-        self.reserve_active_segment();
         self.dir_sync_needed = true;
         // Preserve any injected stamp source; reopen its (fresh) sidecar.
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;
@@ -417,22 +416,6 @@ impl Log {
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn config_snapshot(&self) -> LogConfig {
         self.config.read().unwrap().clone()
-    }
-
-    /// Reserve the active segment's `segment_size` of disk blocks when the
-    /// partition's `preallocate` is on. Every path that makes a segment the
-    /// active one calls this, so each segment is reserved once, as it starts
-    /// taking appends. See [`SegmentAllocation::Preallocate`].
-    pub(super) fn reserve_active_segment(&mut self) {
-        let (allocation, segment_size) = {
-            let config = self.config.read().unwrap();
-            (config.segment_allocation, config.segment_size)
-        };
-        if allocation == SegmentAllocation::Preallocate
-            && let Some(active) = self.active.as_mut()
-        {
-            active.reserve(segment_size);
-        }
     }
 
     /// Replace the log's I/O implementation for fault-injection tests.

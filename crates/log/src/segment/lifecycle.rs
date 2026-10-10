@@ -79,20 +79,42 @@ impl Segment {
     /// left at the bytes it holds. See
     /// [`SegmentAllocation::Preallocate`](crate::SegmentAllocation::Preallocate).
     ///
-    /// A refused reservation leaves a segment that grows as it is written,
+    /// The log calls this before every append, so it does nothing once the
+    /// segment holds, or has asked for, a reservation reaching `size`. A
+    /// refused reservation leaves a segment that grows as it is written,
     /// which is the segment it would have been without one, so it is logged
-    /// and not returned.
+    /// and not returned, and not asked for again.
     pub(crate) fn reserve(&mut self, size: ByteSize) {
         let end = size.bytes_u64();
-        if end <= self.log_size.max(self.reserved_end) {
+        if end
+            <= self
+                .log_size
+                .max(self.reserved_end)
+                .max(self.reserve_requested)
+        {
             return;
         }
+        self.reserve_requested = end;
         match self
             .io
             .reserve(&self.log_file, self.log_size, end - self.log_size)
         {
             Ok(()) => self.reserved_end = end,
             Err(error) => log_refused("reserve", self.base_offset, &error),
+        }
+    }
+
+    /// Take the reservation again after a truncate.
+    ///
+    /// A truncate frees every block past the new end, the reservation's with
+    /// them -- it is how [`Self::release_reservation`] gives them back -- so
+    /// the blocks counted before it are gone, and a reservation this process
+    /// asked for has to be asked for again.
+    pub(super) fn renew_reservation(&mut self) {
+        self.reserved_end = 0;
+        let requested = std::mem::take(&mut self.reserve_requested);
+        if requested > 0 {
+            self.reserve(ByteSize::from_bytes(requested));
         }
     }
 
@@ -188,6 +210,7 @@ impl Segment {
         self.first_timestamp = None;
         seek_to_log_size(&self.log_file, position)?;
         self.log_size = position;
+        self.renew_reservation();
         self.last_offset = last_offset;
         self.max_timestamp = max_timestamp;
         self.max_timestamp_offset = max_timestamp_offset;
@@ -271,6 +294,7 @@ impl Segment {
         self.first_timestamp = None;
         seek_to_log_size(&self.log_file, pos)?;
         self.log_size = pos;
+        self.renew_reservation();
         self.last_offset = last_kept_offset;
         self.max_timestamp = last_kept_ts;
         self.max_timestamp_offset = last_kept_ts_offset;

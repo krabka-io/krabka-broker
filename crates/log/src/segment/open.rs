@@ -72,6 +72,7 @@ impl Segment {
             first_timestamp: None,
             last_offset: base_offset - 1,
             reserved_end: 0,
+            reserve_requested: 0,
         })
     }
 
@@ -151,6 +152,7 @@ impl Segment {
             })?;
         if recovered.valid_end < self.log_size {
             self.log_file.set_len(recovered.valid_end)?;
+            self.renew_reservation();
         }
         self.log_size = recovered.valid_end;
         seek_to_log_size(&self.log_file, self.log_size)?;
