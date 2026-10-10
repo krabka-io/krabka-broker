@@ -368,7 +368,7 @@ async fn every_acquired_offset_has_its_record_in_the_response() {
     broker.shutdown().await;
 }
 
-/// The broker cap applies to ShareFetch's whole-response budget, and the
+/// The broker cap applies to `ShareFetch`'s whole-response budget, and the
 /// first complete batch can exceed it so the member still makes progress.
 #[tokio::test]
 async fn broker_fetch_cap_limits_share_fetch_and_keeps_first_batch_progress() {

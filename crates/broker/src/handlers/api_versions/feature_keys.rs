@@ -71,7 +71,7 @@ mod tests {
         }
     }
 
-    /// A fresh image follows Kafka's initial FeaturesPublisher state: the
+    /// A fresh image follows Kafka's initial `FeaturesPublisher` state: the
     /// minimum metadata version is finalized, while `kraft.version` 0 is no row.
     #[test]
     fn a_fresh_image_advertises_kafkas_minimum_metadata_version() {
