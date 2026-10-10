@@ -173,7 +173,7 @@ async fn a_failed_deletion_is_counted_and_takes_the_log_dir_offline() {
     {
         // This fault blocks the immediate-deletion tombstone path. Delayed
         // reclamation uses unique names and runs through writer maintenance.
-        let mut log = partition.log.lock().expect("partition log lock");
+        let log = partition.log.lock().expect("partition log lock");
         let mut config = log.config_snapshot();
         config.file_delete_delay = krabka_units::millis(0);
         log.set_config(config);
