@@ -22,6 +22,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     harness::{admin_plain_password, alice_password, round_trip, wrong_scram_password},
+    kafka_wire::SaslHandshakeSetup,
     scram::drive_sasl_scram_session,
     support::{
         sasl::{ScramAlgorithm, ScramUpsertionSetup, scram_upsertion},
@@ -168,7 +169,14 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
     let _ = round_trip(&mut stream, SocketExchangeSetup::default(), &av_body).await?;
 
     // ── 2. SaslHandshake v1.
-    crate::kafka_wire::sasl_handshake_on(&mut stream, "krabka-sasl-test", 2, "PLAIN").await?;
+    crate::kafka_wire::sasl_handshake_on(
+        &mut stream,
+        SaslHandshakeSetup {
+            client_id: "krabka-sasl-test",
+            ..Default::default()
+        },
+    )
+    .await?;
 
     // ── 3. SaslAuthenticate v2 (flexible). auth_bytes = \0user\0password.
     let auth_body = crate::kafka_wire::encode_named(

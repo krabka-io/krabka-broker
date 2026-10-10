@@ -101,3 +101,11 @@ pub async fn start_admin_with(
     let addr = handle.listen_addr();
     (dir, handle, addr)
 }
+
+/// A real foo partition with only an irrelevant ACL: Alice's topic operations remain denied.
+pub async fn start_denied_foo() -> (BrokerHandle, tempfile::TempDir, std::net::SocketAddr) {
+    let (handle, directory, address) = start_admin_alice().await;
+    crate::acl_admin::create_topic_as_admin(address, "foo", 1).await;
+    crate::support::acl::seed_dummy_acl(&handle).await;
+    (handle, directory, address)
+}

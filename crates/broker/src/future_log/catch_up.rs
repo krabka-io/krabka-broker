@@ -140,12 +140,12 @@ mod tests {
 
     #[tokio::test]
     async fn catch_up_resets_after_source_retention_without_dropping_batch_data() {
-        let primary = tempdir().unwrap();
-        let target = tempdir().unwrap();
-        let part = crate::future_log::test_support::source_partition(
-            primary.path(),
+        let fixture = crate::future_log::test_support::source_fixture(
             crate::future_log::test_support::FutureSourceSetup::default(),
         );
+        let _primary = fixture.primary;
+        let target = fixture.target;
+        let part = fixture.partition;
         part.log
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -184,15 +184,15 @@ mod tests {
 
     #[tokio::test]
     async fn catch_up_waits_when_move_throttle_is_exhausted() {
-        let primary = tempdir().unwrap();
-        let target = tempdir().unwrap();
-        let part = crate::future_log::test_support::source_partition(
-            primary.path(),
+        let fixture = crate::future_log::test_support::source_fixture(
             crate::future_log::test_support::FutureSourceSetup {
                 count: crate::test_support::RecordCount(1),
                 ..Default::default()
             },
         );
+        let _primary = fixture.primary;
+        let target = fixture.target;
+        let part = fixture.partition;
         let (_future_path, future) =
             crate::future_log::test_support::open_future_log(target.path());
         let throttle = crate::throttle::TokenBucket::new();

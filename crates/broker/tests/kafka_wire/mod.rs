@@ -35,6 +35,7 @@ use krabka_protocol::{
         elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
         elect_leaders_response::ElectLeadersResponse,
         produce_request::ProduceRequest,
+        produce_response::ProduceResponse,
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
         sasl_handshake_request::SaslHandshakeRequest,
@@ -151,6 +152,17 @@ pub struct PlainAuthenticationSetup<'a> {
     pub password: Vec<u8>,
 }
 
+impl<'a> PlainAuthenticationSetup<'a> {
+    /// The admin fixture's super-user credentials, bound to a suite's client ID.
+    pub fn admin(client_id: &'a str) -> Self {
+        Self {
+            client_id,
+            user: "admin",
+            password: b"admin-secret".to_vec(),
+        }
+    }
+}
+
 /// Connects to `addr` and authenticates the connection with SASL/PLAIN.
 ///
 /// # Errors
@@ -166,31 +178,34 @@ pub async fn sasl_plain_authenticate(
     Ok(stream)
 }
 
+#[derive(krabka_macros::FieldDefaults)]
+pub struct PlainRequestSetup<'a> {
+    pub authentication: PlainAuthenticationSetup<'a>,
+    pub api: frames::ApiRequestSetup,
+    #[default("request")]
+    pub operation: &'a str,
+}
+
 /// Send a flexible request on a new PLAIN connection, retaining named codec errors.
 ///
 /// # Errors
 /// Returns authentication, framing, or codec errors from the exchange.
 pub async fn request_as_plain<Q, R>(
     addr: SocketAddr,
-    client_id: &str,
-    (user, password): (&str, &[u8]),
     request: &Q,
-    (api_key, version): (i16, i16),
-    operation: &str,
+    setup: &PlainRequestSetup<'_>,
 ) -> io::Result<R>
 where
     Q: Encode,
     R: for<'de> Decode<'de>,
 {
-    let mut stream = sasl_plain_authenticate(
-        addr,
-        &PlainAuthenticationSetup {
-            client_id,
-            user,
-            password: (password).to_vec(),
-        },
-    )
-    .await?;
+    let PlainRequestSetup {
+        authentication,
+        api,
+        operation,
+    } = setup;
+    let version = api.version.0;
+    let mut stream = sasl_plain_authenticate(addr, authentication).await?;
     let mut body = BytesMut::new();
     request
         .encode(&mut body, version)
@@ -198,10 +213,10 @@ where
     let response = round_trip(
         &mut stream,
         ExchangeSetup {
-            api_key: WireApiKey(api_key),
+            api_key: api.api_key,
             version: WireApiVersion(version),
             correlation: frames::CorrelationId(4),
-            client_id,
+            client_id: authentication.client_id,
             header: frames::HeaderEncoding::Flexible,
             ..Default::default()
         },
@@ -212,30 +227,46 @@ where
         .map_err(|e| io::Error::other(format!("{operation} decode: {e}")))
 }
 
+/// Drive a Produce v11 request over a fresh PLAIN-authenticated connection.
+pub async fn drive_produce_as_plain(
+    addr: SocketAddr,
+    req: ProduceRequest,
+    authentication: &PlainAuthenticationSetup<'_>,
+) -> Result<ProduceResponse, io::Error> {
+    request_as_plain(
+        addr,
+        &req,
+        &PlainRequestSetup {
+            authentication: authentication.clone(),
+            api: crate::support::wire::ApiRequestSetup {
+                api_key: krabka_ids::ApiKey(0),
+                version: krabka_ids::ApiVersion(11),
+            },
+            operation: "Produce",
+        },
+    )
+    .await
+}
+
 /// Create one topic as the admin fixture, checking the entire response's cardinality.
 ///
 /// # Panics
 /// Panics if authentication or creation fails, or the response has no unique topic row.
-pub async fn create_topic_as_super_user(
-    addr: SocketAddr,
-    client_id: &str,
-    name: &str,
-    partitions: i32,
-) {
-    let request =
-        topics::create_topic_request(topic(crate::support::topics::ConfiguredTopicSetup {
-            name: name.to_string(),
-            partitions: crate::support::topics::TopicPartitionCount(partitions),
-            ..Default::default()
-        }));
+pub async fn create_topic_as_super_user(addr: SocketAddr, setup: AutomaticTopicSetup<'_>) {
+    let name = setup.topic.name.clone();
+    let request = topics::create_topic_request(topic(setup.topic));
     let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
         request_as_plain(
             addr,
-            client_id,
-            ("admin", b"admin-secret"),
             &request,
-            (19, 7),
-            "CreateTopics",
+            &crate::kafka_wire::PlainRequestSetup {
+                authentication: crate::kafka_wire::PlainAuthenticationSetup::admin(setup.client_id),
+                api: crate::support::wire::ApiRequestSetup {
+                    api_key: krabka_ids::ApiKey(19),
+                    version: krabka_ids::ApiVersion(7),
+                },
+                operation: "CreateTopics",
+            },
         )
         .await
         .expect("CreateTopics as super-user must round-trip");
@@ -548,12 +579,27 @@ pub async fn sasl_scram_authenticate_on(
     .await?;
 
     // ── 2. SaslHandshake v1 (non-flexible).
-    sasl_handshake_on(stream, client_id, 2, mechanism.wire_name()).await?;
+    sasl_handshake_on(
+        stream,
+        SaslHandshakeSetup {
+            client_id,
+            mechanism: mechanism.wire_name(),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     // ── 3. SCRAM client-first → server-first.
     let (client_first, client) = krabka_macros::scram_client_first!(user, password, mechanism)?;
-    let scram_first_response =
-        sasl_authenticate_on(stream, client_id, 3, Bytes::from(client_first)).await?;
+    let scram_first_response = sasl_authenticate_on(
+        stream,
+        Bytes::from(client_first),
+        SaslAuthenticateSetup {
+            client_id,
+            ..Default::default()
+        },
+    )
+    .await?;
     if scram_first_response.error_code != 0 {
         return Err(io::Error::other(format!(
             "SaslAuthenticate round 1 failed: error_code={} error_message={:?}",
@@ -566,8 +612,15 @@ pub async fn sasl_scram_authenticate_on(
     let (client_final, client) = client
         .step(&server_first)
         .map_err(|e| io::Error::other(format!("scram client step: {e:?}")))?;
-    let scram_final_response =
-        sasl_authenticate_on(stream, client_id, 4, Bytes::from(client_final)).await?;
+    let scram_final_response = sasl_authenticate_on(
+        stream,
+        Bytes::from(client_final),
+        SaslAuthenticateSetup {
+            client_id,
+            correlation: crate::support::wire::CorrelationId(4),
+        },
+    )
+    .await?;
     if scram_final_response.error_code != 0 {
         return Err(io::Error::other(format!(
             "SaslAuthenticate round 2 failed: error_code={} error_message={:?}",
@@ -583,27 +636,40 @@ pub async fn sasl_scram_authenticate_on(
     Ok(())
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct SaslHandshakeSetup<'a> {
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    #[default(frames::CorrelationId(2))]
+    pub correlation: frames::CorrelationId,
+    #[default("PLAIN")]
+    pub mechanism: &'a str,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct SaslAuthenticateSetup<'a> {
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    #[default(frames::CorrelationId(3))]
+    pub correlation: frames::CorrelationId,
+}
+
 /// A successful v1 handshake on an existing SASL session.
-pub async fn sasl_handshake_on<S>(
-    stream: &mut S,
-    client_id: &str,
-    corr_id: i32,
-    mechanism: &str,
-) -> io::Result<()>
+pub async fn sasl_handshake_on<S>(stream: &mut S, setup: SaslHandshakeSetup<'_>) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let response: SaslHandshakeResponse = exchange(
         stream,
         &SaslHandshakeRequest {
-            mechanism: mechanism.to_string(),
+            mechanism: setup.mechanism.to_string(),
             ..Default::default()
         },
         ExchangeSetup {
             api_key: WireApiKey(17),
             version: WireApiVersion(1),
-            correlation: frames::CorrelationId(corr_id),
-            client_id,
+            correlation: setup.correlation,
+            client_id: setup.client_id,
             ..Default::default()
         },
     )
@@ -620,9 +686,8 @@ where
 /// One SASL Authenticate v2 message; callers decide whether an error is expected.
 pub async fn sasl_authenticate_on<S>(
     stream: &mut S,
-    client_id: &str,
-    corr_id: i32,
     auth_bytes: Bytes,
+    setup: SaslAuthenticateSetup<'_>,
 ) -> io::Result<SaslAuthenticateResponse>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -636,8 +701,8 @@ where
         ExchangeSetup {
             api_key: WireApiKey(36),
             version: WireApiVersion(2),
-            correlation: frames::CorrelationId(corr_id),
-            client_id,
+            correlation: setup.correlation,
+            client_id: setup.client_id,
             header: frames::HeaderEncoding::Flexible,
             ..Default::default()
         },
@@ -647,17 +712,31 @@ where
 
 pub async fn sasl_plain_reauthenticate_on(
     stream: &mut TcpStream,
-    client_id: &str,
-    corr: &mut i32,
-    user: &str,
-    password: &[u8],
+    corr: &mut frames::CorrelationId,
+    setup: &PlainAuthenticationSetup<'_>,
 ) -> Result<SaslAuthenticateResponse, io::Error> {
-    *corr += 1;
-    sasl_handshake_on(stream, client_id, *corr, "PLAIN").await?;
+    corr.0 += 1;
+    sasl_handshake_on(
+        stream,
+        SaslHandshakeSetup {
+            client_id: setup.client_id,
+            correlation: *corr,
+            ..Default::default()
+        },
+    )
+    .await?;
 
-    let payload = plain_payload(user, password);
-    *corr += 1;
-    sasl_authenticate_on(stream, client_id, *corr, payload).await
+    let payload = plain_payload(setup.user, &setup.password);
+    corr.0 += 1;
+    sasl_authenticate_on(
+        stream,
+        payload,
+        SaslAuthenticateSetup {
+            client_id: setup.client_id,
+            correlation: *corr,
+        },
+    )
+    .await
 }
 
 /// A Produce v11-compatible batch of zero-filled records for quota tests.

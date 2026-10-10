@@ -327,8 +327,8 @@ async fn the_written_metadata_hash_is_kafkas() {
 async fn the_replayed_assignment_timestamp_holds_the_interval() {
     use crate::coordinator::unified::{GroupSeed, wall_clock_ms};
 
-    let rows = crate::coordinator::unified::test_support::ASSIGNMENT_INTERVAL_CASES;
-    let mut cases = crate::coordinator::unified::test_support::AssignmentIntervalResults::default();
+    let (rows, mut cases) =
+        crate::coordinator::unified::test_support::assignment_interval_fixture();
 
     for (case, ago, wanted) in rows {
         let coordinator = Arc::new(GroupCoordinator::new(

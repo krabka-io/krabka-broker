@@ -143,18 +143,10 @@ async fn drive_sasl_plain_session(
 /// in-band re-auth on the same connection.
 pub async fn plain_authenticate(
     stream: &mut TcpStream,
-    corr: &mut i32,
-    user: &str,
-    password: &[u8],
+    corr: &mut crate::support::wire::CorrelationId,
+    setup: &PlainAuthenticationSetup<'_>,
 ) -> Result<SaslAuthenticateResponse, io::Error> {
-    crate::kafka_wire::sasl_plain_reauthenticate_on(
-        stream,
-        "krabka-sasl-test",
-        corr,
-        user,
-        password,
-    )
-    .await
+    crate::kafka_wire::sasl_plain_reauthenticate_on(stream, corr, setup).await
 }
 
 /// KIP-368: with `connections.max.reauth.ms` set, a PLAIN session reports the

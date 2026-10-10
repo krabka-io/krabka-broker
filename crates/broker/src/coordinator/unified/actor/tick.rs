@@ -190,6 +190,7 @@ mod tests {
             consumer_state::GroupState,
             group::GroupKind,
             offsets_log::fake::InMemoryOffsetsLog,
+            test_support::check_two_members_expired,
         },
     };
 
@@ -289,7 +290,7 @@ mod tests {
         }
         check!(written == expected);
         let state = group.as_consumer().unwrap();
-        check!((state.members.len(), state.group_epoch, state.target.epoch) == (0, 4, 2));
+        check_two_members_expired((state.members.len(), state.group_epoch, state.target.epoch));
     }
 
     /// KIP-848: Kafka fences a member that does not revoke its partitions
@@ -606,6 +607,11 @@ mod tests {
         assert!(!handle.tx.is_closed());
     }
 
+    fn check_preparing_survivor(state: &ClassicState) {
+        check!(state.state == ClassicGroupState::PreparingRebalance);
+        check!(state.members.keys().collect::<Vec<_>>() == vec!["m2"]);
+    }
+
     /// Kafka's `removeMemberAndUpdateClassicGroup` reaches `prepareRebalance`,
     /// which answers every member waiting in `SyncGroup` with
     /// `REBALANCE_IN_PROGRESS` at once and gives the survivors the whole group
@@ -631,8 +637,7 @@ mod tests {
                     ..Default::default()
                 }
         );
-        check!(state.state == ClassicGroupState::PreparingRebalance);
-        check!(state.members.keys().collect::<Vec<_>>() == vec!["m2"]);
+        check_preparing_survivor(state);
         // The survivor's 60 s rebalance timeout, not the 3 s initial delay.
         check!(
             state
@@ -699,8 +704,7 @@ mod tests {
                 == codes::REBALANCE_IN_PROGRESS
         );
         let state = group.as_classic().unwrap();
-        check!(state.state == ClassicGroupState::PreparingRebalance);
-        check!(state.members.keys().collect::<Vec<_>>() == vec!["m2"]);
+        check_preparing_survivor(state);
         check!(state.sync_deadline.is_none());
     }
 

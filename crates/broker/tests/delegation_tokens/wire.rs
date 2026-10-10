@@ -21,7 +21,9 @@ use tokio::net::TcpStream;
 
 use crate::{
     kafka_wire,
-    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
+    kafka_wire::{
+        ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup, SaslAuthenticateSetup,
+    },
     support::wire::CorrelationId as WireCorrelationId,
 };
 
@@ -109,9 +111,11 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
 
     let r1_resp = kafka_wire::sasl_authenticate_on(
         &mut stream,
-        CLIENT_ID,
-        3,
         bytes::Bytes::from(client_first),
+        SaslAuthenticateSetup {
+            client_id: CLIENT_ID,
+            ..Default::default()
+        },
     )
     .await?;
     if r1_resp.error_code != 0 {
@@ -124,9 +128,11 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
     let client_final = client.client_final(&r1_resp.auth_bytes)?;
     let r2_resp = kafka_wire::sasl_authenticate_on(
         &mut stream,
-        CLIENT_ID,
-        4,
         bytes::Bytes::from(client_final),
+        SaslAuthenticateSetup {
+            client_id: CLIENT_ID,
+            correlation: crate::support::wire::CorrelationId(4),
+        },
     )
     .await?;
     if r2_resp.error_code != 0 {

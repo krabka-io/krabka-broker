@@ -38,6 +38,26 @@ pub(super) struct TopicMetadataSetup<'a> {
     pub partitions: crate::test_support::PartitionCount,
 }
 
+impl TopicMetadataSetup<'_> {
+    pub(super) fn four_partitions() -> Self {
+        Self {
+            partitions: crate::test_support::PartitionCount(4),
+            ..Default::default()
+        }
+    }
+}
+
+/// A share coordinator for a topic, with the requested group configuration.
+pub(super) fn topic_coordinator(
+    topic: TopicMetadataSetup<'_>,
+    share: ShareGroupConfig,
+) -> (Arc<GroupCoordinator>, Uuid) {
+    let (metadata, id) = metadata_with_topic(topic);
+    let (coordinator, _) =
+        make_coordinator_with_config(metadata, NextGenConfig::assigning_at_once(), share);
+    (coordinator, id)
+}
+
 /// Metadata snapshot with one named topic and the requested partition count.
 pub(super) fn metadata_with_topic(
     setup: TopicMetadataSetup<'_>,

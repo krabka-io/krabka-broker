@@ -98,6 +98,24 @@ pub(super) fn source_partition(primary: &Path, setup: FutureSourceSetup) -> Arc<
     part
 }
 
+/// Own both log roots for a populated source and its future replica.
+pub(super) struct SourceFixture {
+    pub partition: Arc<Partition>,
+    pub target: tempfile::TempDir,
+    pub primary: tempfile::TempDir,
+}
+
+pub(super) fn source_fixture(setup: FutureSourceSetup) -> SourceFixture {
+    let primary = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let partition = source_partition(primary.path(), setup);
+    SourceFixture {
+        partition,
+        target,
+        primary,
+    }
+}
+
 /// Publish the source partition only after its initial records have been appended.
 pub(super) fn registered_source(
     primary: &Path,

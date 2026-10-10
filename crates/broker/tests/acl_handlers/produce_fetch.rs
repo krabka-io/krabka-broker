@@ -15,31 +15,22 @@ use assert2::assert;
 
 use crate::{
     ERR_TOPIC_AUTHORIZATION_FAILED,
-    acl_admin::create_topic_as_admin,
     client_api::{drive_fetch_as_plain, drive_produce_as_plain, single_record_produce_request},
     polling::retry_produce_until_allowed,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn produce_denied_without_topic_acl() {
-    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
-    let addr = handle.listen_addr();
-
-    // Admin creates topic "foo" with one partition (rf=1, single-node).
-    create_topic_as_admin(addr, "foo", 1).await;
-
-    // Seed a meaningless ACL via direct controller write. The super-user
-    // is already set so `authorize()`'s compat shim is off, but populating
-    // at least one ACL makes the test read closer to a "real" cluster
-    // post-bootstrap.
-    seed_dummy_acl(&handle).await;
+    let (handle, _dir, addr) = crate::sasl_cluster::start_denied_foo().await;
 
     // alice has NO Write-on-foo binding → Produce must return 29.
     let resp = drive_produce_as_plain(
         addr,
-        "alice",
-        b"wonderland",
         single_record_produce_request("foo", 0, b"hello"),
+        &crate::kafka_wire::PlainAuthenticationSetup {
+            client_id: crate::framing::CLIENT_ID,
+            ..Default::default()
+        },
     )
     .await
     .expect("Produce must round-trip");
@@ -85,14 +76,7 @@ async fn produce_allowed_with_topic_write_acl() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_denied_without_topic_read_acl() {
-    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
-    let addr = handle.listen_addr();
-
-    create_topic_as_admin(addr, "foo", 1).await;
-
-    // Seed a dummy ACL via direct controller write. Same rationale as in
-    // produce_denied_without_topic_acl.
-    seed_dummy_acl(&handle).await;
+    let (handle, _dir, addr) = crate::sasl_cluster::start_denied_foo().await;
 
     // alice has NO Read-on-foo binding → Fetch must return 29 on the
     // partition row.
@@ -102,9 +86,16 @@ async fn fetch_denied_without_topic_read_acl() {
             0,
         )),
     );
-    let resp = drive_fetch_as_plain(addr, "alice", b"wonderland", req)
-        .await
-        .expect("Fetch must round-trip");
+    let resp = drive_fetch_as_plain(
+        addr,
+        req,
+        &crate::kafka_wire::PlainAuthenticationSetup {
+            client_id: crate::framing::CLIENT_ID,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("Fetch must round-trip");
     handle.shutdown().await;
 
     assert!(resp.responses.len() == 1, "one topic in response");
@@ -117,16 +108,4 @@ async fn fetch_denied_without_topic_read_acl() {
         p.error_code == ERR_TOPIC_AUTHORIZATION_FAILED,
         "alice has no Read ACL on foo, expected TOPIC_AUTHORIZATION_FAILED (29), got {p:?}"
     );
-}
-
-/// Keep the authorizer populated while leaving alice without a topic grant.
-async fn seed_dummy_acl(handle: &krabka_broker::BrokerHandle) {
-    handle
-        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
-            "_nothing",
-            "User:admin",
-            krabka_metadata::AclOperation::Read,
-        ))
-        .await
-        .expect("seed dummy ACL");
 }

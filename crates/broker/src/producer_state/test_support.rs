@@ -2,9 +2,9 @@
 
 use super::ProducerState;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ProducerEpoch(pub i16);
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ProducerSequence(pub i32);
 #[derive(Clone, Copy)]
 pub(super) struct SequenceDelta(pub i32);
@@ -41,7 +41,7 @@ pub(super) async fn commit_fixture(state: &ProducerState, setup: ProducerCommitS
         .await;
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(super) enum RecordOffsets {
     #[default]
     Contiguous,

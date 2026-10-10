@@ -368,13 +368,27 @@ mod tests {
         (part, future_log, future_path)
     }
 
-    async fn truncated_copied_future(
-        primary: &std::path::Path,
-        target: &std::path::Path,
-    ) -> (Arc<Partition>, Arc<Mutex<Log>>, PathBuf) {
-        let copied = partition_with_copied_future_log(primary, target);
-        copied.0.truncate_to(Offset(3)).await.unwrap();
-        copied
+    struct TruncatedFutureFixture {
+        future_path: PathBuf,
+        future_log: Arc<Mutex<Log>>,
+        part: Arc<Partition>,
+        target: tempfile::TempDir,
+        _primary: tempfile::TempDir,
+    }
+
+    async fn truncated_copied_future() -> TruncatedFutureFixture {
+        let primary = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let (part, future_log, future_path) =
+            partition_with_copied_future_log(primary.path(), target.path());
+        part.truncate_to(Offset(3)).await.unwrap();
+        TruncatedFutureFixture {
+            future_path,
+            future_log,
+            part,
+            target,
+            _primary: primary,
+        }
     }
 
     /// The value size of each record of `log` from offset 0.
@@ -407,10 +421,8 @@ mod tests {
     /// in.
     #[tokio::test]
     async fn a_truncation_of_the_current_log_cuts_the_future_log_before_the_swap() {
-        let primary = tempdir().unwrap();
-        let target = tempdir().unwrap();
-        let (part, future_log, future_path) =
-            truncated_copied_future(primary.path(), target.path()).await;
+        let fixture = truncated_copied_future().await;
+        let part = fixture.part;
         for _ in 0..2 {
             append_value_batch(
                 &part,
@@ -420,7 +432,13 @@ mod tests {
         assert!(part.log_end_offset() == Offset(5));
         assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
 
-        finish_replaced_move(&part, future_log, future_path, target.path()).await;
+        finish_replaced_move(
+            &part,
+            fixture.future_log,
+            fixture.future_path,
+            fixture.target.path(),
+        )
+        .await;
     }
 
     /// The truncation mark is in memory, so a move that resumes after a restart
@@ -431,10 +449,8 @@ mod tests {
     /// records from 3 on and grew back to the same log end (#1219).
     #[tokio::test]
     async fn a_resumed_move_cuts_a_future_log_that_kept_what_the_current_log_dropped() {
-        let primary = tempdir().unwrap();
-        let target = tempdir().unwrap();
-        let (part, future_log, future_path) =
-            truncated_copied_future(primary.path(), target.path()).await;
+        let fixture = truncated_copied_future().await;
+        let part = fixture.part;
         // The restart: nothing remembers the cut.
         assert!(part.take_future_truncation().await.unwrap() == Some(Offset(3)));
         for _ in 0..2 {
@@ -446,9 +462,15 @@ mod tests {
                 },
             );
         }
-        assert!(part.log_end_offset() == future_log.lock().unwrap().log_end_offset());
+        assert!(part.log_end_offset() == fixture.future_log.lock().unwrap().log_end_offset());
 
-        finish_replaced_move(&part, future_log, future_path, target.path()).await;
+        finish_replaced_move(
+            &part,
+            fixture.future_log,
+            fixture.future_path,
+            fixture.target.path(),
+        )
+        .await;
     }
 
     /// The writer reports the lowest offset the log was cut to once, and

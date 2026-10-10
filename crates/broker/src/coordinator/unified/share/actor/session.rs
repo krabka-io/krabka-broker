@@ -72,6 +72,7 @@ mod tests {
             persistence::ShareGroupMetadataValue,
             state::ShareMemberState,
         },
+        test_support::check_two_members_expired,
     };
 
     /// Kafka runs a session timer per member, and each one that fires runs
@@ -80,10 +81,7 @@ mod tests {
     /// and an epoch bump, and no target is computed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn each_expired_member_is_fenced_in_a_batch_of_its_own() {
-        let (metadata, _id) = metadata_with_topic(TopicMetadataSetup {
-            partitions: crate::test_support::PartitionCount(4),
-            ..Default::default()
-        });
+        let (metadata, _id) = metadata_with_topic(TopicMetadataSetup::four_partitions());
         let config = ShareGroupConfig {
             session_timeout: Duration::from_millis(1),
             ..ShareGroupConfig::default()
@@ -131,7 +129,7 @@ mod tests {
             expected = vec![fence("m2", 3, t_hash), fence("m1", 4, 0)];
         }
         check!(written == expected);
-        check!((state.members.len(), state.group_epoch, state.target.epoch) == (0, 4, 2));
+        check_two_members_expired((state.members.len(), state.group_epoch, state.target.epoch));
     }
 
     /// Kafka's `maybeCleanupShareGroupState` reaches an empty group too: a

@@ -386,12 +386,28 @@ pub(crate) async fn assert_next_tombstone_batch(
     );
 }
 
+pub(crate) type AssignmentIntervalRow = (&'static str, Option<i64>, (i32, bool));
+
 /// Replayed assignment timestamps outside, inside and beyond the assignment interval.
-pub(crate) const ASSIGNMENT_INTERVAL_CASES: [(&str, Option<i64>, (i32, bool)); 3] = [
+pub(crate) const ASSIGNMENT_INTERVAL_CASES: [AssignmentIntervalRow; 3] = [
     ("no stored time", None, (3, true)),
     ("an assignment a second ago", Some(1_000), (2, false)),
     ("an assignment two minutes ago", Some(120_000), (3, true)),
 ];
+
+/// Fresh independent result rows for the assignment-interval replay scenarios.
+pub(crate) fn assignment_interval_fixture()
+-> ([AssignmentIntervalRow; 3], AssignmentIntervalResults) {
+    (
+        ASSIGNMENT_INTERVAL_CASES,
+        AssignmentIntervalResults::default(),
+    )
+}
+
+/// Both next-generation protocols fence two expired members without changing the target epoch.
+pub(crate) fn check_two_members_expired(actual: (usize, i32, i32)) {
+    assert2::check!(actual == (0, 4, 2));
+}
 
 type AssignmentAnswer = (&'static str, i32, bool);
 

@@ -32,15 +32,18 @@ pub async fn retry_produce_until_allowed(
     topic: &str,
 ) -> Result<ProduceResponse, io::Error> {
     crate::support::poll::retry_response(
-        std::time::Duration::from_secs(10),
-        std::time::Duration::from_millis(50),
-        || {
+        crate::support::poll::RetrySetup::default(),
+        || async {
             drive_produce_as_plain(
                 addr,
-                user,
-                password,
                 single_record_produce_request(topic, 0, b"hello"),
+                &crate::kafka_wire::PlainAuthenticationSetup {
+                    client_id: crate::framing::CLIENT_ID,
+                    user,
+                    password: (password).to_vec(),
+                },
             )
+            .await
         },
         |response| {
             response
@@ -77,9 +80,19 @@ pub async fn retry_metadata_until_topic_visible(
             .collect()
     }));
     crate::support::poll::retry_response(
-        std::time::Duration::from_secs(10),
-        std::time::Duration::from_millis(50),
-        || drive_metadata_as_plain(addr, user, password, req.clone()),
+        crate::support::poll::RetrySetup::default(),
+        || async {
+            drive_metadata_as_plain(
+                addr,
+                req.clone(),
+                &crate::kafka_wire::PlainAuthenticationSetup {
+                    client_id: crate::framing::CLIENT_ID,
+                    user,
+                    password: (password).to_vec(),
+                },
+            )
+            .await
+        },
         |response| {
             response
                 .topics
@@ -116,9 +129,19 @@ pub async fn retry_join_group_until_allowed(
     group_id: &str,
 ) -> Result<JoinGroupResponse, io::Error> {
     crate::support::poll::retry_response(
-        std::time::Duration::from_secs(10),
-        std::time::Duration::from_millis(50),
-        || drive_join_group_as_plain(addr, user, password, join_group_request(group_id)),
+        crate::support::poll::RetrySetup::default(),
+        || async {
+            drive_join_group_as_plain(
+                addr,
+                join_group_request(group_id),
+                &crate::kafka_wire::PlainAuthenticationSetup {
+                    client_id: crate::framing::CLIENT_ID,
+                    user,
+                    password: (password).to_vec(),
+                },
+            )
+            .await
+        },
         |response| response.error_code != ERR_GROUP_AUTHORIZATION_FAILED,
     )
     .await

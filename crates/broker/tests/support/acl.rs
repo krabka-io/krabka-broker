@@ -104,3 +104,15 @@ pub async fn seed_compat_shim_disable_acl(handle: &BrokerHandle) {
 pub async fn seed_alice_write_acl(handle: &BrokerHandle, topic: &str) {
     seed_topic_acl(handle, topic, "User:alice", AclOperation::Write).await;
 }
+
+/// Populate an irrelevant binding so the permissive empty-image shim is disabled.
+pub async fn seed_dummy_acl(handle: &krabka_broker::BrokerHandle) {
+    handle
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "_nothing",
+            "User:admin",
+            krabka_metadata::AclOperation::Read,
+        ))
+        .await
+        .expect("seed dummy ACL");
+}

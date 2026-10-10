@@ -216,3 +216,30 @@ where
     }
     R::decode(&mut body, version).map_err(|error| io::Error::other(format!("{context}: {error}")))
 }
+
+/// Bind a typed request and response to their wire API and codec diagnostic.
+#[macro_export]
+macro_rules! plain_request_driver_fixture {
+    ($vis:vis $name:ident {
+        request: $request:ty,
+        response: $response:ty,
+        api: $api:expr,
+        operation: $operation:literal $(,)?
+    }) => {
+        $vis async fn $name(
+            addr: ::std::net::SocketAddr,
+            request: $request,
+            authentication: &$crate::kafka_wire::PlainAuthenticationSetup<'_>,
+        ) -> ::std::io::Result<$response> {
+            $crate::kafka_wire::request_as_plain(
+                addr,
+                &request,
+                &$crate::kafka_wire::PlainRequestSetup {
+                    authentication: authentication.clone(),
+                    api: $api,
+                    operation: $operation,
+                },
+            ).await
+        }
+    };
+}
