@@ -2,12 +2,13 @@
 
 use bytes::Bytes;
 use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_ids::PartitionIndex;
 
 #[derive(krabka_macros::FieldDefaults)]
 pub struct ProducerRecordSetup {
     #[default("orders".into())]
     pub topic: String,
-    pub partition: Option<i32>,
+    pub partition: Option<PartitionIndex>,
     pub key: Option<Bytes>,
     #[default(Some(Bytes::from_static(b"v")))]
     pub value: Option<Bytes>,
@@ -22,7 +23,7 @@ pub fn producer_record(setup: ProducerRecordSetup) -> ProducerRecord {
     } = setup;
     ProducerRecord {
         topic,
-        partition,
+        partition: partition.map(|partition| partition.0),
         key,
         value,
         ..Default::default()

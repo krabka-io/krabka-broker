@@ -104,14 +104,14 @@ struct ExpectedTopicSetup<'a> {
     #[default("orders")]
     name: &'a str,
     topic_id: ProtoUuid,
-    error_code: i16,
+    error_code: crate::test_support::KafkaErrorCode,
     error_message: Option<String>,
-    #[default(-1)]
-    num_partitions: i32,
-    #[default(-1)]
-    replication_factor: i16,
+    #[default(crate::handlers::test_support::TopicPartitionCount(-1))]
+    num_partitions: crate::handlers::test_support::TopicPartitionCount,
+    #[default(crate::handlers::test_support::TopicReplicationFactor(-1))]
+    replication_factor: crate::handlers::test_support::TopicReplicationFactor,
     configs: Vec<CreatableTopicConfigs>,
-    topic_config_error_code: i16,
+    topic_config_error_code: crate::test_support::KafkaErrorCode,
 }
 
 fn expected_topic(setup: ExpectedTopicSetup<'_>) -> CreatableTopicResult {
@@ -128,12 +128,12 @@ fn expected_topic(setup: ExpectedTopicSetup<'_>) -> CreatableTopicResult {
     tagged_wire!(CreatableTopicResult {
         name: name.into(),
         topic_id,
-        error_code,
+        error_code: error_code.0,
         error_message,
-        num_partitions,
-        replication_factor,
+        num_partitions: num_partitions.0,
+        replication_factor: replication_factor.0,
         configs: Some(configs),
-        topic_config_error_code,
+        topic_config_error_code: topic_config_error_code.0,
     })
 }
 
@@ -144,7 +144,7 @@ fn expected_empty_topic(
 ) -> CreatableTopicResult {
     expected_topic(ExpectedTopicSetup {
         name,
-        error_code,
+        error_code: crate::test_support::KafkaErrorCode(error_code),
         error_message,
         ..Default::default()
     })
@@ -372,10 +372,12 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
                 topic_id: image.topic(&name).map_or(ProtoUuid([0; 16]), |topic| {
                     ProtoUuid(topic.topic_id.into_bytes())
                 }),
-                error_code,
+                error_code: crate::test_support::KafkaErrorCode(error_code),
                 error_message: error_message.map(str::to_owned),
-                num_partitions: created,
-                replication_factor: created_rf,
+                num_partitions: crate::handlers::test_support::TopicPartitionCount(created),
+                replication_factor: crate::handlers::test_support::TopicReplicationFactor(
+                    created_rf
+                ),
                 configs: if created_ok {
                     expected_configs(&[])
                 } else {
@@ -415,8 +417,8 @@ async fn handle_success_persists_topic_config_and_success_fields() {
             expected_topic(ExpectedTopicSetup {
                 name: "configured",
                 topic_id: resp.topics[0].topic_id,
-                num_partitions: 2,
-                replication_factor: 1,
+                num_partitions: crate::handlers::test_support::TopicPartitionCount(2),
+                replication_factor: crate::handlers::test_support::TopicReplicationFactor(1),
                 configs: expected_configs(&[("retention.ms", "60000")]),
                 ..Default::default()
             })
@@ -584,8 +586,8 @@ async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
         topics: vec![expected_topic(ExpectedTopicSetup {
             name: "retries",
             topic_id: resp.topics[0].topic_id,
-            num_partitions: 1,
-            replication_factor: 1,
+            num_partitions: crate::handlers::test_support::TopicPartitionCount(1),
+            replication_factor: crate::handlers::test_support::TopicReplicationFactor(1),
             configs: expected_configs(&[
                 ("delivery.mode", "scheduled"),
                 ("delivery.max.delay.ms", "-1"),
@@ -635,8 +637,8 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
         topics: vec![expected_topic(ExpectedTopicSetup {
             name: "events",
             topic_id: resp.topics[0].topic_id,
-            num_partitions: 1,
-            replication_factor: 1,
+            num_partitions: crate::handlers::test_support::TopicPartitionCount(1),
+            replication_factor: crate::handlers::test_support::TopicReplicationFactor(1),
             configs: expected_configs(&[("krabka.diskless", "true")]),
             ..Default::default()
         })],
@@ -901,8 +903,8 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
             expected_topic(ExpectedTopicSetup {
                 name: "throttled",
                 topic_id: resp.topics[0].topic_id,
-                num_partitions: 5,
-                replication_factor: 1,
+                num_partitions: crate::handlers::test_support::TopicPartitionCount(5),
+                replication_factor: crate::handlers::test_support::TopicReplicationFactor(1),
                 configs: expected_configs(&[]),
                 ..Default::default()
             })
@@ -1034,7 +1036,9 @@ async fn create_without_describe_configs_withholds_the_configs_but_creates_the_t
         topics: vec![expected_topic(ExpectedTopicSetup {
             name: "undescribable",
             topic_id: resp.topics[0].topic_id,
-            topic_config_error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            topic_config_error_code: crate::test_support::KafkaErrorCode(
+                codes::TOPIC_AUTHORIZATION_FAILED
+            ),
             ..Default::default()
         })],
     });
@@ -1613,7 +1617,9 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
                 expected_topic(ExpectedTopicSetup {
                     name,
                     topic_id: id_of(name),
-                    topic_config_error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                    topic_config_error_code: crate::test_support::KafkaErrorCode(
+                        codes::TOPIC_AUTHORIZATION_FAILED,
+                    ),
                     ..Default::default()
                 })
             } else {

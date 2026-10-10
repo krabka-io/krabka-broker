@@ -133,22 +133,9 @@ impl Harness {
     fn scheduled(
         &self,
         dir: &tempfile::TempDir,
-        topic: &str,
-        timestamps: &[i64],
+        setup: crate::delivery::test_support::ScheduleSetup<'_>,
     ) -> Arc<crate::partition::Partition> {
-        let partition = scheduled_partition(
-            dir,
-            &self.clock,
-            crate::delivery::test_support::ScheduleSetup {
-                topic,
-                activations: timestamps
-                    .iter()
-                    .copied()
-                    .map(crate::test_support::UnixMillis)
-                    .collect(),
-                ..Default::default()
-            },
-        );
+        let partition = scheduled_partition(dir, &self.clock, setup);
         register(&self.registry, &partition);
         partition
     }
@@ -181,9 +168,8 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
     let dir = tempfile::tempdir().expect("log root");
     let harness = Harness::new();
     // One batch that is already active, then one that comes due in 10s.
-    let partition = scheduled_partition(
+    let partition = harness.scheduled(
         &dir,
-        &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             activations: vec![
                 crate::test_support::UnixMillis(NOW_MS - 60_000),
@@ -192,7 +178,6 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
             ..Default::default()
         },
     );
-    register(&harness.registry, &partition);
 
     let task = harness.spawn();
     check!(wait_parked(&harness.timeline, 1).await);
@@ -238,9 +223,8 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
 async fn a_topic_that_delivers_immediately_reports_nothing() {
     let dir = tempfile::tempdir().expect("log root");
     let harness = Harness::new();
-    let immediate = scheduled_partition(
+    let immediate = harness.scheduled(
         &dir,
-        &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             topic: "immediate",
             policy: DeliveryPolicy::Immediate,
@@ -248,7 +232,6 @@ async fn a_topic_that_delivers_immediately_reports_nothing() {
             ..Default::default()
         },
     );
-    register(&harness.registry, &immediate);
 
     let task = harness.spawn();
     check!(wait_parked(&harness.timeline, 1).await);
@@ -266,9 +249,8 @@ async fn a_topic_that_delivers_immediately_reports_nothing() {
 async fn a_partition_this_broker_does_not_lead_is_left_alone() {
     let dir = tempfile::tempdir().expect("log root");
     let harness = Harness::new();
-    let followed = scheduled_partition(
+    let followed = harness.scheduled(
         &dir,
-        &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             topic: "followed",
             activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
@@ -276,7 +258,6 @@ async fn a_partition_this_broker_does_not_lead_is_left_alone() {
             ..Default::default()
         },
     );
-    register(&harness.registry, &followed);
 
     let task = harness.spawn();
     check!(wait_parked(&harness.timeline, 1).await);
@@ -294,16 +275,14 @@ async fn a_partition_this_broker_does_not_lead_is_left_alone() {
 async fn the_scheduler_adopts_a_leader_partition_so_a_produce_can_rearm_it() {
     let dir = tempfile::tempdir().expect("log root");
     let harness = Harness::new();
-    let partition = scheduled_partition(
+    let partition = harness.scheduled(
         &dir,
-        &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             topic: "adopted",
             activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
             ..Default::default()
         },
     );
-    register(&harness.registry, &partition);
 
     let task = harness.spawn();
     check!(wait_parked(&harness.timeline, 1).await);
@@ -341,7 +320,17 @@ fn reported_sweep(
 async fn the_sweep_reports_the_watermark_and_the_pending_count() {
     let dir = tempfile::tempdir().expect("log root");
     let harness = Harness::new();
-    let _partition = harness.scheduled(&dir, "reported", &[NOW_MS - 60_000, NOW_MS + 10_000]);
+    let _partition = harness.scheduled(
+        &dir,
+        crate::delivery::test_support::ScheduleSetup {
+            topic: "reported",
+            activations: vec![
+                crate::test_support::UnixMillis(NOW_MS - 60_000),
+                crate::test_support::UnixMillis(NOW_MS + 10_000),
+            ],
+            ..Default::default()
+        },
+    );
 
     let (mut heap, _waker) = reported_sweep(&harness, harness.metrics.as_ref());
 
@@ -365,7 +354,14 @@ async fn the_sweep_reports_the_watermark_and_the_pending_count() {
 async fn a_sweep_with_no_metrics_of_its_own_still_advances_the_watermark() {
     let dir = tempfile::tempdir().expect("log root");
     let harness = Harness::new();
-    let partition = harness.scheduled(&dir, "quiet", &[NOW_MS - 60_000]);
+    let partition = harness.scheduled(
+        &dir,
+        crate::delivery::test_support::ScheduleSetup {
+            topic: "quiet",
+            activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
+            ..Default::default()
+        },
+    );
 
     let (mut heap, _waker) = reported_sweep(&harness, &NoDeliveryMetrics);
 
@@ -387,16 +383,14 @@ async fn check_dead_start(
 async fn the_scheduler_stops_without_sweeping_when_the_first_deadline_is_refused() {
     let dir = tempfile::tempdir().expect("log root");
     let harness = Harness::new();
-    let partition = scheduled_partition(
+    let _partition = harness.scheduled(
         &dir,
-        &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             topic: "unarmable",
             activations: vec![crate::test_support::UnixMillis(NOW_MS + 10_000)],
             ..Default::default()
         },
     );
-    register(&harness.registry, &partition);
 
     let timer = BrokenTimer::dead(TimerFailure::Registration);
     let task = harness.spawn_on(timer.injectable());
@@ -422,16 +416,14 @@ async fn the_scheduler_stops_when_the_first_deadline_is_armed_but_never_complete
 async fn the_scheduler_sweeps_once_and_stops_when_the_next_sleep_cannot_be_armed() {
     let dir = tempfile::tempdir().expect("log root");
     let harness = Harness::new();
-    let partition = scheduled_partition(
+    let partition = harness.scheduled(
         &dir,
-        &harness.clock,
         crate::delivery::test_support::ScheduleSetup {
             topic: "unrearmable",
             activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
             ..Default::default()
         },
     );
-    register(&harness.registry, &partition);
 
     let timer = BrokenTimer::dead_after(1, TimerFailure::Registration);
     let task = harness.spawn_on(timer.injectable());

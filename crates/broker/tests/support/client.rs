@@ -252,9 +252,13 @@ pub async fn create_configured_topic(
             CreateTopicSetup {
                 topic,
                 configs,
-                num_partitions: partitions,
-                replication_factor,
-                timeout_ms,
+                num_partitions: crate::support::topics::TopicPartitionCount(partitions),
+                replication_factor: crate::support::topics::TopicReplicationFactor(
+                    replication_factor,
+                ),
+                timeout: <krabka_units::Time as krabka_units::convert::TimeExt>::from_millis(
+                    i64::from(timeout_ms),
+                ),
             },
         ))
         .await

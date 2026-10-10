@@ -123,31 +123,26 @@ async fn spawn_on(
     (task, partition, before)
 }
 
-#[tokio::test]
-async fn run_stops_without_sweeping_when_the_first_deadline_is_refused() {
+/// Both initial timer failures end the task before it can compact the partition.
+async fn check_initial_timer_failure(topic: &str, failure: TimerFailure) {
     let dir = tempfile::tempdir().expect("log root");
-    let timer = BrokenTimer::dead(TimerFailure::Registration);
-    let (task, partition, before) = spawn_on(&dir, "unarmable", timer.injectable()).await;
-
-    // Nobody cancels the token, so the task can only end by giving up on its
-    // ticker — and it gives up before the start-up sweep, so the compactable
-    // partition is left exactly as it was.
+    let timer = BrokenTimer::dead(failure);
+    let (task, partition, before) = spawn_on(&dir, topic, timer.injectable()).await;
     task.await.expect("cleaner task exits");
     check!(record_count(&partition) == before);
     check!(timer.registrations() == 1);
 }
 
 #[tokio::test]
-async fn run_stops_when_the_first_deadline_is_armed_but_never_completes() {
-    let dir = tempfile::tempdir().expect("log root");
-    let timer = BrokenTimer::dead(TimerFailure::Completion);
-    let (task, partition, before) = spawn_on(&dir, "unfired", timer.injectable()).await;
+async fn run_stops_without_sweeping_when_the_first_deadline_is_refused() {
+    // Nobody cancels the token; refusal of the first deadline ends the task.
+    check_initial_timer_failure("unarmable", TimerFailure::Registration).await;
+}
 
-    // The deadline registers, so the loop reaches its select — and then fails,
-    // which ends the task on the other of the two timer paths.
-    task.await.expect("cleaner task exits");
-    check!(record_count(&partition) == before);
-    check!(timer.registrations() == 1);
+#[tokio::test]
+async fn run_stops_when_the_first_deadline_is_armed_but_never_completes() {
+    // Registration succeeds, then the failed deadline ends the select loop.
+    check_initial_timer_failure("unfired", TimerFailure::Completion).await;
 }
 
 #[tokio::test]

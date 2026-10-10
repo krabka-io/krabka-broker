@@ -127,7 +127,7 @@ async fn produce_appender(
             .send(crate::support::producer::producer_record(
                 crate::support::producer::ProducerRecordSetup {
                     topic: (TOPIC).into(),
-                    partition: Some(0),
+                    partition: Some(krabka_ids::PartitionIndex(0)),
                     value: Some(Bytes::copy_from_slice(&value)),
                     ..Default::default()
                 },

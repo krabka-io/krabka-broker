@@ -54,7 +54,7 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
     );
     let create = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
         topic: TOPIC,
-        num_partitions: PARTITIONS,
+        num_partitions: crate::handlers::test_support::TopicPartitionCount(PARTITIONS),
         ..Default::default()
     });
     dispatch_context(

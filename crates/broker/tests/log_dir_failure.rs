@@ -239,7 +239,7 @@ async fn produce(producer: &Producer, timestamp_ms: i64) {
             ..crate::support::producer::producer_record(
                 crate::support::producer::ProducerRecordSetup {
                     topic: TOPIC.to_owned(),
-                    partition: Some(0),
+                    partition: Some(krabka_ids::PartitionIndex(0)),
                     value: Some(Bytes::from_static(b"log-dir-failure")),
                     ..Default::default()
                 },

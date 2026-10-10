@@ -51,7 +51,7 @@ async fn create_topic(broker: &BrokerHandle, topic: &str, partitions: i32) -> Wi
         crate::handlers::test_support::ClientTopicSetup {
             client_id: "share-session-test",
             name: topic,
-            partitions,
+            partitions: crate::handlers::test_support::TopicPartitionCount(partitions),
         },
     )
     .await
@@ -63,7 +63,7 @@ async fn produce(broker: &BrokerHandle, topic: &str, partition: i32) {
         broker,
         crate::handlers::test_support::ProduceRecordsSetup {
             topic,
-            partition_index: partition,
+            partition_index: krabka_ids::PartitionIndex(partition),
             ..Default::default()
         },
     )

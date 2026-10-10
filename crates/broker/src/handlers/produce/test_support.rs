@@ -21,6 +21,13 @@ pub(super) struct PipelineFixture {
     phases: crate::metrics::RequestPhases,
 }
 
+#[derive(krabka_macros::FieldDefaults)]
+pub(super) struct PipelinePartitionSetup<'a> {
+    #[default("orders")]
+    pub topic: &'a str,
+    pub log_config: krabka_log::LogConfig,
+}
+
 impl PipelineFixture {
     pub(super) async fn register_partition(
         &self,
@@ -43,17 +50,24 @@ impl PipelineFixture {
         topic: &str,
         image: &MetadataImage,
     ) -> Arc<crate::partition::Partition> {
-        self.partition_with_config(root, topic, image, krabka_log::LogConfig::default())
-            .await
+        self.partition_with_config(
+            root,
+            image,
+            PipelinePartitionSetup {
+                topic,
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     pub(super) async fn partition_with_config(
         &self,
         root: &std::path::Path,
-        topic: &str,
         image: &MetadataImage,
-        log_config: krabka_log::LogConfig,
+        setup: PipelinePartitionSetup<'_>,
     ) -> Arc<crate::partition::Partition> {
+        let PipelinePartitionSetup { topic, log_config } = setup;
         let partition = crate::handlers::test_support::spawn_partition(
             root,
             crate::handlers::test_support::PartitionSpawnSetup {
@@ -75,10 +89,10 @@ impl PipelineFixture {
         partition
     }
 
-    pub(super) fn new(node_id: u64) -> Self {
+    pub(super) fn new(node_id: krabka_ids::NodeId) -> Self {
         let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
         let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-            krabka_audit::NodeId(node_id),
+            node_id,
             Arc::clone(&partitions),
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             50,

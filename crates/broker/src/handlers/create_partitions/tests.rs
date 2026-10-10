@@ -42,8 +42,8 @@ macro_rules! seeded_partition_topic {
             &$handle,
             crate::handlers::create_partitions::test_support::SeedTopicSetup {
                 name: $topic,
-                partitions: $partitions,
-                rf: $replication,
+                partitions: crate::handlers::test_support::TopicPartitionCount($partitions),
+                rf: crate::handlers::test_support::TopicReplicationFactor($replication),
             },
         )
         .await;
@@ -150,7 +150,7 @@ async fn handle_rejects_an_unplaceable_new_diskless_partition() {
         &broker_handle,
         crate::handlers::create_partitions::test_support::SeedTopicSetup {
             name: "diskless-grow",
-            partitions: 1,
+            partitions: crate::handlers::test_support::TopicPartitionCount(1),
             ..Default::default()
         },
     )

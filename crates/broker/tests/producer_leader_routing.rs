@@ -139,7 +139,7 @@ async fn producer_routes_to_non_bootstrap_leaders() {
             .enqueue(crate::support::producer::producer_record(
                 crate::support::producer::ProducerRecordSetup {
                     topic: (topic).into(),
-                    partition: Some(p),
+                    partition: Some(krabka_ids::PartitionIndex(p)),
                     value: Some(Bytes::from(v.clone())),
                     ..Default::default()
                 },

@@ -68,7 +68,7 @@ async fn create_topic_with_partitions(
         crate::handlers::test_support::ClientTopicSetup {
             client_id: "share-fetch-byte-limit-test",
             name,
-            partitions,
+            partitions: crate::handlers::test_support::TopicPartitionCount(partitions),
         },
     )
     .await

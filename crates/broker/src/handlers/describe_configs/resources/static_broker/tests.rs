@@ -9,7 +9,10 @@ use krabka_protocol::owned::describe_configs_response::DescribeConfigsSynonym;
 use super::{
     super::{
         super::wire::CONFIG_SOURCE_DEFAULT,
-        tests::{ExpectedConfigSetup, expected_config_entry, synonym as expected_synonym},
+        tests::{
+            ConfigMutability, ConfigSourceCode, ConfigTypeCode, ExpectedConfigSetup,
+            expected_config_entry, synonym as expected_synonym,
+        },
     },
     *,
 };
@@ -90,7 +93,7 @@ fn an_operator_override_heads_the_chain_over_the_retained_default() {
             == vec![
                 expected_entry(ExpectedStaticConfigSetup {
                     value: "120000",
-                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    source: ConfigSourceCode(CONFIG_SOURCE_STATIC_BROKER),
                     synonyms: vec![
                         expected_synonym(
                             config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
@@ -108,7 +111,7 @@ fn an_operator_override_heads_the_chain_over_the_retained_default() {
                 expected_entry(ExpectedStaticConfigSetup {
                     key: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
                     value: "60000",
-                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    source: ConfigSourceCode(CONFIG_SOURCE_STATIC_BROKER),
                     synonyms: vec![
                         expected_synonym(
                             config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
@@ -201,7 +204,7 @@ fn a_supplied_value_identical_to_the_default_still_reports_as_static() {
         entries
             == vec![
                 expected_entry(ExpectedStaticConfigSetup {
-                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    source: ConfigSourceCode(CONFIG_SOURCE_STATIC_BROKER),
                     synonyms: vec![
                         expected_synonym(
                             config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
@@ -234,11 +237,11 @@ fn topic_creation_defaults_report_their_provenance() {
         expected_entry(ExpectedStaticConfigSetup {
             key,
             value: named.unwrap_or("1"),
-            source: if named.is_some() {
+            source: ConfigSourceCode(if named.is_some() {
                 CONFIG_SOURCE_STATIC_BROKER
             } else {
                 CONFIG_SOURCE_DEFAULT
-            },
+            }),
             synonyms: named
                 .map(|value| expected_synonym(key, value, CONFIG_SOURCE_STATIC_BROKER))
                 .into_iter()
@@ -291,7 +294,7 @@ fn static_boolean_keys_report_their_provenance() {
         ..expected_entry(ExpectedStaticConfigSetup {
             key,
             value,
-            source,
+            source: ConfigSourceCode(source),
             synonyms,
         })
     };
@@ -428,8 +431,8 @@ struct ExpectedStaticConfigSetup<'a> {
     key: &'a str,
     #[default("604800000")]
     value: &'a str,
-    #[default(CONFIG_SOURCE_DEFAULT)]
-    source: i8,
+    #[default(ConfigSourceCode(CONFIG_SOURCE_DEFAULT))]
+    source: ConfigSourceCode,
     synonyms: Vec<DescribeConfigsSynonym>,
 }
 
@@ -443,10 +446,10 @@ fn expected_entry(setup: ExpectedStaticConfigSetup<'_>) -> DescribeConfigsResour
     expected_config_entry(ExpectedConfigSetup {
         name: key,
         value: Some(value),
-        read_only: true,
+        mutability: ConfigMutability::ReadOnly,
         source,
         synonyms,
-        config_type: INT,
+        config_type: ConfigTypeCode(INT),
         documentation: Some(doc_for(key)),
     })
 }

@@ -64,7 +64,7 @@ async fn produce(broker: &BrokerHandle, topic: &str, count: i32) {
         broker,
         crate::handlers::test_support::ProduceRecordsSetup {
             topic,
-            count,
+            count: crate::handlers::test_support::RecordCount(count),
             ..Default::default()
         },
     )

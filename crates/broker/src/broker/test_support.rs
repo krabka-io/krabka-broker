@@ -9,11 +9,7 @@ use std::sync::Arc;
 use assert2::assert;
 use krabka_ids::{LeaderEpoch, NodeId, PartitionIndex};
 
-use crate::{
-    broker::{BrokerHandle, partition_spawn::spawn_partition},
-    partition::Partition,
-    test_support::FakeMetadataSource,
-};
+use crate::{broker::BrokerHandle, partition::Partition, test_support::FakeMetadataSource};
 
 /// A metadata source over `image`, with `leader` as the controller leader and
 /// a loopback controller listener for the gauges and adapter paths to report.
@@ -58,14 +54,14 @@ pub(super) fn local_partition_with_records(
     std::fs::create_dir_all(&part_dir).expect("create partition dir");
     let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default())
         .expect("open partition log");
-    let part = spawn_partition(
-        topic.to_string(),
-        partition,
-        log_dir.to_path_buf(),
+    let part = crate::test_support::spawn_standalone_partition(
+        log_dir,
         log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
+        crate::test_support::StandalonePartitionSetup {
+            topic,
+            partition,
+            ..Default::default()
+        },
     );
     if !values.is_empty() {
         let mut batch = krabka_protocol::records::RecordBatch {

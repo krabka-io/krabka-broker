@@ -404,8 +404,8 @@ async fn create_topic(bootstrap: &str) {
                     topics: vec![crate::support::topics::creatable_topic_with_configs(
                         crate::support::topics::ConfiguredTopicSetup {
                             name: TOPIC.into(),
-                            partitions: PARTITIONS,
-                            replicas: 3,
+                            partitions: crate::support::topics::TopicPartitionCount(PARTITIONS),
+                            replicas: crate::support::topics::TopicReplicationFactor(3),
                             configs: vec![CreatableTopicConfig {
                                 name: "min.insync.replicas".into(),
                                 value: Some("2".into()),
@@ -579,7 +579,7 @@ async fn wait_isr(bootstrap: &str, partition: i32, expected: usize) {
 fn record(partition: i32, key: String, bytes: usize) -> ProducerRecord {
     crate::support::producer::producer_record(crate::support::producer::ProducerRecordSetup {
         topic: (TOPIC).into(),
-        partition: Some(partition),
+        partition: Some(krabka_ids::PartitionIndex(partition)),
         key: Some(key.into()),
         value: Some(Bytes::from(vec![b'x'; bytes])),
     })

@@ -79,7 +79,7 @@ async fn create_topic_with_partitions(broker: &Broker, num_partitions: i32) {
     );
     let request = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
         topic: TOPIC,
-        num_partitions,
+        num_partitions: crate::handlers::test_support::TopicPartitionCount(num_partitions),
         ..Default::default()
     });
     dispatch_context(

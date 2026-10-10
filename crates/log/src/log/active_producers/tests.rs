@@ -13,31 +13,40 @@ use crate::{
 // `base_sequence`, whose max timestamp is `max_timestamp`.
 krabka_macros::producer_batch_fixture!(data, ::bytes::Bytes::from_static(b"v"));
 
-/// A commit (`commit = true`) or abort marker of `producer` that
-/// `coordinator_epoch` wrote at `timestamp`.
+#[derive(Clone, Copy, Default)]
+enum MarkerOutcome {
+    #[default]
+    Commit,
+    Abort,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MarkerCoordinatorEpoch(i32);
+
+/// A commit or abort marker with an explicit producer, coordinator, and timestamp.
 #[derive(Clone, Copy)]
 struct MarkerSetup {
-    producer: (i64, i16),
-    commit: bool,
-    coordinator_epoch: i32,
-    timestamp: i64,
+    producer: BatchProducer,
+    outcome: MarkerOutcome,
+    coordinator_epoch: MarkerCoordinatorEpoch,
+    timestamp: BatchTimestamp,
 }
 
 impl Default for MarkerSetup {
     fn default() -> Self {
         Self {
-            producer: (7, 0),
-            commit: true,
-            coordinator_epoch: 0,
-            timestamp: 1_000,
+            producer: BatchProducer::from_wire((7, 0)),
+            outcome: MarkerOutcome::Commit,
+            coordinator_epoch: MarkerCoordinatorEpoch(0),
+            timestamp: BatchTimestamp(1_000),
         }
     }
 }
 
 fn marker(setup: MarkerSetup) -> RecordBatch {
     let MarkerSetup {
-        producer: (producer_id, producer_epoch),
-        commit,
+        producer,
+        outcome,
         coordinator_epoch,
         timestamp,
     } = setup;
@@ -45,13 +54,16 @@ fn marker(setup: MarkerSetup) -> RecordBatch {
         attributes: Attributes::default()
             .with_transactional(true)
             .with_control(true),
-        base_timestamp: timestamp,
-        max_timestamp: timestamp,
-        producer_id,
-        producer_epoch,
+        base_timestamp: timestamp.0,
+        max_timestamp: timestamp.0,
+        producer_id: producer.id.0,
+        producer_epoch: producer.epoch.0,
         records: vec![Record {
-            key: Some(control_key(i16::from(commit))),
-            value: Some(control_value(coordinator_epoch)),
+            key: Some(control_key(match outcome {
+                MarkerOutcome::Commit => 1,
+                MarkerOutcome::Abort => 0,
+            })),
+            value: Some(control_value(coordinator_epoch.0)),
             ..Record::default()
         }],
         ..RecordBatch::default()
@@ -99,9 +111,9 @@ fn producer_history(history: ProducerHistory) -> Vec<RecordBatch> {
                 ..Default::default()
             }),
             marker(MarkerSetup {
-                producer: (9, 1),
-                coordinator_epoch: 5,
-                timestamp: 3_000,
+                producer: BatchProducer::from_wire((9, 1)),
+                coordinator_epoch: MarkerCoordinatorEpoch(5),
+                timestamp: BatchTimestamp(3_000),
                 ..Default::default()
             }),
         ],
@@ -113,16 +125,16 @@ fn producer_history(history: ProducerHistory) -> Vec<RecordBatch> {
                 ..Default::default()
             }),
             marker(MarkerSetup {
-                producer: (10, 2),
-                commit: false,
-                coordinator_epoch: 6,
-                timestamp: 4_000,
+                producer: BatchProducer::from_wire((10, 2)),
+                outcome: MarkerOutcome::Abort,
+                coordinator_epoch: MarkerCoordinatorEpoch(6),
+                timestamp: BatchTimestamp(4_000),
             }),
         ],
         ProducerHistory::MarkerOnly => vec![marker(MarkerSetup {
-            producer: (11, 3),
-            coordinator_epoch: 7,
-            timestamp: 5_000,
+            producer: BatchProducer::from_wire((11, 3)),
+            coordinator_epoch: MarkerCoordinatorEpoch(7),
+            timestamp: BatchTimestamp(5_000),
             ..Default::default()
         })],
         ProducerHistory::SeveralProducers => vec![
@@ -309,9 +321,9 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
                     ..Default::default()
                 }),
                 marker(MarkerSetup {
-                    producer: (12, 0),
-                    coordinator_epoch: 2,
-                    timestamp: 2_000,
+                    producer: BatchProducer::from_wire((12, 0)),
+                    coordinator_epoch: MarkerCoordinatorEpoch(2),
+                    timestamp: BatchTimestamp(2_000),
                     ..Default::default()
                 }),
                 data(ProducerBatchSetup {
@@ -453,9 +465,9 @@ fn remove_expired_producers_keeps_open_transactions_and_recent_producers() {
         }))
         .unwrap();
         log.append(&mut marker(MarkerSetup {
-            producer: (2, 0),
-            coordinator_epoch: 4,
-            timestamp: 3_000,
+            producer: BatchProducer::from_wire((2, 0)),
+            coordinator_epoch: MarkerCoordinatorEpoch(4),
+            timestamp: BatchTimestamp(3_000),
             ..Default::default()
         }))
         .unwrap();

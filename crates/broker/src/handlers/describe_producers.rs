@@ -546,30 +546,57 @@ mod tests {
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct DataBatchSetup {
         batch: ProducerBatchSetup,
-        base_offset: i64,
+        base_offset: krabka_log::Offset,
     }
 
     /// A data batch of `producer` (`(id, epoch)`) with `records` records from
     /// sequence 0, at `base_offset`, whose max timestamp is `max_timestamp`.
     fn data_batch(setup: DataBatchSetup) -> krabka_protocol::records::RecordBatch {
         krabka_protocol::records::RecordBatch {
-            base_offset: setup.base_offset,
+            base_offset: setup.base_offset.0,
             ..producer_batch(setup.batch)
         }
     }
 
+    /// `DescribeProducers` widens the persisted producer epoch to an i32.
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        Default,
+        PartialEq,
+        Eq,
+        derive_more::Display,
+        derive_more::From,
+        derive_more::Into,
+    )]
+    struct ReportedProducerEpoch(i32);
+
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        Default,
+        PartialEq,
+        Eq,
+        derive_more::Display,
+        derive_more::From,
+        derive_more::Into,
+    )]
+    struct ProducerCoordinatorEpoch(i32);
+
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct ExpectedProducerSetup {
-        #[default(7)]
-        producer_id: i64,
-        producer_epoch: i32,
-        last_sequence: i32,
-        #[default(1_000)]
-        last_timestamp: i64,
-        #[default(-1)]
-        coordinator_epoch: i32,
-        #[default(-1)]
-        current_txn_start_offset: i64,
+        #[default(krabka_ids::ProducerId(7))]
+        producer_id: krabka_ids::ProducerId,
+        producer_epoch: ReportedProducerEpoch,
+        last_sequence: BatchSequence,
+        #[default(BatchTimestamp(1_000))]
+        last_timestamp: BatchTimestamp,
+        #[default(ProducerCoordinatorEpoch(-1))]
+        coordinator_epoch: ProducerCoordinatorEpoch,
+        #[default(krabka_log::Offset(-1))]
+        current_txn_start_offset: krabka_log::Offset,
     }
 
     fn producer_row(setup: ExpectedProducerSetup) -> ProducerState {
@@ -582,12 +609,12 @@ mod tests {
             current_txn_start_offset,
         } = setup;
         ProducerState {
-            producer_id,
-            producer_epoch,
-            last_sequence,
-            last_timestamp,
-            coordinator_epoch,
-            current_txn_start_offset,
+            producer_id: producer_id.0,
+            producer_epoch: producer_epoch.0,
+            last_sequence: last_sequence.0,
+            last_timestamp: last_timestamp.0,
+            coordinator_epoch: coordinator_epoch.0,
+            current_txn_start_offset: current_txn_start_offset.0,
             ..Default::default()
         }
     }
@@ -699,7 +726,7 @@ mod tests {
                     transaction: BatchTransactionMode::Transactional,
                     ..Default::default()
                 },
-                base_offset: 3,
+                base_offset: krabka_log::Offset(3),
             }))
             .await
             .expect("replicate an open transaction");
@@ -732,8 +759,8 @@ mod tests {
                     partition_row(
                         codes::NONE,
                         vec![producer_row(ExpectedProducerSetup {
-                            producer_id: 10,
-                            last_sequence: 2,
+                            producer_id: krabka_ids::ProducerId(10),
+                            last_sequence: BatchSequence(2),
                             ..Default::default()
                         })],
                     ),
@@ -744,17 +771,17 @@ mod tests {
                         codes::NONE,
                         vec![
                             producer_row(ExpectedProducerSetup {
-                                producer_id: 20,
-                                producer_epoch: 3,
-                                last_sequence: 1,
-                                last_timestamp: 3_000,
-                                coordinator_epoch: 9,
+                                producer_id: krabka_ids::ProducerId(20),
+                                producer_epoch: ReportedProducerEpoch(3),
+                                last_sequence: BatchSequence(1),
+                                last_timestamp: BatchTimestamp(3_000),
+                                coordinator_epoch: ProducerCoordinatorEpoch(9),
                                 ..Default::default()
                             }),
                             producer_row(ExpectedProducerSetup {
-                                producer_id: 21,
-                                last_timestamp: 4_000,
-                                current_txn_start_offset: 3,
+                                producer_id: krabka_ids::ProducerId(21),
+                                last_timestamp: BatchTimestamp(4_000),
+                                current_txn_start_offset: krabka_log::Offset(3),
                                 ..Default::default()
                             }),
                         ],

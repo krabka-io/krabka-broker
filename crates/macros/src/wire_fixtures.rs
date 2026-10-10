@@ -96,29 +96,40 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
 pub(crate) fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError> {
     crate::fixtures::named_items(input, |name| {
         moxy::template! {
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, ::derive_more::Display, ::derive_more::From, ::derive_more::Into)]
+            pub(crate) struct TopicPartitionCount(pub i32);
+            impl Default for TopicPartitionCount {
+                fn default() -> Self { Self(1) }
+            }
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, ::derive_more::Display, ::derive_more::From, ::derive_more::Into)]
+            pub(crate) struct TopicReplicationFactor(pub i16);
+            impl Default for TopicReplicationFactor {
+                fn default() -> Self { Self(1) }
+            }
             #[derive(Clone, Copy)]
             pub(crate) struct CreateTopicSetup<'a> {
                 pub topic: &'a str,
                 pub configs: &'a [(&'a str, &'a str)],
-                pub num_partitions: i32,
-                pub replication_factor: i16,
-                pub timeout_ms: i32,
+                pub num_partitions: TopicPartitionCount,
+                pub replication_factor: TopicReplicationFactor,
+                pub timeout: ::krabka_units::Time,
             }
             impl Default for CreateTopicSetup<'_> {
                 fn default() -> Self {
-                    Self { topic: "orders", configs: &[], num_partitions: 1, replication_factor: 1, timeout_ms: 5_000 }
+                    Self { topic: "orders", configs: &[], num_partitions: TopicPartitionCount(1), replication_factor: TopicReplicationFactor(1), timeout: ::krabka_units::millis(5_000) }
                 }
             }
             pub(crate) fn {{ name }}(setup: CreateTopicSetup<'_>) -> ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
-                let CreateTopicSetup { topic, configs, num_partitions, replication_factor, timeout_ms } = setup;
+                use ::krabka_units::convert::TimeExt as _;
+                let CreateTopicSetup { topic, configs, num_partitions, replication_factor, timeout } = setup;
                 ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
                     topics: vec![::krabka_protocol::owned::create_topics_request::CreatableTopic {
-                        name: topic.to_owned(), num_partitions, replication_factor,
+                        name: topic.to_owned(), num_partitions: num_partitions.0, replication_factor: replication_factor.0,
                         configs: configs.iter().map(|(name, value)| ::krabka_protocol::owned::create_topics_request::CreatableTopicConfig {
                             name: (*name).to_owned(), value: Some((*value).to_owned()), ..Default::default()
                         }).collect(),
                         ..Default::default()
-                    }], timeout_ms, ..Default::default()
+                    }], timeout_ms: i32::try_from(timeout.millis_i64()).expect("fixture timeout fits Kafka field"), ..Default::default()
                 }
             }
         }

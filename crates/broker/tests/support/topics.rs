@@ -58,10 +58,10 @@ pub fn metadata_topic(
 pub struct ConfiguredTopicSetup {
     #[default("orders".into())]
     pub name: String,
-    #[default(1)]
-    pub partitions: i32,
-    #[default(1)]
-    pub replicas: i16,
+    #[default(TopicPartitionCount(1))]
+    pub partitions: TopicPartitionCount,
+    #[default(TopicReplicationFactor(1))]
+    pub replicas: TopicReplicationFactor,
     pub configs: Vec<CreatableTopicConfig>,
 }
 
@@ -74,7 +74,7 @@ pub fn creatable_topic_with_configs(setup: ConfiguredTopicSetup) -> CreatableTop
     } = setup;
     CreatableTopic {
         configs,
-        ..creatable_topic(name, partitions, replicas)
+        ..creatable_topic(name, partitions.0, replicas.0)
     }
 }
 
@@ -83,7 +83,7 @@ pub fn diskless_topic_request(name: impl Into<String>, replication: i16) -> Crea
     create_topic_request(
         creatable_topic_with_configs(crate::support::topics::ConfiguredTopicSetup {
             name: name.into(),
-            replicas: replication,
+            replicas: crate::support::topics::TopicReplicationFactor(replication),
             configs: topic_configs([("krabka.diskless", "true")]),
             ..Default::default()
         }),

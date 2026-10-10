@@ -54,7 +54,7 @@ async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) ->
         crate::handlers::test_support::ClientTopicSetup {
             client_id: "share-log-start-lockout-test",
             name,
-            partitions: num_partitions,
+            partitions: crate::handlers::test_support::TopicPartitionCount(num_partitions),
         },
     )
     .await
@@ -66,8 +66,8 @@ async fn produce_records(broker: &BrokerHandle, topic: &str, partition_index: i3
         broker,
         crate::handlers::test_support::ProduceRecordsSetup {
             topic,
-            partition_index,
-            count,
+            partition_index: krabka_ids::PartitionIndex(partition_index),
+            count: crate::handlers::test_support::RecordCount(count),
         },
     )
     .await;

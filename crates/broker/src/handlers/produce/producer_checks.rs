@@ -422,7 +422,8 @@ mod tests {
         (($directory:ident, $image:ident, $fixture:ident)) => {
             let $directory = tempfile::tempdir().unwrap();
             let $image = Arc::new(image_with_topic("orders", &[1]));
-            let $fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+            let $fixture =
+                crate::handlers::produce::test_support::PipelineFixture::new(krabka_ids::NodeId(1));
         };
     }
 

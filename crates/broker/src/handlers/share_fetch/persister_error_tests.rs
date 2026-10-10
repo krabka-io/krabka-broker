@@ -56,7 +56,7 @@ async fn produce_two_records(broker: &BrokerHandle, topic: &str) {
         broker,
         crate::handlers::test_support::ProduceRecordsSetup {
             topic,
-            count: 2,
+            count: crate::handlers::test_support::RecordCount(2),
             ..Default::default()
         },
     )

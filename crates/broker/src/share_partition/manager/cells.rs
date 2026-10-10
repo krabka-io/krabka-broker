@@ -345,13 +345,20 @@ mod tests {
         open_data_partition(
             &reg,
             dir.path(),
-            "t",
-            0,
-            &[
-                (now - 3 * hour, &[b"stale-0", b"stale-1"]),
-                (now - hour - hour / 2, &[b"recent-0", b"recent-1"]),
-            ],
-            Offset(4),
+            crate::share_partition::manager::test_support::DataPartitionSetup {
+                batches: vec![
+                    crate::share_partition::manager::test_support::TimedValues {
+                        timestamp: crate::test_support::UnixMillis(now - 3 * hour),
+                        values: &[b"stale-0", b"stale-1"],
+                    },
+                    crate::share_partition::manager::test_support::TimedValues {
+                        timestamp: crate::test_support::UnixMillis(now - hour - hour / 2),
+                        values: &[b"recent-0", b"recent-1"],
+                    },
+                ],
+                high_watermark: Offset(4),
+                ..Default::default()
+            },
         )
         .await;
 
@@ -432,7 +439,15 @@ mod tests {
         let now = crate::time_util::now_ms();
         let hour = 60 * 60 * 1_000;
         let reg = Arc::new(crate::partition_registry::PartitionRegistry::new());
-        open_data_partition(&reg, dir.path(), "t", 0, &[], Offset(2)).await;
+        open_data_partition(
+            &reg,
+            dir.path(),
+            crate::share_partition::manager::test_support::DataPartitionSetup {
+                high_watermark: Offset(2),
+                ..Default::default()
+            },
+        )
+        .await;
         let partition = reg
             .get("t", krabka_ids::PartitionIndex(0))
             .expect("partition");

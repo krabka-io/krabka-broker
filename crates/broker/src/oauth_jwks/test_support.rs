@@ -65,14 +65,28 @@ pub const JWKS_BODY: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","kid":"k1","x"
 /// `JwksRefresher`, so that the simple refresher tests stay short. These
 /// tests supply `signal_rx` but never send on it. `min_on_demand_pause`
 /// does not apply. Each test has its own timestamps.
+#[derive(krabka_macros::FieldDefaults)]
+pub struct RefresherSetup {
+    #[default("http://127.0.0.1:1/jwks".into())]
+    pub endpoint: String,
+    #[default(millis(50))]
+    pub interval: Time,
+    pub tls_trust: Option<PathBuf>,
+    #[default(dormant_timer())]
+    pub timer: Arc<dyn Timer>,
+}
+
 pub fn test_refresher(
-    endpoint: String,
     handle: JwksHandle,
-    interval: Time,
     shutdown: CancellationToken,
-    tls_trust: Option<PathBuf>,
-    timer: Arc<dyn Timer>,
+    setup: RefresherSetup,
 ) -> JwksRefresher {
+    let RefresherSetup {
+        endpoint,
+        interval,
+        tls_trust,
+        timer,
+    } = setup;
     let (_tx, rx) = mpsc::channel::<()>(1);
     JwksRefresher {
         endpoint,

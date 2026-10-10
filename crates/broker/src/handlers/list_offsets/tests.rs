@@ -252,7 +252,7 @@ async fn duplicate_partitions_get_invalid_request_on_every_row() {
         .send(crate::handlers::test_support::configured_topic_request(
             CreateTopicSetup {
                 topic: TOPIC,
-                num_partitions: 2,
+                num_partitions: crate::handlers::test_support::TopicPartitionCount(2),
                 ..Default::default()
             },
         ))

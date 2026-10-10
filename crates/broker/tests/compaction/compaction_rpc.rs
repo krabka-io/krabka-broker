@@ -43,8 +43,8 @@ pub(crate) async fn create_topic_with_configs(
         topics: vec![crate::support::topics::creatable_topic_with_configs(
             crate::support::topics::ConfiguredTopicSetup {
                 name: topic.to_string(),
-                partitions,
-                replicas: rf,
+                partitions: crate::support::topics::TopicPartitionCount(partitions),
+                replicas: crate::support::topics::TopicReplicationFactor(rf),
                 configs: configs
                     .into_iter()
                     .map(|(name, value)| CreatableTopicConfig {

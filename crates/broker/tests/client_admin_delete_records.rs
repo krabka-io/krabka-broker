@@ -22,7 +22,7 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
             .send(crate::support::producer::producer_record(
                 crate::support::producer::ProducerRecordSetup {
                     topic: "wal".to_string(),
-                    partition: Some(0),
+                    partition: Some(krabka_ids::PartitionIndex(0)),
                     value: Some(format!("frame-{offset}").into_bytes().into()),
                     ..Default::default()
                 },

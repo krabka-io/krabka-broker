@@ -426,7 +426,7 @@ async fn produce_settled(producer: &Producer, topic: &str, keys: &[String]) -> V
 fn record(topic: &str, key: &str) -> ProducerRecord {
     crate::support::producer::producer_record(crate::support::producer::ProducerRecordSetup {
         topic: topic.to_owned(),
-        partition: Some(0),
+        partition: Some(krabka_ids::PartitionIndex(0)),
         key: Some(key.to_owned().into()),
         value: Some(key.to_owned().into()),
     })

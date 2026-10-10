@@ -183,6 +183,20 @@ impl Default for ReplicationFactor {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, derive_more::From, derive_more::Into)]
 pub(crate) struct PartitionEpoch(pub i32);
 
+/// An expected Kafka response code, including deliberately invalid fixture values.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    derive_more::Display,
+    derive_more::From,
+    derive_more::Into,
+)]
+pub(crate) struct KafkaErrorCode(pub i16);
+
 /// A wall-clock coordinate, distinct from a record offset or a duration.
 #[derive(
     Debug,

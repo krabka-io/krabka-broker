@@ -22,7 +22,7 @@ async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
             .send(crate::support::producer::producer_record(
                 crate::support::producer::ProducerRecordSetup {
                     topic: (topic).into(),
-                    partition: Some(0),
+                    partition: Some(krabka_ids::PartitionIndex(0)),
                     key: Some(format!("k{i}").into()),
                     value: Some(format!("v{i}").into()),
                 },

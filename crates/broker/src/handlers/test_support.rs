@@ -709,8 +709,8 @@ pub(crate) struct ClientTopicSetup<'a> {
     pub client_id: &'a str,
     #[default("orders")]
     pub name: &'a str,
-    #[default(1)]
-    pub partitions: i32,
+    #[default(TopicPartitionCount(1))]
+    pub partitions: TopicPartitionCount,
 }
 
 pub(crate) async fn create_topic(broker: &BrokerHandle, setup: ClientTopicSetup<'_>) -> WireUuid {
@@ -729,7 +729,7 @@ pub(crate) async fn create_topic(broker: &BrokerHandle, setup: ClientTopicSetup<
             ..Default::default()
         })
     );
-    for partition in 0..partitions {
+    for partition in 0..partitions.0 {
         broker.wait_until_partition_present(name, partition).await;
     }
     WireUuid(
@@ -742,14 +742,27 @@ pub(crate) async fn create_topic(broker: &BrokerHandle, setup: ClientTopicSetup<
     )
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    derive_more::Display,
+    derive_more::From,
+    derive_more::Into,
+)]
+pub(crate) struct RecordCount(pub i32);
+
 /// Appends one v2 batch of `count` records through the v12 Produce handler.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(crate) struct ProduceRecordsSetup<'a> {
     #[default("orders")]
     pub topic: &'a str,
-    pub partition_index: i32,
-    #[default(3)]
-    pub count: i32,
+    pub partition_index: krabka_ids::PartitionIndex,
+    #[default(RecordCount(3))]
+    pub count: RecordCount,
 }
 
 pub(crate) async fn produce_records(broker: &BrokerHandle, setup: ProduceRecordsSetup<'_>) {
@@ -764,8 +777,8 @@ pub(crate) async fn produce_records(broker: &BrokerHandle, setup: ProduceRecords
         topic_data: vec![TopicProduceData {
             name: topic.to_string(),
             partition_data: vec![PartitionProduceData {
-                index: partition_index,
-                records: Some(RecordsPayload::V2(vec![record_batch(count)])),
+                index: partition_index.0,
+                records: Some(RecordsPayload::V2(vec![record_batch(count.0)])),
                 ..Default::default()
             }],
             ..Default::default()
