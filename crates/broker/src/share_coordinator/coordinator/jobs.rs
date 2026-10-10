@@ -268,8 +268,7 @@ async fn run(
     let mut next_cold = schedule(enabled, cold_interval);
     loop {
         tokio::select! {
-            () = shutdown.cancelled() => return,
-            image = crate::metadata_source::next_published_image(&mut images) => {
+            image = crate::metadata_source::next_image_until_shutdown(&mut images, &shutdown) => {
                     let Some(image) = image else { return; };
                 let deleted = deleted_topic_ids(&previous, &image);
                 coordinator.cleanup_deleted_topics(&deleted).await;

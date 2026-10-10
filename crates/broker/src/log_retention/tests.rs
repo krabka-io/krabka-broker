@@ -11,21 +11,8 @@ use krabka_units::secs;
 use super::*;
 use crate::{
     log_retention::test_support::{expired_partition, segment_files},
-    test_support::{BrokenTimer, TimerFailure},
+    test_support::{BrokenTimer, TimerFailure, park_manual_timer as park},
 };
-
-/// Block until `clock` holds one parked waiter -- the sweep task's armed
-/// interval timer. `wait_for_waiters` blocks the thread, so it runs on the
-/// blocking pool rather than stalling the runtime that has to drive the sweep
-/// task and the partition writer actor.
-async fn park(clock: &Arc<qubit_clock::ManualMonotonicClock>) -> bool {
-    let waiters = Arc::clone(clock);
-    tokio::task::spawn_blocking(move || {
-        waiters.wait_for_waiters(1, std::time::Duration::from_secs(5))
-    })
-    .await
-    .unwrap()
-}
 
 /// Block until the sweep has counted `want` clean passes, or give up.
 ///
@@ -47,8 +34,7 @@ async fn swept(metrics: &BrokerMetrics, want: u64) -> bool {
 async fn run_ticks_until_shutdown() {
     use qubit_clock::{ManualMonotonicClock, MonotonicClock as _};
 
-    let dir = tempfile::tempdir().expect("log root");
-    let registry = Arc::new(PartitionRegistry::new());
+    let (dir, registry) = crate::test_support::sweep_registry_fixture();
     let partition = expired_partition(
         &dir,
         crate::test_support::CommittedPartitionSetup {
@@ -124,8 +110,7 @@ async fn run_ticks_until_shutdown() {
 
 #[tokio::test]
 async fn run_stops_without_sweeping_when_the_first_deadline_is_refused() {
-    let dir = tempfile::tempdir().expect("log root");
-    let registry = Arc::new(PartitionRegistry::new());
+    let (dir, registry) = crate::test_support::sweep_registry_fixture();
     let partition = expired_partition(
         &dir,
         crate::test_support::CommittedPartitionSetup {

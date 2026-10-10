@@ -99,7 +99,7 @@ pub(super) fn subscribed_consumer_group(
                     id: "client",
                     host: "host",
                 },
-                now: std::time::Instant::now(),
+                ..Default::default()
             },
         ));
     }

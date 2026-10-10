@@ -138,7 +138,9 @@ fn archive_segment(
     storage
         .copy_log_segment_data(
             &metadata,
-            &export_segment_data(&export, true, || Bytes::from_static(b"0\n1\n0 0\n")),
+            &export_segment_data(&export, ProducerSnapshotExport::Include, || {
+                Bytes::from_static(b"0\n1\n0 0\n")
+            }),
         )
         .expect("archive the segment");
 

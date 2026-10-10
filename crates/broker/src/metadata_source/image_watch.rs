@@ -54,6 +54,17 @@ pub(crate) async fn next_published_image(
     }
 }
 
+/// Wait for a publication until cancellation or the publisher closing.
+pub(crate) async fn next_image_until_shutdown(
+    images: &mut watch::Receiver<Arc<MetadataImage>>,
+    shutdown: &CancellationToken,
+) -> Option<Arc<MetadataImage>> {
+    tokio::select! {
+        () = shutdown.cancelled() => None,
+        image = next_published_image(images) => image,
+    }
+}
+
 /// Wait for a subscribed image update; no subscription leaves that select arm pending.
 pub(crate) async fn wait_for_image_change(
     images: Option<&mut watch::Receiver<Arc<MetadataImage>>>,

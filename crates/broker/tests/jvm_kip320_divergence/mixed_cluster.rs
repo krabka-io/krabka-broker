@@ -279,24 +279,36 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
 }
 
 /// Advance one partition epoch while retaining its replicas and directory identities.
+#[derive(Clone, Copy)]
+pub struct PartitionEpochDelta(pub i32);
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct SingleLeaderSetup<'a> {
+    #[default("t")]
+    pub topic: &'a str,
+    #[default(krabka_broker::NodeId(1))]
+    pub leader: krabka_broker::NodeId,
+    #[default(krabka_metadata::LeaderEpoch(0))]
+    pub epoch: krabka_metadata::LeaderEpoch,
+    #[default(PartitionEpochDelta(1))]
+    pub partition_epoch_delta: PartitionEpochDelta,
+}
+
 pub fn single_leader_record(
-    topic: &str,
     previous: &krabka_metadata::PartitionRecord,
-    leader: krabka_broker::NodeId,
-    epoch: krabka_metadata::LeaderEpoch,
-    partition_epoch_delta: i32,
+    setup: SingleLeaderSetup<'_>,
 ) -> krabka_metadata::PartitionRecord {
     krabka_metadata::PartitionRecord {
-        topic: topic.to_string(),
+        topic: setup.topic.to_string(),
         partition: 0,
-        leader,
+        leader: setup.leader,
         replicas: previous.replicas.clone(),
-        isr: vec![leader],
-        leader_epoch: epoch,
+        isr: vec![setup.leader],
+        leader_epoch: setup.epoch,
         adding_replicas: vec![],
         removing_replicas: vec![],
         directories: previous.directories.clone(),
-        partition_epoch: previous.partition_epoch + partition_epoch_delta,
+        partition_epoch: previous.partition_epoch + setup.partition_epoch_delta.0,
     }
 }
 

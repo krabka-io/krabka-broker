@@ -324,7 +324,10 @@ mod tests {
 
         broker_fixture!(
             (broker_handle, _dir, broker, persister),
-            share_persister(Arc::new(DenyDescribeOnTopic("secret")), true)
+            share_persister(
+                Arc::new(DenyDescribeOnTopic("secret")),
+                crate::test_support::ShareApiSupport::Enabled
+            )
         );
         register_topic(&broker, "orders", orders_id).await;
         persister
@@ -405,7 +408,10 @@ mod tests {
         for case in cases {
             broker_fixture!(
                 (broker_handle, _dir, broker, persister),
-                share_persister(case.authorizer, true)
+                share_persister(
+                    case.authorizer,
+                    crate::test_support::ShareApiSupport::Enabled
+                )
             );
             let image = image_with_topic("orders", topic_id);
             register_topic(&broker, "orders", topic_id).await;
@@ -471,7 +477,10 @@ mod tests {
         for case in cases {
             broker_fixture!(
                 (broker_handle, _dir, broker, persister),
-                share_persister(case.authorizer, true)
+                share_persister(
+                    case.authorizer,
+                    crate::test_support::ShareApiSupport::Enabled
+                )
             );
 
             orders_and_secret_image!((orders_id, secret_id, image), 1);

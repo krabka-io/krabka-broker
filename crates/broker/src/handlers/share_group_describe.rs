@@ -161,8 +161,11 @@ mod tests {
     #[tokio::test]
     async fn handle_denied_groups_preserve_group_ids_and_error_codes() {
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) =
-            crate::test_support::start_share_broker(Arc::new(DenyAll), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(DenyAll),
+            crate::test_support::ShareBrokerSetup::default(),
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "alice");
         let resp = handle(&broker, request(&["g1", "g2"]), version, &ctx)
@@ -188,8 +191,13 @@ mod tests {
     #[tokio::test]
     async fn handle_disabled_feature_wins_even_when_share_actor_exists() {
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) =
-            crate::test_support::start_share_broker(Arc::new(DenyAll), false).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(DenyAll),
+            crate::test_support::ShareBrokerSetup {
+                support: crate::test_support::ShareApiSupport::Disabled,
+            },
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         broker.group_coordinator.mark_share("g1");
         let _actor = broker.group_coordinator.get_or_create_share("g1");
@@ -306,7 +314,7 @@ mod tests {
             Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
                 std::collections::HashSet::new(),
             )),
-            true,
+            crate::test_support::ShareBrokerSetup::default(),
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();

@@ -1580,16 +1580,28 @@ pub(crate) async fn start_group_broker_no_audit(
     .await
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) enum ShareApiSupport {
+    #[default]
+    Enabled,
+    Disabled,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ShareBrokerSetup {
+    pub support: ShareApiSupport,
+}
+
 /// Like [`start_group_broker`], but it also waits until the share coordinator
-/// serves `__share_group_state`. With `share_enabled` false it then finalizes
+/// serves `__share_group_state`. Disabled support then finalizes
 /// `share.version` at 0, which turns the share-group APIs off.
 pub(crate) async fn start_share_broker(
     authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
-    share_enabled: bool,
+    setup: ShareBrokerSetup,
 ) -> (BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = start_group_broker(authorizer).await;
     handle.wait_until_share_coordinator_ready().await;
-    if !share_enabled {
+    if matches!(setup.support, ShareApiSupport::Disabled) {
         finalize_share_version(&handle.broker_arc_for_test(), 0).await;
     }
     (handle, dir)
@@ -2634,17 +2646,28 @@ pub(crate) fn source_to_repartition()
 }
 
 /// Describe a topic independently of the create response's config conversion.
+type TopicConfigOverrides = std::collections::BTreeMap<String, String>;
+static NO_TOPIC_OVERRIDES: TopicConfigOverrides = TopicConfigOverrides::new();
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct DescribedCreationSetup<'a> {
+    #[default(krabka_metadata::NodeId(1))]
+    pub node: krabka_metadata::NodeId,
+    #[default("t")]
+    pub topic: &'a str,
+    #[default(&NO_TOPIC_OVERRIDES)]
+    pub overrides: &'a TopicConfigOverrides,
+}
+
 pub(crate) fn described_creation_configs(
     image: &krabka_metadata::MetadataImage,
-    node: krabka_metadata::NodeId,
-    topic: &str,
-    overrides: &std::collections::BTreeMap<String, String>,
+    setup: DescribedCreationSetup<'_>,
 ) -> Vec<krabka_protocol::owned::create_topics_response::CreatableTopicConfigs> {
     crate::handlers::describe_configs::effective_topic_configs(
         image,
-        node,
-        topic,
-        overrides,
+        setup.node,
+        setup.topic,
+        setup.overrides,
         crate::api_catalog::UnstableApiVersions::Disabled,
         &std::collections::BTreeMap::new(),
     )
@@ -2877,4 +2900,23 @@ pub(crate) fn listener_time_overrides(
         .iter()
         .map(|(name, value)| ((*name).to_string(), *value))
         .collect()
+}
+
+/// Keep a sweep's log root alive alongside its initially empty registry.
+pub(crate) fn sweep_registry_fixture() -> (
+    tempfile::TempDir,
+    Arc<crate::partition_registry::PartitionRegistry>,
+) {
+    (
+        tempfile::tempdir().expect("log root"),
+        Arc::new(crate::partition_registry::PartitionRegistry::new()),
+    )
+}
+
+/// Block on the blocking pool until a sweep has armed its one interval timer.
+pub(crate) async fn park_manual_timer(clock: &Arc<qubit_clock::ManualMonotonicClock>) -> bool {
+    let waiters = Arc::clone(clock);
+    tokio::task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
+        .await
+        .unwrap()
 }

@@ -936,9 +936,9 @@ mod tests {
             body,
         } = setup;
         wire_request_frame(RequestFrameSetup {
-            api_key: api_key.0,
-            api_version: api_version.0,
-            correlation_id: correlation_id.0,
+            api_key: krabka_ids::ApiKey(api_key.0),
+            api_version: krabka_ids::ApiVersion(api_version.0),
+            correlation_id: FrameCorrelationId(correlation_id.0),
             client_id: client_id.map(str::as_bytes),
             tagged: (header == EmbeddedHeader::Flexible).then_some(&[0][..]),
             body,

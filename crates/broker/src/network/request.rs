@@ -70,6 +70,17 @@ mod tests {
     use super::*;
     use crate::network::test_support::{RequestFrameSetup, request_frame};
 
+    fn legacy_metadata_frame() -> BytesMut {
+        request_frame(RequestFrameSetup {
+            api_key: krabka_ids::ApiKey(3),
+            api_version: krabka_ids::ApiVersion(8),
+            correlation_id: crate::network::test_support::FrameCorrelationId(42),
+            client_id: Some(b"client-a"),
+            body: b"body",
+            ..Default::default()
+        })
+    }
+
     fn assert_flexible_client_body(parsed: &ParsedRequest<'_>) {
         check!(parsed.client_id == Some("client-a"));
         check!(parsed.body_flexible);
@@ -78,14 +89,7 @@ mod tests {
 
     #[test]
     fn parse_request_non_flexible_header() {
-        let frame = request_frame(RequestFrameSetup {
-            api_key: 3,
-            api_version: 8,
-            correlation_id: 42,
-            client_id: Some(b"client-a"),
-            body: b"body",
-            ..Default::default()
-        });
+        let frame = legacy_metadata_frame();
 
         let parsed = parse_request(&frame, |_, _| false).expect("parse request");
 
@@ -100,8 +104,8 @@ mod tests {
     #[test]
     fn parse_request_flexible_header_consumes_tagged_fields_byte() {
         let frame = request_frame(RequestFrameSetup {
-            api_version: 3,
-            correlation_id: 7,
+            api_version: krabka_ids::ApiVersion(3),
+            correlation_id: crate::network::test_support::FrameCorrelationId(7),
             client_id: Some(b"client-a"),
             tagged: Some(&[0]),
             body: b"body",
@@ -120,8 +124,8 @@ mod tests {
     #[test]
     fn parse_request_flexible_header_skips_non_empty_tagged_fields() {
         let frame = request_frame(RequestFrameSetup {
-            api_version: 3,
-            correlation_id: 7,
+            api_version: krabka_ids::ApiVersion(3),
+            correlation_id: crate::network::test_support::FrameCorrelationId(7),
             client_id: Some(b"client-a"),
             tagged: Some(&[1, 1, 3, b't', b'a', b'g']),
             body: b"body",
@@ -137,9 +141,9 @@ mod tests {
     #[test]
     fn parse_request_preserves_empty_client_id() {
         let frame = request_frame(RequestFrameSetup {
-            api_key: 3,
-            api_version: 8,
-            correlation_id: 42,
+            api_key: krabka_ids::ApiKey(3),
+            api_version: krabka_ids::ApiVersion(8),
+            correlation_id: crate::network::test_support::FrameCorrelationId(42),
             client_id: Some(b""),
             body: b"body",
             ..Default::default()
@@ -154,9 +158,9 @@ mod tests {
     #[test]
     fn parse_request_rejects_invalid_utf8_client_id() {
         let frame = request_frame(RequestFrameSetup {
-            api_key: 3,
-            api_version: 8,
-            correlation_id: 42,
+            api_key: krabka_ids::ApiKey(3),
+            api_version: krabka_ids::ApiVersion(8),
+            correlation_id: crate::network::test_support::FrameCorrelationId(42),
             client_id: Some(&[0xff, 0xfe]),
             body: b"body",
             ..Default::default()
@@ -178,18 +182,16 @@ mod tests {
         missing_client_id_len.put_i32(42);
 
         let truncated_client_id = request_frame(RequestFrameSetup {
-            api_key: 3,
-            api_version: 8,
-            correlation_id: 42,
+            api_key: krabka_ids::ApiKey(3),
+            api_version: krabka_ids::ApiVersion(8),
+            correlation_id: crate::network::test_support::FrameCorrelationId(42),
             client_id: Some(b"client"),
-            body: b"",
             ..Default::default()
         });
         let flexible_without_tag = request_frame(RequestFrameSetup {
-            api_version: 3,
-            correlation_id: 42,
+            api_version: krabka_ids::ApiVersion(3),
+            correlation_id: crate::network::test_support::FrameCorrelationId(42),
             client_id: Some(b"client"),
-            body: b"",
             ..Default::default()
         });
 
@@ -216,14 +218,7 @@ mod tests {
 
     #[test]
     fn peek_api_key_matches_existing_dispatch_behavior() {
-        let present = request_frame(RequestFrameSetup {
-            api_key: 3,
-            api_version: 8,
-            correlation_id: 42,
-            client_id: Some(b"client-a"),
-            body: b"body",
-            ..Default::default()
-        });
+        let present = legacy_metadata_frame();
 
         assert!(peek_api_key(&present).expect("api key") == 3);
     }

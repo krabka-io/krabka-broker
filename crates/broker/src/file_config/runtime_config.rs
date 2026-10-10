@@ -283,28 +283,6 @@ pub struct RuntimeFileConfig {
     /// `partition_disk_bytes` gauge. Zero disables the scanner and spawns no
     /// background task.
     pub partition_disk_scan_interval: Option<Time>,
-    /// KIP-853: maximum log-entry lag an observer may have and still be
-    /// promotable to a voter.
-    pub observer_lag_bound: Option<u64>,
-    /// How often this broker sends `BrokerHeartbeat` to the controller leader.
-    pub heartbeat_interval: Option<Time>,
-    /// How long the controller waits without a heartbeat before it marks a
-    /// broker dead.
-    pub heartbeat_timeout: Option<Time>,
-    /// Maximum follower lag before the leader proposes an ISR shrink. Kafka's
-    /// `replica.lag.time.max.ms`.
-    pub replica_lag_time_max: Option<Time>,
-    /// Controller election timeout, Kafka's
-    /// `controller.quorum.fetch.timeout.ms`. It is the follower fetch
-    /// watchdog, and 1.5x of it is the leader's check-quorum window: a leader
-    /// that a majority of the voters has not fetched from within that window
-    /// resigns its epoch.
-    pub controller_election_timeout: Option<Time>,
-    /// Raft heartbeat interval on the controller quorum. It should stay at or
-    /// below `controller_election_timeout / 3`.
-    pub controller_heartbeat_interval: Option<Time>,
-    /// Consecutive follower fetch misses tolerated before a new election.
-    pub controller_fetch_miss_limit: Option<u32>,
     /// Capacity of the metadata Raft engine command queue.
     pub metadata_raft_command_queue_capacity: Option<usize>,
     /// Per-read and per-snapshot-request byte budget on the metadata Raft log.

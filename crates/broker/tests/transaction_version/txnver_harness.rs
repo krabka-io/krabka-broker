@@ -32,8 +32,8 @@ pub async fn create_topic(
         crate::support::transaction_wire::TransactionTopicSetup {
             name,
             partitions,
-            configs: Vec::new(),
             context: "create_topic",
+            ..Default::default()
         },
     )
     .await;

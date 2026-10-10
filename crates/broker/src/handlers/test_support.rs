@@ -29,7 +29,7 @@ macro_rules! broker_fixture {
         $partition.install_replication_target(None, $broker.config.node_id.0, 0).await;
     };
     (($handle:ident, $directory:ident, $broker:ident, $persister:ident), share_persister($authorizer:expr, $enabled:expr)) => {
-        broker_fixture!(($handle, $directory, $broker), crate::test_support::start_share_broker($authorizer, $enabled));
+        broker_fixture!(($handle, $directory, $broker), crate::test_support::start_share_broker($authorizer, crate::test_support::ShareBrokerSetup { support: $enabled }));
         let $persister = $broker.group_coordinator.share_persister().cloned().expect("share persister");
     };
     ($bindings:tt, extra_log_dir($extra:ident)) => {
@@ -88,9 +88,7 @@ macro_rules! broker_fixture {
         ));
     };
     ($bindings:tt, share_allow_all) => {
-        broker_fixture!($bindings, crate::test_support::start_share_broker(
-            std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer), true
-        ));
+        broker_fixture!($bindings, crate::test_support::start_share_broker(std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer), crate::test_support::ShareBrokerSetup::default()));
     };
     ($bindings:tt, allow_all $(, $ready:ident)?) => {
         broker_fixture!(
@@ -135,7 +133,7 @@ macro_rules! share_refusal_cases {
      $handler:ident($request:expr, $version:expr)) => {
         for ($case, $authorizer, $enabled, $($input,)* $expected) in $cases {
             broker_fixture!(($handle, $directory, $broker),
-                crate::test_support::start_share_broker($authorizer, $enabled));
+                crate::test_support::start_share_broker($authorizer, crate::test_support::ShareBrokerSetup { support: $enabled }));
             test_ctx!($ctx, "alice");
             let $response = $handler(&$broker, $request, $version, &$ctx)
                 .await.expect("handle");

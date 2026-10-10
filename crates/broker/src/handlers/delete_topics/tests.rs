@@ -126,7 +126,15 @@ async fn delete_doomed(break_glass: BreakGlassConfig) -> (DeletableTopicResult, 
     .await;
     let broker = broker_handle.broker_arc_for_test();
     request_identity!((principal, peer), principal("admin"));
-    seed_topic(&broker, &principal, &peer, DOOMED).await;
+    seed_topic(
+        &broker,
+        &test_context(&principal, &peer),
+        CreateTopicSetup {
+            topic: DOOMED,
+            ..Default::default()
+        },
+    )
+    .await;
     let topic_id = WireUuid(
         broker
             .controller
@@ -303,19 +311,39 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 /// carries, and asserts the create itself was not refused. Setup for the
 /// cluster-`Delete` shortcut test below, which needs topics that already
 /// exist before it authorizes their deletion.
-async fn seed_topic(broker: &Broker, principal: &Principal, peer: &SocketAddr, name: &str) {
-    let req = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
-        topic: name,
-        ..Default::default()
-    });
-    let ctx = test_context(principal, peer);
-    let resp = crate::handlers::create_topics::handle(broker, req, CREATE_VERSION, &ctx)
+async fn seed_topic(
+    broker: &Broker,
+    ctx: &crate::handlers::RequestContext<'_>,
+    setup: CreateTopicSetup<'_>,
+) {
+    let name = setup.topic;
+    let req = crate::handlers::test_support::configured_topic_request(setup);
+    let resp = crate::handlers::create_topics::handle(broker, req, CREATE_VERSION, ctx)
         .await
         .expect("handle CreateTopics");
     assert!(
         resp.topics[0].error_code == codes::NONE,
         "seed create of {name}: {resp:?}"
     );
+}
+
+/// Seed the topic, then read its identity from the published controller image.
+async fn seeded_topic_id(
+    broker: &Broker,
+    ctx: &crate::handlers::RequestContext<'_>,
+    setup: CreateTopicSetup<'_>,
+) -> WireUuid {
+    let name = setup.topic;
+    seed_topic(broker, ctx, setup).await;
+    WireUuid(
+        broker
+            .controller
+            .current_image()
+            .topic(name)
+            .expect("seeded topic")
+            .topic_id
+            .into_bytes(),
+    )
 }
 
 /// #699: Kafka's `Delete` decision for a `DeleteTopics` request, table-driven
@@ -398,8 +426,24 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
             )])
             .await
             .expect("seed create acl");
-        seed_topic(&broker, &p, &peer, "a").await;
-        seed_topic(&broker, &p, &peer, "app-x").await;
+        seed_topic(
+            &broker,
+            &test_context(&p, &peer),
+            CreateTopicSetup {
+                topic: "a",
+                ..Default::default()
+            },
+        )
+        .await;
+        seed_topic(
+            &broker,
+            &test_context(&p, &peer),
+            CreateTopicSetup {
+                topic: "app-x",
+                ..Default::default()
+            },
+        )
+        .await;
 
         // Grant this case's Delete ACL shape, if any.
         if !case.acls.is_empty() {
@@ -578,16 +622,15 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
             .submit_change(vec![MetadataRecord::V1AccessControlEntry(cluster_create)])
             .await
             .expect("seed create acl");
-        seed_topic(&broker, &p, &peer, TOPIC).await;
-        let topic_id = WireUuid(
-            broker
-                .controller
-                .current_image()
-                .topic(TOPIC)
-                .expect("seeded topic")
-                .topic_id
-                .into_bytes(),
-        );
+        let topic_id = seeded_topic_id(
+            &broker,
+            &test_context(&p, &peer),
+            CreateTopicSetup {
+                topic: TOPIC,
+                ..Default::default()
+            },
+        )
+        .await;
         crate::handlers::acl_test_support::seed_case_acls!(broker, case.acls);
 
         let mut rows: Vec<_> = case.names.iter().map(|name| named_state(name)).collect();
@@ -644,16 +687,15 @@ async fn delete_topic_enable_false_refuses_every_row() {
         .await;
         let broker = broker_handle.broker_arc_for_test();
         request_identity!((p, peer), principal("admin"));
-        seed_topic(&broker, &p, &peer, TOPIC).await;
-        let topic_id = WireUuid(
-            broker
-                .controller
-                .current_image()
-                .topic(TOPIC)
-                .expect("seeded topic")
-                .topic_id
-                .into_bytes(),
-        );
+        let topic_id = seeded_topic_id(
+            &broker,
+            &test_context(&p, &peer),
+            CreateTopicSetup {
+                topic: TOPIC,
+                ..Default::default()
+            },
+        )
+        .await;
         let req = if version < 6 {
             DeleteTopicsRequest {
                 topic_names: vec![TOPIC.into()],

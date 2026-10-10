@@ -174,7 +174,6 @@ pub async fn create_topic_sasl(bootstrap: &str, name: &str, security: ClientSecu
         &client,
         crate::support::transaction_wire::TransactionTopicSetup {
             name,
-            configs: Vec::new(),
             context: "create_topic_sasl",
             ..Default::default()
         },

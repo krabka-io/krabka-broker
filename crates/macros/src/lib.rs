@@ -640,6 +640,9 @@ function_macros! {
     /// Generate deterministic patterned bytes for framing tests and benchmarks.
     patterned_bytes_fixture => network_fixtures::patterned_bytes;
 
+    /// Generate the distinctive proposal UUID shared by signing golden fixtures.
+    break_glass_golden_id => network_fixtures::break_glass_golden_id;
+
     /// Literal Kafka 4.3.1 principal bytes: alice or bob, token flag.
     jvm_principal_golden => network_fixtures::jvm_principal_golden;
 

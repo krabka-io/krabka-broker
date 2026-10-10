@@ -17,8 +17,7 @@ use crate::{
 async fn run_ticks_until_shutdown() {
     use qubit_clock::{ManualMonotonicClock, MonotonicClock as _};
 
-    let dir = tempfile::tempdir().expect("log root");
-    let registry = Arc::new(PartitionRegistry::new());
+    let (dir, registry) = crate::test_support::sweep_registry_fixture();
     let partition = compactable_partition(
         &dir,
         crate::cleaner::test_support::CompactionSetup {
@@ -57,11 +56,7 @@ async fn run_ticks_until_shutdown() {
     // `wait_for_waiters` runs on a blocking thread so it never stalls the
     // current-thread runtime that must drive the cleaner task and the
     // partition writer actor to completion.
-    let waiters = Arc::clone(&clock);
-    let parked =
-        tokio::task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
-            .await
-            .unwrap();
+    let parked = crate::test_support::park_manual_timer(&clock).await;
     assert!(
         parked,
         "cleaner should park on the interval timer after the first sweep"
@@ -78,11 +73,7 @@ async fn run_ticks_until_shutdown() {
     clock
         .advance(interval.to_std())
         .expect("manual time moves forward");
-    let waiters = Arc::clone(&clock);
-    let parked_again =
-        tokio::task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
-            .await
-            .unwrap();
+    let parked_again = crate::test_support::park_manual_timer(&clock).await;
     assert!(
         parked_again,
         "cleaner should re-park on the interval timer after the second sweep"

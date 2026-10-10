@@ -91,16 +91,8 @@ mod tests {
         assert2::assert!(seg.last_offset() == Offset(105));
         assert2::assert!(
             read == vec![
-                sample_batch(crate::segment::test_support::SampleBatchSetup {
-                    offset: crate::Offset(103),
-                    records: crate::segment::test_support::RecordCount(2),
-                    timestamp: crate::segment::test_support::RecordTimestamp(200)
-                }),
-                sample_batch(crate::segment::test_support::SampleBatchSetup {
-                    offset: crate::Offset(105),
-                    timestamp: crate::segment::test_support::RecordTimestamp(300),
-                    ..Default::default()
-                })
+                sample_batch(crate::segment::test_support::INDEXED_READ_BATCHES[1]),
+                sample_batch(crate::segment::test_support::INDEXED_READ_BATCHES[2])
             ]
         );
     }
@@ -135,20 +127,12 @@ mod tests {
     fn read_at_higher_offset_skips_earlier_batches() {
         let (_dir, mut seg) = crate::segment::test_support::test_segment();
         seg.append(
-            &sample_batch(crate::segment::test_support::SampleBatchSetup {
-                records: crate::segment::test_support::RecordCount(3),
-                timestamp: crate::segment::test_support::RecordTimestamp(1_000_000),
-                ..Default::default()
-            }),
+            &sample_batch(crate::segment::test_support::FIRST_LARGE_TIMESTAMP_BATCH),
             kibibytes(4),
         )
         .unwrap();
         seg.append(
-            &sample_batch(crate::segment::test_support::SampleBatchSetup {
-                offset: crate::Offset(3),
-                records: crate::segment::test_support::RecordCount(2),
-                timestamp: crate::segment::test_support::RecordTimestamp(2_000_000),
-            }),
+            &sample_batch(crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH),
             kibibytes(4),
         )
         .unwrap();
@@ -156,11 +140,7 @@ mod tests {
         // Offset 4 falls inside the second batch (offsets 3..=4).
         assert2::assert!(
             read == vec![sample_batch(
-                crate::segment::test_support::SampleBatchSetup {
-                    offset: crate::Offset(3),
-                    records: crate::segment::test_support::RecordCount(2),
-                    timestamp: crate::segment::test_support::RecordTimestamp(2_000_000)
-                }
+                crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH
             )]
         );
     }

@@ -92,6 +92,31 @@ pub(super) const THIRD_TWO_RECORD_BATCH: SampleBatchSetup = SampleBatchSetup {
 pub(super) const FIVE_OFFSET_TIMESTAMP_BATCHES: &[SampleBatchSetup] =
     &[THREE_RECORD_BATCH, TWO_RECORD_AFTER_THREE_BATCH];
 
+/// The pair used to round-trip and fetch across the second batch's interior.
+pub(super) const FIRST_LARGE_TIMESTAMP_BATCH: SampleBatchSetup = SampleBatchSetup {
+    timestamp: RecordTimestamp(1_000_000),
+    ..THREE_RECORD_BATCH
+};
+pub(super) const SECOND_LARGE_TIMESTAMP_BATCH: SampleBatchSetup = SampleBatchSetup {
+    timestamp: RecordTimestamp(2_000_000),
+    ..TWO_RECORD_AFTER_THREE_BATCH
+};
+
+pub(super) const INDEXED_READ_BATCHES: &[SampleBatchSetup] = &[
+    SampleBatchSetup {
+        offset: Offset(100),
+        ..THREE_RECORD_BATCH
+    },
+    SampleBatchSetup {
+        offset: Offset(103),
+        ..TWO_RECORD_AFTER_THREE_BATCH
+    },
+    SampleBatchSetup {
+        offset: Offset(105),
+        ..THIRD_SINGLE_RECORD_BATCH
+    },
+];
+
 pub(super) fn sample_batch(setup: SampleBatchSetup) -> RecordBatch {
     let SampleBatchSetup {
         offset,
@@ -172,23 +197,7 @@ pub(super) fn indexed_segment() -> (tempfile::TempDir, Segment) {
         dir.path(),
         crate::segment::test_support::SeededSegmentSetup {
             offset: crate::Offset(100),
-            batches: &[
-                crate::segment::test_support::SampleBatchSetup {
-                    offset: crate::Offset(100),
-                    records: crate::segment::test_support::RecordCount(3),
-                    timestamp: crate::segment::test_support::RecordTimestamp(100),
-                },
-                crate::segment::test_support::SampleBatchSetup {
-                    offset: crate::Offset(103),
-                    records: crate::segment::test_support::RecordCount(2),
-                    timestamp: crate::segment::test_support::RecordTimestamp(200),
-                },
-                crate::segment::test_support::SampleBatchSetup {
-                    offset: crate::Offset(105),
-                    timestamp: crate::segment::test_support::RecordTimestamp(300),
-                    ..Default::default()
-                },
-            ],
+            batches: INDEXED_READ_BATCHES,
             ..Default::default()
         },
     );

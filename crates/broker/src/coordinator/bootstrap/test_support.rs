@@ -151,6 +151,17 @@ pub(super) fn consumer_group_records(
     ]
 }
 
+/// Replay ordinary values through the same parser and record application path.
+pub(super) fn replay_values(
+    coordinator: &Arc<GroupCoordinator>,
+    records: impl IntoIterator<Item = (bytes::Bytes, bytes::Bytes)>,
+) -> super::replay::Replayed {
+    replay_stream(
+        coordinator,
+        records.into_iter().map(|(key, value)| (key, Some(value))),
+    )
+}
+
 /// Apply a stream of record values and tombstones in log order.
 pub(super) fn replay_stream(
     coordinator: &Arc<GroupCoordinator>,

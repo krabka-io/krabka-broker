@@ -291,7 +291,10 @@ pub fn tp() -> TopicIdPartition {
 }
 
 pub fn batch(n: i32) -> RecordBatch {
-    crate::test_support::keyed_records_batch(n, 64)
+    crate::test_support::keyed_records_batch(crate::test_support::KeyedBatchSetup {
+        records: crate::test_support::KeyedRecordCount(n),
+        ..Default::default()
+    })
 }
 
 /// Build a log rolled into several sealed segments under `dir`.

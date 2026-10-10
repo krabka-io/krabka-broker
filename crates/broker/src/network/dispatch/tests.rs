@@ -81,9 +81,9 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         body: &[u8],
     ) -> Vec<u8> {
         let frame = request_frame(RequestFrameSetup {
-            api_key,
-            api_version: version,
-            correlation_id: 7,
+            api_key: krabka_ids::ApiKey(api_key),
+            api_version: krabka_ids::ApiVersion(version),
+            correlation_id: crate::network::test_support::FrameCorrelationId(7),
             tagged: Some(&[0]),
             body,
             ..Default::default()
@@ -173,9 +173,9 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
 
         let mut framed = test_support::connect_framed(addr, "connect").await;
         let frame = request_frame(RequestFrameSetup {
-            api_key,
-            api_version: version,
-            correlation_id: 7,
+            api_key: krabka_ids::ApiKey(api_key),
+            api_version: krabka_ids::ApiVersion(version),
+            correlation_id: crate::network::test_support::FrameCorrelationId(7),
             tagged: entry.body_flexible(version).then_some(&[0][..]),
             ..Default::default()
         });
@@ -235,9 +235,9 @@ async fn drive_one_frame_per_connection(
             .is_some_and(|entry| entry.body_flexible(version));
         let mut framed = test_support::connect_framed(addr, "connect").await;
         let frame = request_frame(RequestFrameSetup {
-            api_key,
-            api_version: version,
-            correlation_id,
+            api_key: krabka_ids::ApiKey(api_key),
+            api_version: krabka_ids::ApiVersion(version),
+            correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
             tagged: flexible.then_some(&[0][..]),
             ..Default::default()
         });
@@ -542,7 +542,7 @@ async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mecha
     // api_keys an unauthenticated connection may send.
     let produce = || {
         request_frame(RequestFrameSetup {
-            api_key: 0,
+            api_key: krabka_ids::ApiKey(0),
             ..Default::default()
         })
         .freeze()
@@ -554,8 +554,8 @@ async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mecha
         body.put_i16(5);
         body.put_slice(b"PLAIN");
         request_frame(RequestFrameSetup {
-            api_key: 17,
-            api_version: 1,
+            api_key: krabka_ids::ApiKey(17),
+            api_version: krabka_ids::ApiVersion(1),
             body: &body,
             ..Default::default()
         })
@@ -630,21 +630,35 @@ krabka_macros::test_authorizer!(DenyCertificatePrincipal, request; {
 });
 
 /// Encodes one request frame: the request header and the encoded `body`.
+#[derive(Clone, Copy, Default)]
+enum RequestHeader {
+    #[default]
+    Legacy,
+    Flexible,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct EncodedFrameSetup {
+    #[default(krabka_ids::ApiKey(18))]
+    api_key: krabka_ids::ApiKey,
+    api_version: krabka_ids::ApiVersion,
+    #[default(crate::network::test_support::FrameCorrelationId(1))]
+    correlation_id: crate::network::test_support::FrameCorrelationId,
+    header: RequestHeader,
+}
+
 fn encoded_request_frame<T: krabka_protocol::Encode>(
-    api_key: i16,
-    api_version: i16,
-    correlation_id: i32,
-    flexible: bool,
     body: &T,
+    setup: EncodedFrameSetup,
 ) -> bytes::Bytes {
-    let mut encoded = BytesMut::with_capacity(body.encoded_len(api_version));
-    body.encode(&mut encoded, api_version)
+    let mut encoded = BytesMut::with_capacity(body.encoded_len(setup.api_version.0));
+    body.encode(&mut encoded, setup.api_version.0)
         .expect("encode request body");
     request_frame(RequestFrameSetup {
-        api_key,
-        api_version,
-        correlation_id,
-        tagged: flexible.then_some(&[0][..]),
+        api_key: setup.api_key,
+        api_version: setup.api_version,
+        correlation_id: setup.correlation_id,
+        tagged: matches!(setup.header, RequestHeader::Flexible).then_some(&[0][..]),
         body: &encoded,
         ..Default::default()
     })
@@ -689,24 +703,27 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
 
     let handshake = |mechanism: &str| {
         encoded_request_frame(
-            HANDSHAKE,
-            1,
-            1,
-            false,
             &SaslHandshakeRequest {
                 mechanism: mechanism.to_string(),
+                ..Default::default()
+            },
+            EncodedFrameSetup {
+                api_key: krabka_ids::ApiKey(HANDSHAKE),
+                api_version: krabka_ids::ApiVersion(1),
                 ..Default::default()
             },
         )
     };
     let authenticate = || {
         encoded_request_frame(
-            AUTHENTICATE,
-            2,
-            1,
-            true,
             &SaslAuthenticateRequest {
                 auth_bytes: bytes::Bytes::from_static(b"\0alice\0wonderland"),
+                ..Default::default()
+            },
+            EncodedFrameSetup {
+                api_key: krabka_ids::ApiKey(AUTHENTICATE),
+                api_version: krabka_ids::ApiVersion(2),
+                header: RequestHeader::Flexible,
                 ..Default::default()
             },
         )
@@ -817,10 +834,6 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
 
         framed
             .send(encoded_request_frame(
-                METADATA,
-                12,
-                2,
-                true,
                 &MetadataRequest {
                     topics: Some(vec![MetadataRequestTopic {
                         name: Some(TOPIC.to_string()),
@@ -828,6 +841,12 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
                     }]),
                     allow_auto_topic_creation: false,
                     ..Default::default()
+                },
+                EncodedFrameSetup {
+                    api_key: krabka_ids::ApiKey(METADATA),
+                    api_version: krabka_ids::ApiVersion(12),
+                    correlation_id: crate::network::test_support::FrameCorrelationId(2),
+                    header: RequestHeader::Flexible,
                 },
             ))
             .await
@@ -894,7 +913,7 @@ mod request_budget {
     /// loop answers without any authorization or metadata in the way.
     fn api_versions_frame(correlation_id: i32) -> bytes::Bytes {
         request_frame(RequestFrameSetup {
-            correlation_id,
+            correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
             ..Default::default()
         })
         .freeze()
@@ -1227,9 +1246,9 @@ mod request_limit {
         .encode(&mut body, 4)
         .expect("encode DescribeConfigs");
         request_frame(RequestFrameSetup {
-            api_key: 32,
-            api_version: 4,
-            correlation_id,
+            api_key: krabka_ids::ApiKey(32),
+            api_version: krabka_ids::ApiVersion(4),
+            correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
             tagged: Some(&[0]),
             body: &body,
             ..Default::default()
@@ -1268,7 +1287,7 @@ mod request_limit {
         assert!(small_request.len() - 4 <= LIMIT);
         // An ApiVersions v0 request whose client id alone is over the limit.
         let oversize_request = request_frame(RequestFrameSetup {
-            correlation_id: 8,
+            correlation_id: crate::network::test_support::FrameCorrelationId(8),
             client_id: Some(&[b'c'; LIMIT + 1]),
             ..Default::default()
         });

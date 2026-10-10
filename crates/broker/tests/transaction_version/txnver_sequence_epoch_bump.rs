@@ -272,12 +272,12 @@ async fn probe(
                     epoch,
                 },
                 sequence,
-                records: ProbeRecordCount(1),
                 transaction: if producer.transactional_id.is_some() {
                     BatchTransaction::Transactional
                 } else {
                     BatchTransaction::Ordinary
                 },
+                ..Default::default()
             }),
         ),
     )

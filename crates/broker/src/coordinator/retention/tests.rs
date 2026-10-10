@@ -33,7 +33,7 @@ use crate::{
         },
     },
     test_support::{
-        dispatch_context, encode_request, peer, principal, request_context,
+        UnixMillis, dispatch_context, encode_request, peer, principal, request_context,
         start_broker_with_authorizer_no_audit,
     },
 };
@@ -140,14 +140,17 @@ fn seed_group_with_member(broker: &Broker) {
 /// committed offsets are back, its members are not, and `empty_since_ms` holds
 /// whatever moment the group's k2 snapshot carried — `None` for a group that
 /// never wrote one.
-fn seed_replayed_group(
-    broker: &Broker,
-    protocol_type: Option<&str>,
-    empty_since_ms: Option<i64>,
-    commit_timestamp_ms: i64,
-) {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct ReplayedGroupSetup<'a> {
+    protocol_type: Option<&'a str>,
+    empty_since_ms: Option<UnixMillis>,
+    #[default(UnixMillis(0))]
+    commit_timestamp_ms: UnixMillis,
+}
+
+fn seed_replayed_group(broker: &Broker, setup: ReplayedGroupSetup<'_>) {
     let mut state = ClassicGroup::new(GROUP);
-    state.protocol_type = protocol_type.map(str::to_string);
+    state.protocol_type = setup.protocol_type.map(str::to_string);
     let mut group = CoordinatorGroup::seeded(
         GROUP,
         GroupKind::Classic(state),
@@ -157,14 +160,14 @@ fn seed_replayed_group(
                 offset: krabka_log::Offset(42),
                 leader_epoch: -1,
                 metadata: String::new(),
-                commit_timestamp_ms,
+                commit_timestamp_ms: setup.commit_timestamp_ms.0,
                 expire_timestamp_ms: None,
                 topic_id: None,
             },
         )]
         .into(),
     );
-    group.empty_since_ms = empty_since_ms;
+    group.empty_since_ms = setup.empty_since_ms.map(|at| at.0);
     broker
         .group_coordinator
         .seed_classic(GROUP, Box::new(group));
@@ -541,7 +544,13 @@ async fn a_simple_group_expires_from_its_commit_not_from_the_restart() {
     let (broker_handle, _dir) = start().await;
     let broker = broker_handle.broker_arc_for_test();
     let restarted_at = crate::time_util::now_ms();
-    seed_replayed_group(&broker, None, None, restarted_at - RETENTION_MS * 10);
+    seed_replayed_group(
+        &broker,
+        ReplayedGroupSetup {
+            commit_timestamp_ms: UnixMillis(restarted_at - RETENTION_MS * 10),
+            ..Default::default()
+        },
+    );
 
     let swept = sweep_at(&broker, restarted_at).await;
 
@@ -561,9 +570,11 @@ async fn a_joined_group_expires_from_the_moment_it_emptied() {
     let emptied_at = crate::time_util::now_ms();
     seed_replayed_group(
         &broker,
-        Some("consumer"),
-        Some(emptied_at),
-        emptied_at - RETENTION_MS * 10,
+        ReplayedGroupSetup {
+            protocol_type: Some("consumer"),
+            empty_since_ms: Some(UnixMillis(emptied_at)),
+            commit_timestamp_ms: UnixMillis(emptied_at - RETENTION_MS * 10),
+        },
     );
 
     let early = sweep_at(&broker, emptied_at + RETENTION_MS - 1).await;

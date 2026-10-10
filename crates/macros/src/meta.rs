@@ -112,10 +112,10 @@ pub(crate) fn required_tokens(
     }
 }
 
-/// Read one of the two explicit modes accepted by a field-group attribute.
-pub(crate) fn mode(
+/// Read one of the explicit modes accepted by a field-group attribute.
+pub(crate) fn mode<const N: usize>(
     tokens: TokenStream,
-    modes: [&'static str; 2],
+    modes: [&'static str; N],
 ) -> Result<&'static str, ParseError> {
     let tokens: Vec<_> = tokens.into_iter().collect();
     if let [TokenTree::Ident(name)] = tokens.as_slice()
@@ -125,7 +125,10 @@ pub(crate) fn mode(
     }
     Err(ParseError::new(
         Span::call_site(),
-        format!("expected `{}` or `{}`", modes[0], modes[1]),
+        format!(
+            "expected one of {}",
+            modes.map(|mode| format!("`{mode}`")).join(", ")
+        ),
     ))
 }
 

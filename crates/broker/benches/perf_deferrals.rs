@@ -154,14 +154,17 @@ krabka_macros::frame_prefix_fixture!(wire_frame_prefix);
 /// is the handler's body, handed to the socket as its own segment.
 fn frame_prefix(body_len: usize) -> Bytes {
     let header_len = response_framing::response_header_len(API_KEY, BODY_FLEXIBLE);
-    wire_frame_prefix(
-        header_len,
-        CORRELATION_ID,
-        response_framing::response_header_v1(API_KEY, BODY_FLEXIBLE),
-        body_len,
-        4 + header_len,
-        "a bench body fits in a frame",
-    )
+    wire_frame_prefix(ResponsePrefixSetup {
+        header_len: ResponseByteCount(header_len),
+        correlation_id: ResponseCorrelationId(CORRELATION_ID),
+        header: ResponseHeaderEncoding::from_wire(response_framing::response_header_v1(
+            API_KEY,
+            BODY_FLEXIBLE,
+        )),
+        body_len: ResponseByteCount(body_len),
+        capacity: ResponseByteCount(4 + header_len),
+        context: "a bench body fits in a frame",
+    })
     .freeze()
 }
 
@@ -360,7 +363,7 @@ fn bench_response_framing(c: &mut Criterion) {
     let mut group = c.benchmark_group("broker/response_framing");
 
     for (label, size) in BODY_SIZES {
-        let payload = body(size);
+        let payload = body(PatternedPayloadLength(size));
         group.throughput(Throughput::Bytes(size as u64));
         for (case, framing) in [("copy", Framing::Copy), ("chained", Framing::Chained)] {
             group.bench_function(format!("{label}/{case}"), |b| {
@@ -425,7 +428,7 @@ fn bench_ratio(_c: &mut Criterion) {
         "body", "copy", "chained", "saved", "saved %"
     );
     for (label, size) in BODY_SIZES {
-        let payload = body(size);
+        let payload = body(PatternedPayloadLength(size));
         let copy = fastest(|iters| timed_sends(&payload, Framing::Copy, iters));
         let chained = fastest(|iters| timed_sends(&payload, Framing::Chained, iters));
         println!(

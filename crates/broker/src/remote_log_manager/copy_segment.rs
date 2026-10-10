@@ -154,7 +154,9 @@ async fn copy_one_inner(
         return CopyOutcome::Failed;
     }
 
-    let data = export_segment_data(ex, true, || leader_epoch_index_bytes(&epochs));
+    let data = export_segment_data(ex, ProducerSnapshotExport::Include, || {
+        leader_epoch_index_bytes(&epochs)
+    });
 
     // The RSM is a blocking SPI — run the copy on the blocking pool.
     //

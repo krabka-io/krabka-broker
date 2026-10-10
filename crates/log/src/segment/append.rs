@@ -267,16 +267,8 @@ mod tests {
     #[test]
     fn append_then_read_back() {
         let (_dir, mut seg) = crate::segment::test_support::test_segment();
-        let b1 = sample_batch(crate::segment::test_support::SampleBatchSetup {
-            records: crate::segment::test_support::RecordCount(3),
-            timestamp: crate::segment::test_support::RecordTimestamp(1_000_000),
-            ..Default::default()
-        });
-        let b2 = sample_batch(crate::segment::test_support::SampleBatchSetup {
-            offset: crate::Offset(3),
-            records: crate::segment::test_support::RecordCount(2),
-            timestamp: crate::segment::test_support::RecordTimestamp(2_000_000),
-        });
+        let b1 = sample_batch(crate::segment::test_support::FIRST_LARGE_TIMESTAMP_BATCH);
+        let b2 = sample_batch(crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH);
         seg.append(&b1, kibibytes(4)).unwrap();
         seg.append(&b2, kibibytes(4)).unwrap();
         let read = seg.read(Offset(0), NO_LIMIT).unwrap();

@@ -148,8 +148,8 @@ async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
 /// real handler through the whole serve loop.
 async fn send_api_versions(framed: &mut Framed<TcpStream, KafkaCodec>, correlation_id: i32) {
     let frame = request_frame(RequestFrameSetup {
-        api_key: super::API_VERSIONS_KEY,
-        correlation_id,
+        api_key: krabka_ids::ApiKey(super::API_VERSIONS_KEY),
+        correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
         ..Default::default()
     })
     .freeze();
@@ -166,9 +166,9 @@ async fn send_request(
     body: &BytesMut,
 ) {
     let frame = request_frame(RequestFrameSetup {
-        api_key,
-        api_version: version,
-        correlation_id,
+        api_key: krabka_ids::ApiKey(api_key),
+        api_version: krabka_ids::ApiVersion(version),
+        correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
         tagged: Some(&[0]),
         body,
         ..Default::default()
@@ -444,8 +444,8 @@ async fn produce_charges_the_whole_request_frame_once() {
 
     let body = produce_body("frame-charge", 1, 256, 8);
     let frame_len = request_frame(RequestFrameSetup {
-        api_key: PRODUCE_KEY,
-        api_version: PRODUCE_VERSION,
+        api_key: krabka_ids::ApiKey(PRODUCE_KEY),
+        api_version: krabka_ids::ApiVersion(PRODUCE_VERSION),
         tagged: Some(&[0]),
         body: &body,
         ..Default::default()
@@ -622,8 +622,8 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
     for case in cases {
         let (server, mut framed) = connect_to_serve_loop(&handle).await;
         let frame = super::request_frame(RequestFrameSetup {
-            api_key: case.api_key,
-            api_version: case.version,
+            api_key: krabka_ids::ApiKey(case.api_key),
+            api_version: krabka_ids::ApiVersion(case.version),
             tagged: case.flexible.then_some(&[0][..]),
             body: &case.body,
             ..Default::default()

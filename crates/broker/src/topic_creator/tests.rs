@@ -132,9 +132,11 @@ async fn without_principal_creates_a_topic_and_then_reports_that_it_exists() {
     let image = broker.controller.current_image();
     let configs = crate::test_support::described_creation_configs(
         &image,
-        broker.config.node_id,
-        "fresh",
-        &std::collections::BTreeMap::new(),
+        crate::test_support::DescribedCreationSetup {
+            node: broker.config.node_id,
+            topic: "fresh",
+            overrides: &std::collections::BTreeMap::new(),
+        },
     );
     let created = response(CreatableTopicResult {
         name: "fresh".to_owned(),

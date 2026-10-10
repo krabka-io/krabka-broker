@@ -1008,9 +1008,11 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
     let image = broker_handle.controller_image_for_test();
     let described = crate::test_support::described_creation_configs(
         &image,
-        broker.config.node_id,
-        "mirrored",
-        image.topic_config("mirrored").expect("stored overrides"),
+        crate::test_support::DescribedCreationSetup {
+            node: broker.config.node_id,
+            topic: "mirrored",
+            overrides: image.topic_config("mirrored").expect("stored overrides"),
+        },
     );
     assert!(resp.topics[0].configs.clone().expect("configs") == described);
     broker_handle.shutdown().await;

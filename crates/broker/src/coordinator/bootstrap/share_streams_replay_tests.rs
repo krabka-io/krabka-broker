@@ -74,10 +74,7 @@ async fn share_group_records_replay_into_seed() {
             .encode(),
         ),
     ];
-    super::test_support::replay_stream(
-        &coord,
-        recs.into_iter().map(|(key, value)| (key, Some(value))),
-    );
+    super::test_support::replay_values(&coord, recs);
 
     // Type locked + seed reconstructed.
     assert!(coord.group_type("sg") == Some(crate::coordinator::unified::GroupType::Share));
@@ -166,10 +163,7 @@ async fn streams_group_records_replay_into_seed() {
             .encode(),
         ),
     ];
-    super::test_support::replay_stream(
-        &coord,
-        recs.into_iter().map(|(key, value)| (key, Some(value))),
-    );
+    super::test_support::replay_values(&coord, recs);
 
     // Type locked to Streams + seed reconstructed.
     assert!(coord.group_type("stg") == Some(crate::coordinator::unified::GroupType::Streams));
