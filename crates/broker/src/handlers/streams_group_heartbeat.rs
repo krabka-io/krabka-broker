@@ -185,10 +185,12 @@ mod tests {
             .controller
             .submit_change(
                 crate::handlers::group_heartbeat_test_support::topic_with_partitions(
-                    name,
-                    uuid::Uuid::new_v4(),
-                    1,
-                    broker.config.node_id,
+                    crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                        name,
+                        topic_id: uuid::Uuid::new_v4(),
+                        partitions: crate::test_support::PartitionCount(1),
+                        node: broker.config.node_id,
+                    },
                 ),
             )
             .await

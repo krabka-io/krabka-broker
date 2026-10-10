@@ -218,12 +218,18 @@ mod tests {
         )
     }
 
-    fn topic(name: &str, topic_id: uuid::Uuid, node: u64) -> Vec<krabka_metadata::MetadataRecord> {
+    fn topic(
+        name: &str,
+        topic_id: uuid::Uuid,
+        node: krabka_raft::NodeId,
+    ) -> Vec<krabka_metadata::MetadataRecord> {
         crate::handlers::group_heartbeat_test_support::topic_with_partitions(
-            name,
-            topic_id,
-            1,
-            krabka_raft::NodeId(node),
+            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                name,
+                topic_id,
+                partitions: crate::test_support::PartitionCount(1),
+                node,
+            },
         )
     }
 
@@ -313,8 +319,8 @@ mod tests {
             acl(ResourceType::Group, "missing"),
             acl(ResourceType::Topic, "t"),
         ];
-        records.extend(topic("t", visible, node));
-        records.extend(topic("secret", hidden, node));
+        records.extend(topic("t", visible, krabka_raft::NodeId(node)));
+        records.extend(topic("secret", hidden, krabka_raft::NodeId(node)));
         broker
             .controller
             .submit_change(records)

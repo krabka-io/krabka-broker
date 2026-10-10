@@ -75,13 +75,28 @@ pub(super) async fn versioned_group_broker(
 }
 
 /// A bare `V1Topic` record of `partitions` partitions.
-fn topic_record(name: &str, topic_id: uuid::Uuid, partitions: i32) -> MetadataRecord {
+fn topic_record(name: &str, topic_id: uuid::Uuid, partitions: PartitionCount) -> MetadataRecord {
     MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
         name: name.into(),
         topic_id,
-        partitions,
+        partitions: partitions.0,
         replication_factor: 1,
     })
+}
+
+use krabka_raft::NodeId;
+
+use crate::test_support::PartitionCount;
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct GroupTopicSetup<'a> {
+    #[default("orders")]
+    pub name: &'a str,
+    pub topic_id: uuid::Uuid,
+    #[default(PartitionCount(2))]
+    pub partitions: PartitionCount,
+    #[default(NodeId(1))]
+    pub node: NodeId,
 }
 
 /// A `V1Topic` record plus one `V1Partition` per index, assigned to
@@ -90,14 +105,15 @@ fn topic_record(name: &str, topic_id: uuid::Uuid, partitions: i32) -> MetadataRe
 /// real count comes from the `V1Partition` records that follow it -- so a
 /// topic meant to be assignable needs both, unlike [`topic_record`] alone
 /// (used only where a test never reaches the assignor).
-pub(super) fn topic_with_partitions(
-    name: &str,
-    topic_id: uuid::Uuid,
-    partitions: i32,
-    node: krabka_raft::NodeId,
-) -> Vec<MetadataRecord> {
+pub(super) fn topic_with_partitions(setup: GroupTopicSetup<'_>) -> Vec<MetadataRecord> {
+    let GroupTopicSetup {
+        name,
+        topic_id,
+        partitions,
+        node,
+    } = setup;
     let mut records = vec![topic_record(name, topic_id, partitions)];
-    records.extend((0..partitions).map(|partition| {
+    records.extend((0..partitions.0).map(|partition| {
         MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
             name,
             krabka_ids::PartitionIndex(partition),

@@ -738,8 +738,22 @@ mod tests {
         let denied_id = uuid::Uuid::from_u128(2);
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g"), describe_acl("orders-eu")];
-        records.extend(topic_with_partitions("orders-eu", allowed_id, 2, node));
-        records.extend(topic_with_partitions("orders-us", denied_id, 2, node));
+        records.extend(topic_with_partitions(
+            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                name: "orders-eu",
+                topic_id: allowed_id,
+                node,
+                ..Default::default()
+            },
+        ));
+        records.extend(topic_with_partitions(
+            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                name: "orders-us",
+                topic_id: denied_id,
+                node,
+                ..Default::default()
+            },
+        ));
         broker
             .controller
             .submit_change(records)
@@ -878,7 +892,14 @@ mod tests {
         let mut records = vec![group_read_acl("g")];
         for (name, id) in topics {
             records.push(describe_acl(name));
-            records.extend(topic_with_partitions(name, *id, 2, node));
+            records.extend(topic_with_partitions(
+                crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                    name,
+                    topic_id: *id,
+                    node,
+                    ..Default::default()
+                },
+            ));
         }
         broker
             .controller
@@ -915,7 +936,14 @@ mod tests {
 
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![describe_acl("orders-us")];
-        records.extend(topic_with_partitions("orders-us", second, 2, node));
+        records.extend(topic_with_partitions(
+            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                name: "orders-us",
+                topic_id: second,
+                node,
+                ..Default::default()
+            },
+        ));
         broker
             .controller
             .submit_change(records)

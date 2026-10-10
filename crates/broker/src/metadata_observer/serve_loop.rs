@@ -316,33 +316,31 @@ mod tests {
         }
     }
 
-    /// `high_watermark` is what the responder itself has committed and
-    /// `quorum_high_watermark` is what the quorum has: they differ whenever
-    /// the controller that answered is a follower still catching up.
-    fn metadata_fetch_response_body(
+    #[derive(krabka_macros::FieldDefaults)]
+    struct MetadataFetchResponseSetup {
+        #[default(krabka_ids::NodeId(1))]
+        leader: krabka_ids::NodeId,
         records: Bytes,
-        high_watermark: i64,
-        quorum_high_watermark: i64,
-    ) -> Vec<u8> {
-        metadata_fetch_response_naming(1, records, high_watermark, quorum_high_watermark)
+        high_watermark: krabka_ids::Offset,
+        quorum_high_watermark: krabka_ids::Offset,
     }
 
-    /// [`metadata_fetch_response_body`] from a controller that believes
-    /// `leader_hint` leads.
-    fn metadata_fetch_response_naming(
-        leader_hint: i64,
-        records: Bytes,
-        high_watermark: i64,
-        quorum_high_watermark: i64,
-    ) -> Vec<u8> {
+    /// The responder and quorum watermarks differ while a follower catches up.
+    fn metadata_fetch_response_body(setup: MetadataFetchResponseSetup) -> Vec<u8> {
+        let MetadataFetchResponseSetup {
+            leader,
+            records,
+            high_watermark,
+            quorum_high_watermark,
+        } = setup;
         let mut out = vec![0u8]; // flexible ResponseHeader v1 tagged-fields
         krabka_raft::KrabkaMetadataFetchResponse {
             error_code: 0,
-            leader_hint,
+            leader_hint: i64::try_from(leader.0).expect("test node fits i64"),
             leader_epoch: 3,
             log_start_offset: 0,
-            high_watermark,
-            quorum_high_watermark,
+            high_watermark: high_watermark.0,
+            quorum_high_watermark: quorum_high_watermark.0,
             snapshot_id: None,
             records,
         }
@@ -522,7 +520,7 @@ mod tests {
             krabka_raft::API_KEY_METADATA_FETCH,
             move || {
                 fetches_for_mock.fetch_add(1, Ordering::SeqCst);
-                metadata_fetch_response_body(Bytes::new(), 0, 0)
+                metadata_fetch_response_body(MetadataFetchResponseSetup::default())
             },
             api_versions_response_v0,
         )
@@ -705,7 +703,7 @@ mod tests {
         // which is what separates this exit from the unreachable-voter one.
         let mock = crate::test_support::mock_request_broker(
             krabka_raft::API_KEY_METADATA_FETCH,
-            move || metadata_fetch_response_body(Bytes::new(), 0, 0),
+            move || metadata_fetch_response_body(MetadataFetchResponseSetup::default()),
             api_versions_response_v0,
         )
         .await;
@@ -728,11 +726,12 @@ mod tests {
             }
             if api_key == krabka_raft::API_KEY_METADATA_FETCH {
                 let fetch = fetches.fetch_add(1, Ordering::SeqCst);
-                return Some(metadata_fetch_response_body(
-                    body(fetch),
-                    high_watermark,
-                    high_watermark,
-                ));
+                return Some(metadata_fetch_response_body(MetadataFetchResponseSetup {
+                    records: body(fetch),
+                    high_watermark: krabka_ids::Offset(high_watermark),
+                    quorum_high_watermark: krabka_ids::Offset(high_watermark),
+                    ..Default::default()
+                }));
             }
             None
         })
@@ -885,7 +884,12 @@ mod tests {
                         .unwrap()
                         .push((request.replica_id, request.replica_directory_id));
                     // Both controllers name node 2 as the leader.
-                    return Some(metadata_fetch_response_naming(2, Bytes::new(), 5, 5));
+                    return Some(metadata_fetch_response_body(MetadataFetchResponseSetup {
+                        leader: krabka_ids::NodeId(2),
+                        high_watermark: krabka_ids::Offset(5),
+                        quorum_high_watermark: krabka_ids::Offset(5),
+                        ..Default::default()
+                    }));
                 }
                 None
             }
@@ -946,7 +950,11 @@ mod tests {
             krabka_raft::API_KEY_METADATA_FETCH,
             move || {
                 // A follower holding 5 of the quorum's 10 000 records.
-                metadata_fetch_response_body(Bytes::new(), 5, 10_000)
+                metadata_fetch_response_body(MetadataFetchResponseSetup {
+                    high_watermark: krabka_ids::Offset(5),
+                    quorum_high_watermark: krabka_ids::Offset(10_000),
+                    ..Default::default()
+                })
             },
             api_versions_response_v0,
         )

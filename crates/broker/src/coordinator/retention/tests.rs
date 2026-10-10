@@ -108,6 +108,20 @@ async fn start() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     (broker, dir)
 }
 
+/// Leave a real group memberless with its committed offset still retained.
+async fn memberless_group_with_committed_offset() -> (
+    crate::broker::BrokerHandle,
+    tempfile::TempDir,
+    std::sync::Arc<Broker>,
+) {
+    let (handle, dir) = start().await;
+    let broker = handle.broker_arc_for_test();
+    seed_group_with_member(&broker);
+    commit_offset(&broker, 42, -1).await;
+    remove_last_member(&broker).await;
+    (handle, dir, broker)
+}
+
 /// Install a `Stable` classic group holding one member, so a commit fences
 /// against a real membership and a leave really empties the group.
 fn seed_group_with_member(broker: &Broker) {
@@ -369,11 +383,7 @@ async fn per_commit_retention_time_expires_before_the_broker_default() {
 /// left alone: the leader sweeps it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_group_this_broker_does_not_own_is_not_swept() {
-    let (broker_handle, _dir) = start().await;
-    let broker = broker_handle.broker_arc_for_test();
-    seed_group_with_member(&broker);
-    commit_offset(&broker, 42, -1).await;
-    remove_last_member(&broker).await;
+    let (_broker_handle, _dir, broker) = memberless_group_with_committed_offset().await;
 
     let now_ms = crate::time_util::now_ms() + RETENTION_MS + 1;
     let swept = sweep(
@@ -394,11 +404,7 @@ async fn a_group_this_broker_does_not_own_is_not_swept() {
 /// entry's emptiness as "nobody is using these offsets".
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_streams_group_offset_home_is_not_swept() {
-    let (broker_handle, _dir) = start().await;
-    let broker = broker_handle.broker_arc_for_test();
-    seed_group_with_member(&broker);
-    commit_offset(&broker, 42, -1).await;
-    remove_last_member(&broker).await;
+    let (_broker_handle, _dir, broker) = memberless_group_with_committed_offset().await;
     // Lock the id to the streams namespace, as a KIP-1071 group would.
     let _ = broker.group_coordinator.get_or_create_streams(GROUP);
 
@@ -469,11 +475,7 @@ async fn an_empty_group_that_holds_no_offsets_is_reaped() {
 /// group itself goes on the next pass, even though the pass expired nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_group_whose_last_offset_was_deleted_is_reaped_next_pass() {
-    let (broker_handle, _dir) = start().await;
-    let broker = broker_handle.broker_arc_for_test();
-    seed_group_with_member(&broker);
-    commit_offset(&broker, 42, -1).await;
-    remove_last_member(&broker).await;
+    let (_broker_handle, _dir, broker) = memberless_group_with_committed_offset().await;
 
     // Take the offset out from under the group the way `OffsetDelete` does,
     // leaving a memberless group that holds nothing.
