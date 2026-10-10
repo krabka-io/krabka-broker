@@ -167,16 +167,23 @@ mod tests {
         test_support::RecordCount,
     };
 
-    fn state_with_dlq(records: i64) -> AcquisitionState {
+    fn state_with_dlq(end: Offset) -> AcquisitionState {
         let mut s = AcquisitionState::new(Offset(0));
         acquire_window(
             &mut s,
             AcquiredWindowSetup {
-                end: Offset(records),
+                end,
                 record_limit: RecordCount(100),
                 dead_letter_queue: DeadLetterQueue::Enabled,
             },
         );
+        s
+    }
+
+    fn state_with_rejected_prefix() -> AcquisitionState {
+        let mut s = state_with_dlq(Offset(4));
+        s.acknowledge("m1", Offset(0), Offset(1), AckType::Reject, 5)
+            .unwrap();
         s
     }
 
@@ -186,9 +193,7 @@ mod tests {
     /// SPSO.
     #[test]
     fn a_reject_with_a_queue_waits_in_archiving() {
-        let mut s = state_with_dlq(4);
-        s.acknowledge("m1", Offset(0), Offset(1), AckType::Reject, 5)
-            .unwrap();
+        let mut s = state_with_rejected_prefix();
         s.acknowledge("m1", Offset(2), Offset(2), AckType::Gap, 5)
             .unwrap();
         s.acknowledge("m1", Offset(3), Offset(3), AckType::Accept, 5)
@@ -222,7 +227,7 @@ mod tests {
     /// run waits for the queue.
     #[test]
     fn a_reject_without_a_queue_archives_at_once() {
-        let mut s = state_with_dlq(2);
+        let mut s = state_with_dlq(Offset(2));
         s.set_dlq_enabled(false);
         s.acknowledge("m1", Offset(0), Offset(1), AckType::Reject, 5)
             .unwrap();
@@ -301,9 +306,7 @@ mod tests {
     /// SPSO move on, and a state that is not `Archiving` is left alone.
     #[test]
     fn finishing_archives_the_run_and_moves_the_spso() {
-        let mut s = state_with_dlq(4);
-        s.acknowledge("m1", Offset(0), Offset(1), AckType::Reject, 5)
-            .unwrap();
+        let mut s = state_with_rejected_prefix();
         s.acknowledge("m1", Offset(2), Offset(2), AckType::Accept, 5)
             .unwrap();
         s.dirty = false;
@@ -321,7 +324,7 @@ mod tests {
     /// record.
     #[test]
     fn finishing_a_part_of_a_run_leaves_the_rest_archiving() {
-        let mut s = state_with_dlq(3);
+        let mut s = state_with_dlq(Offset(3));
         s.acknowledge("m1", Offset(0), Offset(2), AckType::Reject, 5)
             .unwrap();
         s.dirty = false;
@@ -352,7 +355,7 @@ mod tests {
     /// follows the delivery count.
     #[test]
     fn archiving_persists_as_state_three_and_reloads_pending() {
-        let mut s = state_with_dlq(3);
+        let mut s = state_with_dlq(Offset(3));
         s.acknowledge("m1", Offset(0), Offset(1), AckType::Reject, 5)
             .unwrap();
         let (start, _, batches) = s.to_persist_batches();

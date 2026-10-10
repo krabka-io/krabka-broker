@@ -3,6 +3,7 @@
 //! dropped in silence, and the four disagreements that stop a restore.
 
 use assert2::check;
+use krabka_ids::Offset;
 use krabka_remote_storage::{RlmmCacheDump, TopicIdPartition};
 
 use super::*;
@@ -12,7 +13,8 @@ use crate::{
     discover::{
         inventory,
         test_support::{
-            args_from, single_segment_archive, snapshot_segment, write_full_segment, write_snapshot,
+            PartitionKey, SegmentSetup, SnapshotSegmentSetup, args_from, single_segment_archive,
+            snapshot_segment, write_full_segment, write_snapshot,
         },
     },
 };
@@ -29,7 +31,18 @@ fn partition_dump(
         segments: segments
             .iter()
             .map(|&(segment_id, base_offset, state)| {
-                snapshot_segment(topic, 0, topic_id, segment_id, base_offset, state)
+                snapshot_segment(SnapshotSegmentSetup {
+                    segment: SegmentSetup {
+                        partition: PartitionKey {
+                            topic,
+                            topic_id,
+                            ..Default::default()
+                        },
+                        base_offset: Offset(base_offset),
+                        segment_id,
+                    },
+                    state,
+                })
             })
             .collect(),
         delete_state: None,
@@ -54,8 +67,28 @@ fn snapshot_of(
 fn two_segment_archive() -> (tempfile::TempDir, Uuid, Uuid, Uuid) {
     let archive = tempfile::tempdir().expect("temp dir");
     let (topic, first, second) = (Uuid::from_u128(1), Uuid::from_u128(10), Uuid::from_u128(11));
-    write_full_segment(archive.path(), "orders", 0, topic, 0, first);
-    write_full_segment(archive.path(), "orders", 0, topic, 100, second);
+    write_full_segment(
+        archive.path(),
+        SegmentSetup {
+            partition: PartitionKey {
+                topic_id: topic,
+                ..Default::default()
+            },
+            segment_id: first,
+            ..Default::default()
+        },
+    );
+    write_full_segment(
+        archive.path(),
+        SegmentSetup {
+            partition: PartitionKey {
+                topic_id: topic,
+                ..Default::default()
+            },
+            base_offset: Offset(100),
+            segment_id: second,
+        },
+    );
     (archive, topic, first, second)
 }
 
@@ -85,7 +118,7 @@ fn two_segment_snapshot(
 fn authenticated_snapshot(
     state: RemoteLogSegmentState,
 ) -> (tempfile::TempDir, std::path::PathBuf, RestoreArgs) {
-    let (archive, topic_id, segment_id) = single_segment_archive(0);
+    let (archive, topic_id, segment_id) = single_segment_archive(Offset(0));
     let snapshot = archive.path().join("snapshot");
     snapshot_of(&snapshot, "orders", topic_id, &[(segment_id, 0, state)]);
     let mut args = args_from(
@@ -168,7 +201,7 @@ async fn authenticated_rlmm_excludes_objects_retained_after_completed_deletion()
 
 #[tokio::test]
 async fn a_segment_the_snapshot_does_not_mention_is_a_disagreement() {
-    let (archive, topic_id, _) = single_segment_archive(0);
+    let (archive, topic_id, _) = single_segment_archive(Offset(0));
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -187,7 +220,7 @@ async fn a_delete_finished_segment_with_bytes_still_present_is_a_disagreement() 
     // being in the archive is a real inconsistency, unlike
     // `DeleteSegmentStarted`, where a deletion still in flight leaving
     // bytes behind is routine and gets dropped silently instead.
-    let (archive, topic_id, seg) = single_segment_archive(0);
+    let (archive, topic_id, seg) = single_segment_archive(Offset(0));
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -209,7 +242,18 @@ async fn a_live_partition_missing_from_the_scan_entirely_is_a_disagreement() {
     let archive = tempfile::tempdir().expect("temp dir");
     let payments_id = Uuid::from_u128(2);
     let payments_seg = Uuid::from_u128(20);
-    write_full_segment(archive.path(), "payments", 0, payments_id, 0, payments_seg);
+    write_full_segment(
+        archive.path(),
+        SegmentSetup {
+            partition: PartitionKey {
+                topic: "payments",
+                topic_id: payments_id,
+                ..Default::default()
+            },
+            segment_id: payments_seg,
+            ..Default::default()
+        },
+    );
 
     let orders_id = Uuid::from_u128(1);
     let snap_dir = tempfile::tempdir().expect("temp dir");
@@ -247,7 +291,7 @@ async fn a_live_partition_missing_from_the_scan_entirely_is_a_disagreement() {
 
 #[tokio::test]
 async fn a_missing_snapshot_file_is_reported_as_io_not_found() {
-    let (archive, _topic_id, _) = single_segment_archive(0);
+    let (archive, _topic_id, _) = single_segment_archive(Offset(0));
 
     let missing = archive.path().join("does-not-exist-snapshot");
     let args = args_from(
@@ -264,7 +308,7 @@ async fn a_missing_snapshot_file_is_reported_as_io_not_found() {
 
 #[tokio::test]
 async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
-    let (archive, topic_id, segment_id) = single_segment_archive(0);
+    let (archive, topic_id, segment_id) = single_segment_archive(Offset(0));
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -286,7 +330,7 @@ async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
 
 #[tokio::test]
 async fn duplicate_partition_keys_in_the_snapshot_are_a_disagreement() {
-    let (archive, topic_id, segment_id) = single_segment_archive(0);
+    let (archive, topic_id, segment_id) = single_segment_archive(Offset(0));
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -310,7 +354,7 @@ async fn duplicate_partition_keys_in_the_snapshot_are_a_disagreement() {
 
 #[tokio::test]
 async fn maximum_offset_reconciliation_is_stable_across_retry() {
-    let (archive, topic_id, segment_id) = single_segment_archive(i64::MAX);
+    let (archive, topic_id, segment_id) = single_segment_archive(Offset(i64::MAX));
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");

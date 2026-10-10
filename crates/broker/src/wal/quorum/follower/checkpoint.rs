@@ -215,9 +215,11 @@ mod tests {
         (dir, checkpoint, log)
     }
 
-    fn checkpoint_log(records: i32) -> (tempfile::TempDir, std::path::PathBuf, Log) {
+    fn checkpoint_log(
+        records: crate::test_support::RecordCount,
+    ) -> (tempfile::TempDir, std::path::PathBuf, Log) {
         let (dir, checkpoint, mut log) = empty_checkpoint_log();
-        let mut batch = crate::wal::quorum::test_support::batch(records);
+        let mut batch = crate::wal::quorum::test_support::batch(records.0);
         log.append(&mut batch).unwrap();
         (dir, checkpoint, log)
     }
@@ -352,7 +354,7 @@ mod tests {
             (Some("0\n1 1\n"), true, 1, 1),
             (None, true, 1, 1),
         ] {
-            let (dir, checkpoint, mut log) = checkpoint_log(3);
+            let (dir, checkpoint, mut log) = checkpoint_log(crate::test_support::RecordCount(3));
             if let Some(value) = value {
                 std::fs::write(&checkpoint, value).unwrap();
             } else {
@@ -398,7 +400,7 @@ mod tests {
             ("0 1\n", "predates krabka 1.0"),
             ("1\n0 1\n", "unsupported checkpoint version \"1\""),
         ] {
-            let (_dir, checkpoint, mut log) = checkpoint_log(1);
+            let (_dir, checkpoint, mut log) = checkpoint_log(crate::test_support::RecordCount(1));
             log.sync().unwrap();
             std::fs::write(&checkpoint, checkpoint_value).unwrap();
 
