@@ -137,6 +137,7 @@ impl Log {
                 self.active_txn_index = active_txn_index;
                 let stamp_index_path = seg.stamp_index_path();
                 self.active = Some(seg);
+                self.reserve_active_segment();
                 self.stamp_indexes
                     .retain(|segment_base, _| *segment_base <= base);
                 self.reopen_active_stamp_index(base, stamp_index_path)?;
@@ -149,6 +150,7 @@ impl Log {
                 self.active_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
                 let stamp_index_path = new_seg.stamp_index_path();
                 self.active = Some(new_seg);
+                self.reserve_active_segment();
                 self.dir_sync_needed = true;
                 self.stamp_indexes.clear();
                 self.reopen_active_stamp_index(offset, stamp_index_path)?;

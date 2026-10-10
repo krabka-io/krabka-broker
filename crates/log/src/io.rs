@@ -7,7 +7,8 @@
 //! performs -- goes through the path-and-target methods below, so a test can
 //! fail exactly one class of file and watch what recovery makes of it. The
 //! readahead hint of the fetch path goes through it too, so a test can see
-//! which ranges a read asks the kernel for.
+//! which ranges a read asks the kernel for, and so do the block reservation
+//! and release of `preallocate`.
 
 use std::{
     fmt::Debug,
@@ -149,6 +150,47 @@ pub trait LogIo: Debug + Send + Sync {
     fn advise_will_need(&self, file: &File, offset: u64, len: u64) {
         advise_will_need(file, offset, len);
     }
+
+    /// Reserve disk blocks for the `len` bytes of a `.log` file from `offset`
+    /// without changing its length, so the appends that later fill the range
+    /// do not allocate.
+    ///
+    /// This is `fallocate(FALLOC_FL_KEEP_SIZE)`. A reservation changes no
+    /// byte a reader can see, so a caller treats a failure as a segment that
+    /// grows as it is written. The targets without it answer `Unsupported`.
+    ///
+    /// # Errors
+    /// Returns the underlying `fallocate` error, or `Unsupported` off Linux.
+    fn reserve(&self, file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+        reserve(file, offset, len)
+    }
+
+    /// Give back the blocks a [`LogIo::reserve`] left unused past a `.log`
+    /// file's end, which is `len`.
+    ///
+    /// This truncates the file to the length it already has. ext4 and tmpfs
+    /// free every block past the end on a truncate, even one that moves
+    /// nothing, and that is the only way to reach blocks reserved past the
+    /// end: ext4 ignores `FALLOC_FL_PUNCH_HOLE` at or past it. A filesystem
+    /// that keeps them keeps them until retention deletes the segment.
+    ///
+    /// # Errors
+    /// Returns the underlying truncate error.
+    fn release(&self, file: &File, len: u64) -> std::io::Result<()> {
+        file.set_len(len)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn reserve(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    rustix::fs::fallocate(file, rustix::fs::FallocateFlags::KEEP_SIZE, offset, len)
+        .map_err(Into::into)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn reserve(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    let _ = (file, offset, len);
+    Err(std::io::ErrorKind::Unsupported.into())
 }
 
 #[cfg(target_os = "linux")]

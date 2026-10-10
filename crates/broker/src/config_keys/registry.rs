@@ -755,7 +755,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         ConfigScope::Topic,
         ConfigType::Boolean,
         Some("false"),
-        "Preallocate a new segment file to segment.bytes. Stored and reported only: krabka grows a segment as it writes it.",
+        "Reserve segment.bytes of disk for each new segment without changing the file's length, and return the unused part when the segment rolls. Linux only; elsewhere, or on a filesystem that refuses, a segment grows as it is written.",
         ValueCheck::Bool,
     ),
     key(

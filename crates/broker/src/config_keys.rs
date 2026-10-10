@@ -10,18 +10,17 @@
 //! (`segment.ms`), the sparse-index spacing (`index.interval.bytes`), the
 //! sparse-index size cap (`segment.index.bytes`), the cleaner's three
 //! selection keys (`min.compaction.lag.ms`,
-//! `max.compaction.lag.ms`, `min.cleanable.dirty.ratio`) and
-//! `message.timestamp.type`.
+//! `max.compaction.lag.ms`, `min.cleanable.dirty.ratio`),
+//! `message.timestamp.type` and `preallocate`.
 //!
 //! `cleanup.policy` is a list, as it is on Kafka: `delete`, `compact`, or
 //! `compact,delete`, which both compacts the log and applies retention to it.
 //! Kafka Streams writes the pair on every windowed-store changelog topic.
 //!
-//! Eight keys are accepted and stored with no krabka behaviour behind them:
+//! Seven keys are accepted and stored with no krabka behaviour behind them:
 //! `segment.jitter.ms`, `file.delete.delay.ms`, `flush.messages`, `flush.ms`,
-//! `preallocate`, and the three codec levels
-//! `compression.gzip.level`, `compression.lz4.level` and
-//! `compression.zstd.level`.
+//! and the three codec levels `compression.gzip.level`,
+//! `compression.lz4.level` and `compression.zstd.level`.
 //! Kafka accepts them, so a topic manifest that carries one creates the topic
 //! here too, and `DescribeConfigs` reports back what was set. Each one says so
 //! in its own `doc` string, which is what `DescribeConfigs
@@ -203,7 +202,8 @@ pub(crate) const FLUSH_MS: &str = "flush.ms";
 /// Kafka's `index.interval.bytes`: bytes of `.log` between sparse index
 /// entries.
 pub(crate) const INDEX_INTERVAL_BYTES: &str = "index.interval.bytes";
-/// Kafka's `preallocate`: whether a new segment file is preallocated.
+/// Kafka's `preallocate`: whether a new segment reserves `segment.bytes` of
+/// disk when it is created.
 pub(crate) const PREALLOCATE: &str = "preallocate";
 /// Kafka's `message.timestamp.type`: whose clock the stored records carry.
 pub(crate) const MESSAGE_TIMESTAMP_TYPE: &str = "message.timestamp.type";

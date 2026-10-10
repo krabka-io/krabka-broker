@@ -71,6 +71,7 @@ impl Segment {
             max_timestamp_offset: base_offset - 1,
             first_timestamp: None,
             last_offset: base_offset - 1,
+            reserved_end: 0,
         })
     }
 
@@ -264,10 +265,30 @@ impl Segment {
     pub fn open(dir: &Path, base_offset: Offset) -> Result<Self, LogError> {
         let log_path = name::log_path(dir, base_offset.0);
         let log_file = OpenOptions::new().read(true).write(true).open(&log_path)?;
-        let log_size = log_file.metadata()?.len();
+        let metadata = log_file.metadata()?;
+        let log_size = metadata.len();
         seek_to_log_size(&log_file, log_size)?;
-        Self::from_log_file(dir, base_offset, log_file, log_size)
+        let mut segment = Self::from_log_file(dir, base_offset, log_file, log_size)?;
+        // A reservation outlives the process that made it, and nothing on
+        // disk records it but the blocks themselves. Count them, so sealing
+        // this segment later gives back what an earlier run reserved.
+        segment.reserved_end = allocated_bytes(&metadata);
+        Ok(segment)
     }
+}
+
+/// Bytes of disk the file behind `metadata` occupies, which is past its
+/// length when blocks are reserved beyond its end.
+#[cfg(unix)]
+fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::blocks(metadata).saturating_mul(512)
+}
+
+/// The targets without block counts cannot reserve blocks either.
+#[cfg(not(unix))]
+fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+    let _ = metadata;
+    0
 }
 
 #[cfg(test)]

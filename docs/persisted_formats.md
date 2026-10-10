@@ -65,6 +65,8 @@ Each partition directory is `<log_dir>/<topic>-<partition>/`.
 
 Kafka names a replica move directory `<topic>-<partition>.<uuid>-future`. [`format-divergences.md`](format-divergences.md) records the difference. The broker writes no recovery-point, replication-offset or cleaner-offset checkpoint, and no `partition.metadata`.
 
+A `.log` file is always exactly as long as the batches in it. With `preallocate=true`, Kafka sets a new segment's length to `segment.bytes` and trims it when the segment closes, so after a crash its file can end in zeros. krabka reserves the blocks with `fallocate(FALLOC_FL_KEEP_SIZE)` instead and leaves the length alone, so `preallocate` changes no byte that any 1.x broker reads.
+
 ### Log directory root
 
 | Artifact | Location | Encoding | Version marker | Unknown-version behavior | Gating |

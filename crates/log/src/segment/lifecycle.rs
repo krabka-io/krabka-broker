@@ -7,10 +7,23 @@
 
 use krabka_ids::Offset;
 use krabka_protocol::records::RecordBatch;
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use tracing::instrument;
 
 use super::{Segment, io::seek_to_log_size};
 use crate::error::LogError;
+
+/// Log a block reservation or release the filesystem refused.
+///
+/// A filesystem without `fallocate` refuses every one, so that is not news
+/// worth more than a debug line; anything else, a full disk above all, is.
+fn log_refused(operation: &'static str, base_offset: Offset, error: &std::io::Error) {
+    if error.kind() == std::io::ErrorKind::Unsupported {
+        tracing::debug!(operation, base_offset = base_offset.0, %error, "segment preallocation unsupported");
+    } else {
+        tracing::warn!(operation, base_offset = base_offset.0, %error, "segment preallocation refused");
+    }
+}
 
 /// What [`Segment::write_snapshot`] saves for [`Segment::rollback_failed_write`].
 #[derive(Debug, Clone, Copy)]
@@ -57,7 +70,46 @@ impl Segment {
     pub fn seal(&mut self) -> Result<(), LogError> {
         self.append_running_max_time_entry()?;
         self.sealed = true;
+        self.release_reservation();
         Ok(())
+    }
+
+    /// Reserve disk blocks for this segment to grow to `size` without
+    /// allocating as it goes: Kafka's `preallocate`, with the file's length
+    /// left at the bytes it holds. See
+    /// [`SegmentAllocation::Preallocate`](crate::SegmentAllocation::Preallocate).
+    ///
+    /// A refused reservation leaves a segment that grows as it is written,
+    /// which is the segment it would have been without one, so it is logged
+    /// and not returned.
+    pub(crate) fn reserve(&mut self, size: ByteSize) {
+        let end = size.bytes_u64();
+        if end <= self.log_size.max(self.reserved_end) {
+            return;
+        }
+        match self
+            .io
+            .reserve(&self.log_file, self.log_size, end - self.log_size)
+        {
+            Ok(()) => self.reserved_end = end,
+            Err(error) => log_refused("reserve", self.base_offset, &error),
+        }
+    }
+
+    /// Give back the blocks reserved past the bytes this segment holds.
+    ///
+    /// A segment sealed before it filled -- by `segment.ms`, a full index, or
+    /// a batch that did not fit -- would otherwise keep its reservation for as
+    /// long as retention keeps the segment. A refused release keeps them only
+    /// until then, so it is logged and not returned.
+    fn release_reservation(&mut self) {
+        let reserved_end = std::mem::take(&mut self.reserved_end);
+        if reserved_end <= self.log_size {
+            return;
+        }
+        if let Err(error) = self.io.release(&self.log_file, self.log_size) {
+            log_refused("release", self.base_offset, &error);
+        }
     }
 
     /// Kafka's `timeIndex().maybeAppend(maxTimestampSoFar(),

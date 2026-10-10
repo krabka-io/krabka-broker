@@ -73,6 +73,12 @@ pub struct Segment {
     first_timestamp: Option<i64>,
     /// Last absolute offset (inclusive) of any batch in this segment.
     last_offset: Offset,
+    /// End of the disk blocks the `.log` file may hold past `log_size`:
+    /// those a [`Segment::reserve`] reserved, or, for a segment opened from
+    /// disk, those the filesystem reports allocated. Sealing gives back the
+    /// range `log_size..reserved_end`. It is `0` when there is nothing to
+    /// give back.
+    reserved_end: u64,
 }
 
 /// Verbatim, decode-free output of [`Segment::read_raw`].

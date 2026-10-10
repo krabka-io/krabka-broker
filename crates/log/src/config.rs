@@ -105,6 +105,28 @@ impl CleanupPolicy {
     }
 }
 
+/// How a new segment's `.log` file gets its disk blocks: Kafka's
+/// `preallocate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SegmentAllocation {
+    /// `preallocate=false`, Kafka's default: the file allocates blocks as
+    /// appends grow it.
+    #[default]
+    OnWrite,
+    /// `preallocate=true`: reserve `segment_size` of disk blocks for a
+    /// segment when it becomes the active one, so appends do not allocate as
+    /// they grow it.
+    ///
+    /// Kafka sets the file's length to `segment.bytes` and trims it back when
+    /// the segment closes. krabka reserves the blocks without changing the
+    /// length (`fallocate(FALLOC_FL_KEEP_SIZE)`), so a segment's file is
+    /// never longer than the batches in it, and gives back what is left of
+    /// the reservation when the segment is sealed. The bytes on disk are the
+    /// same either way. Off Linux, or on a filesystem that cannot reserve
+    /// blocks, a segment allocates as it is written.
+    Preallocate,
+}
+
 /// Per-topic policy for when a durable record becomes visible to consumers.
 ///
 /// `Immediate` is the default and is every ordinary topic. `Scheduled` gates
@@ -248,6 +270,10 @@ pub struct LogConfig {
     /// separately.
     pub flush_on_append: bool,
 
+    /// Kafka's `preallocate`. Defaults to [`SegmentAllocation::OnWrite`],
+    /// Kafka's `false`. See [`SegmentAllocation`].
+    pub segment_allocation: SegmentAllocation,
+
     /// On open, CRC every batch in the active segment and rebuild its sparse indexes.
     #[default(true)]
     pub validate_on_open: bool,
@@ -376,6 +402,7 @@ mod tests {
                     index_interval: bytes(4096),
                     segment_index_size: bytes(10 * 1024 * 1024),
                     flush_on_append: false,
+                    segment_allocation: SegmentAllocation::OnWrite,
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
                     min_compaction_lag: Time::ZERO,

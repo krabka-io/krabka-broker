@@ -563,6 +563,7 @@ impl Log {
         self.sealed_txn_indexes.insert(old_base, old_txn_index);
         let stamp_index_path = new_seg.stamp_index_path();
         self.active = Some(new_seg);
+        self.reserve_active_segment();
         self.dir_sync_needed = true;
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;
         Ok(())

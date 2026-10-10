@@ -16,7 +16,7 @@ use super::{
     CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, INDEX_INTERVAL_BYTES,
     INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS,
     MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND,
-    MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS, REMOTE_LOG_COPY_DISABLE,
+    MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS, PREALLOCATE, REMOTE_LOG_COPY_DISABLE,
     REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
     SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_MS,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC},
@@ -141,6 +141,15 @@ pub(crate) fn apply_to_log_config(
             }
             REMOTE_LOG_DELETE_ON_DISABLE => {
                 out.remote_tier.delete_on_disable = bool_value(v) == Some(true);
+            }
+            PREALLOCATE => {
+                if let Some(preallocate) = bool_value(v) {
+                    out.segment_allocation = if preallocate {
+                        krabka_log::SegmentAllocation::Preallocate
+                    } else {
+                        krabka_log::SegmentAllocation::OnWrite
+                    };
+                }
             }
             DELIVERY_MODE => {
                 out.delivery_policy = if parse::java_trim(v) == DELIVERY_MODE_SCHEDULED {
@@ -289,6 +298,34 @@ mod tests {
     }
 
     #[test]
+    fn apply_preallocate_propagates() {
+        // A corrupt value (`yes`) leaves the base alone, as its neighbours do.
+        use krabka_log::SegmentAllocation::{OnWrite, Preallocate};
+        for (value, base_allocation, expected) in [
+            ("true", OnWrite, Preallocate),
+            ("TRUE", OnWrite, Preallocate),
+            ("false", Preallocate, OnWrite),
+            ("yes", Preallocate, Preallocate),
+            ("yes", OnWrite, OnWrite),
+        ] {
+            let mut o = BTreeMap::new();
+            o.insert(PREALLOCATE.into(), value.into());
+            let base = LogConfig {
+                segment_allocation: base_allocation,
+                ..LogConfig::default()
+            };
+            let out = apply_to_log_config(&o, &base);
+            assert!(
+                out == LogConfig {
+                    segment_allocation: expected,
+                    ..LogConfig::default()
+                },
+                "preallocate={value} over base {base_allocation:?}"
+            );
+        }
+    }
+
+    #[test]
     fn apply_max_message_bytes_propagates() {
         let mut o = BTreeMap::new();
         o.insert(MAX_MESSAGE_BYTES.into(), "2048".into());
@@ -392,8 +429,7 @@ mod tests {
         super::super::SEGMENT_JITTER_MS.to_string() => "5000".to_string(),
         super::super::FILE_DELETE_DELAY_MS.to_string() => "1000".to_string(),
         super::super::FLUSH_MESSAGES.to_string() => "10".to_string(),
-        super::super::FLUSH_MS.to_string() => "10".to_string(),
-        super::super::PREALLOCATE.to_string() => "true".to_string()};
+        super::super::FLUSH_MS.to_string() => "10".to_string()};
 
         let out = apply_to_log_config(&overrides, &LogConfig::default());
 

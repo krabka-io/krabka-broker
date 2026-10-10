@@ -46,7 +46,8 @@ zerocopy = { workspace = true }
 [target.'cfg(target_os = "wasi")'.dependencies]
 rustix = { workspace = true }
 
-# The `posix_fadvise(POSIX_FADV_WILLNEED)` readahead hint of the fetch path.
+# The `posix_fadvise(POSIX_FADV_WILLNEED)` readahead hint of the fetch path,
+# and the `fallocate` block reservation of `preallocate`.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }
 

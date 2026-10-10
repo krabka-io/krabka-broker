@@ -34,6 +34,8 @@ mod delivery;
 #[cfg(test)]
 mod faults;
 mod open;
+#[cfg(test)]
+mod preallocation;
 mod read;
 mod rollover_flush;
 mod stamp;
