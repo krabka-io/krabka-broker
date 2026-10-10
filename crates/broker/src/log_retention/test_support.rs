@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use krabka_ids::PartitionIndex;
 use krabka_metadata::NodeId;
 use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::TempDir;
@@ -55,11 +54,13 @@ pub(super) async fn expired_partition(
     }
     crate::test_support::committed_partition(
         root.path(),
-        topic,
-        PartitionIndex(0),
-        leader,
         log,
-        log_dir_status,
+        crate::test_support::CommittedPartitionSetup {
+            topic,
+            leader,
+            registry: log_dir_status,
+            ..Default::default()
+        },
     )
     .await
 }

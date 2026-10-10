@@ -11,7 +11,10 @@ use krabka_protocol::{
     records::RecordBatch,
 };
 
-use crate::support::records::{batch_from_records, value_record};
+use crate::support::{
+    records::{batch_from_records, value_record},
+    topics::CreateTopicSetup,
+};
 
 /// Kafka's `max.message.bytes`, and its broker-wide default
 /// `message.max.bytes`, which a topic that sets neither inherits.
@@ -44,7 +47,11 @@ pub(super) async fn create_topic(
 ) -> WireUuid {
     let response = client
         .send(crate::support::topics::configured_topic_request(
-            name, configs, 1, 1, 5_000,
+            CreateTopicSetup {
+                topic: name,
+                configs,
+                ..Default::default()
+            },
         ))
         .await
         .expect("CreateTopics");

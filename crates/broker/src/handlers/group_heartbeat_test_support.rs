@@ -18,10 +18,12 @@ pub(super) fn acl(
     operation: AclOperation,
 ) -> MetadataRecord {
     MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
-        resource_type,
-        name,
-        "User:alice",
-        operation,
+        crate::test_support::AllowAclSetup {
+            resource_type,
+            resource_name: name,
+            operation,
+            ..Default::default()
+        },
     ))
 }
 

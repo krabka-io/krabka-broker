@@ -19,7 +19,7 @@ use crate::{
         activation::{Activation, activation_records, check_bootstrap_records},
         checkpoint::write_checkpoint,
         records::metadata_record_batch,
-        test_support::{await_leader, build_engine_only, voter_set},
+        test_support::{EngineSetup, await_leader, build_engine_only, voter_set},
     },
 };
 
@@ -241,7 +241,10 @@ async fn a_new_leader_writes_the_bootstrap_records_only_to_a_log_without_a_metad
         ),
     ];
     for (what, voters, bootstrap, before, elected, log, committed) in cases {
-        let (mut engine, _dir) = build_engine_only(NodeId(1), voters);
+        let (mut engine, _dir) = build_engine_only(EngineSetup {
+            ids: voters,
+            ..Default::default()
+        });
         engine.activation = Activation {
             bootstrap_records: bootstrap,
             default_min_insync_replicas: 2,
@@ -420,7 +423,10 @@ fn the_activation_sets_the_cluster_min_insync_replicas_when_the_bootstrap_enable
 /// not create is one the leader refuses.
 #[test]
 fn a_refused_activation_is_a_fatal_fault() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let (mut engine, _dir) = build_engine_only(EngineSetup {
+        ids: &[NodeId(1)],
+        ..Default::default()
+    });
     engine.activation = Activation {
         bootstrap_records: vec![
             feature(METADATA_VERSION_FEATURE, LATEST_PRODUCTION_METADATA_VERSION),

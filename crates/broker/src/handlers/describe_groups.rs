@@ -482,10 +482,12 @@ mod tests {
 
     fn allow(group: &str, operation: AclOperation) -> krabka_metadata::MetadataRecord {
         krabka_metadata::MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
-            ResourceType::Group,
-            group,
-            "User:admin",
-            operation,
+            crate::test_support::AllowAclSetup {
+                resource_type: ResourceType::Group,
+                resource_name: group,
+                principal: "User:admin",
+                operation,
+            },
         ))
     }
 

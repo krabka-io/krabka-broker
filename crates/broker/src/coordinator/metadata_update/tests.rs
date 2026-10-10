@@ -127,10 +127,11 @@ fn changed_topics_are_the_created_changed_and_deleted_topics() {
 
 fn describe_acl(topic: &str) -> MetadataRecord {
     MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
-        krabka_metadata::ResourceType::Topic,
-        topic,
-        "User:alice",
-        krabka_metadata::AclOperation::Describe,
+        crate::test_support::AllowAclSetup {
+            resource_name: topic,
+            operation: krabka_metadata::AclOperation::Describe,
+            ..Default::default()
+        },
     ))
 }
 

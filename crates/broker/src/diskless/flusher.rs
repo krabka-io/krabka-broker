@@ -404,7 +404,10 @@ mod tests {
         test_support::{flush_record, orders_partition, test_index_log, test_partition},
         *,
     };
-    use crate::diskless::index_log::test_support::{PacedReplayLog, ReplayPace};
+    use crate::{
+        diskless::index_log::test_support::{PacedReplayLog, ReplayPace},
+        test_support::FreezeSetup,
+    };
 
     // Keep field evaluation order, including metrics and readiness allocation.
     macro_rules! test_context {
@@ -848,12 +851,11 @@ mod tests {
         retention_fixture!(dir, topic_id, context, store, handle; mut image);
         set_retention(&handle, krabka_units::millis(1));
         image.apply(&MetadataRecord::V1TopicFreeze(
-            crate::test_support::topic_freeze_record(
-                "orders",
-                krabka_metadata::PatternType::Literal,
-                true,
-                "a cutover is in flight",
-            ),
+            crate::test_support::topic_freeze_record(FreezeSetup {
+                pattern_type: krabka_metadata::PatternType::Literal,
+                reason: "a cutover is in flight",
+                ..Default::default()
+            }),
         ));
         let partitions = [flush_partition(topic_id, &handle)];
 

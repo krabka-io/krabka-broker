@@ -128,11 +128,13 @@ async fn open_compactable_partition(
 
     crate::test_support::committed_partition(
         root.path(),
-        topic,
-        PartitionIndex(partition_id),
-        leader,
         log,
-        log_dir_status,
+        crate::test_support::CommittedPartitionSetup {
+            topic,
+            partition: PartitionIndex(partition_id),
+            leader,
+            registry: log_dir_status,
+        },
     )
     .await
 }

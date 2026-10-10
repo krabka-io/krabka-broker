@@ -87,12 +87,32 @@ fn record(offset_delta: i32, timestamp_delta: i64) -> Record {
     }
 }
 
-fn batch(
+#[derive(Clone, Copy)]
+struct BatchSetup {
     base_offset: i64,
     base_timestamp: i64,
     max_timestamp: i64,
     record_count: i32,
-) -> RecordBatch {
+}
+
+impl Default for BatchSetup {
+    fn default() -> Self {
+        Self {
+            base_offset: 100,
+            base_timestamp: 1_000,
+            max_timestamp: 1_020,
+            record_count: 3,
+        }
+    }
+}
+
+fn batch(setup: BatchSetup) -> RecordBatch {
+    let BatchSetup {
+        base_offset,
+        base_timestamp,
+        max_timestamp,
+        record_count,
+    } = setup;
     RecordBatch {
         base_offset,
         last_offset_delta: record_count - 1,
@@ -201,8 +221,17 @@ struct SegmentBytes {
 }
 
 fn segment_bytes(batch1_max_ts: i64, batch2_max_ts: i64) -> SegmentBytes {
-    let batch1 = batch(100, 1000, batch1_max_ts, 3);
-    let batch2 = batch(103, 1030, batch2_max_ts, 2);
+    let batch1 = batch(BatchSetup {
+        base_timestamp: 1000,
+        max_timestamp: batch1_max_ts,
+        ..Default::default()
+    });
+    let batch2 = batch(BatchSetup {
+        base_offset: 103,
+        base_timestamp: 1030,
+        max_timestamp: batch2_max_ts,
+        record_count: 2,
+    });
     let batch1_len = batch1.encoded_len();
     let log = encode_all(&[batch1, batch2]);
     let max_timestamp_ms = [batch1_max_ts, batch2_max_ts]
@@ -396,7 +425,19 @@ async fn a_gap_between_crc_valid_batches_is_accepted() {
 
     // The first batch ends at 102, but the second starts at 104. Both batches
     // are independently well-framed and carry valid CRCs.
-    fixture.log = encode_all(&[batch(100, 1000, 1020, 3), batch(104, 1040, 1040, 1)]);
+    fixture.log = encode_all(&[
+        batch(BatchSetup {
+            base_timestamp: 1000,
+            max_timestamp: 1020,
+            ..Default::default()
+        }),
+        batch(BatchSetup {
+            base_offset: 104,
+            base_timestamp: 1040,
+            max_timestamp: 1040,
+            record_count: 1,
+        }),
+    ]);
 
     let segment = write_segment(dir.path(), &fixture, &[]);
     let verified = verify_segment(&store, &partition, &segment)
@@ -410,7 +451,12 @@ async fn first_batch_must_match_the_segment_base_offset() {
     let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
-    fixture.log = encode_all(&[batch(101, 1000, 1000, 1)]);
+    fixture.log = encode_all(&[batch(BatchSetup {
+        base_offset: 101,
+        base_timestamp: 1000,
+        max_timestamp: 1000,
+        record_count: 1,
+    })]);
 
     let segment = write_segment(dir.path(), &fixture, &[]);
     let error = verify_segment(&store, &partition, &segment)
@@ -425,7 +471,12 @@ async fn a_batch_whose_exclusive_end_overflows_is_rejected() {
     let mut fixture = valid_segment_bytes();
 
     fixture.base_offset = Offset(i64::MAX);
-    fixture.log = encode_all(&[batch(i64::MAX, 1000, 1000, 1)]);
+    fixture.log = encode_all(&[batch(BatchSetup {
+        base_offset: i64::MAX,
+        base_timestamp: 1000,
+        max_timestamp: 1000,
+        record_count: 1,
+    })]);
 
     let segment = write_segment(dir.path(), &fixture, &[]);
     let error = verify_segment(&store, &partition, &segment)

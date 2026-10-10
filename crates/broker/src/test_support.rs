@@ -136,17 +136,45 @@ pub(crate) fn open_partition(
     let path = crate::log_dir::partition_dir(log_dir, topic, partition);
     std::fs::create_dir_all(&path).expect("create partition directory");
     let log = krabka_log::Log::open(&path, krabka_log::LogConfig::default()).expect("open log");
-    spawn_standalone_partition(log_dir, topic, partition, log, false)
+    spawn_standalone_partition(
+        log_dir,
+        log,
+        crate::test_support::StandalonePartitionSetup {
+            topic,
+            partition,
+            ..Default::default()
+        },
+    )
 }
 
 /// Start a standalone writer over the caller's already-opened log.
+#[derive(Clone, Copy)]
+pub(crate) struct StandalonePartitionSetup<'a> {
+    pub topic: &'a str,
+    pub partition: i32,
+    pub diskless: bool,
+}
+
+impl Default for StandalonePartitionSetup<'_> {
+    fn default() -> Self {
+        Self {
+            topic: "orders",
+            partition: 0,
+            diskless: false,
+        }
+    }
+}
+
 pub(crate) fn spawn_standalone_partition(
     log_dir: &std::path::Path,
-    topic: &str,
-    partition: i32,
     log: krabka_log::Log,
-    diskless: bool,
+    setup: StandalonePartitionSetup<'_>,
 ) -> Arc<crate::partition::Partition> {
+    let StandalonePartitionSetup {
+        topic,
+        partition,
+        diskless,
+    } = setup;
     crate::broker::spawn_partition(
         topic.to_owned(),
         krabka_ids::PartitionIndex(partition),
@@ -283,12 +311,32 @@ pub(crate) fn string_pairs(values: &[(&str, &str)]) -> std::collections::BTreeMa
 }
 
 /// The signed-action placeholder metadata used by retention freeze fixtures.
-pub(crate) fn topic_freeze_record(
-    scope: &str,
-    pattern_type: krabka_metadata::PatternType,
-    frozen: bool,
-    reason: &str,
-) -> krabka_metadata::TopicFreezeRecord {
+#[derive(Clone, Copy)]
+pub(crate) struct FreezeSetup<'a> {
+    pub scope: &'a str,
+    pub pattern_type: krabka_metadata::PatternType,
+    pub frozen: bool,
+    pub reason: &'a str,
+}
+
+impl Default for FreezeSetup<'_> {
+    fn default() -> Self {
+        Self {
+            scope: "orders",
+            pattern_type: krabka_metadata::PatternType::Literal,
+            frozen: true,
+            reason: "DR cutover",
+        }
+    }
+}
+
+pub(crate) fn topic_freeze_record(setup: FreezeSetup<'_>) -> krabka_metadata::TopicFreezeRecord {
+    let FreezeSetup {
+        scope,
+        pattern_type,
+        frozen,
+        reason,
+    } = setup;
     krabka_metadata::TopicFreezeRecord {
         scope: scope.to_owned(),
         pattern_type,
@@ -309,7 +357,11 @@ pub(crate) fn frozen_topics_image(
     let mut image = MetadataImage::new(uuid::Uuid::from_u128(0x5150));
     for &(scope, pattern_type) in scopes {
         image.apply(&krabka_metadata::MetadataRecord::V1TopicFreeze(
-            topic_freeze_record(scope, pattern_type, true, "DR cutover"),
+            topic_freeze_record(FreezeSetup {
+                scope,
+                pattern_type,
+                ..Default::default()
+            }),
         ));
     }
     image
@@ -323,17 +375,42 @@ pub(crate) fn topic_thaw_record(
         set_by: "User:bob".to_owned(),
         set_at_ms: 1_770_000_100_000,
         proposal_id: uuid::Uuid::from_u128(7),
-        ..topic_freeze_record(scope, pattern_type, false, "")
+        ..topic_freeze_record(FreezeSetup {
+            scope,
+            pattern_type,
+            frozen: false,
+            reason: "",
+        })
     }
 }
 
 /// A topic-only image for policy tests, before any partitions are installed.
-pub(crate) fn topic_image(
-    topic: &str,
-    topic_id: uuid::Uuid,
-    partitions: i32,
-    replication_factor: i16,
-) -> MetadataImage {
+#[derive(Clone, Copy)]
+pub(crate) struct TopicSetup<'a> {
+    pub topic: &'a str,
+    pub topic_id: uuid::Uuid,
+    pub partitions: i32,
+    pub replication_factor: i16,
+}
+
+impl Default for TopicSetup<'_> {
+    fn default() -> Self {
+        Self {
+            topic: "orders",
+            topic_id: uuid::Uuid::from_u128(1),
+            partitions: 1,
+            replication_factor: 3,
+        }
+    }
+}
+
+pub(crate) fn topic_image(setup: TopicSetup<'_>) -> MetadataImage {
+    let TopicSetup {
+        topic,
+        topic_id,
+        partitions,
+        replication_factor,
+    } = setup;
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: topic.into(),
@@ -393,13 +470,38 @@ pub(crate) fn directory_partition_image(
 krabka_macros::topic_record_fixture!(single_partition_topic);
 
 /// Seeds the one-partition reassignment fixtures with the fixed leader epoch.
-pub(crate) fn reassignment_partition(
-    replicas: &[u64],
-    isr: &[u64],
-    changing: (&[u64], &[u64]),
-    leader: u64,
-) -> PartitionRecord {
-    let (adding, removing) = changing;
+#[derive(Clone, Copy)]
+pub(crate) struct ReassignmentSetup<'a> {
+    pub replicas: &'a [u64],
+    pub isr: &'a [u64],
+    pub adding: &'a [u64],
+    pub removing: &'a [u64],
+    pub leader: u64,
+    pub directories: &'a [uuid::Uuid],
+}
+
+impl Default for ReassignmentSetup<'_> {
+    fn default() -> Self {
+        Self {
+            replicas: &[1, 2, 3],
+            isr: &[1, 2, 3],
+            adding: &[],
+            removing: &[],
+            leader: 1,
+            directories: &[],
+        }
+    }
+}
+
+pub(crate) fn reassignment_partition(setup: ReassignmentSetup<'_>) -> PartitionRecord {
+    let ReassignmentSetup {
+        replicas,
+        isr,
+        adding,
+        removing,
+        leader,
+        directories,
+    } = setup;
     PartitionRecord {
         topic: "foo".into(),
         partition: 0,
@@ -409,7 +511,7 @@ pub(crate) fn reassignment_partition(
         leader_epoch: krabka_metadata::LeaderEpoch(5),
         adding_replicas: adding.iter().copied().map(NodeId).collect(),
         removing_replicas: removing.iter().copied().map(NodeId).collect(),
-        directories: vec![],
+        directories: directories.to_vec(),
         partition_epoch: 0,
     }
 }
@@ -1032,12 +1134,32 @@ impl crate::authorizer::Authorizer for GrantsInPrincipalName {
 
 /// A literal `Allow` ACL for `principal` (such as `User:alice`) from any host,
 /// to `operation` on the `resource_type` resource named `resource_name`.
-pub(crate) fn allow_acl(
-    resource_type: krabka_metadata::ResourceType,
-    resource_name: &str,
-    principal: &str,
-    operation: krabka_metadata::AclOperation,
-) -> krabka_metadata::AclEntry {
+#[derive(Clone, Copy)]
+pub(crate) struct AllowAclSetup<'a> {
+    pub resource_type: krabka_metadata::ResourceType,
+    pub resource_name: &'a str,
+    pub principal: &'a str,
+    pub operation: krabka_metadata::AclOperation,
+}
+
+impl Default for AllowAclSetup<'_> {
+    fn default() -> Self {
+        Self {
+            resource_type: krabka_metadata::ResourceType::Topic,
+            resource_name: "orders",
+            principal: "User:alice",
+            operation: krabka_metadata::AclOperation::Read,
+        }
+    }
+}
+
+pub(crate) fn allow_acl(setup: AllowAclSetup<'_>) -> krabka_metadata::AclEntry {
+    let AllowAclSetup {
+        resource_type,
+        resource_name,
+        principal,
+        operation,
+    } = setup;
     krabka_metadata::AclEntry {
         resource_type,
         resource_name: resource_name.to_string(),
@@ -1063,10 +1185,12 @@ pub(crate) async fn grant_cluster_operation(
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1AccessControlEntry(allow_acl(
-            krabka_metadata::ResourceType::Cluster,
-            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            &format!("User:{user}"),
-            operation,
+            crate::test_support::AllowAclSetup {
+                resource_type: krabka_metadata::ResourceType::Cluster,
+                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+                principal: &format!("User:{user}"),
+                operation,
+            },
         ))])
         .await
         .expect("commit cluster acl");
@@ -1089,10 +1213,12 @@ pub(crate) async fn grant_topic_operation(
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1AccessControlEntry(allow_acl(
-            krabka_metadata::ResourceType::Topic,
-            topic,
-            &format!("User:{user}"),
-            operation,
+            crate::test_support::AllowAclSetup {
+                resource_name: topic,
+                principal: &format!("User:{user}"),
+                operation,
+                ..Default::default()
+            },
         ))])
         .await
         .expect("commit topic acl");
@@ -2228,14 +2354,35 @@ pub(crate) fn default_records_batch(n: i32) -> RecordBatch {
 /// Spawn a caught-up replica whose entire local log is committed.
 /// Cleaner and retention fixtures must advance the high watermark through
 /// the follower path, which clamps it to the local log end.
+pub(crate) struct CommittedPartitionSetup<'a> {
+    pub topic: &'a str,
+    pub partition: krabka_ids::PartitionIndex,
+    pub leader: krabka_metadata::NodeId,
+    pub registry: crate::log_dir_status::LogDirRegistry,
+}
+
+impl Default for CommittedPartitionSetup<'_> {
+    fn default() -> Self {
+        Self {
+            topic: "orders",
+            partition: krabka_ids::PartitionIndex(0),
+            leader: krabka_metadata::NodeId(1),
+            registry: crate::log_dir_status::LogDirRegistry::default(),
+        }
+    }
+}
+
 pub(crate) async fn committed_partition(
     root: &std::path::Path,
-    topic: &str,
-    partition: krabka_ids::PartitionIndex,
-    leader: krabka_metadata::NodeId,
     log: krabka_log::Log,
-    registry: crate::log_dir_status::LogDirRegistry,
+    setup: CommittedPartitionSetup<'_>,
 ) -> Arc<crate::partition::Partition> {
+    let CommittedPartitionSetup {
+        topic,
+        partition,
+        leader,
+        registry,
+    } = setup;
     let part = crate::broker::spawn_partition(
         topic.to_owned(),
         partition,

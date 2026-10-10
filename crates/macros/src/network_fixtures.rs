@@ -3,19 +3,35 @@
 use moxy::{ast::ParseError, token::TokenStream};
 
 pub(crate) fn request_frame(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = crate::fixtures::name(input)?;
-    Ok(moxy::template! {
-        pub(crate) fn {{ name }}(api_key: i16, api_version: i16, correlation_id: i32, client_id: Option<&[u8]>, tagged: Option<&[u8]>, body: &[u8]) -> ::bytes::BytesMut {
-            use ::bytes::BufMut as _;
-            let mut buf = ::bytes::BytesMut::new();
-            buf.put_i16(api_key); buf.put_i16(api_version); buf.put_i32(correlation_id);
-            match client_id {
-                Some(id) => { buf.put_i16(i16::try_from(id.len()).expect("client id length")); buf.put_slice(id); }
-                None => buf.put_i16(-1),
+    crate::fixtures::named_items(input, |name| {
+        moxy::template! {
+            #[derive(Clone, Copy)]
+            pub(crate) struct RequestFrameSetup<'a> {
+                pub api_key: i16,
+                pub api_version: i16,
+                pub correlation_id: i32,
+                pub client_id: Option<&'a [u8]>,
+                pub tagged: Option<&'a [u8]>,
+                pub body: &'a [u8],
             }
-            if let Some(tagged) = tagged { buf.put_slice(tagged); }
-            buf.put_slice(body);
-            buf
+            impl Default for RequestFrameSetup<'_> {
+                fn default() -> Self {
+                    Self { api_key: 18, api_version: 0, correlation_id: 1, client_id: None, tagged: None, body: &[] }
+                }
+            }
+            pub(crate) fn {{ name }}(setup: RequestFrameSetup<'_>) -> ::bytes::BytesMut {
+                let RequestFrameSetup { api_key, api_version, correlation_id, client_id, tagged, body } = setup;
+                use ::bytes::BufMut as _;
+                let mut buf = ::bytes::BytesMut::new();
+                buf.put_i16(api_key); buf.put_i16(api_version); buf.put_i32(correlation_id);
+                match client_id {
+                    Some(id) => { buf.put_i16(i16::try_from(id.len()).expect("client id length")); buf.put_slice(id); }
+                    None => buf.put_i16(-1),
+                }
+                if let Some(tagged) = tagged { buf.put_slice(tagged); }
+                buf.put_slice(body);
+                buf
+            }
         }
     })
 }

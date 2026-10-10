@@ -11,8 +11,8 @@ use super::*;
 use crate::{
     config_keys::{UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
     leader_election::test_support::{
-        expected_clean_election, expected_partition, img_with_dirs, liveness_with_alive,
-        one_partition_change, set_topic_config,
+        ElectionSetup, ExpectedPartitionSetup, expected_clean_election, expected_partition,
+        img_with_partition, liveness_with_alive, one_partition_change, set_topic_config,
     },
 };
 
@@ -28,7 +28,12 @@ fn offline_image(
         directories[index] = bad;
     }
     (
-        img_with_dirs("t", leader, &[1, 2, 3], isr, &directories),
+        img_with_partition(ElectionSetup {
+            leader,
+            isr,
+            dirs: &directories,
+            ..Default::default()
+        }),
         bad,
         good,
     )
@@ -95,7 +100,13 @@ async fn offline_dir_shrinks_isr_for_non_leader_replica() {
     let MetadataRecord::V1Partition(pr) = &plan.changes[0] else {
         panic!()
     };
-    let expected = expected_partition("t", 1, &[1, 3], LeaderEpoch(5), vec![good, bad, good]);
+    let expected = expected_partition(ExpectedPartitionSetup {
+        leader: 1,
+        isr: &[1, 3],
+        leader_epoch: LeaderEpoch(5),
+        directories: vec![good, bad, good],
+        ..Default::default()
+    });
     assert!(*pr == expected);
 }
 

@@ -19,7 +19,7 @@ use super::*;
 use crate::{
     broker::Broker,
     codes,
-    handlers::delete_records::test_support::gated_config,
+    handlers::{delete_records::test_support::gated_config, test_support::CreateTopicSetup},
     test_support::{DenyAll, peer, principal},
 };
 
@@ -179,8 +179,11 @@ async fn topic_with_configs_holding_a_pending_batch(
             crate::config_keys::parse_cleanup_policy(policy).expect("a valid cleanup.policy")
         });
     let version = create_topics_response::MAX_VERSION;
-    let create =
-        crate::handlers::test_support::configured_topic_request(topic, configs, 1, 1, 5_000);
+    let create = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+        topic,
+        configs,
+        ..Default::default()
+    });
     let created = crate::handlers::create_topics::handle(broker, create, version, ctx)
         .await
         .expect("CreateTopics");

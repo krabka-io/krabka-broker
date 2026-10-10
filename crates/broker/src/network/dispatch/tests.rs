@@ -9,27 +9,11 @@ use futures_util::StreamExt;
 use tokio::net::TcpStream;
 
 use super::{test_support::DEFAULT_MAX_FRAME_BYTES, *};
-use crate::codes;
+use crate::{codes, network::test_support::RequestFrameSetup};
 
 mod throttle_mute;
 
-fn request_frame(
-    api_key: i16,
-    api_version: i16,
-    correlation_id: i32,
-    client_id: Option<&[u8]>,
-    tagged: Option<u8>,
-    body: &[u8],
-) -> BytesMut {
-    crate::network::test_support::request_frame(
-        api_key,
-        api_version,
-        correlation_id,
-        client_id,
-        tagged.as_ref().map(std::slice::from_ref),
-        body,
-    )
-}
+use crate::network::test_support::request_frame;
 
 #[test]
 fn peek_api_key_reads_first_two_bytes_big_endian() {
@@ -96,7 +80,14 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         version: i16,
         body: &[u8],
     ) -> Vec<u8> {
-        let frame = request_frame(api_key, version, 7, None, Some(0), body);
+        let frame = request_frame(RequestFrameSetup {
+            api_key,
+            api_version: version,
+            correlation_id: 7,
+            tagged: Some(&[0]),
+            body,
+            ..Default::default()
+        });
         framed.send(frame.freeze()).await.expect("send request");
         let resp = framed
             .next()
@@ -181,14 +172,13 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
         let server = tokio::spawn(serve);
 
         let mut framed = test_support::connect_framed(addr, "connect").await;
-        let frame = request_frame(
+        let frame = request_frame(RequestFrameSetup {
             api_key,
-            version,
-            7,
-            None,
-            entry.body_flexible(version).then_some(0),
-            &[],
-        );
+            api_version: version,
+            correlation_id: 7,
+            tagged: entry.body_flexible(version).then_some(&[0][..]),
+            ..Default::default()
+        });
         framed.send(frame.freeze()).await.expect("send request");
         check!(
             framed.next().await.is_none(),
@@ -244,14 +234,13 @@ async fn drive_one_frame_per_connection(
             .get(api_key)
             .is_some_and(|entry| entry.body_flexible(version));
         let mut framed = test_support::connect_framed(addr, "connect").await;
-        let frame = request_frame(
+        let frame = request_frame(RequestFrameSetup {
             api_key,
-            version,
+            api_version: version,
             correlation_id,
-            None,
-            flexible.then_some(0),
-            &[],
-        );
+            tagged: flexible.then_some(&[0][..]),
+            ..Default::default()
+        });
         framed.send(frame.freeze()).await.expect("send request");
 
         outcomes.push(match framed.next().await {
@@ -551,14 +540,26 @@ async fn a_frame_that_is_not_a_request_closes_the_connection_as_a_decode_error()
 async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mechanism() {
     // Produce (api_key 0) v0: a well-formed request, and not one of the three
     // api_keys an unauthenticated connection may send.
-    let produce = || request_frame(0, 0, 1, None, None, &[]).freeze();
+    let produce = || {
+        request_frame(RequestFrameSetup {
+            api_key: 0,
+            ..Default::default()
+        })
+        .freeze()
+    };
     // SaslHandshake (api_key 17) v1 for PLAIN. The body is one non-flexible
     // STRING: an i16 length and the mechanism name.
     let handshake = || {
         let mut body = BytesMut::new();
         body.put_i16(5);
         body.put_slice(b"PLAIN");
-        request_frame(17, 1, 1, None, None, &body).freeze()
+        request_frame(RequestFrameSetup {
+            api_key: 17,
+            api_version: 1,
+            body: &body,
+            ..Default::default()
+        })
+        .freeze()
     };
 
     let cases = [
@@ -639,14 +640,14 @@ fn encoded_request_frame<T: krabka_protocol::Encode>(
     let mut encoded = BytesMut::with_capacity(body.encoded_len(api_version));
     body.encode(&mut encoded, api_version)
         .expect("encode request body");
-    request_frame(
+    request_frame(RequestFrameSetup {
         api_key,
         api_version,
         correlation_id,
-        None,
-        flexible.then_some(0),
-        &encoded,
-    )
+        tagged: flexible.then_some(&[0][..]),
+        body: &encoded,
+        ..Default::default()
+    })
     .freeze()
 }
 
@@ -866,7 +867,7 @@ mod request_budget {
     use assert2::{assert, check};
     use futures_util::{SinkExt as _, StreamExt as _};
 
-    use super::{KafkaCodec, active_closes, request_frame};
+    use super::{KafkaCodec, RequestFrameSetup, active_closes, request_frame};
     use crate::broker::Broker;
 
     /// One connection served by the loop, and the client end already framed.
@@ -892,14 +893,22 @@ mod request_budget {
     /// An `ApiVersions` v0 request with an empty body: the smallest frame the
     /// loop answers without any authorization or metadata in the way.
     fn api_versions_frame(correlation_id: i32) -> bytes::Bytes {
-        request_frame(18, 0, correlation_id, None, None, &[]).freeze()
+        request_frame(RequestFrameSetup {
+            correlation_id,
+            ..Default::default()
+        })
+        .freeze()
     }
 
     /// An `ApiVersions` request padded past [`BUDGET_BYTES`]. The body is trailing
     /// bytes the v0 decoder ignores, so what refuses the frame is the budget
     /// and not the decode.
     fn oversized_frame() -> bytes::Bytes {
-        request_frame(18, 0, 1, None, None, &vec![0_u8; 2 * BUDGET_BYTES]).freeze()
+        request_frame(RequestFrameSetup {
+            body: &vec![0_u8; 2 * BUDGET_BYTES],
+            ..Default::default()
+        })
+        .freeze()
     }
 
     use crate::test_support::start_broker_with as broker_with;
@@ -1056,7 +1065,7 @@ mod log_levels {
     use futures_util::{SinkExt as _, StreamExt as _};
     use tracing::{Instrument as _, Level};
 
-    use super::{DEFAULT_MAX_FRAME_BYTES, request_frame};
+    use super::{DEFAULT_MAX_FRAME_BYTES, RequestFrameSetup, request_frame};
     use crate::{broker::Broker, network::codec, test_support::LogCapture};
 
     // What the client end of the one connection does.
@@ -1099,7 +1108,7 @@ mod log_levels {
         let open_client = match peer {
             Peer::OneRequest => {
                 client
-                    .send(request_frame(18, 0, 1, None, None, &[]).freeze())
+                    .send(request_frame(RequestFrameSetup::default()).freeze())
                     .await
                     .expect("send the request");
                 client
@@ -1193,7 +1202,7 @@ mod request_limit {
         owned::describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
     };
 
-    use super::request_frame;
+    use super::{RequestFrameSetup, request_frame};
     use crate::broker::Broker;
 
     /// The limit of the broker under test: well over its own requests to
@@ -1217,7 +1226,14 @@ mod request_limit {
         }
         .encode(&mut body, 4)
         .expect("encode DescribeConfigs");
-        request_frame(32, 4, correlation_id, None, Some(0), &body)
+        request_frame(RequestFrameSetup {
+            api_key: 32,
+            api_version: 4,
+            correlation_id,
+            tagged: Some(&[0]),
+            body: &body,
+            ..Default::default()
+        })
     }
 
     /// Serves one connection on a broker whose `socket.request.max.bytes` is
@@ -1251,7 +1267,11 @@ mod request_limit {
         let small_request = describe_broker_configs(7);
         assert!(small_request.len() - 4 <= LIMIT);
         // An ApiVersions v0 request whose client id alone is over the limit.
-        let oversize_request = request_frame(18, 0, 8, Some(&[b'c'; LIMIT + 1]), None, &[]);
+        let oversize_request = request_frame(RequestFrameSetup {
+            correlation_id: 8,
+            client_id: Some(&[b'c'; LIMIT + 1]),
+            ..Default::default()
+        });
         assert!(oversize_request.len() - 4 > LIMIT);
 
         let answer = answer_under_limit(small_request)

@@ -285,6 +285,7 @@ mod tests {
         authorizer::{AuthorizationResult, Authorizer},
         codes,
         coordinator::unified::{GroupType, ShareGroupSeed, share::actor::ShareGroupActorMessage},
+        handlers::test_support::CreateTopicSetup,
         test_support::{DenyAll, test_ctx},
     };
 
@@ -374,8 +375,10 @@ mod tests {
         ctx: &crate::handlers::RequestContext<'_>,
     ) {
         let version = create_topics_response::MAX_VERSION;
-        let request =
-            crate::handlers::test_support::configured_topic_request(topic_name, &[], 1, 1, 5_000);
+        let request = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+            topic: topic_name,
+            ..Default::default()
+        });
         let response = crate::handlers::create_topics::handle(broker, request, version, ctx)
             .await
             .expect("create topic");

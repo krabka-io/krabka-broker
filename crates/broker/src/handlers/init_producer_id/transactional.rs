@@ -505,8 +505,11 @@ mod tests {
         let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = Log::open(&part_dir, LogConfig::default()).unwrap();
-        let part =
-            crate::test_support::spawn_standalone_partition(dir.path(), "orders", 0, log, false);
+        let part = crate::test_support::spawn_standalone_partition(
+            dir.path(),
+            log,
+            crate::test_support::StandalonePartitionSetup::default(),
+        );
         assert!(part.log_end_offset() == 0);
         // The metadata reconcile installs this broker, node 1, as the leader.
         part.install_leader_change(1, 0).await;
@@ -655,10 +658,8 @@ mod tests {
         std::fs::create_dir_all(&data_dir).expect("create the data partition directory");
         let data = crate::test_support::spawn_standalone_partition(
             dir,
-            "orders",
-            0,
             Log::open(&data_dir, LogConfig::default()).expect("open the data log"),
-            false,
+            crate::test_support::StandalonePartitionSetup::default(),
         );
         // The metadata reconcile installs this broker, node 1, as the leader.
         data.install_leader_change(1, 0).await;
@@ -1152,10 +1153,11 @@ mod tests {
             std::fs::create_dir_all(&ghost_dir).expect("create ghost partition dir");
             let ghost = crate::test_support::spawn_standalone_partition(
                 dir.path(),
-                "ghost",
-                0,
                 Log::open(&ghost_dir, LogConfig::default()).expect("open ghost log"),
-                false,
+                crate::test_support::StandalonePartitionSetup {
+                    topic: "ghost",
+                    ..Default::default()
+                },
             );
             ghost.install_leader_change(1, 0).await;
             coordinator

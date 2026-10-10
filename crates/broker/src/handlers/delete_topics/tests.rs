@@ -22,6 +22,7 @@ use crate::{
     broker::Broker,
     codes,
     config::BreakGlassConfig,
+    handlers::test_support::CreateTopicSetup,
     test_support::{
         DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
     },
@@ -303,7 +304,10 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 /// cluster-`Delete` shortcut test below, which needs topics that already
 /// exist before it authorizes their deletion.
 async fn seed_topic(broker: &Broker, principal: &Principal, peer: &SocketAddr, name: &str) {
-    let req = crate::handlers::test_support::configured_topic_request(name, &[], 1, 1, 5_000);
+    let req = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+        topic: name,
+        ..Default::default()
+    });
     let ctx = test_context(principal, peer);
     let resp = crate::handlers::create_topics::handle(broker, req, CREATE_VERSION, &ctx)
         .await
@@ -481,7 +485,12 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
 
 /// One `alice` Allow ACL on a literal resource.
 fn alice_acl(resource_type: ResourceType, name: &str, operation: AclOperation) -> AclEntry {
-    crate::test_support::allow_acl(resource_type, name, "User:alice", operation)
+    crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+        resource_type,
+        resource_name: name,
+        operation,
+        ..Default::default()
+    })
 }
 
 /// Kafka's `ControllerApis.deleteTopics` checks `Describe` and `Delete`

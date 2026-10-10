@@ -431,11 +431,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let partition = crate::test_support::spawn_standalone_partition(
             directory.path(),
-            "orders",
-            0,
             krabka_log::Log::open(directory.path(), krabka_log::LogConfig::default())
                 .expect("open log"),
-            false,
+            crate::test_support::StandalonePartitionSetup::default(),
         );
 
         for producer_id in [-1, i64::MIN] {

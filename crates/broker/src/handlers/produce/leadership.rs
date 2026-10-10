@@ -330,8 +330,14 @@ mod tests {
             krabka_log::LogConfig::default(),
         )
         .unwrap();
-        let partition =
-            crate::test_support::spawn_standalone_partition(dir.path(), "orders", 0, log, true);
+        let partition = crate::test_support::spawn_standalone_partition(
+            dir.path(),
+            log,
+            crate::test_support::StandalonePartitionSetup {
+                diskless: true,
+                ..Default::default()
+            },
+        );
 
         assert!(!diskless_role_ready(&partition, record));
         partition
@@ -380,7 +386,14 @@ mod tests {
         partitions.insert(
             "orders".into(),
             krabka_ids::PartitionIndex(0),
-            crate::test_support::spawn_standalone_partition(dir.path(), "orders", 0, log, diskless),
+            crate::test_support::spawn_standalone_partition(
+                dir.path(),
+                log,
+                crate::test_support::StandalonePartitionSetup {
+                    diskless,
+                    ..Default::default()
+                },
+            ),
         );
         validate_partition_gate(
             "orders",

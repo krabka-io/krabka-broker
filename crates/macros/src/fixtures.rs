@@ -40,6 +40,14 @@ pub(crate) fn name(tokens: TokenStream) -> Result<Ident, ParseError> {
     }
 }
 
+/// Build named fixture items after validating the generator's item name.
+pub(crate) fn named_items(
+    input: TokenStream,
+    build: impl FnOnce(Ident) -> TokenStream,
+) -> Result<TokenStream, ParseError> {
+    Ok(build(name(input)?))
+}
+
 /// Parse an item name followed by a fixed number of generator arguments.
 pub(crate) fn named_arguments(
     input: TokenStream,

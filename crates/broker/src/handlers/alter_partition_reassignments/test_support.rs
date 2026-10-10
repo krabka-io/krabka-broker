@@ -13,6 +13,8 @@ use krabka_protocol::owned::alter_partition_reassignments_request::{
     AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
 };
 
+use crate::test_support::ReassignmentSetup;
+
 pub(super) fn request(
     allow_replication_factor_change: bool,
     topic: &str,
@@ -77,7 +79,14 @@ pub(super) fn img_with_epoch(
     }));
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
         partition_epoch,
-        ..crate::test_support::reassignment_partition(replicas, isr, (adding, removing), leader)
+        ..crate::test_support::reassignment_partition(ReassignmentSetup {
+            replicas,
+            isr,
+            adding,
+            removing,
+            leader,
+            ..Default::default()
+        })
     }));
     img
 }

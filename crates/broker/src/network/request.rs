@@ -68,7 +68,7 @@ mod tests {
     use bytes::{BufMut, BytesMut};
 
     use super::*;
-    use crate::network::test_support::request_frame;
+    use crate::network::test_support::{RequestFrameSetup, request_frame};
 
     fn assert_flexible_client_body(parsed: &ParsedRequest<'_>) {
         check!(parsed.client_id == Some("client-a"));
@@ -78,7 +78,14 @@ mod tests {
 
     #[test]
     fn parse_request_non_flexible_header() {
-        let frame = request_frame(3, 8, 42, Some(b"client-a"), None, b"body");
+        let frame = request_frame(RequestFrameSetup {
+            api_key: 3,
+            api_version: 8,
+            correlation_id: 42,
+            client_id: Some(b"client-a"),
+            body: b"body",
+            ..Default::default()
+        });
 
         let parsed = parse_request(&frame, |_, _| false).expect("parse request");
 
@@ -92,7 +99,14 @@ mod tests {
 
     #[test]
     fn parse_request_flexible_header_consumes_tagged_fields_byte() {
-        let frame = request_frame(18, 3, 7, Some(b"client-a"), Some(&[0]), b"body");
+        let frame = request_frame(RequestFrameSetup {
+            api_version: 3,
+            correlation_id: 7,
+            client_id: Some(b"client-a"),
+            tagged: Some(&[0]),
+            body: b"body",
+            ..Default::default()
+        });
 
         let parsed =
             parse_request(&frame, |key, version| key == 18 && version >= 3).expect("parse request");
@@ -105,14 +119,14 @@ mod tests {
 
     #[test]
     fn parse_request_flexible_header_skips_non_empty_tagged_fields() {
-        let frame = request_frame(
-            18,
-            3,
-            7,
-            Some(b"client-a"),
-            Some(&[1, 1, 3, b't', b'a', b'g']),
-            b"body",
-        );
+        let frame = request_frame(RequestFrameSetup {
+            api_version: 3,
+            correlation_id: 7,
+            client_id: Some(b"client-a"),
+            tagged: Some(&[1, 1, 3, b't', b'a', b'g']),
+            body: b"body",
+            ..Default::default()
+        });
 
         let parsed =
             parse_request(&frame, |key, version| key == 18 && version >= 3).expect("parse request");
@@ -122,7 +136,14 @@ mod tests {
 
     #[test]
     fn parse_request_preserves_empty_client_id() {
-        let frame = request_frame(3, 8, 42, Some(b""), None, b"body");
+        let frame = request_frame(RequestFrameSetup {
+            api_key: 3,
+            api_version: 8,
+            correlation_id: 42,
+            client_id: Some(b""),
+            body: b"body",
+            ..Default::default()
+        });
 
         let parsed = parse_request(&frame, |_, _| false).expect("parse request");
 
@@ -132,7 +153,14 @@ mod tests {
 
     #[test]
     fn parse_request_rejects_invalid_utf8_client_id() {
-        let frame = request_frame(3, 8, 42, Some(&[0xff, 0xfe]), None, b"body");
+        let frame = request_frame(RequestFrameSetup {
+            api_key: 3,
+            api_version: 8,
+            correlation_id: 42,
+            client_id: Some(&[0xff, 0xfe]),
+            body: b"body",
+            ..Default::default()
+        });
 
         let err = parse_request(&frame, |_, _| false).expect_err("invalid utf8 client id");
 
@@ -149,8 +177,21 @@ mod tests {
         missing_client_id_len.put_i16(8);
         missing_client_id_len.put_i32(42);
 
-        let truncated_client_id = request_frame(3, 8, 42, Some(b"client"), None, b"");
-        let flexible_without_tag = request_frame(18, 3, 42, Some(b"client"), None, b"");
+        let truncated_client_id = request_frame(RequestFrameSetup {
+            api_key: 3,
+            api_version: 8,
+            correlation_id: 42,
+            client_id: Some(b"client"),
+            body: b"",
+            ..Default::default()
+        });
+        let flexible_without_tag = request_frame(RequestFrameSetup {
+            api_version: 3,
+            correlation_id: 42,
+            client_id: Some(b"client"),
+            body: b"",
+            ..Default::default()
+        });
 
         let cases = [
             ("missing fixed header", vec![0_u8; 7]),
@@ -175,7 +216,14 @@ mod tests {
 
     #[test]
     fn peek_api_key_matches_existing_dispatch_behavior() {
-        let present = request_frame(3, 8, 42, Some(b"client-a"), None, b"body");
+        let present = request_frame(RequestFrameSetup {
+            api_key: 3,
+            api_version: 8,
+            correlation_id: 42,
+            client_id: Some(b"client-a"),
+            body: b"body",
+            ..Default::default()
+        });
 
         assert!(peek_api_key(&present).expect("api key") == 3);
     }

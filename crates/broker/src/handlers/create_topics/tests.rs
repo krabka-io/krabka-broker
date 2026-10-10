@@ -1689,12 +1689,11 @@ fn topic_with_nullable_configs(name: &str, configs: &[(&str, Option<&str>)]) -> 
 async fn cluster_create_and_describe_configs_probes_leave_no_denial_behind() {
     use crate::metrics::AuthorizationDeniedLabel;
 
-    let literal_a = crate::test_support::allow_acl(
-        ResourceType::Topic,
-        "a",
-        "User:alice",
-        AclOperation::Create,
-    );
+    let literal_a = crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+        resource_name: "a",
+        operation: AclOperation::Create,
+        ..Default::default()
+    });
     let denied = |operation: &str, resource_type: &str| AuthorizationDeniedLabel {
         operation: operation.into(),
         resource_type: resource_type.into(),

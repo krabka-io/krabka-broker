@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_metadata::{
-    BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, PartitionRecord, PatternType,
-    TopicFreezeRecord, TopicRecord,
+    BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, PartitionRecord, TopicFreezeRecord,
+    TopicRecord,
 };
 use krabka_raft::NodeId;
 use uuid::Uuid;
@@ -19,7 +19,7 @@ use crate::{
     broker::Broker,
     codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
     handlers::alter_partition_reassignments::test_support::{request, test_context},
-    test_support::{DenyAll, start_broker_with_authorizer as start_broker, test_ctx},
+    test_support::{DenyAll, FreezeSetup, start_broker_with_authorizer as start_broker, test_ctx},
 };
 
 async fn seed_reassignable_partition(broker: &Broker) {
@@ -273,12 +273,7 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
         .controller
         .submit_change(vec![MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
             set_at_ms: 10,
-            ..crate::test_support::topic_freeze_record(
-                "orders",
-                PatternType::Literal,
-                true,
-                "DR cutover",
-            )
+            ..crate::test_support::topic_freeze_record(FreezeSetup::default())
         })])
         .await
         .expect("seed topic freeze");

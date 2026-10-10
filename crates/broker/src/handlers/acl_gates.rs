@@ -423,12 +423,10 @@ mod tests {
         );
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crate::test_support::allow_acl(
-                ResourceType::Topic,
-                "orders",
-                "User:alice",
-                AclOperation::Write,
-            ),
+            crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+                operation: AclOperation::Write,
+                ..Default::default()
+            }),
         ));
         let authorizer = crate::authorizer::SimpleAclAuthorizer::new(HashSet::new());
 

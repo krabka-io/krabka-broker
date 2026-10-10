@@ -502,6 +502,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::test_support::TopicSetup;
 
     /// Shorthand for wrapping a raw offset in the test asserts below.
     fn o(v: i64) -> Offset {
@@ -1070,7 +1071,10 @@ mod tests {
     }
 
     fn policy_image() -> MetadataImage {
-        crate::test_support::topic_image("t", uuid::Uuid::from_u128(1), 1, 3)
+        crate::test_support::topic_image(TopicSetup {
+            topic: "t",
+            ..Default::default()
+        })
     }
 
     /// The policy the ISR scan reads out of the metadata image: the topic's

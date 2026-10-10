@@ -28,6 +28,7 @@ use super::{FIRST_TOPIC_ID_VERSION, handle};
 use crate::{
     broker::Broker,
     codes,
+    handlers::test_support::CreateTopicSetup,
     test_support::{decode_response, dispatch_context, encode_request, peer, principal},
 };
 
@@ -56,7 +57,10 @@ async fn create_topic(broker: &Broker, name: &str) {
         principal(ADMIN_GRANTS),
         client_id = "produce-txn-authz-admin"
     );
-    let request = crate::handlers::test_support::configured_topic_request(name, &[], 1, 1, 5_000);
+    let request = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+        topic: name,
+        ..Default::default()
+    });
     dispatch_context(
         broker,
         create_topics_request::API_KEY,

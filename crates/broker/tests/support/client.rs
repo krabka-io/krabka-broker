@@ -18,7 +18,7 @@ use tokio::{
 use crate::support::{
     produce::single_partition_produce,
     records::{batch_from_records, value_record},
-    topics::{creatable_topic, create_topic_request},
+    topics::{CreateTopicSetup, creatable_topic, create_topic_request},
 };
 pub async fn connect(bootstrap: &str, client_id: &str) -> Arc<Client> {
     Arc::new(connect_client(bootstrap, Some(client_id)).await)
@@ -249,11 +249,13 @@ pub async fn create_configured_topic(
 ) {
     let response = client
         .send(crate::support::topics::configured_topic_request(
-            topic,
-            configs,
-            partitions,
-            replication_factor,
-            timeout_ms,
+            CreateTopicSetup {
+                topic,
+                configs,
+                num_partitions: partitions,
+                replication_factor,
+                timeout_ms,
+            },
         ))
         .await
         .expect("CreateTopics");

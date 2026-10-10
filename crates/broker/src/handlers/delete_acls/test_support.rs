@@ -5,7 +5,7 @@
 //! than one of the sibling test modules, so they live here rather than being
 //! repeated in each.
 
-use krabka_metadata::{AclEntry, AclOperation, ResourceType};
+use krabka_metadata::{AclEntry, AclOperation};
 use krabka_protocol::owned::delete_acls_request::{DeleteAclsFilter, DeleteAclsRequest};
 
 pub(super) use crate::handlers::acl_test_support::{
@@ -16,7 +16,12 @@ pub(super) use crate::handlers::acl_test_support::{
 pub(super) const VERSION: i16 = 3;
 
 pub(super) fn acl(resource_name: &str, principal: &str, operation: AclOperation) -> AclEntry {
-    crate::test_support::allow_acl(ResourceType::Topic, resource_name, principal, operation)
+    crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+        resource_name,
+        principal,
+        operation,
+        ..Default::default()
+    })
 }
 
 pub(super) fn filter(resource_name: Option<&str>, principal: Option<&str>) -> DeleteAclsFilter {

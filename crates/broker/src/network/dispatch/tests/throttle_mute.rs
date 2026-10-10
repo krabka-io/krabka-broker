@@ -26,7 +26,7 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use super::request_frame;
-use crate::network::codec::KafkaCodec;
+use crate::network::{codec::KafkaCodec, test_support::RequestFrameSetup};
 
 /// `Produce` wire `api_key`.
 const PRODUCE_KEY: i16 = 0;
@@ -127,7 +127,13 @@ async fn connect_to_serve_loop(
 }
 
 async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
-    let body = encoded(&configured_topic_request(topic, &[], 1, 1, 5_000), 7);
+    let body = encoded(
+        &configured_topic_request(CreateTopicSetup {
+            topic,
+            ..Default::default()
+        }),
+        7,
+    );
     send_request(framed, 19, 7, 1, &body).await;
     let response = response_frame(
         framed,
@@ -141,7 +147,12 @@ async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
 /// Writes a v0 `ApiVersions` request, the cheapest frame that still reaches a
 /// real handler through the whole serve loop.
 async fn send_api_versions(framed: &mut Framed<TcpStream, KafkaCodec>, correlation_id: i32) {
-    let frame = request_frame(super::API_VERSIONS_KEY, 0, correlation_id, None, None, &[]).freeze();
+    let frame = request_frame(RequestFrameSetup {
+        api_key: super::API_VERSIONS_KEY,
+        correlation_id,
+        ..Default::default()
+    })
+    .freeze();
     framed.send(frame).await.expect("send ApiVersions");
 }
 
@@ -154,7 +165,15 @@ async fn send_request(
     correlation_id: i32,
     body: &BytesMut,
 ) {
-    let frame = request_frame(api_key, version, correlation_id, None, Some(0), body).freeze();
+    let frame = request_frame(RequestFrameSetup {
+        api_key,
+        api_version: version,
+        correlation_id,
+        tagged: Some(&[0]),
+        body,
+        ..Default::default()
+    })
+    .freeze();
     framed.send(frame).await.expect("send request");
 }
 
@@ -424,7 +443,14 @@ async fn produce_charges_the_whole_request_frame_once() {
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
     let body = produce_body("frame-charge", 1, 256, 8);
-    let frame_len = request_frame(PRODUCE_KEY, PRODUCE_VERSION, 1, None, Some(0), &body).len();
+    let frame_len = request_frame(RequestFrameSetup {
+        api_key: PRODUCE_KEY,
+        api_version: PRODUCE_VERSION,
+        tagged: Some(&[0]),
+        body: &body,
+        ..Default::default()
+    })
+    .len();
     send_request(&mut framed, PRODUCE_KEY, PRODUCE_VERSION, 1, &body).await;
     let response = response_frame(
         &mut framed,
@@ -595,14 +621,13 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
 
     for case in cases {
         let (server, mut framed) = connect_to_serve_loop(&handle).await;
-        let frame = super::request_frame(
-            case.api_key,
-            case.version,
-            1,
-            None,
-            case.flexible.then_some(0),
-            &case.body,
-        )
+        let frame = super::request_frame(RequestFrameSetup {
+            api_key: case.api_key,
+            api_version: case.version,
+            tagged: case.flexible.then_some(&[0][..]),
+            body: &case.body,
+            ..Default::default()
+        })
         .freeze();
         framed.send(frame).await.expect("send request");
         let response = response_frame(
@@ -707,7 +732,10 @@ async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation(
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
     let body = encoded(
-        &configured_topic_request("one-observation", &[], 1, 1, 5_000),
+        &configured_topic_request(CreateTopicSetup {
+            topic: "one-observation",
+            ..Default::default()
+        }),
         VERSION,
     );
     send_request(&mut framed, 19, VERSION, 1, &body).await;

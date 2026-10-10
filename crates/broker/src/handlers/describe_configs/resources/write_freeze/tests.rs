@@ -11,6 +11,7 @@ use crate::{
     config_keys,
     handlers::describe_configs::{
         resources::tests::{describe_topic, entry_named},
+        test_support::TopicConfigSetup,
         wire::{CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_TOPIC},
     },
 };
@@ -122,11 +123,10 @@ fn topic_describe_places_write_freeze_beside_the_stored_overrides() {
 #[test]
 fn topic_describe_applies_the_key_filter_to_the_synthesised_key() {
     let mut image = image_with_freezes(&[("orders", PatternType::Literal)]);
-    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: "orders".into(),
-        overrides: maplit::btreemap! {
-        config_keys::RETENTION_MS.to_string() => "60000".to_string()},
-    }));
+    crate::handlers::describe_configs::test_support::set_topic_config(
+        &mut image,
+        TopicConfigSetup::default(),
+    );
 
     for (label, keys, expected) in [
         (

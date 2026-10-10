@@ -10,8 +10,8 @@ use super::*;
 use crate::{
     heartbeat::controller_state::TestClock,
     leader_election::test_support::{
-        fake_source, fencing_updates, img_with_partition, one_partition_change, partition_batches,
-        recovery_handle_for_tests, register_brokers,
+        ElectionSetup, fake_source, fencing_updates, img_with_partition, one_partition_change,
+        partition_batches, recovery_handle_for_tests, register_brokers,
     },
 };
 
@@ -44,7 +44,7 @@ impl TickFixture {
     }
 
     fn registered_partition(leader: u64, was_leader: bool) -> Self {
-        let mut image = img_with_partition("t", 0, 1, &[1, 2, 3], &[1, 2, 3]);
+        let mut image = img_with_partition(ElectionSetup::default());
         register_brokers(&mut image, &[1, 2, 3]);
         Self::new(image, leader, was_leader)
     }
@@ -165,7 +165,9 @@ async fn tick_leaves_the_unfence_of_a_returning_broker_to_its_heartbeat() {
     // Broker 3 is fenced in the image and alive again. Kafka unfences a
     // broker only in `processBrokerHeartbeat`, once the broker has caught up
     // to its registration, so the tick writes nothing for it.
-    let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+    let mut img = img_with_partition(ElectionSetup {
+        ..Default::default()
+    });
     register_brokers(&mut img, &[1, 2, 3]);
     let fence = crate::heartbeat::fencing::registration_change(
         &img,

@@ -37,6 +37,7 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
+    handlers::test_support::CreateTopicSetup,
     test_support::{
         decode_response, encode_request, peer, principal, request_context,
         start_broker_no_audit_with,
@@ -66,11 +67,10 @@ async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {
         .expect("client build");
     let response = client
         .send(crate::handlers::test_support::configured_topic_request(
-            "local",
-            &[],
-            1,
-            1,
-            5_000,
+            CreateTopicSetup {
+                topic: "local",
+                ..Default::default()
+            },
         ))
         .await
         .expect("CreateTopics");

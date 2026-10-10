@@ -1050,7 +1050,11 @@ mod tests {
 
         use crate::kraft::controller::test_support::{build_engine_only, one_offset_batch};
 
-        let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+        let (mut engine, _dir) =
+            build_engine_only(crate::kraft::controller::test_support::EngineSetup {
+                ids: &[NodeId(1)],
+                ..Default::default()
+            });
         let t1 = DelegationTokenRecord {
             token_id: "tok1".into(),
             owner: principal("alice"),
@@ -1079,7 +1083,11 @@ mod tests {
         assert2::assert!(matches!(res_exists, Err(RaftError::ChangeRejected(_))));
 
         // Token create when hwm < log_end_offset (uncommitted tail) is rejected
-        let (mut engine2, _dir2) = build_engine_only(NodeId(1), &[NodeId(1)]);
+        let (mut engine2, _dir2) =
+            build_engine_only(crate::kraft::controller::test_support::EngineSetup {
+                ids: &[NodeId(1)],
+                ..Default::default()
+            });
         let t2 = DelegationTokenRecord {
             token_id: "tok2".into(),
             owner: principal("bob"),

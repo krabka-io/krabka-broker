@@ -262,28 +262,66 @@ async fn every_replica_describes_the_producers_of_its_log() {
         produce(
             &leader,
             topic_id,
-            batch(IDEMPOTENT, 0, 3, BASE_TIMESTAMP, false),
+            batch(ProducerBatchSetup {
+                producer: IDEMPOTENT,
+                records: 3,
+                max_timestamp: BASE_TIMESTAMP,
+                ..Default::default()
+            }),
         )
         .await,
         produce(
             &leader,
             topic_id,
-            batch(IDEMPOTENT, 3, 2, BASE_TIMESTAMP + 1, false),
+            batch(ProducerBatchSetup {
+                producer: IDEMPOTENT,
+                base_sequence: 3,
+                records: 2,
+                max_timestamp: BASE_TIMESTAMP + 1,
+                ..Default::default()
+            }),
         )
         .await,
     ];
     // Offsets 5 and 6, 8, and 10 and 11: the transactional batches. Offsets 7
     // and 9 are the markers below.
-    let committed =
-        produce_transactional(&leader, batch(COMMITTED, 0, 2, BASE_TIMESTAMP + 2, true)).await;
+    let committed = produce_transactional(
+        &leader,
+        batch(ProducerBatchSetup {
+            producer: COMMITTED,
+            records: 2,
+            max_timestamp: BASE_TIMESTAMP + 2,
+            transactional: true,
+            ..Default::default()
+        }),
+    )
+    .await;
     let before_markers = now_ms();
     let commit = end_transaction(&leader, COMMITTED, true, 1).await;
-    let aborted =
-        produce_transactional(&leader, batch(ABORTED, 0, 1, BASE_TIMESTAMP + 3, true)).await;
+    let aborted = produce_transactional(
+        &leader,
+        batch(ProducerBatchSetup {
+            producer: ABORTED,
+            max_timestamp: BASE_TIMESTAMP + 3,
+            transactional: true,
+            ..Default::default()
+        }),
+    )
+    .await;
     let (aborted_id, aborted_epoch) = ABORTED;
     let abort = end_transaction(&leader, (aborted_id, aborted_epoch + 1), false, 2).await;
     let after_markers = now_ms();
-    let open = produce_transactional(&leader, batch(OPEN, 0, 2, BASE_TIMESTAMP + 4, true)).await;
+    let open = produce_transactional(
+        &leader,
+        batch(ProducerBatchSetup {
+            producer: OPEN,
+            records: 2,
+            max_timestamp: BASE_TIMESTAMP + 4,
+            transactional: true,
+            ..Default::default()
+        }),
+    )
+    .await;
     assert!(
         (idempotent, committed, commit, aborted, abort, open)
             == (

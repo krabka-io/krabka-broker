@@ -18,46 +18,51 @@ use crate::{
     test_support::FakeMetadataSource,
 };
 
-pub fn img_with_partition(
-    topic: &str,
-    partition: i32,
-    leader: u64,
-    replicas: &[u64],
-    isr: &[u64],
-) -> MetadataImage {
-    image_with_dirs(topic, partition, leader, replicas, isr, &[])
+#[derive(Clone, Copy)]
+pub struct ElectionSetup<'a> {
+    pub topic: &'a str,
+    pub partition: i32,
+    pub leader: u64,
+    pub replicas: &'a [u64],
+    pub isr: &'a [u64],
+    pub dirs: &'a [Uuid],
 }
 
-fn image_with_dirs(
-    topic: &str,
-    partition: i32,
-    leader: u64,
-    replicas: &[u64],
-    isr: &[u64],
-    dirs: &[Uuid],
-) -> MetadataImage {
+impl Default for ElectionSetup<'_> {
+    fn default() -> Self {
+        Self {
+            topic: "t",
+            partition: 0,
+            leader: 1,
+            replicas: &[1, 2, 3],
+            isr: &[1, 2, 3],
+            dirs: &[],
+        }
+    }
+}
+
+pub fn img_with_partition(setup: ElectionSetup<'_>) -> MetadataImage {
     let mut img = MetadataImage::new(Uuid::nil());
     img.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: topic.into(),
+        name: setup.topic.into(),
         topic_id: Uuid::nil(),
         partitions: 1,
-        replication_factor: i16::try_from(replicas.len()).unwrap(),
+        replication_factor: i16::try_from(setup.replicas.len()).unwrap(),
     }));
-    img.apply(&MetadataRecord::V1Partition(seed_partition(
-        topic, partition, leader, replicas, isr, dirs,
-    )));
+    img.apply(&MetadataRecord::V1Partition(seed_partition(setup)));
     img
 }
 
 /// Input partition for election tests, before any leader or ISR change.
-pub fn seed_partition(
-    topic: &str,
-    partition: i32,
-    leader: u64,
-    replicas: &[u64],
-    isr: &[u64],
-    dirs: &[Uuid],
-) -> PartitionRecord {
+pub fn seed_partition(setup: ElectionSetup<'_>) -> PartitionRecord {
+    let ElectionSetup {
+        topic,
+        partition,
+        leader,
+        replicas,
+        isr,
+        dirs,
+    } = setup;
     PartitionRecord {
         topic: topic.into(),
         partition,
@@ -103,17 +108,43 @@ pub fn expected_clean_election(
     isr: &[u64],
     directories: Vec<Uuid>,
 ) -> PartitionRecord {
-    expected_partition("t", leader, isr, LeaderEpoch(6), directories)
+    expected_partition(ExpectedPartitionSetup {
+        leader,
+        isr,
+        directories,
+        ..Default::default()
+    })
 }
 
 /// Independent expected partition after one change to the three-replica fixture.
-pub fn expected_partition(
-    topic: &str,
-    leader: u64,
-    isr: &[u64],
-    leader_epoch: LeaderEpoch,
-    directories: Vec<Uuid>,
-) -> PartitionRecord {
+pub struct ExpectedPartitionSetup<'a> {
+    pub topic: &'a str,
+    pub leader: u64,
+    pub isr: &'a [u64],
+    pub leader_epoch: LeaderEpoch,
+    pub directories: Vec<Uuid>,
+}
+
+impl Default for ExpectedPartitionSetup<'_> {
+    fn default() -> Self {
+        Self {
+            topic: "t",
+            leader: 2,
+            isr: &[2, 3],
+            leader_epoch: LeaderEpoch(6),
+            directories: vec![],
+        }
+    }
+}
+
+pub fn expected_partition(setup: ExpectedPartitionSetup<'_>) -> PartitionRecord {
+    let ExpectedPartitionSetup {
+        topic,
+        leader,
+        isr,
+        leader_epoch,
+        directories,
+    } = setup;
     PartitionRecord {
         topic: topic.into(),
         partition: 0,
@@ -339,14 +370,4 @@ pub fn register_broker_with_dirs(img: &mut MetadataImage, id: u64, log_dirs: Vec
             ..crate::test_support::broker_registration(id)
         },
     ));
-}
-
-pub fn img_with_dirs(
-    topic: &str,
-    leader: u64,
-    replicas: &[u64],
-    isr: &[u64],
-    dirs: &[uuid::Uuid],
-) -> MetadataImage {
-    image_with_dirs(topic, 0, leader, replicas, isr, dirs)
 }

@@ -153,7 +153,11 @@ mod tests {
             krabka_log::LogConfig::default(),
         )
         .expect("open log");
-        crate::test_support::spawn_standalone_partition(dir, "orders", 0, log, false)
+        crate::test_support::spawn_standalone_partition(
+            dir,
+            log,
+            crate::test_support::StandalonePartitionSetup::default(),
+        )
     }
 
     /// Keep the borrowed context and its log-directory registry in each caller's scope.

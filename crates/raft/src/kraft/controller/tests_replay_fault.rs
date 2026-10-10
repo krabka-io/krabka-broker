@@ -29,7 +29,9 @@ use crate::{
         control_state::voter_set_from_wire,
         records::{decode_control_record, typed_control_batch},
         recovery::{replay_committed, replay_control_records},
-        test_support::{build_engine_only, elect_single_voter_engine, one_offset_batch, voter_set},
+        test_support::{
+            EngineSetup, build_engine_only, elect_single_voter_engine, one_offset_batch, voter_set,
+        },
     },
 };
 
@@ -188,6 +190,16 @@ fn fault_for(value: &[u8], offset: i64) -> Option<MetadataReplayError> {
 /// the decoder's error. It skips a record that decodes but that the image
 /// cannot take. Each row first commits a topic, so a row can name a topic
 /// the image holds.
+fn elected_replay_engine() -> (Engine, tempfile::TempDir, i32) {
+    let (mut engine, dir) = build_engine_only(EngineSetup {
+        ids: &[NodeId(1)],
+        ..Default::default()
+    });
+    elect_single_voter_engine(&mut engine);
+    let epoch = i32::try_from(engine.core.quorum_state().leader_epoch).expect("epoch");
+    (engine, dir, epoch)
+}
+
 #[test]
 fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
     let cases: [(&str, Vec<u8>, Want); 8] = [
@@ -229,9 +241,7 @@ fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
     ];
 
     for (case, value, want) in cases {
-        let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-        elect_single_voter_engine(&mut engine);
-        let epoch = i32::try_from(engine.core.quorum_state().leader_epoch).expect("epoch");
+        let (mut engine, _dir, epoch) = elected_replay_engine();
         let known = engine.log.log_end_offset().0;
         engine
             .log
@@ -293,9 +303,7 @@ fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
 /// A controller that has stopped on a record applies nothing after it.
 #[test]
 fn a_stopped_controller_applies_no_later_record() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
-    let epoch = i32::try_from(engine.core.quorum_state().leader_epoch).expect("epoch");
+    let (mut engine, _dir, epoch) = elected_replay_engine();
     let bad_offset = engine.log.log_end_offset().0;
     engine
         .log

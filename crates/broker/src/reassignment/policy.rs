@@ -208,13 +208,15 @@ mod tests {
 
     use assert2::{assert, check};
     use krabka_metadata::{
-        BrokerRegistrationRecord, MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord,
-        TopicRecord,
+        BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicFreezeRecord, TopicRecord,
     };
     use uuid::Uuid;
 
     use super::*;
-    use crate::reassignment::test_support::{first_partition, img, img_with_dirs, liveness};
+    use crate::{
+        reassignment::test_support::{first_partition, img, liveness},
+        test_support::{FreezeSetup, ReassignmentSetup},
+    };
 
     #[test]
     fn remap_directories_preserves_slot_alignment_on_replica_removal() {
@@ -426,7 +428,14 @@ mod tests {
             expected,
         } in cases
         {
-            let image = img(replicas, isr, adding, removing, leader);
+            let image = img(ReassignmentSetup {
+                replicas,
+                isr,
+                adding,
+                removing,
+                leader,
+                ..Default::default()
+            });
             let l = liveness(&[1, 2, 3, 4]).await;
 
             let updates = compute_reassignment_progress(&image, &l).await;
@@ -462,7 +471,12 @@ mod tests {
         let da = Uuid::from_u128(0xA);
         let db = Uuid::from_u128(0xB);
         let dc = Uuid::from_u128(0xC);
-        let image = img_with_dirs(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1, &[da, db, dc]);
+        let image = img(ReassignmentSetup {
+            adding: &[3],
+            removing: &[2],
+            directories: &[da, db, dc],
+            ..Default::default()
+        });
         let pr = completed_target(&image).await;
         // Slot 0 → broker 1 → dA; slot 1 → broker 3 → dC (NOT dB).
         check!(pr.directories == vec![da, dc]);
@@ -471,7 +485,11 @@ mod tests {
 
     #[tokio::test]
     async fn complete_when_adding_in_isr_writes_target() {
-        let img = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1);
+        let img = img(ReassignmentSetup {
+            adding: &[3],
+            removing: &[2],
+            ..Default::default()
+        });
         let pr = completed_target(&img).await;
         // leader and leader_epoch are unchanged (leader didn't change).
         check!(pr.adding_replicas == Vec::<NodeId>::new());
@@ -512,8 +530,13 @@ mod tests {
         ] {
             // replicas=[1,2,3], removing=[3]: the completion drops broker 3
             // from the replica set, and the published ELR still names it.
-            let mut image = std::sync::Arc::try_unwrap(img(&[1, 2, 3], isr, adding, &[3], 1))
-                .expect("the fixture holds the only reference");
+            let mut image = std::sync::Arc::try_unwrap(img(ReassignmentSetup {
+                isr,
+                adding,
+                removing: &[3],
+                ..Default::default()
+            }))
+            .expect("the fixture holds the only reference");
             crate::test_support::finalize_elr_version(&mut image);
             image.apply(&MetadataRecord::V1TopicConfig(
                 krabka_metadata::TopicConfigRecord {
@@ -569,15 +592,17 @@ mod tests {
 
     #[tokio::test]
     async fn freeze_allows_completion_of_an_already_accepted_reassignment() {
-        let mut image = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1);
+        let mut image = img(ReassignmentSetup {
+            adding: &[3],
+            removing: &[2],
+            ..Default::default()
+        });
         Arc::make_mut(&mut image).apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
             set_at_ms: 10,
-            ..crate::test_support::topic_freeze_record(
-                "foo",
-                PatternType::Literal,
-                true,
-                "DR cutover",
-            )
+            ..crate::test_support::topic_freeze_record(FreezeSetup {
+                scope: "foo",
+                ..Default::default()
+            })
         }));
         let l = liveness(&[1, 2, 3]).await;
 
@@ -624,7 +649,14 @@ mod tests {
             ),
         ];
         for (case, replicas, isr, adding, removing, leader, alive) in cases {
-            let img = img(&replicas, &isr, &adding, &removing, leader);
+            let img = img(ReassignmentSetup {
+                replicas: &replicas,
+                isr: &isr,
+                adding: &adding,
+                removing: &removing,
+                leader,
+                ..Default::default()
+            });
             let l = liveness(&alive).await;
             let updates = compute_reassignment_progress(&img, &l).await;
             assert!(
@@ -637,7 +669,12 @@ mod tests {
     #[tokio::test]
     async fn leader_handoff_when_leader_in_removing() {
         // leader=2, removing=[2]; new leader must come from target ∩ isr = {1,3} ∩ {1,2,3} = {1,3}.
-        let img = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 2);
+        let img = img(ReassignmentSetup {
+            adding: &[3],
+            removing: &[2],
+            leader: 2,
+            ..Default::default()
+        });
         let l = liveness(&[1, 2, 3]).await;
         let updates = compute_reassignment_progress(&img, &l).await;
         assert!(updates.len() == 1);
@@ -657,7 +694,12 @@ mod tests {
 
     #[test]
     fn exhausted_epochs_block_reassignment_transitions() {
-        let image = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 2);
+        let image = img(ReassignmentSetup {
+            adding: &[3],
+            removing: &[2],
+            leader: 2,
+            ..Default::default()
+        });
         let mut record = image.partition("foo", 0).expect("seeded partition").clone();
         let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3)]);
 
@@ -711,7 +753,14 @@ mod tests {
     async fn target_includes_only_replicas_minus_removing() {
         // adding=[4,5], removing=[1,2], replicas=[1,2,3,4,5].
         // target = [3,4,5]. isr ⊇ adding required; isr=[1,2,3,4,5].
-        let img = img(&[1, 2, 3, 4, 5], &[1, 2, 3, 4, 5], &[4, 5], &[1, 2], 3);
+        let img = img(ReassignmentSetup {
+            replicas: &[1, 2, 3, 4, 5],
+            isr: &[1, 2, 3, 4, 5],
+            adding: &[4, 5],
+            removing: &[1, 2],
+            leader: 3,
+            ..Default::default()
+        });
         let l = liveness(&[1, 2, 3, 4, 5]).await;
         let updates = compute_reassignment_progress(&img, &l).await;
         assert!(updates.len() == 1);
@@ -727,7 +776,13 @@ mod tests {
     #[test]
     fn completion_keeps_the_operators_target_order() {
         // Target [3,4,1] over current [1,2,3]: the start wrote [3,4,1,2].
-        let image = img(&[3, 4, 1, 2], &[1, 2, 3, 4], &[4], &[2], 1);
+        let image = img(ReassignmentSetup {
+            replicas: &[3, 4, 1, 2],
+            isr: &[1, 2, 3, 4],
+            adding: &[4],
+            removing: &[2],
+            ..Default::default()
+        });
         let record = image.partition("foo", 0).expect("seeded partition");
         let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
 
@@ -752,7 +807,13 @@ mod tests {
     async fn isr_intersection_when_some_targets_not_in_isr() {
         // adding=[4], removing=[2]; isr=[1,2,3,4]; target=[1,3,4].
         // new_isr = isr ∩ target = [1,3,4].
-        let img = img(&[1, 2, 3, 4], &[1, 2, 3, 4], &[4], &[2], 1);
+        let img = img(ReassignmentSetup {
+            replicas: &[1, 2, 3, 4],
+            isr: &[1, 2, 3, 4],
+            adding: &[4],
+            removing: &[2],
+            ..Default::default()
+        });
         let l = liveness(&[1, 2, 3, 4]).await;
         let updates = compute_reassignment_progress(&img, &l).await;
         assert!(updates.len() == 1);

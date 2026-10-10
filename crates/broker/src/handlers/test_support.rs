@@ -659,7 +659,11 @@ pub(crate) async fn create_topic(
         (client, response),
         broker,
         client_id,
-        crate::handlers::test_support::configured_topic_request(name, &[], partitions, 1, 5_000,)
+        crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+            topic: name,
+            num_partitions: partitions,
+            ..Default::default()
+        })
     );
     for partition in 0..partitions {
         broker.wait_until_partition_present(name, partition).await;

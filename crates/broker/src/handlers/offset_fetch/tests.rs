@@ -29,6 +29,7 @@ use crate::{
         actor::{GroupActorMessage, GroupKindTag},
         classic_state::OffsetEntry,
     },
+    handlers::test_support::CreateTopicSetup,
     test_support::{peer, principal},
 };
 
@@ -396,7 +397,10 @@ async fn seed_topic_reference_group(broker_handle: &crate::broker::BrokerHandle)
         (client, response),
         broker_handle,
         "offset-fetch-resolution-test",
-        crate::handlers::test_support::configured_topic_request(KNOWN_NAME, &[], 1, 1, 5_000,)
+        crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+            topic: KNOWN_NAME,
+            ..Default::default()
+        })
     );
     broker_handle
         .wait_until_partition_present(KNOWN_NAME, 0)

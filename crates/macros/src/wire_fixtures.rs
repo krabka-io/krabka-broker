@@ -35,10 +35,21 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
         }
     };
     Ok(moxy::template! {
-        pub(crate) fn {{ name }}(
-            (producer_id, producer_epoch): (i64, i16), base_sequence: i32,
-            records: i32, max_timestamp: i64, transactional: bool,
-        ) -> ::krabka_protocol::records::RecordBatch {
+        #[derive(Clone, Copy)]
+        pub(crate) struct ProducerBatchSetup {
+            pub producer: (i64, i16),
+            pub base_sequence: i32,
+            pub records: i32,
+            pub max_timestamp: i64,
+            pub transactional: bool,
+        }
+        impl Default for ProducerBatchSetup {
+            fn default() -> Self {
+                Self { producer: (7, 0), base_sequence: 0, records: 1, max_timestamp: 1_000, transactional: false }
+            }
+        }
+        pub(crate) fn {{ name }}(setup: ProducerBatchSetup) -> ::krabka_protocol::records::RecordBatch {
+            let ProducerBatchSetup { producer: (producer_id, producer_epoch), base_sequence, records, max_timestamp, transactional } = setup;
             ::krabka_protocol::records::RecordBatch {
                 attributes: ::krabka_protocol::records::Attributes::default().with_transactional(transactional),
                 last_offset_delta: records - 1, base_timestamp: max_timestamp, max_timestamp,
@@ -53,24 +64,35 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
 }
 
 pub(crate) fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError> {
-    crate::fixtures::function(
-        input,
-        &moxy::template! { pub(crate) },
-        &moxy::template! { topic: &str, configs: &[(&str, &str)], num_partitions: i32,
-        replication_factor: i16, timeout_ms: i32, },
-        &moxy::template! { ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest },
-        &moxy::template! {
-            ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
-                topics: vec![::krabka_protocol::owned::create_topics_request::CreatableTopic {
-                    name: topic.to_owned(), num_partitions, replication_factor,
-                    configs: configs.iter().map(|(name, value)| ::krabka_protocol::owned::create_topics_request::CreatableTopicConfig {
-                        name: (*name).to_owned(), value: Some((*value).to_owned()), ..Default::default()
-                    }).collect(),
-                    ..Default::default()
-                }], timeout_ms, ..Default::default()
+    crate::fixtures::named_items(input, |name| {
+        moxy::template! {
+            #[derive(Clone, Copy)]
+            pub(crate) struct CreateTopicSetup<'a> {
+                pub topic: &'a str,
+                pub configs: &'a [(&'a str, &'a str)],
+                pub num_partitions: i32,
+                pub replication_factor: i16,
+                pub timeout_ms: i32,
             }
-        },
-    )
+            impl Default for CreateTopicSetup<'_> {
+                fn default() -> Self {
+                    Self { topic: "orders", configs: &[], num_partitions: 1, replication_factor: 1, timeout_ms: 5_000 }
+                }
+            }
+            pub(crate) fn {{ name }}(setup: CreateTopicSetup<'_>) -> ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+                let CreateTopicSetup { topic, configs, num_partitions, replication_factor, timeout_ms } = setup;
+                ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+                    topics: vec![::krabka_protocol::owned::create_topics_request::CreatableTopic {
+                        name: topic.to_owned(), num_partitions, replication_factor,
+                        configs: configs.iter().map(|(name, value)| ::krabka_protocol::owned::create_topics_request::CreatableTopicConfig {
+                            name: (*name).to_owned(), value: Some((*value).to_owned()), ..Default::default()
+                        }).collect(),
+                        ..Default::default()
+                    }], timeout_ms, ..Default::default()
+                }
+            }
+        }
+    })
 }
 
 pub(crate) fn consumer_fetch(input: TokenStream) -> Result<TokenStream, ParseError> {

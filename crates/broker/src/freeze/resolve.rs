@@ -190,13 +190,19 @@ mod tests {
         FreezeMutationResolution, FreezeVerdict, resolve_freeze_mutation, resolve_freeze_verdict,
         resolve_topic_freeze,
     };
+    use crate::test_support::FreezeSetup;
 
     fn image() -> MetadataImage {
         MetadataImage::new(Uuid::from_u128(0x5150))
     }
 
     fn freeze(scope: &str, pattern_type: PatternType, reason: &str) -> TopicFreezeRecord {
-        crate::test_support::topic_freeze_record(scope, pattern_type, true, reason)
+        crate::test_support::topic_freeze_record(FreezeSetup {
+            scope,
+            pattern_type,
+            reason,
+            ..Default::default()
+        })
     }
 
     fn frozen(image: &mut MetadataImage, scope: &str, pattern_type: PatternType, reason: &str) {

@@ -129,9 +129,13 @@ mod tests {
     };
 
     use super::*;
+    use crate::test_support::TopicSetup;
 
     fn image(topic_override: Option<&str>, cluster_default: Option<&str>) -> MetadataImage {
-        let mut image = crate::test_support::topic_image("t", uuid::Uuid::from_u128(1), 1, 3);
+        let mut image = crate::test_support::topic_image(TopicSetup {
+            topic: "t",
+            ..Default::default()
+        });
         if let Some(value) = topic_override {
             image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: "t".into(),

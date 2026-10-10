@@ -15,6 +15,7 @@ use crate::{
         block_segment_deletion, expired_partition, log_size, segment_files,
     },
     metrics::{CleanerFailureLabel, CleanerFailureReason},
+    test_support::FreezeSetup,
 };
 
 /// The failure counter's value for one `(topic, partition, reason)`.
@@ -33,7 +34,10 @@ fn failures(metrics: &BrokerMetrics, topic: &str, reason: CleanerFailureReason) 
 fn image_with_freeze(scope: &str) -> MetadataImage {
     let mut image = MetadataImage::new(Uuid::from_u128(0x5150));
     image.apply(&MetadataRecord::V1TopicFreeze(
-        crate::test_support::topic_freeze_record(scope, PatternType::Literal, true, "DR cutover"),
+        crate::test_support::topic_freeze_record(FreezeSetup {
+            scope,
+            ..Default::default()
+        }),
     ));
     image
 }

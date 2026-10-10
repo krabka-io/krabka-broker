@@ -85,7 +85,7 @@ mod tests {
     use super::*;
     use crate::{
         authorizer::AuthorizationResult,
-        test_support::test_ctx,
+        test_support::{FreezeSetup, test_ctx},
         txn::{
             handlers::add_partitions_to_txn::{
                 handle,
@@ -105,7 +105,11 @@ mod tests {
     const UNFROZEN_TOPIC: &str = "events";
 
     fn freeze_record(scope: &str, pattern_type: PatternType) -> TopicFreezeRecord {
-        crate::test_support::topic_freeze_record(scope, pattern_type, true, "DR cutover")
+        crate::test_support::topic_freeze_record(FreezeSetup {
+            scope,
+            pattern_type,
+            ..Default::default()
+        })
     }
 
     use crate::test_support::frozen_topics_image as image_with_freezes;

@@ -41,12 +41,12 @@ async fn grant(
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-            crate::test_support::allow_acl(
+            crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
                 resource_type,
                 resource_name,
-                &format!("User:{user}"),
+                principal: &format!("User:{user}"),
                 operation,
-            ),
+            }),
         )])
         .await
         .expect("commit acl");

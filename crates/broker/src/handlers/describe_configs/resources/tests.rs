@@ -23,7 +23,9 @@ use super::{
     },
     *,
 };
-use crate::config_keys::registry::ConfigType;
+use crate::{
+    config_keys::registry::ConfigType, handlers::describe_configs::test_support::TopicConfigSetup,
+};
 
 fn seed_metrics_subscription(image: &mut MetadataImage) {
     image.apply(&MetadataRecord::V1ClientMetricsConfig(
@@ -298,13 +300,7 @@ fn expected_named_static_chain(key: &str, value: &str, default: &str) -> Expecte
     )
 }
 
-pub(super) fn synonym(name: &str, value: &str, source: i8) -> DescribeConfigsSynonym {
-    tagged_wire!(DescribeConfigsSynonym {
-        name: name.to_owned(),
-        value: Some(value.to_owned()),
-        source,
-    })
-}
+pub(super) use crate::handlers::describe_configs::test_support::synonym;
 
 fn image_with_broker_config(
     node_id: krabka_metadata::NodeId,
@@ -336,11 +332,10 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
         DEFAULT_BROKER_CONFIG_NODE_ID,
         &[(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
     );
-    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: "orders".into(),
-        overrides: maplit::btreemap! {
-        config_keys::RETENTION_MS.to_string() => "60000".to_string()},
-    }));
+    crate::handlers::describe_configs::test_support::set_topic_config(
+        &mut image,
+        TopicConfigSetup::default(),
+    );
 
     let result = describe_topic(
         &image,
@@ -438,11 +433,14 @@ fn a_topic_override_stays_at_the_head_of_the_chain_above_the_cluster_default() {
         DEFAULT_BROKER_CONFIG_NODE_ID,
         &[(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
     );
-    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: "orders".into(),
-        overrides: maplit::btreemap! {
-        config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_string() => "false".to_string()},
-    }));
+    crate::handlers::describe_configs::test_support::set_topic_config(
+        &mut image,
+        TopicConfigSetup {
+            key: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
+            value: "false",
+            ..Default::default()
+        },
+    );
 
     let result = describe_topic(
         &image,
@@ -930,11 +928,10 @@ fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
         krabka_metadata::NodeId(2),
         &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
     );
-    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: "orders".into(),
-        overrides: maplit::btreemap! {
-        config_keys::RETENTION_MS.to_string() => "60000".to_string()},
-    }));
+    crate::handlers::describe_configs::test_support::set_topic_config(
+        &mut image,
+        TopicConfigSetup::default(),
+    );
     seed_metrics_subscription(&mut image);
     image.apply(&MetadataRecord::V1GroupConfig(
         krabka_metadata::GroupConfigRecord {

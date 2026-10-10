@@ -16,13 +16,19 @@ use krabka_metadata::{
 use super::*;
 use crate::{
     config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
-    leader_election::test_support::{expected_partition, img_with_partition, set_topic_configs},
+    leader_election::test_support::{
+        ElectionSetup, ExpectedPartitionSetup, expected_partition, img_with_partition,
+        set_topic_configs,
+    },
 };
 
 /// The image of a partition `t-0` with replicas `[1, 2, 3]`, led by broker 1
 /// alone in its record, and with `published` as its ELR state.
 fn leaderless_image(published: &str) -> MetadataImage {
-    let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
+    let mut img = img_with_partition(ElectionSetup {
+        isr: &[1],
+        ..Default::default()
+    });
     crate::test_support::finalize_elr_version(&mut img);
     set_topic_configs(
         &mut img,
@@ -47,7 +53,11 @@ fn leaderless_image(published: &str) -> MetadataImage {
 /// whole and the ELR and recovery records follow it. Any other election is the
 /// one `V1PartitionUpdate` Kafka's `PartitionChangeRecord` is.
 fn elected(leader: u64, eligible: &[u64], recovering: bool) -> Vec<MetadataRecord> {
-    let partition = expected_partition("t", leader, &[leader], LeaderEpoch(6), vec![]);
+    let partition = expected_partition(ExpectedPartitionSetup {
+        leader,
+        isr: &[leader],
+        ..Default::default()
+    });
     let eligible: Vec<NodeId> = eligible.iter().copied().map(NodeId).collect();
     let recovery = recovering.then_some(LeaderRecoveryState::Recovering);
     if leader != 1 {

@@ -1202,10 +1202,11 @@ mod tests {
     fn epoch_checks_partition(dir: &std::path::Path) -> Arc<crate::partition::Partition> {
         crate::test_support::spawn_standalone_partition(
             dir,
-            "diverge",
-            0,
             Log::open(dir, LogConfig::default()).expect("open partition log"),
-            false,
+            crate::test_support::StandalonePartitionSetup {
+                topic: "diverge",
+                ..Default::default()
+            },
         )
     }
 
