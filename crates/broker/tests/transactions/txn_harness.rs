@@ -79,7 +79,16 @@ async fn create_topic_with_configs(
     configs: Vec<CreatableTopicConfig>,
 ) {
     let client = connect_client(bootstrap, None).await;
-    crate::support::transaction_wire::create_topic(&client, name, 1, configs, "create_topic").await;
+    crate::support::transaction_wire::create_topic(
+        &client,
+        crate::support::transaction_wire::TransactionTopicSetup {
+            name,
+            configs,
+            context: "create_topic",
+            ..Default::default()
+        },
+    )
+    .await;
 }
 
 pub async fn init_transaction(
@@ -158,10 +167,12 @@ pub async fn create_topic_sasl(bootstrap: &str, name: &str, security: ClientSecu
         .unwrap();
     crate::support::transaction_wire::create_topic(
         &client,
-        name,
-        1,
-        Vec::new(),
-        "create_topic_sasl",
+        crate::support::transaction_wire::TransactionTopicSetup {
+            name,
+            configs: Vec::new(),
+            context: "create_topic_sasl",
+            ..Default::default()
+        },
     )
     .await;
 }

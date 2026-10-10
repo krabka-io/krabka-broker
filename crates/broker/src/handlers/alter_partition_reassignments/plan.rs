@@ -378,14 +378,28 @@ mod tests {
     }
 
     /// The record the fixture partition `foo-0` becomes.
-    fn record(
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct PlanRecordSetup<'a> {
+        #[default(1)]
         leader: u64,
-        replicas: &[u64],
-        isr: &[u64],
-        adding: &[u64],
-        removing: &[u64],
+        #[default(&[1, 2, 3])]
+        replicas: &'a [u64],
+        #[default(&[1, 2, 3])]
+        isr: &'a [u64],
+        adding: &'a [u64],
+        removing: &'a [u64],
         leader_epoch: i32,
-    ) -> PartitionRecord {
+    }
+
+    fn record(setup: PlanRecordSetup<'_>) -> PartitionRecord {
+        let PlanRecordSetup {
+            leader,
+            replicas,
+            isr,
+            adding,
+            removing,
+            leader_epoch,
+        } = setup;
         PartitionRecord {
             topic: "foo".into(),
             partition: 0,
@@ -433,84 +447,125 @@ mod tests {
                 (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
                 &[3, 2, 1],
                 false,
-                Some(record(1, &[3, 2, 1], &[1, 2, 3], &[], &[], 5)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[3, 2, 1],
+                    leader_epoch: 5,
+                    ..Default::default()
+                })),
             ),
             (
                 "the target comes first, then the removing replicas",
                 (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
                 &[3, 4, 1],
                 false,
-                Some(record(1, &[3, 4, 1, 2], &[1, 2, 3], &[4], &[2], 5)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[3, 4, 1, 2],
+                    adding: &[4],
+                    removing: &[2],
+                    leader_epoch: 5,
+                    ..Default::default()
+                })),
             ),
             (
                 "a new target over an in-flight reassignment keeps every replica",
                 (&[1, 2, 3, 4], &[1, 2, 3], &[4], &[2, 3], 1),
                 &[5, 6],
                 true,
-                Some(record(
-                    1,
-                    &[5, 6, 1, 2, 3, 4],
-                    &[1, 2, 3],
-                    &[5, 6],
-                    &[1, 2, 3, 4],
-                    5,
-                )),
+                Some(record(PlanRecordSetup {
+                    replicas: &[5, 6, 1, 2, 3, 4],
+                    adding: &[5, 6],
+                    removing: &[1, 2, 3, 4],
+                    leader_epoch: 5,
+                    ..Default::default()
+                })),
             ),
             (
                 "a pure removal completes at once and bumps the leader epoch",
                 (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
                 &[1, 2],
                 true,
-                Some(record(1, &[1, 2], &[1, 2], &[], &[], 6)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[1, 2],
+                    isr: &[1, 2],
+                    leader_epoch: 6,
+                    ..Default::default()
+                })),
             ),
             (
                 "the adding and removing lists are sorted",
                 (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
                 &[5, 4, 1],
                 false,
-                Some(record(1, &[5, 4, 1, 2, 3], &[1, 2, 3], &[4, 5], &[2, 3], 5)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[5, 4, 1, 2, 3],
+                    adding: &[4, 5],
+                    removing: &[2, 3],
+                    leader_epoch: 5,
+                    ..Default::default()
+                })),
             ),
             (
                 "a leader only in the old removing set stays in the union",
                 (&[1, 2, 3, 4], &[1, 2, 3], &[4], &[1, 2, 3], 1),
                 &[5],
                 true,
-                Some(record(
-                    1,
-                    &[5, 1, 2, 3, 4],
-                    &[1, 2, 3],
-                    &[5],
-                    &[1, 2, 3, 4],
-                    5,
-                )),
+                Some(record(PlanRecordSetup {
+                    replicas: &[5, 1, 2, 3, 4],
+                    adding: &[5],
+                    removing: &[1, 2, 3, 4],
+                    leader_epoch: 5,
+                    ..Default::default()
+                })),
             ),
             (
                 "an addition waits for the new replica to join the ISR",
                 (&[1, 2], &[1, 2], &[], &[], 1),
                 &[1, 2, 3],
                 true,
-                Some(record(1, &[1, 2, 3], &[1, 2], &[3], &[], 5)),
+                Some(record(PlanRecordSetup {
+                    isr: &[1, 2],
+                    adding: &[3],
+                    leader_epoch: 5,
+                    ..Default::default()
+                })),
             ),
             (
                 "a completion that removes the leader elects the first target in the ISR",
                 (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
                 &[2, 3],
                 true,
-                Some(record(2, &[2, 3], &[2, 3], &[], &[], 6)),
+                Some(record(PlanRecordSetup {
+                    leader: 2,
+                    replicas: &[2, 3],
+                    isr: &[2, 3],
+                    leader_epoch: 6,
+                    ..Default::default()
+                })),
             ),
             (
                 "an empty difference keeps the in-flight adding list and can complete",
                 (&[1, 2, 3, 4], &[1, 3, 4], &[4], &[2], 1),
                 &[1, 3, 4],
                 false,
-                Some(record(1, &[1, 3, 4], &[1, 3, 4], &[], &[], 6)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[1, 3, 4],
+                    isr: &[1, 3, 4],
+                    leader_epoch: 6,
+                    ..Default::default()
+                })),
             ),
             (
                 "a decrease waits while the ISR lacks a target replica",
                 (&[1, 2, 3], &[1, 2], &[], &[], 1),
                 &[1, 3],
                 true,
-                Some(record(1, &[1, 3, 2], &[1, 2], &[], &[2], 5)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[1, 3, 2],
+                    isr: &[1, 2],
+                    removing: &[2],
+                    leader_epoch: 5,
+                    ..Default::default()
+                })),
             ),
             (
                 "the current order is already the target",
@@ -550,25 +605,41 @@ mod tests {
                 "a leader in the adding set moves to the reverted ISR",
                 (&[1, 2, 3, 4], &[1, 4], &[4], &[2, 3], 4),
                 false,
-                Ok(Some(record(1, &[1, 2, 3], &[1], &[], &[], 6))),
+                Ok(Some(record(PlanRecordSetup {
+                    isr: &[1],
+                    leader_epoch: 6,
+                    ..Default::default()
+                }))),
             ),
             (
                 "a leader outside the reverted ISR is replaced",
                 (&[1, 2, 3, 4], &[1, 4], &[4], &[3], 2),
                 false,
-                Ok(Some(record(1, &[1, 2, 3], &[1], &[], &[], 6))),
+                Ok(Some(record(PlanRecordSetup {
+                    isr: &[1],
+                    leader_epoch: 6,
+                    ..Default::default()
+                }))),
             ),
             (
                 "only removing replicas keeps the leader epoch",
                 (&[1, 2, 3], &[1, 2, 3], &[], &[3], 1),
                 false,
-                Ok(Some(record(1, &[1, 2, 3], &[1, 2, 3], &[], &[], 5))),
+                Ok(Some(record(PlanRecordSetup {
+                    leader_epoch: 5,
+                    ..Default::default()
+                }))),
             ),
             (
                 "a dropped adding replica bumps the leader epoch",
                 (&[1, 2, 3], &[1, 2, 3], &[3], &[], 1),
                 false,
-                Ok(Some(record(1, &[1, 2], &[1, 2], &[], &[], 6))),
+                Ok(Some(record(PlanRecordSetup {
+                    replicas: &[1, 2],
+                    isr: &[1, 2],
+                    leader_epoch: 6,
+                    ..Default::default()
+                }))),
             ),
             (
                 "an ISR of adding replicas needs unclean election",
@@ -580,7 +651,12 @@ mod tests {
                 "an ISR of adding replicas reverts uncleanly when the topic allows it",
                 (&[1, 2, 3], &[3], &[3], &[], 3),
                 true,
-                Ok(Some(record(1, &[1, 2], &[1], &[], &[], 6))),
+                Ok(Some(record(PlanRecordSetup {
+                    replicas: &[1, 2],
+                    isr: &[1],
+                    leader_epoch: 6,
+                    ..Default::default()
+                }))),
             ),
         ];
         for (label, (replicas, isr, adding, removing, leader), unclean, expected) in cases {

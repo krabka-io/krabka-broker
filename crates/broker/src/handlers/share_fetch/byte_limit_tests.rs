@@ -65,9 +65,11 @@ async fn create_topic_with_partitions(
 ) -> WireUuid {
     crate::handlers::test_support::create_topic(
         broker,
-        "share-fetch-byte-limit-test",
-        name,
-        partitions,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "share-fetch-byte-limit-test",
+            name,
+            partitions,
+        },
     )
     .await
 }

@@ -244,10 +244,11 @@ async fn read_committed_under_rf1_unchanged() {
         drop(
             producer
                 .enqueue(crate::support::producer::producer_record(
-                    "rctxn",
-                    None,
-                    None,
-                    Some(Bytes::from(v.to_string())),
+                    crate::support::producer::ProducerRecordSetup {
+                        topic: ("rctxn").into(),
+                        value: Some(Bytes::from(v.to_string())),
+                        ..Default::default()
+                    },
                 ))
                 .await
                 .expect("record is queued"),

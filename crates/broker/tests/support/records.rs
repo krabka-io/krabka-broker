@@ -42,7 +42,23 @@ pub fn empty_record_batch(n: i32) -> RecordBatch {
 ///
 /// # Panics
 /// Panics if the count or an index does not fit its original i32 field.
-pub fn producer_values_batch(pid: i64, epoch: i16, base_seq: i32, values: &[&str]) -> RecordBatch {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ProducerValuesSetup<'a> {
+    #[default(7)]
+    pub pid: i64,
+    pub epoch: i16,
+    pub base_seq: i32,
+    #[default(&["v"])]
+    pub values: &'a [&'a str],
+}
+
+pub fn producer_values_batch(setup: ProducerValuesSetup<'_>) -> RecordBatch {
+    let ProducerValuesSetup {
+        pid,
+        epoch,
+        base_seq,
+        values,
+    } = setup;
     let n = i32::try_from(values.len()).expect("values.len fits i32");
     let mut records = Vec::with_capacity(values.len());
     for (i, value) in values.iter().enumerate() {

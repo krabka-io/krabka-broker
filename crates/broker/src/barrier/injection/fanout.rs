@@ -302,7 +302,14 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let registry = PartitionRegistry::new();
         for p in 0..2 {
-            open_partition(&registry, dir.path(), "orders", p);
+            open_partition(
+                &registry,
+                dir.path(),
+                crate::test_support::StandalonePartitionSetup {
+                    partition: p,
+                    ..Default::default()
+                },
+            );
             registry
                 .get("orders", PartitionIndex(p))
                 .expect("the partition is open")
@@ -333,7 +340,11 @@ mod tests {
     async fn a_partition_that_is_not_open_locally_stays_unmarked() {
         let dir = tempdir().expect("tempdir");
         let registry = PartitionRegistry::new();
-        open_partition(&registry, dir.path(), "orders", 0);
+        open_partition(
+            &registry,
+            dir.path(),
+            crate::test_support::StandalonePartitionSetup::default(),
+        );
         registry
             .get("orders", PartitionIndex(0))
             .expect("the partition is open")

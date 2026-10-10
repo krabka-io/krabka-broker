@@ -9,7 +9,7 @@ use krabka_protocol::owned::describe_configs_response::DescribeConfigsSynonym;
 use super::{
     super::{
         super::wire::CONFIG_SOURCE_DEFAULT,
-        tests::{expected_config_entry, synonym as expected_synonym},
+        tests::{ExpectedConfigSetup, expected_config_entry, synonym as expected_synonym},
     },
     *,
 };
@@ -65,26 +65,15 @@ fn kafka_defaults_report_at_default_config_source() {
     assert!(
         entries
             == vec![
-                expected_entry(
-                    config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
-                    "604800000",
-                    CONFIG_SOURCE_DEFAULT,
-                    vec![expected_synonym(
+                expected_entry(ExpectedStaticConfigSetup {
+                    synonyms: vec![expected_synonym(
                         config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
                         "604800000",
                         CONFIG_SOURCE_DEFAULT
-                    )]
-                ),
-                expected_entry(
-                    config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-                    "3600000",
-                    CONFIG_SOURCE_DEFAULT,
-                    vec![expected_synonym(
-                        config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-                        "3600000",
-                        CONFIG_SOURCE_DEFAULT
-                    )]
-                ),
+                    )],
+                    ..Default::default()
+                }),
+                expected_default_cleanup_interval(),
             ]
     );
 }
@@ -99,11 +88,10 @@ fn an_operator_override_heads_the_chain_over_the_retained_default() {
     assert!(
         entries
             == vec![
-                expected_entry(
-                    config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
-                    "120000",
-                    CONFIG_SOURCE_STATIC_BROKER,
-                    vec![
+                expected_entry(ExpectedStaticConfigSetup {
+                    value: "120000",
+                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    synonyms: vec![
                         expected_synonym(
                             config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
                             "120000",
@@ -114,13 +102,14 @@ fn an_operator_override_heads_the_chain_over_the_retained_default() {
                             "604800000",
                             CONFIG_SOURCE_DEFAULT
                         ),
-                    ]
-                ),
-                expected_entry(
-                    config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-                    "60000",
-                    CONFIG_SOURCE_STATIC_BROKER,
-                    vec![
+                    ],
+                    ..Default::default()
+                }),
+                expected_entry(ExpectedStaticConfigSetup {
+                    key: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                    value: "60000",
+                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    synonyms: vec![
                         expected_synonym(
                             config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
                             "60000",
@@ -132,7 +121,7 @@ fn an_operator_override_heads_the_chain_over_the_retained_default() {
                             CONFIG_SOURCE_DEFAULT
                         ),
                     ]
-                ),
+                }),
             ]
     );
 }
@@ -148,21 +137,15 @@ fn a_bare_request_carries_the_value_without_synonyms_or_documentation() {
             == vec![
                 DescribeConfigsResourceResult {
                     documentation: None,
-                    ..expected_entry(
-                        config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
-                        "604800000",
-                        CONFIG_SOURCE_DEFAULT,
-                        Vec::new()
-                    )
+                    ..expected_entry(ExpectedStaticConfigSetup::default())
                 },
                 DescribeConfigsResourceResult {
                     documentation: None,
-                    ..expected_entry(
-                        config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-                        "3600000",
-                        CONFIG_SOURCE_DEFAULT,
-                        Vec::new()
-                    )
+                    ..expected_entry(ExpectedStaticConfigSetup {
+                        key: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                        value: "3600000",
+                        ..Default::default()
+                    })
                 },
             ]
     );
@@ -217,11 +200,9 @@ fn a_supplied_value_identical_to_the_default_still_reports_as_static() {
     assert!(
         entries
             == vec![
-                expected_entry(
-                    config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
-                    "604800000",
-                    CONFIG_SOURCE_STATIC_BROKER,
-                    vec![
+                expected_entry(ExpectedStaticConfigSetup {
+                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    synonyms: vec![
                         expected_synonym(
                             config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
                             "604800000",
@@ -232,18 +213,10 @@ fn a_supplied_value_identical_to_the_default_still_reports_as_static() {
                             "604800000",
                             CONFIG_SOURCE_DEFAULT
                         ),
-                    ]
-                ),
-                expected_entry(
-                    config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-                    "3600000",
-                    CONFIG_SOURCE_DEFAULT,
-                    vec![expected_synonym(
-                        config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-                        "3600000",
-                        CONFIG_SOURCE_DEFAULT
-                    )]
-                ),
+                    ],
+                    ..Default::default()
+                }),
+                expected_default_cleanup_interval(),
             ]
     );
 }
@@ -258,20 +231,20 @@ fn topic_creation_defaults_report_their_provenance() {
     };
     let default_synonym = |key: &str| expected_synonym(key, "1", CONFIG_SOURCE_DEFAULT);
     let entry = |key: &str, named: Option<&str>| {
-        expected_entry(
+        expected_entry(ExpectedStaticConfigSetup {
             key,
-            named.unwrap_or("1"),
-            if named.is_some() {
+            value: named.unwrap_or("1"),
+            source: if named.is_some() {
                 CONFIG_SOURCE_STATIC_BROKER
             } else {
                 CONFIG_SOURCE_DEFAULT
             },
-            named
+            synonyms: named
                 .map(|value| expected_synonym(key, value, CONFIG_SOURCE_STATIC_BROKER))
                 .into_iter()
                 .chain(std::iter::once(default_synonym(key)))
                 .collect(),
-        )
+        })
     };
 
     for (label, num_partitions, default_replication_factor, expected) in [
@@ -315,7 +288,12 @@ fn static_boolean_keys_report_their_provenance() {
     let synonym = |key: &str, value: &str, source| expected_synonym(key, value, source);
     let entry = |key: &str, value: &str, source, synonyms| DescribeConfigsResourceResult {
         config_type: registry::ConfigType::Boolean.wire(),
-        ..expected_entry(key, value, source, synonyms)
+        ..expected_entry(ExpectedStaticConfigSetup {
+            key,
+            value,
+            source,
+            synonyms,
+        })
     };
     let not_named = |key: &'static str| {
         vec![entry(
@@ -444,19 +422,46 @@ fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
 }
 
 /// Fully pinned independent expectations, shared by each static-config case.
-fn expected_entry(
-    key: &str,
-    value: &str,
+#[derive(krabka_macros::FieldDefaults)]
+struct ExpectedStaticConfigSetup<'a> {
+    #[default(config_keys::TRANSACTIONAL_ID_EXPIRATION_MS)]
+    key: &'a str,
+    #[default("604800000")]
+    value: &'a str,
+    #[default(CONFIG_SOURCE_DEFAULT)]
     source: i8,
     synonyms: Vec<DescribeConfigsSynonym>,
-) -> DescribeConfigsResourceResult {
-    expected_config_entry(
+}
+
+fn expected_entry(setup: ExpectedStaticConfigSetup<'_>) -> DescribeConfigsResourceResult {
+    let ExpectedStaticConfigSetup {
         key,
-        Some(value),
-        true,
+        value,
         source,
         synonyms,
-        INT,
-        Some(doc_for(key)),
-    )
+    } = setup;
+    expected_config_entry(ExpectedConfigSetup {
+        name: key,
+        value: Some(value),
+        read_only: true,
+        source,
+        synonyms,
+        config_type: INT,
+        documentation: Some(doc_for(key)),
+    })
+}
+
+/// The cleanup interval remains at Kafka's default when only expiration is supplied.
+fn expected_default_cleanup_interval()
+-> krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult {
+    expected_entry(ExpectedStaticConfigSetup {
+        key: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+        value: "3600000",
+        synonyms: vec![expected_synonym(
+            config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+            "3600000",
+            CONFIG_SOURCE_DEFAULT,
+        )],
+        ..Default::default()
+    })
 }

@@ -92,10 +92,11 @@ async fn create_dead_letter_topic_with(
     let response = client
         .send(CreateTopicsRequest {
             topics: vec![crate::support::topics::creatable_topic_with_configs(
-                DLQ_TOPIC.into(),
-                1,
-                1,
-                configs,
+                crate::support::topics::ConfiguredTopicSetup {
+                    name: DLQ_TOPIC.into(),
+                    configs,
+                    ..Default::default()
+                },
             )],
             timeout_ms: 5_000,
             ..Default::default()

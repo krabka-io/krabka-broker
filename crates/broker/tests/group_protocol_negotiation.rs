@@ -53,18 +53,21 @@ fn join_group_request(
 ) -> JoinGroupRequest {
     JoinGroupRequest {
         group_instance_id: None,
-        ..classic_join_request(
-            group_id.to_string(),
-            member_id.to_string(),
-            (30_000, 60_000),
-            protocol_type.to_string(),
-            protocols
+        ..classic_join_request(crate::support::classic::ClassicJoinSetup {
+            group_id: group_id.to_string(),
+            member_id: member_id.to_string(),
+            timeouts: crate::support::classic::ClassicTimeouts {
+                rebalance: krabka_units::millis(60_000),
+                ..Default::default()
+            },
+            protocol_type: protocol_type.to_string(),
+            protocols: protocols
                 .iter()
                 .map(|(name, meta)| {
                     join_protocol((*name).to_string(), Bytes::copy_from_slice(meta))
                 })
                 .collect(),
-        )
+        })
     }
 }
 

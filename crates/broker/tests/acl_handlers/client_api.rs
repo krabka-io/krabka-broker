@@ -94,12 +94,15 @@ pub async fn drive_init_producer_id_as_plain(
 pub fn join_group_request(group_id: &str) -> JoinGroupRequest {
     JoinGroupRequest {
         group_instance_id: None,
-        ..classic_join_request(
-            group_id.to_string(),
-            String::new(),
-            (30_000, 60_000),
-            "consumer".to_string(),
-            vec![join_protocol("range".to_string(), bytes::Bytes::new())],
-        )
+        ..classic_join_request(crate::support::classic::ClassicJoinSetup {
+            group_id: group_id.to_string(),
+            timeouts: crate::support::classic::ClassicTimeouts {
+                rebalance: krabka_units::millis(60_000),
+                ..Default::default()
+            },
+            protocol_type: "consumer".to_string(),
+            protocols: vec![join_protocol("range".to_string(), bytes::Bytes::new())],
+            ..Default::default()
+        })
     }
 }

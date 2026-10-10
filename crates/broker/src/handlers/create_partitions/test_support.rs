@@ -42,7 +42,22 @@ pub fn request(topics: Vec<CreatePartitionsTopic>, validate_only: bool) -> Creat
     }
 }
 
-pub async fn seed_topic(handle: &BrokerHandle, name: &str, partitions: i32, rf: i16) {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct SeedTopicSetup<'a> {
+    #[default("t")]
+    pub name: &'a str,
+    #[default(2)]
+    pub partitions: i32,
+    #[default(1)]
+    pub rf: i16,
+}
+
+pub async fn seed_topic(handle: &BrokerHandle, setup: SeedTopicSetup<'_>) {
+    let SeedTopicSetup {
+        name,
+        partitions,
+        rf,
+    } = setup;
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
         name: name.into(),
         topic_id: uuid::Uuid::new_v4(),

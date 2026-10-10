@@ -41,17 +41,19 @@ pub(crate) async fn create_topic_with_configs(
 ) {
     let req = CreateTopicsRequest {
         topics: vec![crate::support::topics::creatable_topic_with_configs(
-            topic.to_string(),
-            partitions,
-            rf,
-            configs
-                .into_iter()
-                .map(|(name, value)| CreatableTopicConfig {
-                    name: name.to_string(),
-                    value: Some(value.to_string()),
-                    ..Default::default()
-                })
-                .collect(),
+            crate::support::topics::ConfiguredTopicSetup {
+                name: topic.to_string(),
+                partitions,
+                replicas: rf,
+                configs: configs
+                    .into_iter()
+                    .map(|(name, value)| CreatableTopicConfig {
+                        name: name.to_string(),
+                        value: Some(value.to_string()),
+                        ..Default::default()
+                    })
+                    .collect(),
+            },
         )],
         timeout_ms: 5_000,
         ..Default::default()

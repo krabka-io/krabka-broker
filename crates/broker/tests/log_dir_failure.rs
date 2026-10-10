@@ -237,10 +237,12 @@ async fn produce(producer: &Producer, timestamp_ms: i64) {
         .send(ProducerRecord {
             timestamp_ms: Some(timestamp_ms),
             ..crate::support::producer::producer_record(
-                TOPIC.to_owned(),
-                Some(0),
-                None,
-                Some(Bytes::from_static(b"log-dir-failure")),
+                crate::support::producer::ProducerRecordSetup {
+                    topic: TOPIC.to_owned(),
+                    partition: Some(0),
+                    value: Some(Bytes::from_static(b"log-dir-failure")),
+                    ..Default::default()
+                },
             )
         })
         .await

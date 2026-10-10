@@ -348,9 +348,11 @@ mod tests {
     async fn create_topic(broker: &crate::broker::BrokerHandle, name: &str) -> ProtoUuid {
         crate::handlers::test_support::create_topic(
             broker,
-            "share-acknowledge-resolution-test",
-            name,
-            1,
+            crate::handlers::test_support::ClientTopicSetup {
+                client_id: "share-acknowledge-resolution-test",
+                name,
+                ..Default::default()
+            },
         )
         .await
     }

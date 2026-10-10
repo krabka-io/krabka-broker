@@ -77,12 +77,23 @@ mod tests {
     /// The function uses the real `spawn_partition` path and mirrors the
     /// `future_log` and registry test fixtures. It appends `count` records, so
     /// the LEO of the partition advances to `count`.
-    fn partition_with_leo(
-        log_dir: &std::path::Path,
-        topic: &str,
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct PartitionLogSetup<'a> {
+        #[default("orders")]
+        topic: &'a str,
         partition: krabka_ids::PartitionIndex,
         count: i32,
+    }
+
+    fn partition_with_leo(
+        log_dir: &std::path::Path,
+        setup: PartitionLogSetup<'_>,
     ) -> std::sync::Arc<crate::partition::Partition> {
+        let PartitionLogSetup {
+            topic,
+            partition,
+            count,
+        } = setup;
         let part = crate::test_support::open_partition(log_dir, topic, partition.get());
         if count > 0 {
             append_n(&part.log, count);
@@ -108,7 +119,14 @@ mod tests {
     async fn offset_lag_matches_kafka() {
         let dir = tempfile::tempdir().unwrap();
         let reg = crate::partition_registry::PartitionRegistry::new();
-        let part = partition_with_leo(dir.path(), "t", krabka_ids::PartitionIndex(0), 5);
+        let part = partition_with_leo(
+            dir.path(),
+            PartitionLogSetup {
+                topic: "t",
+                count: 5,
+                ..Default::default()
+            },
+        );
         assert!(part.log_end_offset() == krabka_log::Offset(5));
         reg.insert("t".into(), krabka_ids::PartitionIndex(0), part);
         for (topic, expected) in [("ghost", INVALID_OFFSET_LAG), ("t", 0)] {
@@ -144,7 +162,14 @@ mod tests {
     async fn future_offset_lag_matches_kafka() {
         let cur_dir = tempfile::tempdir().unwrap();
         let reg = crate::partition_registry::PartitionRegistry::new();
-        let part = partition_with_leo(cur_dir.path(), "t", krabka_ids::PartitionIndex(3), 5);
+        let part = partition_with_leo(
+            cur_dir.path(),
+            PartitionLogSetup {
+                topic: "t",
+                partition: krabka_ids::PartitionIndex(3),
+                count: 5,
+            },
+        );
         assert!(part.log_end_offset() == krabka_log::Offset(5));
         reg.insert("t".into(), krabka_ids::PartitionIndex(3), part);
 

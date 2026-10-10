@@ -124,13 +124,20 @@ pub async fn round_trip_with<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let frame = frames::request_frame(
-        (api_key, api_version, corr_id, flexibility.request),
+    let frame = frames::request_frame(frames::WireFrameSetup {
+        api_key: krabka_ids::ApiKey(api_key),
+        version: krabka_ids::ApiVersion(api_version),
+        correlation: crate::support::wire::CorrelationId(corr_id),
+        header: crate::support::wire::HeaderEncoding::from_wire(flexibility.request),
         client_id,
         body,
-        Some(16 + client_id.len() + body.len()),
-        Some("client_id fits in i16"),
-    );
+        capacity: Some(
+            <krabka_units::ByteSize as krabka_units::convert::ByteSizeExt>::from_bytes(
+                u64::try_from(16 + client_id.len() + body.len()).expect("frame capacity fits u64"),
+            ),
+        ),
+        length_context: Some("client_id fits in i16"),
+    });
 
     frames::write_frame(stream, &frame, Some("frame fits in u32")).await?;
 

@@ -181,12 +181,24 @@ mod tests {
     /// hosts one classic member: a k5 with the classic sub-state, a k7 target
     /// of `target`, and a k8 current assignment at `member_epoch` in `state`
     /// of `assigned` with `pending` awaiting revocation.
-    fn hosted_classic_seed(
+    #[derive(krabka_macros::FieldDefaults)]
+    struct HostedClassicSetup {
+        #[default(vec![0, 1])]
         target: Vec<i32>,
-        (member_epoch, state): (i32, MemberAssignmentState),
+        #[default((5, MemberAssignmentState::Stable))]
+        current: (i32, MemberAssignmentState),
+        #[default(vec![0, 1])]
         assigned: Vec<i32>,
         pending: Vec<i32>,
-    ) -> GroupSeed {
+    }
+
+    fn hosted_classic_seed(setup: HostedClassicSetup) -> GroupSeed {
+        let HostedClassicSetup {
+            target,
+            current: (member_epoch, state),
+            assigned,
+            pending,
+        } = setup;
         GroupSeed {
             group_epoch: 5,
             target_epoch: 5,
@@ -244,12 +256,7 @@ mod tests {
         let mut state = GroupState::new("g");
         apply_seed(
             &mut state,
-            hosted_classic_seed(
-                vec![0, 1],
-                (5, MemberAssignmentState::Stable),
-                vec![0, 1],
-                vec![],
-            ),
+            hosted_classic_seed(HostedClassicSetup::default()),
         );
 
         let restored: HashMap<Uuid, Vec<i32>> = [(TOPIC, vec![0, 1])].into();
@@ -292,7 +299,12 @@ mod tests {
             let mut state = GroupState::new("g");
             apply_seed(
                 &mut state,
-                hosted_classic_seed(vec![0, 1], current, assigned.clone(), pending.clone()),
+                hosted_classic_seed(HostedClassicSetup {
+                    current,
+                    assigned: assigned.clone(),
+                    pending: pending.clone(),
+                    ..Default::default()
+                }),
             );
             let request = HeartbeatRequest {
                 group_id: "g".into(),

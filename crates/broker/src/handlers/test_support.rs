@@ -688,12 +688,22 @@ macro_rules! created_topic_fixture {
     };
 }
 
-pub(crate) async fn create_topic(
-    broker: &BrokerHandle,
-    client_id: &str,
-    name: &str,
-    partitions: i32,
-) -> WireUuid {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct ClientTopicSetup<'a> {
+    #[default("admin-client")]
+    pub client_id: &'a str,
+    #[default("orders")]
+    pub name: &'a str,
+    #[default(1)]
+    pub partitions: i32,
+}
+
+pub(crate) async fn create_topic(broker: &BrokerHandle, setup: ClientTopicSetup<'_>) -> WireUuid {
+    let ClientTopicSetup {
+        client_id,
+        name,
+        partitions,
+    } = setup;
     created_topic_fixture!(
         (client, response),
         broker,
@@ -718,12 +728,21 @@ pub(crate) async fn create_topic(
 }
 
 /// Appends one v2 batch of `count` records through the v12 Produce handler.
-pub(crate) async fn produce_records(
-    broker: &BrokerHandle,
-    topic: &str,
-    partition_index: i32,
-    count: i32,
-) {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct ProduceRecordsSetup<'a> {
+    #[default("orders")]
+    pub topic: &'a str,
+    pub partition_index: i32,
+    #[default(3)]
+    pub count: i32,
+}
+
+pub(crate) async fn produce_records(broker: &BrokerHandle, setup: ProduceRecordsSetup<'_>) {
+    let ProduceRecordsSetup {
+        topic,
+        partition_index,
+        count,
+    } = setup;
     let request = ProduceRequest {
         acks: -1,
         timeout_ms: 5_000,
@@ -764,39 +783,63 @@ pub(crate) fn local_partition(
     root: &Path,
     topic: &str,
 ) -> Arc<crate::partition::Partition> {
-    partition(broker, root, topic, false)
+    partition(
+        broker,
+        root,
+        crate::test_support::StandalonePartitionSetup {
+            topic,
+            ..Default::default()
+        },
+    )
 }
 
 pub(crate) fn partition(
     broker: &crate::broker::Broker,
     root: &Path,
-    topic: &str,
-    diskless: bool,
+    setup: crate::test_support::StandalonePartitionSetup<'_>,
 ) -> Arc<crate::partition::Partition> {
+    let crate::test_support::StandalonePartitionSetup {
+        topic,
+        partition: index,
+        diskless,
+    } = setup;
     spawn_partition(
         root,
-        topic,
-        0,
-        (
-            broker.log_dir_status.clone(),
-            Arc::clone(&broker.producer_state),
-        ),
-        diskless,
-        krabka_log::LogConfig::default(),
+        crate::handlers::test_support::PartitionSpawnSetup {
+            topic,
+            index,
+            log_dir_status: broker.log_dir_status.clone(),
+            producer_state: Arc::clone(&broker.producer_state),
+            diskless,
+            ..Default::default()
+        },
     )
+}
+
+#[derive(krabka_macros::FieldDefaults)]
+pub(crate) struct PartitionSpawnSetup<'a> {
+    #[default("orders")]
+    pub topic: &'a str,
+    pub index: i32,
+    pub log_dir_status: crate::log_dir_status::LogDirRegistry,
+    #[default(Arc::new(crate::producer_state::ProducerState::new()))]
+    pub producer_state: Arc<crate::producer_state::ProducerState>,
+    pub diskless: bool,
+    pub log_config: krabka_log::LogConfig,
 }
 
 pub(crate) fn spawn_partition(
     root: &Path,
-    topic: &str,
-    index: i32,
-    (log_dir_status, producer_state): (
-        crate::log_dir_status::LogDirRegistry,
-        Arc<crate::producer_state::ProducerState>,
-    ),
-    diskless: bool,
-    log_config: krabka_log::LogConfig,
+    setup: PartitionSpawnSetup<'_>,
 ) -> Arc<crate::partition::Partition> {
+    let PartitionSpawnSetup {
+        topic,
+        index,
+        log_dir_status,
+        producer_state,
+        diskless,
+        log_config,
+    } = setup;
     let partition_dir = crate::log_dir::partition_dir(root, topic, index);
     std::fs::create_dir_all(&partition_dir).expect("partition directory");
     crate::broker::spawn_partition(

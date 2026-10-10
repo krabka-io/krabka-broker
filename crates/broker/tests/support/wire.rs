@@ -2,6 +2,7 @@
 
 use std::io;
 
+use krabka_units::ByteSize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Write and flush a frame with the caller's original length diagnostic.
@@ -104,29 +105,78 @@ macro_rules! flexible_round_trip_fixture {
     };
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, derive_more::From, derive_more::Into)]
+pub struct CorrelationId(pub i32);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HeaderEncoding {
+    #[default]
+    Legacy,
+    Flexible,
+}
+
+impl HeaderEncoding {
+    /// Adapt a protocol version's flexible-header flag at the codec boundary.
+    pub fn from_wire(flexible: bool) -> Self {
+        if flexible {
+            Self::Flexible
+        } else {
+            Self::Legacy
+        }
+    }
+}
+
+/// The manually framed clients reserve a fixed header allowance plus the body.
+pub fn request_body_capacity(body: &[u8]) -> ByteSize {
+    use krabka_units::convert::ByteSizeExt;
+    ByteSize::from_bytes(u64::try_from(16 + body.len()).expect("frame capacity fits u64"))
+}
+
 /// Encode a request header followed by its body, retaining the original allocation policy.
 ///
 /// # Panics
 /// Panics with the caller's diagnostic if its client ID does not fit the header's i16 length.
-pub fn request_frame(
-    (api_key, version, correlation, flexible): (i16, i16, i32, bool),
-    client_id: &str,
-    body: &[u8],
-    capacity: Option<usize>,
-    length_context: Option<&str>,
-) -> bytes::BytesMut {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct WireFrameSetup<'a> {
+    #[default(krabka_ids::ApiKey(18))]
+    pub api_key: krabka_ids::ApiKey,
+    pub version: krabka_ids::ApiVersion,
+    #[default(CorrelationId(1))]
+    pub correlation: CorrelationId,
+    pub header: HeaderEncoding,
+    #[default("test-client")]
+    pub client_id: &'a str,
+    pub body: &'a [u8],
+    pub capacity: Option<ByteSize>,
+    pub length_context: Option<&'a str>,
+}
+
+pub fn request_frame(setup: WireFrameSetup<'_>) -> bytes::BytesMut {
     use bytes::BufMut;
-    let mut frame = capacity.map_or_else(bytes::BytesMut::new, bytes::BytesMut::with_capacity);
-    frame.put_i16(api_key);
-    frame.put_i16(version);
-    frame.put_i32(correlation);
+    use krabka_units::convert::ByteSizeExt;
+    let WireFrameSetup {
+        api_key,
+        version,
+        correlation,
+        header,
+        client_id,
+        body,
+        capacity,
+        length_context,
+    } = setup;
+    let mut frame = capacity.map_or_else(bytes::BytesMut::new, |capacity| {
+        bytes::BytesMut::with_capacity(capacity.bytes_usize())
+    });
+    frame.put_i16(api_key.0);
+    frame.put_i16(version.0);
+    frame.put_i32(correlation.0);
     let length = i16::try_from(client_id.len());
     frame.put_i16(match length_context {
         Some(context) => length.expect(context),
         None => length.unwrap(),
     });
     frame.put_slice(client_id.as_bytes());
-    if flexible {
+    if header == HeaderEncoding::Flexible {
         frame.put_u8(0);
     }
     frame.put_slice(body);

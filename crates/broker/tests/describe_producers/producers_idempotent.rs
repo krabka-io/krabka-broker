@@ -57,7 +57,15 @@ async fn after_idempotent_produce_describe_returns_the_producer() {
             "t",
             topic_id,
             0,
-            Some(batch(pid, epoch, 0, &["a", "b", "c"]).into()),
+            Some(
+                batch(crate::support::records::ProducerValuesSetup {
+                    pid,
+                    epoch,
+                    values: &["a", "b", "c"],
+                    ..Default::default()
+                })
+                .into(),
+            ),
             (-1, 5_000),
         ))
         .await
@@ -114,7 +122,15 @@ async fn multiple_producers_on_same_partition_all_surfaced() {
                 "shared",
                 topic_id,
                 0,
-                Some(batch(pid, epoch, 0, &["x"]).into()),
+                Some(
+                    batch(crate::support::records::ProducerValuesSetup {
+                        pid,
+                        epoch,
+                        values: &["x"],
+                        ..Default::default()
+                    })
+                    .into(),
+                ),
                 (-1, 5_000),
             ))
             .await

@@ -55,8 +55,15 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::Temp
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    crate::handlers::test_support::create_topic(broker, "share-fetch-resolution-test", name, 1)
-        .await
+    crate::handlers::test_support::create_topic(
+        broker,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "share-fetch-resolution-test",
+            name,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// A request for partition 0 of `topic_id`, in the share session of `member`.

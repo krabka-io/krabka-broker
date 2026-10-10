@@ -39,12 +39,28 @@ enum Api {
 use crate::handlers::test_support::start_allow_all_no_audit as start;
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    crate::handlers::test_support::create_topic(broker, "share-persister-error-test", name, 1).await
+    crate::handlers::test_support::create_topic(
+        broker,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "share-persister-error-test",
+            name,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Appends one batch of two records to partition 0 of `topic`.
 async fn produce_two_records(broker: &BrokerHandle, topic: &str) {
-    crate::handlers::test_support::produce_records(broker, topic, 0, 2).await;
+    crate::handlers::test_support::produce_records(
+        broker,
+        crate::handlers::test_support::ProduceRecordsSetup {
+            topic,
+            count: 2,
+            ..Default::default()
+        },
+    )
+    .await;
 }
 
 /// Sends a `ShareFetch` for partition 0 of `topic_id`. With `accept`, the row

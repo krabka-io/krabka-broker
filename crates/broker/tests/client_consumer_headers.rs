@@ -14,7 +14,13 @@ async fn consumer_record_carries_headers() {
                 key: "trace".into(),
                 value: Some("abc".into()),
             }],
-            ..crate::support::producer::producer_record("h", None, None, Some("v".into()))
+            ..crate::support::producer::producer_record(
+                crate::support::producer::ProducerRecordSetup {
+                    topic: ("h").into(),
+                    value: Some("v".into()),
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();

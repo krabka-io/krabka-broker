@@ -57,14 +57,15 @@ async fn start_broker() -> (BrokerHandle, SocketAddr) {
 async fn create_topic_with_compression(addr: SocketAddr, topic: &str, codec: &str) {
     let req = CreateTopicsRequest {
         topics: vec![crate::support::topics::creatable_topic_with_configs(
-            topic.into(),
-            1,
-            1,
-            vec![CreatableTopicConfig {
-                name: "compression.type".into(),
-                value: Some(codec.into()),
+            crate::support::topics::ConfiguredTopicSetup {
+                name: topic.into(),
+                configs: vec![CreatableTopicConfig {
+                    name: "compression.type".into(),
+                    value: Some(codec.into()),
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
+            },
         )],
         timeout_ms: 5_000,
         ..Default::default()

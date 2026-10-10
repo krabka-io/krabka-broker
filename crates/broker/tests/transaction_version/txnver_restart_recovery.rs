@@ -103,10 +103,12 @@ async fn add_partition_ongoing(
     let added_topic = crate::support::transaction_wire::transaction_topic(topic, vec![partition]);
     let add = client
         .send(crate::support::transaction_wire::partitions_request(
-            tid,
-            (pid, epoch),
-            false,
-            vec![added_topic],
+            crate::support::transaction_wire::TransactionPartitionsSetup {
+                transactional_id: tid,
+                producer: crate::support::transactions::ProducerIdentity::from_wire((pid, epoch)),
+                topics: vec![added_topic],
+                ..Default::default()
+            },
         ))
         .await
         .expect("AddPartitionsToTxn add");

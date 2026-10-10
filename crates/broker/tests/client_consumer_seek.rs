@@ -20,10 +20,12 @@ async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
     for i in 0..n {
         producer
             .send(crate::support::producer::producer_record(
-                topic,
-                Some(0),
-                Some(format!("k{i}").into()),
-                Some(format!("v{i}").into()),
+                crate::support::producer::ProducerRecordSetup {
+                    topic: (topic).into(),
+                    partition: Some(0),
+                    key: Some(format!("k{i}").into()),
+                    value: Some(format!("v{i}").into()),
+                },
             ))
             .await
             .unwrap();

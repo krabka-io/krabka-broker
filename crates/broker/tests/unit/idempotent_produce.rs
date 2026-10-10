@@ -29,7 +29,14 @@ async fn idempotent_produce_dedups_duplicate_batch() {
         "idem",
         idem_id,
         0,
-        Some(one_batch_with_producer(pid, 0, 0, &["a", "b", "c"]).into()),
+        Some(
+            one_batch_with_producer(crate::support::records::ProducerValuesSetup {
+                pid,
+                values: &["a", "b", "c"],
+                ..Default::default()
+            })
+            .into(),
+        ),
         (-1, 5_000),
     );
 
@@ -60,7 +67,15 @@ async fn out_of_order_returns_45() {
             "ooo",
             ooo_id,
             0,
-            Some(one_batch_with_producer(pid, 0, base_seq, &["x", "y"]).into()),
+            Some(
+                one_batch_with_producer(crate::support::records::ProducerValuesSetup {
+                    pid,
+                    base_seq,
+                    values: &["x", "y"],
+                    ..Default::default()
+                })
+                .into(),
+            ),
             (-1, 5_000),
         )
     };

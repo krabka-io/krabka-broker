@@ -273,10 +273,11 @@ async fn enqueue_transaction_values(producer: &Producer) {
         drop(
             producer
                 .enqueue(crate::support::producer::producer_record(
-                    "t",
-                    None,
-                    None,
-                    Some(bytes::Bytes::from(v.to_string())),
+                    crate::support::producer::ProducerRecordSetup {
+                        topic: ("t").into(),
+                        value: Some(bytes::Bytes::from(v.to_string())),
+                        ..Default::default()
+                    },
                 ))
                 .await
                 .expect("record is queued"),

@@ -51,16 +51,26 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) -> WireUuid {
     crate::handlers::test_support::create_topic(
         broker,
-        "share-log-start-lockout-test",
-        name,
-        num_partitions,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "share-log-start-lockout-test",
+            name,
+            partitions: num_partitions,
+        },
     )
     .await
 }
 
 /// Appends `count` one-record batches to `partition_index` of `topic`.
 async fn produce_records(broker: &BrokerHandle, topic: &str, partition_index: i32, count: i32) {
-    crate::handlers::test_support::produce_records(broker, topic, partition_index, count).await;
+    crate::handlers::test_support::produce_records(
+        broker,
+        crate::handlers::test_support::ProduceRecordsSetup {
+            topic,
+            partition_index,
+            count,
+        },
+    )
+    .await;
 }
 
 /// Trims `partition_index` of `topic` to `new_log_start` with a real

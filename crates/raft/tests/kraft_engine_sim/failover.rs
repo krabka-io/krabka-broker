@@ -11,6 +11,17 @@ use crate::{
     },
 };
 
+/// Start the failover fixture and retain its directories through the scenario.
+async fn elected_cluster(
+    net: &crate::sim_net::SimNet,
+    setup: crate::harness::SimClusterSetup<'_>,
+) -> (Vec<tempfile::TempDir>, fixture::NodeId, u32) {
+    let ids = setup.ids;
+    let dirs = start_engines(net, setup);
+    let (leader, epoch) = await_single_leader(net, ids, fixture::Duration::from_secs(10)).await;
+    (dirs, leader, epoch)
+}
+
 /// Polls `ctrl`'s quorum-state snapshot until `f` accepts it, or panics.
 ///
 /// This is the view `DescribeQuorum`, Metadata and `BrokerHeartbeat` all serve
@@ -62,9 +73,15 @@ async fn leader_failure_reelects() {
     let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(300);
 
-    let _dirs = start_engines(&net, &ids, cid, &STAGGERED_TIMEOUTS);
-
-    let (leader, epoch1) = await_single_leader(&net, &ids, fixture::Duration::from_secs(10)).await;
+    let (_dirs, leader, epoch1) = elected_cluster(
+        &net,
+        crate::harness::SimClusterSetup {
+            ids: &ids,
+            cluster_id: cid,
+            ..Default::default()
+        },
+    )
+    .await;
 
     // Kill the leader: shut it down and remove it from the registry so peers see
     // it as unreachable.
@@ -119,7 +136,14 @@ async fn repeated_leader_restart_reelects() {
     let dirs: fixture::HashMap<_, _> = ids
         .iter()
         .copied()
-        .zip(start_engines(&net, &ids, cid, &STAGGERED_TIMEOUTS))
+        .zip(start_engines(
+            &net,
+            crate::harness::SimClusterSetup {
+                ids: &ids,
+                cluster_id: cid,
+                ..Default::default()
+            },
+        ))
         .collect();
 
     for _ in 0..5 {
@@ -175,9 +199,15 @@ async fn repeated_leader_restart_reelects() {
 async fn isolated_leader_resigns_and_rejoins_after_heal() {
     let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(302);
-    let _dirs = start_engines(&net, &ids, cid, &STAGGERED_TIMEOUTS);
-
-    let (leader, epoch1) = await_single_leader(&net, &ids, fixture::Duration::from_secs(10)).await;
+    let (_dirs, leader, epoch1) = elected_cluster(
+        &net,
+        crate::harness::SimClusterSetup {
+            ids: &ids,
+            cluster_id: cid,
+            ..Default::default()
+        },
+    )
+    .await;
     let isolated = net.get(leader).expect("leader is registered");
     net.partition(leader);
 

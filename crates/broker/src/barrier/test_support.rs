@@ -3,7 +3,7 @@
 //! that opens a real partition with a live writer. Both the fan-out tests and
 //! the coordinator tests need them.
 
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig};
@@ -39,19 +39,17 @@ pub(crate) fn topic_records(topic: &str, partitions: i32, leader: NodeId) -> Vec
 }
 
 /// Open a real partition with a live writer, and register it.
-pub(crate) fn open_partition(registry: &PartitionRegistry, dir: &Path, topic: &str, index: i32) {
+pub(crate) fn open_partition(
+    registry: &PartitionRegistry,
+    dir: &Path,
+    setup: crate::test_support::StandalonePartitionSetup<'_>,
+) {
+    let topic = setup.topic;
+    let index = setup.partition;
     let partition_dir = crate::log_dir::partition_dir(dir, topic, index);
     std::fs::create_dir_all(&partition_dir).expect("create the partition directory");
     let log = Log::open(&partition_dir, LogConfig::default()).expect("open the log");
-    let partition = crate::broker::spawn_partition(
-        topic.to_owned(),
-        PartitionIndex(index),
-        dir.to_path_buf(),
-        log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    );
+    let partition = crate::test_support::spawn_standalone_partition(dir, log, setup);
     registry.insert(topic.into(), PartitionIndex(index), partition);
 }
 

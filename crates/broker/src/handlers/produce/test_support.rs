@@ -56,14 +56,13 @@ impl PipelineFixture {
     ) -> Arc<crate::partition::Partition> {
         let partition = crate::handlers::test_support::spawn_partition(
             root,
-            topic,
-            0,
-            (
-                self.log_dir_status.clone(),
-                Arc::clone(&self.producer_state),
-            ),
-            false,
-            log_config,
+            crate::handlers::test_support::PartitionSpawnSetup {
+                topic,
+                log_dir_status: self.log_dir_status.clone(),
+                producer_state: Arc::clone(&self.producer_state),
+                log_config,
+                ..Default::default()
+            },
         );
         let record = image.partition(topic, 0).expect("partition");
         let topic_id = image.topic(topic).expect("topic").topic_id;

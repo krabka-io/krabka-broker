@@ -81,7 +81,15 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::Temp
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    crate::handlers::test_support::create_topic(broker, "produce-resolution-test", name, 1).await;
+    crate::handlers::test_support::create_topic(
+        broker,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "produce-resolution-test",
+            name,
+            ..Default::default()
+        },
+    )
+    .await;
 }
 
 /// Send one single-row `Produce` at `case.version` for `case.topic`. Return

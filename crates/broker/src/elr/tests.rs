@@ -189,7 +189,11 @@ async fn describe_partition(broker: &Arc<Broker>) -> DescribeTopicPartitionsResp
 /// honest: the ELR columns cannot be read as having moved because some
 /// neighbouring field moved instead.
 fn expected_row(isr: &[i32], eligible: &[i32]) -> DescribeTopicPartitionsResponsePartition {
-    row(isr, eligible, &[], &[])
+    row(ExpectedElrSetup {
+        isr,
+        eligible,
+        ..Default::default()
+    })
 }
 
 /// Expected row while both followers remain unavailable to the client listener.
@@ -197,18 +201,33 @@ fn offline_followers_row(
     isr: &[i32],
     eligible: &[i32],
 ) -> DescribeTopicPartitionsResponsePartition {
-    row(isr, eligible, &[], &[2, 3])
+    row(ExpectedElrSetup {
+        isr,
+        eligible,
+        offline: &[2, 3],
+        ..Default::default()
+    })
 }
 
 /// [`expected_row`] with the last-known ELR and the offline set given too.
 /// The registration tests need the offline set: they register broker 3, which
 /// takes it out of it.
-fn row(
-    isr: &[i32],
-    eligible: &[i32],
-    last_known: &[i32],
-    offline: &[i32],
-) -> DescribeTopicPartitionsResponsePartition {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct ExpectedElrSetup<'a> {
+    #[default(&[1, 2, 3])]
+    isr: &'a [i32],
+    eligible: &'a [i32],
+    last_known: &'a [i32],
+    offline: &'a [i32],
+}
+
+fn row(setup: ExpectedElrSetup<'_>) -> DescribeTopicPartitionsResponsePartition {
+    let ExpectedElrSetup {
+        isr,
+        eligible,
+        last_known,
+        offline,
+    } = setup;
     DescribeTopicPartitionsResponsePartition {
         error_code: codes::NONE,
         partition_index: 0,

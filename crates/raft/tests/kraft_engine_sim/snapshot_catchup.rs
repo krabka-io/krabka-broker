@@ -17,10 +17,7 @@ use krabka_raft::kraft::{
 };
 
 use crate::{
-    harness::{
-        STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine_with_snapshot_interval,
-        topic_record,
-    },
+    harness::{STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, topic_record},
     sim_net::SimNet,
 };
 
@@ -34,13 +31,15 @@ fn start_snapshot_pair(
         .into_iter()
         .map(|id| {
             let idx = usize::try_from(id.0 - 1).unwrap();
-            let (ctrl, dir) = build_engine_with_snapshot_interval(
-                id,
-                voters,
-                cid,
-                STAGGERED_TIMEOUTS[idx],
+            let (ctrl, dir) = build_engine(
                 net,
-                interval,
+                crate::harness::SimEngineSetup {
+                    me: id,
+                    ids: voters,
+                    cluster_id: cid,
+                    election_timeout: STAGGERED_TIMEOUTS[idx],
+                    snapshot_interval_records: interval,
+                },
             );
             net.register(id, ctrl);
             (id, dir)
@@ -166,13 +165,15 @@ async fn lagging_follower_catches_up_via_snapshot() {
     // Now bring the lagging node 3 up on a FRESH empty tempdir: its LEO is 0,
     // far below the leader's pruned log_start, so it can ONLY catch up by
     // fetching the snapshot.
-    let (lag_ctrl, lag_dir) = build_engine_with_snapshot_interval(
-        NodeId(3),
-        &ids,
-        cid,
-        STAGGERED_TIMEOUTS[2],
+    let (lag_ctrl, lag_dir) = build_engine(
         &net,
-        interval,
+        crate::harness::SimEngineSetup {
+            me: NodeId(3),
+            ids: &ids,
+            cluster_id: cid,
+            election_timeout: STAGGERED_TIMEOUTS[2],
+            snapshot_interval_records: interval,
+        },
     );
     net.register(NodeId(3), lag_ctrl);
     dirs.insert(NodeId(3), lag_dir);

@@ -162,20 +162,29 @@ async fn produce_transactional(leader: &Connection, batch: RecordBatch) -> i16 {
 async fn end_transaction(
     leader: &Connection,
     (producer_id, producer_epoch): (i64, i16),
-    commit: bool,
+    commit: crate::support::transactions::TransactionOutcome,
     transaction_version: i8,
 ) -> i16 {
     let response = leader
         .send(WriteTxnMarkersRequest {
             markers: vec![crate::support::transactions::transaction_marker(
-                (producer_id, producer_epoch),
-                commit,
-                COORDINATOR_EPOCH,
-                transaction_version,
-                vec![crate::support::transactions::marker_topic(
-                    TOPIC.into(),
-                    vec![0],
-                )],
+                crate::support::transactions::TransactionMarkerSetup {
+                    producer: crate::support::transactions::ProducerIdentity::from_wire((
+                        producer_id,
+                        producer_epoch,
+                    )),
+                    outcome: commit,
+                    coordinator_epoch: crate::support::transactions::CoordinatorEpoch(
+                        COORDINATOR_EPOCH,
+                    ),
+                    transaction_version: crate::support::transactions::TransactionVersion(
+                        transaction_version,
+                    ),
+                    topics: vec![crate::support::transactions::marker_topic(
+                        TOPIC.into(),
+                        vec![0],
+                    )],
+                },
             )],
             ..Default::default()
         })
@@ -297,7 +306,13 @@ async fn every_replica_describes_the_producers_of_its_log() {
     )
     .await;
     let before_markers = now_ms();
-    let commit = end_transaction(&leader, COMMITTED, true, 1).await;
+    let commit = end_transaction(
+        &leader,
+        COMMITTED,
+        crate::support::transactions::TransactionOutcome::Commit,
+        1,
+    )
+    .await;
     let aborted = produce_transactional(
         &leader,
         batch(ProducerBatchSetup {
@@ -309,7 +324,13 @@ async fn every_replica_describes_the_producers_of_its_log() {
     )
     .await;
     let (aborted_id, aborted_epoch) = ABORTED;
-    let abort = end_transaction(&leader, (aborted_id, aborted_epoch + 1), false, 2).await;
+    let abort = end_transaction(
+        &leader,
+        (aborted_id, aborted_epoch + 1),
+        crate::support::transactions::TransactionOutcome::Abort,
+        2,
+    )
+    .await;
     let after_markers = now_ms();
     let open = produce_transactional(
         &leader,

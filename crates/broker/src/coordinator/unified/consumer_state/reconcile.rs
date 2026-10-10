@@ -481,7 +481,24 @@ mod tests {
         pending: Vec<i32>,
     }
 
-    fn held(epoch: i32, state: MemberAssignmentState, assigned: &[i32], pending: &[i32]) -> Held {
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct HeldSetup<'a> {
+        #[default(5)]
+        epoch: i32,
+        #[default(MemberAssignmentState::Stable)]
+        state: MemberAssignmentState,
+        #[default(&[0, 1])]
+        assigned: &'a [i32],
+        pending: &'a [i32],
+    }
+
+    fn held(setup: HeldSetup<'_>) -> Held {
+        let HeldSetup {
+            epoch,
+            state,
+            assigned,
+            pending,
+        } = setup;
         Held {
             epoch,
             state,
@@ -530,9 +547,7 @@ mod tests {
     /// `TopicPartitions`.
     #[test]
     fn reconcile_member_follows_the_current_assignment_builder() {
-        use MemberAssignmentState::{
-            Stable as S, UnreleasedPartitions as R, UnrevokedPartitions as U,
-        };
+        use MemberAssignmentState::UnrevokedPartitions as U;
 
         struct Row {
             name: &'static str,
@@ -554,14 +569,6 @@ mod tests {
             changed: false,
             after,
         };
-        let revoking_input = || held(5, U, &[0, 1], &[2]);
-        let expanded_input = || held(5, S, &[0, 1, 2], &[]);
-        let single_partition_input = || held(5, S, &[0], &[]);
-        let unreleased_input = || held(6, R, &[0], &[]);
-        let current_input = || held(6, S, &[0, 1], &[]);
-        let revoking_expected = || held(5, U, &[0, 1], &[2]);
-        let settled_expected = || held(6, S, &[0, 1], &[]);
-        let withheld_expected = || held(6, R, &[0], &[]);
         let rows = [
             // A member that must revoke stays where it is until it reports an
             // owned set without the pending partitions.
@@ -679,18 +686,28 @@ mod tests {
                 changed: true,
                 ..row(
                     "a revocation waits, and so does a free partition",
-                    held(5, S, &[0, 1], &[]),
+                    held(HeldSetup::default()),
                     (&[], &[]),
                     &[1, 2],
                     None,
-                    held(5, U, &[1], &[0]),
+                    held(HeldSetup {
+                        state: U,
+                        assigned: &[1],
+                        pending: &[0],
+                        ..Default::default()
+                    }),
                 )
             },
             Row {
                 changed: true,
                 ..row(
                     "a partition the member gave up is free for it again",
-                    held(5, U, &[0], &[1]),
+                    held(HeldSetup {
+                        state: U,
+                        assigned: &[0],
+                        pending: &[1],
+                        ..Default::default()
+                    }),
                     (&[], &[]),
                     &[0, 1],
                     Some(&[0]),
@@ -704,11 +721,19 @@ mod tests {
                 subscription_changed: true,
                 ..row(
                     "a subscription change alone leaves a member at the target epoch",
-                    held(6, S, &[0, 1, 2], &[]),
+                    held(HeldSetup {
+                        epoch: 6,
+                        assigned: &[0, 1, 2],
+                        ..Default::default()
+                    }),
                     (&[], &[]),
                     &[0, 1],
                     None,
-                    held(6, S, &[0, 1, 2], &[]),
+                    held(HeldSetup {
+                        epoch: 6,
+                        assigned: &[0, 1, 2],
+                        ..Default::default()
+                    }),
                 )
             },
         ];
@@ -728,7 +753,10 @@ mod tests {
     /// it in its own heartbeat, and it keeps its epoch until it revokes.
     #[test]
     fn install_target_does_not_reconcile_any_member() {
-        let before = held(5, MemberAssignmentState::Stable, &[0, 1, 2], &[]);
+        let before = held(HeldSetup {
+            assigned: &[0, 1, 2],
+            ..Default::default()
+        });
         let mut g = group(&before, (&[], &[]), &[0, 1]);
 
         check!(held_by(&g, "a") == before);
@@ -736,7 +764,12 @@ mod tests {
 
         g.reconcile_member("a", None, false, &topics());
         check!(
-            held_by(&g, "a") == held(5, MemberAssignmentState::UnrevokedPartitions, &[0, 1], &[2])
+            held_by(&g, "a")
+                == held(HeldSetup {
+                    state: MemberAssignmentState::UnrevokedPartitions,
+                    pending: &[2],
+                    ..Default::default()
+                })
         );
     }
 
@@ -744,7 +777,12 @@ mod tests {
     /// granted at that epoch is assigned at it, even one the member gave up.
     #[test]
     fn a_granted_partition_is_assigned_at_the_new_epoch() {
-        let before = held(5, MemberAssignmentState::UnrevokedPartitions, &[0], &[1]);
+        let before = held(HeldSetup {
+            state: MemberAssignmentState::UnrevokedPartitions,
+            assigned: &[0],
+            pending: &[1],
+            ..Default::default()
+        });
         let mut g = group(&before, (&[], &[]), &[0, 1]);
 
         g.reconcile_member("a", Some(&parts(&[0])), false, &topics());
@@ -757,6 +795,7 @@ mod tests {
     }
 
     const U: Uuid = Uuid([2; 16]);
+    const ONE_PARTITION_PER_TOPIC: &[(Uuid, &[i32])] = &[(T, &[0]), (U, &[0])];
     /// A topic that the metadata does not hold, as one that was deleted.
     const W: Uuid = Uuid([3; 16]);
 
@@ -770,12 +809,23 @@ mod tests {
         pending: Partitions,
     }
 
-    fn shape(
-        (epoch, previous_epoch): (i32, i32),
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct ShapeSetup<'a> {
+        #[default((6, 5))]
+        epochs: (i32, i32),
+        #[default(MemberAssignmentState::Stable)]
         state: MemberAssignmentState,
-        assigned: &[(Uuid, &[i32])],
-        pending: &[(Uuid, &[i32])],
-    ) -> Shape {
+        assigned: &'a [(Uuid, &'a [i32])],
+        pending: &'a [(Uuid, &'a [i32])],
+    }
+
+    fn shape(setup: ShapeSetup<'_>) -> Shape {
+        let ShapeSetup {
+            epochs: (epoch, previous_epoch),
+            state,
+            assigned,
+            pending,
+        } = setup;
         Shape {
             epoch,
             previous_epoch,
@@ -819,7 +869,7 @@ mod tests {
     }
 
     fn subscription_rows() -> Vec<SubscriptionRow> {
-        use MemberAssignmentState::{Stable, UnreleasedPartitions, UnrevokedPartitions};
+        use MemberAssignmentState::{UnreleasedPartitions, UnrevokedPartitions};
 
         let row = |name: &'static str,
                    names: &'static [&'static str],
@@ -839,47 +889,34 @@ mod tests {
             after,
         };
         let owning_everything = topic_parts(&[(T, &[0, 1]), (U, &[0])]);
-        let revoking_5_4_input = || {
-            shape(
-                (5, 4),
-                UnrevokedPartitions,
-                &[(T, &[0]), (U, &[0])],
-                &[(T, &[1])],
-            )
-        };
-        let stable_6_5_input = || shape((6, 5), Stable, &[(T, &[0, 1]), (U, &[0, 1])], &[]);
-        let stable_5_4_input = || shape((5, 4), Stable, &[(T, &[0])], &[]);
-        let stable_6_5_expected = || shape((6, 5), Stable, &[(T, &[0])], &[]);
-        let stable_5_4_input_two_topics = || shape((5, 4), Stable, &[], &[]);
-        let withheld_6_6_expected = || shape((6, 6), UnreleasedPartitions, &[(T, &[0])], &[]);
         vec![
             row(
                 "an unrevoked member that owns its pending set drops a topic it left",
                 &["t"],
                 revoking_5_4_input(),
-                topic_parts(&[(T, &[0]), (U, &[0])]),
+                topic_parts(ONE_PARTITION_PER_TOPIC),
                 Some(owning_everything.clone()),
                 true,
-                shape(
-                    (5, 5),
-                    UnrevokedPartitions,
-                    &[(T, &[0])],
-                    &[(T, &[1]), (U, &[0])],
-                ),
+                shape(ShapeSetup {
+                    epochs: (5, 5),
+                    state: UnrevokedPartitions,
+                    assigned: &[(T, &[0])],
+                    pending: &[(T, &[1]), (U, &[0])],
+                }),
             ),
             row(
                 "an unrevoked member that owns its pending set keeps it without a change",
                 &["t"],
                 revoking_5_4_input(),
-                topic_parts(&[(T, &[0]), (U, &[0])]),
+                topic_parts(ONE_PARTITION_PER_TOPIC),
                 Some(owning_everything.clone()),
                 false,
-                shape(
-                    (5, 4),
-                    UnrevokedPartitions,
-                    &[(T, &[0]), (U, &[0])],
-                    &[(T, &[1])],
-                ),
+                shape(ShapeSetup {
+                    epochs: (5, 4),
+                    state: UnrevokedPartitions,
+                    assigned: ONE_PARTITION_PER_TOPIC,
+                    pending: &[(T, &[1])],
+                }),
             ),
             row(
                 "a stable member at the target epoch revokes a topic it left and still owns",
@@ -888,12 +925,12 @@ mod tests {
                 topic_parts(&[(T, &[0, 1]), (U, &[0, 1])]),
                 None,
                 true,
-                shape(
-                    (6, 6),
-                    UnrevokedPartitions,
-                    &[(T, &[0, 1])],
-                    &[(U, &[0, 1])],
-                ),
+                shape(ShapeSetup {
+                    epochs: (6, 6),
+                    state: UnrevokedPartitions,
+                    assigned: &[(T, &[0, 1])],
+                    pending: &[(U, &[0, 1])],
+                }),
             ),
             row(
                 "a stable member at the target epoch drops a topic it left and released",
@@ -902,16 +939,28 @@ mod tests {
                 topic_parts(&[(T, &[0, 1]), (U, &[0, 1])]),
                 Some(topic_parts(&[(T, &[0, 1])])),
                 true,
-                shape((6, 6), Stable, &[(T, &[0, 1])], &[]),
+                shape(ShapeSetup {
+                    epochs: (6, 6),
+                    assigned: &[(T, &[0, 1])],
+                    ..Default::default()
+                }),
             ),
             row(
                 "a member with no subscription revokes everything",
                 &[],
-                shape((6, 5), Stable, &[(T, &[0]), (U, &[0])], &[]),
-                topic_parts(&[(T, &[0]), (U, &[0])]),
+                shape(ShapeSetup {
+                    assigned: ONE_PARTITION_PER_TOPIC,
+                    ..Default::default()
+                }),
+                topic_parts(ONE_PARTITION_PER_TOPIC),
                 None,
                 true,
-                shape((6, 6), UnrevokedPartitions, &[], &[(T, &[0]), (U, &[0])]),
+                shape(ShapeSetup {
+                    epochs: (6, 6),
+                    state: UnrevokedPartitions,
+                    pending: ONE_PARTITION_PER_TOPIC,
+                    ..Default::default()
+                }),
             ),
             row(
                 "the target of a topic the member left grants nothing",
@@ -925,11 +974,20 @@ mod tests {
             row(
                 "a partition of a topic the member left is revoked though the target holds it",
                 &["t"],
-                shape((5, 4), Stable, &[(T, &[0]), (U, &[0])], &[]),
-                topic_parts(&[(T, &[0]), (U, &[0])]),
+                shape(ShapeSetup {
+                    epochs: (5, 4),
+                    assigned: ONE_PARTITION_PER_TOPIC,
+                    ..Default::default()
+                }),
+                topic_parts(ONE_PARTITION_PER_TOPIC),
                 None,
                 false,
-                shape((5, 5), UnrevokedPartitions, &[(T, &[0])], &[(U, &[0])]),
+                shape(ShapeSetup {
+                    epochs: (5, 5),
+                    state: UnrevokedPartitions,
+                    assigned: &[(T, &[0])],
+                    pending: &[(U, &[0])],
+                }),
             ),
             row(
                 "a topic that does not exist is not subscribed",
@@ -949,7 +1007,10 @@ mod tests {
                     topic_parts(&[(U, &[0])]),
                     None,
                     false,
-                    shape((6, 5), Stable, &[(U, &[0])], &[]),
+                    shape(ShapeSetup {
+                        assigned: &[(U, &[0])],
+                        ..Default::default()
+                    }),
                 )
             },
             SubscriptionRow {
@@ -961,7 +1022,7 @@ mod tests {
                     topic_parts(&[(U, &[0])]),
                     None,
                     false,
-                    shape((6, 5), Stable, &[], &[]),
+                    shape(ShapeSetup::default()),
                 )
             },
             // A member that keeps its epoch is rebuilt all the same, and records
@@ -971,7 +1032,11 @@ mod tests {
                 ..row(
                     "an unreleased member that keeps waiting records the epoch it stays in",
                     &["t"],
-                    shape((6, 5), UnreleasedPartitions, &[(T, &[0])], &[]),
+                    shape(ShapeSetup {
+                        state: UnreleasedPartitions,
+                        assigned: &[(T, &[0])],
+                        ..Default::default()
+                    }),
                     topic_parts(&[(T, &[0, 1])]),
                     None,
                     false,
@@ -983,7 +1048,12 @@ mod tests {
                 ..row(
                     "an unreleased member that already recorded it changes nothing",
                     &["t"],
-                    shape((6, 6), UnreleasedPartitions, &[(T, &[0])], &[]),
+                    shape(ShapeSetup {
+                        epochs: (6, 6),
+                        state: UnreleasedPartitions,
+                        assigned: &[(T, &[0])],
+                        ..Default::default()
+                    }),
                     topic_parts(&[(T, &[0, 1])]),
                     None,
                     false,
@@ -1063,5 +1133,100 @@ mod tests {
 
         check!(held == HashSet::from([(T, 2), (T, 4), (U, 7)]));
         check!(g.held_by_others("a", &Partitions::new()).is_empty());
+    }
+    fn revoking_input() -> Held {
+        held(HeldSetup {
+            state: MemberAssignmentState::UnrevokedPartitions,
+            pending: &[2],
+            ..Default::default()
+        })
+    }
+    fn expanded_input() -> Held {
+        held(HeldSetup {
+            assigned: &[0, 1, 2],
+            ..Default::default()
+        })
+    }
+    fn single_partition_input() -> Held {
+        held(HeldSetup {
+            assigned: &[0],
+            ..Default::default()
+        })
+    }
+    fn unreleased_input() -> Held {
+        held(HeldSetup {
+            epoch: 6,
+            state: MemberAssignmentState::UnreleasedPartitions,
+            assigned: &[0],
+            ..Default::default()
+        })
+    }
+    fn current_input() -> Held {
+        held(HeldSetup {
+            epoch: 6,
+            ..Default::default()
+        })
+    }
+    fn revoking_expected() -> Held {
+        held(HeldSetup {
+            state: MemberAssignmentState::UnrevokedPartitions,
+            pending: &[2],
+            ..Default::default()
+        })
+    }
+    fn settled_expected() -> Held {
+        held(HeldSetup {
+            epoch: 6,
+            ..Default::default()
+        })
+    }
+    fn withheld_expected() -> Held {
+        held(HeldSetup {
+            epoch: 6,
+            state: MemberAssignmentState::UnreleasedPartitions,
+            assigned: &[0],
+            ..Default::default()
+        })
+    }
+    fn revoking_5_4_input() -> Shape {
+        shape(ShapeSetup {
+            epochs: (5, 4),
+            state: MemberAssignmentState::UnrevokedPartitions,
+            assigned: ONE_PARTITION_PER_TOPIC,
+            pending: &[(T, &[1])],
+        })
+    }
+    fn stable_6_5_input() -> Shape {
+        shape(ShapeSetup {
+            assigned: &[(T, &[0, 1]), (U, &[0, 1])],
+            ..Default::default()
+        })
+    }
+    fn stable_5_4_input() -> Shape {
+        shape(ShapeSetup {
+            epochs: (5, 4),
+            assigned: &[(T, &[0])],
+            ..Default::default()
+        })
+    }
+    fn stable_6_5_expected() -> Shape {
+        shape(ShapeSetup {
+            assigned: &[(T, &[0])],
+            ..Default::default()
+        })
+    }
+    fn stable_5_4_input_two_topics() -> Shape {
+        shape(ShapeSetup {
+            epochs: (5, 4),
+            ..Default::default()
+        })
+    }
+    fn withheld_6_6_expected() -> Shape {
+        shape(ShapeSetup {
+            epochs: (6, 6),
+            state: MemberAssignmentState::UnreleasedPartitions,
+            assigned: &[(T, &[0])],
+            ..Default::default()
+        })
     }
 }

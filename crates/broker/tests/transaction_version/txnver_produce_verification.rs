@@ -200,10 +200,15 @@ async fn add_partition(client: &Client, producer: Producer, topic: &str) {
         || async {
             let response = client
                 .send(crate::support::transaction_wire::partitions_request(
-                    producer.transactional_id,
-                    (producer.id, producer.epoch),
-                    false,
-                    vec![added.clone()],
+                    crate::support::transaction_wire::TransactionPartitionsSetup {
+                        transactional_id: producer.transactional_id,
+                        producer: crate::support::transactions::ProducerIdentity::from_wire((
+                            producer.id,
+                            producer.epoch,
+                        )),
+                        topics: vec![added.clone()],
+                        ..Default::default()
+                    },
                 ))
                 .await
                 .expect("AddPartitionsToTxn");

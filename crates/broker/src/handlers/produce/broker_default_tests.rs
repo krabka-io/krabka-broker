@@ -29,7 +29,15 @@ use crate::{
 const VERSION: i16 = 9;
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    crate::handlers::test_support::create_topic(broker, "broker-default-test", name, 1).await;
+    crate::handlers::test_support::create_topic(
+        broker,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "broker-default-test",
+            name,
+            ..Default::default()
+        },
+    )
+    .await;
 }
 
 /// The stored value of one dynamic broker config, on `node` (the cluster

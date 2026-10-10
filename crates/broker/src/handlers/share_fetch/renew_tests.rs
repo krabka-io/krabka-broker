@@ -47,12 +47,28 @@ use crate::{
 };
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    crate::handlers::test_support::create_topic(broker, "share-renew-test", name, 1).await
+    crate::handlers::test_support::create_topic(
+        broker,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "share-renew-test",
+            name,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Appends one batch of `count` records to partition 0 of `topic`.
 async fn produce(broker: &BrokerHandle, topic: &str, count: i32) {
-    crate::handlers::test_support::produce_records(broker, topic, 0, count).await;
+    crate::handlers::test_support::produce_records(
+        broker,
+        crate::handlers::test_support::ProduceRecordsSetup {
+            topic,
+            count,
+            ..Default::default()
+        },
+    )
+    .await;
 }
 
 /// The fetch limits of a `ShareFetch`.

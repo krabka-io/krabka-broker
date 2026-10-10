@@ -29,15 +29,29 @@ use crate::support::init_tracing;
 
 /// Build a `SASL_PLAINTEXT` data-plane listener config for broker `i`
 /// (0-indexed) and parameterized `controller_listener_protocol`.
-fn sasl_broker_config(
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct SaslBrokerSetup<'a> {
     i: usize,
+    #[default(data_listen_addr())]
     data_addr: SocketAddr,
+    #[default((ListenerProtocol::SaslPlaintext, data_listen_addr()))]
     controller: (ListenerProtocol, SocketAddr),
-    voters: &[(u64, SocketAddr)],
-    log_dir: &std::path::Path,
+    voters: &'a [(u64, SocketAddr)],
+    #[default(BootstrapMode::Bootstrap)]
     mode: BootstrapMode,
-    credentials: (&str, &str),
-) -> BrokerConfig {
+    #[default(("raft-user", "raft-password"))]
+    credentials: (&'a str, &'a str),
+}
+
+fn sasl_broker_config(log_dir: &std::path::Path, setup: SaslBrokerSetup<'_>) -> BrokerConfig {
+    let SaslBrokerSetup {
+        i,
+        data_addr,
+        controller,
+        voters,
+        mode,
+        credentials,
+    } = setup;
     let (ctrl, ctrl_addr) = controller;
     let (plain_user, plain_pass) = credentials;
     let mut cfg = crate::support::node_config(i, log_dir);
@@ -108,22 +122,23 @@ async fn start_two_brokers_with_controller_protocol(
     let dir1 = TempDir::new().unwrap();
 
     let cfg0 = sasl_broker_config(
-        0,
-        data_listen_addr(),
-        (ctrl, ctrl_addrs[0]),
-        &voters,
         dir0.path(),
-        BootstrapMode::Bootstrap,
-        (plain_user, plain_pass),
+        SaslBrokerSetup {
+            controller: (ctrl, ctrl_addrs[0]),
+            voters: &voters,
+            credentials: (plain_user, plain_pass),
+            ..Default::default()
+        },
     );
     let cfg1 = sasl_broker_config(
-        1,
-        data_listen_addr(),
-        (ctrl, ctrl_addrs[1]),
-        &voters,
         dir1.path(),
-        BootstrapMode::Bootstrap,
-        (plain_user, plain_pass),
+        SaslBrokerSetup {
+            i: 1,
+            controller: (ctrl, ctrl_addrs[1]),
+            voters: &voters,
+            credentials: (plain_user, plain_pass),
+            ..Default::default()
+        },
     );
 
     // KIP-595 static-quorum bootstrap: both brokers boot with the same
@@ -156,13 +171,14 @@ async fn assert_disconnected_controllers(
     // block Broker::start on its leader wait. Each node instead bootstraps itself.
     let config = |index: usize, dir: &TempDir| {
         let mut config = sasl_broker_config(
-            index,
-            data_listen_addr(),
-            (ListenerProtocol::SaslPlaintext, ctrl_addrs[index]),
-            &[(u64::try_from(index).unwrap() + 1, ctrl_addrs[index])],
             dir.path(),
-            BootstrapMode::Bootstrap,
-            credentials[index],
+            SaslBrokerSetup {
+                i: index,
+                controller: (ListenerProtocol::SaslPlaintext, ctrl_addrs[index]),
+                voters: &[(u64::try_from(index).unwrap() + 1, ctrl_addrs[index])],
+                credentials: credentials[index],
+                ..Default::default()
+            },
         );
         if deny_controller {
             // Valid SASL credentials are still denied CLUSTER_ACTION without
@@ -228,22 +244,23 @@ async fn controller_listener_oauthbearer_two_broker_quorum() {
     std::fs::write(&token_path, oauth_token()).unwrap();
 
     let mut cfg0 = sasl_broker_config(
-        0,
-        data_listen_addr(),
-        (ListenerProtocol::SaslPlaintext, controller_addrs[0]),
-        &voters,
         dir0.path(),
-        BootstrapMode::Bootstrap,
-        ("unused", "unused"),
+        SaslBrokerSetup {
+            controller: (ListenerProtocol::SaslPlaintext, controller_addrs[0]),
+            voters: &voters,
+            credentials: ("unused", "unused"),
+            ..Default::default()
+        },
     );
     let mut cfg1 = sasl_broker_config(
-        1,
-        data_listen_addr(),
-        (ListenerProtocol::SaslPlaintext, controller_addrs[1]),
-        &voters,
         dir1.path(),
-        BootstrapMode::Bootstrap,
-        ("unused", "unused"),
+        SaslBrokerSetup {
+            i: 1,
+            controller: (ListenerProtocol::SaslPlaintext, controller_addrs[1]),
+            voters: &voters,
+            credentials: ("unused", "unused"),
+            ..Default::default()
+        },
     );
     for config in [&mut cfg0, &mut cfg1] {
         config.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer];

@@ -30,7 +30,15 @@ async fn transactional_fields_follow_open_and_completed_transactions() {
                 "transactions",
                 topic_id,
                 0,
-                Some(transactional_batch(pid, epoch, 0, &["first"]).into()),
+                Some(
+                    transactional_batch(crate::support::records::ProducerValuesSetup {
+                        pid,
+                        epoch,
+                        values: &["first"],
+                        ..Default::default()
+                    })
+                    .into(),
+                ),
                 (-1, 5_000),
             )
         })
@@ -49,14 +57,18 @@ async fn transactional_fields_follow_open_and_completed_transactions() {
         .client
         .send(WriteTxnMarkersRequest {
             markers: vec![crate::support::transactions::transaction_marker(
-                (pid, epoch),
-                true,
-                17,
-                1,
-                vec![crate::support::transactions::marker_topic(
-                    "transactions".into(),
-                    vec![0],
-                )],
+                crate::support::transactions::TransactionMarkerSetup {
+                    producer: crate::support::transactions::ProducerIdentity::from_wire((
+                        pid, epoch,
+                    )),
+                    coordinator_epoch: crate::support::transactions::CoordinatorEpoch(17),
+                    transaction_version: crate::support::transactions::TransactionVersion(1),
+                    topics: vec![crate::support::transactions::marker_topic(
+                        "transactions".into(),
+                        vec![0],
+                    )],
+                    ..Default::default()
+                },
             )],
             ..Default::default()
         })
@@ -74,7 +86,15 @@ async fn transactional_fields_follow_open_and_completed_transactions() {
                 "transactions",
                 topic_id,
                 0,
-                Some(transactional_batch(pid, epoch, 1, &["second"]).into()),
+                Some(
+                    transactional_batch(crate::support::records::ProducerValuesSetup {
+                        pid,
+                        epoch,
+                        base_seq: 1,
+                        values: &["second"],
+                    })
+                    .into(),
+                ),
                 (-1, 5_000),
             )
         })

@@ -79,7 +79,14 @@ mod tests {
 
     async fn leader_partition(dir: &std::path::Path) -> std::sync::Arc<Partition> {
         let registry = PartitionRegistry::new();
-        open_partition(&registry, dir, "test-barrier", 0);
+        open_partition(
+            &registry,
+            dir,
+            crate::test_support::StandalonePartitionSetup {
+                topic: "test-barrier",
+                ..Default::default()
+            },
+        );
         let partition = registry.get("test-barrier", PartitionIndex(0)).unwrap();
         partition.install_leader_change(1, 5).await;
         partition

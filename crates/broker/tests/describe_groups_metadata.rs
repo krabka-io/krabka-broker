@@ -39,17 +39,16 @@ fn sync_request(
     member_id: &str,
     assignment: &'static [u8],
 ) -> krabka_protocol::owned::sync_group_request::SyncGroupRequest {
-    classic_sync_request(
-        group_id.to_owned(),
-        generation_id,
-        member_id.to_owned(),
-        Some("consumer".into()),
-        Some("range".into()),
-        vec![sync_assignment(
+    classic_sync_request(crate::support::classic::ClassicSyncSetup {
+        group_id: group_id.to_owned(),
+        generation_id: crate::support::classic::GenerationId(generation_id),
+        member_id: member_id.to_owned(),
+        assignments: vec![sync_assignment(
             member_id.to_owned(),
             Bytes::from_static(assignment),
         )],
-    )
+        ..Default::default()
+    })
 }
 
 fn assert_described_group(resp: &DescribeGroupsResponse) {
@@ -126,16 +125,19 @@ use crate::support::start_group_coordinator as start_broker;
 fn join_request(group_id: &str, member_id: &str, metadata: &'static [u8]) -> JoinGroupRequest {
     JoinGroupRequest {
         group_instance_id: None,
-        ..classic_join_request(
-            group_id.to_string(),
-            member_id.to_string(),
-            (10_000, 30_000),
-            "consumer".to_string(),
-            vec![join_protocol(
+        ..classic_join_request(crate::support::classic::ClassicJoinSetup {
+            group_id: group_id.to_string(),
+            member_id: member_id.to_string(),
+            timeouts: crate::support::classic::ClassicTimeouts {
+                session: krabka_units::millis(10_000),
+                ..Default::default()
+            },
+            protocol_type: "consumer".to_string(),
+            protocols: vec![join_protocol(
                 "range".to_string(),
                 Bytes::from_static(metadata),
             )],
-        )
+        })
     }
 }
 

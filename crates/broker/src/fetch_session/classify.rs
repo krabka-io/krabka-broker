@@ -494,12 +494,23 @@ mod tests {
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::INVALID_FETCH_SESSION_EPOCH);
     }
 
-    fn incremental_topic(
+    #[derive(krabka_macros::FieldDefaults)]
+    struct IncrementalTopicSetup {
+        #[default("t".into())]
         name: String,
         topic_id: WireUuid,
         fetch_offset: i64,
+        #[default(1024)]
         partition_max_bytes: i32,
-    ) -> FetchTopic {
+    }
+
+    fn incremental_topic(setup: IncrementalTopicSetup) -> FetchTopic {
+        let IncrementalTopicSetup {
+            name,
+            topic_id,
+            fetch_offset,
+            partition_max_bytes,
+        } = setup;
         FetchTopic {
             topic: name,
             topic_id,
@@ -538,6 +549,21 @@ mod tests {
         }
     }
 
+    /// Incrementals retain the cache's resolved topic identity.
+    fn resolved_incremental_partition(
+        topic_id: WireUuid,
+        state: CachedPartitionState,
+    ) -> Vec<(FetchSessionKey, CachedPartitionState)> {
+        vec![(
+            FetchSessionKey {
+                topic_name: "t".into(),
+                topic_id,
+                partition: 0,
+            },
+            state,
+        )]
+    }
+
     #[test]
     fn incremental_merge_matches_cached_key_by_topic_id_only() {
         // Reproduces the broker-jvm-acceptance regression: a v ≥ 13 client
@@ -554,20 +580,18 @@ mod tests {
         let r = req(SessionRequestSetup {
             session_id: id,
             session_epoch: 1,
-            topics: vec![incremental_topic(String::new(), tid, 42, 2048)],
+            topics: vec![incremental_topic(IncrementalTopicSetup {
+                name: String::new(),
+                topic_id: tid,
+                fetch_offset: 42,
+                partition_max_bytes: 2048,
+            })],
             ..Default::default()
         });
         let partitions = incremental_partitions(cache.classify(&r, NAME_FETCH_VERSION));
         // No duplicate entry created; the cached (fully-resolved) key is
         // preserved and its desired state updated in place.
-        let expected = vec![(
-            FetchSessionKey {
-                topic_name: "t".into(),
-                topic_id: tid,
-                partition: 0,
-            },
-            expected_incremental_state(42, 2048),
-        )];
+        let expected = resolved_incremental_partition(tid, expected_incremental_state(42, 2048));
         assert!(partitions == expected);
     }
 
@@ -582,18 +606,15 @@ mod tests {
         let r = req(SessionRequestSetup {
             session_id: id,
             session_epoch: 1,
-            topics: vec![incremental_topic("t".into(), WireUuid::ZERO, 99, 4096)],
+            topics: vec![incremental_topic(IncrementalTopicSetup {
+                fetch_offset: 99,
+                partition_max_bytes: 4096,
+                ..Default::default()
+            })],
             ..Default::default()
         });
         let partitions = incremental_partitions(cache.classify(&r, NAME_FETCH_VERSION));
-        let expected = vec![(
-            FetchSessionKey {
-                topic_name: "t".into(),
-                topic_id: tid,
-                partition: 0,
-            },
-            expected_incremental_state(99, 4096),
-        )];
+        let expected = resolved_incremental_partition(tid, expected_incremental_state(99, 4096));
         assert!(partitions == expected);
     }
 

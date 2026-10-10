@@ -138,12 +138,25 @@ async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_
 
 /// An ACL on topic `name` with `pattern_type`, `principal` and
 /// `permission_type`.
-fn topic_acl(
-    name: &str,
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct TopicAclSetup<'a> {
+    #[default("orders")]
+    name: &'a str,
+    #[default(PatternType::Literal)]
     pattern_type: PatternType,
-    principal: &str,
+    #[default("User:alice")]
+    principal: &'a str,
+    #[default(PermissionType::Allow)]
     permission_type: PermissionType,
-) -> AclEntry {
+}
+
+fn topic_acl(setup: TopicAclSetup<'_>) -> AclEntry {
+    let TopicAclSetup {
+        name,
+        pattern_type,
+        principal,
+        permission_type,
+    } = setup;
     AclEntry {
         pattern_type,
         permission_type,
@@ -192,31 +205,32 @@ async fn handle_deletes_exactly_what_kafka_matches() {
     );
     test_ctx!(ctx, "admin");
 
-    let literal_foo = topic_acl(
-        "foo",
-        PatternType::Literal,
-        "User:alice",
-        PermissionType::Allow,
-    );
-    let wildcard_deny = topic_acl("*", PatternType::Literal, "User:bob", PermissionType::Deny);
-    let prefixed_fo = topic_acl(
-        "fo",
-        PatternType::Prefixed,
-        "User:alice",
-        PermissionType::Deny,
-    );
-    let prefixed_bar = topic_acl(
-        "bar",
-        PatternType::Prefixed,
-        "User:bob",
-        PermissionType::Allow,
-    );
-    let literal_food = topic_acl(
-        "food",
-        PatternType::Literal,
-        "User:alice",
-        PermissionType::Allow,
-    );
+    let literal_foo = topic_acl(TopicAclSetup {
+        name: "foo",
+        ..Default::default()
+    });
+    let wildcard_deny = topic_acl(TopicAclSetup {
+        name: "*",
+        principal: "User:bob",
+        permission_type: PermissionType::Deny,
+        ..Default::default()
+    });
+    let prefixed_fo = topic_acl(TopicAclSetup {
+        name: "fo",
+        pattern_type: PatternType::Prefixed,
+        permission_type: PermissionType::Deny,
+        ..Default::default()
+    });
+    let prefixed_bar = topic_acl(TopicAclSetup {
+        name: "bar",
+        pattern_type: PatternType::Prefixed,
+        principal: "User:bob",
+        ..Default::default()
+    });
+    let literal_food = topic_acl(TopicAclSetup {
+        name: "food",
+        ..Default::default()
+    });
     let seeded = vec![
         literal_foo.clone(),
         wildcard_deny.clone(),

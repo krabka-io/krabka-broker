@@ -319,13 +319,16 @@ async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {
 
     // Build the v2 request header (flexible — Metadata went flexible at
     // v9). One TCP round-trip, plaintext, no SASL.
-    let frame = crate::support::wire::request_frame(
-        (3, version, 7, true),
-        "krabka-kip-430-v9",
-        &body,
-        Some(16 + body.len()),
-        None,
-    );
+    let frame = crate::support::wire::request_frame(crate::support::wire::WireFrameSetup {
+        api_key: krabka_ids::ApiKey(3),
+        version: krabka_ids::ApiVersion(version),
+        correlation: crate::support::wire::CorrelationId(7),
+        header: crate::support::wire::HeaderEncoding::Flexible,
+        client_id: "krabka-kip-430-v9",
+        body: &body,
+        capacity: Some(crate::support::wire::request_body_capacity(&body)),
+        ..Default::default()
+    });
 
     let mut stream = tokio::net::TcpStream::connect(h.handle.listen_addr())
         .await

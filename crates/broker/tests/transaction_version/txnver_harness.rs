@@ -25,10 +25,12 @@ pub async fn admin_client(bootstrap: &str) -> Client {
 pub async fn create_topic(client: &Client, name: &str, partitions: i32) {
     crate::support::transaction_wire::create_topic(
         client,
-        name,
-        partitions,
-        Vec::new(),
-        "create_topic",
+        crate::support::transaction_wire::TransactionTopicSetup {
+            name,
+            partitions,
+            configs: Vec::new(),
+            context: "create_topic",
+        },
     )
     .await;
 }

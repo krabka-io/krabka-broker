@@ -75,11 +75,27 @@ impl Fixture {
         let dir = tempdir().expect("tempdir");
         let registry = Arc::new(PartitionRegistry::new());
         for p in 0..4 {
-            open_partition(&registry, dir.path(), STATE_TOPIC, p);
+            open_partition(
+                &registry,
+                dir.path(),
+                crate::test_support::StandalonePartitionSetup {
+                    topic: STATE_TOPIC,
+                    partition: p,
+                    ..Default::default()
+                },
+            );
         }
         for (topic, count) in data {
             for p in 0..*count {
-                open_partition(&registry, dir.path(), topic, p);
+                open_partition(
+                    &registry,
+                    dir.path(),
+                    crate::test_support::StandalonePartitionSetup {
+                        topic,
+                        partition: p,
+                        ..Default::default()
+                    },
+                );
             }
         }
         Self {

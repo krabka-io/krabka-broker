@@ -127,13 +127,15 @@ pub async fn produce_batch_to(
     let mut stream = TcpStream::connect(addr).await.expect("connect for produce");
     stream.set_nodelay(true).ok();
     // ProduceRequest v9 is flexible (FLEXIBLE_MIN = 9).
-    let frame = crate::support::wire::request_frame(
-        (0, PRODUCE_VERSION, 99, true),
-        "legacy-fetch-produce",
-        &body,
-        None,
-        None,
-    );
+    let frame = crate::support::wire::request_frame(crate::support::wire::WireFrameSetup {
+        api_key: krabka_ids::ApiKey(0),
+        version: krabka_ids::ApiVersion(PRODUCE_VERSION),
+        correlation: crate::support::wire::CorrelationId(99),
+        header: crate::support::wire::HeaderEncoding::Flexible,
+        client_id: "legacy-fetch-produce",
+        body: &body,
+        ..Default::default()
+    });
 
     stream
         .write_u32(u32::try_from(frame.len()).unwrap())

@@ -6,13 +6,28 @@ use tokio::net::TcpListener;
 use super::*;
 use crate::{broker::test_support::submit_metadata_topic_partition, config::BrokerConfig};
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct StaticVoterSetup<'a> {
+    #[default(1)]
+    node_id: u64,
+    #[default(SocketAddr::from(([127, 0, 0, 1], 0)))]
+    listen_addr: SocketAddr,
+    #[default(SocketAddr::from(([127, 0, 0, 1], 0)))]
+    controller_addr: SocketAddr,
+    // An empty list retains the automatic quorum used by ordinary single-broker fixtures.
+    voters: &'a [(u64, SocketAddr)],
+}
+
 fn static_voter_test_config(
     log_dir: &std::path::Path,
-    node_id: u64,
-    listen_addr: SocketAddr,
-    controller_addr: SocketAddr,
-    voters: &[(u64, SocketAddr)],
+    setup: StaticVoterSetup<'_>,
 ) -> BrokerConfig {
+    let StaticVoterSetup {
+        node_id,
+        listen_addr,
+        controller_addr,
+        voters,
+    } = setup;
     let mut config = BrokerConfig::for_tests(log_dir.to_path_buf());
     config.broker_id = i32::try_from(node_id).expect("node id fits broker id");
     config.node_id = krabka_raft::NodeId(node_id);
@@ -41,8 +56,24 @@ async fn broker_handle_reports_non_default_node_and_voter_state() {
     let controller8 = controller_listener8.local_addr().unwrap();
     let voters = [(7, controller7), (8, controller8)];
 
-    let config7 = static_voter_test_config(dir7.path(), 7, listen7, controller7, &voters);
-    let config8 = static_voter_test_config(dir8.path(), 8, listen8, controller8, &voters);
+    let config7 = static_voter_test_config(
+        dir7.path(),
+        StaticVoterSetup {
+            node_id: 7,
+            listen_addr: listen7,
+            controller_addr: controller7,
+            voters: &voters,
+        },
+    );
+    let config8 = static_voter_test_config(
+        dir8.path(),
+        StaticVoterSetup {
+            node_id: 8,
+            listen_addr: listen8,
+            controller_addr: controller8,
+            voters: &voters,
+        },
+    );
     let start = Box::pin(tokio::time::timeout(
         std::time::Duration::from_secs(10),
         async {

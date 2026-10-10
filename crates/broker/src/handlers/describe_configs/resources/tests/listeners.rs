@@ -33,7 +33,25 @@ const DEFAULT_LISTENERS: &str = "PLAINTEXT://:9092";
 const DEFAULT_PROTOCOL_MAP: &str =
     "SASL_SSL:SASL_SSL,PLAINTEXT:PLAINTEXT,SSL:SSL,SASL_PLAINTEXT:SASL_PLAINTEXT";
 
-fn listener(name: &str, bind: &str, advertised: &str, protocol: ListenerProtocol) -> ListenerSpec {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct ListenerSetup<'a> {
+    #[default("CLIENT")]
+    name: &'a str,
+    #[default("0.0.0.0:9092")]
+    bind: &'a str,
+    #[default("broker-1.example:9092")]
+    advertised: &'a str,
+    #[default(SaslSsl)]
+    protocol: ListenerProtocol,
+}
+
+fn listener(setup: ListenerSetup<'_>) -> ListenerSpec {
+    let ListenerSetup {
+        name,
+        bind,
+        advertised,
+        protocol,
+    } = setup;
     ListenerSpec {
         name: name.to_owned(),
         bind_addr: bind.parse().expect("a socket address"),
@@ -52,13 +70,13 @@ fn two_listener_node(roles: &[NodeRole], inter_broker: Option<&str>) -> BrokerCo
     let mut config = BrokerConfig {
         roles: roles.to_vec(),
         listeners: vec![
-            listener("CLIENT", "0.0.0.0:9092", "broker-1.example:9092", SaslSsl),
-            listener(
-                "INTERNAL",
-                "10.0.0.1:9094",
-                "broker-1.internal:9094",
-                SaslPlaintext,
-            ),
+            listener(ListenerSetup::default()),
+            listener(ListenerSetup {
+                name: "INTERNAL",
+                bind: "10.0.0.1:9094",
+                advertised: "broker-1.internal:9094",
+                protocol: SaslPlaintext,
+            }),
         ],
         controller_listen_addr: "0.0.0.0:9093".parse().expect("a socket address"),
         controller_listener_protocol: Ssl,

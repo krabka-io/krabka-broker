@@ -309,7 +309,11 @@ mod tests {
         leader_epoch: i32,
     ) -> PartitionRegistry {
         let registry = PartitionRegistry::new();
-        open_partition(&registry, dir, "orders", 0);
+        open_partition(
+            &registry,
+            dir,
+            crate::test_support::StandalonePartitionSetup::default(),
+        );
         let partition = registry
             .get("orders", PartitionIndex(0))
             .expect("the partition is open");

@@ -22,9 +22,11 @@ async fn restart_recovers_image() {
         .copied()
         .zip(crate::harness::start_engines(
             &net,
-            &ids,
-            cid,
-            &STAGGERED_TIMEOUTS,
+            crate::harness::SimClusterSetup {
+                ids: &ids,
+                cluster_id: cid,
+                ..Default::default()
+            },
         ))
         .collect();
 

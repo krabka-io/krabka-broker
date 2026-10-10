@@ -97,7 +97,15 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::Temp
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    crate::handlers::test_support::create_topic(broker, "fetch-resolution-test", name, 1).await
+    crate::handlers::test_support::create_topic(
+        broker,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "fetch-resolution-test",
+            name,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Send one `Fetch` at `version` and return the response as a client decodes

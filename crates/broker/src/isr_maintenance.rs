@@ -150,7 +150,7 @@ mod tests {
 
     use super::*;
     use crate::isr_maintenance::test_support::{
-        fake_source, fixture_partition, partition, set_replica_state, topic,
+        IsrSetup, fake_source, fixture_partition, partition, set_replica_state, topic,
     };
 
     /// One scan of a leader partition whose only follower last caught up
@@ -171,23 +171,20 @@ mod tests {
         part.current_leader.store(1, Ordering::Release);
         set_replica_state(
             &part,
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
-            NodeId(1),
-            10,
-            &[(NodeId(2), Duration::from_secs(30))],
+            IsrSetup {
+                leader_epoch: 10,
+                stale_followers: &[(NodeId(2), Duration::from_secs(30))],
+                ..Default::default()
+            },
         )
         .await;
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&topic("t", uuid::Uuid::from_u128(1)));
-        image.apply(&partition(
-            "t",
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
-            NodeId(1),
-            10,
-            4,
-        ));
+        image.apply(&partition(IsrSetup {
+            leader_epoch: 10,
+            partition_epoch: 4,
+            ..Default::default()
+        }));
 
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert("t".into(), PartitionIndex(0), part);

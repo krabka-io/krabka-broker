@@ -41,7 +41,10 @@ use crate::support::{
         offset_delete_request, offset_delete_topic,
     },
     relay::Relay,
-    transactions::{end_transaction_request, txn_offset_partition, txn_offset_topic},
+    transaction_wire::{TransactionProduceSetup, produce_fixture},
+    transactions::{
+        ProducerIdentity, end_transaction_request, txn_offset_partition, txn_offset_topic,
+    },
 };
 
 const TID: &str = "txn-uncommitted-writes";
@@ -120,9 +123,16 @@ async fn produce(
     producer: Option<(i64, i16)>,
     values: &[&'static str],
 ) {
-    crate::support::transaction_wire::produce_succeeds(connection.send(
-        crate::support::transaction_wire::produce_request(TID, TOPIC, topic_id, producer, values),
-    ))
+    produce_fixture(
+        TransactionProduceSetup {
+            transactional_id: TID,
+            topic: TOPIC,
+            topic_id,
+            producer: producer.map(ProducerIdentity::from_wire),
+            values,
+        },
+        |request| connection.send(request),
+    )
     .await;
 }
 

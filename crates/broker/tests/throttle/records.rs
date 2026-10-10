@@ -107,13 +107,15 @@ pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: 
 
     // Send raw frame and capture the full raw response (before decode) so we
     // can measure response bytes.
-    let frame = crate::support::wire::request_frame(
-        (1, VERSION, 1, true),
-        "krabka-throttle-test",
-        &body,
-        Some(16 + body.len()),
-        None,
-    );
+    let frame = crate::support::wire::request_frame(crate::support::wire::WireFrameSetup {
+        api_key: krabka_ids::ApiKey(1),
+        version: krabka_ids::ApiVersion(VERSION),
+        header: crate::support::wire::HeaderEncoding::Flexible,
+        client_id: "krabka-throttle-test",
+        body: &body,
+        capacity: Some(crate::support::wire::request_body_capacity(&body)),
+        ..Default::default()
+    });
 
     crate::support::wire::write_frame(&mut stream, &frame, None)
         .await

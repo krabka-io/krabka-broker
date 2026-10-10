@@ -42,14 +42,30 @@ pub(super) use crate::test_support::open_partition as fixture_partition;
 /// Install `isr` and `replicas` with `leader` at `leader_epoch` on `part`.
 /// Each `(follower, age)` in `stale_followers` has not fetched from this
 /// leader and last caught up `age` ago.
-pub(super) async fn set_replica_state(
-    part: &Partition,
-    isr: &[NodeId],
-    replicas: &[NodeId],
-    leader: NodeId,
-    leader_epoch: i32,
-    stale_followers: &[(NodeId, Duration)],
-) {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct IsrSetup<'a> {
+    #[default("t")]
+    pub topic: &'a str,
+    #[default(&[NodeId(1), NodeId(2)])]
+    pub isr: &'a [NodeId],
+    #[default(&[NodeId(1), NodeId(2)])]
+    pub replicas: &'a [NodeId],
+    #[default(NodeId(1))]
+    pub leader: NodeId,
+    pub leader_epoch: i32,
+    pub partition_epoch: i32,
+    pub stale_followers: &'a [(NodeId, Duration)],
+}
+
+pub(super) async fn set_replica_state(part: &Partition, setup: IsrSetup<'_>) {
+    let IsrSetup {
+        isr,
+        replicas,
+        leader,
+        leader_epoch,
+        stale_followers,
+        ..
+    } = setup;
     let now = Instant::now();
     let mut st = part.replica_state.lock().await;
     st.install_isr(isr, replicas, leader, now);
@@ -73,14 +89,16 @@ pub(super) async fn set_replica_state(
 }
 
 /// Partition 0 of `topic` as the metadata image holds it.
-pub(super) fn partition(
-    topic: &str,
-    isr: &[NodeId],
-    replicas: &[NodeId],
-    leader: NodeId,
-    leader_epoch: i32,
-    partition_epoch: i32,
-) -> MetadataRecord {
+pub(super) fn partition(setup: IsrSetup<'_>) -> MetadataRecord {
+    let IsrSetup {
+        topic,
+        isr,
+        replicas,
+        leader,
+        leader_epoch,
+        partition_epoch,
+        ..
+    } = setup;
     MetadataRecord::V1Partition(PartitionRecord {
         topic: topic.to_string(),
         partition: 0,

@@ -38,7 +38,15 @@ macro_rules! seeded_partition_topic {
     (($handle:ident, $directory:ident, $broker:ident), $topic:expr, $partitions:expr, $replication:expr) => {
         let ($handle, $directory) =
             start_broker(std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        seed_topic(&$handle, $topic, $partitions, $replication).await;
+        seed_topic(
+            &$handle,
+            crate::handlers::create_partitions::test_support::SeedTopicSetup {
+                name: $topic,
+                partitions: $partitions,
+                rf: $replication,
+            },
+        )
+        .await;
         let $broker = $handle.broker_arc_for_test();
     };
 }
@@ -138,7 +146,15 @@ async fn handle_adds_new_partitions_and_preserves_response_identity() {
 #[tokio::test]
 async fn handle_rejects_an_unplaceable_new_diskless_partition() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    seed_topic(&broker_handle, "diskless-grow", 1, 1).await;
+    seed_topic(
+        &broker_handle,
+        crate::handlers::create_partitions::test_support::SeedTopicSetup {
+            name: "diskless-grow",
+            partitions: 1,
+            ..Default::default()
+        },
+    )
+    .await;
     broker_handle
         .broker_arc_for_test()
         .controller
@@ -178,7 +194,14 @@ async fn handle_rejects_an_unplaceable_new_diskless_partition() {
 #[tokio::test]
 async fn strict_create_partitions_rejects_after_quota_exhaustion() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    seed_topic(&broker_handle, "metered", 2, 1).await;
+    seed_topic(
+        &broker_handle,
+        crate::handlers::create_partitions::test_support::SeedTopicSetup {
+            name: "metered",
+            ..Default::default()
+        },
+    )
+    .await;
     seed_controller_quota(&broker_handle, 2.0).await;
     let broker = broker_handle.broker_arc_for_test();
     request_identity!((p, peer), principal("admin"));
@@ -558,7 +581,11 @@ async fn rows_follow_kafkas_duplicate_and_count_checks() {
     for (label, topics, validate_only, results) in cases {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        seed_topic(&broker_handle, "t", 2, 1).await;
+        seed_topic(
+            &broker_handle,
+            crate::handlers::create_partitions::test_support::SeedTopicSetup::default(),
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         request_identity!((p, peer), principal("admin"));
 

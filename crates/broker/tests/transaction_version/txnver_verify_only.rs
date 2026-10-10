@@ -98,10 +98,12 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
     };
     let add = client
         .send(crate::support::transaction_wire::partitions_request(
-            VERIFY_TID,
-            (pid, epoch),
-            false,
-            vec![added_topic],
+            crate::support::transaction_wire::TransactionPartitionsSetup {
+                transactional_id: VERIFY_TID,
+                producer: crate::support::transactions::ProducerIdentity::from_wire((pid, epoch)),
+                topics: vec![added_topic],
+                ..Default::default()
+            },
         ))
         .await
         .expect("AddPartitionsToTxn add");
@@ -120,10 +122,12 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
     };
     let verify = client
         .send(crate::support::transaction_wire::partitions_request(
-            VERIFY_TID,
-            (pid, epoch),
-            true,
-            vec![verify_topic],
+            crate::support::transaction_wire::TransactionPartitionsSetup {
+                transactional_id: VERIFY_TID,
+                producer: crate::support::transactions::ProducerIdentity::from_wire((pid, epoch)),
+                registration: crate::support::transactions::PartitionRegistration::VerifyOnly,
+                topics: vec![verify_topic],
+            },
         ))
         .await
         .expect("AddPartitionsToTxn verify-only");

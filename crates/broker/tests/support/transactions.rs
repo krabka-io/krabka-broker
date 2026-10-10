@@ -101,20 +101,83 @@ pub fn marker_topic(
     }
 }
 
-/// A complete transaction marker with caller-selected identity, result and fencing fields.
+use krabka_protocol::owned::write_txn_markers_request::WritableTxnMarkerTopic;
+
+/// Producer identity and fencing versions have distinct types at fixture boundaries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, derive_more::From, derive_more::Into)]
+pub struct ProducerEpoch(pub i16);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, derive_more::From, derive_more::Into)]
+pub struct CoordinatorEpoch(pub i32);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, derive_more::From, derive_more::Into)]
+pub struct TransactionVersion(pub i8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProducerIdentity {
+    pub id: krabka_ids::ProducerId,
+    pub epoch: ProducerEpoch,
+}
+
+impl Default for ProducerIdentity {
+    fn default() -> Self {
+        Self {
+            id: krabka_ids::ProducerId(7),
+            epoch: ProducerEpoch::default(),
+        }
+    }
+}
+
+impl ProducerIdentity {
+    /// Wrap an identity returned by the Kafka codec.
+    pub fn from_wire((id, epoch): (i64, i16)) -> Self {
+        Self {
+            id: krabka_ids::ProducerId(id),
+            epoch: ProducerEpoch(epoch),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TransactionOutcome {
+    #[default]
+    Commit,
+    Abort,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PartitionRegistration {
+    #[default]
+    Add,
+    VerifyOnly,
+}
+
+/// Transaction marker identity, result and fencing fields.
+#[derive(krabka_macros::FieldDefaults)]
+pub struct TransactionMarkerSetup {
+    pub producer: ProducerIdentity,
+    pub outcome: TransactionOutcome,
+    pub coordinator_epoch: CoordinatorEpoch,
+    pub transaction_version: TransactionVersion,
+    pub topics: Vec<WritableTxnMarkerTopic>,
+}
+
 pub fn transaction_marker(
-    (producer_id, producer_epoch): (i64, i16),
-    transaction_result: bool,
-    coordinator_epoch: i32,
-    transaction_version: i8,
-    topics: Vec<krabka_protocol::owned::write_txn_markers_request::WritableTxnMarkerTopic>,
+    setup: TransactionMarkerSetup,
 ) -> krabka_protocol::owned::write_txn_markers_request::WritableTxnMarker {
-    krabka_protocol::owned::write_txn_markers_request::WritableTxnMarker {
-        producer_id,
-        producer_epoch,
-        transaction_result,
+    let TransactionMarkerSetup {
+        producer,
+        outcome,
         coordinator_epoch,
         transaction_version,
+        topics,
+    } = setup;
+    krabka_protocol::owned::write_txn_markers_request::WritableTxnMarker {
+        producer_id: producer.id.0,
+        producer_epoch: producer.epoch.0,
+        transaction_result: outcome == TransactionOutcome::Commit,
+        coordinator_epoch: coordinator_epoch.0,
+        transaction_version: transaction_version.0,
         topics,
         ..Default::default()
     }

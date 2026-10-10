@@ -20,7 +20,8 @@ use crate::support::{
     client::connect_owned,
     discovery::{coordinator_lookup_request, topic_metadata_request},
     topics::metadata_topic,
-    transactions::end_transaction_request,
+    transaction_wire::{TransactionProduceSetup, produce_fixture},
+    transactions::{ProducerIdentity, end_transaction_request},
 };
 
 const TID: &str = "txn-coordinator-failover";
@@ -140,9 +141,16 @@ async fn produce(client: &Client, producer: Option<(i64, i16)>, values: &[&'stat
         .find(|row| row.name.as_deref() == Some(TOPIC))
         .map(|row| row.topic_id)
         .expect("topic in metadata");
-    crate::support::transaction_wire::produce_succeeds(client.send(
-        crate::support::transaction_wire::produce_request(TID, TOPIC, topic_id, producer, values),
-    ))
+    produce_fixture(
+        TransactionProduceSetup {
+            transactional_id: TID,
+            topic: TOPIC,
+            topic_id,
+            producer: producer.map(ProducerIdentity::from_wire),
+            values,
+        },
+        |request| client.send(request),
+    )
     .await;
 }
 

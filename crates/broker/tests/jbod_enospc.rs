@@ -402,14 +402,16 @@ async fn create_topic(bootstrap: &str) {
             match client
                 .send(CreateTopicsRequest {
                     topics: vec![crate::support::topics::creatable_topic_with_configs(
-                        TOPIC.into(),
-                        PARTITIONS,
-                        3,
-                        vec![CreatableTopicConfig {
-                            name: "min.insync.replicas".into(),
-                            value: Some("2".into()),
-                            ..Default::default()
-                        }],
+                        crate::support::topics::ConfiguredTopicSetup {
+                            name: TOPIC.into(),
+                            partitions: PARTITIONS,
+                            replicas: 3,
+                            configs: vec![CreatableTopicConfig {
+                                name: "min.insync.replicas".into(),
+                                value: Some("2".into()),
+                                ..Default::default()
+                            }],
+                        },
                     )],
                     timeout_ms: 10_000,
                     ..Default::default()
@@ -575,12 +577,12 @@ async fn wait_isr(bootstrap: &str, partition: i32, expected: usize) {
 }
 
 fn record(partition: i32, key: String, bytes: usize) -> ProducerRecord {
-    crate::support::producer::producer_record(
-        TOPIC,
-        Some(partition),
-        Some(key.into()),
-        Some(Bytes::from(vec![b'x'; bytes])),
-    )
+    crate::support::producer::producer_record(crate::support::producer::ProducerRecordSetup {
+        topic: (TOPIC).into(),
+        partition: Some(partition),
+        key: Some(key.into()),
+        value: Some(Bytes::from(vec![b'x'; bytes])),
+    })
 }
 
 async fn producer(bootstrap: &str) -> Producer {

@@ -80,13 +80,10 @@ pub(crate) async fn init_transactional_producer(
 pub(crate) use crate::support::records::producer_values_batch as batch;
 
 pub(crate) fn transactional_batch(
-    pid: i64,
-    epoch: i16,
-    base_seq: i32,
-    values: &[&str],
+    setup: crate::support::records::ProducerValuesSetup<'_>,
 ) -> RecordBatch {
     RecordBatch {
         attributes: Attributes::default().with_transactional(true),
-        ..batch(pid, epoch, base_seq, values)
+        ..batch(setup)
     }
 }

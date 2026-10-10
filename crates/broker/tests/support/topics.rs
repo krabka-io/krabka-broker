@@ -54,12 +54,24 @@ pub fn metadata_topic(
 }
 
 /// A configured topic row with caller-owned values and the unchanged protocol defaults.
-pub fn creatable_topic_with_configs(
-    name: String,
-    partitions: i32,
-    replicas: i16,
-    configs: Vec<CreatableTopicConfig>,
-) -> CreatableTopic {
+#[derive(krabka_macros::FieldDefaults)]
+pub struct ConfiguredTopicSetup {
+    #[default("orders".into())]
+    pub name: String,
+    #[default(1)]
+    pub partitions: i32,
+    #[default(1)]
+    pub replicas: i16,
+    pub configs: Vec<CreatableTopicConfig>,
+}
+
+pub fn creatable_topic_with_configs(setup: ConfiguredTopicSetup) -> CreatableTopic {
+    let ConfiguredTopicSetup {
+        name,
+        partitions,
+        replicas,
+        configs,
+    } = setup;
     CreatableTopic {
         configs,
         ..creatable_topic(name, partitions, replicas)
@@ -69,12 +81,12 @@ pub fn creatable_topic_with_configs(
 /// A single-partition diskless topic created through the ordinary admin handler.
 pub fn diskless_topic_request(name: impl Into<String>, replication: i16) -> CreateTopicsRequest {
     create_topic_request(
-        creatable_topic_with_configs(
-            name.into(),
-            1,
-            replication,
-            topic_configs([("krabka.diskless", "true")]),
-        ),
+        creatable_topic_with_configs(crate::support::topics::ConfiguredTopicSetup {
+            name: name.into(),
+            replicas: replication,
+            configs: topic_configs([("krabka.diskless", "true")]),
+            ..Default::default()
+        }),
         10_000,
     )
 }

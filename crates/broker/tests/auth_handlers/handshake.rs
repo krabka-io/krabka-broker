@@ -83,13 +83,19 @@ async fn metadata_rejected_pre_auth_on_sasl_listener() {
     md_req.encode(&mut md_body, 12).unwrap();
 
     // Build the frame manually: header + body, then length-prefix.
-    let frame = crate::support::wire::request_frame(
-        (3, 12, 1, true),
-        "krabka-t19-test",
-        &md_body,
-        Some(32 + md_body.len()),
-        None,
-    );
+    let frame = crate::support::wire::request_frame(crate::support::wire::WireFrameSetup {
+        api_key: krabka_ids::ApiKey(3),
+        version: krabka_ids::ApiVersion(12),
+        header: crate::support::wire::HeaderEncoding::Flexible,
+        client_id: "krabka-t19-test",
+        body: &md_body,
+        capacity: Some(
+            <krabka_units::ByteSize as krabka_units::convert::ByteSizeExt>::from_bytes(
+                u64::try_from(32 + md_body.len()).expect("frame capacity fits u64"),
+            ),
+        ),
+        ..Default::default()
+    });
 
     crate::support::wire::write_frame(&mut stream, &frame, None)
         .await
