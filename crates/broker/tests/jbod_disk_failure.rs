@@ -16,6 +16,8 @@
 mod kafka_wire;
 
 mod support;
+#[path = "support/two_dir_topic.rs"]
+mod two_dir_topic;
 
 use std::net::SocketAddr;
 
@@ -42,18 +44,6 @@ const PRODUCE_VERSION: i16 = 9; // flexible, acks=1
 
 // Flexible headers and correlation ID 1 for every request in this suite.
 crate::flexible_round_trip_fixture!(round_trip, CLIENT_ID, 1);
-
-async fn create_topic(addr: SocketAddr, topic: &str, partitions: i32) {
-    kafka_wire::create_topic_plaintext(addr, CLIENT_ID, kafka_wire::topic(topic, partitions, 1))
-        .await;
-}
-
-async fn wait_all_partitions(handle: &BrokerHandle, topic: &str, n: i32) {
-    // Wait until every partition of `topic` has materialized in the image.
-    for p in 0..n {
-        handle.wait_until_partition_present(topic, p).await;
-    }
-}
 
 /// Lists the partition indices of `topic` whose data dir lives directly under
 /// `dir`.
@@ -105,9 +95,13 @@ async fn produce_to_partition_on_offline_dir_returns_storage_error() {
     // both dirs under the least-loaded placement algorithm.
     const N: i32 = 6;
 
-    let (handle, primary, extra, addr) = start_two_dir_broker().await;
-    create_topic(addr, TOPIC, N).await;
-    wait_all_partitions(&handle, TOPIC, N).await;
+    let (handle, primary, extra, addr) = crate::two_dir_topic::start(crate::two_dir_topic::Setup {
+        client_id: CLIENT_ID,
+        topic: TOPIC,
+        partitions: crate::support::topics::TopicPartitionCount(N),
+        ..Default::default()
+    })
+    .await;
 
     // Confirm spread: both dirs must hold at least one partition of the topic.
     let in_extra = partitions_in_dir(extra.path(), TOPIC);
@@ -232,8 +226,17 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
     // Use a single-dir broker so the broker IS the controller leader.
     let (_primary, handle, addr) = single_directory_broker().await;
 
-    create_topic(addr, TOPIC, N).await;
-    wait_all_partitions(&handle, TOPIC, N).await;
+    crate::two_dir_topic::create_and_wait(
+        &handle,
+        addr,
+        crate::two_dir_topic::Setup {
+            client_id: CLIENT_ID,
+            topic: TOPIC,
+            partitions: crate::support::topics::TopicPartitionCount(N),
+            ..Default::default()
+        },
+    )
+    .await;
 
     // Look up the topic UUID from the controller image so we can reference
     // the partition correctly in the request.
@@ -340,5 +343,3 @@ async fn heartbeat_with_offline_log_dirs_is_accepted() {
 
     handle.shutdown().await;
 }
-
-pub use crate::support::storage::start_two_dir_broker;

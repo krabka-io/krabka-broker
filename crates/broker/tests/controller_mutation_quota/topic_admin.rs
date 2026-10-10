@@ -31,7 +31,11 @@ pub(crate) async fn drive_create_topics_sasl(
     const VERSION: i16 = 7; // MAX_VERSION; flexible (>= 5)
 
     let req = crate::support::topics::create_topic_request_with_setup(
-        creatable_topic(topic.to_string(), partitions, 1),
+        creatable_topic(crate::support::topics::ConfiguredTopicSetup {
+            name: topic.to_string(),
+            partitions: crate::support::topics::TopicPartitionCount(partitions),
+            ..Default::default()
+        }),
         crate::support::topics::CreateTopicRequestSetup {
             timeout: crate::support::topics::CreateTopicsTimeoutMillis(30_000),
         },

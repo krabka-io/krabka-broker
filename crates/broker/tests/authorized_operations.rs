@@ -114,9 +114,11 @@ fn boot_with_super_user(super_user: &str) -> impl std::future::Future<Output = H
 async fn create_topic(client: &Client, name: &str, partitions: i32) {
     let resp = client
         .send(create_topic_request(creatable_topic(
-            name.to_string(),
-            partitions,
-            1,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: name.to_string(),
+                partitions: crate::support::topics::TopicPartitionCount(partitions),
+                ..Default::default()
+            },
         )))
         .await
         .expect("CreateTopics");

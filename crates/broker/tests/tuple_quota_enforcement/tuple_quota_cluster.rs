@@ -29,7 +29,12 @@ pub(crate) async fn create_topic_as_admin(
         addr,
         CLIENT_ID,
         ("admin", password),
-        kafka_wire::topic(topic, partitions, replication_factor),
+        kafka_wire::topic(crate::support::topics::ConfiguredTopicSetup {
+            name: (topic).into(),
+            partitions: crate::support::topics::TopicPartitionCount(partitions),
+            replicas: crate::support::topics::TopicReplicationFactor(replication_factor),
+            ..Default::default()
+        }),
     )
     .await;
 }

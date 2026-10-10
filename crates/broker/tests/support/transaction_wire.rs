@@ -196,7 +196,13 @@ pub async fn create_topic(client: &krabka_client_core::Client, setup: Transactio
         .send(crate::support::topics::create_topic_request(
             krabka_protocol::owned::create_topics_request::CreatableTopic {
                 configs,
-                ..crate::support::topics::creatable_topic(name, partitions.0, 1)
+                ..crate::support::topics::creatable_topic(
+                    crate::support::topics::ConfiguredTopicSetup {
+                        name: (name).into(),
+                        partitions: crate::support::topics::TopicPartitionCount(partitions.0),
+                        ..Default::default()
+                    },
+                )
             },
         ))
         .await

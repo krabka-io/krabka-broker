@@ -337,7 +337,13 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     // Topic with 2 partitions, RF=1. Round-robin places P0 on node 1 and P1 on
     // node 2.
     let cr = admin
-        .send(create_topic_request(creatable_topic(TOPIC, 2, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: (TOPIC).into(),
+                partitions: crate::support::topics::TopicPartitionCount(2),
+                ..Default::default()
+            },
+        )))
         .await
         .expect("create topic");
     assert!(
@@ -572,7 +578,13 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
     let mut expected = Vec::new();
     for case in cases {
         let created = admin
-            .send(create_topic_request(creatable_topic(case.name, 2, 1)))
+            .send(create_topic_request(creatable_topic(
+                crate::support::topics::ConfiguredTopicSetup {
+                    name: (case.name).into(),
+                    partitions: crate::support::topics::TopicPartitionCount(2),
+                    ..Default::default()
+                },
+            )))
             .await
             .expect("create topic");
         assert!(

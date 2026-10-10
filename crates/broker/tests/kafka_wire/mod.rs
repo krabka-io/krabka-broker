@@ -217,7 +217,12 @@ pub async fn create_topic_as_super_user(
     name: &str,
     partitions: i32,
 ) {
-    let request = topics::create_topic_request(topic(name.to_string(), partitions, 1));
+    let request =
+        topics::create_topic_request(topic(crate::support::topics::ConfiguredTopicSetup {
+            name: name.to_string(),
+            partitions: crate::support::topics::TopicPartitionCount(partitions),
+            ..Default::default()
+        }));
     let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
         request_as_plain(
             addr,
@@ -639,19 +644,45 @@ pub async fn create_topic_plaintext(
     create_topic_on(&mut stream, client_id, topic).await;
 }
 
-/// Create an automatically placed topic as the native admin fixture principal.
-pub async fn create_topic_as_admin(
-    addr: SocketAddr,
-    client_id: &str,
-    name: &str,
-    partitions: i32,
-    replication_factor: i16,
-) {
+/// Automatic placement and client identity, with a one-partition orders topic by default.
+#[derive(krabka_macros::FieldDefaults)]
+pub struct AutomaticTopicSetup<'a> {
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    pub topic: crate::support::topics::ConfiguredTopicSetup,
+}
+
+/// SASL/PLAIN topic creation defaults to the admin fixture's credentials.
+#[derive(krabka_macros::FieldDefaults)]
+pub struct SaslTopicSetup<'a> {
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    #[default("admin")]
+    pub user: &'a str,
+    #[default(b"admin-secret")]
+    pub password: &'a [u8],
+    pub topic: crate::support::topics::ConfiguredTopicSetup,
+}
+
+pub async fn create_configured_topic_sasl(addr: SocketAddr, setup: SaslTopicSetup<'_>) {
     create_topic_sasl(
         addr,
-        client_id,
-        ("admin", b"admin-secret"),
-        topic(name, partitions, replication_factor),
+        setup.client_id,
+        (setup.user, setup.password),
+        topic(setup.topic),
+    )
+    .await;
+}
+
+/// Create an automatically placed topic as the native admin fixture principal.
+pub async fn create_topic_as_admin(addr: SocketAddr, setup: AutomaticTopicSetup<'_>) {
+    create_configured_topic_sasl(
+        addr,
+        SaslTopicSetup {
+            client_id: setup.client_id,
+            topic: setup.topic,
+            ..Default::default()
+        },
     )
     .await;
 }
@@ -670,15 +701,8 @@ pub async fn create_topic_on_fresh_connection(
 }
 
 /// Create an automatically placed topic over plaintext.
-pub async fn create_automatic_topic_plaintext(
-    addr: SocketAddr,
-    client_id: &str,
-    name: &str,
-    partitions: i32,
-    replication_factor: i16,
-) {
-    create_topic_on_fresh_connection(addr, client_id, topic(name, partitions, replication_factor))
-        .await;
+pub async fn create_automatic_topic_plaintext(addr: SocketAddr, setup: AutomaticTopicSetup<'_>) {
+    create_topic_on_fresh_connection(addr, setup.client_id, topic(setup.topic)).await;
 }
 
 /// Create one partition with an explicit ordered assignment over plaintext.
@@ -730,4 +754,9 @@ pub async fn produce_sasl_with_ids(
     let mut cur: &[u8] = &resp_bytes;
     krabka_protocol::owned::produce_response::ProduceResponse::decode(&mut cur, VERSION)
         .expect("decode ProduceResponse")
+}
+
+/// Automatic plaintext creation with the original JBOD fixtures' connect unwrap policy.
+pub async fn create_configured_topic_plaintext(addr: SocketAddr, setup: AutomaticTopicSetup<'_>) {
+    create_topic_plaintext(addr, setup.client_id, topic(setup.topic)).await;
 }

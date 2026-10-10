@@ -49,7 +49,12 @@ async fn create_topic(addr: std::net::SocketAddr) {
 }
 
 async fn create_topic_named(addr: std::net::SocketAddr, topic: &str) {
-    let req = create_topic_request(creatable_topic(topic, 1, 1));
+    let req = create_topic_request(creatable_topic(
+        crate::support::topics::ConfiguredTopicSetup {
+            name: (topic).into(),
+            ..Default::default()
+        },
+    ));
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_TOPICS_VERSION).unwrap();

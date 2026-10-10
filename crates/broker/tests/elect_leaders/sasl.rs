@@ -12,31 +12,11 @@ use krabka_protocol::owned::{
     elect_leaders_response::ElectLeadersResponse,
 };
 
+pub use crate::kafka_wire::create_configured_topic_sasl as create_topic_sasl_plain;
 use crate::{
     kafka_wire,
     wire::{CLIENT_ID, ELECT_LEADERS_VERSION},
 };
-
-/// Creates a topic with SASL/PLAIN.
-///
-/// The auth-deny test uses this helper, because its listener is
-/// `SASL_PLAINTEXT` and not PLAINTEXT.
-pub async fn create_topic_sasl_plain(
-    addr: SocketAddr,
-    user: &str,
-    password: &[u8],
-    name: &str,
-    partitions: i32,
-    replication_factor: i16,
-) {
-    kafka_wire::create_topic_sasl(
-        addr,
-        CLIENT_ID,
-        (user, password),
-        kafka_wire::topic(name, partitions, replication_factor),
-    )
-    .await;
-}
 
 /// Drives `ElectLeaders` over a SASL/PLAIN authenticated connection.
 ///

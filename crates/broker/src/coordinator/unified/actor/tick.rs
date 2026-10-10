@@ -242,9 +242,7 @@ mod tests {
                     ..Default::default()
                 },
             );
-            m.last_seen = Instant::now()
-                .checked_sub(Duration::from_millis(50))
-                .expect("50ms is always within Instant range");
+            m.last_seen = crate::coordinator::unified::test_support::expired_session_last_seen();
             state.add_or_update_member(m);
         }
         state.group_epoch = 2;
@@ -266,10 +264,11 @@ mod tests {
             .expect("tick should succeed");
 
         let fence = |member_id: &str, epoch| {
+            use crate::coordinator::unified::test_support::member_tombstones;
             PendingRecords {
-                member_metadata: vec![(member_id.into(), None)],
-                target_per_member: vec![(member_id.into(), None)],
-                current_per_member: vec![(member_id.into(), None)],
+                member_metadata: member_tombstones(member_id),
+                target_per_member: member_tombstones(member_id),
+                current_per_member: member_tombstones(member_id),
                 group_metadata: Some(
                     crate::coordinator::unified::persistence_next_gen::GroupMetadataValue {
                         epoch,

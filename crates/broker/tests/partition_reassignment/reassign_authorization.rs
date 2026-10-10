@@ -51,7 +51,17 @@ async fn non_super_user_denied() {
         .wait_for_image(|img| img.all_acls().next().is_some())
         .await;
 
-    create_topic_as_admin(addr, crate::plaintext_wire::CLIENT_ID, "foo", 1, 1).await;
+    create_topic_as_admin(
+        addr,
+        crate::kafka_wire::AutomaticTopicSetup {
+            client_id: crate::plaintext_wire::CLIENT_ID,
+            topic: crate::support::topics::ConfiguredTopicSetup {
+                name: ("foo").into(),
+                ..Default::default()
+            },
+        },
+    )
+    .await;
     wait_partition_exists(&handle, "foo", 0).await;
 
     // Retry up to 5s to absorb raft apply latency on slow runners.

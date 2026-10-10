@@ -37,7 +37,13 @@ async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
 
 async fn create_topic(client: &Client, topic: &str, partitions: i32) {
     let resp = client
-        .send(create_topic_request(creatable_topic(topic, partitions, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: (topic).into(),
+                partitions: crate::support::topics::TopicPartitionCount(partitions),
+                ..Default::default()
+            },
+        )))
         .await
         .expect("CreateTopics");
     assert!(

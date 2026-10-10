@@ -138,7 +138,12 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
 
 async fn create_topic(client: &Client, name: &str) {
     let cr = client
-        .send(create_topic_request(creatable_topic(name, 1, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: (name).into(),
+                ..Default::default()
+            },
+        )))
         .await
         .expect("CreateTopics");
     assert!(cr.topics[0].error_code == 0, "create_topic failed: {cr:?}");

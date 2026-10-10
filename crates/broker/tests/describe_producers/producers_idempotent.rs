@@ -12,7 +12,14 @@ use crate::{
 #[tokio::test]
 async fn empty_partition_returns_no_active_producers() {
     let p = support::start().await;
-    create_topic(&p.client, "fresh", 1).await;
+    create_topic(
+        &p.client,
+        crate::support::topics::CreateTopicSetup {
+            topic: "fresh",
+            ..Default::default()
+        },
+    )
+    .await;
 
     let resp = p
         .client
@@ -44,7 +51,14 @@ async fn empty_partition_returns_no_active_producers() {
 #[tokio::test]
 async fn after_idempotent_produce_describe_returns_the_producer() {
     let p = support::start().await;
-    create_topic(&p.client, "t", 1).await;
+    create_topic(
+        &p.client,
+        crate::support::topics::CreateTopicSetup {
+            topic: "t",
+            ..Default::default()
+        },
+    )
+    .await;
     let topic_id = topic_id_for(&p.client, "t").await;
 
     let (pid, epoch) = init_producer(&p).await;
@@ -99,7 +113,14 @@ async fn after_idempotent_produce_describe_returns_the_producer() {
 #[tokio::test]
 async fn multiple_producers_on_same_partition_all_surfaced() {
     let p = support::start().await;
-    create_topic(&p.client, "shared", 1).await;
+    create_topic(
+        &p.client,
+        crate::support::topics::CreateTopicSetup {
+            topic: "shared",
+            ..Default::default()
+        },
+    )
+    .await;
     let topic_id = topic_id_for(&p.client, "shared").await;
 
     let (pid_a, epoch_a) = init_producer(&p).await;

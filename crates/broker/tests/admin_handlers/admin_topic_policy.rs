@@ -31,7 +31,13 @@ const POLICY_VIOLATION: i16 = 44;
 const CONFIG_OP_SET: i8 = 0;
 
 fn create_request(name: &str, replication_factor: i16) -> CreateTopicsRequest {
-    create_topic_request(creatable_topic(name, 1, replication_factor))
+    create_topic_request(creatable_topic(
+        crate::support::topics::ConfiguredTopicSetup {
+            name: (name).into(),
+            replicas: crate::support::topics::TopicReplicationFactor(replication_factor),
+            ..Default::default()
+        },
+    ))
 }
 
 /// A replication factor under the policy floor is refused with 44 and a

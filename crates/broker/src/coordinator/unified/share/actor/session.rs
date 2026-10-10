@@ -91,9 +91,7 @@ mod tests {
         let mut state = ShareGroupState::new("g");
         for member_id in ["m1", "m2"] {
             let mut m = ShareMemberState::joining(member_id, "c", "h", ["t".to_owned()].into());
-            m.last_seen = Instant::now()
-                .checked_sub(Duration::from_millis(50))
-                .expect("50ms is always within Instant range");
+            m.last_seen = crate::coordinator::unified::test_support::expired_session_last_seen();
             state.add_or_update_member(m);
         }
         state.group_epoch = 2;
@@ -106,10 +104,11 @@ mod tests {
         // The first fence leaves the other member subscribed to `t`.
         let t_hash = metadata.snapshot().metadata_hash(["t"]);
         let fence = |member_id: &str, epoch, metadata_hash| {
+            use crate::coordinator::unified::test_support::member_tombstones;
             PendingShareRecords {
-                member_metadata: vec![(member_id.into(), None)],
-                target_per_member: vec![(member_id.into(), None)],
-                current_per_member: vec![(member_id.into(), None)],
+                member_metadata: member_tombstones(member_id),
+                target_per_member: member_tombstones(member_id),
+                current_per_member: member_tombstones(member_id),
                 group_metadata: Some(ShareGroupMetadataValue {
                     epoch,
                     metadata_hash,

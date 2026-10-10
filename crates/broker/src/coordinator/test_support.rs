@@ -366,6 +366,21 @@ pub(crate) enum CommitWaitOutcome {
     TimedOut,
 }
 
+impl CommitWaitOutcome {
+    /// Independent Kafka error expectation for the commit-wait matrix.
+    pub(crate) fn kafka_error(self) -> Option<crate::test_support::KafkaErrorCode> {
+        match self {
+            Self::Committed => None,
+            Self::NotLeader => Some(crate::test_support::KafkaErrorCode(
+                crate::codes::NOT_COORDINATOR,
+            )),
+            Self::TimedOut => Some(crate::test_support::KafkaErrorCode(
+                crate::codes::COORDINATOR_NOT_AVAILABLE,
+            )),
+        }
+    }
+}
+
 pub(crate) fn commit_wait_cases() -> [CommitWaitCase; 6] {
     use std::time::Duration;
 

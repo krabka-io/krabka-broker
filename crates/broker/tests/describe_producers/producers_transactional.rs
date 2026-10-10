@@ -17,7 +17,14 @@ use crate::{
 #[tokio::test]
 async fn transactional_fields_follow_open_and_completed_transactions() {
     let p = support::start().await;
-    create_topic(&p.client, "transactions", 1).await;
+    create_topic(
+        &p.client,
+        crate::support::topics::CreateTopicSetup {
+            topic: "transactions",
+            ..Default::default()
+        },
+    )
+    .await;
     let topic_id = topic_id_for(&p.client, "transactions").await;
     let (pid, epoch) = init_transactional_producer(&p, "describe-producers-tid").await;
 

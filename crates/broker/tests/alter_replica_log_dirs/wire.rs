@@ -23,22 +23,14 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use crate::{
-    kafka_wire,
-    support::configs::{incremental_config, incremental_request, incremental_resource},
-};
+use crate::support::configs::{incremental_config, incremental_request, incremental_resource};
 
-const CLIENT_ID: &str = "krabka-arld-test";
+pub(crate) const CLIENT_ID: &str = "krabka-arld-test";
 const ALTER_VERSION: i16 = 2;
 const DESCRIBE_VERSION: i16 = 4;
 
 // Flexible headers and correlation ID 1 for every request in this suite.
 crate::flexible_round_trip_fixture!(round_trip, CLIENT_ID, 1);
-
-pub(crate) async fn create_topic(addr: SocketAddr, topic: &str, partitions: i32) {
-    kafka_wire::create_topic_plaintext(addr, CLIENT_ID, kafka_wire::topic(topic, partitions, 1))
-        .await;
-}
 
 pub(crate) async fn alter_replica_log_dirs(
     addr: SocketAddr,

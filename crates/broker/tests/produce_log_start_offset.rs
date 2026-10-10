@@ -146,7 +146,12 @@ async fn create_topic(
     name: &str,
 ) -> WireUuid {
     let response = client
-        .send(create_topic_request(creatable_topic(name.to_owned(), 1, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: name.to_owned(),
+                ..Default::default()
+            },
+        )))
         .await
         .expect("CreateTopics");
     assert!(response.topics[0].error_code == codes::NONE, "{response:?}");

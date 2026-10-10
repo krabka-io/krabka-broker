@@ -56,6 +56,34 @@ pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, temp
     (p, dir)
 }
 
+/// Whether a commit fixture keeps the partition's initial leader or installs the test term.
+#[derive(Clone, Copy, Default)]
+pub(crate) enum CommitFixtureLeader {
+    #[default]
+    KeepPartitionDefault,
+    BrokerOneAtEpochZero,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CommitPartitionSetup {
+    pub high_watermark: krabka_log::Offset,
+    pub leader: CommitFixtureLeader,
+}
+
+/// A real temporary partition with the requested commit frontier and its own notifier.
+pub(crate) async fn commit_partition(
+    setup: CommitPartitionSetup,
+) -> (Arc<Partition>, tempfile::TempDir, Arc<Notify>) {
+    let notify = Arc::new(Notify::new());
+    let (partition, directory) = test_partition(Arc::clone(&notify));
+    let partition = Arc::new(partition);
+    if matches!(setup.leader, CommitFixtureLeader::BrokerOneAtEpochZero) {
+        partition.install_leader_change(1, 0).await;
+    }
+    partition.replica_state.lock().await.hw = setup.high_watermark;
+    (partition, directory, notify)
+}
+
 pub(crate) fn test_partition_with_writer() -> (Partition, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
     let log = Arc::new(Mutex::new(

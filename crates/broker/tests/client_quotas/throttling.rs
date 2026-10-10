@@ -589,7 +589,17 @@ async fn prepare_quota_topic(
     operation: krabka_metadata::AclOperation,
 ) {
     seed_compat_shim_disable_acl(broker).await;
-    create_topic_as_admin(addr, crate::CLIENT_ID, topic, 1, 1).await;
+    create_topic_as_admin(
+        addr,
+        crate::kafka_wire::AutomaticTopicSetup {
+            client_id: crate::CLIENT_ID,
+            topic: crate::support::topics::ConfiguredTopicSetup {
+                name: (topic).into(),
+                ..Default::default()
+            },
+        },
+    )
+    .await;
     wait_partition_exists(broker, topic, 0).await;
     crate::support::acl::seed_topic_acl(broker, topic, "User:alice", operation).await;
 }

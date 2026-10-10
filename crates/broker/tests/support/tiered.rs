@@ -23,7 +23,12 @@ pub async fn create_configured_topic(
         .send(crate::support::topics::create_topic_request(
             krabka_protocol::owned::create_topics_request::CreatableTopic {
                 configs,
-                ..crate::support::topics::creatable_topic(topic, 1, 1)
+                ..crate::support::topics::creatable_topic(
+                    crate::support::topics::ConfiguredTopicSetup {
+                        name: (topic).into(),
+                        ..Default::default()
+                    },
+                )
             },
         ))
         .await

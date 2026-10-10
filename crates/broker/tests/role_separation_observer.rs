@@ -206,7 +206,12 @@ async fn broker_only_node_observes_and_forwards() {
     let topic = "rolesep-observed";
     let client = connect_client(broker_only.listen_addr().to_string(), None).await;
     let resp = client
-        .send(create_topic_request(creatable_topic(topic, 1, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: (topic).into(),
+                ..Default::default()
+            },
+        )))
         .await
         .unwrap();
     assert!(

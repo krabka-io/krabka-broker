@@ -100,7 +100,12 @@ async fn create_topic_named(addr: SocketAddr, name: &str, partitions: i32, repli
     kafka_wire::create_topic_on(
         &mut stream,
         CLIENT_ID,
-        kafka_wire::topic(name, partitions, replication),
+        kafka_wire::topic(crate::support::topics::ConfiguredTopicSetup {
+            name: (name).into(),
+            partitions: crate::support::topics::TopicPartitionCount(partitions),
+            replicas: crate::support::topics::TopicReplicationFactor(replication),
+            ..Default::default()
+        }),
     )
     .await;
 }

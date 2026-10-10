@@ -78,7 +78,12 @@ async fn seek_rejects_negative_offset() {
 
     let admin = connect_client(&bootstrap, None).await;
     admin
-        .send(create_topic_request(creatable_topic("n", 1, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("n").into(),
+                ..Default::default()
+            },
+        )))
         .await
         .unwrap();
 

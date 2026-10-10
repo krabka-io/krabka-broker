@@ -49,7 +49,18 @@ async fn non_super_user_without_acl_denied() {
     let addr = handle.listen_addr();
 
     // Create the topic as admin (rf=1 fine for a single-broker cluster).
-    create_topic_sasl_plain(addr, "admin", b"admin-secret", "foo-auth-test", 1, 1).await;
+    create_topic_sasl_plain(
+        addr,
+        crate::kafka_wire::SaslTopicSetup {
+            client_id: crate::wire::CLIENT_ID,
+            topic: crate::support::topics::ConfiguredTopicSetup {
+                name: ("foo-auth-test").into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await;
     wait_partition_exists(&handle, "foo-auth-test", 0).await;
 
     // Seed a dummy ACL so the compat shim is disabled. The ACL itself

@@ -6,25 +6,10 @@
 //! idempotent one with the transactional attribute bit set.
 
 use assert2::assert;
-use krabka_client_core::Client;
 use krabka_protocol::records::{Attributes, RecordBatch};
 
-pub(crate) use crate::support::topic_id_for;
-use crate::{
-    support,
-    support::{
-        discovery::coordinator_lookup_request,
-        topics::{creatable_topic, create_topic_request},
-    },
-};
-
-pub(crate) async fn create_topic(client: &Client, name: &str, partitions: i32) {
-    let resp = client
-        .send(create_topic_request(creatable_topic(name, partitions, 1)))
-        .await
-        .expect("CreateTopics");
-    assert!(resp.topics[0].error_code == 0, "{name} create: {resp:?}");
-}
+pub(crate) use crate::support::{client::create_topic_named as create_topic, topic_id_for};
+use crate::{support, support::discovery::coordinator_lookup_request};
 
 pub(crate) async fn init_producer(p: &support::InProcess) -> (i64, i16) {
     // A null transactional id is an idempotent producer; an empty one is invalid.

@@ -369,7 +369,12 @@ async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() 
         create_version,
         true,
         &encode(
-            &create_topic_request(creatable_topic("created-by-creator".to_owned(), 1, 1)),
+            &create_topic_request(creatable_topic(
+                crate::support::topics::ConfiguredTopicSetup {
+                    name: "created-by-creator".to_owned(),
+                    ..Default::default()
+                },
+            )),
             create_version,
         ),
     )

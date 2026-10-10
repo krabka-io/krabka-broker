@@ -93,7 +93,10 @@ async fn produce_one(client: &Client, topic: &str, topic_id: WireUuid, value: &'
 async fn create_topic(client: &Client, topic: &str) {
     let response = client
         .send(crate::support::topics::create_topic_request_with_setup(
-            creatable_topic(topic, 1, 1),
+            creatable_topic(crate::support::topics::ConfiguredTopicSetup {
+                name: (topic).into(),
+                ..Default::default()
+            }),
             crate::support::topics::CreateTopicRequestSetup {
                 timeout: crate::support::topics::CreateTopicsTimeoutMillis(10_000),
             },

@@ -83,9 +83,11 @@ pub async fn create_topic_with_partitions(
 ) {
     let cr = client
         .send(create_topic_request(creatable_topic(
-            name,
-            num_partitions,
-            1,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: (name).into(),
+                partitions: crate::support::topics::TopicPartitionCount(num_partitions),
+                ..Default::default()
+            },
         )))
         .await
         .expect("CreateTopics");

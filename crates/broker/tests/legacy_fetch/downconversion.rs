@@ -33,9 +33,10 @@ async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {
     let cr = p
         .client
         .send(create_topic_request(creatable_topic(
-            "legacy_fetch_basic",
-            1,
-            1,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("legacy_fetch_basic").into(),
+                ..Default::default()
+            },
         )))
         .await
         .expect("CreateTopics");

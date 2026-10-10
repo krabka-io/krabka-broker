@@ -423,7 +423,14 @@ async fn create_topic_with_partitions(
 ) {
     let client = connect_client(bootstrap.to_string(), None).await;
     let resp = client
-        .send(create_topic_request(creatable_topic(name, partitions, rf)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: (name).into(),
+                partitions: crate::support::topics::TopicPartitionCount(partitions),
+                replicas: crate::support::topics::TopicReplicationFactor(rf),
+                ..Default::default()
+            },
+        )))
         .await
         .expect("CreateTopics");
     assert!(

@@ -323,9 +323,10 @@ async fn controller_listener_serves_the_topic_lifecycle() {
 
     let created = connection
         .send(create_topic_request(creatable_topic(
-            "controller-lifecycle",
-            1,
-            1,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("controller-lifecycle").into(),
+                ..Default::default()
+            },
         )))
         .await
         .expect("CreateTopics over the controller listener");
@@ -583,9 +584,10 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
 
     let created = connection
         .send(create_topic_request(creatable_topic(
-            "controller-dirs",
-            1,
-            1,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("controller-dirs").into(),
+                ..Default::default()
+            },
         )))
         .await
         .expect("CreateTopics over the controller listener");
@@ -724,9 +726,10 @@ async fn controller_only_node_places_no_replica_on_itself() {
 
     let created = connection
         .send(create_topic_request(creatable_topic(
-            "controller-only-placement",
-            1,
-            1,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("controller-only-placement").into(),
+                ..Default::default()
+            },
         )))
         .await
         .expect("CreateTopics over a controller-only listener");

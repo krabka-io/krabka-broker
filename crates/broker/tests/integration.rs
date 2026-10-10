@@ -78,7 +78,12 @@ async fn list_offsets_by_timestamp_local() {
     let p = support::start().await;
 
     p.client
-        .send(create_topic_request(creatable_topic("by_ts", 1, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("by_ts").into(),
+                ..Default::default()
+            },
+        )))
         .await
         .unwrap();
     let topic_id = topic_id_for(&p.client, "by_ts").await;
@@ -140,7 +145,12 @@ async fn end_to_end_create_produce_fetch_delete() {
     // 2. CreateTopics.
     let cr = p
         .client
-        .send(create_topic_request(creatable_topic("e2e", 1, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("e2e").into(),
+                ..Default::default()
+            },
+        )))
         .await
         .unwrap();
     assert!(cr.topics[0].error_code == 0);
@@ -210,9 +220,10 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     let create = p
         .client
         .send(create_topic_request(creatable_topic(
-            "one-way-produce",
-            1,
-            1,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("one-way-produce").into(),
+                ..Default::default()
+            },
         )))
         .await
         .expect("create topic");
@@ -297,7 +308,13 @@ async fn second_open_recovers_partitions_from_disk() {
         let bootstrap = handle.listen_addr().to_string();
         let client = connect_client(&bootstrap, Some("recovery-test")).await;
         let cr = client
-            .send(create_topic_request(creatable_topic("persisted", 2, 1)))
+            .send(create_topic_request(creatable_topic(
+                crate::support::topics::ConfiguredTopicSetup {
+                    name: ("persisted").into(),
+                    partitions: crate::support::topics::TopicPartitionCount(2),
+                    ..Default::default()
+                },
+            )))
             .await
             .unwrap();
         assert!(cr.topics[0].error_code == 0);

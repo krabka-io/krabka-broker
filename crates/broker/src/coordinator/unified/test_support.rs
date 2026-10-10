@@ -567,3 +567,51 @@ pub(crate) fn consumer_join_request(
         ..Default::default()
     }
 }
+
+/// A session seen fifty milliseconds ago, preserving each expiry fixture's clock read.
+pub(crate) fn expired_session_last_seen() -> std::time::Instant {
+    std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_millis(50))
+        .expect("50ms is always within Instant range")
+}
+
+/// Independent tombstone rows for a fenced member, parameterized by record family.
+pub(crate) fn member_tombstones<T>(member_id: &str) -> Vec<(String, Option<T>)> {
+    vec![(member_id.into(), None)]
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TargetAssignmentEpoch(pub i32);
+
+/// Independent Kafka bytes for the default and tagged assignment timestamps.
+pub(crate) struct AssignmentMetadataGoldenCase {
+    pub description: &'static str,
+    pub epoch: TargetAssignmentEpoch,
+    pub timestamp: crate::test_support::UnixMillis,
+    pub bytes: &'static [u8],
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct AssignmentMetadataGoldenSetup {
+    #[default("the time is unknown")]
+    pub unknown_time_description: &'static str,
+}
+
+pub(crate) fn assignment_metadata_golden_cases(
+    setup: AssignmentMetadataGoldenSetup,
+) -> [AssignmentMetadataGoldenCase; 2] {
+    [
+        AssignmentMetadataGoldenCase {
+            description: setup.unknown_time_description,
+            epoch: TargetAssignmentEpoch(12),
+            timestamp: crate::test_support::UnixMillis(0),
+            bytes: b"\x00\x00\x00\x00\x00\x0c\x00",
+        },
+        AssignmentMetadataGoldenCase {
+            description: "an assignment that finished at 2026-10-07T00:00:00Z",
+            epoch: TargetAssignmentEpoch(12),
+            timestamp: crate::test_support::UnixMillis(1_791_331_200_000),
+            bytes: b"\x00\x00\x00\x00\x00\x0c\x01\x00\x08\x00\x00\x01\xa1\x13\xa8\xec\x00",
+        },
+    ]
+}

@@ -13,9 +13,7 @@ use bytes::{Bytes, BytesMut};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-        metadata_response::MetadataResponse,
+        create_topics_response::CreateTopicsResponse, metadata_response::MetadataResponse,
         produce_response::ProduceResponse,
     },
     primitives::uuid::Uuid,
@@ -31,30 +29,10 @@ use crate::{
 /// Create a topic with config overrides, on PLAINTEXT and with no SASL.
 pub(crate) async fn create_topic_with_configs(
     addr: SocketAddr,
-    topic: &str,
-    partitions: i32,
-    rf: i16,
-    configs: Vec<(&str, &str)>,
+    setup: crate::support::topics::CreateTopicSetup<'_>,
 ) {
-    let req = CreateTopicsRequest {
-        topics: vec![crate::support::topics::creatable_topic_with_configs(
-            crate::support::topics::ConfiguredTopicSetup {
-                name: topic.to_string(),
-                partitions: crate::support::topics::TopicPartitionCount(partitions),
-                replicas: crate::support::topics::TopicReplicationFactor(rf),
-                configs: configs
-                    .into_iter()
-                    .map(|(name, value)| CreatableTopicConfig {
-                        name: name.to_string(),
-                        value: Some(value.to_string()),
-                        ..Default::default()
-                    })
-                    .collect(),
-            },
-        )],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    let topic = setup.topic;
+    let req = crate::support::topics::configured_topic_request(setup);
 
     let version: i16 = 7; // flexible
     let mut stream = TcpStream::connect(addr).await.expect("connect");
@@ -90,14 +68,26 @@ pub(crate) async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
         .unwrap_or_default()
 }
 
+/// One keyed record for the compacted single-partition topic.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct ProduceRecordSetup<'a> {
+    #[default("compacted")]
+    pub topic: &'a str,
+    pub topic_id: Uuid,
+    #[default(b"k")]
+    pub key: &'a [u8],
+    #[default(b"v")]
+    pub value: &'a [u8],
+}
+
 /// Produce one record with an explicit key and value to (topic, partition 0).
-pub(crate) async fn produce_record(
-    addr: SocketAddr,
-    topic: &str,
-    topic_id: Uuid,
-    key: &[u8],
-    value: &[u8],
-) {
+pub(crate) async fn produce_record(addr: SocketAddr, setup: ProduceRecordSetup<'_>) {
+    let ProduceRecordSetup {
+        topic,
+        topic_id,
+        key,
+        value,
+    } = setup;
     let record = Record {
         key: Some(Bytes::copy_from_slice(key)),
         ..value_record(0, Some(Bytes::copy_from_slice(value)))

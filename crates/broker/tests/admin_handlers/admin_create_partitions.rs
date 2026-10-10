@@ -36,9 +36,11 @@ async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
 
     let created = client
         .send(create_topic_request(creatable_topic(
-            "t-usable-brokers",
-            1,
-            2,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("t-usable-brokers").into(),
+                replicas: crate::support::topics::TopicReplicationFactor(2),
+                ..Default::default()
+            },
         )))
         .await
         .unwrap();
@@ -77,7 +79,13 @@ async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
     // takes it last, so a replication factor of 3 on the 3 registered brokers
     // succeeds. The fenced replica stays out of the ISR and never leads.
     let last_resort = client
-        .send(create_topic_request(creatable_topic("t-last-resort", 1, 3)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("t-last-resort").into(),
+                replicas: crate::support::topics::TopicReplicationFactor(3),
+                ..Default::default()
+            },
+        )))
         .await
         .unwrap();
     assert!(last_resort.topics[0].error_code == 0);
@@ -94,9 +102,11 @@ async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
 
     let rejected = client
         .send(create_topic_request(creatable_topic(
-            "t-too-many-replicas",
-            1,
-            4,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("t-too-many-replicas").into(),
+                replicas: crate::support::topics::TopicReplicationFactor(4),
+                ..Default::default()
+            },
         )))
         .await
         .unwrap();

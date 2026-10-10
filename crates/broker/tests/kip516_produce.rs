@@ -21,7 +21,12 @@ const UNKNOWN_TOPIC_ID: i16 = 100;
 async fn produce_unresolved_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     p.client
-        .send(create_topic_request(creatable_topic("p_known", 1, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("p_known").into(),
+                ..Default::default()
+            },
+        )))
         .await
         .expect("create topic");
 

@@ -251,9 +251,12 @@ async fn every_replica_describes_the_producers_of_its_log() {
         "admin client",
     )
     .await;
-    let topic_id =
-        support::client::create_topic_spec(&admin, support::topic_on(TOPIC, &[&[1, 2, 3]]), 5_000)
-            .await;
+    let topic_id = support::client::create_topic_spec(
+        &admin,
+        support::topic_on(TOPIC, &[&[1, 2, 3]]),
+        crate::support::topics::CreateTopicRequestSetup::default(),
+    )
+    .await;
     for (handle, _, _) in &cluster {
         handle.wait_until_partition_present(TOPIC, 0).await;
     }

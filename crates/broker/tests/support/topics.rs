@@ -20,15 +20,19 @@ pub fn topic_configs<'a>(
 krabka_macros::create_topic_fixture!(configured_topic_request);
 krabka_macros::consumer_fetch_fixture!(consumer_fetch_request);
 
-pub fn creatable_topic(
-    name: impl Into<String>,
-    num_partitions: i32,
-    replication_factor: i16,
-) -> CreatableTopic {
+/// The complete named topic row, with one partition and one replica by default.
+pub fn creatable_topic(setup: ConfiguredTopicSetup) -> CreatableTopic {
+    let ConfiguredTopicSetup {
+        name,
+        partitions,
+        replicas,
+        configs,
+    } = setup;
     CreatableTopic {
-        name: name.into(),
-        num_partitions,
-        replication_factor,
+        name,
+        num_partitions: partitions.0,
+        replication_factor: replicas.0,
+        configs,
         ..Default::default()
     }
 }
@@ -87,18 +91,7 @@ pub struct ConfiguredTopicSetup {
     pub configs: Vec<CreatableTopicConfig>,
 }
 
-pub fn creatable_topic_with_configs(setup: ConfiguredTopicSetup) -> CreatableTopic {
-    let ConfiguredTopicSetup {
-        name,
-        partitions,
-        replicas,
-        configs,
-    } = setup;
-    CreatableTopic {
-        configs,
-        ..creatable_topic(name, partitions.0, replicas.0)
-    }
-}
+pub use creatable_topic as creatable_topic_with_configs;
 
 /// A single-partition diskless topic created through the ordinary admin handler.
 pub fn diskless_topic_request(name: impl Into<String>, replication: i16) -> CreateTopicsRequest {

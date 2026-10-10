@@ -198,8 +198,16 @@ async fn produce_to_non_leader_is_rejected() {
     let cr = admin
         .send(CreateTopicsRequest {
             topics: vec![
-                creatable_topic("gate-rf3", 1, 3),
-                creatable_topic("gate-rf1", 6, 1),
+                creatable_topic(crate::support::topics::ConfiguredTopicSetup {
+                    name: ("gate-rf3").into(),
+                    replicas: crate::support::topics::TopicReplicationFactor(3),
+                    ..Default::default()
+                }),
+                creatable_topic(crate::support::topics::ConfiguredTopicSetup {
+                    name: ("gate-rf1").into(),
+                    partitions: crate::support::topics::TopicPartitionCount(6),
+                    ..Default::default()
+                }),
             ],
             timeout_ms: 5_000,
             ..Default::default()

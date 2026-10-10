@@ -53,7 +53,12 @@ async fn denied_operation_returns_topic_authorization_failed() {
     // Attempt a create that will be denied.
     let resp = p
         .client
-        .send(create_topic_request(creatable_topic("denied-topic", 1, 1)))
+        .send(create_topic_request(creatable_topic(
+            crate::support::topics::ConfiguredTopicSetup {
+                name: ("denied-topic").into(),
+                ..Default::default()
+            },
+        )))
         .await
         .unwrap();
 

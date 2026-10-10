@@ -194,7 +194,10 @@ fn embedded_create_topics(topic: &str) -> Bytes {
     let version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
     let body = encode(
         &crate::support::topics::create_topic_request(crate::support::topics::creatable_topic(
-            topic, 1, 1,
+            crate::support::topics::ConfiguredTopicSetup {
+                name: (topic).into(),
+                ..Default::default()
+            },
         )),
         version,
     );
@@ -656,7 +659,10 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
         tagged: Some(&[0]),
         body: &encode(
             &crate::support::topics::create_topic_request(crate::support::topics::creatable_topic(
-                TOPIC, 1, 1,
+                crate::support::topics::ConfiguredTopicSetup {
+                    name: (TOPIC).into(),
+                    ..Default::default()
+                },
             )),
             krabka_protocol::owned::create_topics_request::MAX_VERSION,
         ),

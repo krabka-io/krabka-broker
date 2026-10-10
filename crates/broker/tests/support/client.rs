@@ -108,7 +108,14 @@ pub async fn http_get(addr: SocketAddr, path: &str, flush: bool) -> String {
 
 pub async fn create_topic_with(client: &Client, setup: CreateTopicSetup<'_>) -> WireUuid {
     let mut request = crate::support::topics::configured_topic_request(setup);
-    create_topic_spec(client, request.topics.remove(0), request.timeout_ms).await
+    create_topic_spec(
+        client,
+        request.topics.remove(0),
+        crate::support::topics::CreateTopicRequestSetup {
+            timeout: crate::support::topics::CreateTopicsTimeoutMillis(request.timeout_ms),
+        },
+    )
+    .await
 }
 
 /// The three-replica topic used by witness and stretched-quorum scenarios.
@@ -129,14 +136,11 @@ pub async fn create_replicated_topic(client: &Client, topic: &str) -> WireUuid {
 pub async fn create_topic_spec(
     client: &Client,
     topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
-    timeout_ms: i32,
+    setup: crate::support::topics::CreateTopicRequestSetup,
 ) -> WireUuid {
     let resp = client
         .send(crate::support::topics::create_topic_request_with_setup(
-            topic,
-            crate::support::topics::CreateTopicRequestSetup {
-                timeout: crate::support::topics::CreateTopicsTimeoutMillis(timeout_ms),
-            },
+            topic, setup,
         ))
         .await
         .expect("CreateTopics");
@@ -353,4 +357,31 @@ pub async fn standalone_topic(topic: &str) -> (tempfile::TempDir, BrokerHandle, 
     let admin = connect_client(&bootstrap, None).await;
     create_topic(&admin, topic, 1).await;
     (dir, broker, bootstrap, admin)
+}
+
+/// Named-topic creation with the original producer and topic-description success diagnostic.
+pub async fn create_topic_named(client: &Client, setup: CreateTopicSetup<'_>) {
+    let name = setup.topic;
+    let response = send_topic_creation(client, setup).await;
+    assert!(
+        response.topics[0].error_code == 0,
+        "{name} create: {response:?}"
+    );
+}
+
+/// Connect through the fixture broker and create a topic with scenario-specific placement.
+pub async fn create_topic_for_broker(broker: &BrokerHandle, setup: CreateTopicSetup<'_>) {
+    let client = connect_with_context(broker.listen_addr().to_string(), None, "client").await;
+    let response = send_topic_creation(&client, setup).await;
+    assert!(response.topics[0].error_code == 0, "{response:?}");
+}
+
+async fn send_topic_creation(
+    client: &Client,
+    setup: CreateTopicSetup<'_>,
+) -> krabka_protocol::owned::create_topics_response::CreateTopicsResponse {
+    client
+        .send(crate::support::topics::configured_topic_request(setup))
+        .await
+        .expect("CreateTopics")
 }

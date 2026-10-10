@@ -204,7 +204,10 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
     // the topic has to exist for the delete to reach the log.
     let created = client
         .send(crate::support::topics::create_topic_request_with_setup(
-            creatable_topic(TOPIC.to_string(), 1, 1),
+            creatable_topic(crate::support::topics::ConfiguredTopicSetup {
+                name: TOPIC.to_string(),
+                ..Default::default()
+            }),
             crate::support::topics::CreateTopicRequestSetup {
                 timeout: crate::support::topics::CreateTopicsTimeoutMillis(10_000),
             },

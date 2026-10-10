@@ -210,7 +210,11 @@ pub async fn create_topic_rf(
     configs: &[(&str, &str)],
     replication_factor: i16,
 ) -> WireUuid {
-    let topic = creatable_topic(name, 1, replication_factor);
+    let topic = creatable_topic(crate::support::topics::ConfiguredTopicSetup {
+        name: (name).into(),
+        replicas: crate::support::topics::TopicReplicationFactor(replication_factor),
+        ..Default::default()
+    });
     create_topic_from(broker, client, topic, configs).await
 }
 
