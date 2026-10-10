@@ -166,7 +166,7 @@ impl Log {
             dir_sync_needed,
             rollover_flusher: super::rollover_flush::Flusher::default(),
             unflushed_messages: 0,
-            last_flush: std::time::SystemTime::now(),
+            last_flush: std::time::Instant::now(),
             roll_jitter: None,
             pending_deletes: Vec::new(),
             start_offset,

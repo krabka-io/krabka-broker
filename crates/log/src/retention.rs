@@ -104,8 +104,8 @@ pub(crate) fn retire_segment_files(
 }
 
 /// Retire a file set under unique names, so repeated compactions of the same
-/// base cannot replace a file still retained for readers. `retired` also keeps
-/// successful renames when a later rename fails.
+/// base cannot replace a file still retained for readers. Failed retirement restores
+/// successful renames before returning the error.
 pub(crate) fn retire_files(
     io: &dyn LogIo,
     dir: &Path,
@@ -115,19 +115,33 @@ pub(crate) fn retire_files(
 ) -> Result<(), LogError> {
     static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    for extension in extensions {
-        let path = dir.join(format!("{}.{extension}", name::format_base_offset(base.0)));
-        let tombstone = dir.join(format!(
-            "{}.{extension}.{generation}.deleted",
-            name::format_base_offset(base.0)
-        ));
-        match io.rename(IoTarget::SegmentDeletion, &path, &tombstone) {
-            Ok(()) => retired.push(tombstone),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(LogError::Io(error)),
+    let mut renamed = Vec::new();
+    let result = (|| {
+        for extension in extensions {
+            let path = dir.join(format!("{}.{extension}", name::format_base_offset(base.0)));
+            let tombstone = dir.join(format!(
+                "{}.{extension}.{generation}.deleted",
+                name::format_base_offset(base.0)
+            ));
+            match io.rename(IoTarget::SegmentDeletion, &path, &tombstone) {
+                Ok(()) => renamed.push((path, tombstone)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(LogError::Io(error)),
+            }
         }
+        io.sync_dir(dir)?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        // The caller still owns these segments until retirement succeeds.
+        // Restore their live names rather than queueing referenced files for deletion.
+        for (path, tombstone) in renamed.iter().rev() {
+            io.rename(IoTarget::SegmentDeletion, tombstone, path)?;
+        }
+        io.sync_dir(dir)?;
+        return Err(error);
     }
-    io.sync_dir(dir)?;
+    retired.extend(renamed.into_iter().map(|(_, tombstone)| tombstone));
     Ok(())
 }
 

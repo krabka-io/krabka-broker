@@ -31,7 +31,7 @@ impl Log {
         Ok(())
     }
 
-    /// Drop the files of a discarded tail after closing its segment handle.
+    /// Retire a discarded tail before dropping its segment handle.
     pub(super) fn remove_truncated_segment_files(&mut self, base: Offset) -> Result<(), LogError> {
         // Producer snapshots are pruned separately by retain_reload_range:
         // the snapshot exactly at the cut must survive deleting its segment.
@@ -40,8 +40,7 @@ impl Log {
             base,
             now,
             &["log", "index", "timeindex", "txnindex", "stampindex"],
-        )?;
-        self.reap_deleted_files(now)
+        )
     }
 
     /// Truncate the log so that no record at offset `>= offset` remains.
@@ -105,10 +104,13 @@ impl Log {
 
         // Drop exactly the sealed suffix selected by the verified plan.
         while self.segments.len() > plan.retained_sealed {
-            let popped = self.segments.pop().expect("length exceeds retained prefix");
-            let base = popped.base_offset();
-            drop(popped);
+            let base = self
+                .segments
+                .last()
+                .expect("length exceeds retained prefix")
+                .base_offset();
             self.remove_truncated_segment_files(base)?;
+            self.segments.pop();
             self.sealed_txn_indexes.remove(&base);
             self.stamp_indexes.remove(&base);
         }
@@ -118,8 +120,8 @@ impl Log {
             && let Some(active) = &self.active
         {
             let base = active.base_offset();
-            self.active = None;
             self.remove_truncated_segment_files(base)?;
+            self.active = None;
             self.stamp_indexes.remove(&base);
         }
 
@@ -198,7 +200,7 @@ impl Log {
         // the cut landed inside a batch, and a start past the end would name
         // records the log no longer holds.
         self.lower_log_start_offset(offset.min(new_end))?;
-        Ok(())
+        self.reap_deleted_files(std::time::SystemTime::now())
     }
 
     /// Trim from the start of the log and return the resulting

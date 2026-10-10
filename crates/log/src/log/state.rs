@@ -213,16 +213,17 @@ impl Log {
         self.invalidate_delivery_schedule(new_base);
 
         // Drop every sealed segment + its on-disk files.
-        while let Some(popped) = self.segments.pop() {
-            let base = popped.base_offset();
-            drop(popped);
+        while let Some(segment) = self.segments.last() {
+            let base = segment.base_offset();
             self.remove_truncated_segment_files(base)?;
+            self.segments.pop();
+            self.sealed_txn_indexes.remove(&base);
+            self.stamp_indexes.remove(&base);
         }
 
         // Drop the active segment + its on-disk files.
-        if let Some(active) = self.active.take() {
+        if let Some(active) = &self.active {
             let base = active.base_offset();
-            drop(active);
             self.remove_truncated_segment_files(base)?;
         }
 
@@ -262,7 +263,7 @@ impl Log {
         if new_base.0 > 0 {
             producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
         }
-        Ok(())
+        self.reap_deleted_files(std::time::SystemTime::now())
     }
 
     /// Kafka's `ProducerStateManager.takeSnapshot`: write the producer state at

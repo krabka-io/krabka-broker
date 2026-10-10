@@ -301,10 +301,10 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = keys! {
 };
 
 impl KafkaStaticKey {
-    /// Kafka's default of the key: its `KafkaConfig` row's, or, for a group
-    /// synonym that Kafka 4.3.1 does not define, the default of the group key
-    /// it sets.
-    pub(crate) fn kafka_default(&self) -> Option<&'static str> {
+    /// Kafka's effective default, following topic broker synonyms with unit
+    /// conversion when the direct row has no default, or the group default
+    /// for a group synonym that Kafka 4.3.1 does not define.
+    pub(crate) fn kafka_default(&self) -> Option<String> {
         crate::config_keys::kafka_broker::lookup(self.name)
             .and_then(|row| row.default)
             .or_else(|| {
@@ -312,6 +312,17 @@ impl KafkaStaticKey {
                     .iter()
                     .find(|group_key| group_key.broker_synonym == Some(self.name))
                     .and_then(|group_key| group_key.default)
+            })
+            .map(str::to_owned)
+            .or_else(|| {
+                let (_, topic) = crate::config_keys::broker_dynamic::TOPIC_DEFAULT_SYNONYMS
+                    .iter()
+                    .find(|(broker, _)| *broker == self.name)?;
+                crate::config_keys::broker_dynamic::topic_broker_synonyms(topic)
+                    .iter()
+                    .find_map(|synonym| {
+                        crate::config_keys::in_topic_unit(topic, synonym.name, synonym.default?)
+                    })
             })
     }
 
@@ -324,7 +335,7 @@ impl KafkaStaticKey {
             .static_config_origins
             .supplied_kafka_keys
             .contains(self.name);
-        (supplied || self.kafka_default() != Some(value.as_str())).then_some(value)
+        (supplied || self.kafka_default().as_deref() != Some(value.as_str())).then_some(value)
     }
 }
 

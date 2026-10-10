@@ -1,6 +1,10 @@
 //! Flush thresholds, per-segment roll jitter, and deferred file reclamation.
 
-use std::{collections::hash_map::RandomState, hash::BuildHasher, time::SystemTime};
+use std::{
+    collections::hash_map::RandomState,
+    hash::BuildHasher,
+    time::{Duration, Instant, SystemTime},
+};
 
 use krabka_ids::Offset;
 use krabka_units::{Time, prelude::TimeExt as _};
@@ -18,7 +22,7 @@ impl Log {
     /// Panics when the configuration lock is poisoned.
     pub fn maintain(&mut self, now: SystemTime) -> Result<(), LogError> {
         self.rollover_flusher.check()?;
-        self.flush_if_due(now)?;
+        self.flush_if_due(Instant::now())?;
         self.reap_deleted_files(now)
     }
 
@@ -28,23 +32,32 @@ impl Log {
     /// Panics when the configuration lock is poisoned.
     #[must_use]
     pub fn maintenance_delay(&self, now: SystemTime) -> Option<std::time::Duration> {
-        let flush = self
-            .config
-            .read()
-            .unwrap()
-            .flush_interval
-            .filter(|_| self.unflushed_messages > 0)
-            .and_then(|interval| {
-                self.last_flush
-                    .checked_add(std::time::Duration::from_millis(
-                        u64::try_from(interval.millis_i64_trunc()).unwrap_or(0),
-                    ))
-            });
+        self.maintenance_delay_at(now, Instant::now())
+    }
+
+    fn maintenance_delay_at(&self, now: SystemTime, elapsed: Instant) -> Option<Duration> {
+        let config = self.config.read().unwrap();
+        let flush = if self.unflushed_messages == 0 {
+            None
+        } else if config
+            .flush_messages
+            .is_some_and(|limit| self.unflushed_messages >= limit)
+        {
+            Some(Duration::ZERO)
+        } else {
+            config.flush_interval.map(|interval| {
+                Duration::from_millis(u64::try_from(interval.millis_i64_trunc()).unwrap_or(0))
+                    .saturating_sub(elapsed.saturating_duration_since(self.last_flush))
+            })
+        };
         flush
             .into_iter()
-            .chain(self.pending_deletes.iter().map(|(deadline, _)| *deadline))
+            .chain(
+                self.pending_deletes
+                    .iter()
+                    .map(|(deadline, _)| deadline.duration_since(now).unwrap_or_default()),
+            )
             .min()
-            .map(|deadline| deadline.duration_since(now).unwrap_or_default())
     }
 
     pub(super) fn jittered_roll_interval(&mut self, interval: Time) -> Time {
@@ -86,24 +99,28 @@ impl Log {
             self.rollover_flusher.finish()?;
             self.active_segment_flush()?;
             self.unflushed_messages = 0;
-            self.last_flush = SystemTime::now();
+            self.last_flush = Instant::now();
         } else if threshold.is_some_and(|limit| self.unflushed_messages >= limit) {
             self.sync()?;
         } else {
-            self.flush_if_due(SystemTime::now())?;
+            self.flush_if_due(Instant::now())?;
         }
         Ok(())
     }
 
-    pub(super) fn flush_if_due(&mut self, now: SystemTime) -> Result<(), LogError> {
-        let interval = self.config.read().unwrap().flush_interval;
-        if self.unflushed_messages > 0
-            && interval.is_some_and(|interval| {
-                now.duration_since(self.last_flush).is_ok_and(|elapsed| {
-                    elapsed.as_millis() >= u128::try_from(interval.millis_i64_trunc()).unwrap_or(0)
-                })
-            })
-        {
+    pub(super) fn flush_if_due(&mut self, now: Instant) -> Result<(), LogError> {
+        let due = {
+            let config = self.config.read().unwrap();
+            self.unflushed_messages > 0
+                && (config
+                    .flush_messages
+                    .is_some_and(|limit| self.unflushed_messages >= limit)
+                    || config.flush_interval.is_some_and(|interval| {
+                        now.saturating_duration_since(self.last_flush).as_millis()
+                            >= u128::try_from(interval.millis_i64_trunc()).unwrap_or(0)
+                    }))
+        };
+        if due {
             self.sync()?;
             self.last_flush = now;
         }

@@ -138,9 +138,9 @@ pub(crate) use self::{
         resolve_remote_copy_lag,
     },
     validation::{
-        TopicDefaults, canonical_topic_config, canonical_topic_config_map, parse_cleanup_policy,
-        parse_compression_type, validate_config_combination, validate_remote_storage_disable,
-        validate_topic_config,
+        TopicDefaults, canonical_topic_config, canonical_topic_config_map, in_topic_unit,
+        parse_cleanup_policy, parse_compression_type, validate_config_combination,
+        validate_remote_storage_disable, validate_topic_config,
     },
 };
 // Reached only from #[cfg(test)] code -- the produce delivery/throttle tests and

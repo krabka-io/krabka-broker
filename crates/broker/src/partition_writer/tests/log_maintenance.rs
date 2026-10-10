@@ -78,30 +78,35 @@ impl krabka_log::LogIo for ObserveFlush {
 
 #[tokio::test]
 async fn writer_flush_timer_runs_after_a_live_config_change_without_another_append() {
-    let dir = tempdir().unwrap();
-    let log = open_default_log(dir.path());
-    let flushed = std::sync::Arc::new(tokio::sync::Notify::new());
-    {
-        let mut log = log.lock().unwrap();
-        log.append(&mut sample_batch(2)).unwrap();
-        log.test_set_io(std::sync::Arc::new(ObserveFlush(flushed.clone())));
-    }
-    let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions::default());
-    let (ack, ack_rx) = tokio::sync::oneshot::channel();
-    tx.send(WriterMessage::SetLogConfig {
-        config: LogConfig {
+    for config in [
+        LogConfig {
             flush_interval: Some(krabka_units::millis(10)),
             ..LogConfig::default()
         },
-        ack,
-    })
-    .await
-    .unwrap();
-    ack_rx.await.unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(2), flushed.notified())
-        .await
-        .expect("idle partition flushes on its timer");
-    drop(tx);
-    writer.await.unwrap();
+        LogConfig {
+            flush_messages: Some(2),
+            ..LogConfig::default()
+        },
+    ] {
+        let dir = tempdir().unwrap();
+        let log = open_default_log(dir.path());
+        let flushed = std::sync::Arc::new(tokio::sync::Notify::new());
+        {
+            let mut log = log.lock().unwrap();
+            log.append(&mut sample_batch(2)).unwrap();
+            log.test_set_io(std::sync::Arc::new(ObserveFlush(flushed.clone())));
+        }
+        let (tx, rx) = mpsc::channel(1);
+        let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions::default());
+        let (ack, ack_rx) = tokio::sync::oneshot::channel();
+        tx.send(WriterMessage::SetLogConfig { config, ack })
+            .await
+            .unwrap();
+        ack_rx.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), flushed.notified())
+            .await
+            .expect("idle partition flushes after the live threshold changes");
+        drop(tx);
+        writer.await.unwrap();
+    }
 }

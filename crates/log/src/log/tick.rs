@@ -49,7 +49,7 @@ impl Log {
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn tick(&mut self, now: SystemTime, high_watermark: Offset) -> Result<(), LogError> {
         self.rollover_flusher.check()?;
-        self.flush_if_due(now)?;
+        self.flush_if_due(std::time::Instant::now())?;
         self.reap_deleted_files(now)?;
         // Tiered topics' segment lifecycle is owned by the RemoteLogManager.
         if self.config.read().unwrap().remote_storage_enable {

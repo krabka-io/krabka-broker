@@ -84,7 +84,7 @@ pub struct Log {
     dir_sync_needed: bool,
     rollover_flusher: rollover_flush::Flusher,
     unflushed_messages: u64,
-    last_flush: std::time::SystemTime,
+    last_flush: std::time::Instant,
     roll_jitter: Option<(Offset, u64)>,
     pending_deletes: Vec<(std::time::SystemTime, Vec<PathBuf>)>,
     /// The global log start (Kafka's `logStartOffset`): the first offset any
