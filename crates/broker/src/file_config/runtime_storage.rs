@@ -53,7 +53,8 @@ impl RuntimeFileConfig {
             positive_usize: share_session_cache_max_when_unlimited;
             whole_bytes_usize: log_read_buffer_cap => log_config.read_buffer_cap,
                 log_timestamp_scan_window => log_config.timestamp_scan_window;
-            kafka_long_bytes: log_read_ahead_max => log_config.read_ahead_max;
+            kafka_long_bytes: log_read_ahead_max => log_config.read_ahead_max,
+                log_tail_cache_size => log_config.tail_cache_size;
         }
         // A topic reports these two at `STATIC_BROKER_CONFIG` when the
         // operator named them, so the loader records the provenance.
@@ -105,8 +106,9 @@ impl RuntimeFileConfig {
 mod tests {
     use assert2::assert;
     use krabka_units::{
+        bytes,
         convert::{ByteSizeExt as _, TimeExt as _},
-        millis,
+        mebibytes, millis,
     };
 
     use crate::file_config::FileConfig;
@@ -178,6 +180,29 @@ mod tests {
                     .map(|()| cfg.log_config.read_ahead_max.bytes_u64())
             });
             assert!(applied == expected, "log_read_ahead_max={value}");
+        }
+    }
+
+    /// Zero is a value here too: a partition keeps only its newest batch in
+    /// memory. A fractional byte count is refused, and an omitted key keeps
+    /// the log's default.
+    #[test]
+    fn log_tail_cache_size_round_trips_into_the_log_config() {
+        for (line, expected) in [
+            ("log_tail_cache_size = \"4MiB\"\n", Some(mebibytes(4))),
+            ("log_tail_cache_size = \"0B\"\n", Some(bytes(0))),
+            ("log_tail_cache_size = \"1.5B\"\n", None),
+            ("", Some(krabka_log::DEFAULT_TAIL_CACHE_SIZE)),
+        ] {
+            let applied = toml::from_str::<FileConfig>(&format!("[runtime]\n{line}"))
+                .ok()
+                .and_then(|file| {
+                    let mut cfg = crate::config::BrokerConfig::default();
+                    file.apply_to(&mut cfg)
+                        .ok()
+                        .map(|()| cfg.log_config.tail_cache_size)
+                });
+            assert!(applied == expected, "{line}");
         }
     }
 

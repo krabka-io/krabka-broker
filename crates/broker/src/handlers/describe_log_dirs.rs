@@ -24,6 +24,7 @@ use krabka_protocol::owned::{
         DescribeLogDirsTopic,
     },
 };
+use krabka_units::prelude::ByteSizeExt;
 
 mod dirs;
 mod filter;
@@ -109,7 +110,22 @@ context_handler! {
                     } else {
                         log_dir::partition_dir(dir, &topic, partition)
                     };
-                    let size = sum_log_segments(&part_dir).unwrap_or(0);
+                    // A log loaded from this directory knows its size: the
+                    // bytes of its batches, Kafka's `UnifiedLog.size`. Its
+                    // files can hold more -- the block of padding an
+                    // `O_DIRECT` active segment carries under `preallocate`
+                    // -- so they are summed only where no log here owns them.
+                    let loaded = if is_future_key {
+                        None
+                    } else {
+                        partitions
+                            .get(&topic, krabka_ids::PartitionIndex(partition))
+                            .and_then(|part| part.log_size_in(&part_dir))
+                    };
+                    let size = loaded.map_or_else(
+                        || sum_log_segments(&part_dir).unwrap_or(0),
+                        ByteSizeExt::bytes_u64,
+                    );
                     let offset_lag = if is_future_key {
                         future_offset_lag(
                             &partitions,

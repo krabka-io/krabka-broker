@@ -6,6 +6,7 @@
 
 use std::io::IoSlice;
 
+use bytes::Bytes;
 use krabka_ids::{LeaderEpoch, Offset};
 use krabka_protocol::records::{HEADER_LEN, RecordBatch, patch_base_offset_and_leader_epoch};
 use krabka_units::prelude::{ByteSize, ByteSizeExt};
@@ -17,6 +18,24 @@ use super::{
     lifecycle::WriteSnapshot,
 };
 use crate::error::LogError;
+
+/// One batch's encoded bytes, as an append path has them.
+#[derive(Clone, Copy)]
+enum BatchBytes<'a> {
+    /// The encoding path's single buffer.
+    Whole(&'a Bytes),
+    /// The verbatim path's patched header and the producer's untouched body.
+    Split(&'a [u8], &'a [u8]),
+}
+
+impl BatchBytes<'_> {
+    fn len(self) -> usize {
+        match self {
+            Self::Whole(bytes) => bytes.len(),
+            Self::Split(header, body) => header.len() + body.len(),
+        }
+    }
+}
 
 impl Segment {
     fn append_coordinates(
@@ -68,15 +87,12 @@ impl Segment {
         batch.encode(&mut buf)?;
         let bytes = buf.freeze();
 
-        // The active file cursor is kept at log_size by open/recovery/truncate,
-        // so the hot append path does not need an lseek before every write.
         self.write_batch(
             batch.base_offset,
             batch.last_offset_delta,
-            bytes.len(),
             batch.max_timestamp,
             index_interval,
-            |io, file| write_all(io, file, &bytes),
+            BatchBytes::Whole(&bytes),
         )
     }
 
@@ -133,23 +149,52 @@ impl Segment {
         // recompute). The batch BODY is written straight from the input slice
         // with no copy: the previous `bytes.to_vec()` was a full-payload memcpy
         // on the produce hot path (100 KiB+ per batch for large messages), the
-        // dominant remaining produce-side cost. The active file cursor is kept
-        // at log_size, so one writev appends the patched header plus original
-        // body without an lseek or full-payload copy.
+        // dominant remaining produce-side cost.
         let mut header = [0u8; HEADER_LEN];
         header.copy_from_slice(&bytes[..HEADER_LEN]);
         // The protocol patcher writes the raw KIP-320 wire `int32`; unwrap here.
         patch_base_offset_and_leader_epoch(&mut header, base_offset.0, leader_epoch.0);
 
-        let mut bufs = [IoSlice::new(&header), IoSlice::new(&bytes[HEADER_LEN..])];
         self.write_batch(
             base_offset.0,
             last_offset_delta,
-            bytes.len(),
             max_timestamp,
             index_interval,
-            |io, file| write_all_vectored(io, file, &mut bufs),
+            BatchBytes::Split(&header, &bytes[HEADER_LEN..]),
         )
+    }
+
+    /// Write one batch's bytes at the end of the `.log` file.
+    ///
+    /// Through the page cache, the buffered handle's cursor is kept at
+    /// `log_size` by open, recovery and truncate, so the hot append path
+    /// needs no `lseek` before a write, and a split batch goes out in one
+    /// `writev` without a copy. Through `O_DIRECT`, the writer copies the
+    /// batch behind the partial last block and writes whole blocks, and the
+    /// batch joins the bytes kept in memory for reads.
+    fn write_bytes(&mut self, batch: BatchBytes<'_>) -> std::io::Result<()> {
+        let Some(mode) = self.direct.as_mut() else {
+            return match batch {
+                BatchBytes::Whole(bytes) => write_all(&*self.io, &self.log_file, bytes),
+                BatchBytes::Split(header, body) => write_all_vectored(
+                    &*self.io,
+                    &self.log_file,
+                    &mut [IoSlice::new(header), IoSlice::new(body)],
+                ),
+            };
+        };
+        let io = &*self.io;
+        let (parts, cached): (&[&[u8]], Bytes) = match batch {
+            BatchBytes::Whole(bytes) => (&[bytes], bytes.clone()),
+            BatchBytes::Split(header, body) => {
+                (&[header, body], Bytes::from([header, body].concat()))
+            }
+        };
+        mode.writer.append(parts, |file, buf, offset| {
+            io.write_direct(file, buf, offset)
+        })?;
+        mode.cache.push(cached);
+        Ok(())
     }
 
     fn ensure_writable(&self) -> Result<(), LogError> {
@@ -163,16 +208,15 @@ impl Segment {
         &mut self,
         base: i64,
         delta: i32,
-        len: usize,
         max_timestamp: i64,
         index_interval: ByteSize,
-        write: impl FnOnce(&dyn crate::io::LogIo, &std::fs::File) -> std::io::Result<()>,
+        batch: BatchBytes<'_>,
     ) -> Result<u64, LogError> {
-        let (last_offset, new_log_size) = self.append_coordinates(base, delta, len)?;
+        let (last_offset, new_log_size) = self.append_coordinates(base, delta, batch.len())?;
         let position = self.log_size;
         let previous = self.write_snapshot();
         let index_entry = self.index_entry_for(position, last_offset, index_interval)?;
-        if let Err(error) = write(&*self.io, &self.log_file) {
+        if let Err(error) = self.write_bytes(batch) {
             self.rollback_failed_write(position, previous)?;
             return Err(error.into());
         }

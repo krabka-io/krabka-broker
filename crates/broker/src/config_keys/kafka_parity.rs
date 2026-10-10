@@ -360,7 +360,6 @@ fn an_inert_key_says_so_where_an_operator_reads_it() {
         "file.delete.delay.ms",
         "flush.messages",
         "flush.ms",
-        "preallocate",
     ] {
         let row = registry::lookup(ConfigScope::Topic, name).expect(name);
         check!(

@@ -31,9 +31,13 @@ mod append;
 mod compaction;
 pub(crate) mod control;
 mod delivery;
+#[cfg(all(test, unix))]
+mod direct_writes;
 #[cfg(test)]
 mod faults;
 mod open;
+#[cfg(test)]
+mod preallocation;
 mod read;
 mod rollover_flush;
 mod stamp;

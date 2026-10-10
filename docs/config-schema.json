@@ -2043,6 +2043,15 @@
             "null"
           ]
         },
+        "log_tail_cache_size": {
+          "default": null,
+          "description": "How much of the newest data a partition with `preallocate=true` keeps\nin memory to serve reads with. Such a partition writes its active\nsegment through `O_DIRECT`, which bypasses the page cache, so without\nthis a consumer reading right behind the producer reads from disk.\nEvery such partition holds up to this much, plus one batch. The\ndefault is 1 MiB, and 0 keeps only the newest batch.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "log_timestamp_scan_window": {
           "default": null,
           "description": "Size of the window a timestamp search reads the log in.",

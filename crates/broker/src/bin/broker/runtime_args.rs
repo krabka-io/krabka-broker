@@ -77,6 +77,7 @@ pub struct RuntimeArgs {
     pub share_session_cache_max_when_unlimited: Option<PositiveCount>,
     pub log_read_buffer_cap: Option<ByteSize>,
     pub log_read_ahead_max: Option<ByteSize>,
+    pub log_tail_cache_size: Option<ByteSize>,
     pub log_timestamp_scan_window: Option<ByteSize>,
     pub log_delivery_clock_uncertainty: Option<Time>,
     #[arg(long, env = "KRABKA_MESSAGE_MAX_BYTES", value_parser = parse_kafka_int_byte_size)]
@@ -368,6 +369,7 @@ mod tests {
         share-session-cache-max-when-unlimited KRABKA_SHARE_SESSION_CACHE_MAX_WHEN_UNLIMITED None -+--++-------\n\
         log-read-buffer-cap KRABKA_LOG_READ_BUFFER_CAP None ---------++--\n\
         log-read-ahead-max KRABKA_LOG_READ_AHEAD_MAX None ---------++--\n\
+        log-tail-cache-size KRABKA_LOG_TAIL_CACHE_SIZE None ---------++--\n\
         log-timestamp-scan-window KRABKA_LOG_TIMESTAMP_SCAN_WINDOW None ---------++--\n\
         log-delivery-clock-uncertainty KRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY None -------+-----\n\
         message-max-bytes KRABKA_MESSAGE_MAX_BYTES None +-------++---\n\

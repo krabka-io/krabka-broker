@@ -118,15 +118,15 @@ pub mod topic_name;
 mod txn_index;
 
 pub use config::{
-    CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DEFAULT_READ_AHEAD_MAX, DeliveryPolicy, LogConfig,
-    RemoteTierFlags, ScheduleOrder,
+    CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DEFAULT_READ_AHEAD_MAX, DEFAULT_TAIL_CACHE_SIZE,
+    DeliveryPolicy, LogConfig, RemoteTierFlags, ScheduleOrder, SegmentAllocation,
 };
 pub use delivery::{DeliveryAdvance, batch_is_deliverable};
 pub use error::LogError;
 pub use filter::{FilteredBatch, filter_batch};
 pub use io::write_file_atomic;
 #[cfg(any(test, feature = "test-helpers"))]
-pub use io::{IoTarget, LogIo};
+pub use io::{DirectFile, IoTarget, LogIo};
 pub use krabka_ids::{LeaderEpoch, Offset, ProducerId};
 pub use leader_epoch_checkpoint::{
     EpochEntry, LeaderEpochCheckpoint, epoch_and_offset_for_entries,

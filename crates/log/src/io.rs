@@ -7,7 +7,9 @@
 //! performs -- goes through the path-and-target methods below, so a test can
 //! fail exactly one class of file and watch what recovery makes of it. The
 //! readahead hint of the fetch path goes through it too, so a test can see
-//! which ranges a read asks the kernel for.
+//! which ranges a read asks the kernel for, and so do the block reservation
+//! and release of `preallocate` and the `O_DIRECT` handle its active segment
+//! writes through.
 
 use std::{
     fmt::Debug,
@@ -149,6 +151,131 @@ pub trait LogIo: Debug + Send + Sync {
     fn advise_will_need(&self, file: &File, offset: u64, len: u64) {
         advise_will_need(file, offset, len);
     }
+
+    /// Reserve disk blocks for the `len` bytes of a `.log` file from `offset`
+    /// without changing its length, so the appends that later fill the range
+    /// do not allocate.
+    ///
+    /// This is `fallocate(FALLOC_FL_KEEP_SIZE)`. A reservation changes no
+    /// byte a reader can see, so a caller treats a failure as a segment that
+    /// grows as it is written. The targets without it answer `Unsupported`.
+    ///
+    /// # Errors
+    /// Returns the underlying `fallocate` error, or `Unsupported` off Linux.
+    fn reserve(&self, file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+        reserve(file, offset, len)
+    }
+
+    /// Give back the blocks a [`LogIo::reserve`] left unused past a `.log`
+    /// file's end, which is `len`.
+    ///
+    /// This truncates the file to the length it already has. ext4 and tmpfs
+    /// free every block past the end on a truncate, even one that moves
+    /// nothing, and that is the only way to reach blocks reserved past the
+    /// end: ext4 ignores `FALLOC_FL_PUNCH_HOLE` at or past it. A filesystem
+    /// that keeps them keeps them until retention deletes the segment.
+    ///
+    /// # Errors
+    /// Returns the underlying truncate error.
+    fn release(&self, file: &File, len: u64) -> std::io::Result<()> {
+        file.set_len(len)
+    }
+
+    /// Open a second handle on a `.log` file that bypasses the page cache
+    /// (`O_DIRECT`), with the alignment every write through it needs.
+    ///
+    /// The alignment comes from `statx(STATX_DIOALIGN)` (Linux 6.1) and from
+    /// nowhere else: a guessed one that is wrong fails the append that first
+    /// uses it, and a failed append takes the log directory offline. A
+    /// kernel or filesystem that does not report one answers `Unsupported`,
+    /// and the segment stays buffered.
+    ///
+    /// # Errors
+    /// Returns `Unsupported` where `O_DIRECT` is unavailable or its alignment
+    /// unknown, or the underlying `statx` or `open` error.
+    fn open_direct(&self, path: &Path) -> std::io::Result<DirectFile> {
+        open_direct(path)
+    }
+
+    /// Write `buf` at `offset` through a handle [`LogIo::open_direct`]
+    /// opened. `buf`, `offset` and the length are aligned as that handle
+    /// requires. Like [`std::io::Write::write`], this may write fewer bytes
+    /// than asked for.
+    ///
+    /// # Errors
+    /// Returns the underlying write error.
+    fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+        write_direct(file, buf, offset)
+    }
+}
+
+/// A `.log` handle that bypasses the page cache, and what it requires of a
+/// write: a buffer address aligned to `mem_align`, and an offset and a length
+/// that are multiples of `block`.
+#[derive(Debug)]
+pub struct DirectFile {
+    /// The `O_DIRECT` handle.
+    pub file: File,
+    /// Required alignment of a write's buffer address, in bytes.
+    pub mem_align: usize,
+    /// Required alignment of a write's offset and length, in bytes.
+    pub block: usize,
+}
+
+#[cfg(target_os = "linux")]
+fn open_direct(path: &Path) -> std::io::Result<DirectFile> {
+    use rustix::fs::{AtFlags, CWD, Mode, OFlags, StatxFlags};
+
+    let stat = rustix::fs::statx(CWD, path, AtFlags::empty(), StatxFlags::DIOALIGN)?;
+    let reported = stat.stx_mask & StatxFlags::DIOALIGN.bits() != 0;
+    // A zero offset alignment is the kernel saying this file cannot be
+    // opened `O_DIRECT` at all.
+    if !reported || stat.stx_dio_offset_align == 0 || stat.stx_dio_mem_align == 0 {
+        return Err(std::io::ErrorKind::Unsupported.into());
+    }
+    let to_usize = |align: u32| {
+        usize::try_from(align).map_err(|_| std::io::Error::from(std::io::ErrorKind::Unsupported))
+    };
+    let fd = rustix::fs::open(
+        path,
+        OFlags::RDWR | OFlags::DIRECT | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    Ok(DirectFile {
+        file: File::from(fd),
+        mem_align: to_usize(stat.stx_dio_mem_align)?,
+        block: to_usize(stat.stx_dio_offset_align)?,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_direct(path: &Path) -> std::io::Result<DirectFile> {
+    let _ = path;
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+#[cfg(unix)]
+fn write_direct(file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+    std::os::unix::fs::FileExt::write_at(file, buf, offset)
+}
+
+/// No target without `O_DIRECT` ever opens a handle to write through.
+#[cfg(not(unix))]
+fn write_direct(file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+    let _ = (file, buf, offset);
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+#[cfg(target_os = "linux")]
+fn reserve(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    rustix::fs::fallocate(file, rustix::fs::FallocateFlags::KEEP_SIZE, offset, len)
+        .map_err(Into::into)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn reserve(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    let _ = (file, offset, len);
+    Err(std::io::ErrorKind::Unsupported.into())
 }
 
 #[cfg(target_os = "linux")]
