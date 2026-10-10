@@ -158,7 +158,16 @@ async fn end_txn(client: &Client, (producer_id, epoch): (i64, i16)) -> EndTxnRes
     crate::support::transaction_wire::retry_coordinator(
         || async {
             client
-                .send(end_transaction_request(TID, (producer_id, epoch), true))
+                .send(end_transaction_request(
+                    TID,
+                    crate::support::transactions::EndTransactionSetup {
+                        producer: crate::support::transactions::ProducerIdentity::from_wire((
+                            producer_id,
+                            epoch,
+                        )),
+                        ..Default::default()
+                    },
+                ))
                 .await
                 .expect("EndTxn")
         },

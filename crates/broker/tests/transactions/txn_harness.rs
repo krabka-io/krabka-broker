@@ -100,7 +100,12 @@ pub async fn init_transaction(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let response = client
-            .send(new_producer_request(Some(transactional_id.into()), 60_000))
+            .send(new_producer_request(
+                crate::support::transactions::InitProducerSetup {
+                    transactional_id: Some(transactional_id.into()),
+                    ..Default::default()
+                },
+            ))
             .await
             .unwrap();
         if response.error_code == 0 {

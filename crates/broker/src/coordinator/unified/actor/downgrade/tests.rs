@@ -127,9 +127,8 @@ async fn upgrade_then_downgrade_round_trip() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_of_last_native_member_triggers_downgrade() {
-    let (coord, _log) = bidirectional_coordinator();
-    let (handle, native) =
-        crate::coordinator::unified::actor::test_support::seed_classic_with_native(&coord).await;
+    let (_coord, _log, handle, native) =
+        crate::coordinator::unified::actor::test_support::bidirectional_with_members().await;
 
     let response = rpc::classic_leave(&handle, &native).await;
     check!(response.len() == 1);

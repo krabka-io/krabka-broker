@@ -57,8 +57,10 @@ async fn authenticated_object_count_covers_only_the_selected_topic() {
     let args = restore_args(
         fixture.archive_root.path(),
         target.path(),
-        "127.0.0.1:9093",
-        &refs,
+        crate::args::RestoreOptions {
+            extra: &refs,
+            ..Default::default()
+        },
     );
 
     let report = restore(&args).await.unwrap();

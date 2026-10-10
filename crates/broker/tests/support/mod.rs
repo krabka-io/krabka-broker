@@ -109,8 +109,8 @@ pub use self::{
         start_reusing_addrs, two_controller_followers, wait_for_all_brokers_registered,
     },
     containers::{
-        JvmListeners, bridge_gateway, combined_output, docker, docker_exec, docker_logs,
-        docker_output, docker_run_blocking, docker_tool_command, fixture_cache_dir,
+        JvmAdminSetup, JvmListeners, bridge_gateway, combined_output, docker, docker_exec,
+        docker_logs, docker_output, docker_run_blocking, docker_tool_command, fixture_cache_dir,
         format_jvm_voter, free_port, init_jvm_tracing, jvm_acks_all_producer, jvm_admin_args,
         jvm_admin_config, jvm_bootstrap_servers, jvm_broker_config, jvm_client_addr,
         jvm_client_ports, jvm_docker_command, jvm_docker_run, jvm_finalized_level, jvm_listeners,

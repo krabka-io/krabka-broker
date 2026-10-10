@@ -11,8 +11,10 @@ pub(crate) async fn restore_fixture(
     let args = crate::args::restore_args(
         archive_root,
         &target_parent.join("restored"),
-        "127.0.0.1:9093",
-        &["--cluster-id", &cluster_id.to_string()],
+        crate::args::RestoreOptions {
+            extra: &["--cluster-id", &cluster_id.to_string()],
+            ..Default::default()
+        },
     );
     krabka_restore::restore(&args).await.expect("restore")
 }

@@ -167,21 +167,7 @@ impl PendingShareRecords {
     }
 }
 
-/// The topics in id order and the partitions ascending, so that two equal
-/// assignments give equal records.
-fn sorted_partitions(partitions: &HashMap<Uuid, Vec<i32>>) -> Vec<(Uuid, Vec<i32>)> {
-    let mut topics: Vec<(Uuid, Vec<i32>)> = partitions
-        .iter()
-        .filter(|(_, partitions)| !partitions.is_empty())
-        .map(|(topic_id, partitions)| {
-            let mut partitions = partitions.clone();
-            partitions.sort_unstable();
-            (*topic_id, partitions)
-        })
-        .collect();
-    topics.sort_by_key(|(topic_id, _)| topic_id.0);
-    topics
-}
+use crate::coordinator::unified::persistence::sorted_partitions;
 
 /// The records of one share-group transition, as Kafka's
 /// `GroupMetadataManager` writes them: a record only where the transition

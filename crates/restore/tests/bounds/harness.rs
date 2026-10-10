@@ -22,7 +22,14 @@ use tempfile::TempDir;
 /// binary and the crate's own tests use. `extra` carries the bound flags
 /// under test.
 pub(crate) fn restore_args(archive_dir: &Path, target_dir: &Path, extra: &[&str]) -> RestoreArgs {
-    let argv = cli_args::restore_argv(archive_dir, target_dir, "127.0.0.1:9093", extra);
+    let argv = cli_args::restore_argv(
+        archive_dir,
+        target_dir,
+        cli_args::RestoreOptions {
+            extra,
+            ..Default::default()
+        },
+    );
     Cli::try_parse_from(argv).expect("valid command line").args
 }
 

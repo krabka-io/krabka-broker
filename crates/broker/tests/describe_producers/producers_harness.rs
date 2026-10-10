@@ -61,8 +61,10 @@ pub(crate) async fn init_transactional_producer(
         let init = p
             .client
             .send(crate::support::transactions::new_producer_request(
-                Some(transactional_id.into()),
-                60_000,
+                crate::support::transactions::InitProducerSetup {
+                    transactional_id: Some(transactional_id.into()),
+                    ..Default::default()
+                },
             ))
             .await
             .expect("transactional InitProducerId");

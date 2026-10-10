@@ -673,8 +673,8 @@ mod tests {
             classic_initial_rebalance_delay: std::time::Duration::ZERO,
             ..NextGenConfig::assigning_at_once()
         });
-        let handle = coord.get_or_create_classic("g");
-        coord.mark_classic("g");
+        let handle =
+            crate::coordinator::unified::actor::test_support::marked_classic_handle(&coord, "g");
 
         let assigned = rpc::classic_join(&handle, "", "t").await;
         check!(assigned.error_code == codes::MEMBER_ID_REQUIRED);
@@ -710,8 +710,9 @@ mod tests {
                 classic_initial_rebalance_delay: Duration::ZERO,
                 ..NextGenConfig::assigning_at_once()
             });
-            let handle = coord.get_or_create_classic("g");
-            coord.mark_classic("g");
+            let handle = crate::coordinator::unified::actor::test_support::marked_classic_handle(
+                &coord, "g",
+            );
             let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicJoin {
                 req: JoinGroupRequest {
                     group_id: "g".into(),
@@ -1151,6 +1152,19 @@ mod tests {
             .collect()
     }
 
+    #[derive(Clone, Copy)]
+    struct PersistedBatchCount(usize);
+
+    /// Exactly one new durable join batch, before the caller checks its scenario-specific keys.
+    async fn new_join_batch_shape(
+        log: &crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog,
+        before: PersistedBatchCount,
+    ) -> Vec<(Option<NextGenKey>, bool)> {
+        let batches = log.batches().await;
+        check!(batches.len() == before.0 + 1);
+        batch_shape(batches.last().expect("the join's batch"))
+    }
+
     /// The records of Kafka's `replaceMember` for `old` replaced by `new`:
     /// the old member's tombstones, then the new member's subscription,
     /// target and current assignment.
@@ -1265,9 +1279,7 @@ mod tests {
         let mut want_members = vec!["native".to_string(), second.member_id.clone()];
         want_members.sort_unstable();
         check!(member_ids(&handle).await == want_members);
-        let batches = log.batches().await;
-        check!(batches.len() == batches_before + 1);
-        let shape = batch_shape(batches.last().expect("the join's batch"));
+        let shape = new_join_batch_shape(&log, PersistedBatchCount(batches_before)).await;
         check!(shape[..6] == replace_member_shape(&first.member_id, &second.member_id)[..]);
     }
 
@@ -1444,9 +1456,7 @@ mod tests {
         check!(
             (view.state, view.generation_id, members) == (ClassicGroupState::Stable, epoch, want)
         );
-        let batches = log.batches().await;
-        check!(batches.len() == batches_before + 1);
-        let shape = batch_shape(batches.last().expect("the join's batch"));
+        let shape = new_join_batch_shape(&log, PersistedBatchCount(batches_before)).await;
         check!(shape[..6] == replace_member_shape("native", &joined.member_id)[..]);
         check!(
             shape[shape.len() - 3..]

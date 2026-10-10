@@ -137,7 +137,16 @@ async fn produce(
 }
 
 fn end_txn_request((producer_id, epoch): (i64, i16)) -> EndTxnRequest {
-    end_transaction_request(TID, (producer_id, epoch), true)
+    end_transaction_request(
+        TID,
+        crate::support::transactions::EndTransactionSetup {
+            producer: crate::support::transactions::ProducerIdentity::from_wire((
+                producer_id,
+                epoch,
+            )),
+            ..Default::default()
+        },
+    )
 }
 
 /// Commit, and retry while the coordinator answers a retriable error.
@@ -666,7 +675,10 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
             topics: vec![txn_offset_topic(
                 TOPIC,
                 topic_id,
-                vec![txn_offset_partition(0, 7)],
+                vec![txn_offset_partition(
+                    krabka_ids::PartitionIndex(0),
+                    krabka_ids::Offset(7),
+                )],
             )],
             ..Default::default()
         })

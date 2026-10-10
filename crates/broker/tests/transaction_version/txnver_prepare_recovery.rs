@@ -56,9 +56,13 @@ async fn init_producer_id(
 ) -> InitProducerIdResponse {
     client
         .send(init_producer_request(
-            Some(transactional_id.into()),
-            60_000,
-            (identity.0, identity.1),
+            crate::support::transactions::InitProducerSetup {
+                transactional_id: Some(transactional_id.into()),
+                producer: crate::support::transactions::ProducerIdentity::from_wire((
+                    identity.0, identity.1,
+                )),
+                ..Default::default()
+            },
         ))
         .await
         .expect("InitProducerId")
@@ -118,11 +122,20 @@ async fn produce(
     assert!(code == 0, "Produce: {response:?}");
 }
 
-fn end_txn_request(transactional_id: &str, producer: Identity, committed: bool) -> EndTxnRequest {
+fn end_txn_request(
+    transactional_id: &str,
+    producer: Identity,
+    outcome: crate::support::transactions::TransactionOutcome,
+) -> EndTxnRequest {
     end_transaction_request(
         transactional_id,
-        (producer.producer_id, producer.epoch),
-        committed,
+        crate::support::transactions::EndTransactionSetup {
+            producer: crate::support::transactions::ProducerIdentity::from_wire((
+                producer.producer_id,
+                producer.epoch,
+            )),
+            outcome,
+        },
     )
 }
 
@@ -132,13 +145,13 @@ async fn end_txn_until_answered(
     client: &Client,
     transactional_id: &str,
     producer: Identity,
-    committed: bool,
+    outcome: crate::support::transactions::TransactionOutcome,
 ) -> EndTxnResponse {
     find_coordinator(client, transactional_id).await;
     crate::support::transaction_wire::retry_coordinator(
         || async {
             client
-                .send(end_txn_request(transactional_id, producer, committed))
+                .send(end_txn_request(transactional_id, producer, outcome))
                 .await
                 .expect("EndTxn")
         },
@@ -230,7 +243,7 @@ fn completed(producer: Identity, epoch_bump: i16) -> EndTxnResponse {
 struct CutCase {
     name: &'static str,
     topic: &'static str,
-    committed: bool,
+    outcome: crate::support::transactions::TransactionOutcome,
     downgrade_to: Option<i16>,
     epoch_bump: i16,
     /// What a `read_committed` consumer reads through the record that the
@@ -251,7 +264,7 @@ async fn end_txn_cut_by_shutdown(case: &CutCase) -> (Identity, EndTxnResponse, V
     )
     .await;
     let cut_client = admin_client(&first.bootstrap).await;
-    let request = end_txn_request(case.name, producer, case.committed);
+    let request = end_txn_request(case.name, producer, case.outcome);
     let cut = tokio::spawn(async move { cut_client.send(request).await });
     first
         .broker
@@ -266,7 +279,7 @@ async fn end_txn_cut_by_shutdown(case: &CutCase) -> (Identity, EndTxnResponse, V
     );
 
     let second = start(directory.path(), Some(BootstrapMode::Rejoin)).await;
-    let retried = end_txn_until_answered(&second.client, case.name, producer, case.committed).await;
+    let retried = end_txn_until_answered(&second.client, case.name, producer, case.outcome).await;
     produce(&second.client, case.topic, None, &["z"]).await;
     let seen = read_committed_through(&second.bootstrap, case.topic, "z").await;
     second.broker.shutdown().await;
@@ -279,7 +292,7 @@ async fn end_txn_cut_between_prepare_and_complete_completes_after_restart() {
         CutCase {
             name: "cut-commit",
             topic: "cut-commit",
-            committed: true,
+            outcome: crate::support::transactions::TransactionOutcome::Commit,
             downgrade_to: None,
             epoch_bump: 1,
             visible: &["a", "b", "c", "z"],
@@ -287,7 +300,7 @@ async fn end_txn_cut_between_prepare_and_complete_completes_after_restart() {
         CutCase {
             name: "cut-abort",
             topic: "cut-abort",
-            committed: false,
+            outcome: crate::support::transactions::TransactionOutcome::Abort,
             downgrade_to: None,
             epoch_bump: 1,
             visible: &["z"],
@@ -295,7 +308,7 @@ async fn end_txn_cut_between_prepare_and_complete_completes_after_restart() {
         CutCase {
             name: "cut-commit-tv1",
             topic: "cut-commit-tv1",
-            committed: true,
+            outcome: crate::support::transactions::TransactionOutcome::Commit,
             downgrade_to: Some(1),
             epoch_bump: 1,
             visible: &["a", "b", "c", "z"],
@@ -333,7 +346,11 @@ async fn init_producer_id_during_prepare_commit_is_concurrent_transactions() {
     )
     .await;
     let end_client = admin_client(&started.bootstrap).await;
-    let request = end_txn_request(transactional_id, producer, true);
+    let request = end_txn_request(
+        transactional_id,
+        producer,
+        crate::support::transactions::TransactionOutcome::Commit,
+    );
     let end = tokio::spawn(async move { end_client.send(request).await });
     started
         .broker
@@ -389,7 +406,11 @@ async fn end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() 
     .await;
     let answer = started
         .client
-        .send(end_txn_request(transactional_id, producer, true))
+        .send(end_txn_request(
+            transactional_id,
+            producer,
+            crate::support::transactions::TransactionOutcome::Commit,
+        ))
         .await
         .expect("EndTxn");
     assert!(
@@ -400,7 +421,13 @@ async fn end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() 
     started
         .broker
         .set_transaction_marker_fanout_for_test(MarkerFanoutMode::Open);
-    let retried = end_txn_until_answered(&started.client, transactional_id, producer, true).await;
+    let retried = end_txn_until_answered(
+        &started.client,
+        transactional_id,
+        producer,
+        crate::support::transactions::TransactionOutcome::Commit,
+    )
+    .await;
     assert!(retried == completed(producer, 1), "retried EndTxn");
     assert_visible_suffix_and_shutdown(started, topic, &["a", "b", "c", "z"]).await;
 }

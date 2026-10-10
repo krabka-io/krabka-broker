@@ -558,3 +558,25 @@ pub(super) async fn seed_classic_with_native(
     let native = join_native_consumer(&handle).await;
     (handle, native.member_id)
 }
+
+/// A marked classic handle, in the same get-before-mark order as coordinator dispatch.
+pub(super) fn marked_classic_handle(
+    coord: &Arc<GroupCoordinator>,
+    group_id: &str,
+) -> Arc<GroupActorHandle> {
+    let handle = coord.get_or_create_classic(group_id);
+    coord.mark_classic(group_id);
+    handle
+}
+
+/// The bidirectional migration fixture with both a hosted classic and a native consumer.
+pub(super) async fn bidirectional_with_members() -> (
+    Arc<GroupCoordinator>,
+    Arc<InMemoryOffsetsLog>,
+    Arc<GroupActorHandle>,
+    String,
+) {
+    let (coord, log) = bidirectional_coordinator();
+    let (handle, native) = seed_classic_with_native(&coord).await;
+    (coord, log, handle, native)
+}

@@ -368,7 +368,12 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     let coord = sasl_client(&format!("{coord_host}:{coord_port}")).await;
 
     let init = coord
-        .send(init_producer_request(Some(TID.into()), 60_000, (-1, -1)))
+        .send(init_producer_request(
+            crate::support::transactions::InitProducerSetup {
+                transactional_id: Some(TID.into()),
+                ..Default::default()
+            },
+        ))
         .await
         .expect("init producer id");
     assert!(init.error_code == 0, "InitProducerId failed: {init:?}");
@@ -410,7 +415,13 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     // the path the fix repairs — the pre-fix one-shot client could not
     // authenticate and EndTxn would surface a retriable UNKNOWN_SERVER_ERROR.
     let end = coord
-        .send(end_transaction_request(TID, (pid, epoch), true))
+        .send(end_transaction_request(
+            TID,
+            crate::support::transactions::EndTransactionSetup {
+                producer: crate::support::transactions::ProducerIdentity::from_wire((pid, epoch)),
+                ..Default::default()
+            },
+        ))
         .await
         .expect("end txn");
     assert!(
@@ -645,8 +656,13 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
         let ended = to_coordinator
             .send(end_transaction_request(
                 case.name,
-                (init.producer_id, init.producer_epoch),
-                true,
+                crate::support::transactions::EndTransactionSetup {
+                    producer: crate::support::transactions::ProducerIdentity::from_wire((
+                        init.producer_id,
+                        init.producer_epoch,
+                    )),
+                    ..Default::default()
+                },
             ))
             .await
             .expect("end txn");
@@ -685,9 +701,10 @@ async fn init_producer(client: &Client, transactional_id: &str) -> InitProducerI
     loop {
         let init = client
             .send(init_producer_request(
-                Some(transactional_id.into()),
-                60_000,
-                (-1, -1),
+                crate::support::transactions::InitProducerSetup {
+                    transactional_id: Some(transactional_id.into()),
+                    ..Default::default()
+                },
             ))
             .await
             .expect("init producer id");

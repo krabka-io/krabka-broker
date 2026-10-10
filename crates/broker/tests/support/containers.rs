@@ -510,7 +510,25 @@ pub async fn docker_run_blocking(args: Vec<String>, context: &'static str) -> st
 }
 
 /// Command prefix for authenticated admin tools mounted at the shared config path.
-pub fn jvm_admin_args(image: &str, mount: &str, tool: &str, bootstrap: &str) -> Vec<String> {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct JvmAdminSetup<'a> {
+    #[default("mirror.gcr.io/apache/kafka:4.3.1")]
+    pub image: &'a str,
+    #[default("/tmp/krabka-config:/krabka-config")]
+    pub mount: &'a str,
+    #[default("/opt/kafka/bin/kafka-configs.sh")]
+    pub tool: &'a str,
+    #[default("host.docker.internal:9092")]
+    pub bootstrap: &'a str,
+}
+
+pub fn jvm_admin_args(setup: JvmAdminSetup<'_>) -> Vec<String> {
+    let JvmAdminSetup {
+        image,
+        mount,
+        tool,
+        bootstrap,
+    } = setup;
     [
         "run",
         "--rm",

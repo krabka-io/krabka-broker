@@ -69,7 +69,12 @@ async fn init_producer_id(client: &Client, tid: &str) -> (i64, i16) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
         let resp = client
-            .send(init_producer_request(Some(tid.into()), 60_000, (-1, -1)))
+            .send(init_producer_request(
+                crate::support::transactions::InitProducerSetup {
+                    transactional_id: Some(tid.into()),
+                    ..Default::default()
+                },
+            ))
             .await
             .expect("InitProducerId");
         if resp.error_code == 0 {
@@ -133,7 +138,15 @@ async fn commit_via_end_txn(client: &Client, tid: &str, pid: i64, epoch: i16) ->
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let resp = client
-            .send(end_transaction_request(tid, (pid, epoch), true))
+            .send(end_transaction_request(
+                tid,
+                crate::support::transactions::EndTransactionSetup {
+                    producer: crate::support::transactions::ProducerIdentity::from_wire((
+                        pid, epoch,
+                    )),
+                    ..Default::default()
+                },
+            ))
             .await
             .expect("EndTxn");
         // 15/16: coordinator still loading — keep retrying until the deadline.

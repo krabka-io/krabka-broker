@@ -223,8 +223,13 @@ async fn set_up(client: &Client, case: &Case) -> Identity {
             let end = client
                 .send(end_transaction_request(
                     transactional_id,
-                    (producer.producer_id.0, producer.epoch.0),
-                    true,
+                    crate::support::transactions::EndTransactionSetup {
+                        producer: crate::support::transactions::ProducerIdentity::from_wire((
+                            producer.producer_id.0,
+                            producer.epoch.0,
+                        )),
+                        ..Default::default()
+                    },
                 ))
                 .await
                 .expect("EndTxn");

@@ -408,25 +408,44 @@ async fn a_record_at_the_delivery_limit_does_not_stall_the_partition() {
 }
 
 /// A `ShareFetch` of every partition of `topic_id`, with no wait.
-fn fetch_partitions(
-    group: &str,
-    epoch: i32,
+use crate::handlers::test_support::{ShareSessionEpoch, TopicPartitionCount};
+
+#[derive(Clone, Copy)]
+struct ShareResponseByteLimit(i32);
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct FetchPartitionsSetup<'a> {
+    #[default("g")]
+    group: &'a str,
+    #[default(ShareSessionEpoch(0))]
+    epoch: ShareSessionEpoch,
+    #[default(WireUuid::ZERO)]
     topic_id: WireUuid,
-    partitions: i32,
-    max_bytes: i32,
-) -> ShareFetchRequest {
+    partitions: TopicPartitionCount,
+    #[default(ShareResponseByteLimit(1 << 20))]
+    maximum: ShareResponseByteLimit,
+}
+
+fn fetch_partitions(setup: FetchPartitionsSetup<'_>) -> ShareFetchRequest {
+    let FetchPartitionsSetup {
+        group,
+        epoch,
+        topic_id,
+        partitions,
+        maximum,
+    } = setup;
     ShareFetchRequest {
         group_id: Some(group.into()),
         member_id: Some("member".into()),
-        share_session_epoch: epoch,
+        share_session_epoch: epoch.0,
         max_wait_ms: 0,
         min_bytes: 0,
-        max_bytes,
+        max_bytes: maximum.0,
         max_records: 500,
         batch_size: 500,
         topics: vec![FetchTopic {
             topic_id,
-            partitions: (0..partitions)
+            partitions: (0..partitions.0)
                 .map(|partition_index| FetchPartition {
                     partition_index,
                     ..Default::default()
@@ -519,7 +538,12 @@ async fn only_the_first_partition_may_exceed_the_byte_budget() {
         }
         let opened = send_share_fetch(
             &broker,
-            &fetch_partitions(&group, 0, topic_id, PARTITIONS, 1 << 20),
+            &fetch_partitions(FetchPartitionsSetup {
+                group: &group,
+                topic_id,
+                partitions: TopicPartitionCount(PARTITIONS),
+                ..Default::default()
+            }),
         )
         .await;
         assert!(spread(&opened).rows_with_records == 0, "{opened:?}");
@@ -530,13 +554,13 @@ async fn only_the_first_partition_may_exceed_the_byte_budget() {
 
         let limited = send_share_fetch(
             &broker,
-            &fetch_partitions(
-                &group,
-                1,
+            &fetch_partitions(FetchPartitionsSetup {
+                group: &group,
+                epoch: ShareSessionEpoch(1),
                 topic_id,
-                PARTITIONS,
-                size * numerator / denominator,
-            ),
+                partitions: TopicPartitionCount(PARTITIONS),
+                maximum: ShareResponseByteLimit(size * numerator / denominator),
+            }),
         )
         .await;
 
@@ -611,7 +635,11 @@ async fn a_batch_acquired_over_two_passes_is_carried_once() {
     // The first pass acquires offset 0 and falls short of `MinBytes`. While
     // the request waits, `other` releases offset 1, which the last pass
     // acquires.
-    let mut request = fetch_partitions("g", 1, topic_id, 1, 1 << 20);
+    let mut request = fetch_partitions(FetchPartitionsSetup {
+        epoch: ShareSessionEpoch(1),
+        topic_id,
+        ..Default::default()
+    });
     request.member_id = Some("waiting".into());
     request.min_bytes = 1 << 20;
     request.max_wait_ms = 1_000;

@@ -179,7 +179,10 @@ async fn init_producer_id_denied_without_txn_acl() {
         .await
         .expect("seed dummy ACL");
 
-    let req = init_producer_request(Some("tx-1".to_string()), 60_000, (-1, -1));
+    let req = init_producer_request(crate::support::transactions::InitProducerSetup {
+        transactional_id: Some("tx-1".to_string()),
+        ..Default::default()
+    });
     let resp = drive_init_producer_id_as_plain(addr, "alice", b"wonderland", req)
         .await
         .expect("InitProducerId must round-trip");

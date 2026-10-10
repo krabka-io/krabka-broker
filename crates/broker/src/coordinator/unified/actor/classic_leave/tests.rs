@@ -89,9 +89,8 @@ async fn classic_delete_append_failure_keeps_group_registered() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_removes_a_hosted_member_from_an_upgraded_group() {
-    let (coord, _log) = bidirectional_coordinator();
-    let (handle, native) =
-        crate::coordinator::unified::actor::test_support::seed_classic_with_native(&coord).await;
+    let (_coord, _log, handle, native) =
+        crate::coordinator::unified::actor::test_support::bidirectional_with_members().await;
 
     let response = rpc::classic_leave(&handle, "m-classic").await;
     check!(response.len() == 1);

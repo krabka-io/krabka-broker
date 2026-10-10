@@ -153,7 +153,14 @@ fn archive_segment(
 /// the pipeline reaches segment verification, plus whatever `extra` flags a
 /// scenario needs.
 fn restore_args(archive_root: &StdPath, log_dir: &StdPath, extra: &[&str]) -> RestoreArgs {
-    let argv = cli_args::restore_argv(archive_root, log_dir, "127.0.0.1:9093", extra);
+    let argv = cli_args::restore_argv(
+        archive_root,
+        log_dir,
+        cli_args::RestoreOptions {
+            extra,
+            ..Default::default()
+        },
+    );
     Cli::try_parse_from(argv).expect("valid command line").args
 }
 

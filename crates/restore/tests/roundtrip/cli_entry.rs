@@ -24,8 +24,10 @@ async fn cli_restore(extra: &[&str]) -> CliRestore {
     let code = run_from_args(crate::args::restore_argv(
         fixture.archive_root.path(),
         &log_dir,
-        "127.0.0.1:9093",
-        extra,
+        crate::args::RestoreOptions {
+            extra,
+            ..Default::default()
+        },
     ))
     .await;
     check!(code == EXIT_OK);

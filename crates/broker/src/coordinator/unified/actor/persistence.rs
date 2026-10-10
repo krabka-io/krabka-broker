@@ -69,30 +69,23 @@ fn current_topic_partitions(
     member: &MemberState,
     partitions: &HashMap<Uuid, Vec<i32>>,
 ) -> Vec<CurrentTopicPartitions> {
-    let mut topics: Vec<CurrentTopicPartitions> = partitions
-        .iter()
-        .filter(|(_, partitions)| !partitions.is_empty())
-        .map(|(topic_id, partitions)| {
-            let mut partitions = partitions.clone();
-            partitions.sort_unstable();
-            CurrentTopicPartitions {
-                topic_id: *topic_id,
-                assignment_epochs: Some(
-                    partitions
-                        .iter()
-                        .map(|&partition| {
-                            member
-                                .assignment_epoch(topic_id, partition)
-                                .unwrap_or_else(|| member.member_epoch.max(0))
-                        })
-                        .collect(),
-                ),
-                partitions,
-            }
+    crate::coordinator::unified::persistence::sorted_partitions(partitions)
+        .into_iter()
+        .map(|(topic_id, partitions)| CurrentTopicPartitions {
+            topic_id,
+            assignment_epochs: Some(
+                partitions
+                    .iter()
+                    .map(|&partition| {
+                        member
+                            .assignment_epoch(&topic_id, partition)
+                            .unwrap_or_else(|| member.member_epoch.max(0))
+                    })
+                    .collect(),
+            ),
+            partitions,
         })
-        .collect();
-    topics.sort_by_key(|topic| topic.topic_id.0);
-    topics
+        .collect()
 }
 
 pub(super) fn current_assignment_value(member: &MemberState) -> CurrentMemberAssignmentValue {
@@ -342,18 +335,11 @@ mod tests {
     use crate::coordinator::unified::actor::member_state::build_member;
 
     fn joined(member_id: &str) -> MemberState {
-        build_member(
-            member_id,
-            &ConsumerGroupHeartbeatRequest {
-                subscribed_topic_names: Some(vec!["t".into()]),
-                rebalance_timeout_ms: 60_000,
+        super::super::test_support::subscribed_member(
+            super::super::test_support::ConsumerMemberSetup {
+                member_id,
                 ..Default::default()
             },
-            crate::coordinator::unified::ClientIdentity {
-                id: "client",
-                host: "host",
-            },
-            Instant::now(),
         )
     }
 

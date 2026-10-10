@@ -25,7 +25,10 @@ use crate::support::{
 };
 
 pub(crate) fn init_producer_request(transactional_id: &str) -> InitProducerIdRequest {
-    producer_initialization(Some(transactional_id.into()), 60_000, (-1, -1))
+    producer_initialization(crate::support::transactions::InitProducerSetup {
+        transactional_id: Some(transactional_id.into()),
+        ..Default::default()
+    })
 }
 
 /// Supply both layouts so the client can negotiate either protocol version.

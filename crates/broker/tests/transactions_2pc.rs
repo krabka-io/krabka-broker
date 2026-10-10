@@ -81,7 +81,11 @@ async fn enable_2pc_rejected_when_cluster_disabled() {
         .send(two_phase_init(InitProducerIdRequest {
             enable2_pc: true,
             keep_prepared_txn: false,
-            ..init_producer_request(Some("tid-2pc".into()), 30_000, (-1, -1))
+            ..init_producer_request(crate::support::transactions::InitProducerSetup {
+                transactional_id: Some("tid-2pc".into()),
+                timeout: crate::support::transactions::TransactionTimeoutMillis(30_000),
+                ..Default::default()
+            })
         }))
         .await
         .expect("InitProducerId");
@@ -116,7 +120,11 @@ async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
         .send(two_phase_init(InitProducerIdRequest {
             enable2_pc: true,
             keep_prepared_txn: true,
-            ..init_producer_request(Some("tid-keep".into()), 30_000, (-1, -1))
+            ..init_producer_request(crate::support::transactions::InitProducerSetup {
+                transactional_id: Some("tid-keep".into()),
+                timeout: crate::support::transactions::TransactionTimeoutMillis(30_000),
+                ..Default::default()
+            })
         }))
         .await
         .expect("InitProducerId");
@@ -162,7 +170,11 @@ async fn enable_2pc_persists_no_timeout_sentinel() {
         .send(two_phase_init(InitProducerIdRequest {
             enable2_pc: true,
             keep_prepared_txn: false,
-            ..init_producer_request(Some("tid-2pc-ok".into()), 30_000, (-1, -1))
+            ..init_producer_request(crate::support::transactions::InitProducerSetup {
+                transactional_id: Some("tid-2pc-ok".into()),
+                timeout: crate::support::transactions::TransactionTimeoutMillis(30_000),
+                ..Default::default()
+            })
         }))
         .await
         .expect("InitProducerId(enable2Pc)");

@@ -40,9 +40,10 @@ async fn await_transaction_coordinator(client: &Client) -> (i64, i16) {
     loop {
         let response = client
             .send(init_producer_request(
-                Some(VERIFY_TID.into()),
-                60_000,
-                (-1, -1),
+                crate::support::transactions::InitProducerSetup {
+                    transactional_id: Some(VERIFY_TID.into()),
+                    ..Default::default()
+                },
             ))
             .await
             .expect("InitProducerId");
