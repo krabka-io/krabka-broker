@@ -449,17 +449,13 @@ mod tests {
     /// exception that fails the load.
     #[test]
     fn share_records_replay_as_kafka() {
-        let group =
-            crate::coordinator::unified::test_support::expected_seed(ShareGroupSeed::new_group);
         let tombstone = |kind: &str, id: &str| Record::Tombstone(key(kind, id));
         // Kafka's `ShareGroup.createGroupTombstoneRecords` for member `m`.
-        let kafka_deletion = || {
-            crate::coordinator::unified::test_support::assignment_tombstones(
-                tombstone,
-                "m",
-                &["state", "group"],
-            )
-        };
+        let (group, kafka_deletion) = crate::coordinator::unified::test_support::replay_fixtures(
+            ShareGroupSeed::new_group,
+            tombstone,
+            crate::coordinator::unified::test_support::AssignmentDeletionSetup::default(),
+        );
         let rows: Vec<(&str, Vec<Record>, Outcome)> = vec![
             (
                 "every record of a group",
@@ -527,12 +523,11 @@ mod tests {
             ),
             (
                 "a member tombstone while the member has a target",
-                vec![
+                crate::coordinator::unified::test_support::undeleted_target_records(
                     Record::Member("m"),
                     Record::Target("m"),
-                    tombstone("current", "m"),
-                    tombstone("member", "m"),
-                ],
+                    tombstone,
+                ),
                 Err(
                     "Received a tombstone record to delete member m but member exists in \
                      target assignment."

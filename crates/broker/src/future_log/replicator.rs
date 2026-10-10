@@ -289,8 +289,14 @@ mod tests {
             .expect("source log")
             .set_stamp_source(stamp_source)
             .expect("source stamp index");
-        append_records(&part, 3);
-        partitions.insert("t".into(), PartitionIndex(0), part.clone());
+        crate::future_log::test_support::append_and_register_source(
+            &part,
+            &partitions,
+            crate::test_support::PartitionRecordsSetup {
+                count: crate::test_support::RecordCount(3),
+                ..Default::default()
+            },
+        );
 
         resume_and_wait(
             &part,
@@ -307,7 +313,7 @@ mod tests {
             canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target.path())
         );
         assert!(part.stamp_for_offset(Offset(0)) == Some(101));
-        append_records(&part, 1);
+        append_records(&part, crate::test_support::PartitionRecordsSetup::default());
         assert!(part.stamp_for_offset(Offset(3)) == Some(102));
     }
 
@@ -319,7 +325,13 @@ mod tests {
         let future_logs = Arc::new(DashMap::new());
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
         for _ in 0..4 {
-            append_value_batch(&part, 400 * 1024);
+            append_value_batch(
+                &part,
+                crate::future_log::test_support::FutureRecordSetup {
+                    value_size: crate::future_log::test_support::RecordValueBytes(400 * 1024),
+                    ..Default::default()
+                },
+            );
         }
         partitions.insert("t".into(), PartitionIndex(0), part.clone());
 
@@ -344,7 +356,13 @@ mod tests {
     ) -> (Arc<Partition>, Arc<Mutex<Log>>, PathBuf) {
         let part = fixture_partition(primary, "t", PartitionIndex(0));
         for _ in 0..5 {
-            append_value_batch(&part, 10);
+            append_value_batch(
+                &part,
+                crate::future_log::test_support::FutureRecordSetup {
+                    value_size: crate::future_log::test_support::RecordValueBytes(10),
+                    ..Default::default()
+                },
+            );
         }
         let (future_path, future_log) = crate::future_log::test_support::open_future_log(target);
         let policy = test_policy();
@@ -400,7 +418,10 @@ mod tests {
         let (part, future_log, future_path) =
             truncated_copied_future(primary.path(), target.path()).await;
         for _ in 0..2 {
-            append_value_batch(&part, 20);
+            append_value_batch(
+                &part,
+                crate::future_log::test_support::FutureRecordSetup::default(),
+            );
         }
         assert!(part.log_end_offset() == Offset(5));
         assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
@@ -423,7 +444,13 @@ mod tests {
         // The restart: nothing remembers the cut.
         assert!(part.take_future_truncation().await.unwrap() == Some(Offset(3)));
         for _ in 0..2 {
-            append_epoch_batch(&part, 20, 2);
+            append_epoch_batch(
+                &part,
+                crate::future_log::test_support::FutureRecordSetup {
+                    leader_epoch: krabka_ids::LeaderEpoch(2),
+                    ..Default::default()
+                },
+            );
         }
         assert!(part.log_end_offset() == future_log.lock().unwrap().log_end_offset());
 
@@ -442,7 +469,10 @@ mod tests {
         part.truncate_to(Offset(4)).await.unwrap();
         part.truncate_to(Offset(2)).await.unwrap();
         for _ in 0..3 {
-            append_value_batch(&part, 20);
+            append_value_batch(
+                &part,
+                crate::future_log::test_support::FutureRecordSetup::default(),
+            );
         }
         assert!(part.log_end_offset() == Offset(5));
         let (ack, outcome) = oneshot::channel();

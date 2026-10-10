@@ -30,8 +30,10 @@ fn operator_key(
 ) -> (Ed25519KeyPair, OperatorKeyEntry) {
     let (pair, path) = crate::test_support::ed25519_public_key_file(
         dir.path(),
-        &format!("{key_id}.pub"),
-        "write key file",
+        crate::test_support::OperatorKeyFileSetup {
+            name: &format!("{key_id}.pub"),
+            context: "write key file",
+        },
     );
     (
         pair,

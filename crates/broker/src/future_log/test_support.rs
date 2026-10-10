@@ -53,12 +53,11 @@ pub(super) fn fixture_partition(
     )
 }
 
-pub(super) fn append_records(part: &Arc<Partition>, count: i32) {
-    let mut batch =
-        crate::test_support::repeated_records_batch(crate::test_support::RepeatedRecordsSetup {
-            count: crate::test_support::RecordCount(count),
-            timestamp: crate::test_support::UnixMillis(1_700_000_000),
-        });
+pub(super) fn append_records(
+    part: &Arc<Partition>,
+    setup: crate::test_support::PartitionRecordsSetup,
+) {
+    let mut batch = crate::test_support::partition_records_batch(setup);
     part.log
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -66,17 +65,39 @@ pub(super) fn append_records(part: &Arc<Partition>, count: i32) {
         .expect("append source records");
 }
 
-/// Appends a one-record batch stamped with leader epoch 1.
-pub(super) fn append_value_batch(part: &Arc<Partition>, value_size: usize) {
-    append_epoch_batch(part, value_size, 1);
+/// Append the source data before making the partition visible in the registry.
+pub(super) fn append_and_register_source(
+    part: &Arc<Partition>,
+    partitions: &crate::partition_registry::PartitionRegistry,
+    setup: crate::test_support::PartitionRecordsSetup,
+) {
+    append_records(part, setup);
+    partitions.insert("t".into(), PartitionIndex(0), part.clone());
 }
 
-/// Appends a one-record batch stamped with `leader_epoch`, as a replicated
-/// partition holds them.
-pub(super) fn append_epoch_batch(part: &Arc<Partition>, value_size: usize, leader_epoch: i32) {
+#[derive(Clone, Copy)]
+pub(super) struct RecordValueBytes(pub usize);
+
+impl Default for RecordValueBytes {
+    fn default() -> Self {
+        Self(20)
+    }
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct FutureRecordSetup {
+    pub value_size: RecordValueBytes,
+    #[default(krabka_ids::LeaderEpoch(1))]
+    pub leader_epoch: krabka_ids::LeaderEpoch,
+}
+
+pub(super) use append_epoch_batch as append_value_batch;
+
+/// Appends one repeated-value record at the selected leader epoch.
+pub(super) fn append_epoch_batch(part: &Arc<Partition>, setup: FutureRecordSetup) {
     let mut batch = RecordBatch {
         base_offset: 0,
-        partition_leader_epoch: leader_epoch,
+        partition_leader_epoch: setup.leader_epoch.0,
         attributes: Attributes::default(),
         last_offset_delta: 0,
         base_timestamp: 1_700_000_000,
@@ -89,7 +110,7 @@ pub(super) fn append_epoch_batch(part: &Arc<Partition>, value_size: usize, leade
             offset_delta: 0,
             timestamp_delta: 0,
             key: None,
-            value: Some(Bytes::from(vec![b'x'; value_size])),
+            value: Some(Bytes::from(vec![b'x'; setup.value_size.0])),
             headers: vec![],
         }],
     };

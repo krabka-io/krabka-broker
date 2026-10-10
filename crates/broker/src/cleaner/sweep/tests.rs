@@ -252,10 +252,13 @@ async fn tick_all_skips_a_frozen_partition_and_compacts_an_unfrozen_control() {
     // One image, one sweep. The control partition is compactable in
     // exactly the same way as the two frozen ones, so a sweep that
     // compacted nothing at all could not pass this test.
-    let image = image_with_freezes(&[
-        ("frozen-literal", PatternType::Literal),
-        ("tenant-a.", PatternType::Prefixed),
-    ]);
+    let image = image_with_freezes(
+        &[
+            ("frozen-literal", PatternType::Literal),
+            ("tenant-a.", PatternType::Prefixed),
+        ],
+        crate::test_support::FrozenTopicsImageSetup::default(),
+    );
 
     tick_all(
         &registry,
@@ -286,7 +289,10 @@ async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
     let registry = PartitionRegistry::new();
     let cases = compactable_topics(&dir, &registry, &["orders"]).await;
     let (_, partition, before) = &cases[0];
-    let mut image = image_with_freezes(&[("orders", PatternType::Literal)]);
+    let mut image = image_with_freezes(
+        &[("orders", PatternType::Literal)],
+        crate::test_support::FrozenTopicsImageSetup::default(),
+    );
     let metrics = BrokerMetrics::new();
 
     tick_all(
@@ -318,10 +324,13 @@ async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
 
 #[test]
 fn freeze_stops_compaction_reads_the_registry_the_produce_path_reads() {
-    let image = image_with_freezes(&[
-        ("orders", PatternType::Literal),
-        ("tenant-a.", PatternType::Prefixed),
-    ]);
+    let image = image_with_freezes(
+        &[
+            ("orders", PatternType::Literal),
+            ("tenant-a.", PatternType::Prefixed),
+        ],
+        crate::test_support::FrozenTopicsImageSetup::default(),
+    );
 
     for (label, topic, want) in [
         (

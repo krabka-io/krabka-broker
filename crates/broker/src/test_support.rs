@@ -88,18 +88,49 @@ pub(crate) fn ecdsa_pair_for_host(host: &str) -> (rcgen::Certificate, rcgen::Key
     (cert, key)
 }
 
+/// Advertise every finalized feature from zero through its finalized level.
+pub(crate) fn finalized_broker_features(
+    image: &krabka_metadata::MetadataImage,
+) -> Vec<krabka_protocol::owned::broker_registration_request::Feature> {
+    image
+        .finalized_features()
+        .iter()
+        .map(
+            |(name, level)| krabka_protocol::owned::broker_registration_request::Feature {
+                name: name.clone(),
+                min_supported_version: 0,
+                max_supported_version: *level,
+                ..Default::default()
+            },
+        )
+        .collect()
+}
+
+/// Generate a real Ed25519 pair for signing and trust-set fixtures.
+pub(crate) fn fresh_ed25519_key() -> ring::signature::Ed25519KeyPair {
+    use ring::signature::Ed25519KeyPair;
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate pkcs8");
+    Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse pkcs8")
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct OperatorKeyFileSetup<'a> {
+    #[default("alice.pub")]
+    pub name: &'a str,
+    #[default("write public key")]
+    pub context: &'a str,
+}
+
 /// Stage an operator public key while returning the private signing pair to its owner.
 pub(crate) fn ed25519_public_key_file(
     dir: &std::path::Path,
-    name: &str,
-    context: &str,
+    setup: OperatorKeyFileSetup<'_>,
 ) -> (ring::signature::Ed25519KeyPair, std::path::PathBuf) {
-    use ring::signature::{Ed25519KeyPair, KeyPair as _};
-    let rng = ring::rand::SystemRandom::new();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate pkcs8");
-    let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse pkcs8");
-    let path = dir.join(name);
-    std::fs::write(&path, pair.public_key().as_ref()).expect(context);
+    use ring::signature::KeyPair as _;
+    let pair = fresh_ed25519_key();
+    let path = dir.join(setup.name);
+    std::fs::write(&path, pair.public_key().as_ref()).expect(setup.context);
     (pair, path)
 }
 
@@ -368,6 +399,21 @@ pub(crate) struct RepeatedRecordsSetup {
 #[derive(Clone, Copy)]
 struct RecordOffsetDelta(i32);
 
+/// Partition fixtures append records with a deterministic wall-clock timestamp.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct PartitionRecordsSetup {
+    pub count: RecordCount,
+    #[default(UnixMillis(1_700_000_000))]
+    pub timestamp: UnixMillis,
+}
+
+pub(crate) fn partition_records_batch(setup: PartitionRecordsSetup) -> RecordBatch {
+    repeated_records_batch(RepeatedRecordsSetup {
+        count: setup.count,
+        timestamp: setup.timestamp,
+    })
+}
+
 /// Builds a batch of identical values, preserving the explicit count header.
 pub(crate) fn repeated_records_batch(setup: RepeatedRecordsSetup) -> RecordBatch {
     let RepeatedRecordsSetup {
@@ -473,11 +519,18 @@ pub(crate) fn topic_freeze_record(setup: FreezeSetup<'_>) -> krabka_metadata::To
     }
 }
 
-/// One live DR-cutover freeze per scope, in the sweep/transaction test image.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct FrozenTopicsImageSetup {
+    #[default(uuid::Uuid::from_u128(0x5150))]
+    pub cluster: uuid::Uuid,
+}
+
+/// One live DR-cutover freeze per scope, in the requested cluster image.
 pub(crate) fn frozen_topics_image(
     scopes: &[(&str, krabka_metadata::PatternType)],
+    setup: FrozenTopicsImageSetup,
 ) -> MetadataImage {
-    let mut image = MetadataImage::new(uuid::Uuid::from_u128(0x5150));
+    let mut image = MetadataImage::new(setup.cluster);
     for &(scope, pattern_type) in scopes {
         image.apply(&krabka_metadata::MetadataRecord::V1TopicFreeze(
             topic_freeze_record(FreezeSetup {

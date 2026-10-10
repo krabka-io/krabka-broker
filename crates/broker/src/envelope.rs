@@ -780,25 +780,57 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Default)]
+    enum ForwardedBodyEncoding {
+        Legacy,
+        #[default]
+        Flexible,
+    }
+
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct ForwardedResponseSetup {
+        #[default(krabka_ids::ApiKey(19))]
+        api_key: krabka_ids::ApiKey,
+        api_version: krabka_ids::ApiVersion,
+        #[default(EmbeddedCorrelationId(0x0102_0304))]
+        correlation_id: EmbeddedCorrelationId,
+        encoding: ForwardedBodyEncoding,
+    }
+
+    fn forwarded(setup: ForwardedResponseSetup) -> ForwardedRequest {
+        ForwardedRequest {
+            api_key: setup.api_key.0,
+            api_version: setup.api_version.0,
+            correlation_id: setup.correlation_id.0,
+            client_id: None,
+            body: Bytes::new(),
+            body_flexible: matches!(setup.encoding, ForwardedBodyEncoding::Flexible),
+        }
+    }
+
     /// `unwrap_response` strips the header `wrap_response` writes and hands
     /// back the correlation id and the body. `ApiVersions` keeps a v0 header
     /// even when its body is flexible.
     #[test]
     fn a_wrapped_response_unwraps_to_its_correlation_id_and_body() {
-        let forwarded = |api_key: i16, body_flexible: bool| ForwardedRequest {
-            api_key,
-            api_version: 0,
-            correlation_id: 0x0102_0304,
-            client_id: None,
-            body: Bytes::new(),
-            body_flexible,
-        };
         let cases = [
-            ("flexible body takes a v1 header", forwarded(19, true)),
-            ("non-flexible body takes a v0 header", forwarded(19, false)),
+            (
+                "flexible body takes a v1 header",
+                forwarded(ForwardedResponseSetup::default()),
+            ),
+            (
+                "non-flexible body takes a v0 header",
+                forwarded(ForwardedResponseSetup {
+                    encoding: ForwardedBodyEncoding::Legacy,
+                    ..Default::default()
+                }),
+            ),
             (
                 "flexible ApiVersions takes a v0 header",
-                forwarded(18, true),
+                forwarded(ForwardedResponseSetup {
+                    api_key: krabka_ids::ApiKey(18),
+                    ..Default::default()
+                }),
             ),
         ];
 
@@ -1189,23 +1221,22 @@ mod tests {
     /// forwarded header, so the forwarder can relay these bytes untouched.
     #[test]
     fn a_served_response_is_wrapped_with_the_clients_own_response_header() {
-        let forwarded = |api_key: i16, body_flexible: bool| ForwardedRequest {
-            api_key,
-            api_version: 0,
-            correlation_id: 0x0102_0304,
-            client_id: None,
-            body: Bytes::new(),
-            body_flexible,
-        };
         let cases = [
             (
                 "flexible body takes a v1 header",
-                forwarded(44, true),
+                forwarded(ForwardedResponseSetup {
+                    api_key: krabka_ids::ApiKey(44),
+                    ..Default::default()
+                }),
                 vec![0x01, 0x02, 0x03, 0x04, 0x00, b'x'],
             ),
             (
                 "non-flexible body takes a v0 header",
-                forwarded(33, false),
+                forwarded(ForwardedResponseSetup {
+                    api_key: krabka_ids::ApiKey(33),
+                    encoding: ForwardedBodyEncoding::Legacy,
+                    ..Default::default()
+                }),
                 vec![0x01, 0x02, 0x03, 0x04, b'x'],
             ),
         ];

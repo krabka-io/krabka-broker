@@ -526,7 +526,6 @@ mod wire_tests {
         BrokerRegistrationRecord, LeaderEpoch, NodeId, PartitionRecord, TopicConfigRecord,
         TopicRecord,
     };
-    use krabka_protocol::owned::broker_registration_request::Feature;
 
     use super::*;
     use crate::{
@@ -676,16 +675,7 @@ mod wire_tests {
                 security_protocol: 0,
                 ..Default::default()
             }],
-            features: image
-                .finalized_features()
-                .iter()
-                .map(|(name, level)| Feature {
-                    name: name.clone(),
-                    min_supported_version: 0,
-                    max_supported_version: *level,
-                    ..Default::default()
-                })
-                .collect(),
+            features: crate::test_support::finalized_broker_features(&image),
             log_dirs: vec![krabka_protocol::primitives::uuid::Uuid(
                 uuid::Uuid::from_u128(1011).into_bytes(),
             )],

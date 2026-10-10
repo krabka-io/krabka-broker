@@ -602,12 +602,11 @@ mod tests {
             ),
             (
                 "a member tombstone while the member has a target",
-                vec![
+                crate::coordinator::unified::test_support::undeleted_target_records(
                     Record::Member("m"),
                     Record::Target("m"),
-                    tombstone("current", "m"),
-                    tombstone("member", "m"),
-                ],
+                    tombstone,
+                ),
                 Err(
                     "Received a tombstone record to delete member m but did not receive \
                      ConsumerGroupTargetAssignmentMetadataValue tombstone."
@@ -623,18 +622,9 @@ mod tests {
                         .into(),
                 ),
             ),
-            (
-                "a group tombstone with a member left",
-                vec![
-                    Record::Member("m"),
-                    tombstone("target-epoch", ""),
-                    tombstone("group", ""),
-                ],
-                Err(
-                    "Received a tombstone record to delete group g but the group still has 1 \
-                     members."
-                        .into(),
-                ),
+            crate::coordinator::unified::test_support::group_deletion_with_member_case(
+                Record::Member("m"),
+                tombstone,
             ),
             (
                 "a group tombstone before the target metadata tombstone",

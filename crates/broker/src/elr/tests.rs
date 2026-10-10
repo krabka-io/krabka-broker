@@ -14,7 +14,7 @@ use krabka_metadata::{
     BrokerRegistrationRecord, LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord,
 };
 use krabka_protocol::owned::{
-    broker_registration_request::{BrokerRegistrationRequest, Feature, Listener},
+    broker_registration_request::{BrokerRegistrationRequest, Listener},
     describe_topic_partitions_response::DescribeTopicPartitionsResponsePartition,
 };
 
@@ -236,16 +236,7 @@ fn row(setup: ExpectedElrSetup<'_>) -> DescribeTopicPartitionsResponsePartition 
 /// `SupportedFeatures` does.
 async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) {
     let image = broker.controller.current_image();
-    let features = image
-        .finalized_features()
-        .iter()
-        .map(|(name, level)| Feature {
-            name: name.clone(),
-            min_supported_version: 0,
-            max_supported_version: *level,
-            ..Default::default()
-        })
-        .collect();
+    let features = crate::test_support::finalized_broker_features(&image);
     let request = BrokerRegistrationRequest {
         broker_id: 3,
         cluster_id: image.cluster_id().to_string(),

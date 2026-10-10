@@ -4,12 +4,12 @@
 //! connection, so a test can present a record she signed as well as one the
 //! trust set refuses.
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::net::SocketAddr;
 
-use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord};
+use krabka_metadata::{MetadataImage, PatternType, TopicFreezeRecord};
 use krabka_protocol::krabka::freeze::SetTopicFreezeRequest;
 use krabka_security::Principal;
-use ring::signature::{Ed25519KeyPair, KeyPair as _};
+use ring::signature::Ed25519KeyPair;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -54,21 +54,10 @@ const ALICE_NAME: &str = "alice";
 const ALICE_KEY: &str = "alice-yubi";
 
 fn image(entries: &[(&str, PatternType)]) -> MetadataImage {
-    let mut image = MetadataImage::new(CLUSTER);
-    for (scope, pattern_type) in entries {
-        image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
-            scope: (*scope).to_owned(),
-            pattern_type: *pattern_type,
-            frozen: true,
-            reason: "DR cutover".to_owned(),
-            set_by: ALICE.to_owned(),
-            set_at_ms: 1_770_000_000_000,
-            proposal_id: Uuid::nil(),
-            key_id: String::new(),
-            signature: Vec::new(),
-        }));
-    }
-    image
+    crate::test_support::frozen_topics_image(
+        entries,
+        crate::test_support::FrozenTopicsImageSetup { cluster: CLUSTER },
+    )
 }
 
 fn peer() -> SocketAddr {
@@ -88,11 +77,10 @@ fn context<'a>(principal: &'a Principal, peer: &'a SocketAddr) -> RequestContext
 
 // A broker configuration with alice's operator key loaded.
 fn config_with_alice(dir: &TempDir) -> (BrokerConfig, Ed25519KeyPair) {
-    let rng = ring::rand::SystemRandom::new();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate pkcs8");
-    let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse pkcs8");
-    let path: PathBuf = dir.path().join("alice.pub");
-    std::fs::write(&path, pair.public_key().as_ref()).expect("write public key");
+    let (pair, path) = crate::test_support::ed25519_public_key_file(
+        dir.path(),
+        crate::test_support::OperatorKeyFileSetup::default(),
+    );
     let keys = OperatorKeys::load(&[OperatorKeyEntry {
         key_id: ALICE_KEY.to_owned(),
         principal: ALICE.to_owned(),

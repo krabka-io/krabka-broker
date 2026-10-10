@@ -40,7 +40,13 @@ struct Trust {
 }
 
 fn fresh_key(dir: &TempDir, name: &str) -> (Ed25519KeyPair, PathBuf) {
-    crate::test_support::ed25519_public_key_file(dir.path(), name, "write public key")
+    crate::test_support::ed25519_public_key_file(
+        dir.path(),
+        crate::test_support::OperatorKeyFileSetup {
+            name,
+            ..Default::default()
+        },
+    )
 }
 
 fn trust() -> Trust {

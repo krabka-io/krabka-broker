@@ -116,10 +116,13 @@ mod tests {
 
     #[test]
     fn frozen_topics_keeps_the_covered_names_and_nothing_else() {
-        let image = image_with_freezes(&[
-            ("orders", PatternType::Literal),
-            ("tenant-a.", PatternType::Prefixed),
-        ]);
+        let image = image_with_freezes(
+            &[
+                ("orders", PatternType::Literal),
+                ("tenant-a.", PatternType::Prefixed),
+            ],
+            crate::test_support::FrozenTopicsImageSetup::default(),
+        );
 
         // (label, the topics the request names, the names the gate keeps)
         let cases: [(&str, &[&str], &[&str]); 5] = [
@@ -158,7 +161,7 @@ mod tests {
 
     #[test]
     fn frozen_topics_is_empty_on_a_cluster_with_no_freeze() {
-        let image = image_with_freezes(&[]);
+        let image = image_with_freezes(&[], crate::test_support::FrozenTopicsImageSetup::default());
         let topics = [topic("orders", &[0]), topic("tenant-a.billing", &[1])];
 
         check!(frozen_topics(&image, &topics, &HashSet::new()) == HashSet::new());

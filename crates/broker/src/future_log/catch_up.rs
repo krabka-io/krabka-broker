@@ -143,7 +143,13 @@ mod tests {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        append_records(&part, 3);
+        append_records(
+            &part,
+            crate::test_support::PartitionRecordsSetup {
+                count: crate::test_support::RecordCount(3),
+                ..Default::default()
+            },
+        );
         part.log
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -185,7 +191,7 @@ mod tests {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        append_records(&part, 1);
+        append_records(&part, crate::test_support::PartitionRecordsSetup::default());
         let (_future_path, future) =
             crate::future_log::test_support::open_future_log(target.path());
         let throttle = crate::throttle::TokenBucket::new();

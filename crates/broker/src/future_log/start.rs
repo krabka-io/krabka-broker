@@ -214,7 +214,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::future_log::test_support::{append_records, fixture_partition, test_policy};
+    use crate::future_log::test_support::{fixture_partition, test_policy};
 
     // Move t-0 using the common log config and policy, with caller-owned registries/status.
     macro_rules! move_with_defaults {
@@ -485,8 +485,14 @@ mod tests {
         let partitions = Arc::new(PartitionRegistry::new());
         let future_logs = Arc::new(DashMap::new());
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        append_records(&part, 3);
-        partitions.insert("t".into(), PartitionIndex(0), part.clone());
+        crate::future_log::test_support::append_and_register_source(
+            &part,
+            &partitions,
+            crate::test_support::PartitionRecordsSetup {
+                count: crate::test_support::RecordCount(3),
+                ..Default::default()
+            },
+        );
 
         // Plant a registry entry pointing at `extra`.
         let (future_path, future_log) =

@@ -44,7 +44,13 @@ async fn install_isr_advances_and_notifies_only_synced_storage() {
         let hw_advance_notify = Arc::new(Notify::new());
         let (mut partition, _dir) = test_partition(hw_advance_notify.clone());
         partition.diskless = diskless;
-        append_records(&partition, 3);
+        append_records(
+            &partition,
+            crate::test_support::PartitionRecordsSetup {
+                count: crate::test_support::RecordCount(3),
+                ..Default::default()
+            },
+        );
         assert!(partition.high_watermark().await == 0);
 
         let waiter = hw_advance_notify.notified();
@@ -70,7 +76,13 @@ async fn install_isr_advances_and_notifies_only_synced_storage() {
 async fn install_isr_same_high_watermark_does_not_notify() {
     let hw_advance_notify = Arc::new(Notify::new());
     let (p, _td) = test_partition(hw_advance_notify.clone());
-    append_records(&p, 2);
+    append_records(
+        &p,
+        crate::test_support::PartitionRecordsSetup {
+            count: crate::test_support::RecordCount(2),
+            ..Default::default()
+        },
+    );
     install_local_isr(&p).await;
     assert!(p.high_watermark().await == 2);
 
@@ -114,7 +126,13 @@ async fn set_follower_hw_clamps_advances_and_notifies() {
     let (p, _dir) = test_partition(hw_advance_notify.clone());
 
     // Append a 3-record batch so log_end_offset() == 3.
-    append_records(&p, 3);
+    append_records(
+        &p,
+        crate::test_support::PartitionRecordsSetup {
+            count: crate::test_support::RecordCount(3),
+            ..Default::default()
+        },
+    );
     assert!(p.log_end_offset() == 3);
 
     // reported_hw below log_end: stored verbatim, notify fires.

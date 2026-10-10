@@ -127,12 +127,8 @@ pub(crate) async fn install_three_replica_isr(partition: &Partition) {
         .await;
 }
 
-pub(super) fn append_records(p: &Partition, count: i32) {
-    let mut batch =
-        crate::test_support::repeated_records_batch(crate::test_support::RepeatedRecordsSetup {
-            count: crate::test_support::RecordCount(count),
-            timestamp: crate::test_support::UnixMillis(1_700_000_000),
-        });
+pub(super) fn append_records(p: &Partition, setup: crate::test_support::PartitionRecordsSetup) {
+    let mut batch = crate::test_support::partition_records_batch(setup);
     p.log
         .lock()
         .expect("log mutex")

@@ -225,7 +225,8 @@ mod tests {
         config::NextGenConfig,
         offsets_log::fake::InMemoryOffsetsLog,
         share::actor::test_support::{
-            heartbeat, make_coordinator, metadata_with_topic, seed_initialized, subscribed_request,
+            ShareSubscriptionSetup, TopicMetadataSetup, heartbeat, make_coordinator,
+            metadata_with_topic, seed_initialized, subscribed_request,
         },
     };
 
@@ -241,7 +242,10 @@ mod tests {
             share_group_heartbeat_response::Assignment,
         };
 
-        let (metadata, id) = metadata_with_topic("t", 4);
+        let (metadata, id) = metadata_with_topic(TopicMetadataSetup {
+            partitions: crate::test_support::PartitionCount(4),
+            ..Default::default()
+        });
         let response =
             |member: &str, epoch: i32, partitions: Option<Vec<i32>>| ShareGroupHeartbeatResponse {
                 member_id: Some(member.into()),
@@ -307,7 +311,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn member_limit_rejects_only_new_members() {
-        let (metadata, _id) = metadata_with_topic("t", 1);
+        let (metadata, _id) = metadata_with_topic(TopicMetadataSetup::default());
         let log = Arc::new(InMemoryOffsetsLog::default());
         let coord = Arc::new(GroupCoordinator::new(
             NextGenConfig::assigning_at_once(),
@@ -322,7 +326,12 @@ mod tests {
         let handle = coord.get_or_create_share("g");
         crate::coordinator::unified::test_support::assert_single_member_limit(
             &handle,
-            subscribed_request,
+            |member_id, epoch| {
+                subscribed_request(ShareSubscriptionSetup {
+                    member_id,
+                    epoch: crate::coordinator::unified::test_support::MemberEpoch(epoch),
+                })
+            },
             heartbeat,
         )
         .await;
@@ -359,10 +368,17 @@ mod tests {
             ),
         ];
         for (member_id, expected, new_batches, group_epoch) in rows {
-            let (metadata, _id) = metadata_with_topic("t", 4);
+            let (metadata, _id) = metadata_with_topic(TopicMetadataSetup {
+                partitions: crate::test_support::PartitionCount(4),
+                ..Default::default()
+            });
             let (coord, log) = make_coordinator(metadata);
             let handle = coord.get_or_create_share("g");
-            let joined = heartbeat(&handle, subscribed_request("m1", 0)).await;
+            let joined = heartbeat(
+                &handle,
+                subscribed_request(ShareSubscriptionSetup::default()),
+            )
+            .await;
             check!(joined.error_code == codes::NONE);
             let pre_leave = log.batches().await.len();
 
@@ -396,13 +412,28 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stale_epoch_is_fenced() {
-        let (metadata, _id) = metadata_with_topic("t", 4);
-        let (coord, _log) = make_coordinator(metadata);
-        let handle = coord.get_or_create_share("g");
-        let joined = heartbeat(&handle, subscribed_request("m1", 0)).await;
+        let (_coord, _log, handle) =
+            crate::coordinator::unified::share::actor::test_support::subscribed_group(
+                TopicMetadataSetup {
+                    partitions: crate::test_support::PartitionCount(4),
+                    ..Default::default()
+                },
+            );
+        let joined = heartbeat(
+            &handle,
+            subscribed_request(ShareSubscriptionSetup::default()),
+        )
+        .await;
         assert!(joined.member_epoch == 2);
         // Re-send with an epoch ahead of the server → fenced.
-        let resp = heartbeat(&handle, subscribed_request("m1", 99)).await;
+        let resp = heartbeat(
+            &handle,
+            subscribed_request(ShareSubscriptionSetup {
+                epoch: crate::coordinator::unified::test_support::MemberEpoch(99),
+                ..Default::default()
+            }),
+        )
+        .await;
         assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
     }
 
@@ -425,16 +456,61 @@ mod tests {
         ];
 
         for (index, (member_id, member_epoch, accepted)) in rows.into_iter().enumerate() {
-            let (metadata, _id) = metadata_with_topic("t", 4);
-            let (coord, _log) = make_coordinator(metadata);
-            let handle = coord.get_or_create_share("g");
-            check!(heartbeat(&handle, request("m1", 0)).await.member_epoch == 2);
-            check!(heartbeat(&handle, request("m2", 0)).await.member_epoch == 3);
-            check!(heartbeat(&handle, request("m3", 0)).await.member_epoch == 4);
-            let advanced = heartbeat(&handle, request("m1", 2)).await;
+            let (_coord, _log, handle) =
+                crate::coordinator::unified::share::actor::test_support::subscribed_group(
+                    TopicMetadataSetup {
+                        partitions: crate::test_support::PartitionCount(4),
+                        ..Default::default()
+                    },
+                );
+            check!(
+                heartbeat(&handle, request(ShareSubscriptionSetup::default()))
+                    .await
+                    .member_epoch
+                    == 2
+            );
+            check!(
+                heartbeat(
+                    &handle,
+                    request(ShareSubscriptionSetup {
+                        member_id: "m2",
+                        ..Default::default()
+                    })
+                )
+                .await
+                .member_epoch
+                    == 3
+            );
+            check!(
+                heartbeat(
+                    &handle,
+                    request(ShareSubscriptionSetup {
+                        member_id: "m3",
+                        ..Default::default()
+                    })
+                )
+                .await
+                .member_epoch
+                    == 4
+            );
+            let advanced = heartbeat(
+                &handle,
+                request(ShareSubscriptionSetup {
+                    epoch: crate::coordinator::unified::test_support::MemberEpoch(2),
+                    ..Default::default()
+                }),
+            )
+            .await;
             check!(advanced.member_epoch == 4);
 
-            let resp = heartbeat(&handle, request(member_id, member_epoch)).await;
+            let resp = heartbeat(
+                &handle,
+                request(ShareSubscriptionSetup {
+                    member_id,
+                    epoch: crate::coordinator::unified::test_support::MemberEpoch(member_epoch),
+                }),
+            )
+            .await;
 
             let config = ShareGroupConfig::assigning_at_once();
             let expected = if accepted {
@@ -460,7 +536,7 @@ mod tests {
     /// A heartbeat without a rack id keeps it (`maybeUpdateRackId`).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heartbeat_updates_the_rack_id() {
-        let (metadata, _id) = metadata_with_topic("t", 1);
+        let (metadata, _id) = metadata_with_topic(TopicMetadataSetup::default());
         let (coord, _log) = make_coordinator(metadata);
         let handle = coord.get_or_create_share("g");
         let request = |member_epoch, rack_id: Option<&str>| ShareGroupHeartbeatRequest {
@@ -500,12 +576,16 @@ mod tests {
         for (what, failure, expected) in
             crate::coordinator::unified::test_support::heartbeat_write_failures()
         {
-            let (metadata, _id) = metadata_with_topic("t", 1);
+            let (metadata, _id) = metadata_with_topic(TopicMetadataSetup::default());
             let (coord, log) = make_coordinator(metadata);
             let handle = coord.get_or_create_share("g");
             log.fail_next_append(failure);
 
-            let response = heartbeat(&handle, subscribed_request("m1", 0)).await;
+            let response = heartbeat(
+                &handle,
+                subscribed_request(ShareSubscriptionSetup::default()),
+            )
+            .await;
 
             check!(
                 response
@@ -536,7 +616,10 @@ mod tests {
             crate::coordinator::unified::test_support::AssignmentIntervalResults::default();
 
         for (case, ago, wanted) in rows {
-            let (metadata, _) = metadata_with_topic("t", 4);
+            let (metadata, _) = metadata_with_topic(TopicMetadataSetup {
+                partitions: crate::test_support::PartitionCount(4),
+                ..Default::default()
+            });
             let coordinator = Arc::new(GroupCoordinator::new(
                 NextGenConfig::assigning_at_once(),
                 ShareGroupConfig {
@@ -562,13 +645,7 @@ mod tests {
             let before = wall_clock_ms();
             let joined = heartbeat(
                 &handle,
-                ShareGroupHeartbeatRequest {
-                    group_id: "g".into(),
-                    member_id: "m1".into(),
-                    member_epoch: 0,
-                    subscribed_topic_names: Some(vec!["t".into()]),
-                    ..Default::default()
-                },
+                subscribed_request(ShareSubscriptionSetup::default()),
             )
             .await;
             let after = wall_clock_ms();

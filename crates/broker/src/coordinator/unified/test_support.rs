@@ -36,15 +36,8 @@ pub(crate) fn stable_streams_assignment(
     streams::persistence::StreamsGroupCurrentMemberAssignmentValue {
         member_epoch: epochs.0,
         previous_member_epoch: epochs.1,
-        state: streams::persistence::StreamsMemberWireState::Stable,
         active,
-        standby: BTreeMap::new(),
-        warmup: BTreeMap::new(),
-        active_pending_revocation: BTreeMap::new(),
-        standby_pending_revocation: BTreeMap::new(),
-        warmup_pending_revocation: BTreeMap::new(),
-        active_epochs: BTreeMap::new(),
-        active_pending_revocation_epochs: BTreeMap::new(),
+        ..Default::default()
     }
 }
 
@@ -441,23 +434,87 @@ pub(crate) fn expected_seed<S>(
     move |update| Ok(Some(updated_seed(seed(), update)))
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) enum AssignmentDeletionProtocol {
+    #[default]
+    Share,
+    Streams,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct AssignmentDeletionSetup<'a> {
+    #[default("m")]
+    pub member: &'a str,
+    pub protocol: AssignmentDeletionProtocol,
+}
+
 /// Kafka removes current and target assignments before member metadata.
 pub(crate) fn assignment_tombstones<R>(
     mut tombstone: impl FnMut(&str, &str) -> R,
-    member: &str,
-    suffix: &[&str],
+    setup: AssignmentDeletionSetup<'_>,
 ) -> Vec<R> {
     let mut records: Vec<R> = [
-        ("current", member),
-        ("target", member),
+        ("current", setup.member),
+        ("target", setup.member),
         ("target-epoch", ""),
-        ("member", member),
+        ("member", setup.member),
     ]
     .into_iter()
     .map(|(kind, id)| tombstone(kind, id))
     .collect();
+    let suffix = match setup.protocol {
+        AssignmentDeletionProtocol::Share => ["state", "group"],
+        AssignmentDeletionProtocol::Streams => ["group", "topology"],
+    };
     records.extend(suffix.iter().map(|kind| tombstone(kind, "")));
     records
+}
+
+/// The replay oracle and ordered Kafka deletion records for one protocol.
+pub(crate) fn replay_fixtures<S, R>(
+    seed: impl Fn() -> S,
+    tombstone: impl Fn(&str, &str) -> R,
+    setup: AssignmentDeletionSetup<'_>,
+) -> (
+    impl Fn(SeedUpdate<'_, S>) -> ReplayOutcome<S>,
+    impl Fn() -> Vec<R>,
+) {
+    (expected_seed(seed), move || {
+        assignment_tombstones(&tombstone, setup)
+    })
+}
+
+/// A member deletion that leaves its target assignment behind.
+pub(crate) fn undeleted_target_records<R>(
+    member: R,
+    target: R,
+    mut tombstone: impl FnMut(&str, &str) -> R,
+) -> Vec<R> {
+    vec![
+        member,
+        target,
+        tombstone("current", "m"),
+        tombstone("member", "m"),
+    ]
+}
+
+/// Independent Kafka expectation for deleting a group while its member remains.
+pub(crate) fn group_deletion_with_member_case<R, S>(
+    member: R,
+    mut tombstone: impl FnMut(&str, &str) -> R,
+) -> ReplayCase<'static, R, S> {
+    (
+        "a group tombstone with a member left",
+        vec![
+            member,
+            tombstone("target-epoch", ""),
+            tombstone("group", ""),
+        ],
+        Err(
+            "Received a tombstone record to delete group g but the group still has 1 members."
+                .into(),
+        ),
+    )
 }
 
 /// Build the expected seed after applying a case's changes.

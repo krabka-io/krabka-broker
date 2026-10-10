@@ -33,3 +33,12 @@ pub(super) fn configured_feature<T>(
             other => other.to_string(),
         })
 }
+
+/// Invalid TOML and invalid applied values both leave the optional feature absent.
+pub(super) fn optional_configured_feature<T>(
+    source: &str,
+    feature: impl FnOnce(&BrokerConfig) -> T,
+) -> Option<T> {
+    let file = toml::from_str(source).ok()?;
+    apply(file).ok().map(|config| feature(&config))
+}

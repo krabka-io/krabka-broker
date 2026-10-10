@@ -572,55 +572,54 @@ index_cache_size = "256MiB"
     }
 
     #[test]
-    fn remote_storage_local_and_s3_together_rejected() {
-        let toml = r#"
+    fn remote_storage_backends_are_mutually_exclusive() {
+        for (case, source, expected) in [
+            (
+                "remote_storage_local_and_s3_together_rejected",
+                r#"
 [remote_storage]
 storage_dir = "/tmp/tier"
 
 [remote_storage.s3]
 bucket = "b"
 region = "us-east-1"
-"#;
-        let err = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap_err();
-        let rendered = err.to_string();
-        assert!(
-            rendered.contains("cannot set both"),
-            "expected backend-conflict error, got: {rendered}"
-        );
-    }
-    #[test]
-    fn remote_storage_local_and_gcs_together_rejected() {
-        let toml = r#"
+"#,
+                "cannot set both",
+            ),
+            (
+                "remote_storage_local_and_gcs_together_rejected",
+                r#"
 [remote_storage]
 storage_dir = "/tmp/tier"
 
 [remote_storage.gcs]
 bucket = "b"
-"#;
-        let err = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap_err();
-        let rendered = err.to_string();
-        assert!(
-            rendered.contains("cannot set"),
-            "expected backend-conflict error, got: {rendered}"
-        );
-    }
-    #[test]
-    fn remote_storage_s3_and_gcs_together_rejected() {
-        let toml = r#"
+"#,
+                "cannot set",
+            ),
+            (
+                "remote_storage_s3_and_gcs_together_rejected",
+                r#"
 [remote_storage.s3]
 bucket = "b"
 region = "us-east-1"
 
 [remote_storage.gcs]
 bucket = "b"
-"#;
-        let err = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap_err();
-        let rendered = err.to_string();
-        assert!(
-            rendered.contains("cannot set"),
-            "expected backend-conflict error, got: {rendered}"
-        );
+"#,
+                "cannot set",
+            ),
+        ] {
+            let error =
+                crate::file_config::test_support::configured_unwrap_parse(source).unwrap_err();
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains(expected),
+                "{case}: expected backend-conflict error, got: {rendered}"
+            );
+        }
     }
+
     #[test]
     fn kafka_metadata_in_memory_true_opts_out_to_in_memory_rlmm() {
         let toml = r#"

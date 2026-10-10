@@ -93,11 +93,7 @@ pub(super) fn topology_with_source_topic(topic: &str) -> StreamsGroupTopologyVal
         subtopologies: vec![StoredSubtopology {
             subtopology_id: "0".into(),
             source_topics: vec![topic.into()],
-            source_topic_regex: Vec::new(),
-            repartition_sink_topics: Vec::new(),
-            state_changelog_topics: Vec::new(),
-            repartition_source_topics: Vec::new(),
-            copartition_groups: Vec::new(),
+            ..Default::default()
         }],
     }
 }

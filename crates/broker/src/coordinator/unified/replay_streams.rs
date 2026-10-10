@@ -472,18 +472,18 @@ mod tests {
     /// exception that fails the load.
     #[test]
     fn streams_records_replay_as_kafka() {
-        let group =
-            crate::coordinator::unified::test_support::expected_seed(StreamsGroupSeed::new_group);
         let tombstone = |kind: &str, id: &str| Record::Tombstone(key(kind, id));
         // Kafka's `StreamsGroup.createGroupTombstoneRecords` for member `m`:
         // the topology tombstone comes after the group's, and is ignored.
-        let kafka_deletion = || {
-            crate::coordinator::unified::test_support::assignment_tombstones(
-                tombstone,
-                "m",
-                &["group", "topology"],
-            )
-        };
+        let (group, kafka_deletion) = crate::coordinator::unified::test_support::replay_fixtures(
+            StreamsGroupSeed::new_group,
+            tombstone,
+            crate::coordinator::unified::test_support::AssignmentDeletionSetup {
+                protocol:
+                    crate::coordinator::unified::test_support::AssignmentDeletionProtocol::Streams,
+                ..Default::default()
+            },
+        );
         let every_record = || {
             vec![
                 Record::Group(30, Some(vec![("num.standby.replicas", "1")])),
@@ -554,18 +554,9 @@ mod tests {
                         .into(),
                 ),
             ),
-            (
-                "a group tombstone with a member left",
-                vec![
-                    Record::Member("m"),
-                    tombstone("target-epoch", ""),
-                    tombstone("group", ""),
-                ],
-                Err(
-                    "Received a tombstone record to delete group g but the group still has 1 \
-                     members."
-                        .into(),
-                ),
+            crate::coordinator::unified::test_support::group_deletion_with_member_case(
+                Record::Member("m"),
+                tombstone,
             ),
             (
                 "a group tombstone with a target left but no member: the streams check \

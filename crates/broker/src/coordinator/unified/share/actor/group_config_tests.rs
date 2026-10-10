@@ -19,8 +19,11 @@ use super::{
 // and its `share.*` entries.
 use crate::coordinator::unified::test_support::group_config_image as group_image;
 use crate::coordinator::unified::{
-    GroupCoordinator, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog,
-    share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
+    GroupCoordinator,
+    config::NextGenConfig,
+    offsets_log::fake::InMemoryOffsetsLog,
+    share::{actor::test_support::TopicMetadataSetup, config::ShareGroupConfig},
+    streams::config::StreamsGroupConfig,
     test_support::fixed_source,
 };
 
@@ -34,7 +37,10 @@ fn coordinator(
     Arc<GroupCoordinator>,
     krabka_protocol::primitives::uuid::Uuid,
 ) {
-    let (metadata, topic_id) = metadata_with_topic("t", 4);
+    let (metadata, topic_id) = metadata_with_topic(TopicMetadataSetup {
+        partitions: crate::test_support::PartitionCount(4),
+        ..Default::default()
+    });
     let coordinator = Arc::new(GroupCoordinator::new(
         NextGenConfig::assigning_at_once(),
         config,
@@ -50,7 +56,10 @@ fn coordinator(
 /// arrives, not with those the actor read before it began to wait for it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_heartbeat_runs_with_the_group_config_of_the_moment_it_arrives() {
-    let (metadata, _) = metadata_with_topic("t", 4);
+    let (metadata, _) = metadata_with_topic(TopicMetadataSetup {
+        partitions: crate::test_support::PartitionCount(4),
+        ..Default::default()
+    });
     let coordinator = Arc::new(GroupCoordinator::new(
         NextGenConfig::assigning_at_once(),
         ShareGroupConfig::assigning_at_once(),

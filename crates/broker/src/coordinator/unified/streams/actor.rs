@@ -450,6 +450,22 @@ struct ActorState {
 }
 
 impl ActorState {
+    /// Apply a published group override and restart its session tick only on change.
+    fn refresh_configuration(
+        &mut self,
+        defaults: &StreamsGroupConfig,
+        image: &krabka_metadata::MetadataImage,
+        config: &mut StreamsGroupConfig,
+        tick: &mut tokio::time::Interval,
+    ) {
+        let next = resolve_group_config_from_image(defaults, image, &self.state.group_id);
+        if next != *config {
+            *config = next;
+            self.trunk_records = config.topology_description_plugin.is_configured();
+            *tick = session_tick(config);
+        }
+    }
+
     fn new(group_id: String) -> Self {
         Self {
             state: StreamsGroupState::new(group_id),
@@ -554,13 +570,7 @@ async fn actor_loop(
             image = wait_for_metadata_change(&mut metadata.images) => Wake::Image(image),
         };
         if let Some(image) = metadata.attach(&coordinator) {
-            let next =
-                resolve_group_config_from_image(&default_config, &image, &actor.state.group_id);
-            if next != config {
-                config = next;
-                actor.trunk_records = config.topology_description_plugin.is_configured();
-                tick = session_tick(&config);
-            }
+            actor.refresh_configuration(&default_config, &image, &mut config, &mut tick);
         }
         let metadata_source = metadata.source.as_ref();
         match wake {
@@ -641,17 +651,11 @@ async fn actor_loop(
                     metadata.images = None;
                     continue;
                 };
-                let next =
-                    resolve_group_config_from_image(&default_config, &image, &actor.state.group_id);
                 // Kafka reads a group's configuration when it needs it. A
                 // changed assignment configuration bumps the group epoch at
                 // the next heartbeat, which compares it with the
                 // `LastAssignmentConfigs` of the last bump.
-                if next != config {
-                    config = next;
-                    actor.trunk_records = config.topology_description_plugin.is_configured();
-                    tick = session_tick(&config);
-                }
+                actor.refresh_configuration(&default_config, &image, &mut config, &mut tick);
             }
         }
     }

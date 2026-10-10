@@ -65,12 +65,8 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::coordinator::unified::{
-        share::persistence::{
-            KEY_SHARE_GROUP_METADATA, KEY_SHARE_TARGET_ASSIGNMENT_METADATA, ShareGroupKey,
-            encode_share_key, parse_share_key,
-        },
-        test_support::peek_version,
+    use crate::coordinator::unified::share::persistence::{
+        KEY_SHARE_GROUP_METADATA, KEY_SHARE_TARGET_ASSIGNMENT_METADATA, ShareGroupKey,
     };
 
     /// i16 version | i32 `Epoch` | i64 `MetadataHash` | uvarint tagged count, as
@@ -111,10 +107,10 @@ mod tests {
         let key = ShareGroupKey::GroupMetadata {
             group_id: "g1".into(),
         };
-        let bytes = encode_share_key(&key).unwrap();
-        let (ver, body) = peek_version(&bytes);
-        assert!(ver == KEY_SHARE_GROUP_METADATA);
-        assert!(parse_share_key(ver, body).unwrap() == key);
+        super::super::check_key_round_trip(
+            &key,
+            super::super::ShareKeyVersion(KEY_SHARE_GROUP_METADATA),
+        );
 
         let v = ShareGroupMetadataValue {
             epoch: 7,
@@ -151,10 +147,10 @@ mod tests {
         let key = ShareGroupKey::TargetAssignmentMetadata {
             group_id: "g1".into(),
         };
-        let b = encode_share_key(&key).unwrap();
-        let (ver, body) = peek_version(&b);
-        assert!(ver == KEY_SHARE_TARGET_ASSIGNMENT_METADATA);
-        assert!(parse_share_key(ver, body).unwrap() == key);
+        super::super::check_key_round_trip(
+            &key,
+            super::super::ShareKeyVersion(KEY_SHARE_TARGET_ASSIGNMENT_METADATA),
+        );
 
         let v = ShareGroupTargetAssignmentMetadataValue {
             assignment_epoch: 12,

@@ -31,15 +31,54 @@ impl MetadataProvider for StaticMetadata {
     }
 }
 
-/// Metadata snapshot with a single topic of `parts` partitions.
-pub(super) fn metadata_with_topic(name: &str, parts: i32) -> (Arc<dyn MetadataProvider>, Uuid) {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct TopicMetadataSetup<'a> {
+    #[default("t")]
+    pub name: &'a str,
+    pub partitions: crate::test_support::PartitionCount,
+}
+
+/// Metadata snapshot with one named topic and the requested partition count.
+pub(super) fn metadata_with_topic(
+    setup: TopicMetadataSetup<'_>,
+) -> (Arc<dyn MetadataProvider>, Uuid) {
     let id = Uuid([7; 16]);
     let input = ReconcileInput {
-        topic_id_by_name: [(name.to_string(), id)].into(),
-        partitions_per_topic: [(id, parts)].into(),
+        topic_id_by_name: [(setup.name.to_string(), id)].into(),
+        partitions_per_topic: [(id, setup.partitions.0)].into(),
         ..Default::default()
     };
     (Arc::new(StaticMetadata { input }), id)
+}
+
+/// A persister with no share-state topic cannot reach a share coordinator.
+pub(super) fn unavailable_persister_coordinator(
+    setup: TopicMetadataSetup<'_>,
+) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>, Uuid) {
+    let (metadata, topic_id) = metadata_with_topic(setup);
+    let (coordinator, log) = make_coordinator(metadata);
+    coordinator.set_share_persister(
+        crate::coordinator::unified::test_support::make_share_persister(
+            crate::coordinator::unified::test_support::fixed_source(
+                krabka_metadata::MetadataImage::default(),
+            ),
+        ),
+    );
+    (coordinator, log, topic_id)
+}
+
+/// Create the metadata, coordinator, log and first share actor in their usual order.
+pub(super) fn subscribed_group(
+    setup: TopicMetadataSetup<'_>,
+) -> (
+    Arc<GroupCoordinator>,
+    Arc<InMemoryOffsetsLog>,
+    Arc<ShareGroupActorHandle>,
+) {
+    let (metadata, _) = metadata_with_topic(setup);
+    let (coordinator, log) = make_coordinator(metadata);
+    let handle = coordinator.get_or_create_share("g");
+    (coordinator, log, handle)
 }
 
 pub(super) fn make_coordinator(
@@ -68,12 +107,19 @@ pub(super) fn make_coordinator_with_config(
     (coord, log)
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(super) struct ShareSubscriptionSetup<'a> {
+    #[default("m1")]
+    pub member_id: &'a str,
+    pub epoch: crate::coordinator::unified::test_support::MemberEpoch,
+}
+
 /// Ordinary share heartbeat for the test topic, with every other wire field defaulted.
-pub(super) fn subscribed_request(member_id: &str, member_epoch: i32) -> ShareGroupHeartbeatRequest {
+pub(super) fn subscribed_request(setup: ShareSubscriptionSetup<'_>) -> ShareGroupHeartbeatRequest {
     ShareGroupHeartbeatRequest {
         group_id: "g".into(),
-        member_id: member_id.into(),
-        member_epoch,
+        member_id: setup.member_id.into(),
+        member_epoch: setup.epoch.0,
         subscribed_topic_names: Some(vec!["t".into()]),
         ..Default::default()
     }

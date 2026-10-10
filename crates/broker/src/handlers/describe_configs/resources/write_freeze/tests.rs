@@ -2,9 +2,7 @@
 //! sits.
 
 use assert2::check;
-use krabka_metadata::{
-    MetadataImage, MetadataRecord, PatternType, TopicConfigRecord, TopicFreezeRecord,
-};
+use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicConfigRecord};
 use uuid::Uuid;
 
 use crate::{
@@ -20,21 +18,12 @@ use crate::{
 /// freeze never reaches a topic-config record, so the image needs no topic and
 /// no override map to answer the synthesised key.
 fn image_with_freezes(entries: &[(&str, PatternType)]) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::nil());
-    for (scope, pattern_type) in entries {
-        image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
-            scope: (*scope).to_owned(),
-            pattern_type: *pattern_type,
-            frozen: true,
-            reason: "DR cutover".to_owned(),
-            set_by: "User:alice".to_owned(),
-            set_at_ms: 1_770_000_000_000,
-            proposal_id: Uuid::nil(),
-            key_id: String::new(),
-            signature: Vec::new(),
-        }));
-    }
-    image
+    crate::test_support::frozen_topics_image(
+        entries,
+        crate::test_support::FrozenTopicsImageSetup {
+            cluster: Uuid::nil(),
+        },
+    )
 }
 
 #[test]

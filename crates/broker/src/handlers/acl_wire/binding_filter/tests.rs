@@ -263,15 +263,12 @@ fn host_filter_compares_a_cidr_host_as_text() {
 /// `CreateAcls` stored, so `DescribeAcls` lists it and `DeleteAcls` revokes it.
 #[test]
 fn exact_user_token_filter_matches_the_stored_binding() {
-    let entry = AclEntry {
+    let entry = crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
         resource_type: ResourceType::User,
-        resource_name: "User:bob".into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
+        resource_name: "User:bob",
         operation: AclOperation::CreateTokens,
-        permission_type: PermissionType::Allow,
-    };
+        ..Default::default()
+    });
     let filter = AclBindingFilter::from_wire(WireAclBindingFilter {
         resource_type: 7,
         resource_name: Some("User:bob"),

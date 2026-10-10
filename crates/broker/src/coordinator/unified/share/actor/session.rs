@@ -65,7 +65,9 @@ mod tests {
         share::{
             actor::{
                 records::PendingShareRecords,
-                test_support::{make_coordinator_with_config, metadata_with_topic},
+                test_support::{
+                    TopicMetadataSetup, make_coordinator_with_config, metadata_with_topic,
+                },
             },
             persistence::ShareGroupMetadataValue,
             state::ShareMemberState,
@@ -78,7 +80,10 @@ mod tests {
     /// and an epoch bump, and no target is computed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn each_expired_member_is_fenced_in_a_batch_of_its_own() {
-        let (metadata, _id) = metadata_with_topic("t", 4);
+        let (metadata, _id) = metadata_with_topic(TopicMetadataSetup {
+            partitions: crate::test_support::PartitionCount(4),
+            ..Default::default()
+        });
         let config = ShareGroupConfig {
             session_timeout: Duration::from_millis(1),
             ..ShareGroupConfig::default()
@@ -139,7 +144,10 @@ mod tests {
             ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
         };
 
-        let (metadata, topic_id) = metadata_with_topic("t", 2);
+        let (metadata, topic_id) = metadata_with_topic(TopicMetadataSetup {
+            partitions: crate::test_support::PartitionCount(2),
+            ..Default::default()
+        });
         let config = ShareGroupConfig::default();
         let (coord, log) = make_coordinator_with_config(
             metadata.clone(),
