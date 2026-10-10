@@ -65,14 +65,72 @@ pub(super) fn append_records(
         .expect("append source records");
 }
 
-/// Append the source data before making the partition visible in the registry.
-pub(super) fn append_and_register_source(
-    part: &Arc<Partition>,
+pub(super) struct FutureSourceSetup {
+    pub count: crate::test_support::RecordCount,
+    pub stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
+}
+
+impl Default for FutureSourceSetup {
+    fn default() -> Self {
+        Self {
+            count: crate::test_support::RecordCount(3),
+            stamp_source: None,
+        }
+    }
+}
+
+pub(super) fn source_partition(primary: &Path, setup: FutureSourceSetup) -> Arc<Partition> {
+    let part = fixture_partition(primary, "t", PartitionIndex(0));
+    if let Some(stamp_source) = setup.stamp_source {
+        part.log
+            .lock()
+            .expect("source log")
+            .set_stamp_source(stamp_source)
+            .expect("source stamp index");
+    }
+    append_records(
+        &part,
+        crate::test_support::PartitionRecordsSetup {
+            count: setup.count,
+            ..Default::default()
+        },
+    );
+    part
+}
+
+/// Publish the source partition only after its initial records have been appended.
+pub(super) fn registered_source(
+    primary: &Path,
     partitions: &crate::partition_registry::PartitionRegistry,
-    setup: crate::test_support::PartitionRecordsSetup,
-) {
-    append_records(part, setup);
+    setup: FutureSourceSetup,
+) -> Arc<Partition> {
+    let part = source_partition(primary, setup);
     partitions.insert("t".into(), PartitionIndex(0), part.clone());
+    part
+}
+
+pub(super) struct PlantedFutureLog {
+    pub path: PathBuf,
+    pub cancel: tokio_util::sync::CancellationToken,
+}
+
+pub(super) fn plant_future_log(
+    future_logs: &dashmap::DashMap<(String, PartitionIndex), Arc<super::FutureLogState>>,
+    target: &Path,
+) -> PlantedFutureLog {
+    let (path, log) = open_future_log(target);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    future_logs.insert(
+        ("t".into(), PartitionIndex(0)),
+        Arc::new(super::FutureLogState {
+            target_log_dir: target.to_path_buf(),
+            future_path: path.clone(),
+            future_log: log,
+            cancel: cancel.clone(),
+            task: Mutex::new(None),
+        }),
+    );
+    PlantedFutureLog { path, cancel }
 }
 
 #[derive(Clone, Copy)]

@@ -121,21 +121,56 @@ pub fn unresolved_topic_ids(
     ]
 }
 
+use krabka_metadata::NodeId as MetadataNodeId;
+
+#[derive(krabka_macros::FieldDefaults)]
+pub struct AssignedTopicSetup {
+    #[default("orders".into())]
+    pub name: String,
+    #[default(vec![MetadataNodeId(1)])]
+    pub replicas: Vec<MetadataNodeId>,
+}
+
+impl AssignedTopicSetup {
+    /// The replication fixtures' ordered three-node assignment.
+    pub fn three_replicas(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            replicas: vec![MetadataNodeId(1), MetadataNodeId(2), MetadataNodeId(3)],
+        }
+    }
+}
+
+/// Build one explicitly assigned partition with ordered node identities.
+///
+/// # Panics
+/// Panics if a node identity does not fit Kafka's broker ID.
+pub fn assigned_topic(
+    setup: AssignedTopicSetup,
+) -> krabka_protocol::owned::create_topics_request::CreatableTopic {
+    let replicas: Vec<i32> = setup
+        .replicas
+        .into_iter()
+        .map(|node| i32::try_from(node.0).expect("replica node fits Kafka broker ID"))
+        .collect();
+    super::topic_on(&setup.name, &[&replicas])
+}
+
 /// Create an explicitly assigned partition and wait for every replica to install it.
 pub async fn create_assigned_partition<'a>(
     client: &krabka_client_core::Client,
-    topic: &str,
-    replicas: &[i32],
+    setup: AssignedTopicSetup,
     brokers: impl IntoIterator<Item = &'a krabka_broker::BrokerHandle>,
 ) -> krabka_protocol::primitives::uuid::Uuid {
+    let topic = setup.name.clone();
     let response = client
-        .send(create_topic_request(super::topic_on(topic, &[replicas])))
+        .send(create_topic_request(assigned_topic(setup)))
         .await
         .unwrap();
     assert2::assert!(response.topics[0].error_code == 0);
     let topic_id = response.topics[0].topic_id;
     for broker in brokers {
-        broker.wait_until_partition_present(topic, 0).await;
+        broker.wait_until_partition_present(&topic, 0).await;
     }
     topic_id
 }

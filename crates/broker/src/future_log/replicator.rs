@@ -283,17 +283,11 @@ mod tests {
             &stamp_source,
         ))));
         let future_logs = Arc::new(DashMap::new());
-        let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        part.log
-            .lock()
-            .expect("source log")
-            .set_stamp_source(stamp_source)
-            .expect("source stamp index");
-        crate::future_log::test_support::append_and_register_source(
-            &part,
+        let part = crate::future_log::test_support::registered_source(
+            primary.path(),
             &partitions,
-            crate::test_support::PartitionRecordsSetup {
-                count: crate::test_support::RecordCount(3),
+            crate::future_log::test_support::FutureSourceSetup {
+                stamp_source: Some(stamp_source),
                 ..Default::default()
             },
         );

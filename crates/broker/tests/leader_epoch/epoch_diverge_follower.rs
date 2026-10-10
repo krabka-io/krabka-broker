@@ -44,8 +44,7 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
     let admin = connect_client(leader_addr.clone(), None).await;
     let topic_id = support::topics::create_assigned_partition(
         &admin,
-        "divtrunc",
-        &[1, 2, 3],
+        crate::support::topics::AssignedTopicSetup::three_replicas("divtrunc"),
         cluster.iter().map(|(broker, _, _)| broker),
     )
     .await;

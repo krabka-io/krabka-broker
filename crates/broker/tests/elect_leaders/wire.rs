@@ -66,5 +66,17 @@ pub async fn drive_elect_all_partitions(
 /// The topic has one partition on `replicas`, in that order, so the tests know
 /// which broker leads it and which one they can elect: an automatic placement
 /// starts at a random broker.
-pub use crate::kafka_wire::create_assigned_topic_plaintext as create_topic_plaintext;
+pub async fn create_topic_plaintext(
+    addr: SocketAddr,
+    topic: crate::support::topics::AssignedTopicSetup,
+) {
+    kafka_wire::create_assigned_topic_plaintext(
+        addr,
+        kafka_wire::AssignedTopicExchangeSetup {
+            client_id: CLIENT_ID,
+            topic,
+        },
+    )
+    .await;
+}
 pub use crate::kafka_wire::elect_leaders_plaintext as drive_elect_leaders;

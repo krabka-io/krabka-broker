@@ -479,7 +479,7 @@ async fn seed_topic_reference_group(broker_handle: &crate::broker::BrokerHandle)
 
 /// The request row for `topic`, and the topic row that the response carries
 /// for it at `version` with `partition` as its only partition row.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OffsetFetchVersion(i16);
 
 #[derive(krabka_macros::FieldDefaults)]
@@ -571,25 +571,61 @@ fn seeded_row() -> OffsetFetchResponsePartitions {
     }
 }
 
+type TopicReferenceCase = (OffsetFetchVersion, TopicRef, OffsetFetchResponsePartitions);
+
+fn unresolved_topic_reference_cases() -> [TopicReferenceCase; 2] {
+    [
+        (
+            OffsetFetchVersion(10),
+            TopicRef::UnknownId,
+            no_offset_row(codes::UNKNOWN_TOPIC_ID),
+        ),
+        (
+            OffsetFetchVersion(10),
+            TopicRef::ZeroId,
+            no_offset_row(codes::UNKNOWN_TOPIC_ID),
+        ),
+    ]
+}
+
+async fn topic_reference_broker(
+    authorizer: Arc<dyn crate::authorizer::Authorizer>,
+) -> (crate::broker::BrokerHandle, tempfile::TempDir, WireUuid) {
+    let (handle, directory) = crate::test_support::start_group_broker_no_audit(authorizer).await;
+    let topic_id = seed_topic_reference_group(&handle).await;
+    (handle, directory, topic_id)
+}
+
+async fn seed_unresolved_name_offset(broker: &Broker) {
+    seed_committed_offset(
+        broker,
+        CommittedOffsetSetup {
+            topic: UNKNOWN_NAME,
+            offset: Offset(9),
+            ..Default::default()
+        },
+    )
+    .await;
+}
+
 /// Send one single-topic request per case, and compare every whole response
 /// with the one that the case expects.
 async fn run_topic_reference_table(
     authorizer: Arc<dyn crate::authorizer::Authorizer>,
-    cases: Vec<(i16, TopicRef, OffsetFetchResponsePartitions)>,
+    cases: Vec<TopicReferenceCase>,
 ) {
-    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(authorizer).await;
-    let known_id = seed_topic_reference_group(&broker_handle).await;
+    let (broker_handle, _dir, known_id) = topic_reference_broker(authorizer).await;
     let broker = broker_handle.broker_arc_for_test();
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
     for (version, topic, partition) in cases {
         let (request_row, response_row) = topic_reference_rows(TopicReferenceSetup {
-            version: OffsetFetchVersion(version),
+            version,
             topic,
             known_id,
             partition,
         });
-        let response = fetch(&broker, version, &groups_request(vec![request_row])).await;
+        let response = fetch(&broker, version.0, &groups_request(vec![request_row])).await;
         actual.push((version, topic, response));
         expected.push((version, topic, groups_response(vec![response_row])));
     }
@@ -605,16 +641,17 @@ async fn topic_row_error_follows_version_and_topic_reference() {
     run_topic_reference_table(
         Arc::new(crate::authorizer::AllowAllAuthorizer),
         vec![
-            (9, TopicRef::KnownName, seeded_row()),
-            (9, TopicRef::UnknownName, no_offset_row(codes::NONE)),
-            (10, TopicRef::KnownId, seeded_row()),
+            (OffsetFetchVersion(9), TopicRef::KnownName, seeded_row()),
             (
-                10,
-                TopicRef::UnknownId,
-                no_offset_row(codes::UNKNOWN_TOPIC_ID),
+                OffsetFetchVersion(9),
+                TopicRef::UnknownName,
+                no_offset_row(codes::NONE),
             ),
-            (10, TopicRef::ZeroId, no_offset_row(codes::UNKNOWN_TOPIC_ID)),
-        ],
+            (OffsetFetchVersion(10), TopicRef::KnownId, seeded_row()),
+        ]
+        .into_iter()
+        .chain(unresolved_topic_reference_cases())
+        .collect(),
     )
     .await;
 }
@@ -626,22 +663,19 @@ async fn unresolved_id_answers_before_topic_authorization() {
         Arc::new(DenyTopics),
         vec![
             (
-                9,
+                OffsetFetchVersion(9),
                 TopicRef::KnownName,
                 no_offset_row(codes::TOPIC_AUTHORIZATION_FAILED),
             ),
             (
-                10,
+                OffsetFetchVersion(10),
                 TopicRef::KnownId,
                 no_offset_row(codes::TOPIC_AUTHORIZATION_FAILED),
             ),
-            (
-                10,
-                TopicRef::UnknownId,
-                no_offset_row(codes::UNKNOWN_TOPIC_ID),
-            ),
-            (10, TopicRef::ZeroId, no_offset_row(codes::UNKNOWN_TOPIC_ID)),
-        ],
+        ]
+        .into_iter()
+        .chain(unresolved_topic_reference_cases())
+        .collect(),
     )
     .await;
 }
@@ -652,11 +686,8 @@ async fn unresolved_id_answers_before_topic_authorization() {
 #[tokio::test]
 async fn refused_topics_follow_the_answered_topics() {
     const VERSION: i16 = 10;
-    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-        crate::authorizer::AllowAllAuthorizer,
-    ))
-    .await;
-    let known_id = seed_topic_reference_group(&broker_handle).await;
+    let (broker_handle, _dir, known_id) =
+        topic_reference_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
     let (zero_request, zero_response) = topic_reference_rows(TopicReferenceSetup {
         version: OffsetFetchVersion(VERSION),
@@ -812,19 +843,10 @@ async fn run_response_table(
 /// it with `TOPIC_AUTHORIZATION_FAILED`.
 #[tokio::test]
 async fn topics_are_authorized_with_describe_and_fetch_all_hides_refused_topics() {
-    let (broker_handle, _dir) =
-        crate::test_support::start_group_broker_no_audit(Arc::new(DescribeKnownTopic)).await;
-    seed_topic_reference_group(&broker_handle).await;
+    let (broker_handle, _dir, _known_id) =
+        topic_reference_broker(Arc::new(DescribeKnownTopic)).await;
     let broker = broker_handle.broker_arc_for_test();
-    seed_committed_offset(
-        &broker,
-        CommittedOffsetSetup {
-            topic: UNKNOWN_NAME,
-            offset: Offset(9),
-            ..Default::default()
-        },
-    )
-    .await;
+    seed_unresolved_name_offset(&broker).await;
     let both: &[&str] = &[UNKNOWN_NAME, KNOWN_NAME];
     run_response_table(
         &broker,
@@ -873,21 +895,10 @@ async fn topics_are_authorized_with_describe_and_fetch_all_hides_refused_topics(
 /// topics come in name order.
 #[tokio::test]
 async fn fetch_all_leaves_out_topics_without_an_id_at_v10() {
-    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-        crate::authorizer::AllowAllAuthorizer,
-    ))
-    .await;
-    let known_id = seed_topic_reference_group(&broker_handle).await;
+    let (broker_handle, _dir, known_id) =
+        topic_reference_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    seed_committed_offset(
-        &broker,
-        CommittedOffsetSetup {
-            topic: UNKNOWN_NAME,
-            offset: Offset(9),
-            ..Default::default()
-        },
-    )
-    .await;
+    seed_unresolved_name_offset(&broker).await;
     let offset_row = |committed_offset| OffsetFetchResponsePartitions {
         committed_offset,
         ..seeded_row()

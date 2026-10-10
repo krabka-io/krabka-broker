@@ -248,8 +248,7 @@ async fn delete_records_moves_every_replica_log_start_before_it_answers() {
     let client = connect_client(leader_addr, None).await;
     let topic_id = support::topics::create_assigned_partition(
         &client,
-        "trimmed",
-        &[1, 2, 3],
+        crate::support::topics::AssignedTopicSetup::three_replicas("trimmed"),
         cluster.iter().map(|(broker, _, _)| broker),
     )
     .await;

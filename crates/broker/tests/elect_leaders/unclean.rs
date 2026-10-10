@@ -60,7 +60,14 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     let h1 = &cluster[1].0;
 
     // Create rf=2 topic. Replicas=[1,2]; broker 1 is preferred.
-    create_topic_plaintext(addr, crate::wire::CLIENT_ID, "foo-unclean", &[1, 2]).await;
+    create_topic_plaintext(
+        addr,
+        crate::support::topics::AssignedTopicSetup {
+            name: ("foo-unclean").into(),
+            replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+        },
+    )
+    .await;
     wait_partition_exists(h0, "foo-unclean", 0).await;
     wait_partition_exists(h1, "foo-unclean", 0).await;
 

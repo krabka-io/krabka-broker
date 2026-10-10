@@ -163,7 +163,14 @@ async fn offline_partition_with_diverged_logs(
     let [h1, h2, h3] = handles;
     // ── Create the RF=3 topic. Partition 0's replica assignment is
     //    [1, 2, 3]; broker 1 is the preferred/first. ──
-    create_topic_plaintext(addr, CLIENT_ID, topic, &[1, 2, 3]).await;
+    create_topic_plaintext(
+        addr,
+        crate::kafka_wire::AssignedTopicExchangeSetup {
+            client_id: CLIENT_ID,
+            topic: crate::support::topics::AssignedTopicSetup::three_replicas(topic),
+        },
+    )
+    .await;
     wait_partition_hosted(h1, topic, 0).await;
     wait_partition_hosted(h2, topic, 0).await;
     wait_partition_hosted(h3, topic, 0).await;

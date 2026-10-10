@@ -57,7 +57,15 @@ fn idempotent_batch(pid: i64, base_seq: i32, values: &[&str]) -> RecordBatch {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(&broker, &bootstrap, "trunc", 1).await;
+    create_topic(
+        &broker,
+        &bootstrap,
+        crate::support::durability::TopicReplicasSetup {
+            topic: "trunc",
+            ..Default::default()
+        },
+    )
+    .await;
 
     let base = produce_batch(
         &bootstrap,
@@ -107,7 +115,15 @@ async fn disk_backed_restart_recovers_idempotent_producer_state() {
         .await
         .unwrap();
     let bootstrap = broker.listen_addr().to_string();
-    create_topic(&broker, &bootstrap, "restart-dedup", 1).await;
+    create_topic(
+        &broker,
+        &bootstrap,
+        crate::support::durability::TopicReplicasSetup {
+            topic: "restart-dedup",
+            ..Default::default()
+        },
+    )
+    .await;
     let produce_setup = crate::support::client::BatchProduceSetup {
         topic: "restart-dedup",
         acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
@@ -146,7 +162,15 @@ async fn disk_backed_restart_recovers_idempotent_producer_state() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acks_one_returns_quickly_on_rf1_broker() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(&broker, &bootstrap, "ack1", 1).await;
+    create_topic(
+        &broker,
+        &bootstrap,
+        crate::support::durability::TopicReplicasSetup {
+            topic: "ack1",
+            ..Default::default()
+        },
+    )
+    .await;
     let start = Instant::now();
     let offset = produce_acks(
         &bootstrap,
@@ -170,7 +194,15 @@ async fn acks_one_returns_quickly_on_rf1_broker() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acks_all_returns_quickly_on_rf1_broker() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(&broker, &bootstrap, "ackall", 1).await;
+    create_topic(
+        &broker,
+        &bootstrap,
+        crate::support::durability::TopicReplicasSetup {
+            topic: "ackall",
+            ..Default::default()
+        },
+    )
+    .await;
     let start = Instant::now();
     let offset = produce_acks(
         &bootstrap,
@@ -195,7 +227,15 @@ async fn acks_all_returns_quickly_on_rf1_broker() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_clamps_at_hw_when_followers_lag() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(&broker, &bootstrap, "clamp", 1).await;
+    create_topic(
+        &broker,
+        &bootstrap,
+        crate::support::durability::TopicReplicasSetup {
+            topic: "clamp",
+            ..Default::default()
+        },
+    )
+    .await;
 
     let offset = produce_acks(
         &bootstrap,
@@ -241,7 +281,15 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
 // in-flight Produce batches before `EndTxn`).
 async fn read_committed_under_rf1_unchanged() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(&broker, &bootstrap, "rctxn", 1).await;
+    create_topic(
+        &broker,
+        &bootstrap,
+        crate::support::durability::TopicReplicasSetup {
+            topic: "rctxn",
+            ..Default::default()
+        },
+    )
+    .await;
     // The producer does not retry COORDINATOR_NOT_AVAILABLE from
     // FindCoordinator. Bring the transaction coordinator up first.
     broker.wait_until_transaction_coordinator_ready().await;
@@ -295,8 +343,13 @@ async fn read_committed_under_rf1_unchanged() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
     support::init_tracing();
-    let (mut cluster, bootstrap_1) =
-        crate::support::durability::replicated_topic_fixture(3, "shrink", 3).await;
+    let (mut cluster, bootstrap_1) = crate::support::durability::replicated_topic_fixture(
+        crate::support::durability::ReplicatedTopicSetup {
+            topic: "shrink",
+            ..Default::default()
+        },
+    )
+    .await;
     // Wait for all 3 replicas to join the ISR before killing broker 3
     // so the scenario genuinely exercises ISR shrink rather than racing the
     // initial ISR population.
@@ -346,8 +399,13 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
     support::init_tracing();
-    let (mut cluster, bootstrap_1) =
-        crate::support::durability::replicated_topic_fixture(3, "phase-stall", 3).await;
+    let (mut cluster, bootstrap_1) = crate::support::durability::replicated_topic_fixture(
+        crate::support::durability::ReplicatedTopicSetup {
+            topic: "phase-stall",
+            ..Default::default()
+        },
+    )
+    .await;
     cluster[0].0.wait_until_isr_len("phase-stall", 0, 3).await;
 
     let dead = cluster.pop().expect("3rd broker");

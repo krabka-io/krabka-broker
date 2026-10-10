@@ -798,15 +798,24 @@ pub async fn create_automatic_topic_plaintext(addr: SocketAddr, setup: Automatic
     create_topic_on_fresh_connection(addr, setup.client_id, topic(setup.topic)).await;
 }
 
+#[derive(krabka_macros::FieldDefaults)]
+pub struct AssignedTopicExchangeSetup<'a> {
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    pub topic: crate::support::topics::AssignedTopicSetup,
+}
+
 /// Create one partition with an explicit ordered assignment over plaintext.
 pub async fn create_assigned_topic_plaintext(
     addr: SocketAddr,
-    client_id: &str,
-    name: &str,
-    replicas: &[i32],
+    setup: AssignedTopicExchangeSetup<'_>,
 ) {
-    create_topic_on_fresh_connection(addr, client_id, crate::support::topic_on(name, &[replicas]))
-        .await;
+    create_topic_on_fresh_connection(
+        addr,
+        setup.client_id,
+        crate::support::topics::assigned_topic(setup.topic),
+    )
+    .await;
 }
 
 /// Elect named partitions over a new plaintext connection and retain the top-level oracle.

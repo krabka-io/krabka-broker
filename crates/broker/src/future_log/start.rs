@@ -444,18 +444,7 @@ mod tests {
         // Plant a registry entry as if a prior ARLD already kicked off
         // a move — exercises the "already moving, same target" branch
         // without racing the replicator's swap-and-remove.
-        let (future_path, future_log) =
-            crate::future_log::test_support::open_future_log(extra.path());
-        future_logs.insert(
-            ("t".to_string(), PartitionIndex(0)),
-            Arc::new(FutureLogState {
-                target_log_dir: extra.path().to_path_buf(),
-                future_path: future_path.clone(),
-                future_log,
-                cancel: CancellationToken::new(),
-                task: std::sync::Mutex::new(None),
-            }),
-        );
+        crate::future_log::test_support::plant_future_log(&future_logs, extra.path());
 
         move_with_defaults!(
             &partitions,
@@ -484,30 +473,17 @@ mod tests {
         ];
         let partitions = Arc::new(PartitionRegistry::new());
         let future_logs = Arc::new(DashMap::new());
-        let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        crate::future_log::test_support::append_and_register_source(
-            &part,
+        let part = crate::future_log::test_support::registered_source(
+            primary.path(),
             &partitions,
-            crate::test_support::PartitionRecordsSetup {
-                count: crate::test_support::RecordCount(3),
-                ..Default::default()
-            },
+            crate::future_log::test_support::FutureSourceSetup::default(),
         );
 
         // Plant a registry entry pointing at `extra`.
-        let (future_path, future_log) =
-            crate::future_log::test_support::open_future_log(extra.path());
-        let old_cancel = CancellationToken::new();
-        future_logs.insert(
-            ("t".to_string(), PartitionIndex(0)),
-            Arc::new(FutureLogState {
-                target_log_dir: extra.path().to_path_buf(),
-                future_path: future_path.clone(),
-                future_log,
-                cancel: old_cancel.clone(),
-                task: std::sync::Mutex::new(None),
-            }),
-        );
+        let crate::future_log::test_support::PlantedFutureLog {
+            path: future_path,
+            cancel: old_cancel,
+        } = crate::future_log::test_support::plant_future_log(&future_logs, extra.path());
 
         move_with_defaults!(
             &partitions,

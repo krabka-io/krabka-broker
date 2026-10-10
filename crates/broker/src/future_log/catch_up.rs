@@ -121,7 +121,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::future_log::test_support::{append_records, fixture_partition};
+    use crate::future_log::test_support::fixture_partition;
 
     fn first_catch_up(
         part: &Arc<Partition>,
@@ -142,13 +142,9 @@ mod tests {
     async fn catch_up_resets_after_source_retention_without_dropping_batch_data() {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
-        let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        append_records(
-            &part,
-            crate::test_support::PartitionRecordsSetup {
-                count: crate::test_support::RecordCount(3),
-                ..Default::default()
-            },
+        let part = crate::future_log::test_support::source_partition(
+            primary.path(),
+            crate::future_log::test_support::FutureSourceSetup::default(),
         );
         part.log
             .lock()
@@ -190,8 +186,13 @@ mod tests {
     async fn catch_up_waits_when_move_throttle_is_exhausted() {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
-        let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        append_records(&part, crate::test_support::PartitionRecordsSetup::default());
+        let part = crate::future_log::test_support::source_partition(
+            primary.path(),
+            crate::future_log::test_support::FutureSourceSetup {
+                count: crate::test_support::RecordCount(1),
+                ..Default::default()
+            },
+        );
         let (_future_path, future) =
             crate::future_log::test_support::open_future_log(target.path());
         let throttle = crate::throttle::TokenBucket::new();
