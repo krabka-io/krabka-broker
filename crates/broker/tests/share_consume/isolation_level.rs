@@ -97,12 +97,15 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
     // A read_committed share fetch must acquire NOTHING: every record is past
     // the LSO (still 0). Poll a few times to be sure it never spuriously acquires.
     for epoch in 0..6 {
-        let row = share_fetch(&client, "g1", &member, tid, 0, epoch, 0).await;
-        assert!(
-            acquired_count(&row) == 0,
-            "read_committed must not surface open-txn records, got {:?}",
-            row.acquired_records
-        );
+        crate::share_rpc::fetch_empty(
+            &client,
+            crate::support::share::ShareFetchSetup::at_epoch(
+                &member,
+                tid,
+                crate::support::share::ShareSessionEpoch(epoch),
+            ),
+        )
+        .await;
         // intentional: deliberately observe that nothing is acquired across a
         // window while the txn stays open (behavior under test, not a
         // state-settle guess).
@@ -117,7 +120,15 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
     txn.commit().await.unwrap();
     let mut values: Vec<String> = Vec::new();
     for epoch in 6..30 {
-        let row = share_fetch(&client, "g1", &member, tid, 0, epoch, 0).await;
+        let row = share_fetch(
+            &client,
+            crate::support::share::ShareFetchSetup::at_epoch(
+                &member,
+                tid,
+                crate::support::share::ShareSessionEpoch(epoch),
+            ),
+        )
+        .await;
         if acquired_count(&row) > 0
             && let Some(batches) = row.records.as_ref().and_then(|r| r.as_v2())
         {
@@ -235,7 +246,15 @@ async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) ->
         values: BTreeSet::new(),
     };
     for epoch in 0..30 {
-        let row = share_fetch(&client, "g1", &member, tid, 0, epoch, 0).await;
+        let row = share_fetch(
+            &client,
+            crate::support::share::ShareFetchSetup::at_epoch(
+                &member,
+                tid,
+                crate::support::share::ShareSessionEpoch(epoch),
+            ),
+        )
+        .await;
         let row_acquired: BTreeSet<i64> = row
             .acquired_records
             .iter()

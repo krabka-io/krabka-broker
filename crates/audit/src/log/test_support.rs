@@ -40,6 +40,13 @@ pub fn life(node: crate::NodeId) -> AuditEvent {
     }
 }
 
+/// Emit a lifecycle sequence in caller-specified node order.
+pub fn emit_lifecycle(log: &AuditLog, nodes: &[crate::NodeId]) {
+    for &node in nodes {
+        log.emit(life(node));
+    }
+}
+
 pub fn header(rec: &AuditRecord, key: &str) -> Option<String> {
     rec.headers
         .iter()

@@ -92,7 +92,11 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         let (broker, client, topic, member) =
             crate::harness::initialized_topic(log_dir.clone(), 3).await;
         tid = topic;
-        let _ = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
+        let _ = fetch_until_acquired(
+            &client,
+            crate::support::share::ShareSessionSetup::opening(&member, tid),
+        )
+        .await;
 
         // Sanity: a describe with no topic list enumerates the initialized
         // partitions for "t" — partition [0] is present before the delete.

@@ -26,8 +26,8 @@ use krabka_protocol::{
 
 use crate::{
     harness::{
-        ACCEPT, NONE, ShareAck, UNSUPPORTED_VERSION, acquired_count, bootstrap_share_state,
-        broker_config, broker_test_permit, connect, create_topic, share_ack,
+        NONE, UNSUPPORTED_VERSION, acquired_count, bootstrap_share_state, broker_config,
+        broker_test_permit, connect, create_topic,
     },
     support::configs::feature_update,
 };
@@ -122,21 +122,11 @@ async fn describe_reflects_spso_after_consume() {
     // Acquire 0..2, Accept all → SPSO advances to 3.
     let (_permit, _broker, client, _dir, tid, member, row) = crate::harness::acquired_topic().await;
     assert!(acquired_count(&row) == 3, "must acquire all 3 offsets");
-    let ack = share_ack(
+    crate::support::share::acknowledge_success(
         &client,
-        ShareAck {
-            group: "g1",
-            member: &member,
-            topic_id: tid,
-            partition: 0,
-            epoch: 1,
-            first: 0,
-            last: 2,
-            ack_type: ACCEPT,
-        },
+        crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)),
     )
     .await;
-    assert!(ack.error_code == NONE, "accept error: {}", ack.error_code);
 
     // Let the persister land the advanced SPSO durably.
     let group = describe_until(&client, "g1", "t", vec![0], 3).await;

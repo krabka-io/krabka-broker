@@ -99,11 +99,8 @@ pub(super) async fn handle_transactional(
             if keep_prepared_txn {
                 let recovery = {
                     let mut entry = existing.lock().await;
-                    if let Some(response) = pending_completion_response(&entry, request_identity) {
+                    if let Some(response) = pending_or_fenced_response(&entry, request_identity) {
                         return Ok(response);
-                    }
-                    if is_fenced(&entry, request_identity) {
-                        return Ok(fenced_response());
                     }
                     if entry.state == TxnState::Ongoing {
                         let ongoing_pid = entry.producer_id;
@@ -138,11 +135,8 @@ pub(super) async fn handle_transactional(
                     });
                 }
                 let entry = existing.lock().await;
-                if let Some(response) = pending_completion_response(&entry, request_identity) {
+                if let Some(response) = pending_or_fenced_response(&entry, request_identity) {
                     return Ok(response);
-                }
-                if is_fenced(&entry, request_identity) {
-                    return Ok(fenced_response());
                 }
             }
 
@@ -157,11 +151,8 @@ pub(super) async fn handle_transactional(
                 let state_partition_write = coord.lock_state_partition_for(tid).await;
                 let current = coord.get(tid).unwrap_or_else(|| Arc::clone(&existing));
                 let mut e = current.lock().await;
-                if let Some(response) = pending_completion_response(&e, request_identity) {
+                if let Some(response) = pending_or_fenced_response(&e, request_identity) {
                     return Ok(response);
-                }
-                if is_fenced(&e, request_identity) {
-                    return Ok(fenced_response());
                 }
                 // A `Retry`-classified identity names the epoch this entry
                 // held before its *last* bump, never its live one (`Bump`
@@ -377,6 +368,16 @@ fn identity_decision(
 /// Whether `request_identity` is fenced against `entry`'s live identity.
 fn is_fenced(entry: &TxnEntry, request_identity: (i64, i16)) -> bool {
     identity_decision(entry, request_identity) == InitProducerIdIdentityDecision::Fenced
+}
+
+/// Reject a pending transition before checking the live producer identity.
+/// Callers hold the same entry lock while checking and staging their mutation.
+fn pending_or_fenced_response(
+    entry: &TxnEntry,
+    request_identity: (i64, i16),
+) -> Option<InitProducerIdResponse> {
+    pending_completion_response(entry, request_identity)
+        .or_else(|| is_fenced(entry, request_identity).then(fenced_response))
 }
 
 /// Kafka `prepareIncrementProducerEpoch`: a retry of a bump that already

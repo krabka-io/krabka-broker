@@ -244,8 +244,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let spool = Spool::open(dir.path(), krabka_units::prelude::bytes(0)).unwrap();
         let (log, _rx) = AuditLog::new_with_mode_and_spool(1, AuditMode::FailOpen, &spool);
-        log.emit(life(crate::NodeId(1)));
-        log.emit(life(crate::NodeId(2)));
+        crate::log::test_support::emit_lifecycle(&log, &[crate::NodeId(1), crate::NodeId(2)]);
 
         let state = std::fs::read(dir.path().join("audit.losses")).unwrap();
         let count = &state[crate::spool::FILE_HEADER_LEN + 8..];

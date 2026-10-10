@@ -464,9 +464,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (log, sink, handle) = memory_writer(dir.path(), MemoryWriterSetup::default());
 
-        log.emit(life(crate::NodeId(1)));
-        log.emit(life(crate::NodeId(2)));
-        log.emit(life(crate::NodeId(3)));
+        crate::log::test_support::emit_lifecycle(
+            &log,
+            &[crate::NodeId(1), crate::NodeId(2), crate::NodeId(3)],
+        );
 
         // Dropping the only sender ends the writer loop cleanly.
         finish_writer(log, handle).await;
@@ -483,8 +484,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // no signer, huge interval => no checkpoints, just chaining
         let (log, sink, h) = memory_writer(dir.path(), MemoryWriterSetup::default());
-        log.emit(life(crate::NodeId(1)));
-        log.emit(life(crate::NodeId(2)));
+        crate::log::test_support::emit_lifecycle(&log, &[crate::NodeId(1), crate::NodeId(2)]);
         finish_writer(log, h).await;
 
         let recs = sink.records();
@@ -552,9 +552,10 @@ mod tests {
     async fn shutdown_emits_final_checkpoint_for_pending_tail() {
         // every_n large so only the shutdown path emits
         let (pubkey, _dir, (log, sink, h)) = signed_writer(SignedWriterSetup::default());
-        log.emit(life(crate::NodeId(1)));
-        log.emit(life(crate::NodeId(2)));
-        log.emit(life(crate::NodeId(3)));
+        crate::log::test_support::emit_lifecycle(
+            &log,
+            &[crate::NodeId(1), crate::NodeId(2), crate::NodeId(3)],
+        );
         finish_writer(log, h).await;
 
         let recs = sink.records();

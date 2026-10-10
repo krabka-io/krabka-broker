@@ -34,7 +34,7 @@ use crate::{
         bootstrap_share_state, broker_config, broker_test_permit, produce_n, produce_values,
         topic_id, wire,
     },
-    share_rpc::{acquired_count, fetch_until_acquired, share_ack, share_fetch},
+    share_rpc::{acquired_count, fetch_until_acquired, share_fetch},
     support::{
         configs::{feature_update, incremental_config, incremental_request, incremental_resource},
         fetch::{fetch_partition, single_partition_fetch},
@@ -221,28 +221,30 @@ async fn reject_ranges(
 ) {
     let response = client
         .send(acknowledge_request(
-            Some(GROUP.into()),
-            Some(member.into()),
-            epoch,
-            None,
-            vec![acknowledge_topic(
-                wire(tid),
-                vec![acknowledge_partition(
-                    0,
-                    ranges
-                        .iter()
-                        .map(|(first, last)| AcknowledgementBatch {
-                            first_offset: *first,
-                            last_offset: *last,
-                            acknowledge_types: vec![
-                                REJECT;
-                                usize::try_from(last - first + 1).unwrap()
-                            ],
-                            ..Default::default()
-                        })
-                        .collect(),
+            crate::support::share::AcknowledgeRequestSetup {
+                group_id: Some(GROUP.into()),
+                member_id: Some(member.into()),
+                epoch: crate::support::share::ShareSessionEpoch(epoch),
+                topics: vec![acknowledge_topic(
+                    wire(tid),
+                    vec![acknowledge_partition(
+                        0,
+                        ranges
+                            .iter()
+                            .map(|(first, last)| AcknowledgementBatch {
+                                first_offset: *first,
+                                last_offset: *last,
+                                acknowledge_types: vec![
+                                    REJECT;
+                                    usize::try_from(last - first + 1).unwrap()
+                                ],
+                                ..Default::default()
+                            })
+                            .collect(),
+                    )],
                 )],
-            )],
+                ..Default::default()
+            },
         ))
         .await
         .expect("ShareAcknowledge");
@@ -276,13 +278,17 @@ impl Cluster {
         (&self.broker, &self.client, &self.tid, &self.member)
     }
     async fn reject_acquired(&self, first: i64, last: i64) {
-        let response =
-            share_ack(&self.client, &self.member, self.tid, 1, first, last, REJECT).await;
-        assert!(
-            response.error_code == NONE,
-            "reject: {}",
-            response.error_code
-        );
+        crate::support::share::acknowledge_success(
+            &self.client,
+            crate::support::share::ShareAck::prefix_for(
+                &self.member,
+                self.tid,
+                krabka_ids::Offset(last),
+            )
+            .starting_at(krabka_ids::Offset(first))
+            .reject(),
+        )
+        .await;
     }
 }
 
@@ -313,6 +319,27 @@ async fn acquired_records(
 
 /// [`acquired_records`], with the records that `produce` writes to `t` in place
 /// of the small ones that `produce_n` writes.
+async fn join_and_acquire(
+    broker: &BrokerHandle,
+    client: &Client,
+    tid: uuid::Uuid,
+) -> (
+    String,
+    krabka_protocol::owned::share_fetch_response::PartitionData,
+) {
+    let (member, _member_epoch) =
+        crate::support::share::join_consume_member(broker, client, tid).await;
+    let row = fetch_until_acquired(
+        client,
+        crate::support::share::ShareSessionSetup {
+            group: GROUP,
+            ..crate::support::share::ShareSessionSetup::opening(&member, tid)
+        },
+    )
+    .await;
+    (member, row)
+}
+
 async fn acquired_records_from(
     records: i64,
     tweak: impl FnOnce(&mut BrokerConfig),
@@ -326,9 +353,7 @@ async fn acquired_records_from(
     bootstrap_share_state(&broker, &client, GROUP).await;
     configure(&client, &broker).await;
     produce(&client, tid).await;
-    let (member, _member_epoch) =
-        crate::support::share::join_consume_member(&broker, &client, tid).await;
-    let row = fetch_until_acquired(&client, GROUP, &member, tid, 0, 0).await;
+    let (member, row) = join_and_acquire(&broker, &client, tid).await;
     assert!(acquired_count(&row) == records, "{row:?}");
     Cluster {
         broker,
@@ -483,7 +508,14 @@ async fn a_record_that_uses_up_its_deliveries_is_dead_lettered() {
     broker
         .wait_until_share_acquired_count(GROUP, *tid, 0, 0)
         .await;
-    let second = share_fetch(client, GROUP, member, *tid, 0, 1, 0).await;
+    let second = share_fetch(
+        client,
+        crate::support::share::ShareFetchSetup::from(crate::support::share::ShareSessionSetup {
+            group: GROUP,
+            ..crate::support::share::ShareSessionSetup::joined(member, *tid)
+        }),
+    )
+    .await;
     assert!(
         acquired_count(&second) == 1 && second.acquired_records[0].delivery_count == 2,
         "{second:?}"
@@ -745,9 +777,7 @@ async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered(
     produce_n(&client, "t", tid, 0, 3).await;
     wait_until_local_log_start(&client, 3).await;
 
-    let (member, _member_epoch) =
-        crate::support::share::join_consume_member(&broker, &client, tid).await;
-    let row = fetch_until_acquired(&client, GROUP, &member, tid, 0, 0).await;
+    let (member, row) = join_and_acquire(&broker, &client, tid).await;
     let values = |records: &[Record]| -> Vec<Option<Bytes>> {
         records.iter().map(|record| record.value.clone()).collect()
     };
@@ -757,8 +787,11 @@ async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered(
     check!(acquired_count(&row) == 3);
     check!(values(&records_of(row.records.as_ref())) == produced);
 
-    let ack = share_ack(&client, &member, tid, 1, 0, 2, REJECT).await;
-    assert!(ack.error_code == NONE, "reject: {}", ack.error_code);
+    crate::support::share::acknowledge_success(
+        &client,
+        crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)).reject(),
+    )
+    .await;
     let dead_letters = wait_for_dead_letters(&broker, &client, 3).await;
     check!(values(&dead_letters) == produced);
     broker.shutdown().await;

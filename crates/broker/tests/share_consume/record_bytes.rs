@@ -9,9 +9,8 @@ use assert2::assert;
 use krabka_client_core::Client;
 
 use crate::{
-    ACCEPT, NONE, REJECT, RELEASE,
     harness::{bootstrap_share_state, produce_n},
-    share_rpc::{acquired_count, fetch_until_acquired, share_ack, share_fetch},
+    share_rpc::{acquired_count, share_fetch},
 };
 
 /// Regression: a `ShareFetch` whose acquired offset begins a *later* record
@@ -34,19 +33,22 @@ async fn acquire_past_leading_batch_returns_bytes() {
         tid,
         member,
     } = crate::harness::consumption_fixture(3).await;
-
-    // Acquire 0..2 and Reject them → archived, SPSO advances to 3.
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
-    assert!(acquired_count(&row) == 3, "acquire all 3");
-    let ack = share_ack(&client, &member, tid, 1, 0, 2, REJECT).await;
-    assert!(ack.error_code == NONE, "reject error: {}", ack.error_code);
+    let session = crate::share_rpc::acquire_three_and_acknowledge(
+        &client,
+        crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)).reject(),
+    )
+    .await;
 
     // A separate single-record batch at offset 3 (this starts a new batch; the
     // acquired range 3..3 begins past the leading 0..2 batch).
     produce_n(&client, "t", tid, 0, 1).await;
 
     // Acquire offset 3 — the payload must carry the record bytes.
-    let row3 = share_fetch(&client, "g1", &member, tid, 0, 2, 0).await;
+    let row3 = share_fetch(
+        &client,
+        session.fetch_at(crate::support::share::ShareSessionEpoch(2)),
+    )
+    .await;
     let row3 =
         crate::support::share::refetch_while_empty(&client, ("g1", &member, tid, 0), row3, 3..18)
             .await;
@@ -115,24 +117,38 @@ async fn fragmented_window_records_match_acquired_offsets() {
     produce_one(&client, "t", tid, 0, "v2").await;
     let (member, _member_epoch) =
         crate::support::share::join_consume_member(&broker, &client, tid).await;
-
-    // Acquire 0..2 (epoch 0 opens; stored epoch is now 1).
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
-    assert!(acquired_count(&row) == 3, "acquire all 3 offsets");
-
-    // Accept the MIDDLE offset (1) only; Release the outer offsets 0 and 2.
-    // SPSO stays at 0 (offset 0 is not accepted), offset 1 becomes Acknowledged,
-    // offsets 0 and 2 return to Available — a gap at offset 1 between them.
-    let a1 = share_ack(&client, &member, tid, 1, 1, 1, ACCEPT).await;
-    assert!(a1.error_code == NONE, "accept 1 error: {}", a1.error_code);
-    let a0 = share_ack(&client, &member, tid, 2, 0, 0, RELEASE).await;
-    assert!(a0.error_code == NONE, "release 0 error: {}", a0.error_code);
-    let a2 = share_ack(&client, &member, tid, 3, 2, 2, RELEASE).await;
-    assert!(a2.error_code == NONE, "release 2 error: {}", a2.error_code);
+    let session = crate::share_rpc::acquire_three_and_acknowledge(
+        &client,
+        crate::support::share::ShareAck::single_for(&member, tid, krabka_ids::Offset(1)),
+    )
+    .await;
+    crate::support::share::acknowledge_success(
+        &client,
+        crate::support::share::ShareAck::prefix(
+            session.with_epoch(crate::support::share::ShareSessionEpoch(2)),
+            krabka_ids::Offset(0),
+        )
+        .release(),
+    )
+    .await;
+    crate::support::share::acknowledge_success(
+        &client,
+        crate::support::share::ShareAck::prefix(
+            session.with_epoch(crate::support::share::ShareSessionEpoch(3)),
+            krabka_ids::Offset(2),
+        )
+        .starting_at(krabka_ids::Offset(2))
+        .release(),
+    )
+    .await;
 
     // Re-fetch: the acquired set is the DISJOINT {0, 2} (offset 1 is gone). The
     // returned records payload must decode to exactly offsets {0, 2}.
-    let mut row2 = share_fetch(&client, "g1", &member, tid, 0, 4, 0).await;
+    let mut row2 = share_fetch(
+        &client,
+        session.fetch_at(crate::support::share::ShareSessionEpoch(4)),
+    )
+    .await;
     for epoch in 5..20 {
         if acquired_count(&row2) >= 2 {
             break;
@@ -140,7 +156,11 @@ async fn fragmented_window_records_match_acquired_offsets() {
         // intentional: bounded RPC poll — re-acquiring the released disjoint set
         // {0, 2} happens only via this ShareFetch; no image/metric reflects it.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        row2 = share_fetch(&client, "g1", &member, tid, 0, epoch, 0).await;
+        row2 = share_fetch(
+            &client,
+            session.fetch_at(crate::support::share::ShareSessionEpoch(epoch)),
+        )
+        .await;
     }
     // The authoritative acquired offset set.
     let acquired_offsets: std::collections::BTreeSet<i64> = row2

@@ -38,6 +38,12 @@ pub struct ConsumptionFixture {
     pub member: String,
 }
 
+impl ConsumptionFixture {
+    pub fn session(&self) -> crate::support::share::ShareSessionSetup<'_> {
+        crate::support::share::ShareSessionSetup::joined(&self.member, self.tid)
+    }
+}
+
 pub async fn consumption_fixture(records: i64) -> ConsumptionFixture {
     let (permit, broker, client, dir, tid) =
         crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;

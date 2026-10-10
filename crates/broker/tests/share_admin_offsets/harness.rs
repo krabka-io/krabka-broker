@@ -13,15 +13,13 @@ use krabka_client_core::Client;
 use krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRequest;
 
 pub use crate::support::share::{
-    ShareAck, acquired_count, bootstrap_share_state, broker_config, broker_test_permit, connect,
-    create_topic, produce_n, share_ack,
+    acquired_count, bootstrap_share_state, broker_config, broker_test_permit, connect,
+    create_topic, produce_n,
 };
 
 pub const NONE: i16 = 0;
 pub const UNSUPPORTED_VERSION: i16 = 35;
 pub const NON_EMPTY_GROUP: i16 = 68;
-
-pub const ACCEPT: i8 = 1;
 
 pub async fn wait_for_share_init(
     broker: &krabka_broker::BrokerHandle,
@@ -81,7 +79,7 @@ pub async fn leave(client: &Client, group: &str, member_id: &str) {
     assert!(resp.error_code == 0, "leave failed: {:?}", resp.error_code);
 }
 
-crate::share_first_fetch_fixture!(fetch_until_acquired, false);
+crate::share_first_fetch_fixture!(fetch_until_acquired, Initial);
 
 crate::share_consumption_fixture!(
     initialize_consumption,
@@ -147,6 +145,10 @@ pub async fn acquired_topic() -> (
     let (permit, broker, client, dir, tid) =
         crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let (member, _) = initialize_consumption(&broker, &client, tid, 3).await;
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
+    let row = fetch_until_acquired(
+        &client,
+        crate::support::share::ShareSessionSetup::opening(&member, tid),
+    )
+    .await;
     (permit, broker, client, dir, tid, member, row)
 }

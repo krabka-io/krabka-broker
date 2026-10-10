@@ -81,7 +81,11 @@ async fn alter_resets_empty_group() {
     // again, so the acquire reads the reset SPSO 5 via the invalidated leader
     // cache.
     let (member, _epoch) = join(&client, "g1", "t").await;
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
+    let row = fetch_until_acquired(
+        &client,
+        crate::support::share::ShareSessionSetup::opening(&member, tid),
+    )
+    .await;
     assert!(
         row.acquired_records[0].first_offset == 5,
         "fetch after Alter must acquire from offset 5, got {:?}",

@@ -295,8 +295,7 @@ mod tests {
         let (log, rx) = AuditLog::new(16);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         let h = spawn_writer(rx, params(sink.clone(), spool, stats.clone()));
-        log.emit(life(crate::NodeId(1)));
-        log.emit(life(crate::NodeId(2)));
+        crate::log::test_support::emit_lifecycle(&log, &[crate::NodeId(1), crate::NodeId(2)]);
         finish_writer(log, h).await;
         check!((sink.inner.records().len(), stats.spooled(), stats.depth()) == (2, 0, 0));
     }
@@ -475,9 +474,10 @@ mod tests {
         let (params, clock) = params_with_clock(sink.clone(), spool, stats.clone());
         let handle = spawn_writer(receiver, params);
 
-        log.emit(life(crate::NodeId(0)));
-        log.emit(life(crate::NodeId(1)));
-        log.emit(life(crate::NodeId(2)));
+        crate::log::test_support::emit_lifecycle(
+            &log,
+            &[crate::NodeId(0), crate::NodeId(1), crate::NodeId(2)],
+        );
         await_until("one spooled and two lost", || stats.dropped() == 2).await;
         check_spool_within_capacity(dir.path(), one);
 
