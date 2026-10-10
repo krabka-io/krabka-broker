@@ -262,7 +262,7 @@ mod tests {
     use super::{NO_OFFSET, mark, refused_topic, request_refusal, row};
     use crate::{
         barrier::{
-            marker::{BarrierMarker, parse_barrier_marker},
+            marker::BarrierMarker,
             test_support::{open_partition, topic_records},
         },
         codes,
@@ -417,8 +417,7 @@ mod tests {
             .expect("read the log back");
         check!(read.batches.len() == 1);
         let batch = &read.batches[0];
-        check!(batch.attributes.is_control_batch());
-        check!(parse_barrier_marker(&batch.records[0]).ok() == Some(marker()));
+        crate::barrier::test_support::check_control_marker(batch, &marker());
     }
 
     /// Authorization answers first, so a caller that may not write markers

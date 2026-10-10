@@ -193,7 +193,7 @@ impl MarkerFanout<'_> {
 mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
-    use assert2::{assert, check};
+    use assert2::assert;
     use krabka_ids::PartitionIndex;
     use krabka_log::Offset;
     use krabka_metadata::NodeId;
@@ -208,7 +208,6 @@ mod tests {
                 MarkerPlacement, MockRemoteMarkerWriter,
                 test_support::{at, fast_config, marker, source},
             },
-            marker::parse_barrier_marker,
             metrics::BrokerBarrierMetrics,
             test_support::{open_partition, topic_records},
         },
@@ -331,8 +330,7 @@ mod tests {
                 .read_log(Offset(0), krabka_units::mebibytes(1))
                 .expect("read the log back");
             let batch = &read.batches[0];
-            check!(batch.attributes.is_control_batch());
-            check!(parse_barrier_marker(&batch.records[0]).ok() == Some(marker()));
+            crate::barrier::test_support::check_control_marker(batch, &marker());
         }
     }
 

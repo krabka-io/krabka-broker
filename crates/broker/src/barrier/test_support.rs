@@ -69,6 +69,20 @@ pub(crate) fn metadata_source(records: &[MetadataRecord]) -> FakeMetadataSource 
         .build()
 }
 
+/// Check the control flag and decoded marker against the expected value.
+pub(crate) fn check_control_marker(
+    batch: &krabka_protocol::records::RecordBatch,
+    expected: &crate::barrier::marker::BarrierMarker,
+) {
+    assert2::check!(batch.attributes.is_control_batch());
+    assert2::check!(
+        crate::barrier::marker::parse_barrier_marker(&batch.records[0])
+            .ok()
+            .as_ref()
+            == Some(expected)
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::metadata_source;

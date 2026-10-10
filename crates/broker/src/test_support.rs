@@ -527,6 +527,16 @@ impl Default for TopicSetup<'_> {
     }
 }
 
+impl TopicSetup<'_> {
+    /// Topic metadata for fixtures whose partition records have one replica.
+    pub(crate) fn single_replica() -> Self {
+        Self {
+            replication_factor: ReplicationFactor(1),
+            ..Self::default()
+        }
+    }
+}
+
 pub(crate) fn topic_image(setup: TopicSetup<'_>) -> MetadataImage {
     let TopicSetup {
         topic,

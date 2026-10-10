@@ -258,20 +258,47 @@ async fn start_default_broker(dir: &std::path::Path) -> (BrokerHandle, Arc<Broke
     (handle, broker, addr)
 }
 
+struct ShutdownFixture {
+    handle: BrokerHandle,
+    broker: Arc<Broker>,
+    addr: SocketAddr,
+    partition: Arc<crate::partition::Partition>,
+}
+
+async fn shutdown_fixture(
+    root: &std::path::Path,
+    setup: crate::broker::test_support::LocalPartitionSetup<'_>,
+) -> ShutdownFixture {
+    let (handle, broker, addr) = start_default_broker(root).await;
+    let (topic, index) = (setup.topic, setup.partition);
+    let partition = local_partition_with_records(root, setup);
+    broker
+        .partitions
+        .insert(topic.into(), index, partition.clone());
+    ShutdownFixture {
+        handle,
+        broker,
+        addr,
+        partition,
+    }
+}
+
 #[tokio::test]
 async fn start_and_shutdown_clean() {
     let dir = tempdir().unwrap();
-    let (handle, broker, addr) = start_default_broker(dir.path()).await;
-    let partition = local_partition_with_records(
+    let ShutdownFixture {
+        handle,
+        broker,
+        addr,
+        partition,
+    } = shutdown_fixture(
         dir.path(),
         crate::broker::test_support::LocalPartitionSetup {
             topic: "shutdown",
             ..Default::default()
         },
-    );
-    broker
-        .partitions
-        .insert("shutdown".into(), PartitionIndex(0), partition.clone());
+    )
+    .await;
     assert!(addr.port() != 0);
     let stream = tokio::net::TcpStream::connect(addr)
         .await
@@ -297,17 +324,19 @@ async fn start_and_shutdown_clean() {
 #[tokio::test]
 async fn dropping_handle_stops_idle_connections_and_partition_writers() {
     let dir = tempdir().unwrap();
-    let (handle, broker, addr) = start_default_broker(dir.path()).await;
-    let partition = local_partition_with_records(
+    let ShutdownFixture {
+        handle,
+        broker,
+        addr,
+        partition,
+    } = shutdown_fixture(
         dir.path(),
         crate::broker::test_support::LocalPartitionSetup {
             topic: "drop-shutdown",
             ..Default::default()
         },
-    );
-    broker
-        .partitions
-        .insert("drop-shutdown".into(), PartitionIndex(0), partition.clone());
+    )
+    .await;
     let stream = tokio::net::TcpStream::connect(addr)
         .await
         .expect("listener accepts before handle drop");
