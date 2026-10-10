@@ -561,6 +561,23 @@ pub async fn start_topic(
     (broker, client, tid)
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct StartGroupTopicSetup<'a> {
+    pub topic: ShareTopicSetup<'a>,
+    #[default("g1")]
+    pub group: &'a str,
+}
+
+/// Bootstrap the share-state topic after creating the requested data topic.
+pub async fn start_group_topic(
+    config: BrokerConfig,
+    setup: StartGroupTopicSetup<'_>,
+) -> (krabka_broker::BrokerHandle, Arc<Client>, uuid::Uuid) {
+    let (broker, client, topic_id) = Box::pin(start_topic(config, setup.topic)).await;
+    bootstrap_share_state(&broker, &client, setup.group).await;
+    (broker, client, topic_id)
+}
+
 pub async fn crash_follower(
     cluster: &mut Vec<(krabka_broker::BrokerHandle, BrokerConfig, tempfile::TempDir)>,
     coordinator: u64,

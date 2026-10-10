@@ -237,6 +237,18 @@ pub(crate) fn subscribed_names_describe_denied(
     .is_empty()
 }
 
+/// Preserve whole-request rejection at the caller before validation or coordinator routing.
+macro_rules! authorize_subscription {
+    (($broker:expr, $image:expr, $ctx:expr), $names:expr => $reply:expr) => {
+        if let Some(error_code) =
+            $crate::handlers::acl_gates::subscribed_names_refusal($broker, $image, $ctx, $names)
+        {
+            return Ok($reply(error_code, None));
+        }
+    };
+}
+pub(crate) use authorize_subscription;
+
 /// Subscription denial code shared by consumer and share heartbeats.
 pub(crate) fn subscribed_names_refusal(
     broker: &crate::broker::Broker,

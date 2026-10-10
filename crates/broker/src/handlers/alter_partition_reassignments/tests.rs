@@ -25,6 +25,34 @@ use crate::{
     test_support::{DenyAll, FreezeSetup, start_broker_with_authorizer as start_broker, test_ctx},
 };
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct ReassignableSeedSetup<'a> {
+    #[default(&[NodeId(1)])]
+    replicas: &'a [NodeId],
+    isr: Option<&'a [NodeId]>,
+    #[default(&[])]
+    adding: &'a [NodeId],
+}
+
+fn reassignable_seed_record(setup: ReassignableSeedSetup<'_>) -> PartitionRecord {
+    let mut record = PartitionRecord {
+        leader_epoch: LeaderEpoch(3),
+        partition_epoch: 11,
+        ..crate::handlers::test_support::replicated_partition(
+            crate::handlers::test_support::ReplicatedPartitionSetup {
+                partition: krabka_ids::PartitionIndex(7),
+                replicas: setup.replicas,
+                ..Default::default()
+            },
+        )
+    };
+    if let Some(isr) = setup.isr {
+        record.isr = isr.to_vec();
+    }
+    record.adding_replicas = setup.adding.to_vec();
+    record
+}
+
 async fn seed_reassignable_partition(broker: &Broker) {
     broker
         .controller
@@ -46,18 +74,7 @@ async fn seed_reassignable_partition(broker: &Broker) {
                 partitions: 1,
                 replication_factor: 1,
             }),
-            MetadataRecord::V1Partition(PartitionRecord {
-                leader_epoch: LeaderEpoch(3),
-                partition_epoch: 11,
-                ..crate::handlers::test_support::replicated_partition(
-                    crate::handlers::test_support::ReplicatedPartitionSetup {
-                        partition: krabka_ids::PartitionIndex(7),
-                        leader: NodeId(1),
-                        replicas: &[NodeId(1)],
-                        ..Default::default()
-                    },
-                )
-            }),
+            MetadataRecord::V1Partition(reassignable_seed_record(ReassignableSeedSetup::default())),
         ])
         .await
         .expect("seed reassignment metadata");
@@ -84,20 +101,13 @@ async fn seed_cancellable_partition(broker: &Broker) {
         partitions: 1,
         replication_factor: 2,
     }));
-    records.push(MetadataRecord::V1Partition(PartitionRecord {
-        isr: vec![NodeId(1)],
-        leader_epoch: LeaderEpoch(3),
-        adding_replicas: vec![NodeId(3)],
-        partition_epoch: 11,
-        ..crate::handlers::test_support::replicated_partition(
-            crate::handlers::test_support::ReplicatedPartitionSetup {
-                partition: krabka_ids::PartitionIndex(7),
-                leader: NodeId(1),
-                replicas: &[NodeId(1), NodeId(2), NodeId(3)],
-                ..Default::default()
-            },
-        )
-    }));
+    records.push(MetadataRecord::V1Partition(reassignable_seed_record(
+        ReassignableSeedSetup {
+            replicas: &[NodeId(1), NodeId(2), NodeId(3)],
+            isr: Some(&[NodeId(1)]),
+            adding: &[NodeId(3)],
+        },
+    )));
     records.push(MetadataRecord::V1TopicConfig(
         krabka_metadata::TopicConfigRecord {
             topic: "orders".into(),

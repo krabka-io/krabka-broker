@@ -125,6 +125,12 @@ mod tests {
         };
     }
 
+    fn check_partition_directory(broker: &Broker, directory: uuid::Uuid) {
+        let image = broker.controller.current_image();
+        let partition = image.partition("t", 0).expect("partition");
+        assert!(partition.directories == vec![directory]);
+    }
+
     /// The topic reference and the partition that one request row reports.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Report {
@@ -193,9 +199,7 @@ mod tests {
             ));
         }
         assert!(actual == expected);
-        let image = broker.controller.current_image();
-        let partition = image.partition("t", 0).expect("partition");
-        assert!(partition.directories == vec![dir_uuid]);
+        check_partition_directory(&broker, dir_uuid);
 
         broker_handle.shutdown().await;
     }
@@ -252,9 +256,7 @@ mod tests {
 
         assert!(resp.error_code == codes::NONE, "{resp:?}");
         assert!(resp.directories[0].topics[0].partitions[0].error_code == codes::NONE);
-        let image = broker.controller.current_image();
-        let partition = image.partition("t", 0).expect("partition");
-        assert!(partition.directories == vec![dir_uuid]);
+        check_partition_directory(&broker, dir_uuid);
         broker_handle.shutdown().await;
     }
 

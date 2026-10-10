@@ -9,7 +9,7 @@ use krabka_protocol::owned::{
 };
 use krabka_raft::RaftError;
 
-use crate::{broker::Broker, codes, handlers::forward_to_controller::is_active_controller};
+use crate::{broker::Broker, codes};
 
 context_handler! {
     BrokerRegistrationRequest => BrokerRegistrationResponse,
@@ -17,13 +17,9 @@ context_handler! {
     {
         let image = broker.controller.current_image();
 
-        // Every listener runs the `ClusterAction` gate, the controller listener
-        // included, as Kafka's `ControllerApis.handleBrokerRegistration` does.
-        if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-            return Ok(response(codes::CLUSTER_AUTHORIZATION_FAILED, -1));
-        }
-        if !is_active_controller(broker) {
-            return Ok(response(codes::NOT_CONTROLLER, -1));
+        // ClusterAction is checked before the active-controller requirement.
+        if let Some(code) = super::registration_listeners::registration_refusal(broker, &image, ctx) {
+            return Ok(response(code, -1));
         }
         // Kafka's controller decides one registration at a time on its event
         // thread. Hold the registration turn from the session check to the
@@ -531,6 +527,7 @@ mod wire_tests {
     use crate::{
         config_keys::MIN_INSYNC_REPLICAS,
         elr::{TopicElr, state::PartitionElr},
+        handlers::forward_to_controller::is_active_controller,
         test_support::{peer, start_broker_with_authorizer},
     };
 

@@ -380,22 +380,34 @@ mod tests {
         entries.iter().map(|(id, p)| (*id, p.to_vec())).collect()
     }
 
-    fn view_member(member_id: &str) -> DescribeMember {
-        DescribeMember {
-            member_id: member_id.into(),
-            instance_id: None,
-            rack_id: None,
-            member_epoch: 5,
-            client_id: "client".into(),
-            client_host: "/10.0.0.1".into(),
-            subscribed_topic_names: vec!["orders".into(), "payments".into()],
-            subscribed_topic_regex: None,
-            assigned_partitions: HashMap::new(),
-            partitions_pending_revocation: HashMap::new(),
-            target_partitions: HashMap::new(),
-            is_classic: false,
-        }
+    /// The same literal member identity appears in the input view and expected wire member.
+    /// Their assignments remain separate, including the independently expected wire mapping.
+    macro_rules! member_identity_fixture {
+        ($name:ident -> $type:ident, $encoding:ident, {$($extra:tt)*}) => {
+            fn $name(member_id: &str) -> $type {
+                member_identity_fixture!(@$encoding $type {
+                    member_id: member_id.into(),
+                    instance_id: None,
+                    rack_id: None,
+                    member_epoch: 5,
+                    client_id: "client".into(),
+                    client_host: "/10.0.0.1".into(),
+                    subscribed_topic_names: vec!["orders".into(), "payments".into()],
+                    subscribed_topic_regex: None,
+                    $($extra)*
+                })
+            }
+        };
+        (@plain $type:ident $fields:tt) => { $type $fields };
+        (@tagged $type:ident $fields:tt) => { tagged_wire!($type $fields) };
     }
+
+    member_identity_fixture!(view_member -> DescribeMember, plain, {
+        assigned_partitions: HashMap::new(),
+        partitions_pending_revocation: HashMap::new(),
+        target_partitions: HashMap::new(),
+        is_classic: false,
+    });
 
     fn view(group_state: &'static str, members: Vec<DescribeMember>) -> DescribeView {
         DescribeView {
@@ -422,21 +434,11 @@ mod tests {
         })
     }
 
-    fn wire_member(member_id: &str) -> Member {
-        tagged_wire!(Member {
-            member_id: member_id.into(),
-            instance_id: None,
-            rack_id: None,
-            member_epoch: 5,
-            client_id: "client".into(),
-            client_host: "/10.0.0.1".into(),
-            subscribed_topic_names: vec!["orders".into(), "payments".into()],
-            subscribed_topic_regex: None,
-            assignment: assigned(vec![]),
-            target_assignment: assigned(vec![]),
-            member_type: MEMBER_TYPE_CONSUMER,
-        })
-    }
+    member_identity_fixture!(wire_member -> Member, tagged, {
+        assignment: assigned(vec![]),
+        target_assignment: assigned(vec![]),
+        member_type: MEMBER_TYPE_CONSUMER,
+    });
 
     fn wire_group(group_state: &str, assignor_name: &str, members: Vec<Member>) -> DescribedGroup {
         tagged_wire!(DescribedGroup {

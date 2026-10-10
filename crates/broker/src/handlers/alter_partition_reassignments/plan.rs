@@ -369,7 +369,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        handlers::alter_partition_reassignments::test_support::{ReassignmentImageSetup, img_with},
+        handlers::alter_partition_reassignments::test_support::{
+            ReassignmentImageSetup, ReplicaBrokerId, ReplicationFactorPolicy, img_with,
+        },
         test_support::ReassignmentSetup,
     };
 
@@ -410,6 +412,24 @@ mod tests {
         }
     }
 
+    const FOUR_REPLICAS: &[NodeId] = &[NodeId(1), NodeId(2), NodeId(3), NodeId(4)];
+
+    /// Independent completed-removal expectation shared by start and cancel rows.
+    fn completed_two_replica_record() -> PartitionRecord {
+        record(PlanRecordSetup {
+            replicas: &[NodeId(1), NodeId(2)],
+            isr: &[NodeId(1), NodeId(2)],
+            leader_epoch: LeaderEpoch(6),
+            ..Default::default()
+        })
+    }
+
+    #[derive(Clone, Copy)]
+    enum UncleanElection {
+        Forbidden,
+        Allowed,
+    }
+
     /// Named input assignment for one reassignment row.
     type State<'a> = ReassignmentSetup<'a>;
 
@@ -427,20 +447,33 @@ mod tests {
 
     /// A start row: label, partition state, target, the KIP-860 flag, and the
     /// planned record.
-    type StartCase<'a> = (&'a str, State<'a>, &'a [i32], bool, Option<PartitionRecord>);
+    type StartCase<'a> = (
+        &'a str,
+        State<'a>,
+        &'a [ReplicaBrokerId],
+        ReplicationFactorPolicy,
+        Option<PartitionRecord>,
+    );
 
     /// A cancel row: label, partition state, the topic's
     /// `unclean.leader.election.enable`, and the planned outcome.
     type CancelCase<'a> = (
         &'a str,
         State<'a>,
-        bool,
+        UncleanElection,
         Result<Option<PartitionRecord>, RowError>,
     );
 
     /// A rejected row: label, topic, partition, target, the KIP-860 flag, and
     /// the row error.
-    type RejectCase<'a> = (&'a str, &'a str, i32, Option<&'a [i32]>, bool, RowError);
+    type RejectCase<'a> = (
+        &'a str,
+        &'a str,
+        krabka_ids::PartitionIndex,
+        Option<&'a [ReplicaBrokerId]>,
+        ReplicationFactorPolicy,
+        RowError,
+    );
 
     /// Kafka's replica arithmetic for a start: the target order, a reorder, a
     /// new target over an in-flight reassignment, and a completion in the same
@@ -454,8 +487,8 @@ mod tests {
                 ReassignmentSetup {
                     ..Default::default()
                 },
-                &[3, 2, 1],
-                false,
+                &[ReplicaBrokerId(3), ReplicaBrokerId(2), ReplicaBrokerId(1)],
+                ReplicationFactorPolicy::Maintain,
                 Some(record(PlanRecordSetup {
                     replicas: &[NodeId(3), NodeId(2), NodeId(1)],
                     leader_epoch: LeaderEpoch(5),
@@ -467,8 +500,8 @@ mod tests {
                 ReassignmentSetup {
                     ..Default::default()
                 },
-                &[3, 4, 1],
-                false,
+                &[ReplicaBrokerId(3), ReplicaBrokerId(4), ReplicaBrokerId(1)],
+                ReplicationFactorPolicy::Maintain,
                 Some(record(PlanRecordSetup {
                     replicas: &[NodeId(3), NodeId(4), NodeId(1), NodeId(2)],
                     adding: &[NodeId(4)],
@@ -485,8 +518,8 @@ mod tests {
                     removing: vec![NodeId(2), NodeId(3)],
                     ..Default::default()
                 },
-                &[5, 6],
-                true,
+                &[ReplicaBrokerId(5), ReplicaBrokerId(6)],
+                ReplicationFactorPolicy::PermitChange,
                 Some(record(PlanRecordSetup {
                     replicas: &[
                         NodeId(5),
@@ -497,7 +530,7 @@ mod tests {
                         NodeId(4),
                     ],
                     adding: &[NodeId(5), NodeId(6)],
-                    removing: &[NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+                    removing: FOUR_REPLICAS,
                     leader_epoch: LeaderEpoch(5),
                     ..Default::default()
                 })),
@@ -507,22 +540,17 @@ mod tests {
                 ReassignmentSetup {
                     ..Default::default()
                 },
-                &[1, 2],
-                true,
-                Some(record(PlanRecordSetup {
-                    replicas: &[NodeId(1), NodeId(2)],
-                    isr: &[NodeId(1), NodeId(2)],
-                    leader_epoch: LeaderEpoch(6),
-                    ..Default::default()
-                })),
+                &[ReplicaBrokerId(1), ReplicaBrokerId(2)],
+                ReplicationFactorPolicy::PermitChange,
+                Some(completed_two_replica_record()),
             ),
             (
                 "the adding and removing lists are sorted",
                 ReassignmentSetup {
                     ..Default::default()
                 },
-                &[5, 4, 1],
-                false,
+                &[ReplicaBrokerId(5), ReplicaBrokerId(4), ReplicaBrokerId(1)],
+                ReplicationFactorPolicy::Maintain,
                 Some(record(PlanRecordSetup {
                     replicas: &[NodeId(5), NodeId(4), NodeId(1), NodeId(2), NodeId(3)],
                     adding: &[NodeId(4), NodeId(5)],
@@ -539,12 +567,12 @@ mod tests {
                     removing: vec![NodeId(1), NodeId(2), NodeId(3)],
                     ..Default::default()
                 },
-                &[5],
-                true,
+                &[ReplicaBrokerId(5)],
+                ReplicationFactorPolicy::PermitChange,
                 Some(record(PlanRecordSetup {
                     replicas: &[NodeId(5), NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
                     adding: &[NodeId(5)],
-                    removing: &[NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+                    removing: FOUR_REPLICAS,
                     leader_epoch: LeaderEpoch(5),
                     ..Default::default()
                 })),
@@ -556,8 +584,8 @@ mod tests {
                     isr: vec![NodeId(1), NodeId(2)],
                     ..Default::default()
                 },
-                &[1, 2, 3],
-                true,
+                &[ReplicaBrokerId(1), ReplicaBrokerId(2), ReplicaBrokerId(3)],
+                ReplicationFactorPolicy::PermitChange,
                 Some(record(PlanRecordSetup {
                     isr: &[NodeId(1), NodeId(2)],
                     adding: &[NodeId(3)],
@@ -570,8 +598,8 @@ mod tests {
                 ReassignmentSetup {
                     ..Default::default()
                 },
-                &[2, 3],
-                true,
+                &[ReplicaBrokerId(2), ReplicaBrokerId(3)],
+                ReplicationFactorPolicy::PermitChange,
                 Some(record(PlanRecordSetup {
                     leader: NodeId(2),
                     replicas: &[NodeId(2), NodeId(3)],
@@ -589,8 +617,8 @@ mod tests {
                     removing: vec![NodeId(2)],
                     ..Default::default()
                 },
-                &[1, 3, 4],
-                false,
+                &[ReplicaBrokerId(1), ReplicaBrokerId(3), ReplicaBrokerId(4)],
+                ReplicationFactorPolicy::Maintain,
                 Some(record(PlanRecordSetup {
                     replicas: &[NodeId(1), NodeId(3), NodeId(4)],
                     isr: &[NodeId(1), NodeId(3), NodeId(4)],
@@ -604,8 +632,8 @@ mod tests {
                     isr: vec![NodeId(1), NodeId(2)],
                     ..Default::default()
                 },
-                &[1, 3],
-                true,
+                &[ReplicaBrokerId(1), ReplicaBrokerId(3)],
+                ReplicationFactorPolicy::PermitChange,
                 Some(record(PlanRecordSetup {
                     replicas: &[NodeId(1), NodeId(3), NodeId(2)],
                     isr: &[NodeId(1), NodeId(2)],
@@ -619,8 +647,8 @@ mod tests {
                 ReassignmentSetup {
                     ..Default::default()
                 },
-                &[1, 2, 3],
-                false,
+                &[ReplicaBrokerId(1), ReplicaBrokerId(2), ReplicaBrokerId(3)],
+                ReplicationFactorPolicy::Maintain,
                 None,
             ),
         ];
@@ -629,7 +657,14 @@ mod tests {
                 assignment,
                 partition_epoch: crate::test_support::PartitionEpoch(11),
             });
-            let planned = process_one_partition(&image, "foo", 0, Some(target), allow_rf, true);
+            let planned = process_one_partition(
+                &image,
+                "foo",
+                0,
+                Some(&target.iter().map(|id| id.0).collect::<Vec<_>>()),
+                matches!(allow_rf, ReplicationFactorPolicy::PermitChange),
+                true,
+            );
             check!(planned == Ok(expected), "case {label}");
         }
     }
@@ -645,7 +680,7 @@ mod tests {
             (
                 "a leader in the adding set moves to the reverted ISR",
                 added_leader_assignment(),
-                false,
+                UncleanElection::Forbidden,
                 Ok(Some(record(PlanRecordSetup {
                     isr: &[NodeId(1)],
                     leader_epoch: LeaderEpoch(6),
@@ -659,7 +694,7 @@ mod tests {
                     leader: NodeId(2),
                     ..added_leader_assignment()
                 },
-                false,
+                UncleanElection::Forbidden,
                 Ok(Some(record(PlanRecordSetup {
                     isr: &[NodeId(1)],
                     leader_epoch: LeaderEpoch(6),
@@ -672,7 +707,7 @@ mod tests {
                     removing: vec![NodeId(3)],
                     ..Default::default()
                 },
-                false,
+                UncleanElection::Forbidden,
                 Ok(Some(record(PlanRecordSetup {
                     leader_epoch: LeaderEpoch(5),
                     ..Default::default()
@@ -684,13 +719,8 @@ mod tests {
                     adding: vec![NodeId(3)],
                     ..Default::default()
                 },
-                false,
-                Ok(Some(record(PlanRecordSetup {
-                    replicas: &[NodeId(1), NodeId(2)],
-                    isr: &[NodeId(1), NodeId(2)],
-                    leader_epoch: LeaderEpoch(6),
-                    ..Default::default()
-                }))),
+                UncleanElection::Forbidden,
+                Ok(Some(completed_two_replica_record())),
             ),
             (
                 "an ISR of adding replicas needs unclean election",
@@ -700,7 +730,7 @@ mod tests {
                     leader: NodeId(3),
                     ..Default::default()
                 },
-                false,
+                UncleanElection::Forbidden,
                 Err((INVALID_REPLICA_ASSIGNMENT, unclean_message.into())),
             ),
             (
@@ -711,7 +741,7 @@ mod tests {
                     leader: NodeId(3),
                     ..Default::default()
                 },
-                true,
+                UncleanElection::Allowed,
                 Ok(Some(record(PlanRecordSetup {
                     replicas: &[NodeId(1), NodeId(2)],
                     isr: &[NodeId(1)],
@@ -725,7 +755,7 @@ mod tests {
                 assignment,
                 partition_epoch: crate::test_support::PartitionEpoch(11),
             });
-            if unclean {
+            if matches!(unclean, UncleanElection::Allowed) {
                 image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                     topic: "foo".into(),
                     overrides: [(
@@ -748,9 +778,9 @@ mod tests {
             (
                 "an unknown topic",
                 "bar",
-                0,
-                Some(&[1]),
-                true,
+                krabka_ids::PartitionIndex(0),
+                Some(&[ReplicaBrokerId(1)]),
+                ReplicationFactorPolicy::PermitChange,
                 (
                     UNKNOWN_TOPIC_OR_PARTITION,
                     "Unable to find a topic named bar.".into(),
@@ -759,9 +789,9 @@ mod tests {
             (
                 "an unknown partition",
                 "foo",
-                1,
-                Some(&[1]),
-                true,
+                krabka_ids::PartitionIndex(1),
+                Some(&[ReplicaBrokerId(1)]),
+                ReplicationFactorPolicy::PermitChange,
                 (
                     UNKNOWN_TOPIC_OR_PARTITION,
                     "Unable to find partition foo:1.".into(),
@@ -770,9 +800,9 @@ mod tests {
             (
                 "an empty target",
                 "foo",
-                0,
+                krabka_ids::PartitionIndex(0),
                 Some(&[]),
-                true,
+                ReplicationFactorPolicy::PermitChange,
                 (
                     INVALID_REPLICA_ASSIGNMENT,
                     "The manual partition assignment includes an empty replica list.".into(),
@@ -781,9 +811,9 @@ mod tests {
             (
                 "a duplicate replica",
                 "foo",
-                0,
-                Some(&[1, 1]),
-                true,
+                krabka_ids::PartitionIndex(0),
+                Some(&[ReplicaBrokerId(1), ReplicaBrokerId(1)]),
+                ReplicationFactorPolicy::PermitChange,
                 (
                     INVALID_REPLICA_ASSIGNMENT,
                     "The manual partition assignment includes the broker 1 more than once.".into(),
@@ -792,9 +822,9 @@ mod tests {
             (
                 "an unregistered broker",
                 "foo",
-                0,
-                Some(&[99]),
-                true,
+                krabka_ids::PartitionIndex(0),
+                Some(&[ReplicaBrokerId(99)]),
+                ReplicationFactorPolicy::PermitChange,
                 (
                     INVALID_REPLICA_ASSIGNMENT,
                     "The manual partition assignment includes broker 99, but no such broker is \
@@ -805,9 +835,9 @@ mod tests {
             (
                 "a negative broker id",
                 "foo",
-                0,
-                Some(&[-1]),
-                true,
+                krabka_ids::PartitionIndex(0),
+                Some(&[ReplicaBrokerId(-1)]),
+                ReplicationFactorPolicy::PermitChange,
                 (
                     INVALID_REPLICA_ASSIGNMENT,
                     "The manual partition assignment includes broker -1, but no such broker is \
@@ -818,9 +848,9 @@ mod tests {
             (
                 "the lowest broker id decides between two faults",
                 "foo",
-                0,
-                Some(&[99, 1, 1]),
-                true,
+                krabka_ids::PartitionIndex(0),
+                Some(&[ReplicaBrokerId(99), ReplicaBrokerId(1), ReplicaBrokerId(1)]),
+                ReplicationFactorPolicy::PermitChange,
                 (
                     INVALID_REPLICA_ASSIGNMENT,
                     "The manual partition assignment includes the broker 1 more than once.".into(),
@@ -829,9 +859,9 @@ mod tests {
             (
                 "a replication factor change without the flag",
                 "foo",
-                0,
-                Some(&[1, 2]),
-                false,
+                krabka_ids::PartitionIndex(0),
+                Some(&[ReplicaBrokerId(1), ReplicaBrokerId(2)]),
+                ReplicationFactorPolicy::Maintain,
                 (
                     INVALID_REPLICATION_FACTOR,
                     "The replication factor is changed from 3 to 2".into(),
@@ -840,15 +870,24 @@ mod tests {
             (
                 "a cancel with nothing in progress",
                 "foo",
-                0,
+                krabka_ids::PartitionIndex(0),
                 None,
-                true,
+                ReplicationFactorPolicy::PermitChange,
                 (NO_REASSIGNMENT_IN_PROGRESS, NO_REASSIGNMENT_MESSAGE.into()),
             ),
         ];
         let image = img_with(ReassignmentImageSetup::default());
         for (label, topic, partition, target, allow_rf, expected) in cases {
-            let planned = process_one_partition(&image, topic, partition, target, allow_rf, true);
+            let planned = process_one_partition(
+                &image,
+                topic,
+                partition.0,
+                target
+                    .map(|ids| ids.iter().map(|id| id.0).collect::<Vec<_>>())
+                    .as_deref(),
+                matches!(allow_rf, ReplicationFactorPolicy::PermitChange),
+                true,
+            );
             check!(planned == Err(expected), "case {label}");
         }
     }

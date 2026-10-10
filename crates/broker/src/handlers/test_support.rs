@@ -1247,3 +1247,25 @@ pub(crate) fn share_fetch_topics(
         ..Default::default()
     }]
 }
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct BrokerConfigMutationSetup<'a> {
+    #[default(krabka_metadata::NodeId(1))]
+    pub serving: krabka_metadata::NodeId,
+    #[default(&[])]
+    pub log_dirs: &'a [std::path::PathBuf],
+    #[default(crate::api_catalog::UnstableApiVersions::Disabled)]
+    pub unstable: crate::api_catalog::UnstableApiVersions,
+}
+
+pub(crate) fn broker_config_context<'a>(
+    image: &'a krabka_metadata::MetadataImage,
+    setup: BrokerConfigMutationSetup<'a>,
+) -> crate::config_keys::broker_dynamic::BrokerConfigContext<'a> {
+    crate::config_keys::broker_dynamic::BrokerConfigContext {
+        image,
+        serving: setup.serving,
+        log_dirs: setup.log_dirs,
+        unstable: setup.unstable,
+    }
+}

@@ -63,11 +63,9 @@ context_handler! {
         // `group_coordinator_error` -- Kafka authorizes the request before it
         // ever reaches coordinator routing, so an unauthorized subscription
         // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-        if let Some(error_code) = crate::handlers::acl_gates::subscribed_names_refusal(
-            broker, &image, ctx, req.subscribed_topic_names.as_deref(),
-        ) {
-            return Ok(reply(error_code, None));
-        }
+        crate::handlers::acl_gates::authorize_subscription!(
+            (broker, &image, ctx), req.subscribed_topic_names.as_deref() => reply
+        );
 
         // Kafka's `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`
         // runs before the operation reaches a coordinator shard.
