@@ -7,16 +7,10 @@
 
 use std::net::SocketAddr;
 
-use krabka_protocol::owned::{
-    elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
-    elect_leaders_response::ElectLeadersResponse,
-};
+use krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions};
 
 pub use crate::kafka_wire::create_configured_topic_sasl as create_topic_sasl_plain;
-use crate::{
-    kafka_wire,
-    wire::{CLIENT_ID, ELECT_LEADERS_VERSION},
-};
+use crate::{kafka_wire, wire::CLIENT_ID};
 
 /// Drives `ElectLeaders` over a SASL/PLAIN authenticated connection.
 ///
@@ -44,17 +38,7 @@ pub async fn drive_elect_leaders_sasl_plain(
         timeout_ms: 30_000,
         ..Default::default()
     };
-    let resp: ElectLeadersResponse = kafka_wire::exchange(
-        &mut stream,
-        &req,
-        43,
-        ELECT_LEADERS_VERSION,
-        1,
-        CLIENT_ID,
-        true,
-    )
-    .await
-    .expect("ElectLeaders round-trip");
+    let resp = kafka_wire::elect_leaders_response(&mut stream, &req, CLIENT_ID).await;
 
     crate::support::admin::election_partition_errors(resp, topic)
 }

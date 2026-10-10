@@ -24,6 +24,7 @@ use std::net::SocketAddr;
 use assert2::{assert, check};
 use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -35,7 +36,10 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use crate::support::records::{batch_from_records, value_record};
+use crate::support::{
+    records::{batch_from_records, value_record},
+    wire::ApiRequestSetup,
+};
 
 krabka_macros::assignment_dirs_fixture!(assignment_dirs_request);
 
@@ -80,9 +84,16 @@ async fn produce_and_get_error(addr: SocketAddr, topic: &str, partition: i32) ->
     let mut body = BytesMut::new();
     req.encode(&mut body, PRODUCE_VERSION).unwrap();
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp_bytes = round_trip(&mut stream, 0, PRODUCE_VERSION, &body)
-        .await
-        .unwrap();
+    let resp_bytes = round_trip(
+        &mut stream,
+        ApiRequestSetup {
+            api_key: WireApiKey(0),
+            version: WireApiVersion(PRODUCE_VERSION),
+        },
+        &body,
+    )
+    .await
+    .unwrap();
     let mut cur: &[u8] = &resp_bytes;
     let resp = ProduceResponse::decode(&mut cur, PRODUCE_VERSION).unwrap();
     resp.responses[0].partition_responses[0].error_code
@@ -266,7 +277,16 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
     req.encode(&mut body, VERSION).unwrap();
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp_bytes = round_trip(&mut stream, 73, VERSION, &body).await.unwrap();
+    let resp_bytes = round_trip(
+        &mut stream,
+        ApiRequestSetup {
+            api_key: WireApiKey(73),
+            version: WireApiVersion(VERSION),
+        },
+        &body,
+    )
+    .await
+    .unwrap();
 
     let mut cur: &[u8] = &resp_bytes;
     let resp = AssignReplicasToDirsResponse::decode(&mut cur, VERSION).unwrap();
@@ -328,9 +348,16 @@ async fn heartbeat_with_offline_log_dirs_is_accepted() {
     req.encode(&mut body, HB_MAX_VERSION).unwrap();
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp_bytes = round_trip(&mut stream, 63, HB_MAX_VERSION, &body)
-        .await
-        .unwrap();
+    let resp_bytes = round_trip(
+        &mut stream,
+        ApiRequestSetup {
+            api_key: WireApiKey(63),
+            version: WireApiVersion(HB_MAX_VERSION),
+        },
+        &body,
+    )
+    .await
+    .unwrap();
 
     let mut cur: &[u8] = &resp_bytes;
     let resp = BrokerHeartbeatResponse::decode(&mut cur, HB_MAX_VERSION).unwrap();

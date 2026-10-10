@@ -20,6 +20,7 @@ use std::{io, net::SocketAddr, time::Duration};
 use assert2::{assert, check};
 use bytes::{BufMut, BytesMut};
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -39,6 +40,10 @@ use crate::{
     support::{
         discovery::{api_versions_request_for, topic_metadata_request},
         topics::metadata_topic,
+        wire::{
+            CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
+            SocketExchangeSetup,
+        },
     },
 };
 
@@ -118,10 +123,11 @@ async fn api_versions(
 ) -> api_versions_response::ApiVersionsResponse {
     let body = round_trip(
         stream,
-        18,
-        version,
-        1,
-        version >= 3,
+        SocketExchangeSetup {
+            version: WireApiVersion(version),
+            header: RequestHeaderEncoding::from_wire(version >= 3),
+            ..Default::default()
+        },
         &encode(request, version),
     )
     .await
@@ -143,7 +149,17 @@ async fn plain_login(stream: &mut TcpStream, password: &str) -> Result<(), io::E
         },
         1,
     );
-    let answer = round_trip(stream, 17, 1, 2, false, &handshake).await?;
+    let answer = round_trip(
+        stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            correlation: WireCorrelationId(2),
+            ..Default::default()
+        },
+        &handshake,
+    )
+    .await?;
     let answer = sasl_handshake_response::SaslHandshakeResponse::decode(&mut &answer[..], 1)
         .expect("decode handshake");
     if answer.error_code != 0 {
@@ -153,7 +169,17 @@ async fn plain_login(stream: &mut TcpStream, password: &str) -> Result<(), io::E
         auth_bytes: bytes::Bytes::from(format!("\0admin\0{password}").into_bytes()),
         ..Default::default()
     };
-    let answer = round_trip(stream, 36, 2, 3, true, &encode(&token, 2)).await?;
+    let answer = round_trip(
+        stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(36),
+            version: WireApiVersion(2),
+            correlation: WireCorrelationId(3),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        &encode(&token, 2),
+    )
+    .await?;
     let answer = sasl_authenticate_response::SaslAuthenticateResponse::decode(&mut &answer[..], 2)
         .expect("decode authenticate");
     if answer.error_code != 0 {
@@ -239,9 +265,17 @@ async fn the_larger_request_limit_returns_once_the_peer_authenticated() {
         },
         1,
     );
-    round_trip(&mut stream, 17, 1, 1, false, &handshake)
-        .await
-        .expect("handshake");
+    round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            ..Default::default()
+        },
+        &handshake,
+    )
+    .await
+    .expect("handshake");
     stream
         .write_all(&request_frame(RequestFrameSetup {
             api_key: krabka_ids::ApiKey(36),
@@ -258,9 +292,18 @@ async fn the_larger_request_limit_returns_once_the_peer_authenticated() {
     plain_login(&mut stream, &admin_plain_password())
         .await
         .expect("login");
-    let body = round_trip(&mut stream, 3, 12, 4, true, &metadata)
-        .await
-        .expect("Metadata after authentication");
+    let body = round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(3),
+            version: WireApiVersion(12),
+            correlation: WireCorrelationId(4),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        &metadata,
+    )
+    .await
+    .expect("Metadata after authentication");
     let response =
         metadata_response::MetadataResponse::decode(&mut &body[..], 12).expect("decode Metadata");
     check!(response.topics.len() == 64);
@@ -312,9 +355,17 @@ async fn a_second_api_versions_before_the_handshake_closes_the_connection() {
     // A refused ApiVersions leaves the state alone, whichever way it is
     // refused, and the retries, a valid one, and a handshake all follow.
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let unsupported = round_trip(&mut stream, 18, i16::MAX, 1, true, &[0xff])
-        .await
-        .expect("UNSUPPORTED_VERSION answer");
+    let unsupported = round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            version: WireApiVersion(i16::MAX),
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &[0xff],
+    )
+    .await
+    .expect("UNSUPPORTED_VERSION answer");
     check!(
         api_versions_response::ApiVersionsResponse::decode(&mut &unsupported[..], 0)
             .expect("decode")

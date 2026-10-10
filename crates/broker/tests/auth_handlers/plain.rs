@@ -5,19 +5,16 @@
 use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
-use bytes::BytesMut;
 use krabka_broker::Broker;
-use krabka_protocol::{
-    Encode,
-    owned::{
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_authenticate_response::SaslAuthenticateResponse,
-    },
-};
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
+use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse;
 use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
-use crate::harness::{alice_password, round_trip, wrong_scram_password};
+use crate::{
+    harness::{alice_password, round_trip, wrong_scram_password},
+    support::wire::{HeaderEncoding as RequestHeaderEncoding, SocketExchangeSetup},
+};
 
 /// Happy-path drive of a SASL/PLAIN session: `ApiVersions` → `SaslHandshake`
 /// → `SaslAuthenticate` → Metadata.
@@ -190,16 +187,21 @@ async fn plain_authenticate_without_handshake_closes_the_connection() {
     let addr = handle.listen_addr();
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let auth_req = SaslAuthenticateRequest {
-        auth_bytes: crate::kafka_wire::plain_payload("alice", alice_password().as_bytes()),
-        ..Default::default()
-    };
-    let mut auth_body = BytesMut::new();
-    auth_req.encode(&mut auth_body, 2).unwrap();
+    let auth_body =
+        crate::support::sasl::plain_authentication_body("alice", alice_password().as_bytes());
     check!(
-        round_trip(&mut stream, 36, 2, 1, true, &auth_body)
-            .await
-            .is_err(),
+        round_trip(
+            &mut stream,
+            SocketExchangeSetup {
+                api_key: WireApiKey(36),
+                version: WireApiVersion(2),
+                header: RequestHeaderEncoding::Flexible,
+                ..Default::default()
+            },
+            &auth_body
+        )
+        .await
+        .is_err(),
         "a SaslAuthenticate before a handshake must close with no response"
     );
 

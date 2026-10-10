@@ -1,10 +1,9 @@
 //! Raw-socket Kafka request framing and the SASL/PLAIN handshake for broker
 //! integration tests that drive the wire by hand.
 //!
-//! [`round_trip_with`] writes one length-prefixed request with a v1 or v2
-//! request header and reads back one response with its header stripped.
-//! [`round_trip`] derives the response header from the request flexibility the
-//! way Kafka does. [`sasl_plain_authenticate`] and
+//! [`round_trip`] writes one length-prefixed request and strips its response
+//! header. The setup selects request encoding and either Kafka response
+//! header rule or an explicit response encoding. [`sasl_plain_authenticate`] and
 //! [`sasl_plain_authenticate_on`] run `ApiVersions`, `SaslHandshake` and
 //! `SaslAuthenticate` over the same framing.
 //!
@@ -27,6 +26,7 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, Bytes, BytesMut};
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -53,82 +53,59 @@ use crate::support::{topics, wire as frames};
 /// The `ApiVersions` API key, whose response header is v0 at every version.
 const API_VERSIONS_KEY: i16 = 18;
 
-/// Sends one request and returns the response body.
-///
-/// The response header is flexible exactly when the request header is, except
-/// for `ApiVersions`, whose response header stays v0 so that a client can read
-/// it before it knows which versions the broker speaks.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum ResponseHeaderSelection {
+    /// Follow the request, retaining `ApiVersions`' always-legacy response header.
+    #[default]
+    ByProtocol,
+    Exact(frames::HeaderEncoding),
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ExchangeSetup<'a> {
+    #[default(krabka_ids::ApiKey(18))]
+    pub api_key: krabka_ids::ApiKey,
+    pub version: krabka_ids::ApiVersion,
+    #[default(frames::CorrelationId(1))]
+    pub correlation: frames::CorrelationId,
+    #[default("krabka-broker-test")]
+    pub client_id: &'a str,
+    pub header: frames::HeaderEncoding,
+    pub response_header: ResponseHeaderSelection,
+}
+
+/// Send one framed request and strip the chosen response header.
 ///
 /// # Errors
-///
-/// Returns the I/O error of a failed write or read, and an error when a
-/// flexible response header is malformed.
+/// Returns failed reads/writes or malformed response header errors.
 pub async fn round_trip<S>(
     stream: &mut S,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    client_id: &str,
-    flexible: bool,
+    setup: ExchangeSetup<'_>,
     body: &[u8],
 ) -> io::Result<Vec<u8>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let flexibility = Flexibility {
-        request: flexible,
-        response: flexible && api_key != API_VERSIONS_KEY,
-    };
-    round_trip_with(
-        stream,
+    let ExchangeSetup {
         api_key,
-        api_version,
-        corr_id,
+        version: api_version,
+        correlation: corr_id,
         client_id,
-        flexibility,
-        body,
-    )
-    .await
-}
-
-/// Whether the request header and the response header of one exchange are
-/// flexible (v2 request, v1 response) and so carry a tagged-fields byte.
-#[derive(Clone, Copy, Debug)]
-pub struct Flexibility {
-    /// The request header is v2.
-    pub request: bool,
-    /// The response header is v1.
-    pub response: bool,
-}
-
-/// Sends one request with the request and response header flexibility chosen
-/// independently, and returns the response body with its header stripped.
-///
-/// A flexible request header ends in an empty tagged-fields byte. A flexible
-/// response header must carry that byte as zero.
-///
-/// # Errors
-///
-/// Returns the I/O error of a failed write or read, and an error when a
-/// flexible response header is missing its tagged-fields byte or carries tagged
-/// fields.
-pub async fn round_trip_with<S>(
-    stream: &mut S,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    client_id: &str,
-    flexibility: Flexibility,
-    body: &[u8],
-) -> io::Result<Vec<u8>>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+        header,
+        response_header,
+    } = setup;
+    let response_header = match response_header {
+        ResponseHeaderSelection::ByProtocol if api_key.0 == API_VERSIONS_KEY => {
+            frames::HeaderEncoding::Legacy
+        }
+        ResponseHeaderSelection::ByProtocol => header,
+        ResponseHeaderSelection::Exact(header) => header,
+    };
     let frame = frames::request_frame(frames::WireFrameSetup {
-        api_key: krabka_ids::ApiKey(api_key),
-        version: krabka_ids::ApiVersion(api_version),
-        correlation: crate::support::wire::CorrelationId(corr_id),
-        header: crate::support::wire::HeaderEncoding::from_wire(flexibility.request),
+        api_key,
+        version: api_version,
+        correlation: corr_id,
+        header,
         client_id,
         body,
         capacity: Some(
@@ -148,7 +125,7 @@ where
         return Err(io::Error::other("response missing correlation id"));
     }
     let _resp_corr_id = cur.get_i32();
-    if flexibility.response {
+    if response_header == frames::HeaderEncoding::Flexible {
         if cur.is_empty() {
             return Err(io::Error::other(
                 "flexible response missing tagged-fields byte",
@@ -202,7 +179,19 @@ where
     request
         .encode(&mut body, version)
         .map_err(|e| io::Error::other(format!("{operation} encode: {e}")))?;
-    let response = round_trip(&mut stream, api_key, version, 4, client_id, true, &body).await?;
+    let response = round_trip(
+        &mut stream,
+        ExchangeSetup {
+            api_key: WireApiKey(api_key),
+            version: WireApiVersion(version),
+            correlation: frames::CorrelationId(4),
+            client_id,
+            header: frames::HeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &body,
+    )
+    .await?;
     R::decode(&mut &response[..], version)
         .map_err(|e| io::Error::other(format!("{operation} decode: {e}")))
 }
@@ -260,7 +249,16 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let av_body = encode_named(&ApiVersionsRequest::default(), 0, "ApiVersions")?;
-    let av_resp = round_trip(stream, API_VERSIONS_KEY, 0, 1, client_id, false, &av_body).await?;
+    let av_resp = round_trip(
+        stream,
+        ExchangeSetup {
+            api_key: WireApiKey(API_VERSIONS_KEY),
+            client_id,
+            ..Default::default()
+        },
+        &av_body,
+    )
+    .await?;
     decode_named::<ApiVersionsResponse>(&av_resp, 0, "ApiVersions")?;
 
     let sh_body = encode_named(
@@ -271,7 +269,18 @@ where
         1,
         "SaslHandshake",
     )?;
-    let sh_resp = round_trip(stream, 17, 1, 2, client_id, false, &sh_body).await?;
+    let sh_resp = round_trip(
+        stream,
+        ExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            correlation: frames::CorrelationId(2),
+            client_id,
+            ..Default::default()
+        },
+        &sh_body,
+    )
+    .await?;
     let sh_resp = decode_named::<SaslHandshakeResponse>(&sh_resp, 1, "SaslHandshake")?;
     if sh_resp.error_code != 0 {
         return Err(io::Error::other(format!(
@@ -289,7 +298,19 @@ where
         2,
         "SaslAuthenticate",
     )?;
-    let auth_resp = round_trip(stream, 36, 2, 3, client_id, true, &auth_body).await?;
+    let auth_resp = round_trip(
+        stream,
+        ExchangeSetup {
+            api_key: WireApiKey(36),
+            version: WireApiVersion(2),
+            correlation: frames::CorrelationId(3),
+            client_id,
+            header: frames::HeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &auth_body,
+    )
+    .await?;
     let auth_resp = decode_named::<SaslAuthenticateResponse>(&auth_resp, 2, "SaslAuthenticate")?;
     if auth_resp.error_code != 0 {
         return Err(io::Error::other(format!(
@@ -325,15 +346,59 @@ pub fn decode_named<R: for<'de> Decode<'de>>(
         .map_err(|error| io::Error::other(format!("{operation} decode: {error}")))
 }
 
+impl<'a> ExchangeSetup<'a> {
+    pub fn for_socket(setup: frames::SocketExchangeSetup, client_id: &'a str) -> Self {
+        Self {
+            api_key: setup.api_key,
+            version: setup.version,
+            correlation: setup.correlation,
+            client_id,
+            header: setup.header,
+            ..Default::default()
+        }
+    }
+}
+
+/// Legacy request and response headers with the suite's exact client identity.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct LegacyExchangeSetup<'a> {
+    pub api_key: krabka_ids::ApiKey,
+    pub version: krabka_ids::ApiVersion,
+    #[default(frames::CorrelationId(1))]
+    pub correlation: frames::CorrelationId,
+    #[default("legacy-fetch-test")]
+    pub client_id: &'a str,
+}
+
+/// Exchange a legacy frame.
+///
+/// # Panics
+/// Panics if socket I/O or response header decoding fails.
+pub async fn legacy_round_trip(
+    stream: &mut TcpStream,
+    setup: LegacyExchangeSetup<'_>,
+    body: &[u8],
+) -> Vec<u8> {
+    round_trip(
+        stream,
+        ExchangeSetup {
+            api_key: setup.api_key,
+            version: setup.version,
+            correlation: setup.correlation,
+            client_id: setup.client_id,
+            ..Default::default()
+        },
+        body,
+    )
+    .await
+    .expect("non-flexible round trip")
+}
+
 /// Encode, exchange and decode a typed request using the caller's exact wire version.
 pub async fn exchange<S, Q, R>(
     stream: &mut S,
     request: &Q,
-    api_key: i16,
-    version: i16,
-    corr_id: i32,
-    client_id: &str,
-    flexible: bool,
+    setup: ExchangeSetup<'_>,
 ) -> io::Result<R>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -342,13 +407,10 @@ where
 {
     let mut body = BytesMut::new();
     request
-        .encode(&mut body, version)
+        .encode(&mut body, setup.version.0)
         .map_err(io::Error::other)?;
-    let bytes = round_trip(
-        stream, api_key, version, corr_id, client_id, flexible, &body,
-    )
-    .await?;
-    R::decode(&mut &bytes[..], version).map_err(io::Error::other)
+    let bytes = round_trip(stream, setup, &body).await?;
+    R::decode(&mut &bytes[..], setup.version.0).map_err(io::Error::other)
 }
 
 /// Send one typed raw request on a fresh connection, retaining its encoded body length.
@@ -373,11 +435,14 @@ where
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let response = round_trip(
         &mut stream,
-        api_key,
-        version,
-        correlation_id,
-        client_id,
-        flexible,
+        ExchangeSetup {
+            api_key: WireApiKey(api_key),
+            version: WireApiVersion(version),
+            correlation: frames::CorrelationId(correlation_id),
+            client_id,
+            header: frames::HeaderEncoding::from_wire(flexible),
+            ..Default::default()
+        },
         &body,
     )
     .await
@@ -387,14 +452,7 @@ where
 }
 
 /// PLAIN's empty authorization id followed by the user and password.
-pub fn plain_payload(user: &str, password: &[u8]) -> Bytes {
-    let mut payload = Vec::with_capacity(2 + user.len() + password.len());
-    payload.push(0);
-    payload.extend_from_slice(user.as_bytes());
-    payload.push(0);
-    payload.extend_from_slice(password);
-    Bytes::from(payload)
-}
+pub use crate::support::sasl::plain_payload;
 
 /// Create exactly one topic on an open connection, checking the whole response row's status.
 pub async fn create_topic_on(
@@ -404,10 +462,19 @@ pub async fn create_topic_on(
 ) {
     let name = topic.name.clone();
     let request = topics::create_topic_request(topic);
-    let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
-        exchange(stream, &request, 19, 7, 1, client_id, true)
-            .await
-            .expect("CreateTopics round-trip");
+    let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse = exchange(
+        stream,
+        &request,
+        ExchangeSetup {
+            api_key: WireApiKey(19),
+            version: WireApiVersion(7),
+            client_id,
+            header: frames::HeaderEncoding::Flexible,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("CreateTopics round-trip");
     assert2::assert!(response.topics.len() == 1);
     assert2::assert!(
         response.topics[0].error_code == 0,
@@ -440,11 +507,10 @@ pub async fn sasl_scram_authenticate_on(
     let _av_resp: ApiVersionsResponse = exchange(
         stream,
         &ApiVersionsRequest::default(),
-        18,
-        0,
-        1,
-        client_id,
-        false,
+        ExchangeSetup {
+            client_id,
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -500,11 +566,13 @@ where
             mechanism: mechanism.to_string(),
             ..Default::default()
         },
-        17,
-        1,
-        corr_id,
-        client_id,
-        false,
+        ExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            correlation: frames::CorrelationId(corr_id),
+            client_id,
+            ..Default::default()
+        },
     )
     .await?;
     if response.error_code != 0 {
@@ -532,11 +600,14 @@ where
             auth_bytes,
             ..Default::default()
         },
-        36,
-        2,
-        corr_id,
-        client_id,
-        true,
+        ExchangeSetup {
+            api_key: WireApiKey(36),
+            version: WireApiVersion(2),
+            correlation: frames::CorrelationId(corr_id),
+            client_id,
+            header: frames::HeaderEncoding::Flexible,
+            ..Default::default()
+        },
     )
     .await
 }
@@ -605,6 +676,30 @@ pub fn single_record_produce_request(topic: &str, partition: i32, value: &[u8]) 
     )
 }
 
+/// Send the fixture election request and retain its complete response.
+///
+/// # Panics
+/// Panics if encoding, socket I/O or response decoding fails.
+pub async fn elect_leaders_response(
+    stream: &mut TcpStream,
+    request: &ElectLeadersRequest,
+    client_id: &str,
+) -> ElectLeadersResponse {
+    exchange(
+        stream,
+        request,
+        ExchangeSetup {
+            api_key: WireApiKey(43),
+            version: WireApiVersion(2),
+            client_id,
+            header: frames::HeaderEncoding::Flexible,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("ElectLeaders round-trip")
+}
+
 pub async fn elect_leaders(
     stream: &mut TcpStream,
     client_id: &str,
@@ -622,9 +717,7 @@ pub async fn elect_leaders(
         timeout_ms: 30_000,
         ..Default::default()
     };
-    let resp: ElectLeadersResponse = exchange(stream, &req, 43, 2, 1, client_id, true)
-        .await
-        .expect("ElectLeaders round-trip");
+    let resp = elect_leaders_response(stream, &req, client_id).await;
 
     assert!(
         resp.error_code == 0,
@@ -748,9 +841,19 @@ pub async fn produce_sasl_with_ids(
         .expect("SASL authenticate for Produce");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode Produce");
-    let resp_bytes = round_trip(&mut stream, 0, VERSION, 1, client_ids.1, true, &body)
-        .await
-        .expect("Produce round-trip");
+    let resp_bytes = round_trip(
+        &mut stream,
+        ExchangeSetup {
+            api_key: WireApiKey(0),
+            version: WireApiVersion(VERSION),
+            client_id: client_ids.1,
+            header: frames::HeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &body,
+    )
+    .await
+    .expect("Produce round-trip");
     let mut cur: &[u8] = &resp_bytes;
     krabka_protocol::owned::produce_response::ProduceResponse::decode(&mut cur, VERSION)
         .expect("decode ProduceResponse")

@@ -10,6 +10,7 @@
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -23,7 +24,10 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use crate::support::configs::{incremental_config, incremental_request, incremental_resource};
+use crate::support::{
+    configs::{incremental_config, incremental_request, incremental_resource},
+    wire::ApiRequestSetup,
+};
 
 pub(crate) const CLIENT_ID: &str = "krabka-arld-test";
 const ALTER_VERSION: i16 = 2;
@@ -31,6 +35,17 @@ const DESCRIBE_VERSION: i16 = 4;
 
 // Flexible headers and correlation ID 1 for every request in this suite.
 crate::flexible_round_trip_fixture!(round_trip, CLIENT_ID, 1);
+
+async fn flexible_exchange<Q: Encode, R: for<'de> Decode<'de>>(
+    stream: &mut TcpStream,
+    request: &Q,
+    setup: ApiRequestSetup,
+) -> R {
+    let mut body = BytesMut::new();
+    request.encode(&mut body, setup.version.0).unwrap();
+    let response = round_trip(stream, setup, &body).await.unwrap();
+    R::decode(&mut &response[..], setup.version.0).unwrap()
+}
 
 pub(crate) async fn alter_replica_log_dirs(
     addr: SocketAddr,
@@ -51,13 +66,15 @@ pub(crate) async fn alter_replica_log_dirs(
         ..Default::default()
     };
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut body = BytesMut::new();
-    req.encode(&mut body, ALTER_VERSION).unwrap();
-    let resp_bytes = round_trip(&mut stream, 34, ALTER_VERSION, &body)
-        .await
-        .unwrap();
-    let mut cur: &[u8] = &resp_bytes;
-    AlterReplicaLogDirsResponse::decode(&mut cur, ALTER_VERSION).unwrap()
+    flexible_exchange(
+        &mut stream,
+        &req,
+        ApiRequestSetup {
+            api_key: WireApiKey(34),
+            version: WireApiVersion(ALTER_VERSION),
+        },
+    )
+    .await
 }
 
 pub(crate) async fn describe_log_dirs(addr: SocketAddr) -> DescribeLogDirsResponse {
@@ -74,11 +91,15 @@ pub(crate) async fn describe_log_dirs_at(
         ..Default::default()
     };
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).unwrap();
-    let resp_bytes = round_trip(&mut stream, 35, version, &body).await.unwrap();
-    let mut cur: &[u8] = &resp_bytes;
-    DescribeLogDirsResponse::decode(&mut cur, version).unwrap()
+    flexible_exchange(
+        &mut stream,
+        &req,
+        ApiRequestSetup {
+            api_key: WireApiKey(35),
+            version: WireApiVersion(version),
+        },
+    )
+    .await
 }
 
 /// `IncrementalAlterConfigs` v1 that SETs one key on broker `broker`, and the
@@ -107,11 +128,15 @@ pub(crate) async fn set_broker_config(
         IncrementalAlterConfigsRequest::default().validate_only,
     );
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).unwrap();
-    let resp_bytes = round_trip(&mut stream, 44, version, &body).await.unwrap();
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = IncrementalAlterConfigsResponse::decode(&mut cur, version).unwrap();
+    let resp: IncrementalAlterConfigsResponse = flexible_exchange(
+        &mut stream,
+        &req,
+        ApiRequestSetup {
+            api_key: WireApiKey(44),
+            version: WireApiVersion(version),
+        },
+    )
+    .await;
     (
         resp.responses[0].error_code,
         resp.responses[0].error_message.clone(),

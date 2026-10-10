@@ -10,12 +10,17 @@ use std::net::SocketAddr;
 
 use assert2::assert;
 use bytes::{Buf, BytesMut};
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{Decode, Encode};
 use tokio::net::TcpStream;
 
 use crate::{
     CLIENT_ID, kafka_wire,
-    support::records::{batch_from_records, value_record},
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::{
+        records::{batch_from_records, value_record},
+        wire::HeaderEncoding as RequestHeaderEncoding,
+    },
 };
 
 /// Produce `count` records of `record_bytes` bytes each to `(topic, 0)` over
@@ -61,9 +66,19 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
     // leadership errors of that window as any Kafka client does.
     let mut attempts = 0;
     let error_code = loop {
-        let resp_bytes = kafka_wire::round_trip(&mut stream, 0, VERSION, 1, CLIENT_ID, true, &body)
-            .await
-            .expect("Produce round-trip");
+        let resp_bytes = kafka_wire::round_trip(
+            &mut stream,
+            WireExchangeSetup {
+                api_key: WireApiKey(0),
+                version: WireApiVersion(VERSION),
+                client_id: CLIENT_ID,
+                header: RequestHeaderEncoding::Flexible,
+                ..Default::default()
+            },
+            &body,
+        )
+        .await
+        .expect("Produce round-trip");
         let mut cur: &[u8] = &resp_bytes;
         let resp = ProduceResponse::decode(&mut cur, VERSION).expect("decode ProduceResponse");
         let error_code = resp.responses[0].partition_responses[0].error_code;

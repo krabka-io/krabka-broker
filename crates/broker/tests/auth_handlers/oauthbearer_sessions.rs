@@ -19,12 +19,12 @@
 use assert2::assert;
 use bytes::BytesMut;
 use krabka_broker::Broker;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request, api_versions_response, metadata_request, metadata_response,
-        sasl_authenticate_request, sasl_authenticate_response, sasl_handshake_request,
-        sasl_handshake_response,
+        sasl_authenticate_response, sasl_handshake_request, sasl_handshake_response,
     },
 };
 use krabka_security::SaslMechanism;
@@ -32,9 +32,14 @@ use tokio::{io::AsyncReadExt, net::TcpStream};
 
 use crate::{
     harness::{alice_password, round_trip},
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
     oauthbearer::{
         drive_inband_reauth, drive_sasl_oauthbearer_session_open, now_unix_secs,
         oauthbearer_zero_skew_validator, unsecured_jws,
+    },
+    support::wire::{
+        CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
+        SocketExchangeSetup,
     },
 };
 
@@ -50,7 +55,17 @@ async fn send_metadata_on_expired_session(stream: &mut TcpStream) {
     metadata_request::MetadataRequest::default()
         .encode(&mut md_body, 12)
         .expect("Metadata encode must succeed");
-    let _ = round_trip(stream, 3, 12, 98, true, &md_body).await;
+    let _ = round_trip(
+        stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(3),
+            version: WireApiVersion(12),
+            correlation: WireCorrelationId(98),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        &md_body,
+    )
+    .await;
 }
 
 /// Test #1: a successful OAUTHBEARER authentication carries
@@ -189,9 +204,18 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
     md_req
         .encode(&mut md_body, 12)
         .expect("Metadata encode must succeed");
-    let md_resp_bytes = round_trip(&mut stream, 3, 12, 99, true, &md_body)
-        .await
-        .expect("Metadata RPC must succeed past original token expiry");
+    let md_resp_bytes = round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(3),
+            version: WireApiVersion(12),
+            correlation: WireCorrelationId(99),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        &md_body,
+    )
+    .await
+    .expect("Metadata RPC must succeed past original token expiry");
     let mut cur: &[u8] = &md_resp_bytes;
     let md_resp = metadata_response::MetadataResponse::decode(&mut cur, 12)
         .expect("Metadata decode must succeed");
@@ -272,9 +296,18 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
     sh_req
         .encode(&mut sh_body, 1)
         .expect("SaslHandshake encode must succeed");
-    let sh_resp_bytes = round_trip(&mut stream, 17, 1, 200, false, &sh_body)
-        .await
-        .expect("handshake round-trip");
+    let sh_resp_bytes = round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            correlation: WireCorrelationId(200),
+            ..Default::default()
+        },
+        &sh_body,
+    )
+    .await
+    .expect("handshake round-trip");
     let mut cur: &[u8] = &sh_resp_bytes;
     let sh_resp = sasl_handshake_response::SaslHandshakeResponse::decode(&mut cur, 1)
         .expect("SaslHandshake decode must succeed");
@@ -288,9 +321,18 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
     );
     // The next frame, whatever it is, gets no answer: the connection closes.
     assert!(
-        round_trip(&mut stream, 17, 1, 201, false, &sh_body)
-            .await
-            .is_err(),
+        round_trip(
+            &mut stream,
+            SocketExchangeSetup {
+                api_key: WireApiKey(17),
+                version: WireApiVersion(1),
+                correlation: WireCorrelationId(201),
+                ..Default::default()
+            },
+            &sh_body
+        )
+        .await
+        .is_err(),
         "the connection must close on the frame after a mechanism switch"
     );
 
@@ -333,11 +375,10 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let _: api_versions_response::ApiVersionsResponse = crate::kafka_wire::exchange(
         &mut stream,
         &api_versions_request::ApiVersionsRequest::default(),
-        18,
-        0,
-        1,
-        "krabka-sasl-test",
-        false,
+        WireExchangeSetup {
+            client_id: "krabka-sasl-test",
+            ..Default::default()
+        },
     )
     .await
     .expect("ApiVersions round-trip");
@@ -348,22 +389,36 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     };
     let mut sh_body = BytesMut::new();
     sh_req.encode(&mut sh_body, 1).unwrap();
-    let sh_resp_bytes = round_trip(&mut stream, 17, 1, 2, false, &sh_body)
-        .await
-        .expect("SaslHandshake round-trip");
+    let sh_resp_bytes = round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            correlation: WireCorrelationId(2),
+            ..Default::default()
+        },
+        &sh_body,
+    )
+    .await
+    .expect("SaslHandshake round-trip");
     let mut cur: &[u8] = &sh_resp_bytes;
     let sh_resp = sasl_handshake_response::SaslHandshakeResponse::decode(&mut cur, 1).unwrap();
     assert!(sh_resp.error_code == 0, "PLAIN handshake must succeed");
 
-    let auth_req = sasl_authenticate_request::SaslAuthenticateRequest {
-        auth_bytes: crate::kafka_wire::plain_payload("alice", alice_password().as_bytes()),
-        ..Default::default()
-    };
-    let mut auth_body = BytesMut::new();
-    auth_req.encode(&mut auth_body, 2).unwrap();
-    let auth_resp_bytes = round_trip(&mut stream, 36, 2, 3, true, &auth_body)
-        .await
-        .expect("SaslAuthenticate round-trip");
+    let auth_body =
+        crate::support::sasl::plain_authentication_body("alice", alice_password().as_bytes());
+    let auth_resp_bytes = round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(36),
+            version: WireApiVersion(2),
+            correlation: WireCorrelationId(3),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        &auth_body,
+    )
+    .await
+    .expect("SaslAuthenticate round-trip");
     let mut cur: &[u8] = &auth_resp_bytes;
     let auth_resp =
         sasl_authenticate_response::SaslAuthenticateResponse::decode(&mut cur, 2).unwrap();
@@ -383,9 +438,18 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let md_req = metadata_request::MetadataRequest::default();
     let mut md_body = BytesMut::new();
     md_req.encode(&mut md_body, 12).unwrap();
-    let md_resp_bytes = round_trip(&mut stream, 3, 12, 5, true, &md_body)
-        .await
-        .expect("Metadata RPC must succeed an hour after PLAIN auth");
+    let md_resp_bytes = round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(3),
+            version: WireApiVersion(12),
+            correlation: WireCorrelationId(5),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        &md_body,
+    )
+    .await
+    .expect("Metadata RPC must succeed an hour after PLAIN auth");
     let mut cur: &[u8] = &md_resp_bytes;
     let md_resp = metadata_response::MetadataResponse::decode(&mut cur, 12).unwrap();
     assert!(

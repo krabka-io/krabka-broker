@@ -20,6 +20,7 @@ use std::time::Duration;
 use assert2::{assert, check};
 use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, metrics::PartitionLabel};
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -30,10 +31,14 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use crate::support::{
-    fetch::single_partition_fetch,
-    records::{batch_from_records, value_record},
-    topics::{creatable_topic, create_topic_request},
+use crate::{
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::{
+        fetch::single_partition_fetch,
+        records::{batch_from_records, value_record},
+        topics::{creatable_topic, create_topic_request},
+        wire::HeaderEncoding as RequestHeaderEncoding,
+    },
 };
 
 const TOPIC: &str = "metrics-it";
@@ -60,11 +65,13 @@ async fn create_topic_named(addr: std::net::SocketAddr, topic: &str) {
     req.encode(&mut body, CREATE_TOPICS_VERSION).unwrap();
     let resp = kafka_wire::round_trip(
         &mut stream,
-        19,
-        CREATE_TOPICS_VERSION,
-        1,
-        CLIENT_ID,
-        true,
+        WireExchangeSetup {
+            api_key: WireApiKey(19),
+            version: WireApiVersion(CREATE_TOPICS_VERSION),
+            client_id: CLIENT_ID,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
         &body,
     )
     .await

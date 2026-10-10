@@ -9,13 +9,18 @@
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{Decode, Encode};
 use tokio::net::TcpStream;
 
 use crate::{
     CLIENT_ID, kafka_wire,
-    support::configs::{
-        describe_resource, incremental_config, incremental_request, incremental_resource,
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::{
+        configs::{
+            describe_resource, incremental_config, incremental_request, incremental_resource,
+        },
+        wire::HeaderEncoding as RequestHeaderEncoding,
     },
 };
 
@@ -82,9 +87,18 @@ pub async fn drive_describe_configs(
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION)
         .expect("encode DescribeConfigs");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 32, VERSION, 1, CLIENT_ID, false, &body)
-        .await
-        .expect("DescribeConfigs round-trip");
+    let resp_bytes = kafka_wire::round_trip(
+        &mut stream,
+        WireExchangeSetup {
+            api_key: WireApiKey(32),
+            version: WireApiVersion(VERSION),
+            client_id: CLIENT_ID,
+            ..Default::default()
+        },
+        &body,
+    )
+    .await
+    .expect("DescribeConfigs round-trip");
     let mut cur: &[u8] = &resp_bytes;
     let resp =
         DescribeConfigsResponse::decode(&mut cur, VERSION).expect("decode DescribeConfigsResponse");
@@ -126,10 +140,19 @@ async fn incremental_alter_configs_on(stream: &mut TcpStream, resources: ConfigR
         false,
     );
 
-    let resp: IncrementalAlterConfigsResponse =
-        kafka_wire::exchange(stream, &req, 44, VERSION, 1, CLIENT_ID, true)
-            .await
-            .expect("IncrementalAlterConfigs round-trip");
+    let resp: IncrementalAlterConfigsResponse = kafka_wire::exchange(
+        stream,
+        &req,
+        WireExchangeSetup {
+            api_key: WireApiKey(44),
+            version: WireApiVersion(VERSION),
+            client_id: CLIENT_ID,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("IncrementalAlterConfigs round-trip");
 
     resp.responses.first().map_or(0, |r| r.error_code)
 }

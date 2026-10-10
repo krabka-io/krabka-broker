@@ -28,11 +28,17 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig};
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::owned::{
     metadata_request::MetadataRequest, metadata_response::MetadataResponse,
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::net::TcpStream;
+
+use crate::{
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
+};
 
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-bootstrap-test";
@@ -156,11 +162,14 @@ async fn drive_sasl_scram_session(
     let md_resp: MetadataResponse = kafka_wire::exchange(
         &mut stream,
         &MetadataRequest::default(),
-        3,
-        12,
-        5,
-        CLIENT_ID,
-        true,
+        WireExchangeSetup {
+            api_key: WireApiKey(3),
+            version: WireApiVersion(12),
+            correlation: WireCorrelationId(5),
+            client_id: CLIENT_ID,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
     )
     .await?;
     if md_resp.brokers.is_empty() {

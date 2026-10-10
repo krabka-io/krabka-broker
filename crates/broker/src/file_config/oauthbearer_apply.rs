@@ -495,41 +495,32 @@ introspection_client_id = "kafka-broker"
     }
 
     #[test]
-    fn apply_to_oauthbearer_introspection_with_userinfo_sets_call_userinfo_true() {
-        let (_dir, secret_path) = client_secret("x");
-        let toml = format!(
-            r#"
+    fn introspection_calls_userinfo_only_when_an_endpoint_is_configured() {
+        for (userinfo, expected) in [
+            (
+                "userinfo_endpoint_uri = \"https://idp.example/userinfo\"\n",
+                true,
+            ),
+            ("", false),
+        ] {
+            let (_dir, secret_path) = client_secret("x");
+            let toml = format!(
+                r#"
 [oauthbearer]
 introspection_endpoint_uri = "https://idp.example/introspect"
-userinfo_endpoint_uri = "https://idp.example/userinfo"
-introspection_client_id = "id"
+{userinfo}introspection_client_id = "id"
 introspection_client_secret_path = '{}'
 "#,
-            secret_path.display()
-        );
-        let cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
-        match cfg.oauthbearer_validator {
-            krabka_security::OAuthBearerValidator::Introspection(v) => assert!(v.call_userinfo),
-            other => panic!("expected Introspection, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn apply_to_oauthbearer_introspection_without_userinfo_sets_call_userinfo_false() {
-        let (_dir, secret_path) = client_secret("x");
-        let toml = format!(
-            r#"
-[oauthbearer]
-introspection_endpoint_uri = "https://idp.example/introspect"
-introspection_client_id = "id"
-introspection_client_secret_path = '{}'
-"#,
-            secret_path.display()
-        );
-        let cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
-        match cfg.oauthbearer_validator {
-            krabka_security::OAuthBearerValidator::Introspection(v) => assert!(!v.call_userinfo),
-            other => panic!("expected Introspection, got {other:?}"),
+                secret_path.display()
+            );
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
+            match cfg.oauthbearer_validator {
+                krabka_security::OAuthBearerValidator::Introspection(v) => assert!(
+                    v.call_userinfo == expected,
+                    "userinfo endpoint: {userinfo:?}"
+                ),
+                other => panic!("expected Introspection, got {other:?}"),
+            }
         }
     }
 }

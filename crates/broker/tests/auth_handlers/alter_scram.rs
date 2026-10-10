@@ -10,6 +10,7 @@ use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
 use krabka_broker::Broker;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::owned::{
     alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
     alter_user_scram_credentials_response::AlterUserScramCredentialsResponse,
@@ -22,7 +23,13 @@ use tokio::net::TcpStream;
 use crate::{
     harness::{admin_plain_password, alice_password, round_trip, wrong_scram_password},
     scram::drive_sasl_scram_session,
-    support::sasl::scram_upsertion,
+    support::{
+        sasl::scram_upsertion,
+        wire::{
+            CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
+            SocketExchangeSetup,
+        },
+    },
 };
 
 /// SCRAM mechanism byte on the `AlterUserScramCredentials` wire, from
@@ -161,7 +168,7 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
     // ── 1. ApiVersions (v0, non-flexible).
     let av_req = ApiVersionsRequest::default();
     let av_body = crate::kafka_wire::encode_named(&av_req, 0, "ApiVersions")?;
-    let _ = round_trip(&mut stream, 18, 0, 1, false, &av_body).await?;
+    let _ = round_trip(&mut stream, SocketExchangeSetup::default(), &av_body).await?;
 
     // ── 2. SaslHandshake v1.
     crate::kafka_wire::sasl_handshake_on(&mut stream, "krabka-sasl-test", 2, "PLAIN").await?;
@@ -175,7 +182,17 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
         2,
         "SaslAuthenticate",
     )?;
-    let auth_resp_bytes = round_trip(&mut stream, 36, 2, 3, true, &auth_body).await?;
+    let auth_resp_bytes = round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(36),
+            version: WireApiVersion(2),
+            correlation: WireCorrelationId(3),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        &auth_body,
+    )
+    .await?;
     let auth_resp = crate::kafka_wire::decode_named::<SaslAuthenticateResponse>(
         &auth_resp_bytes,
         2,
@@ -190,7 +207,17 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
 
     // ── 4. AlterUserScramCredentials v0 (api_key 51, flexible from v0).
     let auscr_body = crate::kafka_wire::encode_named(&req, 0, "AUSCR")?;
-    let auscr_resp_bytes = round_trip(&mut stream, 51, 0, 4, true, &auscr_body).await?;
+    let auscr_resp_bytes = round_trip(
+        &mut stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(51),
+            correlation: WireCorrelationId(4),
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &auscr_body,
+    )
+    .await?;
     crate::kafka_wire::decode_named::<AlterUserScramCredentialsResponse>(
         &auscr_resp_bytes,
         0,

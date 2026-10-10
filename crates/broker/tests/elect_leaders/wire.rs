@@ -10,14 +10,10 @@
 use std::net::SocketAddr;
 
 use assert2::assert;
-use krabka_protocol::owned::{
-    elect_leaders_request::ElectLeadersRequest, elect_leaders_response::ElectLeadersResponse,
-};
+use krabka_protocol::owned::elect_leaders_request::ElectLeadersRequest;
 use tokio::net::TcpStream;
 
 use crate::kafka_wire;
-
-pub const ELECT_LEADERS_VERSION: i16 = 2;
 
 /// The client id every request header in this suite carries.
 pub const CLIENT_ID: &str = "krabka-elect-test";
@@ -42,17 +38,7 @@ pub async fn drive_elect_all_partitions(
         timeout_ms: 30_000,
         ..Default::default()
     };
-    let resp: ElectLeadersResponse = kafka_wire::exchange(
-        &mut stream,
-        &req,
-        43,
-        ELECT_LEADERS_VERSION,
-        1,
-        CLIENT_ID,
-        true,
-    )
-    .await
-    .expect("ElectLeaders round-trip");
+    let resp = kafka_wire::elect_leaders_response(&mut stream, &req, CLIENT_ID).await;
 
     assert!(
         resp.error_code == 0,

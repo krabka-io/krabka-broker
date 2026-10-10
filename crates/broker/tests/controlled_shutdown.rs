@@ -18,9 +18,15 @@ use std::{net::SocketAddr, time::Duration};
 use assert2::assert;
 use bytes::BytesMut;
 use krabka_broker::BrokerHandle;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_metadata::NodeId as MetadataNodeId;
 use krabka_protocol::{Decode, Encode, owned::create_topics_response::CreateTopicsResponse};
 use tokio::net::TcpStream;
+
+use crate::{
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::wire::HeaderEncoding as RequestHeaderEncoding,
+};
 
 mod kafka_wire;
 mod support;
@@ -40,11 +46,13 @@ async fn create_topic(addr: SocketAddr, setup: crate::support::topics::CreateTop
         .expect("encode CreateTopics");
     let resp_bytes = kafka_wire::round_trip(
         &mut stream,
-        CREATE_TOPICS_API_KEY,
-        CREATE_TOPICS_VERSION,
-        1,
-        CLIENT_ID,
-        true,
+        WireExchangeSetup {
+            api_key: WireApiKey(CREATE_TOPICS_API_KEY),
+            version: WireApiVersion(CREATE_TOPICS_VERSION),
+            client_id: CLIENT_ID,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
         &body,
     )
     .await

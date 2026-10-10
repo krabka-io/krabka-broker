@@ -9,6 +9,7 @@
 
 use assert2::assert;
 use bytes::{Buf, BytesMut};
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     kafka_3_6_2::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -20,9 +21,9 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::{
-    kafka_wire,
-    support::topics::{creatable_topic, create_topic_request},
+use crate::support::{
+    topics::{creatable_topic, create_topic_request},
+    wire::CorrelationId as WireCorrelationId,
 };
 
 /// Verify successful down-conversion and extract the exact legacy bytes.
@@ -46,25 +47,7 @@ pub fn legacy_bytes(
 /// One length-prefixed request/response exchange with non-flexible v1 request
 /// and v0 response headers; see [`kafka_wire::round_trip`]. Panics on an I/O
 /// error.
-pub async fn round_trip_nonflexible(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    body: &[u8],
-) -> Vec<u8> {
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        "legacy-fetch-test",
-        false,
-        body,
-    )
-    .await
-    .expect("non-flexible round trip")
-}
+pub use crate::kafka_wire::legacy_round_trip as round_trip_nonflexible;
 
 // ── Topic helpers ─────────────────────────────────────────────────────────────
 
@@ -226,5 +209,15 @@ pub async fn fetch_legacy_raw_partitions(
         .await
         .expect("connect for legacy fetch");
     stream.set_nodelay(true).ok();
-    round_trip_nonflexible(&mut stream, 1, version, 42, &body).await
+    round_trip_nonflexible(
+        &mut stream,
+        crate::kafka_wire::LegacyExchangeSetup {
+            api_key: WireApiKey(1),
+            version: WireApiVersion(version),
+            correlation: WireCorrelationId(42),
+            ..Default::default()
+        },
+        &body,
+    )
+    .await
 }

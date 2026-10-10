@@ -5,9 +5,14 @@
 
 use std::io;
 
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use tokio::net::TcpStream;
 
-use crate::kafka_wire;
+use crate::{
+    kafka_wire,
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
+};
 
 /// alice's SCRAM test password, built from characters at runtime.
 ///
@@ -43,11 +48,14 @@ pub async fn metadata_probe(stream: &mut TcpStream, corr_id: i32) -> io::Result<
         kafka_wire::exchange(
             stream,
             &krabka_protocol::owned::metadata_request::MetadataRequest::default(),
-            3,
-            12,
-            corr_id,
-            "krabka-sasl-test",
-            true,
+            WireExchangeSetup {
+                api_key: WireApiKey(3),
+                version: WireApiVersion(12),
+                correlation: WireCorrelationId(corr_id),
+                client_id: "krabka-sasl-test",
+                header: RequestHeaderEncoding::Flexible,
+                ..Default::default()
+            },
         )
         .await?;
     if response.brokers.is_empty() {

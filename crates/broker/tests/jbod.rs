@@ -19,11 +19,17 @@ mod two_dir_topic;
 use std::net::SocketAddr;
 
 use assert2::assert;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::owned::{
     describe_log_dirs_request::DescribeLogDirsRequest,
     describe_log_dirs_response::DescribeLogDirsResponse,
 };
 use tokio::net::TcpStream;
+
+use crate::{
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::wire::HeaderEncoding as RequestHeaderEncoding,
+};
 
 const CLIENT_ID: &str = "krabka-jbod-test";
 
@@ -35,11 +41,13 @@ async fn describe_log_dirs(addr: SocketAddr) -> DescribeLogDirsResponse {
             topics: None,
             ..Default::default()
         },
-        35,
-        4,
-        1,
-        CLIENT_ID,
-        true,
+        WireExchangeSetup {
+            api_key: WireApiKey(35),
+            version: WireApiVersion(4),
+            client_id: CLIENT_ID,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
     )
     .await
     .unwrap()

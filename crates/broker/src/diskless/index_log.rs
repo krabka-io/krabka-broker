@@ -479,21 +479,28 @@ mod tests {
     };
     use crate::diskless::wal_index::WalIndexEntry;
 
+    #[derive(Clone, Copy)]
+    enum PublishOutcome {
+        Succeed,
+        Fail,
+    }
+
     struct TogglePublishLog {
         inner: Arc<dyn MetadataEventLog>,
         fail: AtomicBool,
     }
 
     impl TogglePublishLog {
-        fn new(inner: Arc<dyn MetadataEventLog>, fail: bool) -> Arc<Self> {
+        fn new(inner: Arc<dyn MetadataEventLog>, outcome: PublishOutcome) -> Arc<Self> {
             Arc::new(Self {
                 inner,
-                fail: AtomicBool::new(fail),
+                fail: AtomicBool::new(matches!(outcome, PublishOutcome::Fail)),
             })
         }
 
-        fn set_failing(&self, fail: bool) {
-            self.fail.store(fail, Ordering::Relaxed);
+        fn set_outcome(&self, outcome: PublishOutcome) {
+            self.fail
+                .store(matches!(outcome, PublishOutcome::Fail), Ordering::Relaxed);
         }
     }
 
@@ -737,14 +744,7 @@ mod tests {
         // The previous leader's in-flight flush lands while this projection is
         // subscribing. Pacing the replay keeps the assertion off the pump's
         // heels, so a gate that stopped one record short stays caught short.
-        let racing = flush_record(WalFlushSetup {
-            object_key: "object-b",
-            topic_id,
-            first_offset: krabka_log::Offset(4),
-            last_offset: krabka_log::Offset(7),
-            max_timestamp: crate::test_support::UnixMillis(0),
-            ..Default::default()
-        });
+        let racing = flush_record(WalFlushSetup::second_object(topic_id));
         let racing_key = WalIndexKey::from(&racing.entries[0]).to_bytes();
         let restarted = DisklessIndexLog::start(RacingAppendLog::new(
             PacedReplayLog::new(event_log, ReplayPace::OneEvery(Duration::from_millis(40))),
@@ -870,39 +870,46 @@ mod tests {
             .await
             .unwrap();
 
-        let Err(error) = DisklessIndexLog::start(TogglePublishLog::new(inner, true)).await else {
+        let Err(error) =
+            DisklessIndexLog::start(TogglePublishLog::new(inner, PublishOutcome::Fail)).await
+        else {
             panic!("the replay fence publish must fail");
         };
         assert!(error.to_string().contains("diskless index replay fence"));
     }
 
-    #[tokio::test]
-    async fn flush_and_tombstone_publish_failures_are_returned() {
-        let transport = TogglePublishLog::new(InProcessMetadataEventLog::new(1), false);
-        let index = DisklessIndexLog::start(transport.clone()).await.unwrap();
+    async fn projected_first_object(
+        transport: Arc<dyn MetadataEventLog>,
+    ) -> (
+        DisklessIndexLog,
+        Uuid,
+        crate::diskless::wal_index::WalFlushRecord,
+    ) {
+        let index = DisklessIndexLog::start(transport).await.unwrap();
         let topic_id = Uuid::from_u128(7);
         let record = flush_record(WalFlushSetup {
             topic_id,
             ..Default::default()
         });
-
         index.publish_flush(&record).await.unwrap();
         assert!(
             index
                 .wait_until_applied(&record, Duration::from_secs(1))
                 .await
         );
-        transport.set_failing(true);
+        (index, topic_id, record)
+    }
+
+    #[tokio::test]
+    async fn flush_and_tombstone_publish_failures_are_returned() {
+        let transport =
+            TogglePublishLog::new(InProcessMetadataEventLog::new(1), PublishOutcome::Succeed);
+        let (index, topic_id, _record) = projected_first_object(transport.clone()).await;
+
+        transport.set_outcome(PublishOutcome::Fail);
 
         let publish_error = index
-            .publish_flush(&flush_record(WalFlushSetup {
-                object_key: "object-b",
-                topic_id,
-                first_offset: krabka_log::Offset(4),
-                last_offset: krabka_log::Offset(7),
-                max_timestamp: crate::test_support::UnixMillis(0),
-                ..Default::default()
-            }))
+            .publish_flush(&flush_record(WalFlushSetup::second_object(topic_id)))
             .await
             .unwrap_err();
         assert!(publish_error.to_string().contains("diskless index publish"));
@@ -918,20 +925,9 @@ mod tests {
     #[tokio::test]
     async fn consumed_tombstone_removes_the_projected_range() {
         let transport = InProcessMetadataEventLog::new(1);
-        let index = DisklessIndexLog::start(transport.clone()).await.unwrap();
-        let topic_id = Uuid::from_u128(7);
-        let record = flush_record(WalFlushSetup {
-            topic_id,
-            ..Default::default()
-        });
+        let (index, topic_id, record) = projected_first_object(transport.clone()).await;
         let key = WalIndexKey::from(&record.entries[0]);
 
-        index.publish_flush(&record).await.unwrap();
-        assert!(
-            index
-                .wait_until_applied(&record, Duration::from_secs(1))
-                .await
-        );
         let bytes = key.to_bytes();
         transport
             .publish_keyed(

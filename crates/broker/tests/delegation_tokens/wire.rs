@@ -11,6 +11,7 @@
 use std::{io, net::SocketAddr};
 
 use base64::Engine;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::owned::{
     api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
     sasl_handshake_request::SaslHandshakeRequest, sasl_handshake_response::SaslHandshakeResponse,
@@ -18,7 +19,10 @@ use krabka_protocol::owned::{
 use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
-use crate::kafka_wire;
+use crate::{
+    kafka_wire, kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::wire::CorrelationId as WireCorrelationId,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire framing (length-prefixed request/response), bound to this suite's
@@ -62,11 +66,10 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
     let _av_resp: ApiVersionsResponse = crate::kafka_wire::exchange(
         &mut stream,
         &ApiVersionsRequest::default(),
-        18,
-        0,
-        1,
-        CLIENT_ID,
-        false,
+        WireExchangeSetup {
+            client_id: CLIENT_ID,
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -76,11 +79,13 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
             mechanism: "SCRAM-SHA-256".to_string(),
             ..Default::default()
         },
-        17,
-        1,
-        2,
-        CLIENT_ID,
-        false,
+        WireExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            correlation: WireCorrelationId(2),
+            client_id: CLIENT_ID,
+            ..Default::default()
+        },
     )
     .await?;
     if sh_resp.error_code != 0 {

@@ -4,7 +4,12 @@
 
 use std::net::SocketAddr;
 
-use crate::{CLIENT_ID, kafka_wire};
+use krabka_ids::ApiKey as WireApiKey;
+
+use crate::{
+    CLIENT_ID, kafka_wire, kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::wire::HeaderEncoding as RequestHeaderEncoding,
+};
 
 krabka_macros::scram_users_fixture!(describe_request);
 
@@ -28,10 +33,18 @@ pub(crate) async fn drive_describe_user_scram_credentials_sasl(
         .await
         .expect("SASL authenticate for DescribeUserScramCredentials");
 
-    let resp: DescribeUserScramCredentialsResponse =
-        kafka_wire::exchange(&mut stream, &req, 50, 0, 1, CLIENT_ID, true)
-            .await
-            .expect("DescribeUserScramCredentials round-trip");
+    let resp: DescribeUserScramCredentialsResponse = kafka_wire::exchange(
+        &mut stream,
+        &req,
+        WireExchangeSetup {
+            api_key: WireApiKey(50),
+            client_id: CLIENT_ID,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("DescribeUserScramCredentials round-trip");
 
     let per_user: Vec<_> = resp
         .results

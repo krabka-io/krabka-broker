@@ -67,6 +67,23 @@ impl<R: krabka_protocol::ProtocolRequest, const V: i16> krabka_protocol::Protoco
     type Response = R::Response;
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct SocketExchangeSetup {
+    #[default(krabka_ids::ApiKey(18))]
+    pub api_key: krabka_ids::ApiKey,
+    pub version: krabka_ids::ApiVersion,
+    #[default(CorrelationId(1))]
+    pub correlation: CorrelationId,
+    pub header: HeaderEncoding,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct ApiRequestSetup {
+    #[default(krabka_ids::ApiKey(18))]
+    pub api_key: krabka_ids::ApiKey,
+    pub version: krabka_ids::ApiVersion,
+}
+
 /// Bind the shared Kafka exchange to a suite's original client identifier.
 #[macro_export]
 macro_rules! socket_round_trip_fixture {
@@ -74,15 +91,10 @@ macro_rules! socket_round_trip_fixture {
         $(#[$attrs])*
         $vis async fn $name<S: ::tokio::io::AsyncRead + ::tokio::io::AsyncWrite + Unpin>(
             stream: &mut S,
-            api_key: i16,
-            api_version: i16,
-            corr_id: i32,
-            flexible: bool,
+            setup: $crate::support::wire::SocketExchangeSetup,
             body: &[u8],
         ) -> ::std::io::Result<Vec<u8>> {
-            $crate::kafka_wire::round_trip(
-                stream, api_key, api_version, corr_id, $client_id, flexible, body,
-            ).await
+            $crate::kafka_wire::round_trip(stream, $crate::kafka_wire::ExchangeSetup::for_socket(setup, $client_id), body).await
         }
     };
 }
@@ -94,13 +106,10 @@ macro_rules! flexible_round_trip_fixture {
         $(#[$attrs])*
         $vis async fn $name(
             stream: &mut ::tokio::net::TcpStream,
-            api_key: i16,
-            api_version: i16,
+            setup: $crate::support::wire::ApiRequestSetup,
             body: &[u8],
         ) -> ::std::io::Result<Vec<u8>> {
-            $crate::kafka_wire::round_trip(
-                stream, api_key, api_version, $correlation, $client_id, true, body,
-            ).await
+            $crate::kafka_wire::round_trip(stream, $crate::kafka_wire::ExchangeSetup::for_socket($crate::support::wire::SocketExchangeSetup { api_key: setup.api_key, version: setup.version, correlation: $crate::support::wire::CorrelationId($correlation), header: $crate::support::wire::HeaderEncoding::Flexible }, $client_id), body).await
         }
     };
 }

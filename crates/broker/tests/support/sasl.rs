@@ -163,3 +163,27 @@ fn start_configured_users(
     configure(&mut config);
     start_broker(config, dir)
 }
+
+/// Encode PLAIN's authentication request at version 2 without choosing handshake order.
+///
+/// # Panics
+/// Panics if the protocol encoder rejects the request.
+pub fn plain_authentication_body(user: &str, password: &[u8]) -> bytes::BytesMut {
+    use krabka_protocol::Encode as _;
+    let request = krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+        auth_bytes: plain_payload(user, password),
+        ..Default::default()
+    };
+    let mut body = bytes::BytesMut::new();
+    request.encode(&mut body, 2).unwrap();
+    body
+}
+
+pub fn plain_payload(user: &str, password: &[u8]) -> bytes::Bytes {
+    let mut payload = Vec::with_capacity(2 + user.len() + password.len());
+    payload.push(0);
+    payload.extend_from_slice(user.as_bytes());
+    payload.push(0);
+    payload.extend_from_slice(password);
+    bytes::Bytes::from(payload)
+}

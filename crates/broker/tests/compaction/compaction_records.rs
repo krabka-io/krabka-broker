@@ -9,6 +9,7 @@
 use std::net::SocketAddr;
 
 use assert2::assert;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
     primitives::uuid::Uuid,
@@ -17,7 +18,11 @@ use tokio::net::TcpStream;
 
 use crate::{
     CLIENT_ID, kafka_wire,
-    support::fetch::{fetch_partition, single_partition_fetch},
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::{
+        fetch::{fetch_partition, single_partition_fetch},
+        wire::HeaderEncoding as RequestHeaderEncoding,
+    },
 };
 
 /// A flattened record: key and value as plain byte vecs.
@@ -58,10 +63,19 @@ pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> 
             })
         };
         let mut stream = TcpStream::connect(addr).await.expect("connect");
-        let resp: FetchResponse =
-            kafka_wire::exchange(&mut stream, &req, 1, version, 1, CLIENT_ID, true)
-                .await
-                .expect("Fetch round-trip");
+        let resp: FetchResponse = kafka_wire::exchange(
+            &mut stream,
+            &req,
+            WireExchangeSetup {
+                api_key: WireApiKey(1),
+                version: WireApiVersion(version),
+                client_id: CLIENT_ID,
+                header: RequestHeaderEncoding::Flexible,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("Fetch round-trip");
 
         let mut got_any = false;
         for topic_resp in &resp.responses {

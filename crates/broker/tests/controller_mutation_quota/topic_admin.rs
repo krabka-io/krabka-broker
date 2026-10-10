@@ -9,6 +9,7 @@
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -17,7 +18,11 @@ use krabka_protocol::{
     },
 };
 
-use crate::{CLIENT_ID, kafka_wire, support::topics::creatable_topic};
+use crate::{
+    CLIENT_ID, kafka_wire,
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::{topics::creatable_topic, wire::HeaderEncoding as RequestHeaderEncoding},
+};
 
 /// Drive `CreateTopics` (`api_key=19`) over a SASL/PLAIN connection.
 /// Returns `(throttle_time_ms, per-topic error_code)` from the first result.
@@ -46,9 +51,19 @@ pub(crate) async fn drive_create_topics_sasl(
         .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode CreateTopics");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, VERSION, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("CreateTopics round-trip");
+    let resp_bytes = kafka_wire::round_trip(
+        &mut stream,
+        WireExchangeSetup {
+            api_key: WireApiKey(19),
+            version: WireApiVersion(VERSION),
+            client_id: CLIENT_ID,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &body,
+    )
+    .await
+    .expect("CreateTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;
     let resp =
         CreateTopicsResponse::decode(&mut cur, VERSION).expect("decode CreateTopicsResponse");
@@ -81,9 +96,19 @@ pub(crate) async fn drive_delete_topics_sasl(
         .expect("SASL authenticate for DeleteTopics");
     let mut body = BytesMut::new();
     req.encode(&mut body, VERSION).expect("encode DeleteTopics");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 20, VERSION, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("DeleteTopics round-trip");
+    let resp_bytes = kafka_wire::round_trip(
+        &mut stream,
+        WireExchangeSetup {
+            api_key: WireApiKey(20),
+            version: WireApiVersion(VERSION),
+            client_id: CLIENT_ID,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &body,
+    )
+    .await
+    .expect("DeleteTopics round-trip");
     let mut cur: &[u8] = &resp_bytes;
     let resp =
         DeleteTopicsResponse::decode(&mut cur, VERSION).expect("decode DeleteTopicsResponse");

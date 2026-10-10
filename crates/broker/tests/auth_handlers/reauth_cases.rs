@@ -3,11 +3,17 @@
 use std::ops::RangeInclusive;
 
 use assert2::check;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse;
 use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
-use crate::{harness, plain, scram};
+use crate::{
+    harness,
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    plain, scram,
+    support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
+};
 
 pub struct Session {
     broker: krabka_broker::BrokerHandle,
@@ -68,11 +74,14 @@ impl Session {
         crate::kafka_wire::exchange(
             &mut self.stream,
             &krabka_protocol::owned::metadata_request::MetadataRequest::default(),
-            3,
-            12,
-            self.correlation,
-            "krabka-sasl-test",
-            true,
+            WireExchangeSetup {
+                api_key: WireApiKey(3),
+                version: WireApiVersion(12),
+                correlation: WireCorrelationId(self.correlation),
+                client_id: "krabka-sasl-test",
+                header: RequestHeaderEncoding::Flexible,
+                ..Default::default()
+            },
         )
         .await
     }

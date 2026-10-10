@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 use bytes::BytesMut;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -28,8 +29,14 @@ use super::{
     quota_admin::drive_alter_client_quotas_sasl,
 };
 use crate::{
-    kafka_wire::{self, Flexibility},
-    support::discovery::api_versions_request_for,
+    kafka_wire,
+    kafka_wire::{
+        ExchangeSetup as WireExchangeSetup, ResponseHeaderSelection as WireResponseHeaderSelection,
+    },
+    support::{
+        discovery::api_versions_request_for,
+        wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
+    },
 };
 
 /// `ApiVersions` is `api_key` 18.
@@ -462,15 +469,15 @@ async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersions
     let mut body = BytesMut::new();
     req.encode(&mut body, API_VERSIONS_VERSION)
         .expect("encode ApiVersions");
-    let resp_bytes = kafka_wire::round_trip_with(
+    let resp_bytes = kafka_wire::round_trip(
         stream,
-        API_VERSIONS_KEY,
-        API_VERSIONS_VERSION,
-        corr_id,
-        CLIENT_ID,
-        Flexibility {
-            request: true,
-            response: false,
+        WireExchangeSetup {
+            api_key: WireApiKey(API_VERSIONS_KEY),
+            version: WireApiVersion(API_VERSIONS_VERSION),
+            correlation: WireCorrelationId(corr_id),
+            client_id: CLIENT_ID,
+            header: RequestHeaderEncoding::Flexible,
+            response_header: WireResponseHeaderSelection::Exact(RequestHeaderEncoding::Legacy),
         },
         &body,
     )

@@ -6,9 +6,14 @@ use std::net::SocketAddr;
 
 use assert2::assert;
 use bytes::BytesMut;
+use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{Decode, Encode};
 
 use super::{round_trip, sasl_plain_authenticate};
+use crate::{
+    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    support::wire::HeaderEncoding as RequestHeaderEncoding,
+};
 
 pub type QuotaEntity = Vec<(String, Option<String>)>;
 pub type QuotaOperations = Vec<(String, f64, bool)>;
@@ -76,9 +81,19 @@ pub async fn drive_alter_client_quotas_sasl(
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .expect("encode AlterClientQuotas");
-    let resp_bytes = round_trip(&mut stream, 49, version, 1, client_id, true, &body)
-        .await
-        .expect("AlterClientQuotas round-trip");
+    let resp_bytes = round_trip(
+        &mut stream,
+        WireExchangeSetup {
+            api_key: WireApiKey(49),
+            version: WireApiVersion(version),
+            client_id,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &body,
+    )
+    .await
+    .expect("AlterClientQuotas round-trip");
     let mut cur: &[u8] = &resp_bytes;
     let resp = AlterClientQuotasResponse::decode(&mut cur, version)
         .expect("decode AlterClientQuotasResponse");
@@ -137,9 +152,19 @@ pub async fn drive_describe_client_quotas_sasl(
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .expect("encode DescribeClientQuotas");
-    let resp_bytes = round_trip(&mut stream, 48, version, 1, client_id, true, &body)
-        .await
-        .expect("DescribeClientQuotas round-trip");
+    let resp_bytes = round_trip(
+        &mut stream,
+        WireExchangeSetup {
+            api_key: WireApiKey(48),
+            version: WireApiVersion(version),
+            client_id,
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &body,
+    )
+    .await
+    .expect("DescribeClientQuotas round-trip");
     let mut cur: &[u8] = &resp_bytes;
     let resp = DescribeClientQuotasResponse::decode(&mut cur, version)
         .expect("decode DescribeClientQuotasResponse");

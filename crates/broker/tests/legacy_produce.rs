@@ -50,25 +50,7 @@ fn build_v0_messageset(pairs: &[(&str, &str)]) -> Bytes {
 /// One length-prefixed request/response exchange with non-flexible v1 request
 /// and v0 response headers; see [`kafka_wire::round_trip`]. Panics on an I/O
 /// error.
-async fn round_trip_v0(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    corr_id: i32,
-    body: &[u8],
-) -> Vec<u8> {
-    kafka_wire::round_trip(
-        stream,
-        api_key,
-        api_version,
-        corr_id,
-        "legacy-produce-test",
-        false,
-        body,
-    )
-    .await
-    .expect("non-flexible round trip")
-}
+pub use crate::kafka_wire::legacy_round_trip as round_trip_v0;
 
 // ── Topic helpers ─────────────────────────────────────────────────────────────
 
@@ -126,11 +108,13 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
         .expect("encode ProduceRequest v0");
 
     // 5. Round-trip over raw TCP.
+    // Produce v0, correlation ID 1 and legacy headers are the setup defaults.
     let resp_body = round_trip_v0(
         &mut stream,
-        0, // api_key = Produce
-        0, // api_version = 0
-        1, // correlation_id
+        crate::kafka_wire::LegacyExchangeSetup {
+            client_id: "legacy-produce-test",
+            ..Default::default()
+        },
         &body,
     )
     .await;

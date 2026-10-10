@@ -141,6 +141,16 @@ impl Default for WalFlushSetup<'_> {
 }
 
 impl WalFlushSetup<'_> {
+    pub(crate) fn second_object(topic_id: uuid::Uuid) -> Self {
+        Self {
+            topic_id,
+            object_key: "object-b",
+            first_offset: krabka_log::Offset(4),
+            last_offset: krabka_log::Offset(7),
+            ..Default::default()
+        }
+    }
+
     /// Offsets zero through two in the six-byte object used by reclaimer tests.
     pub(crate) fn three_records() -> Self {
         Self {
