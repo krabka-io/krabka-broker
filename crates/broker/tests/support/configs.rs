@@ -175,3 +175,21 @@ pub fn legacy_request(
         ..Default::default()
     }
 }
+
+/// A controller supporting every stable metadata version, without endpoints.
+pub fn controller_registration(
+    node_id: krabka_metadata::NodeId,
+) -> krabka_metadata::MetadataRecord {
+    krabka_metadata::MetadataRecord::V1ControllerRegistration(
+        krabka_metadata::ControllerRegistrationRecord {
+            node_id,
+            incarnation_id: uuid::Uuid::from_u128(u128::from(node_id.0)),
+            zk_migration_ready: false,
+            endpoints: Vec::new(),
+            features: std::collections::BTreeMap::from([(
+                "metadata.version".to_owned(),
+                (7, krabka_metadata::metadata_version::METADATA_VERSION_MAX),
+            )]),
+        },
+    )
+}

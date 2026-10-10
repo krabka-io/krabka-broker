@@ -565,12 +565,10 @@ mod tests {
     fn a_group_naming_an_undescribable_topic_is_replaced_by_an_error_row() {
         let mut image = image_with_topics();
         image.apply(&MetadataRecord::V1AccessControlEntry(
-            crate::test_support::allow_acl(
-                krabka_metadata::ResourceType::Topic,
-                "orders",
-                "User:alice",
-                AclOperation::Describe,
-            ),
+            crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+                operation: AclOperation::Describe,
+                ..Default::default()
+            }),
         ));
         let authorizer = acl_authorizer();
         request_identity!(
@@ -780,12 +778,12 @@ mod tests {
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-                crate::test_support::allow_acl(
-                    krabka_metadata::ResourceType::Group,
-                    "allowed",
-                    "User:alice",
-                    krabka_metadata::AclOperation::Describe,
-                ),
+                crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+                    resource_type: krabka_metadata::ResourceType::Group,
+                    resource_name: "allowed",
+                    operation: krabka_metadata::AclOperation::Describe,
+                    ..Default::default()
+                }),
             )])
             .await
             .expect("grant alice Describe on allowed");

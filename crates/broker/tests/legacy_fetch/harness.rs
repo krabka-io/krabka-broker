@@ -22,10 +22,7 @@ use tokio::{
 
 use crate::{
     kafka_wire,
-    support::{
-        produce::single_partition_produce,
-        topics::{creatable_topic, create_topic_request},
-    },
+    support::topics::{creatable_topic, create_topic_request},
 };
 
 /// Verify successful down-conversion and extract the exact legacy bytes.
@@ -85,10 +82,11 @@ pub async fn create_topic_with_partitions(
     num_partitions: i32,
 ) {
     let cr = client
-        .send(create_topic_request(
-            creatable_topic(name, num_partitions, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(
+            name,
+            num_partitions,
+            1,
+        )))
         .await
         .expect("CreateTopics");
     assert!(
@@ -113,12 +111,13 @@ pub async fn produce_batch_to(
     batch: RecordBatch,
 ) {
     const PRODUCE_VERSION: i16 = 9;
-    let req = single_partition_produce(
-        topic,
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        partition,
-        Some(RecordsPayload::V2(vec![batch])),
-        (1, 5_000),
+    let req = crate::support::produce::batch_request(
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: (topic).into(),
+            partition: krabka_ids::PartitionIndex(partition),
+            ..Default::default()
+        },
     );
     let mut body = BytesMut::new();
     req.encode(&mut body, PRODUCE_VERSION)
@@ -127,13 +126,15 @@ pub async fn produce_batch_to(
     let mut stream = TcpStream::connect(addr).await.expect("connect for produce");
     stream.set_nodelay(true).ok();
     // ProduceRequest v9 is flexible (FLEXIBLE_MIN = 9).
-    let frame = crate::support::wire::request_frame(
-        (0, PRODUCE_VERSION, 99, true),
-        "legacy-fetch-produce",
-        &body,
-        None,
-        None,
-    );
+    let frame = crate::support::wire::request_frame(crate::support::wire::WireFrameSetup {
+        api_key: krabka_ids::ApiKey(0),
+        version: krabka_ids::ApiVersion(PRODUCE_VERSION),
+        correlation: crate::support::wire::CorrelationId(99),
+        header: crate::support::wire::HeaderEncoding::Flexible,
+        client_id: "legacy-fetch-produce",
+        body: &body,
+        ..Default::default()
+    });
 
     stream
         .write_u32(u32::try_from(frame.len()).unwrap())

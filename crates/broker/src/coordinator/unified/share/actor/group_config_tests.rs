@@ -162,7 +162,20 @@ async fn a_group_assigns_no_sooner_than_its_own_assignment_interval() {
     crate::coordinator::unified::test_support::check_group_assignment_timing(
         async |id| {
             let handle = coordinator.get_or_create_share(id);
-            seed_initialized(&handle, topic_id, "t", vec![0, 1, 2, 3]).await;
+            seed_initialized(
+                &handle,
+                crate::coordinator::unified::share::actor::test_support::InitializedTopicSetup {
+                    topic_id,
+                    partitions: vec![
+                        krabka_ids::PartitionIndex(0),
+                        krabka_ids::PartitionIndex(1),
+                        krabka_ids::PartitionIndex(2),
+                        krabka_ids::PartitionIndex(3),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .await;
             handle
         },
         join,

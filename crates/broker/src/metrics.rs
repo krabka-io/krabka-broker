@@ -1337,3 +1337,5 @@ pub struct BrokerMetrics {
     #[metric(skip)]
     pub metric_series: MetricSeriesIndex,
 }
+
+pub(crate) use log_cleaner::failure_reason as cleaner_failure_reason;

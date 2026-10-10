@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use krabka_ids::PartitionIndex;
 use krabka_protocol::{
     owned::{
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
@@ -44,10 +45,22 @@ pub(super) fn metadata_with_topic(name: &str, parts: i32) -> (Arc<dyn MetadataPr
 pub(super) fn make_coordinator(
     metadata: Arc<dyn MetadataProvider>,
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
-    let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = Arc::new(GroupCoordinator::new(
+    make_coordinator_with_config(
+        metadata,
         NextGenConfig::assigning_at_once(),
         ShareGroupConfig::assigning_at_once(),
+    )
+}
+
+pub(super) fn make_coordinator_with_config(
+    metadata: Arc<dyn MetadataProvider>,
+    next_gen: NextGenConfig,
+    share: ShareGroupConfig,
+) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
+    let log = Arc::new(InMemoryOffsetsLog::default());
+    let coord = Arc::new(GroupCoordinator::new(
+        next_gen,
+        share,
         metadata,
         log.clone(),
         crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -87,16 +100,28 @@ pub(super) async fn heartbeat(
 /// Seeds the group behind `handle` with `partitions` of `topic` already
 /// initialized, as bootstrap replay of a `ShareGroupStatePartitionMetadata`
 /// record would.
+#[derive(krabka_macros::FieldDefaults)]
+pub(super) struct InitializedTopicSetup<'a> {
+    pub topic_id: Uuid,
+    #[default("t")]
+    pub topic_name: &'a str,
+    #[default(vec![PartitionIndex(0)])]
+    pub partitions: Vec<PartitionIndex>,
+}
+
 pub(super) async fn seed_initialized(
     handle: &ShareGroupActorHandle,
-    topic_id: Uuid,
-    topic_name: &str,
-    partitions: Vec<i32>,
+    setup: InitializedTopicSetup<'_>,
 ) {
     use crate::coordinator::unified::{
         ShareGroupSeed,
         share::persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
     };
+    let InitializedTopicSetup {
+        topic_id,
+        topic_name,
+        partitions,
+    } = setup;
     handle
         .tx
         .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
@@ -104,7 +129,7 @@ pub(super) async fn seed_initialized(
                 initialized: vec![TopicPartitionsInfo {
                     topic_id: uuid::Uuid::from_bytes(topic_id.0),
                     topic_name: topic_name.to_owned(),
-                    partitions,
+                    partitions: partitions.into_iter().map(|index| index.0).collect(),
                 }],
                 ..ShareGroupStatePartitionMetadataValue::default()
             },

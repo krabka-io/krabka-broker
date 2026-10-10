@@ -905,7 +905,7 @@ mod tests {
                 BrokerRegistrationRecord {
                     incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),
                     rack: Some(rack.into()),
-                    ..crate::test_support::broker_registration(node_id)
+                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
                 },
             ));
         }
@@ -1152,7 +1152,10 @@ mod tests {
     async fn a_read_needs_the_installed_role_and_the_image_to_name_this_node() {
         let image = stretch_image(&[]);
         let dir = tempfile::tempdir().expect("tempdir");
-        let partition = crate::test_support::open_partition(dir.path(), "orders", 0);
+        let partition = crate::test_support::open_partition(
+            dir.path(),
+            crate::test_support::StandalonePartitionSetup::default(),
+        );
         let refused = |leader_id| super::PartitionData {
             current_leader: super::LeaderIdAndEpoch {
                 leader_id,
@@ -1202,10 +1205,11 @@ mod tests {
     fn epoch_checks_partition(dir: &std::path::Path) -> Arc<crate::partition::Partition> {
         crate::test_support::spawn_standalone_partition(
             dir,
-            "diverge",
-            0,
             Log::open(dir, LogConfig::default()).expect("open partition log"),
-            false,
+            crate::test_support::StandalonePartitionSetup {
+                topic: "diverge",
+                ..Default::default()
+            },
         )
     }
 

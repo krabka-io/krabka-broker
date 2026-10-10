@@ -368,38 +368,62 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::handlers::alter_partition_reassignments::test_support::{img_with, img_with_epoch};
-
-    fn nodes(ids: &[u64]) -> Vec<NodeId> {
-        ids.iter().copied().map(NodeId).collect()
-    }
+    use crate::{
+        handlers::alter_partition_reassignments::test_support::{ReassignmentImageSetup, img_with},
+        test_support::ReassignmentSetup,
+    };
 
     /// The record the fixture partition `foo-0` becomes.
-    fn record(
-        leader: u64,
-        replicas: &[u64],
-        isr: &[u64],
-        adding: &[u64],
-        removing: &[u64],
-        leader_epoch: i32,
-    ) -> PartitionRecord {
+    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+    struct PlanRecordSetup<'a> {
+        #[default(NodeId(1))]
+        leader: NodeId,
+        #[default(&[NodeId(1), NodeId(2), NodeId(3)])]
+        replicas: &'a [NodeId],
+        #[default(&[NodeId(1), NodeId(2), NodeId(3)])]
+        isr: &'a [NodeId],
+        adding: &'a [NodeId],
+        removing: &'a [NodeId],
+        leader_epoch: LeaderEpoch,
+    }
+
+    fn record(setup: PlanRecordSetup<'_>) -> PartitionRecord {
+        let PlanRecordSetup {
+            leader,
+            replicas,
+            isr,
+            adding,
+            removing,
+            leader_epoch,
+        } = setup;
         PartitionRecord {
             topic: "foo".into(),
             partition: 0,
-            leader: NodeId(leader),
-            replicas: nodes(replicas),
-            isr: nodes(isr),
-            leader_epoch: LeaderEpoch(leader_epoch),
-            adding_replicas: nodes(adding),
-            removing_replicas: nodes(removing),
+            leader,
+            replicas: replicas.to_vec(),
+            isr: isr.to_vec(),
+            leader_epoch,
+            adding_replicas: adding.to_vec(),
+            removing_replicas: removing.to_vec(),
             directories: vec![Uuid::nil(); replicas.len()],
             partition_epoch: 12,
         }
     }
 
-    /// One partition state per row: `(replicas, isr, adding, removing,
-    /// leader)`.
-    type State<'a> = (&'a [u64], &'a [u64], &'a [u64], &'a [u64], u64);
+    /// Named input assignment for one reassignment row.
+    type State<'a> = ReassignmentSetup<'a>;
+
+    /// The in-flight assignment whose leader disappears when its addition is cancelled.
+    fn added_leader_assignment() -> ReassignmentSetup<'static> {
+        ReassignmentSetup {
+            replicas: vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+            isr: vec![NodeId(1), NodeId(4)],
+            adding: vec![NodeId(4)],
+            removing: vec![NodeId(2), NodeId(3)],
+            leader: NodeId(4),
+            ..Default::default()
+        }
+    }
 
     /// A start row: label, partition state, target, the KIP-860 flag, and the
     /// planned record.
@@ -427,99 +451,184 @@ mod tests {
         let cases: [StartCase<'_>; 11] = [
             (
                 "a reorder writes the new order",
-                (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
+                ReassignmentSetup {
+                    ..Default::default()
+                },
                 &[3, 2, 1],
                 false,
-                Some(record(1, &[3, 2, 1], &[1, 2, 3], &[], &[], 5)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[NodeId(3), NodeId(2), NodeId(1)],
+                    leader_epoch: LeaderEpoch(5),
+                    ..Default::default()
+                })),
             ),
             (
                 "the target comes first, then the removing replicas",
-                (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
+                ReassignmentSetup {
+                    ..Default::default()
+                },
                 &[3, 4, 1],
                 false,
-                Some(record(1, &[3, 4, 1, 2], &[1, 2, 3], &[4], &[2], 5)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[NodeId(3), NodeId(4), NodeId(1), NodeId(2)],
+                    adding: &[NodeId(4)],
+                    removing: &[NodeId(2)],
+                    leader_epoch: LeaderEpoch(5),
+                    ..Default::default()
+                })),
             ),
             (
                 "a new target over an in-flight reassignment keeps every replica",
-                (&[1, 2, 3, 4], &[1, 2, 3], &[4], &[2, 3], 1),
+                ReassignmentSetup {
+                    replicas: vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+                    adding: vec![NodeId(4)],
+                    removing: vec![NodeId(2), NodeId(3)],
+                    ..Default::default()
+                },
                 &[5, 6],
                 true,
-                Some(record(
-                    1,
-                    &[5, 6, 1, 2, 3, 4],
-                    &[1, 2, 3],
-                    &[5, 6],
-                    &[1, 2, 3, 4],
-                    5,
-                )),
+                Some(record(PlanRecordSetup {
+                    replicas: &[
+                        NodeId(5),
+                        NodeId(6),
+                        NodeId(1),
+                        NodeId(2),
+                        NodeId(3),
+                        NodeId(4),
+                    ],
+                    adding: &[NodeId(5), NodeId(6)],
+                    removing: &[NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+                    leader_epoch: LeaderEpoch(5),
+                    ..Default::default()
+                })),
             ),
             (
                 "a pure removal completes at once and bumps the leader epoch",
-                (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
+                ReassignmentSetup {
+                    ..Default::default()
+                },
                 &[1, 2],
                 true,
-                Some(record(1, &[1, 2], &[1, 2], &[], &[], 6)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[NodeId(1), NodeId(2)],
+                    isr: &[NodeId(1), NodeId(2)],
+                    leader_epoch: LeaderEpoch(6),
+                    ..Default::default()
+                })),
             ),
             (
                 "the adding and removing lists are sorted",
-                (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
+                ReassignmentSetup {
+                    ..Default::default()
+                },
                 &[5, 4, 1],
                 false,
-                Some(record(1, &[5, 4, 1, 2, 3], &[1, 2, 3], &[4, 5], &[2, 3], 5)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[NodeId(5), NodeId(4), NodeId(1), NodeId(2), NodeId(3)],
+                    adding: &[NodeId(4), NodeId(5)],
+                    removing: &[NodeId(2), NodeId(3)],
+                    leader_epoch: LeaderEpoch(5),
+                    ..Default::default()
+                })),
             ),
             (
                 "a leader only in the old removing set stays in the union",
-                (&[1, 2, 3, 4], &[1, 2, 3], &[4], &[1, 2, 3], 1),
+                ReassignmentSetup {
+                    replicas: vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+                    adding: vec![NodeId(4)],
+                    removing: vec![NodeId(1), NodeId(2), NodeId(3)],
+                    ..Default::default()
+                },
                 &[5],
                 true,
-                Some(record(
-                    1,
-                    &[5, 1, 2, 3, 4],
-                    &[1, 2, 3],
-                    &[5],
-                    &[1, 2, 3, 4],
-                    5,
-                )),
+                Some(record(PlanRecordSetup {
+                    replicas: &[NodeId(5), NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+                    adding: &[NodeId(5)],
+                    removing: &[NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+                    leader_epoch: LeaderEpoch(5),
+                    ..Default::default()
+                })),
             ),
             (
                 "an addition waits for the new replica to join the ISR",
-                (&[1, 2], &[1, 2], &[], &[], 1),
+                ReassignmentSetup {
+                    replicas: vec![NodeId(1), NodeId(2)],
+                    isr: vec![NodeId(1), NodeId(2)],
+                    ..Default::default()
+                },
                 &[1, 2, 3],
                 true,
-                Some(record(1, &[1, 2, 3], &[1, 2], &[3], &[], 5)),
+                Some(record(PlanRecordSetup {
+                    isr: &[NodeId(1), NodeId(2)],
+                    adding: &[NodeId(3)],
+                    leader_epoch: LeaderEpoch(5),
+                    ..Default::default()
+                })),
             ),
             (
                 "a completion that removes the leader elects the first target in the ISR",
-                (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
+                ReassignmentSetup {
+                    ..Default::default()
+                },
                 &[2, 3],
                 true,
-                Some(record(2, &[2, 3], &[2, 3], &[], &[], 6)),
+                Some(record(PlanRecordSetup {
+                    leader: NodeId(2),
+                    replicas: &[NodeId(2), NodeId(3)],
+                    isr: &[NodeId(2), NodeId(3)],
+                    leader_epoch: LeaderEpoch(6),
+                    ..Default::default()
+                })),
             ),
             (
                 "an empty difference keeps the in-flight adding list and can complete",
-                (&[1, 2, 3, 4], &[1, 3, 4], &[4], &[2], 1),
+                ReassignmentSetup {
+                    replicas: vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
+                    isr: vec![NodeId(1), NodeId(3), NodeId(4)],
+                    adding: vec![NodeId(4)],
+                    removing: vec![NodeId(2)],
+                    ..Default::default()
+                },
                 &[1, 3, 4],
                 false,
-                Some(record(1, &[1, 3, 4], &[1, 3, 4], &[], &[], 6)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[NodeId(1), NodeId(3), NodeId(4)],
+                    isr: &[NodeId(1), NodeId(3), NodeId(4)],
+                    leader_epoch: LeaderEpoch(6),
+                    ..Default::default()
+                })),
             ),
             (
                 "a decrease waits while the ISR lacks a target replica",
-                (&[1, 2, 3], &[1, 2], &[], &[], 1),
+                ReassignmentSetup {
+                    isr: vec![NodeId(1), NodeId(2)],
+                    ..Default::default()
+                },
                 &[1, 3],
                 true,
-                Some(record(1, &[1, 3, 2], &[1, 2], &[], &[2], 5)),
+                Some(record(PlanRecordSetup {
+                    replicas: &[NodeId(1), NodeId(3), NodeId(2)],
+                    isr: &[NodeId(1), NodeId(2)],
+                    removing: &[NodeId(2)],
+                    leader_epoch: LeaderEpoch(5),
+                    ..Default::default()
+                })),
             ),
             (
                 "the current order is already the target",
-                (&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
+                ReassignmentSetup {
+                    ..Default::default()
+                },
                 &[1, 2, 3],
                 false,
                 None,
             ),
         ];
-        for (label, (replicas, isr, adding, removing, leader), target, allow_rf, expected) in cases
-        {
-            let image = img_with_epoch(replicas, isr, adding, removing, leader, 11);
+        for (label, assignment, target, allow_rf, expected) in cases {
+            let image = img_with(ReassignmentImageSetup {
+                assignment,
+                partition_epoch: crate::test_support::PartitionEpoch(11),
+            });
             let planned = process_one_partition(&image, "foo", 0, Some(target), allow_rf, true);
             check!(planned == Ok(expected), "case {label}");
         }
@@ -535,43 +644,87 @@ mod tests {
         let cases: [CancelCase<'_>; 6] = [
             (
                 "a leader in the adding set moves to the reverted ISR",
-                (&[1, 2, 3, 4], &[1, 4], &[4], &[2, 3], 4),
+                added_leader_assignment(),
                 false,
-                Ok(Some(record(1, &[1, 2, 3], &[1], &[], &[], 6))),
+                Ok(Some(record(PlanRecordSetup {
+                    isr: &[NodeId(1)],
+                    leader_epoch: LeaderEpoch(6),
+                    ..Default::default()
+                }))),
             ),
             (
                 "a leader outside the reverted ISR is replaced",
-                (&[1, 2, 3, 4], &[1, 4], &[4], &[3], 2),
+                ReassignmentSetup {
+                    removing: vec![NodeId(3)],
+                    leader: NodeId(2),
+                    ..added_leader_assignment()
+                },
                 false,
-                Ok(Some(record(1, &[1, 2, 3], &[1], &[], &[], 6))),
+                Ok(Some(record(PlanRecordSetup {
+                    isr: &[NodeId(1)],
+                    leader_epoch: LeaderEpoch(6),
+                    ..Default::default()
+                }))),
             ),
             (
                 "only removing replicas keeps the leader epoch",
-                (&[1, 2, 3], &[1, 2, 3], &[], &[3], 1),
+                ReassignmentSetup {
+                    removing: vec![NodeId(3)],
+                    ..Default::default()
+                },
                 false,
-                Ok(Some(record(1, &[1, 2, 3], &[1, 2, 3], &[], &[], 5))),
+                Ok(Some(record(PlanRecordSetup {
+                    leader_epoch: LeaderEpoch(5),
+                    ..Default::default()
+                }))),
             ),
             (
                 "a dropped adding replica bumps the leader epoch",
-                (&[1, 2, 3], &[1, 2, 3], &[3], &[], 1),
+                ReassignmentSetup {
+                    adding: vec![NodeId(3)],
+                    ..Default::default()
+                },
                 false,
-                Ok(Some(record(1, &[1, 2], &[1, 2], &[], &[], 6))),
+                Ok(Some(record(PlanRecordSetup {
+                    replicas: &[NodeId(1), NodeId(2)],
+                    isr: &[NodeId(1), NodeId(2)],
+                    leader_epoch: LeaderEpoch(6),
+                    ..Default::default()
+                }))),
             ),
             (
                 "an ISR of adding replicas needs unclean election",
-                (&[1, 2, 3], &[3], &[3], &[], 3),
+                ReassignmentSetup {
+                    isr: vec![NodeId(3)],
+                    adding: vec![NodeId(3)],
+                    leader: NodeId(3),
+                    ..Default::default()
+                },
                 false,
                 Err((INVALID_REPLICA_ASSIGNMENT, unclean_message.into())),
             ),
             (
                 "an ISR of adding replicas reverts uncleanly when the topic allows it",
-                (&[1, 2, 3], &[3], &[3], &[], 3),
+                ReassignmentSetup {
+                    isr: vec![NodeId(3)],
+                    adding: vec![NodeId(3)],
+                    leader: NodeId(3),
+                    ..Default::default()
+                },
                 true,
-                Ok(Some(record(1, &[1, 2], &[1], &[], &[], 6))),
+                Ok(Some(record(PlanRecordSetup {
+                    replicas: &[NodeId(1), NodeId(2)],
+                    isr: &[NodeId(1)],
+                    leader_epoch: LeaderEpoch(6),
+                    ..Default::default()
+                }))),
             ),
         ];
-        for (label, (replicas, isr, adding, removing, leader), unclean, expected) in cases {
-            let mut image = img_with_epoch(replicas, isr, adding, removing, leader, 11);
+        for (label, assignment, unclean, expected) in cases {
+            let mut image = img_with(ReassignmentImageSetup {
+                assignment,
+                partition_epoch: crate::test_support::PartitionEpoch(11),
+            });
             if unclean {
                 image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                     topic: "foo".into(),
@@ -693,7 +846,7 @@ mod tests {
                 (NO_REASSIGNMENT_IN_PROGRESS, NO_REASSIGNMENT_MESSAGE.into()),
             ),
         ];
-        let image = img_with(&[1, 2, 3], &[1, 2, 3], &[], &[], 1);
+        let image = img_with(ReassignmentImageSetup::default());
         for (label, topic, partition, target, allow_rf, expected) in cases {
             let planned = process_one_partition(&image, topic, partition, target, allow_rf, true);
             check!(planned == Err(expected), "case {label}");
@@ -703,7 +856,25 @@ mod tests {
     #[test]
     fn the_replication_factor_check_counts_the_set_the_partition_is_headed_for() {
         // replicas [1,2,3,4], adding [4], removing [2]: headed for [1,3,4].
-        let image = img_with(&[1, 2, 3, 4], &[1, 3, 4], &[4], &[2], 1);
+        let image = img_with(ReassignmentImageSetup {
+            assignment: ReassignmentSetup {
+                replicas: vec![
+                    krabka_ids::NodeId(1),
+                    krabka_ids::NodeId(2),
+                    krabka_ids::NodeId(3),
+                    krabka_ids::NodeId(4),
+                ],
+                isr: vec![
+                    krabka_ids::NodeId(1),
+                    krabka_ids::NodeId(3),
+                    krabka_ids::NodeId(4),
+                ],
+                adding: vec![krabka_ids::NodeId(4)],
+                removing: vec![krabka_ids::NodeId(2)],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
 
         let error = process_one_partition(&image, "foo", 0, Some(&[1, 3]), false, true)
             .expect_err("a two-replica target changes the factor");
@@ -719,7 +890,10 @@ mod tests {
 
     #[test]
     fn start_rejects_an_exhausted_partition_epoch() {
-        let image = img_with_epoch(&[1, 2, 3], &[1, 2, 3], &[], &[], 1, i32::MAX);
+        let image = img_with(ReassignmentImageSetup {
+            partition_epoch: crate::test_support::PartitionEpoch(i32::MAX),
+            ..Default::default()
+        });
         let error = process_one_partition(&image, "foo", 0, Some(&[1, 4]), true, true)
             .expect_err("exhausted epoch must fail closed");
         assert!(error.0 == INVALID_REQUEST);
@@ -730,17 +904,23 @@ mod tests {
         for (label, state, target) in [
             (
                 "a completion that moves the leader",
-                (&[1u64, 2, 3][..], &[1u64, 2, 3][..], &[][..], &[][..], 1u64),
+                ReassignmentSetup {
+                    ..Default::default()
+                },
                 Some(&[2, 3][..]),
             ),
             (
                 "a cancel that moves the leader",
-                (&[1, 2, 3, 4][..], &[1, 4][..], &[4][..], &[2, 3][..], 4),
+                added_leader_assignment(),
                 None,
             ),
         ] {
-            let (replicas, isr, adding, removing, leader) = state;
-            let mut image = img_with(replicas, isr, adding, removing, leader);
+            let leader = state.leader;
+            let assignment = state;
+            let mut image = img_with(ReassignmentImageSetup {
+                assignment,
+                ..Default::default()
+            });
             let mut seeded = image.partition("foo", 0).expect("seeded partition").clone();
             seeded.leader_epoch = LeaderEpoch(i32::MAX);
             image.apply(&MetadataRecord::V1Partition(seeded));
@@ -750,7 +930,7 @@ mod tests {
                     .expect_err("exhausted leader epoch must fail closed");
                 check!(error.0 == INVALID_REQUEST, "case {label}");
                 check!(
-                    image.partition("foo", 0).unwrap().leader == NodeId(leader),
+                    image.partition("foo", 0).unwrap().leader == leader,
                     "case {label}"
                 );
             }
@@ -764,11 +944,18 @@ mod tests {
         let cases = [
             (
                 "a reassignment is in progress",
-                img_with(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1),
+                img_with(ReassignmentImageSetup {
+                    assignment: ReassignmentSetup {
+                        adding: vec![krabka_ids::NodeId(3)],
+                        removing: vec![krabka_ids::NodeId(2)],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
             ),
             (
                 "nothing to cancel",
-                img_with(&[1, 2, 3], &[1, 2, 3], &[], &[], 1),
+                img_with(ReassignmentImageSetup::default()),
             ),
         ];
         for (label, img) in cases {
@@ -788,7 +975,7 @@ mod tests {
 
     #[test]
     fn a_start_is_never_gated() {
-        let img = img_with(&[1, 2, 3], &[1, 2, 3], &[], &[], 1);
+        let img = img_with(ReassignmentImageSetup::default());
         let res = process_one_partition(&img, "foo", 0, Some(&[1, 2, 4]), true, false)
             .expect("a start needs no approval")
             .expect("Some");

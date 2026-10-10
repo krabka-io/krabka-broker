@@ -29,3 +29,10 @@ where
         tokio::time::sleep(backoff).await;
     }
 }
+
+/// Bound one cluster step with the caller's timeout and diagnostic.
+pub async fn within<F: Future>(what: &str, timeout: Duration, future: F) -> F::Output {
+    tokio::time::timeout(timeout, future)
+        .await
+        .unwrap_or_else(|_| panic!("{what} did not finish within {timeout:?}"))
+}

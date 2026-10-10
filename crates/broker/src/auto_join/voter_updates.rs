@@ -175,7 +175,6 @@ mod tests {
 
     use krabka_metadata::{KRaftVersionRange, VoterEndpoint};
     use krabka_raft::{Node, NodeId};
-    use krabka_units::{millis, secs};
 
     use super::*;
     use crate::test_support::FakeMetadataSource;
@@ -341,20 +340,9 @@ mod tests {
                 .build(),
         );
         let params = AutoJoinParams {
-            auto_join: true,
-            retry_backoff: millis(10),
-            voter_request_timeout: secs(1),
             node_id: NodeId(u64::MAX),
             directory_id: uuid::Uuid::from_u128(1),
-            cluster_id: None,
-            bootstrap_servers: vec![],
-            advertised_controller: None,
-            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            inter_broker_server_name: "broker.internal".to_string(),
-            controller: source,
-            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                None, None,
-            )),
+            ..crate::auto_join::test_support::params(source, vec![])
         };
 
         tokio::time::timeout(Duration::from_millis(100), run_voter_updates(params))

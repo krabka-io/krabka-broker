@@ -67,12 +67,8 @@ impl Partition {
             if !holds(self, newest(images.as_deref_mut()).as_deref()) {
                 return Err(Uncommitted::TermEnded);
             }
-            let image_changed = async {
-                match images.as_deref_mut() {
-                    Some(images) => images.changed().await.is_ok(),
-                    None => std::future::pending().await,
-                }
-            };
+            let image_changed =
+                crate::metadata_source::wait_for_image_change(images.as_deref_mut());
             tokio::select! {
                 reached = &mut committed => {
                     reached.map_err(|_| Uncommitted::TimedOut)?;

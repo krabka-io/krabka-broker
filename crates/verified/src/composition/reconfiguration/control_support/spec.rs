@@ -129,3 +129,18 @@ pub(super) fn common_prefix_reported(
     && has_node(next, next.len(), common) }
 }
 }
+
+/// Preflight needs admission alone; a writing request also needs prefix support.
+#[logic(open)]
+pub(super) fn control_supported_request(
+    old: Seq<u64>,
+    state: ReconfigurationState,
+    request: VoterChangeRequest,
+    candidate: (u64, TargetVoter),
+    support: bool,
+) -> bool {
+    pearlite! {
+        control_request_admitted(old, state, request, candidate.0, candidate.1)
+        && (control_record_count(state.1.kraft_version, request.kind) == 0 || support)
+    }
+}

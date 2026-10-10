@@ -203,7 +203,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use krabka_metadata::{ClientQuotaRecord, MetadataRecord, QuotaEntity};
+    use krabka_metadata::MetadataRecord;
 
     use super::*;
     use crate::{broker::BrokerHandle, test_support::DenyAll};
@@ -240,24 +240,14 @@ mod tests {
 
     async fn seed_quota(
         handle: &BrokerHandle,
-        entity: Vec<(&str, Option<&str>)>,
-        key: &str,
-        value: f64,
+        setup: crate::quota::test_support::QuotaRecordSetup<'_>,
     ) {
         handle
             .broker_arc_for_test()
             .controller
-            .submit_change(vec![MetadataRecord::V1ClientQuota(ClientQuotaRecord {
-                entity: entity
-                    .into_iter()
-                    .map(|(entity_type, entity_name)| QuotaEntity {
-                        entity_type: entity_type.into(),
-                        entity_name: entity_name.map(Into::into),
-                    })
-                    .collect(),
-                config_key: key.into(),
-                config_value: Some(value),
-            })])
+            .submit_change(vec![MetadataRecord::V1ClientQuota(
+                crate::quota::test_support::quota_record(setup),
+            )])
             .await
             .expect("seed quota");
     }
@@ -333,9 +323,10 @@ mod tests {
         .await;
         seed_quota(
             &broker_handle,
-            vec![("user", Some("alice"))],
-            "producer_byte_rate",
-            1024.0,
+            crate::quota::test_support::QuotaRecordSetup {
+                value: crate::quota::test_support::QuotaValue(1024.0),
+                ..Default::default()
+            },
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
@@ -407,16 +398,20 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_quota(
             &broker_handle,
-            vec![("client-id", Some("app-1")), ("user", Some("alice"))],
-            "producer_byte_rate",
-            2048.0,
+            crate::quota::test_support::QuotaRecordSetup {
+                entity: vec![("client-id", Some("app-1")), ("user", Some("alice"))],
+                value: crate::quota::test_support::QuotaValue(2048.0),
+                ..Default::default()
+            },
         )
         .await;
         seed_quota(
             &broker_handle,
-            vec![("user", Some("bob"))],
-            "consumer_byte_rate",
-            512.0,
+            crate::quota::test_support::QuotaRecordSetup {
+                entity: vec![("user", Some("bob"))],
+                key: "consumer_byte_rate",
+                value: crate::quota::test_support::QuotaValue(512.0),
+            },
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
@@ -466,16 +461,19 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_quota(
             &broker_handle,
-            vec![("user", Some("alice"))],
-            "producer_byte_rate",
-            1024.0,
+            crate::quota::test_support::QuotaRecordSetup {
+                value: crate::quota::test_support::QuotaValue(1024.0),
+                ..Default::default()
+            },
         )
         .await;
         seed_quota(
             &broker_handle,
-            vec![("user", None)],
-            "producer_byte_rate",
-            2048.0,
+            crate::quota::test_support::QuotaRecordSetup {
+                entity: vec![("user", None)],
+                value: crate::quota::test_support::QuotaValue(2048.0),
+                ..Default::default()
+            },
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();

@@ -281,7 +281,9 @@ pub(super) async fn create_topic(broker: &Broker, name: &str, partitions: i32) {
     })];
     records.extend((0..partitions).map(|partition| {
         MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
-            name, partition, node_id,
+            name,
+            krabka_ids::PartitionIndex(partition),
+            node_id,
         ))
     }));
     broker

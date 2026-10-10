@@ -40,9 +40,12 @@ macro_rules! seeded_token_fixture {
         let $maximum = $seeded_at + $max_delta;
         crate::handlers::delegation_token_test_support::seed_token(
             $controller,
-            &$token_id,
-            $seeded_at + $expiry_delta,
-            $maximum,
+            crate::handlers::delegation_token_test_support::TokenSetup {
+                token_id: &$token_id,
+                expires_at: crate::test_support::UnixMillis($seeded_at + $expiry_delta),
+                max_expires_at: crate::test_support::UnixMillis($maximum),
+                ..crate::handlers::delegation_token_test_support::TokenSetup::for_mutation()
+            },
         )
         .await;
     };
@@ -135,21 +138,61 @@ pub(super) fn hmac_for(token_id: &str) -> Vec<u8> {
     krabka_security::compute_token_hmac(b"k", token_id)
 }
 
-/// Seeds a token owned by `alice`, requested by `minter`, with renewer `bob`.
-pub(super) async fn seed_token(
-    controller: &ControllerHandle,
-    token_id: &str,
-    expiry_timestamp_ms: i64,
-    max_timestamp_ms: i64,
-) {
+/// Independent token metadata shared by description and mutation fixtures.
+pub(super) struct TokenSetup<'a> {
+    pub token_id: &'a str,
+    pub owner: KafkaPrincipal,
+    pub requester: Option<KafkaPrincipal>,
+    pub issued_at: crate::test_support::UnixMillis,
+    pub expires_at: crate::test_support::UnixMillis,
+    pub max_expires_at: crate::test_support::UnixMillis,
+    pub renewers: Vec<KafkaPrincipal>,
+}
+
+impl Default for TokenSetup<'_> {
+    fn default() -> Self {
+        Self {
+            token_id: "t-a",
+            owner: kp("alice"),
+            requester: None,
+            issued_at: crate::test_support::UnixMillis(1_000),
+            expires_at: crate::test_support::UnixMillis(2_000),
+            max_expires_at: crate::test_support::UnixMillis(3_000),
+            renewers: vec![],
+        }
+    }
+}
+
+impl TokenSetup<'_> {
+    /// The mutation tests use the minter and Bob as requester and renewer.
+    pub(super) fn for_mutation() -> Self {
+        Self {
+            requester: Some(kp("minter")),
+            issued_at: crate::test_support::UnixMillis(0),
+            renewers: vec![kp("bob")],
+            ..Self::default()
+        }
+    }
+}
+
+pub(super) async fn seed_token(controller: &ControllerHandle, setup: TokenSetup<'_>) {
+    let TokenSetup {
+        token_id,
+        owner,
+        requester,
+        issued_at,
+        expires_at,
+        max_expires_at,
+        renewers,
+    } = setup;
     let token = DelegationTokenRecord {
         token_id: token_id.into(),
-        owner: kp("alice"),
-        requester: kp("minter"),
-        issue_timestamp_ms: 0,
-        expiry_timestamp_ms,
-        max_timestamp_ms,
-        renewers: vec![kp("bob")],
+        requester: requester.unwrap_or_else(|| owner.clone()),
+        owner,
+        issue_timestamp_ms: issued_at.0,
+        expiry_timestamp_ms: expires_at.0,
+        max_timestamp_ms: max_expires_at.0,
+        renewers,
     };
     controller
         .submit_change(vec![MetadataRecord::V1DelegationToken(token)])
@@ -165,7 +208,16 @@ pub(super) async fn refusal_tokens(
     let live = (hmac_for("live"), now + 60_000);
     let expired = (hmac_for("expired"), now - 1);
     for (token_id, (_, expiry)) in [("live", &live), ("expired", &expired)] {
-        seed_token(controller, token_id, *expiry, now + DAY_MS).await;
+        seed_token(
+            controller,
+            crate::handlers::delegation_token_test_support::TokenSetup {
+                token_id,
+                expires_at: crate::test_support::UnixMillis(*expiry),
+                max_expires_at: crate::test_support::UnixMillis(now + DAY_MS),
+                ..crate::handlers::delegation_token_test_support::TokenSetup::for_mutation()
+            },
+        )
+        .await;
     }
     (live, expired)
 }

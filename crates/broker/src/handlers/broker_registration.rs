@@ -485,7 +485,7 @@ mod tests {
                     incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
                     host: "broker".into(),
                     log_dirs: vec![uuid::Uuid::from_u128(directory)],
-                    ..crate::test_support::broker_registration(node)
+                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
                 },
             ));
         }
@@ -523,11 +523,10 @@ mod wire_tests {
 
     use assert2::assert;
     use krabka_metadata::{
-        BrokerEndpoint, BrokerRegistrationRecord, LeaderEpoch, NodeId, PartitionRecord,
-        TopicConfigRecord, TopicRecord,
+        BrokerRegistrationRecord, LeaderEpoch, NodeId, PartitionRecord, TopicConfigRecord,
+        TopicRecord,
     };
     use krabka_protocol::owned::broker_registration_request::Feature;
-    use krabka_security::ListenerProtocol;
 
     use super::*;
     use crate::{
@@ -580,15 +579,12 @@ mod wire_tests {
                 broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(0xdead),
                 host: "broker-2".into(),
-                endpoints: vec![BrokerEndpoint {
-                    name: "PLAINTEXT".into(),
-                    host: "broker-2".into(),
-                    port: 9092,
-                    protocol: ListenerProtocol::Plaintext,
-                }],
+                endpoints: vec![crate::test_support::plaintext_broker_endpoint(
+                    "broker-2", 9092,
+                )],
                 log_dirs: vec![uuid::Uuid::from_u128(1011)],
                 features: krabka_metadata::supported_feature_ranges(),
-                ..crate::test_support::broker_registration(REGISTERED.0)
+                ..crate::test_support::broker_registration(REGISTERED)
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: TOPIC.into(),

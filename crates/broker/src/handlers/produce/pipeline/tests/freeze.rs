@@ -58,7 +58,11 @@ fn add_topic(image: &mut MetadataImage, topic: &str, topic_id: Uuid) {
         replication_factor: 1,
     }));
     image.apply(&MetadataRecord::V1Partition(
-        crate::handlers::test_support::single_replica_partition(topic, 0, krabka_audit::NodeId(1)),
+        crate::handlers::test_support::single_replica_partition(
+            topic,
+            krabka_ids::PartitionIndex(0),
+            krabka_audit::NodeId(1),
+        ),
     ));
 }
 
@@ -124,7 +128,8 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
     frozen(&mut image, "frozen", PatternType::Literal, "DR cutover");
     let image = Arc::new(image);
 
-    let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+    let fixture =
+        crate::handlers::produce::test_support::PipelineFixture::new(krabka_ids::NodeId(1));
 
     for topic in ["frozen", "control"] {
         let part_dir = crate::log_dir::partition_dir(dir.path(), topic, 0);

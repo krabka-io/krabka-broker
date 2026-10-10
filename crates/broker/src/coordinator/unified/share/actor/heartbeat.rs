@@ -216,7 +216,7 @@ fn leave_resp(member_id: &str, member_epoch: i32) -> ShareGroupHeartbeatResponse
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, atomic::Ordering};
+    use std::sync::Arc;
 
     use assert2::{assert, check};
 
@@ -296,7 +296,7 @@ mod tests {
             let (coord, _log) = make_coordinator(metadata.clone());
             let handle = coord.get_or_create_share("g");
             if let Some(partitions) = initialized {
-                seed_initialized(&handle, id, "t", partitions).await;
+                seed_initialized(&handle, crate::coordinator::unified::share::actor::test_support::InitializedTopicSetup { topic_id: id, partitions: partitions.into_iter().map(krabka_ids::PartitionIndex).collect(), ..Default::default() }).await;
             }
             for (step, (req, expected)) in steps.into_iter().enumerate() {
                 let resp = heartbeat(&handle, req).await;
@@ -503,12 +503,7 @@ mod tests {
             let (metadata, _id) = metadata_with_topic("t", 1);
             let (coord, log) = make_coordinator(metadata);
             let handle = coord.get_or_create_share("g");
-            match failure {
-                Some(error) => {
-                    *log.fail_next_with.lock().expect("not poisoned") = Some(error);
-                }
-                None => log.fail_next.store(true, Ordering::SeqCst),
-            }
+            log.fail_next_append(failure);
 
             let response = heartbeat(&handle, subscribed_request("m1", 0)).await;
 
@@ -536,16 +531,10 @@ mod tests {
             GroupCoordinator, ShareGroupSeed, streams::config::StreamsGroupConfig, wall_clock_ms,
         };
 
-        // (case, milliseconds before now of the stored timestamp, or `None`
-        // for 0, the expected (member epoch, whether the group wrote a new
-        // timestamp))
-        let rows = [
-            ("no stored time", None, (3, true)),
-            ("an assignment a second ago", Some(1_000), (2, false)),
-            ("an assignment two minutes ago", Some(120_000), (3, true)),
-        ];
-        let mut answers = Vec::new();
-        let mut expected = Vec::new();
+        let rows = crate::coordinator::unified::test_support::ASSIGNMENT_INTERVAL_CASES;
+        let mut cases =
+            crate::coordinator::unified::test_support::AssignmentIntervalResults::default();
+
         for (case, ago, wanted) in rows {
             let (metadata, _) = metadata_with_topic("t", 4);
             let coordinator = Arc::new(GroupCoordinator::new(
@@ -587,13 +576,8 @@ mod tests {
                 .cached_share_seed("g")
                 .unwrap()
                 .assignment_timestamp_ms;
-            answers.push((
-                case,
-                joined.member_epoch,
-                (before..=after).contains(&written),
-            ));
-            expected.push((case, wanted.0, wanted.1));
+            cases.record(case, joined.member_epoch, (before, after), written, wanted);
         }
-        check!(answers == expected);
+        cases.check();
     }
 }

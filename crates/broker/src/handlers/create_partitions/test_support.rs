@@ -42,18 +42,33 @@ pub fn request(topics: Vec<CreatePartitionsTopic>, validate_only: bool) -> Creat
     }
 }
 
-pub async fn seed_topic(handle: &BrokerHandle, name: &str, partitions: i32, rf: i16) {
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct SeedTopicSetup<'a> {
+    #[default("t")]
+    pub name: &'a str,
+    #[default(crate::handlers::test_support::TopicPartitionCount(2))]
+    pub partitions: crate::handlers::test_support::TopicPartitionCount,
+    #[default(crate::handlers::test_support::TopicReplicationFactor(1))]
+    pub rf: crate::handlers::test_support::TopicReplicationFactor,
+}
+
+pub async fn seed_topic(handle: &BrokerHandle, setup: SeedTopicSetup<'_>) {
+    let SeedTopicSetup {
+        name,
+        partitions,
+        rf,
+    } = setup;
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
         name: name.into(),
         topic_id: uuid::Uuid::new_v4(),
-        partitions,
-        replication_factor: rf,
+        partitions: partitions.0,
+        replication_factor: rf.0,
     })];
-    for partition in 0..partitions {
+    for partition in 0..partitions.0 {
         records.push(MetadataRecord::V1Partition(
             crate::handlers::test_support::single_replica_partition(
                 name,
-                partition,
+                krabka_ids::PartitionIndex(partition),
                 NodeId(handle.node_id()),
             ),
         ));

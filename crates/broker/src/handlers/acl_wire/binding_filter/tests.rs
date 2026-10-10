@@ -163,14 +163,7 @@ fn from_wire_refuses_unknown_on_any_axis() {
 /// six seeded topic patterns.
 #[test]
 fn resource_pattern_matching_follows_kafka() {
-    let seeded = [
-        ("foo", PatternType::Literal),
-        ("*", PatternType::Literal),
-        ("f", PatternType::Prefixed),
-        ("fo", PatternType::Prefixed),
-        ("bar", PatternType::Prefixed),
-        ("food", PatternType::Literal),
-    ];
+    let seeded = crate::handlers::acl_wire::PATTERN_MATCHING_FIXTURE;
     let all: &[&str] = &["foo", "*", "f", "fo", "bar", "food"];
     let cases: [(i8, Option<&str>, &[&str]); 13] = [
         (WIRE_ANY, None, all),

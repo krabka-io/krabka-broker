@@ -19,7 +19,7 @@ use super::*;
 use crate::{
     broker::Broker,
     codes,
-    handlers::delete_records::test_support::gated_config,
+    handlers::{delete_records::test_support::gated_config, test_support::CreateTopicSetup},
     test_support::{DenyAll, peer, principal},
 };
 
@@ -62,7 +62,15 @@ async fn drive(
 
 macro_rules! pending_partition_fixture {
     (($part:ident, $before:ident), $handle:expr, $broker:expr, $topic:expr, $context:expr) => {
-        topic_holding_a_pending_batch($handle, $broker, $topic, None, $context).await;
+        topic_holding_a_pending_batch(
+            $handle,
+            $context,
+            PendingBatchTopicSetup {
+                topic: $topic,
+                ..Default::default()
+            },
+        )
+        .await;
         let $part = $broker
             .partitions
             .get($topic, krabka_ids::PartitionIndex(0))
@@ -138,21 +146,45 @@ fn batch_at(activation_ms: i64, leader_epoch: i32) -> krabka_protocol::records::
     }
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct PendingBatchTopicSetup<'a> {
+    #[default("orders")]
+    topic: &'a str,
+    delivery_mode: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct ConfiguredPendingBatchSetup<'a> {
+    #[default("orders")]
+    topic: &'a str,
+    configs: &'a [(&'a str, &'a str)],
+}
+
 // Create `topic` with the given `delivery.mode`, then append one batch
 // that has come due and one that has not. Two records per batch puts the
 // log end offset at 4, and a scheduled topic's delivery watermark at 2.
 async fn topic_holding_a_pending_batch(
     broker_handle: &crate::broker::BrokerHandle,
-    broker: &Broker,
-    topic: &str,
-    delivery_mode: Option<&str>,
     ctx: &crate::handlers::RequestContext<'_>,
+    setup: PendingBatchTopicSetup<'_>,
 ) {
+    let PendingBatchTopicSetup {
+        topic,
+        delivery_mode,
+    } = setup;
     let configs: Vec<(&str, &str)> = delivery_mode
         .map(|mode| (crate::config_keys::DELIVERY_MODE, mode))
         .into_iter()
         .collect();
-    topic_with_configs_holding_a_pending_batch(broker_handle, broker, topic, &configs, ctx).await;
+    topic_with_configs_holding_a_pending_batch(
+        broker_handle,
+        ctx,
+        ConfiguredPendingBatchSetup {
+            topic,
+            configs: &configs,
+        },
+    )
+    .await;
 }
 
 // `topic_holding_a_pending_batch` for a topic created with `configs`. It
@@ -160,12 +192,13 @@ async fn topic_holding_a_pending_batch(
 // log before it appends.
 async fn topic_with_configs_holding_a_pending_batch(
     broker_handle: &crate::broker::BrokerHandle,
-    broker: &Broker,
-    topic: &str,
-    configs: &[(&str, &str)],
     ctx: &crate::handlers::RequestContext<'_>,
+    setup: ConfiguredPendingBatchSetup<'_>,
 ) {
     use krabka_protocol::owned::create_topics_response;
+
+    let ConfiguredPendingBatchSetup { topic, configs } = setup;
+    let broker = broker_handle.broker_arc_for_test();
 
     let config = |key: &str| {
         configs
@@ -179,9 +212,12 @@ async fn topic_with_configs_holding_a_pending_batch(
             crate::config_keys::parse_cleanup_policy(policy).expect("a valid cleanup.policy")
         });
     let version = create_topics_response::MAX_VERSION;
-    let create =
-        crate::handlers::test_support::configured_topic_request(topic, configs, 1, 1, 5_000);
-    let created = crate::handlers::create_topics::handle(broker, create, version, ctx)
+    let create = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+        topic,
+        configs,
+        ..Default::default()
+    });
+    let created = crate::handlers::create_topics::handle(&broker, create, version, ctx)
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == codes::NONE, "{created:?}");
@@ -241,7 +277,15 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
     request_identity!((admin, peer, ctx), principal("admin"), test_context);
 
     for (topic, delivery_mode, expected_low_watermark) in cases {
-        topic_holding_a_pending_batch(&broker_handle, &broker, topic, delivery_mode, &ctx).await;
+        topic_holding_a_pending_batch(
+            &broker_handle,
+            &ctx,
+            PendingBatchTopicSetup {
+                topic,
+                delivery_mode,
+            },
+        )
+        .await;
 
         let resp = drive(&broker, &request(topic, &[(0, -1)]), &admin, &peer).await;
 
@@ -267,7 +311,7 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
 async fn a_refused_trim_deletes_nothing() {
     broker_fixture!((broker_handle, _dir, broker), break_glass(gated_config()));
     request_identity!((principal, peer, ctx), principal("admin"), test_context);
-    topic_holding_a_pending_batch(&broker_handle, &broker, "orders", None, &ctx).await;
+    topic_holding_a_pending_batch(&broker_handle, &ctx, PendingBatchTopicSetup::default()).await;
     let part = broker
         .partitions
         .get("orders", krabka_ids::PartitionIndex(0))
@@ -438,10 +482,11 @@ async fn a_compact_only_topic_refuses_a_trim() {
     for (topic, policy, low_watermark, error_code, log_start) in cases {
         topic_with_configs_holding_a_pending_batch(
             &broker_handle,
-            &broker,
-            topic,
-            &[(crate::config_keys::CLEANUP_POLICY, policy)],
             &ctx,
+            ConfiguredPendingBatchSetup {
+                topic,
+                configs: &[(crate::config_keys::CLEANUP_POLICY, policy)],
+            },
         )
         .await;
         let part = broker
@@ -483,7 +528,11 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
                 replication_factor: 1,
             }),
             krabka_metadata::MetadataRecord::V1Partition(
-                crate::handlers::test_support::single_replica_partition(topic, 0, elsewhere),
+                crate::handlers::test_support::single_replica_partition(
+                    topic,
+                    krabka_ids::PartitionIndex(0),
+                    elsewhere,
+                ),
             ),
         ])
         .await
@@ -527,7 +576,7 @@ async fn an_internal_topic_refuses_a_trim() {
         .wait_until_transaction_coordinator_ready()
         .await;
     broker_handle.wait_until_share_coordinator_ready().await;
-    topic_holding_a_pending_batch(&broker_handle, &broker, "orders", None, &ctx).await;
+    topic_holding_a_pending_batch(&broker_handle, &ctx, PendingBatchTopicSetup::default()).await;
 
     let cases = [
         (
@@ -694,7 +743,7 @@ async fn register_follower(broker_handle: &crate::broker::BrokerHandle) {
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
                 broker_epoch: -1,
-                ..crate::test_support::broker_registration(FOLLOWER)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(FOLLOWER))
             },
         ))
         .await

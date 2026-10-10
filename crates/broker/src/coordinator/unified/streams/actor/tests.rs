@@ -2,8 +2,6 @@
 //! heartbeat epoch sequence with no connected `MetadataSource`, and the
 //! resolution of a persisted per-group config override.
 
-use std::sync::atomic::Ordering;
-
 use assert2::{assert, check};
 
 use super::{
@@ -18,6 +16,16 @@ use crate::coordinator::unified::{
 };
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
+
+fn epoch_five_member() -> crate::coordinator::unified::streams::state::StreamsMemberState {
+    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
+        "m1",
+        "client",
+        "/127.0.0.1",
+    );
+    member.member_epoch = 5;
+    member
+}
 
 #[test]
 fn persisted_group_config_overrides_actor_defaults() {
@@ -306,12 +314,7 @@ async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
     {
         let (coord, log) = make_coordinator();
         let handle = coord.get_or_create_streams("g");
-        match failure {
-            Some(error) => {
-                *log.fail_next_with.lock().expect("not poisoned") = Some(error);
-            }
-            None => log.fail_next.store(true, Ordering::SeqCst),
-        }
+        log.fail_next_append(failure);
 
         let response = heartbeat(&handle, member_request("m1", 0)).await;
 
@@ -478,7 +481,7 @@ fn image_of(
     let mut records = vec![MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
             rack: broker_rack.map(str::to_owned),
-            ..crate::test_support::broker_registration(broker.0)
+            ..crate::test_support::broker_registration(broker)
         },
     )];
     for &(name, id, partitions) in topics {
@@ -490,7 +493,9 @@ fn image_of(
         }));
         for partition in 0..partitions {
             records.push(MetadataRecord::V1Partition(partition_record(
-                name, partition, broker,
+                name,
+                krabka_ids::PartitionIndex(partition),
+                broker,
             )));
         }
     }
@@ -679,8 +684,19 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         )
         .await;
 
-        let expected =
-            super::test_support::expected_active_response("m1", row.epoch, row.status, row.active);
+        let expected = super::test_support::expected_active_response(
+            super::test_support::ActiveResponseSetup {
+                epoch: crate::coordinator::unified::test_support::MemberEpoch(row.epoch),
+                status: row.status,
+                active: row.active.map(|partitions| {
+                    partitions
+                        .into_iter()
+                        .map(krabka_ids::PartitionIndex)
+                        .collect()
+                }),
+                ..Default::default()
+            },
+        );
         check!(resp == expected, "{}", row.name);
     }
 }
@@ -857,7 +873,17 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
         ..Default::default()
     };
     let expected = |member_id: &str, epoch, active: Option<Vec<i32>>| {
-        super::test_support::expected_active_response(member_id, epoch, Some(vec![]), active)
+        super::test_support::expected_active_response(super::test_support::ActiveResponseSetup {
+            member_id,
+            epoch: crate::coordinator::unified::test_support::MemberEpoch(epoch),
+            status: Some(vec![]),
+            active: active.map(|partitions| {
+                partitions
+                    .into_iter()
+                    .map(krabka_ids::PartitionIndex)
+                    .collect()
+            }),
+        })
     };
 
     let (before, _log) = make_coordinator();
@@ -981,12 +1007,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
         let topology = Topology {
             epoch: 1,
             subtopologies: vec![
-                Subtopology {
-                    subtopology_id: "0".into(),
-                    source_topics: vec!["orders".into()],
-                    repartition_sink_topics: vec!["rp".into()],
-                    ..Default::default()
-                },
+                crate::test_support::source_to_repartition(),
                 Subtopology {
                     subtopology_id: "1".into(),
                     source_topics: vec!["customers".into()],
@@ -1231,19 +1252,26 @@ async fn the_heartbeat_status_list_follows_kafka() {
         }
 
         let expected = super::test_support::expected_active_response(
-            row.member,
-            row.epoch,
-            Some(
-                row.status
-                    .iter()
-                    .map(|(status_code, detail)| Status {
-                        status_code: *status_code,
-                        status_detail: (*detail).into(),
-                        ..Default::default()
-                    })
-                    .collect(),
-            ),
-            row.active,
+            super::test_support::ActiveResponseSetup {
+                member_id: row.member,
+                epoch: crate::coordinator::unified::test_support::MemberEpoch(row.epoch),
+                status: Some(
+                    row.status
+                        .iter()
+                        .map(|(status_code, detail)| Status {
+                            status_code: *status_code,
+                            status_detail: (*detail).into(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                ),
+                active: row.active.map(|partitions| {
+                    partitions
+                        .into_iter()
+                        .map(krabka_ids::PartitionIndex)
+                        .collect()
+                }),
+            },
         );
         check!(last == Some(expected), "{}", row.name);
     }
@@ -1799,12 +1827,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
     let offset = |api_version| CommitFence::Offset { api_version };
     let txn = CommitFence::Transactional;
     let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
-    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
-        "m1",
-        "client",
-        "/127.0.0.1",
-    );
-    member.member_epoch = 5;
+    let member = epoch_five_member();
     group.members.insert("m1".into(), member);
     let empty = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
 
@@ -1935,12 +1958,7 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
         ],
     };
     let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
-    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
-        "m1",
-        "client",
-        "/127.0.0.1",
-    );
-    member.member_epoch = 5;
+    let mut member = epoch_five_member();
     member.active = maplit::btreemap! {"0".to_string() => vec![0, 1, 3]};
     member.active_pending_revocation = maplit::btreemap! {"0".to_string() => vec![2]};
     member.active_epochs = maplit::btreemap! {

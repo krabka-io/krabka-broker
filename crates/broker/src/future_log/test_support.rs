@@ -43,11 +43,22 @@ pub(super) fn fixture_partition(
     topic: &str,
     partition: PartitionIndex,
 ) -> Arc<Partition> {
-    crate::test_support::open_partition(log_dir, topic, partition.get())
+    crate::test_support::open_partition(
+        log_dir,
+        crate::test_support::StandalonePartitionSetup {
+            topic,
+            partition: krabka_ids::PartitionIndex(partition.get()),
+            ..Default::default()
+        },
+    )
 }
 
 pub(super) fn append_records(part: &Arc<Partition>, count: i32) {
-    let mut batch = crate::test_support::repeated_records_batch(count, 1_700_000_000);
+    let mut batch =
+        crate::test_support::repeated_records_batch(crate::test_support::RepeatedRecordsSetup {
+            count: crate::test_support::RecordCount(count),
+            timestamp: crate::test_support::UnixMillis(1_700_000_000),
+        });
     part.log
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

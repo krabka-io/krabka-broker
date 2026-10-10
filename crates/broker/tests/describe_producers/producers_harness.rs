@@ -20,10 +20,7 @@ use crate::{
 
 pub(crate) async fn create_topic(client: &Client, name: &str, partitions: i32) {
     let resp = client
-        .send(create_topic_request(
-            creatable_topic(name, partitions, 1),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(name, partitions, 1)))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0, "{name} create: {resp:?}");
@@ -61,8 +58,10 @@ pub(crate) async fn init_transactional_producer(
         let init = p
             .client
             .send(crate::support::transactions::new_producer_request(
-                Some(transactional_id.into()),
-                60_000,
+                crate::support::transactions::InitProducerSetup {
+                    transactional_id: Some(transactional_id.into()),
+                    ..Default::default()
+                },
             ))
             .await
             .expect("transactional InitProducerId");
@@ -80,13 +79,10 @@ pub(crate) async fn init_transactional_producer(
 pub(crate) use crate::support::records::producer_values_batch as batch;
 
 pub(crate) fn transactional_batch(
-    pid: i64,
-    epoch: i16,
-    base_seq: i32,
-    values: &[&str],
+    setup: crate::support::records::ProducerValuesSetup<'_>,
 ) -> RecordBatch {
     RecordBatch {
         attributes: Attributes::default().with_transactional(true),
-        ..batch(pid, epoch, base_seq, values)
+        ..batch(setup)
     }
 }

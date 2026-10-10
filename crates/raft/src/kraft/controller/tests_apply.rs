@@ -9,8 +9,7 @@ use crate::kraft::controller::{
     records::{decode_batches, metadata_record_batch},
     recovery::replay_committed,
     test_support::{
-        build_engine_only, build_engine_only_with_policy, one_offset_batch, topic_record,
-        topic_record_named,
+        EngineSetup, build_engine_only, one_offset_batch, topic_record, topic_record_named,
     },
 };
 
@@ -18,12 +17,11 @@ use crate::kraft::controller::{
 fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
     let tiny = MetadataRaftFetchMax::try_from(krabka_units::bytes(1))
         .expect("one byte still makes progress");
-    let (mut engine, _dir) = build_engine_only_with_policy(
-        NodeId(1),
-        &[NodeId(1)],
-        ControllerFetchMissLimit::default(),
-        tiny,
-    );
+    let (mut engine, _dir) = build_engine_only(EngineSetup {
+        ids: &[NodeId(1)],
+        metadata_raft_fetch_max: tiny,
+        ..Default::default()
+    });
 
     let mut scratch = engine.image.clone();
     for (name, id) in [("first", 1), ("second", 2)] {
@@ -65,7 +63,10 @@ fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
 
 #[test]
 fn publish_leader_updates_leader_and_quorum_watchers() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let (mut engine, _dir) = build_engine_only(EngineSetup {
+        ids: &[NodeId(1)],
+        ..Default::default()
+    });
     let mut leader_rx = engine.leader_tx.subscribe();
     let quorum_rx = engine.quorum_tx.subscribe();
 
@@ -86,7 +87,10 @@ fn publish_leader_updates_leader_and_quorum_watchers() {
 
 #[test]
 fn metadata_fetch_slice_excludes_negative_hwm_and_uncommitted_batches() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let (mut engine, _dir) = build_engine_only(EngineSetup {
+        ids: &[NodeId(1)],
+        ..Default::default()
+    });
     let mut multi = RecordBatch {
         base_offset: 0,
         partition_leader_epoch: 1,

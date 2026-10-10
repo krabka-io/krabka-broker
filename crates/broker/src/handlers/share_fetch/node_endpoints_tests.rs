@@ -37,6 +37,7 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
+    handlers::test_support::CreateTopicSetup,
     test_support::{
         decode_response, encode_request, peer, principal, request_context,
         start_broker_no_audit_with,
@@ -66,11 +67,10 @@ async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {
         .expect("client build");
     let response = client
         .send(crate::handlers::test_support::configured_topic_request(
-            "local",
-            &[],
-            1,
-            1,
-            5_000,
+            CreateTopicSetup {
+                topic: "local",
+                ..Default::default()
+            },
         ))
         .await
         .expect("CreateTopics");
@@ -90,7 +90,14 @@ fn partition(topic: &str, partition: i32, leader: i32, epoch: i32) -> MetadataRe
     let leader = NodeId(u64::try_from(leader).expect("a node id"));
     MetadataRecord::V1Partition(PartitionRecord {
         leader_epoch: LeaderEpoch(epoch),
-        ..crate::handlers::test_support::replicated_partition(topic, partition, leader, &[leader])
+        ..crate::handlers::test_support::replicated_partition(
+            crate::handlers::test_support::ReplicatedPartitionSetup {
+                topic,
+                partition: krabka_ids::PartitionIndex(partition),
+                leader,
+                replicas: &[leader],
+            },
+        )
     })
 }
 
@@ -116,7 +123,7 @@ async fn seed_remote_leaders(broker: &BrokerHandle) {
                     port: 9192,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 }],
-                ..crate::test_support::broker_registration(2)
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: "remote".into(),

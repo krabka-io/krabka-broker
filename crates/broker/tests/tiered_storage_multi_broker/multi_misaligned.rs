@@ -25,19 +25,13 @@ use std::{
 use assert2::{assert, check};
 use krabka_broker::{BrokerHandle, NodeId, metrics::TopicLabel};
 use krabka_client_core::Client;
-use krabka_protocol::{
-    primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::{primitives::uuid::Uuid as WireUuid, records::RecordBatch};
 
 use crate::{
     multi_client::topic_id_for,
-    multi_cluster::{
-        await_all_brokers_registered, await_all_rlmm_active,
-        start_three_tiered_brokers_with_segment_sizes,
-    },
+    multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes},
     multi_workload::local_segment_bases,
-    support::{client::connect_owned, records::batch_from_records},
+    support::client::connect_owned,
 };
 
 /// The topic this suite produces into. It sets no `segment.bytes`, so each
@@ -88,15 +82,10 @@ fn remote_segments(root: &Path) -> Vec<RemoteSegment> {
 /// Produces `count` single-record batches through `client`, one request each,
 /// so both replicas see many small batches and roll on their own byte budget.
 async fn produce_records(client: &Client, topic_id: WireUuid, prefix: &str, count: usize) {
-    for index in 0..count {
-        let batch = batch_from_records(vec![Record {
-            value: Some(bytes::Bytes::from(format!("{prefix}-record-{index}"))),
-            ..Default::default()
-        }]);
-        let response =
-            crate::support::client::produce_batch(client, TOPIC, topic_id, batch, 1, 10_000).await;
-        assert!(response.error_code == 0, "Produce failed: {response:?}");
-    }
+    crate::topic_fixture::produce_records(client, TOPIC, topic_id, count, |index| {
+        bytes::Bytes::from(format!("{prefix}-record-{index}"))
+    })
+    .await;
 }
 
 /// Creates the tiered topic, deliberately without a `segment.bytes` override,
@@ -186,11 +175,7 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
         krabka_units::kibibytes(1),
     ])
     .await;
-    await_all_brokers_registered(&b1, &b2, &b3).await;
-    await_all_rlmm_active(&b1, &b2, &b3).await;
-
-    let b1_bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
-    let admin = connect_owned(&b1_bootstrap, "tiered-misaligned-admin", "admin client").await;
+    let admin = ready_admin([&b1, &b2, &b3], "tiered-misaligned-admin").await;
     create_misaligned_topic(&admin, &b1, &b2).await;
 
     // With 3 registered brokers and rf=2 the partition sits on brokers 1 and

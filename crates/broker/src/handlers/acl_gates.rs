@@ -235,6 +235,17 @@ pub(crate) fn subscribed_names_describe_denied(
     .is_empty()
 }
 
+/// Subscription denial code shared by consumer and share heartbeats.
+pub(crate) fn subscribed_names_refusal(
+    broker: &crate::broker::Broker,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+    names: Option<&[String]>,
+) -> Option<i16> {
+    subscribed_names_describe_denied(broker.config.authorizer.as_ref(), image, ctx, names)
+        .then_some(codes::TOPIC_AUTHORIZATION_FAILED)
+}
+
 /// Kafka's `filterByAuthorized(DESCRIBE, TOPIC, requiredTopics)` as the
 /// streams-group handlers read it: `true` when any of `names` is
 /// `Describe`-denied for `ctx`'s principal.
@@ -412,12 +423,10 @@ mod tests {
         );
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crate::test_support::allow_acl(
-                ResourceType::Topic,
-                "orders",
-                "User:alice",
-                AclOperation::Write,
-            ),
+            crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+                operation: AclOperation::Write,
+                ..Default::default()
+            }),
         ));
         let authorizer = crate::authorizer::SimpleAclAuthorizer::new(HashSet::new());
 

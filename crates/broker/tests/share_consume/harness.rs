@@ -27,3 +27,33 @@ crate::share_consumption_fixture!(
     join,
     |broker, client, member, epoch, tid| wait_for_share_init(broker, client, &member, epoch, tid)
 );
+
+/// Owners and initialized membership for a fresh g1/t consume session.
+pub struct ConsumptionFixture {
+    pub _permit: tokio::sync::OwnedSemaphorePermit,
+    pub broker: krabka_broker::BrokerHandle,
+    pub client: std::sync::Arc<krabka_client_core::Client>,
+    pub _dir: tempfile::TempDir,
+    pub tid: uuid::Uuid,
+    pub member: String,
+}
+
+impl ConsumptionFixture {
+    pub fn session(&self) -> crate::support::share::ShareSessionSetup<'_> {
+        crate::support::share::ShareSessionSetup::joined(&self.member, self.tid)
+    }
+}
+
+pub async fn consumption_fixture(records: i64) -> ConsumptionFixture {
+    let (permit, broker, client, dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
+    let (member, _) = initialize_consumption(&broker, &client, tid, records).await;
+    ConsumptionFixture {
+        _permit: permit,
+        broker,
+        client,
+        _dir: dir,
+        tid,
+        member,
+    }
+}

@@ -108,7 +108,15 @@ fn batch(value: &'static [u8]) -> RecordBatch {
 /// Create `topic` with replicas 1 and 2, led by this broker, wait until node
 /// 2 is in the ISR, and append two batches.
 async fn partition(broker: &BrokerHandle, topic: &str, topic_id: u128) -> Arc<Partition> {
-    crate::handlers::test_support::seed_replicated_topic(broker, topic, topic_id, 1).await;
+    crate::handlers::test_support::seed_partition_replicas(
+        broker,
+        crate::handlers::test_support::ReplicatedTopicSetup {
+            topic,
+            topic_id: uuid::Uuid::from_u128(topic_id),
+            ..Default::default()
+        },
+    )
+    .await;
 
     wait_for_local_partition!(
         (shared, partition),

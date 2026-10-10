@@ -139,10 +139,12 @@ mod tests {
     fn image_with_topic(topic: &str, leader: u64) -> MetadataImage {
         crate::test_support::topic_partition_image(topic, 2, || {
             crate::handlers::test_support::replicated_partition(
-                topic,
-                0,
-                krabka_audit::NodeId(leader),
-                &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                crate::handlers::test_support::ReplicatedPartitionSetup {
+                    topic,
+                    leader: krabka_audit::NodeId(leader),
+                    replicas: &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                    ..Default::default()
+                },
             )
         })
     }
@@ -153,7 +155,11 @@ mod tests {
             krabka_log::LogConfig::default(),
         )
         .expect("open log");
-        crate::test_support::spawn_standalone_partition(dir, "orders", 0, log, false)
+        crate::test_support::spawn_standalone_partition(
+            dir,
+            log,
+            crate::test_support::StandalonePartitionSetup::default(),
+        )
     }
 
     /// Keep the borrowed context and its log-directory registry in each caller's scope.

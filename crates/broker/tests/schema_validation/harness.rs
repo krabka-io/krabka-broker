@@ -16,16 +16,14 @@ use krabka_protocol::{
         produce_response::PartitionProduceResponse,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{RecordBatch, RecordsPayload},
+    records::RecordBatch,
 };
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
 
-use crate::support::{
-    produce::single_partition_produce, records::value_record, topics::creatable_topic,
-};
+use crate::support::{records::value_record, topics::creatable_topic};
 
 /// Kafka error 87. KIP-467 added it for "one or more records in the batch were
 /// invalid", which is what a schema rejection is.
@@ -257,16 +255,16 @@ pub async fn produce(
     topic_id: WireUuid,
     batch: RecordBatch,
 ) -> PartitionProduceResponse {
-    let resp = client
-        .send(single_partition_produce(
-            topic,
+    let resp = crate::support::produce::send_batch(
+        &client,
+        batch,
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: (topic).into(),
             topic_id,
-            0,
-            Some(RecordsPayload::V2(vec![batch])),
-            (1, 5_000),
-        ))
-        .await
-        .expect("Produce");
+            ..Default::default()
+        },
+    )
+    .await;
     resp.responses[0].partition_responses[0].clone()
 }
 
@@ -279,9 +277,10 @@ pub fn boot_config(
     Box::pin(async move {
         crate::support::client::start_broker_client(
             config,
-            "schema-validation-test",
-            "broker start",
-            "client build",
+            crate::support::client::BrokerClientSetup {
+                client_id: "schema-validation-test",
+                ..Default::default()
+            },
         )
         .await
     })

@@ -86,19 +86,17 @@ impl Cluster {
 /// registered.
 async fn start_cluster() -> Cluster {
     const NODES: usize = 4;
-    let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
-        support::bind_and_hold_ports(NODES).await;
-    let voters = [(1u64, controller_addrs[0])];
-    let topology = support::RoleTopology::new(&client_addrs, &controller_addrs, &voters);
-    let mut data_listeners = client_listeners.into_iter();
-    let mut ctrl_listeners = controller_listeners.into_iter();
+    let (endpoints, mut data_listeners, mut ctrl_listeners) =
+        support::single_controller_endpoints(NODES).await;
+    let topology = endpoints.topology();
 
     let controller_dir = TempDir::new().unwrap();
     let ctrl_cfg = topology.config(
-        0,
         controller_dir.path(),
-        BootstrapMode::Bootstrap,
-        NodeRole::Controller,
+        crate::support::RoleNodeSetup {
+            role: NodeRole::Controller,
+            ..Default::default()
+        },
     );
     let controller = support::start_held_node(
         ctrl_cfg,
@@ -113,7 +111,14 @@ async fn start_cluster() -> Cluster {
     for index in 1..NODES {
         let primary = TempDir::new().unwrap();
         let extra = TempDir::new().unwrap();
-        let mut cfg = topology.config(index, primary.path(), BootstrapMode::Join, NodeRole::Broker);
+        let mut cfg = topology.config(
+            primary.path(),
+            crate::support::RoleNodeSetup {
+                index: crate::support::NodeIndex(index),
+                mode: BootstrapMode::Join,
+                ..Default::default()
+            },
+        );
         cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
         cfg.replica_lag_time_max = krabka_units::minutes(10);
         apply_server_properties(&mut cfg);
@@ -159,7 +164,7 @@ async fn create_topic(broker: &BrokerHandle, topic: &str) {
     )
     .await;
     let resp = client
-        .send(create_topic_request(creatable_topic(topic, 1, 3), 5_000))
+        .send(create_topic_request(creatable_topic(topic, 1, 3)))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0, "{resp:?}");
@@ -240,10 +245,12 @@ async fn produce(producer: &Producer, timestamp_ms: i64) {
         .send(ProducerRecord {
             timestamp_ms: Some(timestamp_ms),
             ..crate::support::producer::producer_record(
-                TOPIC.to_owned(),
-                Some(0),
-                None,
-                Some(Bytes::from_static(b"log-dir-failure")),
+                crate::support::producer::ProducerRecordSetup {
+                    topic: TOPIC.to_owned(),
+                    partition: Some(krabka_ids::PartitionIndex(0)),
+                    value: Some(Bytes::from_static(b"log-dir-failure")),
+                    ..Default::default()
+                },
             )
         })
         .await

@@ -48,7 +48,7 @@ use tokio::{
 };
 pub use topics::creatable_topic as topic;
 
-use crate::support::{produce, topics, wire as frames};
+use crate::support::{topics, wire as frames};
 
 /// The `ApiVersions` API key, whose response header is v0 at every version.
 const API_VERSIONS_KEY: i16 = 18;
@@ -124,13 +124,20 @@ pub async fn round_trip_with<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let frame = frames::request_frame(
-        (api_key, api_version, corr_id, flexibility.request),
+    let frame = frames::request_frame(frames::WireFrameSetup {
+        api_key: krabka_ids::ApiKey(api_key),
+        version: krabka_ids::ApiVersion(api_version),
+        correlation: crate::support::wire::CorrelationId(corr_id),
+        header: crate::support::wire::HeaderEncoding::from_wire(flexibility.request),
         client_id,
         body,
-        Some(16 + client_id.len() + body.len()),
-        Some("client_id fits in i16"),
-    );
+        capacity: Some(
+            <krabka_units::ByteSize as krabka_units::convert::ByteSizeExt>::from_bytes(
+                u64::try_from(16 + client_id.len() + body.len()).expect("frame capacity fits u64"),
+            ),
+        ),
+        length_context: Some("client_id fits in i16"),
+    });
 
     frames::write_frame(stream, &frame, Some("frame fits in u32")).await?;
 
@@ -210,7 +217,7 @@ pub async fn create_topic_as_super_user(
     name: &str,
     partitions: i32,
 ) {
-    let request = topics::create_topic_request(topic(name.to_string(), partitions, 1), 5_000);
+    let request = topics::create_topic_request(topic(name.to_string(), partitions, 1));
     let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
         request_as_plain(
             addr,
@@ -391,7 +398,7 @@ pub async fn create_topic_on(
     topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
 ) {
     let name = topic.name.clone();
-    let request = topics::create_topic_request(topic, 5_000);
+    let request = topics::create_topic_request(topic);
     let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
         exchange(stream, &request, 19, 7, 1, client_id, true)
             .await
@@ -559,41 +566,37 @@ pub fn produce_records(
         })
         .collect();
 
-    produce::single_partition_produce(
-        topic.to_string(),
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        0,
-        Some(
-            RecordBatch {
-                last_offset_delta: i32::try_from(count - 1).unwrap(),
-                records,
-                ..Default::default()
-            }
-            .into(),
-        ),
-        (1, 30_000),
+    crate::support::produce::batch_request(
+        RecordBatch {
+            last_offset_delta: i32::try_from(count - 1).unwrap(),
+            records,
+            ..Default::default()
+        },
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: topic.to_string(),
+            timeout: crate::support::produce::ProduceTimeoutMillis(30_000),
+            ..Default::default()
+        },
     )
 }
 
 /// Build an all-ISR Produce request with one record.
 pub fn single_record_produce_request(topic: &str, partition: i32, value: &[u8]) -> ProduceRequest {
-    produce::single_partition_produce(
-        topic.to_string(),
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        partition,
-        Some(
-            RecordBatch {
-                last_offset_delta: 0,
-                records: vec![Record {
-                    offset_delta: 0,
-                    value: Some(bytes::Bytes::copy_from_slice(value)),
-                    ..Default::default()
-                }],
+    crate::support::produce::batch_request(
+        RecordBatch {
+            last_offset_delta: 0,
+            records: vec![Record {
+                offset_delta: 0,
+                value: Some(bytes::Bytes::copy_from_slice(value)),
                 ..Default::default()
-            }
-            .into(),
-        ),
-        (-1, 5_000),
+            }],
+            ..Default::default()
+        },
+        crate::support::produce::SinglePartitionProduceSetup {
+            topic: topic.to_string(),
+            partition: krabka_ids::PartitionIndex(partition),
+            ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+        },
     )
 }
 

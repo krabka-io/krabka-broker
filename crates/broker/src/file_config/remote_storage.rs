@@ -413,6 +413,14 @@ storage_dir = "/var/lib/krabka/tier"
             crate::config::RlmmKind::TopicBacked(_)
         ));
     }
+    fn parsed_kafka_metadata(toml: &str) -> crate::config::KafkaRlmmConfig {
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
+        match cfg.remote_log_metadata {
+            crate::config::RlmmKind::TopicBacked(config) => config,
+            crate::config::RlmmKind::InMemory => panic!("expected TopicBacked"),
+        }
+    }
+
     #[test]
     fn kafka_metadata_section_parses_with_defaults() {
         let toml = r#"
@@ -422,11 +430,7 @@ storage_dir = "/tmp/tier"
 [remote_storage.kafka_metadata]
 bootstrap = "127.0.0.1:9092"
 "#;
-        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
-        let km = match &cfg.remote_log_metadata {
-            crate::config::RlmmKind::TopicBacked(k) => k.clone(),
-            crate::config::RlmmKind::InMemory => panic!("expected TopicBacked"),
-        };
+        let km = parsed_kafka_metadata(toml);
         check!(km.bootstrap.as_str() == "127.0.0.1:9092");
         check!(km.num_partitions == 50);
         check!(km.replication == 3);
@@ -456,11 +460,7 @@ fetch_retry_backoff = "300ms"
 event_queue_capacity = 2048
 snapshot_interval = "90s"
 "#;
-        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
-        let km = match &cfg.remote_log_metadata {
-            crate::config::RlmmKind::TopicBacked(k) => k.clone(),
-            crate::config::RlmmKind::InMemory => panic!("expected TopicBacked"),
-        };
+        let km = parsed_kafka_metadata(toml);
         check!(km.bootstrap.as_str() == "broker-0:9094");
         check!(km.num_partitions == 8);
         check!(km.replication == 1);

@@ -71,12 +71,27 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 async fn create_topic(broker: &BrokerHandle) -> WireUuid {
-    crate::handlers::test_support::create_topic(broker, "ack-order-test", TOPIC, 1).await
+    crate::handlers::test_support::create_topic(
+        broker,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "ack-order-test",
+            name: TOPIC,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Appends one batch of three records to partition 0.
 async fn produce(broker: &BrokerHandle) {
-    crate::handlers::test_support::produce_records(broker, TOPIC, 0, 3).await;
+    crate::handlers::test_support::produce_records(
+        broker,
+        crate::handlers::test_support::ProduceRecordsSetup {
+            topic: TOPIC,
+            ..Default::default()
+        },
+    )
+    .await;
 }
 
 /// Starts `group` at the earliest offset and lets [`READER`] acquire offsets
@@ -135,12 +150,17 @@ async fn share_acknowledge(
     (partition_index, batches): (i32, &[Batch]),
 ) -> ShareAcknowledgeResponse {
     let request = crate::handlers::test_support::acknowledge_batches_request(
-        group,
-        "member",
-        1,
-        topic_id,
-        (partition_index, batches),
-        false,
+        crate::handlers::test_support::AcknowledgementSetup {
+            partition: crate::handlers::test_support::AcknowledgementPartitionSetup::from_wire((
+                partition_index,
+                batches,
+            )),
+            ..crate::handlers::test_support::AcknowledgementSetup::for_topic_session(
+                group,
+                crate::handlers::test_support::ShareSessionEpoch::default(),
+                topic_id,
+            )
+        },
     );
     crate::handlers::test_support::share_acknowledge_wire_as(broker, VERSION, user, &request).await
 }

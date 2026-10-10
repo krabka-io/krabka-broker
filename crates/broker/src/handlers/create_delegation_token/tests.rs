@@ -422,12 +422,12 @@ async fn create_tokens_acl_admits_minting_for_that_owner_only() {
     let controller = test_controller(dir.path().into()).await;
     controller
         .submit_change(vec![krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crate::test_support::allow_acl(
-                krabka_metadata::ResourceType::User,
-                "User:alice",
-                "User:bob",
-                krabka_metadata::AclOperation::CreateTokens,
-            ),
+            crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+                resource_type: krabka_metadata::ResourceType::User,
+                resource_name: "User:alice",
+                principal: "User:bob",
+                operation: krabka_metadata::AclOperation::CreateTokens,
+            }),
         )])
         .await
         .expect("seed acl");

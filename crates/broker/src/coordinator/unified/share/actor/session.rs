@@ -55,16 +55,18 @@ pub(super) async fn handle_session_tick(
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     use assert2::check;
 
     use super::*;
     use crate::coordinator::unified::{
         config::NextGenConfig,
-        offsets_log::fake::InMemoryOffsetsLog,
         share::{
-            actor::{records::PendingShareRecords, test_support::metadata_with_topic},
+            actor::{
+                records::PendingShareRecords,
+                test_support::{make_coordinator_with_config, metadata_with_topic},
+            },
             persistence::ShareGroupMetadataValue,
             state::ShareMemberState,
         },
@@ -81,14 +83,11 @@ mod tests {
             session_timeout: Duration::from_millis(1),
             ..ShareGroupConfig::default()
         };
-        let log = Arc::new(InMemoryOffsetsLog::default());
-        let coord = Arc::new(GroupCoordinator::new(
+        let (coord, log) = make_coordinator_with_config(
+            metadata.clone(),
             NextGenConfig::default(),
             config.clone(),
-            metadata.clone(),
-            log.clone(),
-            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        ));
+        );
         let mut state = ShareGroupState::new("g");
         for member_id in ["m1", "m2"] {
             let mut m = ShareMemberState::joining(member_id, "c", "h", ["t".to_owned()].into());
@@ -121,12 +120,7 @@ mod tests {
             .unwrap()
             .records
         };
-        let written: Vec<_> = log
-            .batches()
-            .await
-            .into_iter()
-            .map(|batch| batch.records)
-            .collect();
+        let written: Vec<_> = log.record_batches().await;
         let mut expected = vec![fence("m1", 3, t_hash), fence("m2", 4, 0)];
         if written.first().is_some_and(|batch| batch != &expected[0]) {
             // The members expire together: either may be fenced first.
@@ -148,14 +142,11 @@ mod tests {
 
         let (metadata, topic_id) = metadata_with_topic("t", 2);
         let config = ShareGroupConfig::default();
-        let log = Arc::new(InMemoryOffsetsLog::default());
-        let coord = Arc::new(GroupCoordinator::new(
+        let (coord, log) = make_coordinator_with_config(
+            metadata.clone(),
             NextGenConfig::default(),
             config.clone(),
-            metadata.clone(),
-            log.clone(),
-            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        ));
+        );
         let gone = krabka_protocol::primitives::uuid::Uuid([9; 16]);
         let mut state = ShareGroupState::new("g");
         state.initialized.extend([(topic_id, 0), (gone, 0)]);
@@ -184,12 +175,7 @@ mod tests {
         .into_batch("g", 0)
         .unwrap()
         .records;
-        let written: Vec<_> = log
-            .batches()
-            .await
-            .into_iter()
-            .map(|batch| batch.records)
-            .collect();
+        let written: Vec<_> = log.record_batches().await;
         check!(written == vec![expected]);
     }
 }

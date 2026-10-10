@@ -232,9 +232,11 @@ async fn approve(
 async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool() {
     let (h1, h2, h3, cfg1, cfg2, cfg3, _d1, _d2, _d3) =
         Box::pin(crate::jvm_acceptance::start_registered_sasl_cluster(
-            ADMIN.0,
-            ADMIN.1,
-            &[PROPOSER, APPROVER_ONE, APPROVER_TWO],
+            crate::jvm_acceptance::SaslClusterSetup {
+                admin: ADMIN.0,
+                admin_pass: ADMIN.1,
+                extra_users: &[PROPOSER, APPROVER_ONE, APPROVER_TWO],
+            },
         ))
         .await;
 

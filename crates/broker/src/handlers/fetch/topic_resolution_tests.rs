@@ -97,7 +97,15 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::Temp
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    crate::handlers::test_support::create_topic(broker, "fetch-resolution-test", name, 1).await
+    crate::handlers::test_support::create_topic(
+        broker,
+        crate::handlers::test_support::ClientTopicSetup {
+            client_id: "fetch-resolution-test",
+            name,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Send one `Fetch` at `version` and return the response as a client decodes
@@ -162,14 +170,10 @@ async fn topic_row_error_follows_version_and_topic_reference() {
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
     let known_id = create_topic(&broker, "resolution").await;
 
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for case in cases {
-        let (got, want) = drive(&broker, Some(("resolution", known_id)), case).await;
-        actual.push(got);
-        expected.push(want);
-    }
-    assert!(actual == expected);
+    crate::handlers::test_support::check_cases(cases, async |case| {
+        drive(&broker, Some(("resolution", known_id)), case).await
+    })
+    .await;
     broker.shutdown().await;
 }
 
@@ -298,11 +302,13 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
     let topic_id = uuid::Uuid::from_u128(0x51);
     crate::handlers::test_support::seed_partition_replicas(
         &broker,
-        "moved",
-        topic_id,
-        krabka_audit::NodeId(2),
-        &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-        4,
+        crate::handlers::test_support::ReplicatedTopicSetup {
+            topic: "moved",
+            topic_id,
+            leader: krabka_audit::NodeId(2),
+            replicas: &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+            leader_epoch: krabka_ids::LeaderEpoch(4),
+        },
     )
     .await;
     tokio::time::timeout(std::time::Duration::from_secs(10), async {

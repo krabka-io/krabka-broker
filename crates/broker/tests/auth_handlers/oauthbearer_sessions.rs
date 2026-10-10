@@ -22,12 +22,9 @@ use krabka_broker::Broker;
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-        metadata_request::MetadataRequest, metadata_response::MetadataResponse,
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_authenticate_response::SaslAuthenticateResponse,
-        sasl_handshake_request::SaslHandshakeRequest,
-        sasl_handshake_response::SaslHandshakeResponse,
+        api_versions_request, api_versions_response, metadata_request, metadata_response,
+        sasl_authenticate_request, sasl_authenticate_response, sasl_handshake_request,
+        sasl_handshake_response,
     },
 };
 use krabka_security::SaslMechanism;
@@ -50,7 +47,7 @@ use crate::{
 /// reads is.
 async fn send_metadata_on_expired_session(stream: &mut TcpStream) {
     let mut md_body = BytesMut::new();
-    MetadataRequest::default()
+    metadata_request::MetadataRequest::default()
         .encode(&mut md_body, 12)
         .expect("Metadata encode must succeed");
     let _ = round_trip(stream, 3, 12, 98, true, &md_body).await;
@@ -60,7 +57,7 @@ async fn send_metadata_on_expired_session(stream: &mut TcpStream) {
 /// `session_lifetime_ms ≈ exp - now`.
 ///
 /// `session_lifetime_ms` is the KIP-368 wire field on
-/// `SaslAuthenticateResponse v1+`.
+/// `sasl_authenticate_response::SaslAuthenticateResponse v1+`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
     let (_log_dir, handle, addr) =
@@ -187,7 +184,7 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
         .expect("in-band re-auth with fresh token must succeed past token A's exp");
 
     // Issue a Metadata RPC to prove the connection survived.
-    let md_req = MetadataRequest::default();
+    let md_req = metadata_request::MetadataRequest::default();
     let mut md_body = BytesMut::new();
     md_req
         .encode(&mut md_body, 12)
@@ -196,7 +193,8 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
         .await
         .expect("Metadata RPC must succeed past original token expiry");
     let mut cur: &[u8] = &md_resp_bytes;
-    let md_resp = MetadataResponse::decode(&mut cur, 12).expect("Metadata decode must succeed");
+    let md_resp = metadata_response::MetadataResponse::decode(&mut cur, 12)
+        .expect("Metadata decode must succeed");
     assert!(
         !md_resp.brokers.is_empty(),
         "Metadata response must carry at least one broker"
@@ -208,7 +206,7 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
 /// Test #4: the broker rejects an in-band re-auth with a token whose `sub`
 /// differs from the original principal name.
 ///
-/// `SaslAuthenticateResponse` carries
+/// `sasl_authenticate_response::SaslAuthenticateResponse` carries
 /// `error_code = SASL_AUTHENTICATION_FAILED (58)`, and the connection closes.
 /// The client then reads EOF. KIP-368 forbids a change of principal across an
 /// in-band re-auth.
@@ -266,7 +264,7 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
     // In-band SaslHandshake with SCRAM-SHA-512. Kafka answers it with NONE
     // and the enabled list (the mechanism is enabled), moves to
     // REAUTH_BAD_MECHANISM, and fails the connection on the next frame.
-    let sh_req = SaslHandshakeRequest {
+    let sh_req = sasl_handshake_request::SaslHandshakeRequest {
         mechanism: "SCRAM-SHA-512".to_string(),
         ..Default::default()
     };
@@ -278,11 +276,11 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
         .await
         .expect("handshake round-trip");
     let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp =
-        SaslHandshakeResponse::decode(&mut cur, 1).expect("SaslHandshake decode must succeed");
+    let sh_resp = sasl_handshake_response::SaslHandshakeResponse::decode(&mut cur, 1)
+        .expect("SaslHandshake decode must succeed");
     assert!(
         sh_resp
-            == SaslHandshakeResponse {
+            == sasl_handshake_response::SaslHandshakeResponse {
                 error_code: 0,
                 mechanisms: vec!["OAUTHBEARER".to_string(), "SCRAM-SHA-512".to_string()],
                 ..Default::default()
@@ -328,13 +326,13 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let addr = handle.listen_addr();
 
     // Inline a full PLAIN handshake (mirrors `drive_sasl_plain_session`)
-    // so we can capture the SaslAuthenticateResponse and assert its
+    // so we can capture the sasl_authenticate_response::SaslAuthenticateResponse and assert its
     // `session_lifetime_ms` field directly.
     let mut stream = TcpStream::connect(addr).await.unwrap();
 
-    let _: ApiVersionsResponse = crate::kafka_wire::exchange(
+    let _: api_versions_response::ApiVersionsResponse = crate::kafka_wire::exchange(
         &mut stream,
-        &ApiVersionsRequest::default(),
+        &api_versions_request::ApiVersionsRequest::default(),
         18,
         0,
         1,
@@ -344,7 +342,7 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     .await
     .expect("ApiVersions round-trip");
 
-    let sh_req = SaslHandshakeRequest {
+    let sh_req = sasl_handshake_request::SaslHandshakeRequest {
         mechanism: "PLAIN".to_string(),
         ..Default::default()
     };
@@ -354,10 +352,10 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
         .await
         .expect("SaslHandshake round-trip");
     let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1).unwrap();
+    let sh_resp = sasl_handshake_response::SaslHandshakeResponse::decode(&mut cur, 1).unwrap();
     assert!(sh_resp.error_code == 0, "PLAIN handshake must succeed");
 
-    let auth_req = SaslAuthenticateRequest {
+    let auth_req = sasl_authenticate_request::SaslAuthenticateRequest {
         auth_bytes: crate::kafka_wire::plain_payload("alice", alice_password().as_bytes()),
         ..Default::default()
     };
@@ -367,7 +365,8 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
         .await
         .expect("SaslAuthenticate round-trip");
     let mut cur: &[u8] = &auth_resp_bytes;
-    let auth_resp = SaslAuthenticateResponse::decode(&mut cur, 2).unwrap();
+    let auth_resp =
+        sasl_authenticate_response::SaslAuthenticateResponse::decode(&mut cur, 2).unwrap();
     assert!(auth_resp.error_code == 0, "PLAIN authenticate must succeed");
     assert!(
         auth_resp.session_lifetime_ms == 0,
@@ -381,14 +380,14 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     tokio::time::advance(std::time::Duration::from_hours(1)).await;
     tokio::time::resume();
 
-    let md_req = MetadataRequest::default();
+    let md_req = metadata_request::MetadataRequest::default();
     let mut md_body = BytesMut::new();
     md_req.encode(&mut md_body, 12).unwrap();
     let md_resp_bytes = round_trip(&mut stream, 3, 12, 5, true, &md_body)
         .await
         .expect("Metadata RPC must succeed an hour after PLAIN auth");
     let mut cur: &[u8] = &md_resp_bytes;
-    let md_resp = MetadataResponse::decode(&mut cur, 12).unwrap();
+    let md_resp = metadata_response::MetadataResponse::decode(&mut cur, 12).unwrap();
     assert!(
         !md_resp.brokers.is_empty(),
         "Metadata response must carry at least one broker"

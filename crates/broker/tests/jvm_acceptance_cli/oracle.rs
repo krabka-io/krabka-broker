@@ -78,8 +78,18 @@ pub(crate) struct CliRun {
     pub(crate) stderr: String,
 }
 
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+struct CliRunSetup<'a> {
+    #[default("krabka")]
+    side: &'a str,
+    #[default("kafka-topics")]
+    tool: &'a str,
+    args: &'a [&'a str],
+}
+
 impl CliRun {
-    fn new(side: &str, tool: &str, args: &[&str], out: &Output) -> Self {
+    fn new(out: &Output, setup: CliRunSetup<'_>) -> Self {
+        let CliRunSetup { side, tool, args } = setup;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         eprintln!(
@@ -294,7 +304,7 @@ fn run_against_host(
     let mut command = support::docker_tool_command(ORACLE_IMAGE, &options);
     command.arg(format!("{BIN}/{tool}.sh")).args(args);
     let out = feed(command, stdin);
-    CliRun::new(side, tool, args, &out)
+    CliRun::new(&out, CliRunSetup { side, tool, args })
 }
 
 /// Write `contents` to a tempfile the non-root container user can read.
@@ -418,7 +428,14 @@ impl Oracle {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let out = feed(command, stdin);
-        CliRun::new("apache/kafka:4.3.1", tool, args, &out)
+        CliRun::new(
+            &out,
+            CliRunSetup {
+                side: "apache/kafka:4.3.1",
+                tool,
+                args,
+            },
+        )
     }
 
     /// Write `contents` to `path` inside the container, world-readable.

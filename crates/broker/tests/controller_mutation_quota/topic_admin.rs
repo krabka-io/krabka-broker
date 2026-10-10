@@ -17,10 +17,7 @@ use krabka_protocol::{
     },
 };
 
-use crate::{
-    CLIENT_ID, kafka_wire,
-    support::topics::{creatable_topic, create_topic_request},
-};
+use crate::{CLIENT_ID, kafka_wire, support::topics::creatable_topic};
 
 /// Drive `CreateTopics` (`api_key=19`) over a SASL/PLAIN connection.
 /// Returns `(throttle_time_ms, per-topic error_code)` from the first result.
@@ -33,7 +30,12 @@ pub(crate) async fn drive_create_topics_sasl(
 ) -> (i32, i16) {
     const VERSION: i16 = 7; // MAX_VERSION; flexible (>= 5)
 
-    let req = create_topic_request(creatable_topic(topic.to_string(), partitions, 1), 30_000);
+    let req = crate::support::topics::create_topic_request_with_setup(
+        creatable_topic(topic.to_string(), partitions, 1),
+        crate::support::topics::CreateTopicRequestSetup {
+            timeout: crate::support::topics::CreateTopicsTimeoutMillis(30_000),
+        },
+    );
 
     let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await

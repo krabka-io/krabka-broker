@@ -17,6 +17,17 @@ use super::{
 };
 use crate::test_support::string_pairs;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct MemberEpoch(pub i32);
+
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct MemberEpochs {
+    #[default(MemberEpoch(6))]
+    pub current: MemberEpoch,
+    #[default(MemberEpoch(5))]
+    pub previous: MemberEpoch,
+}
+
 /// An active-only stable streams seed, with no standby, warmup or revocations.
 pub(crate) fn stable_streams_assignment(
     epochs: (i32, i32),
@@ -380,4 +391,179 @@ pub(crate) async fn assert_next_tombstone_batch(
         leave_batch.records.iter().any(|r| r.value.is_none()),
         "leave batch must contain at least one tombstone"
     );
+}
+
+/// Replayed assignment timestamps outside, inside and beyond the assignment interval.
+pub(crate) const ASSIGNMENT_INTERVAL_CASES: [(&str, Option<i64>, (i32, bool)); 3] = [
+    ("no stored time", None, (3, true)),
+    ("an assignment a second ago", Some(1_000), (2, false)),
+    ("an assignment two minutes ago", Some(120_000), (3, true)),
+];
+
+type AssignmentAnswer = (&'static str, i32, bool);
+
+/// Compare each assignment epoch and its timestamp window with an independent expected row.
+#[derive(Default)]
+pub(crate) struct AssignmentIntervalResults {
+    observed: Vec<AssignmentAnswer>,
+    expected: Vec<AssignmentAnswer>,
+}
+
+impl AssignmentIntervalResults {
+    pub(crate) fn record(
+        &mut self,
+        case: &'static str,
+        epoch: i32,
+        window: (i64, i64),
+        written: i64,
+        expected: (i32, bool),
+    ) {
+        self.observed
+            .push((case, epoch, (window.0..=window.1).contains(&written)));
+        self.expected.push((case, expected.0, expected.1));
+    }
+
+    pub(crate) fn check(&self) {
+        assert2::check!(self.observed == self.expected);
+    }
+}
+
+/// The recovered seed, absence, or failure reported by a replay case.
+pub(crate) type ReplayOutcome<S> = Result<Option<S>, String>;
+
+/// The explicit mutations a case applies to its expected seed.
+pub(crate) type SeedUpdate<'a, S> = &'a dyn Fn(&mut S);
+
+/// Expected successful replay, built only from the fixture's explicitly supplied changes.
+pub(crate) fn expected_seed<S>(
+    seed: impl Fn() -> S,
+) -> impl Fn(SeedUpdate<'_, S>) -> ReplayOutcome<S> {
+    move |update| Ok(Some(updated_seed(seed(), update)))
+}
+
+/// Kafka removes current and target assignments before member metadata.
+pub(crate) fn assignment_tombstones<R>(
+    mut tombstone: impl FnMut(&str, &str) -> R,
+    member: &str,
+    suffix: &[&str],
+) -> Vec<R> {
+    let mut records: Vec<R> = [
+        ("current", member),
+        ("target", member),
+        ("target-epoch", ""),
+        ("member", member),
+    ]
+    .into_iter()
+    .map(|(kind, id)| tombstone(kind, id))
+    .collect();
+    records.extend(suffix.iter().map(|kind| tombstone(kind, "")));
+    records
+}
+
+/// Build the expected seed after applying a case's changes.
+pub(crate) fn updated_seed<S>(mut seed: S, update: &dyn Fn(&mut S)) -> S {
+    update(&mut seed);
+    seed
+}
+
+/// Replay a complete case, observing the seed only after successful replay.
+pub(crate) fn replay_outcome<R, S>(
+    records: &[R],
+    replay: impl FnMut(&R) -> Result<(), crate::error::BrokerError>,
+    seed: impl FnOnce() -> Option<S>,
+) -> Result<Option<S>, String> {
+    records
+        .iter()
+        .try_for_each(replay)
+        .map(|()| seed())
+        .map_err(|error| match error {
+            crate::error::BrokerError::Startup(message) => message,
+            other => other.to_string(),
+        })
+}
+
+/// Independently supplied records and expected replay results for one protocol.
+pub(crate) type ReplayCase<'a, R, S> = (&'a str, Vec<R>, ReplayOutcome<S>);
+
+/// The independent absence expectations shared by every modern protocol's deletion replay.
+pub(crate) fn deletion_replay_cases<R: Clone, S>(
+    mut full_group: Vec<R>,
+    deletion: Vec<R>,
+) -> [ReplayCase<'static, R, S>; 2] {
+    full_group.extend(deletion.iter().cloned());
+    [
+        (
+            "Kafka's deletion order removes the whole group",
+            full_group,
+            Ok(None),
+        ),
+        (
+            "tombstones of a group the log does not hold are ignored",
+            deletion,
+            Ok(None),
+        ),
+    ]
+}
+
+/// Each protocol checks both its replay result and the cache populated by replay.
+pub(crate) fn check_replay_cases<R, S: PartialEq + std::fmt::Debug>(
+    rows: &[ReplayCase<'_, R, S>],
+    replay: impl Fn(&GroupCoordinator, &R) -> Result<(), crate::error::BrokerError>,
+    seed: impl Fn(&GroupCoordinator) -> Option<S>,
+    cached: impl Fn(&GroupCoordinator) -> Option<S>,
+) {
+    for (case, log, expected) in rows {
+        let coordinator = make_coord();
+        let outcome = replay_outcome(
+            log,
+            |record| replay(&coordinator, record),
+            || seed(&coordinator),
+        );
+        assert2::check!(&outcome == expected, "{case}");
+        if let Ok(seed) = outcome {
+            assert2::check!(cached(&coordinator) == seed, "{case}");
+        }
+    }
+}
+
+/// Streams member without instance/rack/endpoint/tags, for persisted seeds.
+pub(crate) fn plain_streams_member(
+    topology_epoch: i32,
+) -> streams::persistence::StreamsGroupMemberMetadataValue {
+    streams::persistence::StreamsGroupMemberMetadataValue {
+        instance_id: None,
+        rack_id: None,
+        client_id: "c1".into(),
+        client_host: "/127.0.0.1".into(),
+        process_id: "p1".into(),
+        user_endpoint: None,
+        client_tags: vec![],
+        rebalance_timeout_ms: 60_000,
+        topology_epoch,
+    }
+}
+
+/// First consumer heartbeat, with an empty owned assignment and the standard rebalance timeout.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct ConsumerJoinSetup<'a> {
+    #[default("g")]
+    pub group_id: &'a str,
+    #[default("m1")]
+    pub member_id: &'a str,
+    #[default(&["t"])]
+    pub topics: &'a [&'a str],
+}
+
+pub(crate) fn consumer_join_request(
+    setup: ConsumerJoinSetup<'_>,
+) -> krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest {
+    krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest {
+        group_id: setup.group_id.into(),
+        member_id: setup.member_id.into(),
+        member_epoch: 0,
+        subscribed_topic_names: Some(setup.topics.iter().map(|topic| (*topic).into()).collect()),
+        rebalance_timeout_ms: 60_000,
+        topic_partitions: Some(vec![]),
+        ..Default::default()
+    }
 }

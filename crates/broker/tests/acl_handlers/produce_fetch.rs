@@ -18,7 +18,6 @@ use crate::{
     acl_admin::create_topic_as_admin,
     client_api::{drive_fetch_as_plain, drive_produce_as_plain, single_record_produce_request},
     polling::retry_produce_until_allowed,
-    support::fetch::{fetch_partition, single_partition_fetch},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -33,14 +32,7 @@ async fn produce_denied_without_topic_acl() {
     // is already set so `authorize()`'s compat shim is off, but populating
     // at least one ACL makes the test read closer to a "real" cluster
     // post-bootstrap.
-    handle
-        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
-            "_nothing",
-            "User:admin",
-            krabka_metadata::AclOperation::Read,
-        ))
-        .await
-        .expect("seed dummy ACL");
+    seed_dummy_acl(&handle).await;
 
     // alice has NO Write-on-foo binding → Produce must return 29.
     let resp = drive_produce_as_plain(
@@ -62,23 +54,9 @@ async fn produce_denied_without_topic_acl() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn produce_allowed_with_topic_write_acl() {
-    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
-    let addr = handle.listen_addr();
-
-    create_topic_as_admin(addr, "foo", 1).await;
-
-    // Provision Allow Write Topic LITERAL "foo" User:alice host=* via a
-    // direct controller write. (CreateAcls as admin would also work,
-    // but `submit_metadata_record_for_test` is one fewer round-trip and
-    // exercises the same authorizer state.)
-    handle
-        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
-            "foo",
-            "User:alice",
-            krabka_metadata::AclOperation::Write,
-        ))
-        .await
-        .expect("seed Write-on-foo ACL for alice");
+    // Commit the literal Allow Write grant through the controller.
+    let (handle, _dir, addr) =
+        crate::sasl_cluster::start_alice_topic_grant(krabka_metadata::AclOperation::Write).await;
 
     // The ACL submit above is committed via the controller's raft path
     // then applied into the in-memory `MetadataImage` asynchronously, so
@@ -114,22 +92,15 @@ async fn fetch_denied_without_topic_read_acl() {
 
     // Seed a dummy ACL via direct controller write. Same rationale as in
     // produce_denied_without_topic_acl.
-    handle
-        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
-            "_nothing",
-            "User:admin",
-            krabka_metadata::AclOperation::Read,
-        ))
-        .await
-        .expect("seed dummy ACL");
+    seed_dummy_acl(&handle).await;
 
     // alice has NO Read-on-foo binding → Fetch must return 29 on the
     // partition row.
-    let req = single_partition_fetch(
-        "foo".to_string(),
-        krabka_protocol::primitives::uuid::Uuid::default(),
-        fetch_partition(0, 0, 1_048_576),
-        (0, 1, 1_048_576),
+    let req = crate::support::fetch::named_topic_fetch(
+        "foo",
+        crate::support::fetch::FetchLimits::one_mebibyte(crate::support::fetch::RequestWaitMillis(
+            0,
+        )),
     );
     let resp = drive_fetch_as_plain(addr, "alice", b"wonderland", req)
         .await
@@ -146,4 +117,16 @@ async fn fetch_denied_without_topic_read_acl() {
         p.error_code == ERR_TOPIC_AUTHORIZATION_FAILED,
         "alice has no Read ACL on foo, expected TOPIC_AUTHORIZATION_FAILED (29), got {p:?}"
     );
+}
+
+/// Keep the authorizer populated while leaving alice without a topic grant.
+async fn seed_dummy_acl(handle: &krabka_broker::BrokerHandle) {
+    handle
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "_nothing",
+            "User:admin",
+            krabka_metadata::AclOperation::Read,
+        ))
+        .await
+        .expect("seed dummy ACL");
 }

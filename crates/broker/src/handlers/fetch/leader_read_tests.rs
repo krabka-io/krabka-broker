@@ -96,7 +96,16 @@ async fn partition(
     topic_id: u128,
     leader: u64,
 ) -> Arc<Partition> {
-    crate::handlers::test_support::seed_replicated_topic(broker, topic, topic_id, leader).await;
+    crate::handlers::test_support::seed_partition_replicas(
+        broker,
+        crate::handlers::test_support::ReplicatedTopicSetup {
+            topic,
+            topic_id: uuid::Uuid::from_u128(topic_id),
+            leader: krabka_metadata::NodeId(leader),
+            ..Default::default()
+        },
+    )
+    .await;
 
     wait_for_local_partition!(
         (shared, partition),
@@ -142,11 +151,8 @@ fn request(version: i16, sender: Sender, topic: &str) -> FetchRequest {
         topics: vec![FetchTopic {
             topic: topic.to_owned(),
             partitions: vec![FetchPartition {
-                partition: 0,
                 current_leader_epoch,
-                fetch_offset,
-                partition_max_bytes: 1_048_576,
-                ..Default::default()
+                ..super::test_support::request_partition(fetch_offset)
             }],
             ..Default::default()
         }],

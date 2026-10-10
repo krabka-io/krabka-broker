@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn helpers_preserve_matching_acl_and_submit_error_fields() {
-        let matched = matching_acl_result(&acl("orders", "User:alice", AclOperation::Read));
+        let matched = matching_acl_result(&acl(crate::test_support::AllowAclSetup::default()));
         let expected_matched = tagged_wire!(DeleteAclsMatchingAcl {
             error_code: codes::NONE,
             error_message: None,
@@ -97,7 +97,12 @@ mod tests {
         });
         assert!(matched == expected_matched);
 
-        let mut prefixed_acl = acl("orders-", "User:bob", AclOperation::Write);
+        let mut prefixed_acl = acl(crate::test_support::AllowAclSetup {
+            resource_name: "orders-",
+            principal: "User:bob",
+            operation: AclOperation::Write,
+            ..Default::default()
+        });
         prefixed_acl.pattern_type = PatternType::Prefixed;
         let matched = matching_acl_result(&prefixed_acl);
         assert!(matched.pattern_type == PATTERN_TYPE_PREFIXED);

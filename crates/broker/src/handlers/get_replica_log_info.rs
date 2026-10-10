@@ -179,7 +179,7 @@ mod tests {
                     partition_epoch: 1,
                     ..crate::handlers::test_support::single_replica_partition(
                         "orders",
-                        0,
+                        krabka_ids::PartitionIndex(0),
                         NodeId(1),
                     )
                 }),
@@ -191,8 +191,11 @@ mod tests {
         let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
-        let part =
-            crate::test_support::spawn_standalone_partition(dir.path(), "orders", 0, log, false);
+        let part = crate::test_support::spawn_standalone_partition(
+            dir.path(),
+            log,
+            crate::test_support::StandalonePartitionSetup::default(),
+        );
         part.current_leader_epoch.store(11, Ordering::Release);
         broker
             .partitions

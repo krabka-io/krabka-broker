@@ -232,13 +232,15 @@ mod tests {
         let mut state = GroupState::new("g");
         for member_id in ["m1", "m2"] {
             let mut m = subscribed_member(
-                member_id,
-                &["t"],
-                crate::coordinator::unified::ClientIdentity {
-                    id: "client-a",
-                    host: "h",
+                crate::coordinator::unified::actor::test_support::ConsumerMemberSetup {
+                    member_id,
+                    client: crate::coordinator::unified::ClientIdentity {
+                        id: "client-a",
+                        host: "h",
+                    },
+                    now: Instant::now(),
+                    ..Default::default()
                 },
-                Instant::now(),
             );
             m.last_seen = Instant::now()
                 .checked_sub(Duration::from_millis(50))
@@ -280,12 +282,7 @@ mod tests {
             .unwrap()
             .records
         };
-        let written: Vec<_> = log
-            .batches()
-            .await
-            .into_iter()
-            .map(|batch| batch.records)
-            .collect();
+        let written: Vec<_> = log.record_batches().await;
         let mut expected = vec![fence("m1", 3), fence("m2", 4)];
         if written.first().is_some_and(|batch| batch != &expected[0]) {
             // The members expire together: either may be fenced first.

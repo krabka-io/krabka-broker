@@ -54,11 +54,7 @@ async fn reopening_rebuilds_only_the_snapshot_seed_and_uncovered_tail() {
         }
         drop(log);
         let reopened = Log::open(dir.path(), config).unwrap();
-        let state = ProducerState::new();
-        state
-            .rebuild_from_log("t", PartitionIndex(0), &reopened)
-            .await
-            .unwrap();
+        let state = rebuilt(&reopened).await;
         // The older covered batch still exists, but the snapshot stores only
         // the last batch and replay begins after both covered batches.
         let covered = check(&state, (42, 7), (0, 0)).await;
@@ -124,21 +120,37 @@ async fn a_surviving_snapshot_preserves_a_retry_below_the_local_floor() {
     let reopened = Log::open(dir.path(), config).unwrap();
     assert!(reopened.log_start_offset() == Offset(2));
     assert!(reopened.local_log_start_offset() == Offset(2));
+    let state = rebuilt(&reopened).await;
+    let checked = check(&state, (42, 7), (0, 1)).await;
+    check_duplicate(&checked, (0, 1), (0, 1));
+}
+
+/// Rebuild partition t-0's producer state from the current log.
+pub(super) async fn rebuilt(log: &Log) -> ProducerState {
     let state = ProducerState::new();
     state
-        .rebuild_from_log("t", PartitionIndex(0), &reopened)
+        .rebuild_from_log("t", PartitionIndex(0), log)
         .await
         .unwrap();
-    let checked = check(&state, (42, 7), (0, 1)).await;
-    assert!(checked.decision == Decision::Duplicate { base_offset: 0 });
+    state
+}
+
+/// Assert the complete retained-batch witness for a duplicate retry.
+pub(super) fn check_duplicate(checked: &Checked, sequence: (i32, i32), offsets: (i64, i64)) {
+    assert!(
+        checked.decision
+            == Decision::Duplicate {
+                base_offset: offsets.0
+            }
+    );
     assert!(
         checked.duplicate
             == Some(RetainedBatch {
-                base_sequence: 0,
-                last_sequence: 1,
-                base_offset: 0,
-                last_offset: 1,
-                timestamp: 0
+                base_sequence: sequence.0,
+                last_sequence: sequence.1,
+                base_offset: offsets.0,
+                last_offset: offsets.1,
+                timestamp: 0,
             })
     );
 }

@@ -20,3 +20,16 @@ fn apply(file: FileConfig) -> Result<BrokerConfig, FileConfigError> {
     file.apply_to(&mut config)?;
     Ok(config)
 }
+
+/// Expose one applied feature while preserving the original `InvalidConfig` message.
+pub(super) fn configured_feature<T>(
+    source: &str,
+    feature: impl FnOnce(&BrokerConfig) -> T,
+) -> Result<T, String> {
+    configured_unwrap_parse(source)
+        .map(|config| feature(&config))
+        .map_err(|error| match error {
+            FileConfigError::InvalidConfig(message) => message,
+            other => other.to_string(),
+        })
+}

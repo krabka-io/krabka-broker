@@ -377,14 +377,9 @@ mod tests {
         assert!(assigned.base_offset == 0);
         assert!(leo == 2);
 
-        let read = log
-            .lock()
-            .unwrap()
-            .read(Offset(0), krabka_units::mebibytes(10))
-            .unwrap();
-        assert!(read.batches.len() == 1);
-        check!(read.batches[0].attributes.compression() == CompressionType::Lz4);
-        check!(read.batches[0].records.len() == 2);
+        let batch = one_appended_batch(&log);
+        check!(batch.attributes.compression() == CompressionType::Lz4);
+        check!(batch.records.len() == 2);
     }
 
     /// A control batch that arrives uncompressed stays uncompressed, whatever
@@ -411,6 +406,28 @@ mod tests {
         marker
     }
 
+    fn one_appended_batch(log: &Mutex<Log>) -> krabka_protocol::records::RecordBatch {
+        let read = log
+            .lock()
+            .unwrap()
+            .read(Offset(0), krabka_units::mebibytes(10))
+            .unwrap();
+        assert!(read.batches.len() == 1);
+        read.batches.into_iter().next().unwrap()
+    }
+
+    fn check_control_append(
+        log: &Mutex<Log>,
+        control_entries: &[krabka_log::ProducerSnapshotEntry],
+    ) {
+        assert!(control_entries.len() == 1);
+        check!(control_entries[0].producer_id == krabka_log::ProducerId(7));
+        check!(control_entries[0].producer_epoch == 3);
+        let batch = one_appended_batch(log);
+        check!(batch.attributes.compression() == CompressionType::None);
+        check!(batch.attributes.is_control_batch());
+    }
+
     #[test]
     fn append_control_batch_keeps_its_own_compression() {
         let dir = tempdir().expect("tempdir");
@@ -431,18 +448,7 @@ mod tests {
         // second one: this is what keeps a produce-path mirror from ever
         // blocking a worker thread behind a concurrent blocking-pool log
         // operation.
-        assert!(control_entries.len() == 1);
-        check!(control_entries[0].producer_id == krabka_log::ProducerId(7));
-        check!(control_entries[0].producer_epoch == 3);
-
-        let read = log
-            .lock()
-            .unwrap()
-            .read(Offset(0), krabka_units::mebibytes(10))
-            .unwrap();
-        assert!(read.batches.len() == 1);
-        check!(read.batches[0].attributes.compression() == CompressionType::None);
-        check!(read.batches[0].attributes.is_control_batch());
+        check_control_append(&log, &control_entries);
     }
 
     /// A group that carries a transaction marker first releases every
@@ -527,16 +533,6 @@ mod tests {
                 .base_offset
                 == 0
         );
-        assert!(control_entries.len() == 1);
-        check!(control_entries[0].producer_id == krabka_log::ProducerId(7));
-        check!(control_entries[0].producer_epoch == 3);
-
-        let read = log
-            .lock()
-            .unwrap()
-            .read(Offset(0), krabka_units::mebibytes(10))
-            .unwrap();
-        check!(read.batches[0].attributes.compression() == CompressionType::None);
-        check!(read.batches[0].attributes.is_control_batch());
+        check_control_append(&log, &control_entries);
     }
 }

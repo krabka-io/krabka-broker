@@ -1281,7 +1281,15 @@ mod tests {
                 }],
             });
 
-        let part = crate::handlers::test_support::partition(&broker, dir.path(), "cold", true);
+        let part = crate::handlers::test_support::partition(
+            &broker,
+            dir.path(),
+            crate::test_support::StandalonePartitionSetup {
+                topic: "cold",
+                storage: crate::test_support::StorageMode::Diskless,
+                ..Default::default()
+            },
+        );
         let mut pending = super::PendingRead {
             topic_name: "cold".into(),
             topic_id: WireUuid(topic_id.into_bytes()),

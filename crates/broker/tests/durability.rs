@@ -29,7 +29,7 @@ use tempfile::TempDir;
 
 use crate::support::{
     client::connect_client,
-    fetch::{fetch_partition, single_partition_fetch},
+    fetch::single_partition_fetch,
     topics::{creatable_topic, create_topic_request},
 };
 
@@ -65,10 +65,12 @@ async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
 
     let base = produce_batch(
         &bootstrap,
-        "trunc",
         idempotent_batch(42, 0, &["a", "b", "c"]),
-        -1,
-        5_000,
+        crate::support::client::BatchProduceSetup {
+            topic: "trunc",
+            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+            ..Default::default()
+        },
     )
     .await
     .expect("first idempotent produce succeeds");
@@ -85,10 +87,13 @@ async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
     // stall) fail as Err(REQUEST_TIMED_OUT) rather than hang.
     let retry = produce_batch(
         &bootstrap,
-        "trunc",
         idempotent_batch(42, 0, &["a", "b", "c"]),
-        -1,
-        3_000,
+        crate::support::client::BatchProduceSetup {
+            topic: "trunc",
+            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+            timeout: crate::support::produce::ProduceTimeoutMillis(3_000),
+            ..Default::default()
+        },
     )
     .await;
     assert!(
@@ -107,15 +112,14 @@ async fn disk_backed_restart_recovers_idempotent_producer_state() {
         .unwrap();
     let bootstrap = broker.listen_addr().to_string();
     create_topic(&broker, &bootstrap, "restart-dedup", 1).await;
-    let first = produce_batch(
-        &bootstrap,
-        "restart-dedup",
-        idempotent_batch(42, 0, &["a"]),
-        -1,
-        5_000,
-    )
-    .await
-    .expect("initial idempotent produce");
+    let produce_setup = crate::support::client::BatchProduceSetup {
+        topic: "restart-dedup",
+        acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+        ..Default::default()
+    };
+    let first = produce_batch(&bootstrap, idempotent_batch(42, 0, &["a"]), produce_setup)
+        .await
+        .expect("initial idempotent produce");
     assert!(first == 0);
     broker.shutdown().await;
 
@@ -131,26 +135,14 @@ async fn disk_backed_restart_recovers_idempotent_producer_state() {
         )
         .await;
 
-    let duplicate = produce_batch(
-        &bootstrap,
-        "restart-dedup",
-        idempotent_batch(42, 0, &["a"]),
-        -1,
-        5_000,
-    )
-    .await
-    .expect("idempotent retry after restart");
+    let duplicate = produce_batch(&bootstrap, idempotent_batch(42, 0, &["a"]), produce_setup)
+        .await
+        .expect("idempotent retry after restart");
     assert!(duplicate == 0, "retry must resolve to the original offset");
 
-    let next = produce_batch(
-        &bootstrap,
-        "restart-dedup",
-        idempotent_batch(42, 1, &["b"]),
-        -1,
-        5_000,
-    )
-    .await
-    .expect("next sequence after restart");
+    let next = produce_batch(&bootstrap, idempotent_batch(42, 1, &["b"]), produce_setup)
+        .await
+        .expect("next sequence after restart");
     assert!(next == 1);
     broker.shutdown().await;
 }
@@ -160,9 +152,16 @@ async fn acks_one_returns_quickly_on_rf1_broker() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "ack1", 1).await;
     let start = Instant::now();
-    let offset = produce_acks(&bootstrap, "ack1", &["a", "b", "c"], 1, 5_000)
-        .await
-        .expect("ack=1 success");
+    let offset = produce_acks(
+        &bootstrap,
+        &["a", "b", "c"],
+        crate::support::client::BatchProduceSetup {
+            topic: "ack1",
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("ack=1 success");
     let elapsed = start.elapsed();
     assert!(offset == 0);
     assert!(
@@ -177,9 +176,17 @@ async fn acks_all_returns_quickly_on_rf1_broker() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "ackall", 1).await;
     let start = Instant::now();
-    let offset = produce_acks(&bootstrap, "ackall", &["a", "b", "c"], -1, 5_000)
-        .await
-        .expect("ack=-1 success");
+    let offset = produce_acks(
+        &bootstrap,
+        &["a", "b", "c"],
+        crate::support::client::BatchProduceSetup {
+            topic: "ackall",
+            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("ack=-1 success");
     let elapsed = start.elapsed();
     assert!(offset == 0);
     assert!(
@@ -194,9 +201,16 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "clamp", 1).await;
 
-    let offset = produce_acks(&bootstrap, "clamp", &["x", "y", "z"], 1, 5_000)
-        .await
-        .expect("produce ok");
+    let offset = produce_acks(
+        &bootstrap,
+        &["x", "y", "z"],
+        crate::support::client::BatchProduceSetup {
+            topic: "clamp",
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("produce ok");
     assert!(offset == 0);
     // The writer sends the acks=1 response after the local append and then
     // advances the rf=1 high watermark asynchronously. Wait on the actual HW
@@ -209,12 +223,11 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
     let resp = client
         .send(FetchRequest {
             replica_id: -1,
-            ..single_partition_fetch(
-                "clamp",
+            ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+                topic: "clamp".into(),
                 topic_id,
-                fetch_partition(0, 0, 1 << 20),
-                (500, 1, 1 << 20),
-            )
+                ..Default::default()
+            })
         })
         .await
         .expect("Fetch");
@@ -244,10 +257,11 @@ async fn read_committed_under_rf1_unchanged() {
         drop(
             producer
                 .enqueue(crate::support::producer::producer_record(
-                    "rctxn",
-                    None,
-                    None,
-                    Some(Bytes::from(v.to_string())),
+                    crate::support::producer::ProducerRecordSetup {
+                        topic: ("rctxn").into(),
+                        value: Some(Bytes::from(v.to_string())),
+                        ..Default::default()
+                    },
                 ))
                 .await
                 .expect("record is queued"),
@@ -298,9 +312,18 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
     dead.0.shutdown().await;
 
     let start = Instant::now();
-    let offset = produce_acks(&bootstrap_1, "shrink", &["x", "y", "z"], -1, 10_000)
-        .await
-        .expect("acks=-1 success after shrink");
+    let offset = produce_acks(
+        &bootstrap_1,
+        &["x", "y", "z"],
+        crate::support::client::BatchProduceSetup {
+            topic: "shrink",
+            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+            timeout: crate::support::produce::ProduceTimeoutMillis(10_000),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("acks=-1 success after shrink");
     let elapsed = start.elapsed();
     check!(offset == 0);
     check!(
@@ -334,9 +357,18 @@ async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
     let dead = cluster.pop().expect("3rd broker");
     dead.0.shutdown().await;
 
-    let offset = produce_acks(&bootstrap_1, "phase-stall", &["x", "y", "z"], -1, 10_000)
-        .await
-        .expect("acks=-1 success after shrink");
+    let offset = produce_acks(
+        &bootstrap_1,
+        &["x", "y", "z"],
+        crate::support::client::BatchProduceSetup {
+            topic: "phase-stall",
+            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+            timeout: crate::support::produce::ProduceTimeoutMillis(10_000),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("acks=-1 success after shrink");
     check!(offset == 0);
 
     // The produce went to the first broker, so its registry is the one that
@@ -391,10 +423,7 @@ async fn create_topic_with_partitions(
 ) {
     let client = connect_client(bootstrap.to_string(), None).await;
     let resp = client
-        .send(create_topic_request(
-            creatable_topic(name, partitions, rf),
-            5_000,
-        ))
+        .send(create_topic_request(creatable_topic(name, partitions, rf)))
         .await
         .expect("CreateTopics");
     assert!(

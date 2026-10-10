@@ -41,7 +41,10 @@ use crate::support::{
         offset_delete_request, offset_delete_topic,
     },
     relay::Relay,
-    transactions::{end_transaction_request, txn_offset_partition, txn_offset_topic},
+    transaction_wire::{TransactionProduceSetup, produce_fixture},
+    transactions::{
+        ProducerIdentity, end_transaction_request, txn_offset_partition, txn_offset_topic,
+    },
 };
 
 const TID: &str = "txn-uncommitted-writes";
@@ -120,14 +123,30 @@ async fn produce(
     producer: Option<(i64, i16)>,
     values: &[&'static str],
 ) {
-    crate::support::transaction_wire::produce_succeeds(connection.send(
-        crate::support::transaction_wire::produce_request(TID, TOPIC, topic_id, producer, values),
-    ))
+    produce_fixture(
+        TransactionProduceSetup {
+            transactional_id: TID,
+            topic: TOPIC,
+            topic_id,
+            producer: producer.map(ProducerIdentity::from_wire),
+            values,
+        },
+        |request| connection.send(request),
+    )
     .await;
 }
 
 fn end_txn_request((producer_id, epoch): (i64, i16)) -> EndTxnRequest {
-    end_transaction_request(TID, (producer_id, epoch), true)
+    end_transaction_request(
+        TID,
+        crate::support::transactions::EndTransactionSetup {
+            producer: crate::support::transactions::ProducerIdentity::from_wire((
+                producer_id,
+                epoch,
+            )),
+            ..Default::default()
+        },
+    )
 }
 
 /// Commit, and retry while the coordinator answers a retriable error.
@@ -236,6 +255,8 @@ impl RelayedCluster {
         let voters: Vec<(u64, SocketAddr)> = (0..3)
             .map(|index| (u64::try_from(index + 1).unwrap(), controller_addrs[index]))
             .collect();
+        let topology = support::RoleTopology::new(&client_addrs, &controller_addrs, &voters);
+
         let mut starts = Vec::with_capacity(3);
         let mut metas = Vec::with_capacity(3);
         for (index, (data, controller)) in
@@ -243,12 +264,11 @@ impl RelayedCluster {
         {
             let dir = TempDir::new().expect("tempdir");
             let mut config = support::broker_config(
-                index,
-                &client_addrs,
-                &controller_addrs,
-                &voters,
                 dir.path(),
-                BootstrapMode::Bootstrap,
+                topology.node_setup(crate::support::ClusterBootstrapSetup {
+                    index: crate::support::NodeIndex(index),
+                    ..Default::default()
+                }),
             )
             .with_internal_topics_for(3);
             config.advertised_listener = relays[index].addr().to_string();
@@ -656,7 +676,10 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
             topics: vec![txn_offset_topic(
                 TOPIC,
                 topic_id,
-                vec![txn_offset_partition(0, 7)],
+                vec![txn_offset_partition(
+                    krabka_ids::PartitionIndex(0),
+                    krabka_ids::Offset(7),
+                )],
             )],
             ..Default::default()
         })

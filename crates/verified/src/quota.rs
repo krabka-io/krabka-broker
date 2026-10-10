@@ -118,6 +118,15 @@ fn exact_user_quota_absent(facts: UserClientQuotaFacts) -> bool {
 }
 }
 
+open_logic! {
+fn all_user_quota_absent(facts: UserClientQuotaFacts) -> bool {
+    pearlite! { exact_user_quota_absent(facts)
+    && facts.default_user_exact_client == QuotaCandidatePresence::Absent
+    && facts.default_pair == QuotaCandidatePresence::Absent
+    && facts.default_user == QuotaCandidatePresence::Absent }
+}
+}
+
 /// Select Kafka's first present user/client quota candidate.
 #[ensures((result == UserClientQuotaPrecedence::ExactPair)
     == (facts.exact_pair == QuotaCandidatePresence::Present))]
@@ -141,16 +150,10 @@ fn exact_user_quota_absent(facts: UserClientQuotaFacts) -> bool {
         && facts.default_pair == QuotaCandidatePresence::Absent
         && facts.default_user == QuotaCandidatePresence::Present))]
 #[ensures((result == UserClientQuotaPrecedence::ExactClient)
-    == (exact_user_quota_absent(facts)
-        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
-        && facts.default_pair == QuotaCandidatePresence::Absent
-        && facts.default_user == QuotaCandidatePresence::Absent
+    == (all_user_quota_absent(facts)
         && facts.exact_client == QuotaCandidatePresence::Present))]
 #[ensures((result == UserClientQuotaPrecedence::DefaultClient)
-    == (exact_user_quota_absent(facts)
-        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
-        && facts.default_pair == QuotaCandidatePresence::Absent
-        && facts.default_user == QuotaCandidatePresence::Absent
+    == (all_user_quota_absent(facts)
         && facts.exact_client == QuotaCandidatePresence::Absent
         && facts.default_client == QuotaCandidatePresence::Present))]
 #[ensures((result == UserClientQuotaPrecedence::None) == !(

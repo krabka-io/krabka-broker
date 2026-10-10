@@ -90,7 +90,7 @@ mod tests {
                     incarnation_id: real_uuid(u8::try_from(node_id).unwrap()),
                     host: format!("broker-{node_id}"),
                     rack,
-                    ..crate::test_support::broker_registration(node_id)
+                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
                 },
             ));
         }
@@ -157,7 +157,7 @@ mod tests {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
                     rack: rack.map(str::to_owned),
-                    ..crate::test_support::broker_registration(node_id)
+                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
                 },
             ));
         }

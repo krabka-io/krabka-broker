@@ -50,6 +50,24 @@ fn at_epoch(record: PartitionRecord, epoch: i32) -> PartitionRecord {
 
 use crate::test_support::partition_elr as elr;
 
+fn check_transition(
+    image: &MetadataImage,
+    before: &PartitionRecord,
+    after: &PartitionRecord,
+    published: &crate::elr::state::PartitionElr,
+    expected: &crate::elr::state::PartitionElr,
+    label: &str,
+) {
+    let got = next_partition_elr(
+        image,
+        Some(before),
+        after,
+        published,
+        &std::collections::BTreeSet::new(),
+    );
+    assert!(&got == expected, "{label}");
+}
+
 fn update(partition: PartitionRecord, eligible: &[u64], last_known: &[u64]) -> MetadataRecord {
     MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
         partition,
@@ -211,14 +229,7 @@ fn the_elr_follows_the_isr_across_min_insync_replicas() {
         ),
     ] {
         let image = image(min_isr, None, &before);
-        let got = next_partition_elr(
-            &image,
-            Some(&before),
-            &after,
-            &published,
-            &std::collections::BTreeSet::new(),
-        );
-        assert!(got == want, "{label}");
+        check_transition(&image, &before, &after, &published, &want, label);
     }
 }
 
@@ -451,14 +462,7 @@ fn a_change_that_gives_a_leaderless_partition_a_leader_clears_the_last_known_elr
         ),
     ] {
         let image = image(Some("3"), None, &before);
-        let got = next_partition_elr(
-            &image,
-            Some(&before),
-            &after,
-            &published,
-            &std::collections::BTreeSet::new(),
-        );
-        assert!(got == want, "{label}");
+        check_transition(&image, &before, &after, &published, &want, label);
     }
 }
 

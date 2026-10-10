@@ -159,6 +159,15 @@ pub(super) struct WriterOptions {
     pub(super) sequencer: Option<Arc<dyn crate::wal::OffsetSequencer>>,
 }
 
+impl WriterOptions {
+    pub(super) fn replica_handles(&self) -> (Arc<tokio::sync::Mutex<ReplicaState>>, Arc<Notify>) {
+        (
+            Arc::clone(&self.replica_state),
+            Arc::clone(&self.hw_advance_notify),
+        )
+    }
+}
+
 impl Default for WriterOptions {
     fn default() -> Self {
         Self {
@@ -263,4 +272,44 @@ pub(super) async fn replica_with_isr(nodes: &[u64]) -> Arc<tokio::sync::Mutex<Re
         std::time::Instant::now(),
     );
     replica
+}
+
+/// RF=1 writer notifications and replica state for high-watermark tests.
+pub(super) struct ObservedWriter {
+    pub(super) writer: tokio::task::JoinHandle<()>,
+    pub(super) replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
+    pub(super) hw_advance_notify: Arc<Notify>,
+}
+
+pub(super) async fn observed_single_replica_writer(
+    dir: &std::path::Path,
+    log: Arc<Mutex<Log>>,
+    rx: mpsc::Receiver<WriterMessage>,
+    update: impl FnOnce(&mut WriterOptions),
+) -> ObservedWriter {
+    let mut options = single_replica_options().await;
+    update(&mut options);
+    observed_writer(dir, log, rx, options)
+}
+
+pub(super) fn observed_writer(
+    dir: &std::path::Path,
+    log: Arc<Mutex<Log>>,
+    rx: mpsc::Receiver<WriterMessage>,
+    options: WriterOptions,
+) -> ObservedWriter {
+    let (replica_state, hw_advance_notify) = options.replica_handles();
+    let writer = spawn_writer(dir, log, rx, options);
+    ObservedWriter {
+        writer,
+        replica_state,
+        hw_advance_notify,
+    }
+}
+
+pub(super) async fn single_replica_options() -> WriterOptions {
+    WriterOptions {
+        replica_state: replica_with_isr(&[1]).await,
+        ..Default::default()
+    }
 }

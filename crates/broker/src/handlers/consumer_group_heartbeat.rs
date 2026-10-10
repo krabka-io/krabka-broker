@@ -63,13 +63,10 @@ context_handler! {
         // `group_coordinator_error` -- Kafka authorizes the request before it
         // ever reaches coordinator routing, so an unauthorized subscription
         // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-        if crate::handlers::subscribed_names_describe_denied(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            req.subscribed_topic_names.as_deref(),
+        if let Some(error_code) = crate::handlers::acl_gates::subscribed_names_refusal(
+            broker, &image, ctx, req.subscribed_topic_names.as_deref(),
         ) {
-            return Ok(reply(codes::TOPIC_AUTHORIZATION_FAILED, None));
+            return Ok(reply(error_code, None));
         }
 
         // `GroupCoordinatorService.consumerGroupHeartbeat` validates the
@@ -236,7 +233,7 @@ mod tests {
         handlers::{
             group_heartbeat_test_support::{
                 acl_authorizer, alice, describe_acl, group_read_acl, image_with_group_version,
-                set_group_version, topic_with_partitions,
+                set_group_version, topic_with_partitions, versioned_group_broker,
             },
             group_read_denied,
         },
@@ -246,10 +243,18 @@ mod tests {
     const VERSION: i16 = krabka_protocol::owned::consumer_group_heartbeat_request::MAX_VERSION;
 
     fn request(group_id: &str) -> ConsumerGroupHeartbeatRequest {
+        subscription_request(group_id, "member-a", 0)
+    }
+
+    fn subscription_request(
+        group_id: &str,
+        member_id: &str,
+        member_epoch: i32,
+    ) -> ConsumerGroupHeartbeatRequest {
         ConsumerGroupHeartbeatRequest {
             group_id: group_id.into(),
-            member_id: "member-a".into(),
-            member_epoch: 0,
+            member_id: member_id.into(),
+            member_epoch,
             rebalance_timeout_ms: 30_000,
             topic_partitions: Some(vec![]),
             subscribed_topic_names: Some(vec!["topic-a".into()]),
@@ -490,10 +495,7 @@ mod tests {
     #[tokio::test]
     async fn handle_group_read_denied_preserves_error_response() {
         let authorizer = acl_authorizer();
-        let (broker_handle, _dir) =
-            crate::test_support::start_group_broker(Arc::new(authorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_group_version(&broker, 1).await;
+        let (broker_handle, _dir, broker) = versioned_group_broker(Arc::new(authorizer), 1).await;
         test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group");
 
@@ -539,12 +541,8 @@ mod tests {
 
     #[tokio::test]
     async fn handle_persists_request_client_identity() {
-        let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
-            crate::authorizer::AllowAllAuthorizer,
-        ))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_group_version(&broker, 1).await;
+        let (broker_handle, _dir, broker) =
+            versioned_group_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), 1).await;
         request_identity!((principal, peer, ctx), principal("ANONYMOUS"), test_context);
 
         let resp = handle(&broker, request("identity-group"), VERSION, &ctx)
@@ -567,15 +565,7 @@ mod tests {
         let member_epoch = view.members[0].member_epoch;
         let peer = std::net::SocketAddr::from(([127, 0, 0, 2], 9093));
         let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client-b");
-        let req = ConsumerGroupHeartbeatRequest {
-            group_id: "identity-group".into(),
-            member_id,
-            member_epoch,
-            rebalance_timeout_ms: 30_000,
-            topic_partitions: Some(vec![]),
-            subscribed_topic_names: Some(vec!["topic-a".into()]),
-            ..Default::default()
-        };
+        let req = subscription_request("identity-group", &member_id, member_epoch);
 
         let resp = handle(&broker, req, VERSION, &ctx)
             .await
@@ -598,12 +588,8 @@ mod tests {
     /// and compares the whole response; `None` expects an accepted join.
     #[tokio::test]
     async fn handle_creates_consumer_group_only_on_join_as_kafka_does() {
-        let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
-            crate::authorizer::AllowAllAuthorizer,
-        ))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_group_version(&broker, 1).await;
+        let (broker_handle, _dir, broker) =
+            versioned_group_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), 1).await;
         let coordinator = &broker.group_coordinator;
         coordinator.mark_share("share");
         coordinator.mark_streams("streams");
@@ -704,10 +690,8 @@ mod tests {
     #[tokio::test]
     async fn handle_subscribed_name_describe_denied_refuses_whole_heartbeat_no_member_created() {
         // Deliberately no Describe grant for "topic-a".
-        let (broker_handle, _dir) =
-            crate::test_support::start_group_broker(Arc::new(acl_authorizer())).await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_group_version(&broker, 1).await;
+        let (broker_handle, _dir, broker) =
+            versioned_group_broker(Arc::new(acl_authorizer()), 1).await;
         broker
             .controller
             .submit_change(vec![group_read_acl("g")])
@@ -719,13 +703,7 @@ mod tests {
             client_id = "c",
             address = peer()
         );
-        let req = ConsumerGroupHeartbeatRequest {
-            group_id: "g".into(),
-            rebalance_timeout_ms: 30_000,
-            topic_partitions: Some(vec![]),
-            subscribed_topic_names: Some(vec!["topic-a".into()]),
-            ..Default::default()
-        };
+        let req = subscription_request("g", "", 0);
 
         let resp = handle(&broker, req, VERSION, &ctx)
             .await
@@ -754,16 +732,28 @@ mod tests {
     /// through the whole handler → actor → reconciler path.
     #[tokio::test]
     async fn handle_regex_subscription_assigns_only_describe_authorized_topics() {
-        let (broker_handle, _dir) =
-            crate::test_support::start_group_broker(Arc::new(acl_authorizer())).await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_group_version(&broker, 1).await;
+        let (broker_handle, _dir, broker) =
+            versioned_group_broker(Arc::new(acl_authorizer()), 1).await;
         let allowed_id = uuid::Uuid::from_u128(1);
         let denied_id = uuid::Uuid::from_u128(2);
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g"), describe_acl("orders-eu")];
-        records.extend(topic_with_partitions("orders-eu", allowed_id, 2, node));
-        records.extend(topic_with_partitions("orders-us", denied_id, 2, node));
+        records.extend(topic_with_partitions(
+            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                name: "orders-eu",
+                topic_id: allowed_id,
+                node,
+                ..Default::default()
+            },
+        ));
+        records.extend(topic_with_partitions(
+            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                name: "orders-us",
+                topic_id: denied_id,
+                node,
+                ..Default::default()
+            },
+        ));
         broker
             .controller
             .submit_change(records)
@@ -896,15 +886,20 @@ mod tests {
     async fn broker_with_described_topics(
         topics: &[(&str, uuid::Uuid)],
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (broker_handle, dir) =
-            crate::test_support::start_group_broker(Arc::new(acl_authorizer())).await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_group_version(&broker, 1).await;
+        let (broker_handle, dir, broker) =
+            versioned_group_broker(Arc::new(acl_authorizer()), 1).await;
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g")];
         for (name, id) in topics {
             records.push(describe_acl(name));
-            records.extend(topic_with_partitions(name, *id, 2, node));
+            records.extend(topic_with_partitions(
+                crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                    name,
+                    topic_id: *id,
+                    node,
+                    ..Default::default()
+                },
+            ));
         }
         broker
             .controller
@@ -941,7 +936,14 @@ mod tests {
 
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![describe_acl("orders-us")];
-        records.extend(topic_with_partitions("orders-us", second, 2, node));
+        records.extend(topic_with_partitions(
+            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                name: "orders-us",
+                topic_id: second,
+                node,
+                ..Default::default()
+            },
+        ));
         broker
             .controller
             .submit_change(records)

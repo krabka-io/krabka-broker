@@ -13,6 +13,14 @@ use crate::{
     partition_writer::test_support::{GatedWal, sample_batch, test_sequencer},
 };
 
+async fn writer_after_first_append() -> DefaultWriter {
+    let fixture = default_writer();
+    let ack = queue_batch(&fixture.sender, sample_batch(3)).await;
+    let assigned = ack.await.expect("ack recv").expect("append ok");
+    assert!(assigned.base_offset == 0);
+    fixture
+}
+
 #[tokio::test]
 async fn writer_appends_and_acks() {
     let DefaultWriter {
@@ -21,12 +29,7 @@ async fn writer_appends_and_acks() {
         sender: tx,
         writer,
         notify: _notify,
-    } = default_writer();
-
-    let ack_rx = queue_batch(&tx, sample_batch(3)).await;
-
-    let assigned = ack_rx.await.expect("ack recv").expect("append ok");
-    assert!(assigned.base_offset == 0);
+    } = writer_after_first_append().await;
 
     // Second append assigns offset 3.
     let ack_rx = queue_batch(&tx, sample_batch(2)).await;
@@ -143,12 +146,7 @@ async fn writer_appends_and_acks_on_multi_thread_runtime() {
         sender: tx,
         writer,
         notify: _notify,
-    } = default_writer();
-
-    let ack_rx = queue_batch(&tx, sample_batch(3)).await;
-
-    let assigned = ack_rx.await.expect("ack recv").expect("append ok");
-    assert!(assigned.base_offset == 0);
+    } = writer_after_first_append().await;
 
     drop(tx);
     writer.await.expect("writer join");

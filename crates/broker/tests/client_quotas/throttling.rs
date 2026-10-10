@@ -254,15 +254,7 @@ async fn consumer_byte_rate_throttles_fetch() {
     );
 
     // Wait for the quota to appear in the image.
-    handle
-        .wait_for_image(|img| {
-            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-            img.client_quotas()
-                .get(&key)
-                .and_then(|cfgs| cfgs.get("consumer_byte_rate"))
-                == Some(&128.0)
-        })
-        .await;
+    crate::cluster::wait_alice_quota(&handle, "consumer_byte_rate", 128.0).await;
 
     // Produce 8 KB as admin (not subject to quota yet).
     seed_alice_write_acl(&handle, "throttle-fetch").await; // give admin path a topic

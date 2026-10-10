@@ -6,6 +6,34 @@ use assert2::{assert, check};
 
 use super::*;
 
+async fn mirror_marker(state: &ProducerState) {
+    state
+        .mirror_log_entries(
+            "t",
+            PartitionIndex(0),
+            vec![krabka_log::ProducerSnapshotEntry {
+                producer_id: krabka_log::ProducerId(1000),
+                producer_epoch: 4,
+                last_sequence: -1,
+                last_offset: krabka_log::Offset(-1),
+                offset_delta: 0,
+                timestamp: -1,
+                coordinator_epoch: 0,
+                current_txn_first_offset: None,
+            }],
+        )
+        .await;
+}
+
+fn remove_snapshots(dir: &std::path::Path, offsets: impl IntoIterator<Item = i64>) {
+    for offset in offsets {
+        let path = krabka_log::name::producer_snapshot_path(dir, offset);
+        if path.exists() {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+}
+
 #[tokio::test]
 async fn first_batch_appends() {
     let s = ProducerState::new();
@@ -54,21 +82,7 @@ async fn a_late_commit_at_an_older_epoch_does_not_undo_a_marker() {
     let s = ProducerState::new();
     // The marker's mirror lands first, well before the older batch's deferred
     // acks=all commit resolves.
-    s.mirror_log_entries(
-        "t",
-        PartitionIndex(0),
-        vec![krabka_log::ProducerSnapshotEntry {
-            producer_id: krabka_log::ProducerId(1000),
-            producer_epoch: 4,
-            last_sequence: -1,
-            last_offset: krabka_log::Offset(-1),
-            offset_delta: 0,
-            timestamp: -1,
-            coordinator_epoch: 0,
-            current_txn_first_offset: None,
-        }],
-    )
-    .await;
+    mirror_marker(&s).await;
 
     // The stale, pre-marker commit for epoch 3 resolves after the marker.
     commit!(s, "t", PartitionIndex(0), 1000, 3, 0, 2, 10, 1).await;
@@ -220,21 +234,7 @@ async fn truncate_unknown_partition_is_noop() {
 async fn truncate_drops_every_marker_only_entry_regardless_of_offset() {
     for offset in [0, 1, i64::MAX] {
         let s = ProducerState::new();
-        s.mirror_log_entries(
-            "t",
-            PartitionIndex(0),
-            vec![krabka_log::ProducerSnapshotEntry {
-                producer_id: krabka_log::ProducerId(1000),
-                producer_epoch: 4,
-                last_sequence: -1,
-                last_offset: krabka_log::Offset(-1),
-                offset_delta: 0,
-                timestamp: -1,
-                coordinator_epoch: 0,
-                current_txn_first_offset: None,
-            }],
-        )
-        .await;
+        mirror_marker(&s).await;
         s.truncate("t", PartitionIndex(0), offset).await;
         assert!(
             s.snapshot("t", PartitionIndex(0)).await.is_empty(),
@@ -411,11 +411,7 @@ async fn a_rebuild_retains_the_replayed_tail_for_duplicates() {
 
     for (initial_sequence, widths) in [(0, [1; 6]), (i32::MAX - 1, [1, 3, 2, 1, 4, 2])] {
         let dir = tempfile::tempdir().unwrap();
-        let config = krabka_log::LogConfig {
-            segment_size: krabka_units::prelude::bytes(1),
-            ..krabka_log::LogConfig::default()
-        };
-        let mut log = krabka_log::Log::open(dir.path(), config.clone()).unwrap();
+        let (mut log, config) = snapshot_rolling_log(dir.path());
         let mut sequence = initial_sequence;
         let mut expected = Vec::new();
         for (index, width) in widths.into_iter().enumerate() {
@@ -460,12 +456,7 @@ async fn a_rebuild_retains_the_replayed_tail_for_duplicates() {
         log.sync().unwrap();
         assert!(krabka_log::name::producer_snapshot_path(dir.path(), seed).exists());
         drop(log);
-        for offset in (seed + 1)..=end {
-            let path = krabka_log::name::producer_snapshot_path(dir.path(), offset);
-            if path.exists() {
-                std::fs::remove_file(path).unwrap();
-            }
-        }
+        remove_snapshots(dir.path(), (seed + 1)..=end);
         let log = krabka_log::Log::open(dir.path(), config).unwrap();
         assert!(log.recovered_producers()[0].earlier.len() == 4);
         let s = ProducerState::new();
@@ -512,11 +503,7 @@ async fn replay_chooses_first_retained_alias_after_sequence_wrap() {
     use krabka_protocol::records::{Record, RecordBatch};
 
     let dir = tempfile::tempdir().unwrap();
-    let config = krabka_log::LogConfig {
-        segment_size: krabka_units::prelude::bytes(1),
-        ..krabka_log::LogConfig::default()
-    };
-    let mut log = krabka_log::Log::open(dir.path(), config.clone()).unwrap();
+    let (mut log, config) = snapshot_rolling_log(dir.path());
     for (index, (sequence, delta)) in [(0, 0), (1, i32::MAX - 1), (0, 0)].into_iter().enumerate() {
         let timestamp = 100 + i64::try_from(index).unwrap();
         log.append(&mut RecordBatch {
@@ -537,12 +524,10 @@ async fn replay_chooses_first_retained_alias_after_sequence_wrap() {
     log.sync().unwrap();
     assert!(krabka_log::name::producer_snapshot_path(dir.path(), 1).exists());
     drop(log);
-    for offset in [i64::from(i32::MAX) + 1, i64::from(i32::MAX) + 2] {
-        let path = krabka_log::name::producer_snapshot_path(dir.path(), offset);
-        if path.exists() {
-            std::fs::remove_file(path).unwrap();
-        }
-    }
+    remove_snapshots(
+        dir.path(),
+        [i64::from(i32::MAX) + 1, i64::from(i32::MAX) + 2],
+    );
     let log = krabka_log::Log::open(dir.path(), config).unwrap();
     assert!(log.recovered_producers()[0].earlier.len() == 2);
     let state = ProducerState::new();
@@ -658,4 +643,14 @@ async fn snapshot_reload_preserves_retry_frontiers_and_epoch_fencing() {
         let next = i32::try_from((i64::from(sequence) + 3) % (1i64 << 31)).unwrap();
         assert!(state.check("t", PartitionIndex(0), 42, 7, next, 0).await == Decision::Append);
     }
+}
+
+/// Every append rolls, exposing the snapshot plus uncovered replay tail.
+fn snapshot_rolling_log(path: &std::path::Path) -> (krabka_log::Log, krabka_log::LogConfig) {
+    let config = krabka_log::LogConfig {
+        segment_size: krabka_units::prelude::bytes(1),
+        ..Default::default()
+    };
+    let log = krabka_log::Log::open(path, config.clone()).unwrap();
+    (log, config)
 }
