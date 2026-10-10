@@ -15,18 +15,16 @@ use crate::{
     leader_election::test_support::{
         ElectionSetup, ExpectedPartitionSetup, elected_partition, expected_clean_election,
         expected_partition, failover, failover_with_alive, img_with_partition, liveness_with_alive,
-        mark_witnesses_in_image, one_partition_change, set_cluster_default, set_topic_config,
-        set_topic_configs,
+        mark_witnesses_in_image, one_partition_change, set_cluster_default, set_topic_configs,
     },
 };
 
 fn unclean_single_isr_image() -> krabka_metadata::MetadataImage {
-    let mut image = img_with_partition(ElectionSetup {
+    img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
+        configs: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
         ..Default::default()
-    });
-    set_topic_config(&mut image, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
-    image
+    })
 }
 
 /// Only the preferred replica is in the ISR; broker three precedes broker two among followers.
@@ -177,11 +175,11 @@ async fn failover_unclean_skips_when_no_alive_replica() {
 #[tokio::test]
 async fn failover_unclean_false_string_keeps_default_safe_behavior() {
     // Explicit `false` must behave the same as unset.
-    let mut img = img_with_partition(ElectionSetup {
+    let img = img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
+        configs: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "false")],
         ..Default::default()
     });
-    set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "false");
     let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(
         plan.changes.is_empty(),
@@ -210,11 +208,11 @@ async fn failover_unclean_does_not_apply_when_isr_still_has_alive_member() {
     // Leader 1 dies. ISR {1, 2} but 2 is alive — clean path picks
     // broker 2 even if unclean is enabled. (The unclean branch only
     // fires when alive_isr is empty.)
-    let mut img = img_with_partition(ElectionSetup {
+    let img = img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+        configs: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
         ..Default::default()
     });
-    set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
     let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
@@ -253,11 +251,11 @@ async fn failover_balanced_strategy_requests_recovery_not_immediate_change() {
     // opted into `unclean.recovery.strategy=Balanced`, so the failover
     // scan must NOT make a blind immediate change — it hands the
     // partition to the URM via `recoveries`.
-    let mut img = img_with_partition(ElectionSetup {
+    let img = img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
+        configs: &[(UNCLEAN_RECOVERY_STRATEGY, "Balanced")],
         ..Default::default()
     });
-    set_topic_config(&mut img, "t", UNCLEAN_RECOVERY_STRATEGY, "Balanced");
     let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
     assert!(
         plan.changes.is_empty(),
@@ -288,7 +286,13 @@ async fn topic_none_overrides_cluster_strategy_and_uses_cluster_legacy_flag() {
     });
     set_cluster_default(&mut img, UNCLEAN_RECOVERY_STRATEGY, "Balanced");
     set_cluster_default(&mut img, UNCLEAN_LEADER_ELECTION_ENABLE, "true");
-    set_topic_config(&mut img, "t", UNCLEAN_RECOVERY_STRATEGY, "None");
+    set_topic_configs(
+        &mut img,
+        crate::leader_election::test_support::TopicConfigSetup {
+            entries: &[(UNCLEAN_RECOVERY_STRATEGY, "None")],
+            ..Default::default()
+        },
+    );
     let plan = failover_with_alive(&img, NodeId(1), &[2u64, 3]).await;
 
     assert!(plan.recoveries.is_empty());
@@ -336,9 +340,9 @@ async fn failover_scan_reads_the_witness_role_out_of_the_image() {
 #[tokio::test]
 async fn failover_scan_leaves_a_witness_only_survivor_unavailable() {
     let mut img = img_with_partition(ElectionSetup {
+        configs: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
         ..Default::default()
     });
-    set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
     mark_witnesses_in_image(&mut img, &[2]);
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     l.record_heartbeat(2).await;
@@ -397,7 +401,13 @@ async fn failover_elects_an_eligible_leader_replica_cleanly_under_every_policy()
             (MIN_INSYNC_REPLICAS, "2"),
         ];
         overrides.extend_from_slice(case.policy);
-        set_topic_configs(&mut img, "t", &overrides);
+        set_topic_configs(
+            &mut img,
+            crate::leader_election::test_support::TopicConfigSetup {
+                entries: &overrides,
+                ..Default::default()
+            },
+        );
         let l = ControllerLivenessState::new(krabka_units::secs(10));
         for n in [2u64, 3] {
             l.record_heartbeat(n).await;
@@ -442,12 +452,14 @@ async fn a_dead_eligible_leader_replica_leaves_the_unclean_election_to_decide() 
     let mut img = preferred_replica_alone_in_isr();
     set_topic_configs(
         &mut img,
-        "t",
-        &[
-            (ELIGIBLE_LEADER_REPLICAS, "0:2:"),
-            (MIN_INSYNC_REPLICAS, "2"),
-            (UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
-        ],
+        crate::leader_election::test_support::TopicConfigSetup {
+            entries: &[
+                (ELIGIBLE_LEADER_REPLICAS, "0:2:"),
+                (MIN_INSYNC_REPLICAS, "2"),
+                (UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
+            ],
+            ..Default::default()
+        },
     );
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     l.record_heartbeat(3).await;
@@ -514,10 +526,10 @@ async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_kno
     {
         let mut img = img_with_partition(ElectionSetup {
             isr: &[krabka_raft::NodeId(1)],
+            elr: crate::leader_election::test_support::ElrFinalization::Enabled,
+            configs: overrides,
             ..Default::default()
         });
-        crate::test_support::finalize_elr_version(&mut img);
-        set_topic_configs(&mut img, "t", overrides);
         let l = ControllerLivenessState::new(krabka_units::secs(10));
         for &n in alive {
             l.record_heartbeat(n).await;
@@ -574,11 +586,11 @@ async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_kno
 /// what the published value used to be.
 #[tokio::test]
 async fn a_failover_that_keeps_a_leader_leaves_the_last_known_elr_empty() {
-    let mut img = img_with_partition(ElectionSetup {
+    let img = img_with_partition(ElectionSetup {
+        elr: crate::leader_election::test_support::ElrFinalization::Enabled,
+        configs: &[(MIN_INSYNC_REPLICAS, "3")],
         ..Default::default()
     });
-    crate::test_support::finalize_elr_version(&mut img);
-    set_topic_config(&mut img, "t", MIN_INSYNC_REPLICAS, "3");
     let plan = failover_with_alive(&img, /*dead=*/ NodeId(3), &[1u64, 2]).await;
 
     let [MetadataRecord::V1PartitionUpdate(update)] = plan.changes.as_slice() else {

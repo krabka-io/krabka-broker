@@ -18,6 +18,13 @@ use crate::{
     test_support::FakeMetadataSource,
 };
 
+#[derive(Clone, Copy, Default)]
+pub enum ElrFinalization {
+    #[default]
+    Unchanged,
+    Enabled,
+}
+
 #[derive(Clone, Copy)]
 pub struct ElectionSetup<'a> {
     pub topic: &'a str,
@@ -26,6 +33,8 @@ pub struct ElectionSetup<'a> {
     pub replicas: &'a [NodeId],
     pub isr: &'a [NodeId],
     pub dirs: &'a [Uuid],
+    pub configs: &'a [(&'a str, &'a str)],
+    pub elr: ElrFinalization,
 }
 
 impl Default for ElectionSetup<'_> {
@@ -37,6 +46,8 @@ impl Default for ElectionSetup<'_> {
             replicas: &[NodeId(1), NodeId(2), NodeId(3)],
             isr: &[NodeId(1), NodeId(2), NodeId(3)],
             dirs: &[],
+            configs: &[],
+            elr: ElrFinalization::Unchanged,
         }
     }
 }
@@ -50,6 +61,18 @@ pub fn img_with_partition(setup: ElectionSetup<'_>) -> MetadataImage {
         replication_factor: i16::try_from(setup.replicas.len()).unwrap(),
     }));
     img.apply(&MetadataRecord::V1Partition(seed_partition(setup)));
+    if matches!(setup.elr, ElrFinalization::Enabled) {
+        crate::test_support::finalize_elr_version(&mut img);
+    }
+    if !setup.configs.is_empty() {
+        set_topic_configs(
+            &mut img,
+            TopicConfigSetup {
+                topic: setup.topic,
+                entries: setup.configs,
+            },
+        );
+    }
     img
 }
 
@@ -62,6 +85,7 @@ pub fn seed_partition(setup: ElectionSetup<'_>) -> PartitionRecord {
         replicas,
         isr,
         dirs,
+        ..
     } = setup;
     PartitionRecord {
         topic: topic.into(),
@@ -231,16 +255,16 @@ pub fn recovery_handle_for_tests() -> crate::unclean_recovery::UncleanRecoveryHa
     crate::unclean_recovery::UncleanRecoveryHandle::for_tests(tx)
 }
 
-/// Apply a `V1TopicConfig` override on top of an existing image. This
-/// matches the runtime path where `AlterConfigs` writes the record.
-pub fn set_topic_config(img: &mut MetadataImage, topic: &str, key: &str, value: &str) {
-    set_topic_configs(img, topic, &[(key, value)]);
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub struct TopicConfigSetup<'a> {
+    #[default("t")]
+    pub topic: &'a str,
+    pub entries: &'a [(&'a str, &'a str)],
 }
 
-/// [`set_topic_config`] for several keys at once. A `V1TopicConfig` record
-/// replaces the topic's whole override map, so a test that needs two keys has
-/// to publish them in one record.
-pub fn set_topic_configs(img: &mut MetadataImage, topic: &str, entries: &[(&str, &str)]) {
+/// Apply the complete override map in one record, with ELR state in its own records.
+pub fn set_topic_configs(img: &mut MetadataImage, setup: TopicConfigSetup<'_>) {
+    let TopicConfigSetup { topic, entries } = setup;
     let overrides: BTreeMap<String, String> = entries
         .iter()
         .filter(|(key, _)| *key != crate::config_keys::ELIGIBLE_LEADER_REPLICAS)

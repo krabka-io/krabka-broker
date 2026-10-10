@@ -114,9 +114,7 @@ pub(crate) struct RegisteredCluster {
 async fn registered_admin() -> RegisteredCluster {
     let (h1, h2, h3, cfg1, cfg2, cfg3, d1, d2, d3) =
         Box::pin(crate::jvm_acceptance::start_registered_sasl_cluster(
-            crate::jvm_acceptance::ADMIN,
-            crate::jvm_acceptance::ADMIN_PASS,
-            &[],
+            crate::jvm_acceptance::SaslClusterSetup::default(),
         ))
         .await;
     RegisteredCluster {

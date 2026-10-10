@@ -136,23 +136,52 @@ async fn named_topic_fetch_returns_committed_offset() {
 const TXN_RECORDS_AT: i64 = 10;
 const TXN_MARKER_AT: i64 = 11;
 
+#[derive(krabka_macros::FieldDefaults)]
+struct PendingTxnOffsetsSetup<'a> {
+    #[default("grp")]
+    group: &'a str,
+    #[default(krabka_ids::ProducerId(91))]
+    producer: krabka_ids::ProducerId,
+    #[default(Offset(TXN_RECORDS_AT))]
+    written_at: Offset,
+    #[default(vec![("orders".into(), krabka_ids::PartitionIndex(0))])]
+    keys: Vec<(String, krabka_ids::PartitionIndex)>,
+}
+
+#[derive(Default)]
+struct TxnOffsetCommits(Vec<((String, i32), OffsetEntry)>);
+
+#[derive(krabka_macros::FieldDefaults)]
+struct ResolvedTxnOffsetsSetup<'a> {
+    #[default("grp")]
+    group: &'a str,
+    #[default(krabka_ids::ProducerId(91))]
+    producer: krabka_ids::ProducerId,
+    #[default(Offset(TXN_MARKER_AT))]
+    resolved_through: Offset,
+    committed: TxnOffsetCommits,
+}
+
 // Mark (topic, partition) keys as written by an unresolved transaction, the
 // way `TxnOffsetCommit` does once its records are durable.
-async fn seed_pending_txn_offsets(
-    broker: &Broker,
-    group: &str,
-    producer_id: i64,
-    written_at: i64,
-    keys: Vec<(String, i32)>,
-) {
+async fn seed_pending_txn_offsets(broker: &Broker, setup: PendingTxnOffsetsSetup<'_>) {
+    let PendingTxnOffsetsSetup {
+        group,
+        producer,
+        written_at,
+        keys,
+    } = setup;
     let h = broker
         .group_coordinator
         .get_or_create_group(group, GroupKindTag::Classic);
     let (tx, rx) = oneshot::channel();
     h.tx.send(GroupActorMessage::AddPendingTxnOffsets {
-        producer_id,
-        written_at,
-        keys,
+        producer_id: producer.0,
+        written_at: written_at.0,
+        keys: keys
+            .into_iter()
+            .map(|(topic, partition)| (topic, partition.0))
+            .collect(),
         reply: tx,
     })
     .await
@@ -163,21 +192,21 @@ async fn seed_pending_txn_offsets(
 // Resolve the transaction the way its marker does: publish the offsets a
 // commit carries (an abort carries none) and drop the producer's pending
 // marks, stamped with the marker's own position in the offsets log.
-async fn resolve_pending_txn_offsets(
-    broker: &Broker,
-    group: &str,
-    producer_id: i64,
-    resolved_through: i64,
-    committed: Vec<((String, i32), OffsetEntry)>,
-) {
+async fn resolve_pending_txn_offsets(broker: &Broker, setup: ResolvedTxnOffsetsSetup<'_>) {
+    let ResolvedTxnOffsetsSetup {
+        group,
+        producer,
+        resolved_through,
+        committed,
+    } = setup;
     let h = broker
         .group_coordinator
         .get_or_create_group(group, GroupKindTag::Classic);
     let (tx, rx) = oneshot::channel();
     h.tx.send(GroupActorMessage::ResolveTxnOffsets {
-        producer_id,
-        resolved_through,
-        committed,
+        producer_id: producer.0,
+        resolved_through: resolved_through.0,
+        committed: committed.0,
         reply: tx,
     })
     .await
@@ -342,13 +371,20 @@ async fn a_mark_for_records_below_an_applied_marker_does_not_strand_the_partitio
 
     // The abort marker for the records at TXN_RECORDS_AT lands first and
     // publishes nothing; the commit's own mark arrives after it.
-    resolve_pending_txn_offsets(&broker, "grp", PRODUCER_ID, TXN_MARKER_AT, Vec::new()).await;
+    resolve_pending_txn_offsets(
+        &broker,
+        ResolvedTxnOffsetsSetup {
+            producer: krabka_ids::ProducerId(PRODUCER_ID),
+            ..Default::default()
+        },
+    )
+    .await;
     seed_pending_txn_offsets(
         &broker,
-        "grp",
-        PRODUCER_ID,
-        TXN_RECORDS_AT,
-        vec![("orders".to_string(), 0)],
+        PendingTxnOffsetsSetup {
+            producer: krabka_ids::ProducerId(PRODUCER_ID),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -369,10 +405,11 @@ async fn a_mark_for_records_below_an_applied_marker_does_not_strand_the_partitio
     // reported unstable as usual.
     seed_pending_txn_offsets(
         &broker,
-        "grp",
-        PRODUCER_ID,
-        TXN_MARKER_AT + 1,
-        vec![("orders".to_string(), 0)],
+        PendingTxnOffsetsSetup {
+            producer: krabka_ids::ProducerId(PRODUCER_ID),
+            written_at: Offset(TXN_MARKER_AT + 1),
+            ..Default::default()
+        },
     )
     .await;
     let next_transaction = fetch(&broker, VERSION, &request).await;
@@ -1087,10 +1124,10 @@ async fn require_stable<R>(
     .await;
     seed_pending_txn_offsets(
         &broker,
-        "grp",
-        PRODUCER_ID,
-        TXN_RECORDS_AT,
-        vec![("orders".to_string(), 0)],
+        PendingTxnOffsetsSetup {
+            producer: krabka_ids::ProducerId(PRODUCER_ID),
+            ..Default::default()
+        },
     )
     .await;
     let stable_row = |partition_index, offset| row(partition_index, offset, 5, codes::NONE);
@@ -1106,10 +1143,11 @@ async fn require_stable<R>(
     );
     resolve_pending_txn_offsets(
         &broker,
-        "grp",
-        PRODUCER_ID,
-        TXN_MARKER_AT,
-        vec![(("orders".to_string(), 0), committed_entry(77))],
+        ResolvedTxnOffsetsSetup {
+            producer: krabka_ids::ProducerId(PRODUCER_ID),
+            committed: TxnOffsetCommits(vec![(("orders".to_string(), 0), committed_entry(77))]),
+            ..Default::default()
+        },
     )
     .await;
     let resolved = fetch(&broker, version, &request(true)).await;

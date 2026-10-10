@@ -477,7 +477,6 @@ mod unclean_restart {
     /// `AlterPartition` v2, whose `new_isr` is a plain broker-id list, for the
     /// reason [`crate::elr::tests`] gives: v3 drags the KIP-903 broker-epoch
     /// eligibility check into a fixture that is not about it.
-    const ALTER_VERSION: i16 = 2;
     /// The restarting broker. Node 1 is the controller and stays up.
     const RESTARTING: NodeId = NodeId(2);
 
@@ -504,19 +503,6 @@ mod unclean_restart {
             uuid::Uuid::from_bytes(TOPIC_ID_BYTES),
             "2",
         )
-    }
-
-    /// Shrink the ISR to `new_isr` through the real `AlterPartition` handler,
-    /// which is how a real partition's ELR comes to exist at all.
-    async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
-        crate::test_support::accepted_isr_proposal(
-            broker,
-            (TOPIC, TOPIC_ID_BYTES),
-            (LEADER_EPOCH, ALTER_VERSION),
-            new_isr,
-            crate::test_support::IsrResponseCheck::PartitionOnly,
-        )
-        .await;
     }
 
     /// The published ELR of partition 0.
@@ -555,7 +541,12 @@ mod unclean_restart {
         config.node_id = RESTARTING;
         boot(broker, &mut config).await;
 
-        alter_isr(broker, &[1]).await;
+        crate::test_support::accepted_isr_proposal(
+            broker,
+            crate::test_support::LiveIsrSetup::default(),
+            crate::test_support::IsrResponseCheck::PartitionOnly,
+        )
+        .await;
         assert!(
             published_elr(broker)
                 == PartitionElr {

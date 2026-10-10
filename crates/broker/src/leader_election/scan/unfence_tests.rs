@@ -18,27 +18,21 @@ use crate::{
     config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
     leader_election::test_support::{
         ElectionSetup, ExpectedPartitionSetup, expected_partition, img_with_partition,
-        set_topic_configs,
     },
 };
 
 /// The image of a partition `t-0` with replicas `[1, 2, 3]`, led by broker 1
 /// alone in its record, and with `published` as its ELR state.
 fn leaderless_image(published: &str) -> MetadataImage {
-    let mut img = img_with_partition(ElectionSetup {
+    img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
-        ..Default::default()
-    });
-    crate::test_support::finalize_elr_version(&mut img);
-    set_topic_configs(
-        &mut img,
-        "t",
-        &[
+        elr: crate::leader_election::test_support::ElrFinalization::Enabled,
+        configs: &[
             (MIN_INSYNC_REPLICAS, "2"),
             (ELIGIBLE_LEADER_REPLICAS, published),
         ],
-    );
-    img
+        ..Default::default()
+    })
 }
 
 /// The records an unfence election writes: broker `leader` takes the

@@ -124,8 +124,9 @@ pub use self::{
     },
     coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION, find_coordinator},
     operator_keys::{
-        ANONYMOUS, OperatorKey, mint_operator_key, sasl_client, sasl_plain_security,
-        start_with_operator_key, start_with_operator_keys, start_with_operator_keys_sasl,
+        ANONYMOUS, OperatorKey, OperatorKeysSetup, OperatorSaslSetup, mint_operator_key,
+        sasl_client, sasl_plain_security, start_with_operator_key, start_with_operator_keys,
+        start_with_operator_keys_sasl,
     },
     ports::{bind_and_drop_ports, bind_and_hold_ports},
     sasl::{sasl_plaintext_config, sasl_plaintext_with_users, start_broker},

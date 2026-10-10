@@ -730,20 +730,39 @@ pub(crate) fn alter_partition_request(setup: IsrProposalSetup<'_>) -> AlterParti
     }
 }
 
+/// Identity of the seeded ELR partition; epochs still come from separate live snapshots.
+#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+pub(crate) struct LiveIsrSetup<'a> {
+    #[default("orders")]
+    pub topic: &'a str,
+    #[default(WireUuid([9; 16]))]
+    pub topic_id: WireUuid,
+    #[default(krabka_metadata::LeaderEpoch(7))]
+    pub leader_epoch: krabka_metadata::LeaderEpoch,
+    /// v2 keeps the plain ISR list, avoiding the v3 broker-epoch eligibility extension.
+    #[default(krabka_ids::ApiVersion(2))]
+    pub version: krabka_ids::ApiVersion,
+    #[default(&[WireBrokerId(1)])]
+    pub new_isr: &'a [WireBrokerId],
+}
+
 /// Send a real ISR proposal using the caller's wire identity and separate epoch snapshots.
 pub(crate) async fn propose_isr(
     broker: &Arc<Broker>,
-    topic: &str,
-    identity: (WireUuid, i32, i16),
-    new_isr: &[i32],
+    setup: LiveIsrSetup<'_>,
 ) -> AlterPartitionResponse {
-    let (topic_id, leader_epoch, version) = identity;
+    let LiveIsrSetup {
+        topic,
+        topic_id,
+        leader_epoch,
+        version,
+        new_isr,
+    } = setup;
     let principal = principal("replica");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "broker-client");
     // The controller checks the sender's broker epoch and the row's partition
     // epoch. Keep the two image snapshots in the original request-read order.
-    let wire_isr: Vec<_> = new_isr.iter().copied().map(WireBrokerId).collect();
     let image = broker.controller.current_image();
     let request = alter_partition_request(IsrProposalSetup {
         topic_id,
@@ -752,7 +771,7 @@ pub(crate) async fn propose_isr(
             ..Default::default()
         },
         partition: IsrPartitionEpochs {
-            leader: krabka_metadata::LeaderEpoch(leader_epoch),
+            leader: leader_epoch,
             partition: PartitionEpoch(
                 broker
                     .controller
@@ -762,9 +781,9 @@ pub(crate) async fn propose_isr(
                     .partition_epoch,
             ),
         },
-        new_isr: &wire_isr,
+        new_isr,
     });
-    crate::handlers::alter_partition::handle(broker, request, version, &ctx)
+    crate::handlers::alter_partition::handle(broker, request, version.0, &ctx)
         .await
         .expect("AlterPartition")
 }
@@ -778,18 +797,10 @@ pub(crate) enum IsrResponseCheck {
 /// Propose an ISR change and verify its partition result, optionally checking the envelope first.
 pub(crate) async fn accepted_isr_proposal(
     broker: &Arc<Broker>,
-    topic: (&str, [u8; 16]),
-    epochs: (i32, i16),
-    new_isr: &[i32],
+    setup: LiveIsrSetup<'_>,
     response_check: IsrResponseCheck,
 ) {
-    let response = propose_isr(
-        broker,
-        topic.0,
-        (WireUuid(topic.1), epochs.0, epochs.1),
-        new_isr,
-    )
-    .await;
+    let response = propose_isr(broker, setup).await;
     if response_check == IsrResponseCheck::EnvelopeAndPartition {
         assert2::assert!(response.error_code == crate::codes::NONE);
     }

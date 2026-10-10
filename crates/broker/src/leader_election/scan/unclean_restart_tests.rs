@@ -14,7 +14,6 @@ use crate::{
     config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
     leader_election::test_support::{
         ElectionSetup, ExpectedPartitionSetup, expected_partition, img_with_partition,
-        set_topic_config,
     },
 };
 
@@ -51,11 +50,11 @@ async fn restart_batch(image: &MetadataImage, alive_nodes: &[u64]) -> FailoverPl
 /// batch.
 #[tokio::test]
 async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
-    let mut image = img_with_partition(ElectionSetup {
+    let image = img_with_partition(ElectionSetup {
+        elr: crate::leader_election::test_support::ElrFinalization::Enabled,
+        configs: &[(MIN_INSYNC_REPLICAS, "3")],
         ..Default::default()
     });
-    crate::test_support::finalize_elr_version(&mut image);
-    set_topic_config(&mut image, "t", MIN_INSYNC_REPLICAS, "3");
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
@@ -80,12 +79,12 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
 /// entry to remove.
 #[tokio::test]
 async fn a_published_membership_is_withdrawn_without_a_partition_change() {
-    let mut image = img_with_partition(ElectionSetup {
+    let image = img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+        elr: crate::leader_election::test_support::ElrFinalization::Enabled,
+        configs: &[(ELIGIBLE_LEADER_REPLICAS, "0:3:")],
         ..Default::default()
     });
-    crate::test_support::finalize_elr_version(&mut image);
-    set_topic_config(&mut image, "t", ELIGIBLE_LEADER_REPLICAS, "0:3:");
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
@@ -107,12 +106,12 @@ async fn a_published_membership_is_withdrawn_without_a_partition_change() {
 /// rewritten, because a krabka record always names a leader.
 #[tokio::test]
 async fn the_only_isr_member_restarting_uncleanly_leaves_the_partition_leaderless() {
-    let mut image = img_with_partition(ElectionSetup {
+    let image = img_with_partition(ElectionSetup {
         leader: krabka_raft::NodeId(3),
         isr: &[krabka_raft::NodeId(3)],
+        elr: crate::leader_election::test_support::ElrFinalization::Enabled,
         ..Default::default()
     });
-    crate::test_support::finalize_elr_version(&mut image);
 
     let plan = restart_batch(&image, &[1, 2]).await;
 

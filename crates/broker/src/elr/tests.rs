@@ -28,12 +28,6 @@ use crate::{
 const TOPIC: &str = "orders";
 const TOPIC_ID_BYTES: [u8; 16] = [9; 16];
 const LEADER_EPOCH: i32 = 7;
-/// `AlterPartition` v2, whose `new_isr` is a plain broker-id list. v3
-/// replaces it with `new_isr_with_epochs`, which drags in the KIP-903
-/// broker-epoch eligibility check and so a registration for every proposed
-/// member; the ELR rules do not vary by request version, so the older field
-/// keeps the fixture to the partition state the test is actually about.
-const ALTER_VERSION: i16 = 2;
 const DESCRIBE_VERSION: i16 =
     krabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
 const REGISTER_VERSION: i16 = krabka_protocol::owned::broker_registration_request::MAX_VERSION;
@@ -144,19 +138,6 @@ async fn activate_followers(broker: &Broker) {
             )
             .await;
     }
-}
-
-/// Propose `new_isr` for partition 0 through the real `AlterPartition`
-/// handler, and assert the controller accepted it.
-async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
-    crate::test_support::accepted_isr_proposal(
-        broker,
-        (TOPIC, TOPIC_ID_BYTES),
-        (LEADER_EPOCH, ALTER_VERSION),
-        new_isr,
-        crate::test_support::IsrResponseCheck::EnvelopeAndPartition,
-    )
-    .await;
 }
 
 /// The partition row `DescribeTopicPartitions` answers with for partition 0.
@@ -314,7 +295,12 @@ async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
 
     check_partition(&broker, row(ExpectedElrSetup::default())).await;
 
-    alter_isr(&broker, &[1]).await;
+    crate::test_support::accepted_isr_proposal(
+        &broker,
+        crate::test_support::LiveIsrSetup::default(),
+        crate::test_support::IsrResponseCheck::EnvelopeAndPartition,
+    )
+    .await;
     check_partition(
         &broker,
         row(ExpectedElrSetup {
@@ -325,10 +311,26 @@ async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
     )
     .await;
 
-    alter_isr(&broker, &[1, 2]).await;
-    check_partition(&broker, row(ExpectedElrSetup::two_member_isr())).await;
+    rejoin_follower_and_check_isr(&broker).await;
 
     handle.shutdown().await;
+}
+
+/// Restore broker 2 to the ISR and check the published two-member partition row.
+async fn rejoin_follower_and_check_isr(broker: &Arc<Broker>) {
+    crate::test_support::accepted_isr_proposal(
+        broker,
+        crate::test_support::LiveIsrSetup {
+            new_isr: &[
+                crate::test_support::WireBrokerId(1),
+                crate::test_support::WireBrokerId(2),
+            ],
+            ..Default::default()
+        },
+        crate::test_support::IsrResponseCheck::EnvelopeAndPartition,
+    )
+    .await;
+    check_partition(broker, row(ExpectedElrSetup::two_member_isr())).await;
 }
 
 /// A shrink that stops at `min.insync.replicas` leaves nothing eligible, so
@@ -339,9 +341,7 @@ async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
 async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
     let (handle, _dir, broker) = start_orders().await;
 
-    alter_isr(&broker, &[1, 2]).await;
-
-    check_partition(&broker, row(ExpectedElrSetup::two_member_isr())).await;
+    rejoin_follower_and_check_isr(&broker).await;
 
     handle.shutdown().await;
 }
@@ -382,7 +382,12 @@ async fn assert_returning_broker_withdrawal(min_isr: &str, initial_check: Initia
     .await;
     // Every later derivation still excludes broker 3 while allowing broker 2,
     // which left an ISR whose log was never called into question.
-    alter_isr(&broker, &[1]).await;
+    crate::test_support::accepted_isr_proposal(
+        &broker,
+        crate::test_support::LiveIsrSetup::default(),
+        crate::test_support::IsrResponseCheck::EnvelopeAndPartition,
+    )
+    .await;
     check_partition(
         &broker,
         offline_followers_row(ExpectedElrSetup {

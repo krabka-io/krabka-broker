@@ -409,9 +409,13 @@ async fn sasl_plain_logins_are_audited_either_way() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl(
         &dir.path().join("data"),
-        &[],
-        &[],
-        &[("alice", "alice-secret")],
+        crate::support::OperatorSaslSetup {
+            trust: crate::support::OperatorKeysSetup {
+                keys: &[],
+                approvers: &[],
+            },
+            users: &[("alice", "alice-secret")],
+        },
     )
     .await;
     broker.wait_until_partition_present(AUDIT_TOPIC, 0).await;
