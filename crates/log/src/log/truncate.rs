@@ -5,15 +5,13 @@
 //! `trim_to_offset` moves the log start forward without touching the
 //! active segment.
 
-use std::{collections::HashSet, fs};
+use std::collections::HashSet;
 
 use krabka_ids::Offset;
 use tracing::instrument;
 
 use super::Log;
-use crate::{
-    error::LogError, name, producer_snapshot, retention, segment::Segment, txn_index::TxnIndex,
-};
+use crate::{error::LogError, producer_snapshot, segment::Segment, txn_index::TxnIndex};
 
 impl Log {
     /// Remove sealed segments, their cached indexes, and their producer snapshots.
@@ -27,19 +25,23 @@ impl Log {
         self.stamp_indexes
             .retain(|base, _| !drop_set.contains(base));
         for base in bases {
-            let _ = retention::delete_segment_files(&*self.io, &self.dir, *base);
+            self.retire_segment(*base, std::time::SystemTime::now())?;
             producer_snapshot::remove_at(&self.dir, *base)?;
         }
         Ok(())
     }
 
     /// Drop the files of a discarded tail after closing its segment handle.
-    pub(super) fn remove_truncated_segment_files(&self, base: Offset) {
-        let _ = fs::remove_file(name::log_path(&self.dir, base.0));
-        let _ = fs::remove_file(name::index_path(&self.dir, base.0));
-        let _ = fs::remove_file(name::timeindex_path(&self.dir, base.0));
-        let _ = fs::remove_file(name::txnindex_path(&self.dir, base.0));
-        let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
+    pub(super) fn remove_truncated_segment_files(&mut self, base: Offset) -> Result<(), LogError> {
+        // Producer snapshots are pruned separately by retain_reload_range:
+        // the snapshot exactly at the cut must survive deleting its segment.
+        let now = std::time::SystemTime::now();
+        self.retire_files(
+            base,
+            now,
+            &["log", "index", "timeindex", "txnindex", "stampindex"],
+        )?;
+        self.reap_deleted_files(now)
     }
 
     /// Truncate the log so that no record at offset `>= offset` remains.
@@ -106,7 +108,7 @@ impl Log {
             let popped = self.segments.pop().expect("length exceeds retained prefix");
             let base = popped.base_offset();
             drop(popped);
-            self.remove_truncated_segment_files(base);
+            self.remove_truncated_segment_files(base)?;
             self.sealed_txn_indexes.remove(&base);
             self.stamp_indexes.remove(&base);
         }
@@ -117,7 +119,7 @@ impl Log {
         {
             let base = active.base_offset();
             self.active = None;
-            self.remove_truncated_segment_files(base);
+            self.remove_truncated_segment_files(base)?;
             self.stamp_indexes.remove(&base);
         }
 

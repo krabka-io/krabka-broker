@@ -66,6 +66,18 @@ pub fn delete_segment_files(
     dir: &Path,
     base_offset: Offset,
 ) -> Result<(), LogError> {
+    for tombstone in retire_segment_files(io, dir, base_offset)? {
+        remove_optional(io, &tombstone)?;
+    }
+    Ok(())
+}
+
+/// Rename a removed segment out of the live namespace, retaining its files for open readers.
+pub(crate) fn retire_segment_files(
+    io: &dyn LogIo,
+    dir: &Path,
+    base_offset: Offset,
+) -> Result<Vec<std::path::PathBuf>, LogError> {
     let mut tombstones = Vec::with_capacity(6);
     for path in [
         name::log_path(dir, base_offset.0),
@@ -88,13 +100,38 @@ pub fn delete_segment_files(
             Err(error) => return Err(LogError::Io(error)),
         }
     }
-    for tombstone in tombstones {
-        remove_optional(io, &tombstone)?;
+    Ok(tombstones)
+}
+
+/// Retire a file set under unique names, so repeated compactions of the same
+/// base cannot replace a file still retained for readers. `retired` also keeps
+/// successful renames when a later rename fails.
+pub(crate) fn retire_files(
+    io: &dyn LogIo,
+    dir: &Path,
+    base: Offset,
+    extensions: &[&str],
+    retired: &mut Vec<std::path::PathBuf>,
+) -> Result<(), LogError> {
+    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    for extension in extensions {
+        let path = dir.join(format!("{}.{extension}", name::format_base_offset(base.0)));
+        let tombstone = dir.join(format!(
+            "{}.{extension}.{generation}.deleted",
+            name::format_base_offset(base.0)
+        ));
+        match io.rename(IoTarget::SegmentDeletion, &path, &tombstone) {
+            Ok(()) => retired.push(tombstone),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(LogError::Io(error)),
+        }
     }
+    io.sync_dir(dir)?;
     Ok(())
 }
 
-fn remove_optional(io: &dyn LogIo, path: &Path) -> Result<(), LogError> {
+pub(crate) fn remove_optional(io: &dyn LogIo, path: &Path) -> Result<(), LogError> {
     match io.remove_file(IoTarget::SegmentDeletion, path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

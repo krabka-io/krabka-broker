@@ -236,6 +236,31 @@ pub struct LogConfig {
     #[default(DEFAULT_SEGMENT_ROLL_INTERVAL)]
     pub segment_roll_interval: Time,
 
+    /// Maximum random subtraction from the segment roll interval, sampled per segment.
+    pub segment_jitter: Time,
+
+    /// Delay before retired segment files are unlinked. Readers stop seeing them immediately.
+    #[default(krabka_units::secs(60))]
+    pub file_delete_delay: Time,
+
+    /// Offset span between forced syncs. `None` disables the threshold.
+    pub flush_messages: Option<u64>,
+
+    /// Time between forced syncs of dirty data. `None` disables the timer.
+    pub flush_interval: Option<Time>,
+
+    /// Gzip level used when encoding owned batches; -1 selects the codec default.
+    #[default(-1)]
+    pub compression_gzip_level: i32,
+
+    /// Lz4 level used when encoding owned batches.
+    #[default(9)]
+    pub compression_lz4_level: i32,
+
+    /// Zstd level used when encoding owned batches.
+    #[default(3)]
+    pub compression_zstd_level: i32,
+
     /// Delete sealed segments older than this. `None` = unlimited. Kafka's
     /// `retention.ms`; default 7 days.
     #[default(Some(DEFAULT_RETENTION))]
@@ -400,6 +425,19 @@ pub struct LogConfig {
     pub delivery_clock_uncertainty: Time,
 }
 
+impl LogConfig {
+    /// The configured level for a codec that supports compression levels.
+    #[must_use]
+    pub fn compression_level(&self, codec: CompressionType) -> Option<i32> {
+        match codec {
+            CompressionType::Gzip => Some(self.compression_gzip_level),
+            CompressionType::Lz4 => Some(self.compression_lz4_level),
+            CompressionType::Zstd => Some(self.compression_zstd_level),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -417,6 +455,13 @@ mod tests {
                     timestamp_scan_window: kibibytes(64),
                     segment_size: bytes(1 << 30),
                     segment_roll_interval: days(7),
+                    segment_jitter: Time::ZERO,
+                    file_delete_delay: secs(60),
+                    flush_messages: None,
+                    flush_interval: None,
+                    compression_gzip_level: -1,
+                    compression_lz4_level: 9,
+                    compression_zstd_level: 3,
                     retention: Some(days(7)),
                     retention_size: None,
                     max_message_size: bytes(1_048_588),

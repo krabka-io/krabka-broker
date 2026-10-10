@@ -165,6 +165,10 @@ impl Log {
             active: Some(active),
             dir_sync_needed,
             rollover_flusher: super::rollover_flush::Flusher::default(),
+            unflushed_messages: 0,
+            last_flush: std::time::SystemTime::now(),
+            roll_jitter: None,
+            pending_deletes: Vec::new(),
             start_offset,
             // Derived from the files on disk, not deleted up to by anyone.
             // The checkpoint restore below is what may set it: see

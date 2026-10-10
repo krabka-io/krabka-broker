@@ -122,9 +122,33 @@ pub async fn run_with_sequencer(
     // replace the current log.
     let mut unreported_cut: Option<krabka_log::Offset> = None;
     loop {
+        let mut delay = lock_log(&log).maintenance_delay(std::time::SystemTime::now());
+        if delay == Some(std::time::Duration::ZERO) {
+            let maintenance_log = Arc::clone(&log);
+            let result = storage::run_log_mutation(
+                move || {
+                    lock_log(&maintenance_log)
+                        .maintain(std::time::SystemTime::now())
+                        .map_err(crate::error::BrokerError::from)
+                },
+                "log maintenance task panicked",
+                (&log_dir, &log_dir_status),
+            )
+            .await;
+            if let Err(error) = result {
+                tracing::warn!(%error, "log maintenance failed");
+                // Back off retries while still accepting control messages.
+                delay = Some(std::time::Duration::from_millis(100));
+            } else {
+                continue;
+            }
+        }
         let msg = match pending.take() {
             Some(m) => m,
-            None => match rx.recv().await {
+            None => match tokio::select! {
+                message = rx.recv() => message,
+                () = tokio::time::sleep(delay.unwrap_or(std::time::Duration::ZERO)), if delay.is_some() => continue,
+            } {
                 Some(m) => m,
                 None => break, // channel closed: every sender dropped
             },

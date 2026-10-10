@@ -23,6 +23,18 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
+### Fixed
+
+- The previously inert topic settings `compression.gzip.level`,
+  `compression.lz4.level`, `compression.zstd.level`, `segment.jitter.ms`,
+  `file.delete.delay.ms`, `flush.messages`, and `flush.ms` now control log
+  behavior. Compression levels apply when the broker re-encodes records;
+  producer batches passed through unchanged keep their original encoding.
+  Segment rolls use jitter, removed segment files are reclaimed after the
+  configured delay, and message or time thresholds flush pending writes,
+  including idle partitions. Topic overrides and broker defaults take effect
+  through live configuration updates.
+
 ## [1.0.1] - 2026-10-09
 
 1.0.1 changes no on-disk format, so it upgrades from 1.0.0 in place and

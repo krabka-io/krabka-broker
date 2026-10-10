@@ -514,7 +514,14 @@ pub(super) async fn admit_partition(
     // gates, because Kafka's sits before `analyzeAndValidateProducerState`
     // too, and because a refused batch must leave the idempotent sequence and
     // the log end offset exactly where it found them.
-    if let Some(stored) = prepared.stored_len(topic_compression)
+    let stored_config = matches!(prepared.source, super::prepare::PreparedSource::Owned(_))
+        .then(|| {
+            partitions
+                .get(topic_name, krabka_ids::PartitionIndex(idx))
+                .and_then(|part| part.log.lock().ok().map(|log| log.config_snapshot()))
+        })
+        .flatten();
+    if let Some(stored) = prepared.stored_len(topic_compression, stored_config.as_ref())
         && stored > max_message_bytes.bytes_usize()
     {
         // `out` already carries the -1 `base_offset` sentinel.
@@ -637,7 +644,7 @@ fn exceeds_segment_size(prepared: &PreparedBatch, part: &crate::partition::Parti
     };
     let config = log.config_snapshot();
     drop(log);
-    prepared.appended_len(config.compression_type) > config.segment_size.bytes_usize()
+    prepared.appended_len(&config) > config.segment_size.bytes_usize()
 }
 
 /// The coordinator's answer applied to an admitted batch, then every stage

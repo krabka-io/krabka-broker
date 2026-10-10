@@ -468,7 +468,16 @@ impl Log {
 
         let mut new_segments: Vec<Segment> = Vec::with_capacity(rewrites.len());
         for (group_bases, rewrite) in &rewrites {
-            crate::compact::atomic_swap(&*self.io, &self.dir, group_bases, rewrite)?;
+            if self.config.read().unwrap().file_delete_delay <= krabka_units::Time::ZERO {
+                crate::compact::atomic_swap(&*self.io, &self.dir, group_bases, rewrite)?;
+            } else {
+                let io = self.io.clone();
+                let dir = self.dir.clone();
+                let now = std::time::SystemTime::now();
+                crate::compact::atomic_swap_retiring(&*io, &dir, group_bases, rewrite, |base| {
+                    self.retire_files(base, now, &["log", "index", "timeindex", "txnindex"])
+                })?;
+            }
 
             // Validation scans the new log from byte zero, rebuilds both
             // sparse indexes, and derives exact offset and timestamp

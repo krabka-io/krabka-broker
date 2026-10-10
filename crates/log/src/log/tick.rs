@@ -49,6 +49,8 @@ impl Log {
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn tick(&mut self, now: SystemTime, high_watermark: Offset) -> Result<(), LogError> {
         self.rollover_flusher.check()?;
+        self.flush_if_due(now)?;
+        self.reap_deleted_files(now)?;
         // Tiered topics' segment lifecycle is owned by the RemoteLogManager.
         if self.config.read().unwrap().remote_storage_enable {
             return Ok(());
@@ -149,7 +151,7 @@ impl Log {
         let mut deleted: HashSet<Offset> = HashSet::with_capacity(to_evict.len());
         let mut failure: Option<LogError> = None;
         for base in to_evict {
-            if let Err(error) = retention::delete_segment_files(&*self.io, &self.dir, base) {
+            if let Err(error) = self.retire_segment(base, now) {
                 failure = Some(error);
                 break;
             }

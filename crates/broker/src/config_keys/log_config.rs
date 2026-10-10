@@ -13,12 +13,14 @@ use krabka_units::{
 };
 
 use super::{
-    CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, INDEX_INTERVAL_BYTES,
-    INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS,
-    MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND,
-    MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS, PREALLOCATE, REMOTE_LOG_COPY_DISABLE,
-    REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
-    SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_MS,
+    CLEANUP_POLICY, COMPRESSION_GZIP_LEVEL, COMPRESSION_LZ4_LEVEL, COMPRESSION_TYPE,
+    COMPRESSION_ZSTD_LEVEL, DELETE_RETENTION_MS, FILE_DELETE_DELAY_MS, FLUSH_MESSAGES, FLUSH_MS,
+    INDEX_INTERVAL_BYTES, INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS,
+    MAX_COMPACTION_LAG_MS, MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_TYPE,
+    MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS,
+    PREALLOCATE, REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE,
+    RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS,
+    SEGMENT_MS,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC},
     parse::{self, bool_value, int_value, long_value},
     validation::{parse_cleanup_policy, parse_compression_type},
@@ -127,6 +129,30 @@ pub(crate) fn apply_to_log_config(
                     } else {
                         krabka_protocol::records::TimestampType::CreateTime
                     };
+            }
+            SEGMENT_JITTER_MS | FILE_DELETE_DELAY_MS | FLUSH_MS => {
+                if let Some(ms) = long_value(v).filter(|ms| *ms >= 0) {
+                    match k.as_str() {
+                        SEGMENT_JITTER_MS => out.segment_jitter = Time::from_millis(ms),
+                        FILE_DELETE_DELAY_MS => out.file_delete_delay = Time::from_millis(ms),
+                        _ => out.flush_interval = (ms != i64::MAX).then(|| Time::from_millis(ms)),
+                    }
+                }
+            }
+            FLUSH_MESSAGES => {
+                if let Some(messages) = long_value(v).filter(|messages| *messages >= 1) {
+                    out.flush_messages =
+                        (messages != i64::MAX).then(|| u64::try_from(messages).unwrap());
+                }
+            }
+            COMPRESSION_GZIP_LEVEL | COMPRESSION_LZ4_LEVEL | COMPRESSION_ZSTD_LEVEL => {
+                if let Some(level) = int_value(v) {
+                    match k.as_str() {
+                        COMPRESSION_GZIP_LEVEL => out.compression_gzip_level = level,
+                        COMPRESSION_LZ4_LEVEL => out.compression_lz4_level = level,
+                        _ => out.compression_zstd_level = level,
+                    }
+                }
             }
             COMPRESSION_TYPE => {
                 if let Ok(target) = parse_compression_type(v) {
@@ -421,21 +447,6 @@ mod tests {
         assert!(out.max_compaction_lag == None);
     }
 
-    /// Stored-only keys reach the applier like any other override and must
-    /// leave the log a partition runs with exactly as it was.
-    #[test]
-    fn apply_ignores_the_keys_no_log_behaviour_reads() {
-        let overrides = maplit::btreemap! {
-        super::super::SEGMENT_JITTER_MS.to_string() => "5000".to_string(),
-        super::super::FILE_DELETE_DELAY_MS.to_string() => "1000".to_string(),
-        super::super::FLUSH_MESSAGES.to_string() => "10".to_string(),
-        super::super::FLUSH_MS.to_string() => "10".to_string()};
-
-        let out = apply_to_log_config(&overrides, &LogConfig::default());
-
-        assert!(out == LogConfig::default());
-    }
-
     #[test]
     fn apply_cleanup_policy_delete_propagates() {
         let mut overrides = std::collections::BTreeMap::new();
@@ -554,5 +565,46 @@ mod tests {
             let out = apply_to_log_config(&o, &base);
             assert!(out.segment_size == bytes(4096), "corrupt {corrupt}");
         }
+    }
+}
+
+#[cfg(test)]
+mod active_options_tests {
+    use super::*;
+
+    #[test]
+    fn options_override_the_log_and_deleting_overrides_restores_the_base() {
+        let overrides = maplit::btreemap! {
+            COMPRESSION_GZIP_LEVEL.to_owned() => "1".to_owned(),
+            COMPRESSION_LZ4_LEVEL.to_owned() => "17".to_owned(),
+            COMPRESSION_ZSTD_LEVEL.to_owned() => "-5".to_owned(),
+            SEGMENT_JITTER_MS.to_owned() => "5000".to_owned(),
+            FILE_DELETE_DELAY_MS.to_owned() => "1000".to_owned(),
+            FLUSH_MESSAGES.to_owned() => "10".to_owned(),
+            FLUSH_MS.to_owned() => "50".to_owned(),
+        };
+        let base = LogConfig::default();
+        let applied = apply_to_log_config(&overrides, &base);
+        assert2::assert!(
+            applied
+                == LogConfig {
+                    compression_gzip_level: 1,
+                    compression_lz4_level: 17,
+                    compression_zstd_level: -5,
+                    segment_jitter: Time::from_millis(5000),
+                    file_delete_delay: Time::from_millis(1000),
+                    flush_messages: Some(10),
+                    flush_interval: Some(Time::from_millis(50)),
+                    ..base.clone()
+                }
+        );
+        assert2::assert!(apply_to_log_config(&BTreeMap::new(), &base) == base);
+        let disabled = maplit::btreemap! {
+            FLUSH_MESSAGES.to_owned() => i64::MAX.to_string(),
+            FLUSH_MS.to_owned() => i64::MAX.to_string(),
+        };
+        let applied = apply_to_log_config(&disabled, &applied);
+        assert2::assert!(applied.flush_messages == None);
+        assert2::assert!(applied.flush_interval == None);
     }
 }

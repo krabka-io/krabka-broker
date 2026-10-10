@@ -368,7 +368,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Int,
             Some("-1"),
-            "Level a broker-side gzip re-encode runs at. Stored and reported only: krabka's gzip encoder takes no level and always runs at the codec default, which is what -1 selects.",
+            "Level a broker-side gzip re-encode runs at; -1 selects the codec default. Producer passthrough preserves the producer's bytes.",
             ValueCheck::Parsed,
         )
     },
@@ -379,7 +379,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Int,
             Some("9"),
-            "Level a broker-side lz4 re-encode runs at. Stored and reported only: krabka's lz4 encoder takes no level.",
+            "Level a broker-side lz4 re-encode runs at. Producer passthrough preserves the producer's bytes.",
             ValueCheck::I32Between(LZ4_MIN_LEVEL, LZ4_MAX_LEVEL),
         )
     },
@@ -390,7 +390,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Int,
             Some("3"),
-            "Level a broker-side zstd re-encode runs at. Stored and reported only: krabka's zstd encoder takes no level and always runs at 3, which is this key's default.",
+            "Level a broker-side zstd re-encode runs at. Producer passthrough preserves the producer's bytes.",
             ValueCheck::I32Between(ZSTD_MIN_LEVEL, ZSTD_MAX_LEVEL),
         )
     },
@@ -669,7 +669,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("0"),
-            "Random subtraction from segment.ms, which staggers the roll of many partitions. Stored and reported only: krabka rolls on the interval itself.",
+            "Maximum random subtraction from segment.ms, sampled once per segment to stagger partition rolls and capped by segment.ms.",
             ValueCheck::I64AtLeast(0),
         )
     },
@@ -713,7 +713,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("60000"),
-            "Delay before a segment file removed by retention is unlinked. Stored and reported only: krabka unlinks a segment as it evicts it.",
+            "Delay before retired segment files are unlinked. Removed records become unavailable immediately; renamed files remain for existing readers until the delay expires.",
             ValueCheck::I64AtLeast(0),
         )
     },
@@ -724,7 +724,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("9223372036854775807"),
-            "Records between forced fsyncs. Stored and reported only: krabka manages fsync from its own durability settings.",
+            "Offset span between forced fsyncs. Long.MAX_VALUE disables the threshold. Stricter durability settings may sync sooner.",
             ValueCheck::I64AtLeast(1),
         )
     },
@@ -735,7 +735,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("9223372036854775807"),
-            "Milliseconds between forced fsyncs. Stored and reported only: krabka manages fsync from its own durability settings.",
+            "Milliseconds between forced fsyncs of dirty data, including idle partitions. Long.MAX_VALUE disables the timer. Stricter durability settings may sync sooner.",
             ValueCheck::I64AtLeast(0),
         )
     },

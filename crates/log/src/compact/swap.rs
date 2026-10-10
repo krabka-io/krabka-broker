@@ -60,6 +60,19 @@ pub fn atomic_swap(
     consumed_base_offsets: &[Offset],
     rewrite: &RewriteOutput,
 ) -> Result<(), LogError> {
+    atomic_swap_retiring(io, dir, consumed_base_offsets, rewrite, |base| {
+        remove_replaced_segment(io, dir, base.0)
+    })
+}
+
+/// The swap protocol with caller-owned reclamation of replaced files.
+pub(crate) fn atomic_swap_retiring(
+    io: &dyn LogIo,
+    dir: &Path,
+    consumed_base_offsets: &[Offset],
+    rewrite: &RewriteOutput,
+    mut retire: impl FnMut(Offset) -> Result<(), LogError>,
+) -> Result<(), LogError> {
     let base = rewrite.new_base_offset.0;
     let sidecars = [
         (Some(&rewrite.index_swap), "index"),
@@ -97,7 +110,7 @@ pub fn atomic_swap(
     // must be gone for good before the final rename can make the survivor
     // overlap one of them.
     for consumed in consumed_base_offsets {
-        remove_replaced_segment(io, dir, consumed.0)?;
+        retire(*consumed)?;
     }
     io.sync_dir(dir)?;
 

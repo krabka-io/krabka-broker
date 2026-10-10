@@ -75,6 +75,8 @@ impl Log {
             Self::sync_log_dir(&*self.io, &self.dir)?;
             self.dir_sync_needed = false;
         }
+        self.unflushed_messages = 0;
+        self.last_flush = std::time::SystemTime::now();
         Ok(())
     }
 

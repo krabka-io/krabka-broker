@@ -184,3 +184,54 @@ async fn topic_compression_producer_preserves_producer_gzip() {
 
     handle.shutdown().await;
 }
+
+#[test]
+fn stored_owned_batches_honor_every_codec_level() {
+    use krabka_log::{Log, LogConfig};
+    use krabka_units::gibibytes;
+
+    for (codec, levels) in [
+        (CompressionType::Gzip, [1, 9]),
+        (CompressionType::Lz4, [9, 17]),
+        (CompressionType::Zstd, [-5, 12]),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for level in levels {
+            log.set_config(LogConfig {
+                compression_gzip_level: if codec == CompressionType::Gzip {
+                    level
+                } else {
+                    -1
+                },
+                compression_lz4_level: if codec == CompressionType::Lz4 {
+                    level
+                } else {
+                    9
+                },
+                compression_zstd_level: if codec == CompressionType::Zstd {
+                    level
+                } else {
+                    3
+                },
+                ..LogConfig::default()
+            });
+            let value: Vec<u8> = (0..16 * 1024u32)
+                .map(|i| u8::try_from((i * 7 + i / 13) % 251).unwrap())
+                .collect();
+            let mut batch = RecordBatch {
+                attributes: Attributes::default().with_compression(codec),
+                ..batch_from_records(vec![value_record(0, Some(Bytes::from(value)))])
+            };
+            let (base, _) = log.append(&mut batch).unwrap();
+            let mut expected = bytes::BytesMut::new();
+            batch
+                .encode_with_compression_level(&mut expected, Some(level))
+                .unwrap();
+            let stored = log
+                .read_raw(base, log.log_end_offset(), gibibytes(1))
+                .unwrap();
+            check!(stored.bytes == expected.freeze(), "{codec:?} level={level}");
+        }
+    }
+}

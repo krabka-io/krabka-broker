@@ -201,6 +201,7 @@ impl Log {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn reset_to(&mut self, new_base: Offset) -> Result<(), LogError> {
         self.rollover_flusher.finish()?;
+        self.roll_jitter = None;
         if new_base < 0 {
             return Err(LogError::OffsetMismatch {
                 expected: Offset(0),
@@ -215,14 +216,14 @@ impl Log {
         while let Some(popped) = self.segments.pop() {
             let base = popped.base_offset();
             drop(popped);
-            self.remove_truncated_segment_files(base);
+            self.remove_truncated_segment_files(base)?;
         }
 
         // Drop the active segment + its on-disk files.
         if let Some(active) = self.active.take() {
             let base = active.base_offset();
             drop(active);
-            self.remove_truncated_segment_files(base);
+            self.remove_truncated_segment_files(base)?;
         }
 
         // A hard reset re-bases the local log after a divergence or a

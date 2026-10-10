@@ -346,32 +346,6 @@ fn every_kafka_topic_key_is_documented() {
     }
 }
 
-/// The three codec levels are recognised and inert, and their `doc` string --
-/// what `DescribeConfigs --include-documentation` returns and what the
-/// reference page prints -- has to say so. Accepting a key silently is the
-/// failure this pins.
-#[test]
-fn an_inert_key_says_so_where_an_operator_reads_it() {
-    for name in [
-        "compression.gzip.level",
-        "compression.lz4.level",
-        "compression.zstd.level",
-        "segment.jitter.ms",
-        "file.delete.delay.ms",
-        "flush.messages",
-        "flush.ms",
-    ] {
-        let row = registry::lookup(ConfigScope::Topic, name).expect(name);
-        check!(
-            row.doc
-                .to_ascii_lowercase()
-                .contains("stored and reported only"),
-            "{name}: {}",
-            row.doc
-        );
-    }
-}
-
 /// Matching Kafka's key set is not the same as accepting anything. Each value
 /// below was refused by `LogConfig.validate` on the 4.3.1 jar, with the
 /// message quoted beside it, and krabka refuses it too.

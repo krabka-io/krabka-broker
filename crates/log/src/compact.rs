@@ -47,3 +47,5 @@ mod compact_model;
 
 #[cfg(test)]
 mod retention_fuzz;
+
+pub(crate) use swap::atomic_swap_retiring;

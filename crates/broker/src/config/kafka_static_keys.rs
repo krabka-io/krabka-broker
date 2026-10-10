@@ -254,6 +254,14 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = keys! {
         |c| size(c.metadata_max_bytes_between_snapshots);
     "metadata.log.max.snapshot.interval.ms", Some("metadata_max_snapshot_interval"),
         |c| time_ms(c.metadata_max_snapshot_interval);
+    "log.roll.jitter.ms", None, |c| time_ms(c.log_config.segment_jitter);
+    "log.segment.delete.delay.ms", None, |c| time_ms(c.log_config.file_delete_delay);
+    "log.flush.interval.messages", None, |c| c.log_config.flush_messages.map_or_else(|| i64::MAX.to_string(), |n| n.to_string());
+    "log.flush.interval.ms", None, |c| c.log_config.flush_interval.map_or_else(|| i64::MAX.to_string(), time_ms);
+    "compression.gzip.level", None, |c| c.log_config.compression_gzip_level.to_string();
+    "compression.lz4.level", None, |c| c.log_config.compression_lz4_level.to_string();
+    "compression.zstd.level", None, |c| c.log_config.compression_zstd_level.to_string();
+
     "metadata.log.segment.bytes", Some("metadata_log_segment_bytes"),
         |c| size(c.metadata_log.segment_size);
     "metadata.log.segment.ms", Some("metadata_log_segment_roll_interval"),
