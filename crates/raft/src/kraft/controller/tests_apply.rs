@@ -93,7 +93,10 @@ fn publish_leader_updates_leader_and_quorum_watchers() {
 
 #[test]
 fn quorum_snapshot_timestamp_tracks_applied_not_newer_committed_records() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let (mut engine, _dir) = build_engine_only(EngineSetup {
+        ids: &[NodeId(1)],
+        ..Default::default()
+    });
     let noop = super::records::noop_record_value().expect("no-op record");
     let mut batch = metadata_record_batch(1, &[noop]).expect("metadata batch");
     engine
