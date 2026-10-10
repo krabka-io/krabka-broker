@@ -47,17 +47,9 @@ pub const DEFAULT_READ_BUFFER_CAP: ByteSize = mebibytes(4);
 /// kernel to read ahead.
 pub const DEFAULT_READ_AHEAD_MAX: ByteSize = mebibytes(4);
 
-/// How much of the newest data an active segment that writes through
-/// `O_DIRECT` keeps in memory to serve reads with: one default
+/// Default for [`LogConfig::tail_cache_size`]: one default
 /// `max.partition.fetch.bytes`.
-///
-/// Those writes bypass the page cache and drop what it held of the range, so
-/// without this a consumer reading right behind the producer reads from disk.
-/// Every partition under [`SegmentAllocation::Preallocate`] holds up to this
-/// much, plus one batch. It is a constant rather than a [`LogConfig`] field
-/// because the broker holds its log config by value across `await`s, where
-/// every byte of it counts against `clippy::large_futures`.
-pub(crate) const TAIL_CACHE_SIZE: ByteSize = mebibytes(1);
+pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(1);
 
 /// Default byte window for timestamp scans between sparse index entries.
 pub const DEFAULT_TIMESTAMP_SCAN_WINDOW: ByteSize = kibibytes(64);
@@ -130,8 +122,9 @@ pub enum SegmentAllocation {
     /// as they grow it, and write its batches through `O_DIRECT`. A truncate
     /// gives the reservation up, and the segment takes it again.
     ///
-    /// The `O_DIRECT` writes bypass the page cache. The newest 1 MiB of the
-    /// segment stays in memory to serve reads, and a direct write covers whole blocks, so the active segment's
+    /// The `O_DIRECT` writes bypass the page cache. The newest
+    /// [`LogConfig::tail_cache_size`] of the segment stays in memory to serve
+    /// reads, and a direct write covers whole blocks, so the active segment's
     /// file runs up to a block past its last batch until it is sealed. Where
     /// the kernel does not report the alignment `O_DIRECT` needs (before Linux
     /// 6.1, or on tmpfs), the segment writes through the page cache.
@@ -293,6 +286,16 @@ pub struct LogConfig {
     /// Kafka's `false`. See [`SegmentAllocation`].
     pub segment_allocation: SegmentAllocation,
 
+    /// How much of the newest data an active segment that writes through
+    /// `O_DIRECT` keeps in memory to serve reads with. Those writes bypass
+    /// the page cache and drop what it held of the range, so without this a
+    /// consumer reading right behind the producer reads from disk. Every
+    /// partition under [`SegmentAllocation::Preallocate`] holds up to this
+    /// much, plus one batch; `0` keeps only the newest batch. Default 1 MiB,
+    /// one default `max.partition.fetch.bytes`.
+    #[default(DEFAULT_TAIL_CACHE_SIZE)]
+    pub tail_cache_size: ByteSize,
+
     /// On open, CRC every batch in the active segment and rebuild its sparse indexes.
     #[default(true)]
     pub validate_on_open: bool,
@@ -422,6 +425,7 @@ mod tests {
                     segment_index_size: bytes(10 * 1024 * 1024),
                     flush_on_append: false,
                     segment_allocation: SegmentAllocation::OnWrite,
+                    tail_cache_size: mebibytes(1),
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
                     min_compaction_lag: Time::ZERO,

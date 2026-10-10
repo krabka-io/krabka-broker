@@ -64,10 +64,11 @@ impl LogIo for AlignedDisk {
     }
 }
 
-fn direct() -> LogConfig {
+fn direct(tail_cache_size: ByteSize) -> LogConfig {
     LogConfig {
         segment_size: mebibytes(1),
         segment_allocation: SegmentAllocation::Preallocate,
+        tail_cache_size,
         ..LogConfig::default()
     }
 }
@@ -77,8 +78,7 @@ fn direct() -> LogConfig {
 fn direct_log(disk: &Arc<AlignedDisk>, tail_cache_size: ByteSize) -> (tempfile::TempDir, Log) {
     let (dir, mut log) = configured_test_log(LogConfig::default());
     log.test_set_io(disk.clone());
-    log.tail_cache_size = tail_cache_size;
-    log.set_config(direct());
+    log.set_config(direct(tail_cache_size));
     (dir, log)
 }
 
@@ -256,7 +256,7 @@ fn recovery_cuts_the_padding_a_crash_leaves() {
 /// before and after a roll and across a restart.
 #[test]
 fn a_real_direct_log_round_trips_across_a_roll_and_a_restart() {
-    let (dir, mut log) = configured_test_log(direct());
+    let (dir, mut log) = configured_test_log(direct(mebibytes(1)));
     for records in [1, 300, 2, 17, 900, 5] {
         append_samples(&mut log, 1, records);
     }
@@ -267,7 +267,7 @@ fn a_real_direct_log_round_trips_across_a_roll_and_a_restart() {
     append_samples(&mut log, 1, 3);
     drop(log);
 
-    let log = Log::open(dir.path(), direct()).unwrap();
+    let log = Log::open(dir.path(), direct(mebibytes(1))).unwrap();
     let mut after = expected.to_vec();
     after.push((1225, 2));
     assert2::assert!(batches(&log) == after);

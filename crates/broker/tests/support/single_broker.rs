@@ -49,7 +49,10 @@ pub async fn start_configured(configure: impl FnOnce(&mut BrokerConfig)) -> InPr
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = heartbeat_config(tempdir.path());
     configure(&mut config);
-    let (broker, client) = boot_with_client(config, "krabka-broker-test").await;
+    // Boxed: the boot future holds the whole `BrokerConfig`, and every test
+    // that awaits one of these helpers would otherwise carry it inline,
+    // past `clippy::large_futures`.
+    let (broker, client) = Box::pin(boot_with_client(config, "krabka-broker-test")).await;
     InProcess {
         broker,
         client,

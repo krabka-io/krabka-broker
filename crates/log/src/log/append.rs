@@ -49,6 +49,7 @@ impl Log {
             index_interval,
             flush_on_append,
             segment_allocation,
+            tail_cache_size,
         ) = {
             let cfg = self.config.read().unwrap();
             (
@@ -58,6 +59,7 @@ impl Log {
                 cfg.index_interval,
                 cfg.flush_on_append,
                 cfg.segment_allocation,
+                cfg.tail_cache_size,
             )
         };
         if self.should_roll_for_incoming(
@@ -75,10 +77,6 @@ impl Log {
         // so this is the one place that sees each segment under the config
         // in force when it is written. A segment asks once for each; see
         // `Segment::reserve` and `Segment::write_direct`.
-        #[cfg(test)]
-        let tail_cache_size = self.tail_cache_size;
-        #[cfg(not(test))]
-        let tail_cache_size = crate::config::TAIL_CACHE_SIZE;
         if let Some(active) = self.active.as_mut() {
             match segment_allocation {
                 SegmentAllocation::Preallocate => {

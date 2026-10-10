@@ -222,8 +222,4 @@ pub struct Log {
     /// `None` means the last walk found nothing waiting, or that a truncation
     /// or a compaction may have removed the batch it named.
     delivery_pending_ms: Option<i64>,
-    /// [`crate::config::TAIL_CACHE_SIZE`], which a test can shrink to watch
-    /// a read miss the cache.
-    #[cfg(test)]
-    tail_cache_size: krabka_units::prelude::ByteSize,
 }

@@ -110,12 +110,15 @@ async fn start_role_separated_with(
     customize(0, &mut ctrl_cfg);
     let controller_metadata_dir = ctrl_cfg.metadata_dir().to_path_buf();
     let controller_client_addr = ctrl_cfg.listen_addr;
-    let controller = support::start_held_node(
+    // Boxed, as is each broker's start below: a node's start future holds
+    // its whole `BrokerConfig`, and every test that awaits this helper would
+    // otherwise carry it inline, past `clippy::large_futures`.
+    let controller = Box::pin(support::start_held_node(
         ctrl_cfg,
         &mut ctrl_ls,
         &mut data_ls,
         "controller-only start",
-    )
+    ))
     .await;
     dirs.push(ctrl_dir);
     controller.wait_until_controller_leader().await;
@@ -128,7 +131,13 @@ async fn start_role_separated_with(
         customize(index, &mut cfg);
         broker_configs.push(cfg.clone());
         observers.push(
-            support::start_held_node(cfg, &mut ctrl_ls, &mut data_ls, "broker-only start").await,
+            Box::pin(support::start_held_node(
+                cfg,
+                &mut ctrl_ls,
+                &mut data_ls,
+                "broker-only start",
+            ))
+            .await,
         );
         dirs.push(dir);
     }

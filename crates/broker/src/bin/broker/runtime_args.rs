@@ -77,6 +77,7 @@ pub struct RuntimeArgs {
     pub share_session_cache_max_when_unlimited: Option<PositiveCount>,
     pub log_read_buffer_cap: Option<ByteSize>,
     pub log_read_ahead_max: Option<ByteSize>,
+    pub log_tail_cache_size: Option<ByteSize>,
     pub log_timestamp_scan_window: Option<ByteSize>,
     pub log_delivery_clock_uncertainty: Option<Time>,
     #[arg(long, env = "KRABKA_MESSAGE_MAX_BYTES", value_parser = parse_kafka_int_byte_size)]
