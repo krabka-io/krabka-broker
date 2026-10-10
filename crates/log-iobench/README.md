@@ -112,22 +112,33 @@ system temporary directory, which is often tmpfs, and tmpfs supports neither
 |------------------|----------------------------------------------------------------------|
 | `pread_warm`     | current behaviour, file resident                                     |
 | `pread_cold`     | current behaviour after `POSIX_FADV_DONTNEED` drops the file (untimed) |
-| `dontcache_warm` | `preadv2(RWF_DONTCACHE)` on a resident range                         |
+| `dontcache_warm` | `preadv2(RWF_DONTCACHE)` on the resident file                        |
 | `dontcache_cold` | `preadv2(RWF_DONTCACHE)` after the file is dropped                   |
 | `odirect`        | aligned `pread` on an `O_DIRECT` handle                              |
 
-`uncached_write/*` overwrites the same sizes in place in a file that was
-written out in full beforehand. That is an append into a preallocated segment,
-so no variant pays for block allocation. `buffered`, `dontcache` and `odirect`
-each run alone and then with `fdatasync` after every write. The `fdatasync` is
-what makes an append durable in all three cases: `O_DIRECT` skips the page
-cache but not the drive's write cache.
+The write groups write the same sizes in two shapes:
+
+| group                  | what it writes                                                                 |
+|------------------------|--------------------------------------------------------------------------------|
+| `uncached_overwrite/*` | in place, over a file written out in full beforehand: a preallocated segment   |
+| `uncached_append/*`    | at the end of a file that starts empty, as `krabka-log` appends to a segment today |
+
+An append pays for block allocation on every write and for the new file size
+on every `fdatasync`; an overwrite pays for neither. `buffered`, `dontcache`
+and `odirect` each run alone and then with `fdatasync` after every write. The
+`fdatasync` is what makes an append durable in all three cases: `O_DIRECT`
+skips the page cache but not the drive's write cache.
+
+Every byte comes from a pseudorandom stream whose state runs on across the
+whole fixture, and each write offset gets bytes of its own. A storage stack
+that compresses or deduplicates cannot serve any of it with fewer physical
+bytes.
 
 The cold variants evict the whole file, not the range about to be read. The
 walk is sequential, so the readahead of one read would otherwise have cached the
-next range already. `dontcache_warm` warms its range with a read just before
-the timed one, so at 16 KiB the bytes are still in the CPU cache and the result
-flatters it.
+next range already. The warm variants read the whole 64 MiB file once before
+they start, and `RWF_DONTCACHE` drops only pages its own read brought in, so
+the file stays resident.
 
 What this bench does not measure is the point of `RWF_DONTCACHE`: that a cold
 read or a bulk append leaves the rest of the page cache alone. It times one I/O

@@ -16,19 +16,22 @@
 //! - `pread_cold`: the current behaviour after `POSIX_FADV_DONTNEED` evicts the
 //!   file, which is a consumer reading behind the tail. The eviction runs
 //!   outside the timed section.
-//! - `dontcache_warm`: `preadv2(RWF_DONTCACHE)` on a resident range, which
-//!   shows what the flag costs on a hit.
+//! - `dontcache_warm`: `preadv2(RWF_DONTCACHE)` on the resident file, which
+//!   shows what the flag costs on a hit. The flag drops only the pages its own
+//!   read brought in, so the file stays resident.
 //! - `dontcache_cold`: `preadv2(RWF_DONTCACHE)` on an evicted file.
 //! - `odirect`: an aligned `pread` on an `O_DIRECT` handle. It has no warm or
 //!   cold case, because it never consults the cache.
 //!
-//! `uncached_write/*` overwrites the same sizes in place, in a file that was
-//! written out in full beforehand. That is the shape of an append into a
-//! preallocated segment, so no variant pays for block allocation or a size
-//! change. Each of `buffered`, `dontcache` and `odirect` runs once without a
-//! sync and once followed by `fdatasync`, which is what makes an append
-//! durable whichever way it was written: `O_DIRECT` skips the page cache but
-//! not the drive's write cache.
+//! The write groups write the same sizes in two shapes. `uncached_overwrite/*`
+//! overwrites a file that was written out in full beforehand, which is an
+//! append into a preallocated segment: no block allocation and no size change.
+//! `uncached_append/*` extends a file that starts empty, as `krabka-log`
+//! appends to a segment today, so each write allocates and each `fdatasync`
+//! also writes the new size back. Each of `buffered`, `dontcache` and
+//! `odirect` runs once without a sync and once followed by `fdatasync`, which
+//! is what makes an append durable whichever way it was written: `O_DIRECT`
+//! skips the page cache but not the drive's write cache.
 //!
 //! `O_DIRECT` needs a filesystem that supports it, and `RWF_DONTCACHE` needs
 //! Linux 6.14 or later and a filesystem that opted in. tmpfs supports neither.
@@ -98,9 +101,9 @@ mod linux {
             Self { raw, start, len }
         }
 
-        fn filled(len: usize, align: usize) -> Self {
+        fn filled(len: usize, align: usize, noise: &mut Noise) -> Self {
             let mut buf = Self::new(len, align);
-            buf.as_mut_slice().copy_from_slice(&pattern(len));
+            noise.fill(buf.as_mut_slice());
             buf
         }
 
@@ -113,12 +116,24 @@ mod linux {
         }
     }
 
-    /// Non-zero, non-repeating-per-page bytes, so no filesystem can shortcut
-    /// the I/O as a hole or a run of one value.
-    fn pattern(len: usize) -> Vec<u8> {
-        (0..len)
-            .map(|i| u8::try_from(i % 251).expect("below 256"))
-            .collect()
+    /// A deterministic pseudorandom byte stream (SplitMix64).
+    ///
+    /// Its state carries on from one [`Noise::fill`] to the next, so no block
+    /// of the fixture repeats another, and a storage stack that compresses or
+    /// deduplicates cannot serve the I/O with fewer physical bytes.
+    struct Noise(u64);
+
+    impl Noise {
+        fn fill(&mut self, buf: &mut [u8]) {
+            for chunk in buf.chunks_mut(8) {
+                self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^= z >> 31;
+                chunk.copy_from_slice(&z.to_le_bytes()[..chunk.len()]);
+            }
+        }
     }
 
     /// The directory the fixture files go in: `KRABKA_IOBENCH_DIR` if set,
@@ -133,10 +148,11 @@ mod linux {
 
     /// Write a [`FILE_SIZE`] file in full and make it durable, so a later
     /// overwrite allocates nothing and a cold read finds real blocks.
-    fn write_fixture(path: &Path) {
+    fn write_fixture(path: &Path, noise: &mut Noise) {
         let mut file = File::create(path).expect("create fixture");
-        let chunk = pattern(mebibytes(1).bytes_usize());
+        let mut chunk = vec![0u8; mebibytes(1).bytes_usize()];
         for _ in 0..FILE_SIZE.bytes_u64() / mebibytes(1).bytes_u64() {
+            noise.fill(&mut chunk);
             file.write_all(&chunk).expect("write fixture");
         }
         file.sync_all().expect("sync fixture");
@@ -206,6 +222,18 @@ mod linux {
         .expect("fadvise DONTNEED");
     }
 
+    /// Read all of `file` through the page cache, so the warm variants find it
+    /// resident. It runs outside the timed section and touches far more bytes
+    /// than the CPU caches hold, so no timed read finds its bytes there.
+    fn prime(file: &File) {
+        let mut chunk = vec![0u8; mebibytes(1).bytes_usize()];
+        let mut at = 0;
+        while at < FILE_SIZE.bytes_u64() {
+            file.read_exact_at(&mut chunk, at).expect("pread");
+            at += mebibytes(1).bytes_u64();
+        }
+    }
+
     /// Write back and drop every cached page of `file`, so one write variant
     /// does not leave dirty pages for the next to flush.
     fn settle(file: &File) {
@@ -259,8 +287,9 @@ mod linux {
             let dir = bench_dir();
             let read_path = dir.path().join("00000000000000000000.log");
             let write_path = dir.path().join("00000000000000100000.log");
-            write_fixture(&read_path);
-            write_fixture(&write_path);
+            let mut noise = Noise(0);
+            write_fixture(&read_path, &mut noise);
+            write_fixture(&write_path, &mut noise);
 
             let align = match dio_align(&read_path) {
                 None => {
@@ -316,6 +345,7 @@ mod linux {
             let mut group = c.benchmark_group(format!("uncached_read/{label}"));
 
             group.bench_function("pread_warm", |b| {
+                prime(&file);
                 let mut walk = Walk::new(len);
                 b.iter(|| {
                     file.read_exact_at(&mut buf, walk.step()).expect("pread");
@@ -341,23 +371,14 @@ mod linux {
 
             if fixture.dontcache {
                 group.bench_function("dontcache_warm", |b| {
+                    // RWF_DONTCACHE drops only the pages its own read brought
+                    // in, so a range that was resident before stays resident.
+                    prime(&file);
                     let mut walk = Walk::new(len);
-                    let mut warm = vec![0u8; size.bytes_usize()];
-                    b.iter_batched(
-                        || {
-                            // RWF_DONTCACHE drops what it reads, so warm the
-                            // range first or every read after the first is
-                            // cold.
-                            let at = walk.step();
-                            file.read_exact_at(&mut warm, at).expect("pread");
-                            at
-                        },
-                        |at| {
-                            read_dontcache(&file, at, &mut buf);
-                            black_box(&buf);
-                        },
-                        BatchSize::PerIteration,
-                    );
+                    b.iter(|| {
+                        read_dontcache(&file, walk.step(), &mut buf);
+                        black_box(&buf);
+                    });
                 });
 
                 group.bench_function("dontcache_cold", |b| {
@@ -395,6 +416,39 @@ mod linux {
         }
     }
 
+    /// How the write variants place their bytes.
+    #[derive(Debug, Clone, Copy)]
+    enum WriteShape {
+        /// Overwrite a file that was written out in full beforehand: an append
+        /// into a preallocated segment, with no block allocation and no size
+        /// change.
+        Overwrite,
+        /// Extend a file that starts empty, as `krabka-log` appends to a
+        /// segment today: every write allocates blocks and grows the file, and
+        /// every `fdatasync` writes the new size back.
+        Append,
+    }
+
+    impl WriteShape {
+        fn group(self) -> &'static str {
+            match self {
+                Self::Overwrite => "uncached_overwrite",
+                Self::Append => "uncached_append",
+            }
+        }
+
+        /// The offset of the next write. An append that has walked the whole
+        /// file truncates it back to empty first, outside the timed section.
+        fn next(self, walk: &mut Walk, file: &File) -> u64 {
+            let at = walk.step();
+            if matches!(self, Self::Append) && at == 0 {
+                file.set_len(0).expect("truncate");
+                rustix::fs::fdatasync(file).expect("fdatasync");
+            }
+            at
+        }
+    }
+
     fn bench_uncached_write(c: &mut Criterion) {
         let fixture = Fixture::build();
         let file = File::options()
@@ -402,57 +456,81 @@ mod linux {
             .write(true)
             .open(&fixture.write_path)
             .expect("open fixture");
+        // Each offset gets its own bytes, different from the fixture's, so no
+        // write repeats bytes the storage stack has already seen. The buffer
+        // is aligned for the O_DIRECT variants, and every write offset is a
+        // multiple of its length, so every slice of it stays aligned.
+        let align = fixture.align.map_or(1, |align| align.mem);
+        let source = AlignedBuf::filled(FILE_SIZE.bytes_usize(), align, &mut Noise(1));
 
-        for (label, size) in SIZES {
-            let len = size.bytes_u64();
-            let payload = pattern(size.bytes_usize());
-            let mut group = c.benchmark_group(format!("uncached_write/{label}"));
-
-            for sync in [false, true] {
-                let suffix = if sync { "_fdatasync" } else { "" };
-                let finish = |file: &File| {
-                    if sync {
-                        rustix::fs::fdatasync(file).expect("fdatasync");
-                    }
+        // Overwrite runs first, while the fixture is still full.
+        for shape in [WriteShape::Overwrite, WriteShape::Append] {
+            for (label, size) in SIZES {
+                let len = size.bytes_u64();
+                let payload = |at: u64| {
+                    let at = usize::try_from(at).expect("offset fits usize");
+                    &source.as_slice()[at..at + size.bytes_usize()]
                 };
+                let mut group = c.benchmark_group(format!("{}/{label}", shape.group()));
 
-                settle(&file);
-                group.bench_function(format!("buffered{suffix}"), |b| {
-                    let mut walk = Walk::new(len);
-                    b.iter(|| {
-                        file.write_all_at(&payload, walk.step()).expect("pwrite");
-                        finish(&file);
-                    });
-                });
+                for sync in [false, true] {
+                    let suffix = if sync { "_fdatasync" } else { "" };
+                    let finish = |file: &File| {
+                        if sync {
+                            rustix::fs::fdatasync(file).expect("fdatasync");
+                        }
+                    };
 
-                if fixture.dontcache {
                     settle(&file);
-                    group.bench_function(format!("dontcache{suffix}"), |b| {
+                    group.bench_function(format!("buffered{suffix}"), |b| {
                         let mut walk = Walk::new(len);
-                        b.iter(|| {
-                            write_dontcache(&file, walk.step(), &payload);
-                            finish(&file);
-                        });
+                        b.iter_batched(
+                            || shape.next(&mut walk, &file),
+                            |at| {
+                                file.write_all_at(payload(at), at).expect("pwrite");
+                                finish(&file);
+                            },
+                            BatchSize::PerIteration,
+                        );
                     });
+
+                    if fixture.dontcache {
+                        settle(&file);
+                        group.bench_function(format!("dontcache{suffix}"), |b| {
+                            let mut walk = Walk::new(len);
+                            b.iter_batched(
+                                || shape.next(&mut walk, &file),
+                                |at| {
+                                    write_dontcache(&file, at, payload(at));
+                                    finish(&file);
+                                },
+                                BatchSize::PerIteration,
+                            );
+                        });
+                    }
+
+                    if let Some(align) = fixture.direct_align(len) {
+                        settle(&file);
+                        let direct =
+                            open_direct(&fixture.write_path, align).expect("open O_DIRECT");
+                        group.bench_function(format!("odirect{suffix}"), |b| {
+                            let mut walk = Walk::new(len);
+                            b.iter_batched(
+                                || shape.next(&mut walk, &file),
+                                |at| {
+                                    direct
+                                        .write_all_at(payload(at), at)
+                                        .expect("O_DIRECT pwrite");
+                                    finish(&direct);
+                                },
+                                BatchSize::PerIteration,
+                            );
+                        });
+                    }
                 }
 
-                if let Some(align) = fixture.direct_align(len) {
-                    settle(&file);
-                    let direct = open_direct(&fixture.write_path, align).expect("open O_DIRECT");
-                    let aligned = AlignedBuf::filled(size.bytes_usize(), align.mem);
-                    group.bench_function(format!("odirect{suffix}"), |b| {
-                        let mut walk = Walk::new(len);
-                        b.iter(|| {
-                            direct
-                                .write_all_at(aligned.as_slice(), walk.step())
-                                .expect("O_DIRECT pwrite");
-                            finish(&direct);
-                        });
-                    });
-                }
+                group.finish();
             }
-
-            group.finish();
         }
     }
 
