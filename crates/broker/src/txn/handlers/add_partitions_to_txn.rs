@@ -60,7 +60,10 @@ mod authorization_tests;
 pub(in crate::txn::handlers) mod test_support;
 
 use self::versions::{HandlerDependencies, handle_v3, handle_v4};
-use crate::{broker::Broker, error::BrokerError};
+use crate::{
+    broker::Broker, error::BrokerError, handlers::cluster_action_denied,
+    txn::version::resolve_txn_version,
+};
 
 pub(crate) async fn handle(
     broker: &Broker,
@@ -74,9 +77,7 @@ pub(crate) async fn handle(
 
     // Versions 4 and later come only from brokers. A deny is
     // `AddPartitionsToTxnRequest.getErrorResponse`: the top-level error code.
-    if version >= 4
-        && crate::handlers::cluster_action_denied(authorizer, &controller.current_image(), ctx)
-    {
+    if version >= 4 && cluster_action_denied(authorizer, &controller.current_image(), ctx) {
         return Ok(AddPartitionsToTxnResponse {
             error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
             ..Default::default()
@@ -86,7 +87,7 @@ pub(crate) async fn handle(
     // Refresh leader-partition view from the current metadata image
     // before checking coordinator-ness, to avoid a race.
     let image = controller.current_image();
-    let txnv = crate::txn::version::resolve_txn_version(&image);
+    let txnv = resolve_txn_version(&image);
     drop(coord.refresh_leader_partitions(&image).await);
 
     let dependencies = HandlerDependencies {

@@ -16,9 +16,12 @@ use super::*;
 use crate::{
     config::{BackgroundUncleanRecovery, BreakGlassConfig},
     config_keys::RecoveryStrategy,
+    elr::TopicElr,
     heartbeat::controller_state::ControllerLivenessState,
+    leader_election::{compute_unclean_restart_changes, test_support::img_with_partition},
     metadata_source::MetadataSource,
-    test_support::FakeMetadataSource,
+    metrics::{BreakGlassActionLabel, BrokerMetrics},
+    test_support::{FakeMetadataSource, broker_registration, replica_nodes},
     unclean_recovery::{BackgroundRecovery, selection::ElectionBasis},
 };
 
@@ -38,14 +41,12 @@ fn source_with(leader: Option<u64>, image: MetadataImage) -> Arc<FakeMetadataSou
 const NODE: u64 = 10;
 
 fn image_with_partition(leader: u64, replicas: &[u64]) -> MetadataImage {
-    crate::leader_election::test_support::img_with_partition(
-        crate::leader_election::test_support::ElectionSetup {
-            leader: krabka_raft::NodeId(leader),
-            replicas: &crate::test_support::replica_nodes(replicas),
-            isr: &crate::test_support::replica_nodes(replicas),
-            ..Default::default()
-        },
-    )
+    img_with_partition(crate::leader_election::test_support::ElectionSetup {
+        leader: krabka_raft::NodeId(leader),
+        replicas: &replica_nodes(replicas),
+        isr: &replica_nodes(replicas),
+        ..Default::default()
+    })
 }
 
 /// Rewrite the ISR the record for partition 0 of topic `t` names, leaving
@@ -89,7 +90,7 @@ fn register_broker(img: &mut MetadataImage, node_id: u64, host: &str, port: u16)
         BrokerRegistrationRecord {
             host: host.into(),
             port,
-            ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
+            ..broker_registration(krabka_raft::NodeId(node_id))
         },
     ));
 }
@@ -101,7 +102,7 @@ fn broker_record(node_id: u64, incarnation: Uuid) -> BrokerRegistrationRecord {
     BrokerRegistrationRecord {
         incarnation_id: incarnation,
         port: 1,
-        ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
+        ..broker_registration(krabka_raft::NodeId(node_id))
     }
 }
 
@@ -170,7 +171,7 @@ fn manager_with(
         node_id: NodeId(NODE),
         inter_broker_client: Arc::new(InterBrokerClient::new(None, None)),
         listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-        metrics: crate::metrics::BrokerMetrics::new(),
+        metrics: BrokerMetrics::new(),
         policy: RecoveryPolicy {
             aggressive_deadline: secs(2),
             balanced_deadline: secs(30),
@@ -700,10 +701,10 @@ async fn require_refuses_only_a_recovery_that_no_elr_could_save() {
     }
 }
 
-fn bypasses(metrics: &crate::metrics::BrokerMetrics) -> u64 {
+fn bypasses(metrics: &BrokerMetrics) -> u64 {
     metrics
         .break_glass_bypassed
-        .get_or_create(&crate::metrics::BreakGlassActionLabel {
+        .get_or_create(&BreakGlassActionLabel {
             action: crate::metrics::BreakGlassAction(BreakGlassAction::UncleanRecovery),
         })
         .get()
@@ -804,14 +805,10 @@ async fn a_returning_incarnation_loses_its_eligible_leader_priority() {
     );
 
     let liveness = liveness_with_alive(&[2, 3]).await;
-    let mut batch = crate::leader_election::compute_unclean_restart_changes(
-        &img,
-        NodeId(3),
-        &liveness,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await
-    .changes;
+    let mut batch =
+        compute_unclean_restart_changes(&img, NodeId(3), &liveness, &BrokerMetrics::new())
+            .await
+            .changes;
     batch.push(MetadataRecord::V1BrokerRegistration(broker_record(
         3,
         Uuid::from_u128(2),
@@ -828,7 +825,7 @@ async fn a_returning_incarnation_loses_its_eligible_leader_priority() {
 /// published ELR and the cluster's witness set all come out of the image,
 /// which is what makes the two halves of the test above differ.
 async fn elected_from(image: MetadataImage, poll: &[ReplicaLogInfo]) -> Option<Election> {
-    let eligible = crate::elr::TopicElr::of_topic(&image, "t")
+    let eligible = TopicElr::of_topic(&image, "t")
         .partition(0)
         .eligible_leader_replicas;
     let in_sync = image

@@ -7,6 +7,7 @@ use krabka_log::ProducerId;
 
 use crate::{
     error::BrokerError,
+    producer_id_manager::ProducerIdManager,
     txn::{state::TxnEntry, version::TxnVersion},
 };
 
@@ -24,7 +25,7 @@ pub(crate) async fn next_producer_identity(
     txnv: TxnVersion,
     pid: ProducerId,
     epoch: i16,
-    ids: &crate::producer_id_manager::ProducerIdManager,
+    ids: &ProducerIdManager,
 ) -> Result<(ProducerId, i16), BrokerError> {
     let fresh = if txnv.verified() && epoch >= i16::MAX - 1 {
         Some(ids.allocate().await?.0)
@@ -61,7 +62,7 @@ fn next_identity_with_fresh(
 pub(crate) async fn next_recovery_producer_identity(
     pid: ProducerId,
     epoch: i16,
-    ids: &crate::producer_id_manager::ProducerIdManager,
+    ids: &ProducerIdManager,
 ) -> Result<(ProducerId, i16), BrokerError> {
     let fresh = if epoch == i16::MAX {
         Some(ids.allocate().await?.0)
@@ -99,7 +100,7 @@ fn completion_needs_fresh_producer_id(entry: &TxnEntry, txnv: TxnVersion) -> boo
 pub(crate) async fn prepare_completion_identities(
     entry: &mut TxnEntry,
     txnv: TxnVersion,
-    ids: &crate::producer_id_manager::ProducerIdManager,
+    ids: &ProducerIdManager,
 ) -> Result<(), BrokerError> {
     let fresh = if completion_needs_fresh_producer_id(entry, txnv) {
         Some(ids.allocate().await?.0)
@@ -118,7 +119,7 @@ pub(crate) async fn prepare_completion_identities(
 pub(crate) async fn prepare_server_abort_identities(
     entry: &mut TxnEntry,
     server_version: TxnVersion,
-    ids: &crate::producer_id_manager::ProducerIdManager,
+    ids: &ProducerIdManager,
 ) -> Result<(), BrokerError> {
     let fresh = if completion_needs_fresh_producer_id(entry, server_version) {
         Some(ids.allocate().await?.0)
@@ -205,7 +206,10 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::txn::{handlers::end_txn::test_support::entry, state::TxnState};
+    use crate::txn::{
+        coordinator::completion::apply_completion, handlers::end_txn::test_support::entry,
+        state::TxnState,
+    };
 
     #[tokio::test]
     async fn epoch_bumps_only_at_tv2() {
@@ -381,12 +385,7 @@ mod tests {
         assert!(ongoing.producer_epoch == 3, "the epoch was already raised");
 
         let identity = completion_producer_identity(&ongoing);
-        crate::txn::coordinator::completion::apply_completion(
-            &mut ongoing,
-            TxnState::CompleteAbort,
-            identity,
-            1,
-        );
+        apply_completion(&mut ongoing, TxnState::CompleteAbort, identity, 1);
         assert!(!ongoing.has_failed_epoch_fence);
 
         ongoing.state = TxnState::Ongoing;

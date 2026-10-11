@@ -19,6 +19,7 @@ use crate::{
     error::BrokerError,
     network::client::InterBrokerClient,
     partition::Partition,
+    partition_registry::PartitionRegistry,
     txn::{
         handlers::write_txn_markers::{
             MARKER_COMMIT_TIMEOUT, MarkerAppend, append_marker_as_leader,
@@ -137,7 +138,7 @@ pub(crate) struct MarkerDispatchContext<'a> {
 
 pub(crate) async fn dispatch_markers(
     context: MarkerDispatchContext<'_>,
-    partitions: &std::sync::Arc<crate::partition_registry::PartitionRegistry>,
+    partitions: &std::sync::Arc<PartitionRegistry>,
     entry: &TxnEntry,
     marker_type: MarkerType,
 ) -> MarkerFanOut {
@@ -285,7 +286,11 @@ mod tests {
     use krabka_ids::PartitionIndex;
 
     use super::*;
-    use crate::txn::handlers::end_txn::test_support::{marker_entry, plaintext_client, tps};
+    use crate::{
+        codes::NOT_LEADER_OR_FOLLOWER,
+        test_support::{StandalonePartitionSetup, broker_registration, open_partition},
+        txn::handlers::end_txn::test_support::{marker_entry, plaintext_client, tps},
+    };
 
     fn marker_context<'a>(
         image: &'a MetadataImage,
@@ -332,9 +337,9 @@ mod tests {
         let client = plaintext_client();
         let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
-        let part = crate::test_support::open_partition(
+        let part = open_partition(
             dir.path(),
-            crate::test_support::StandalonePartitionSetup {
+            StandalonePartitionSetup {
                 topic: "t",
                 ..Default::default()
             },
@@ -394,16 +399,16 @@ mod tests {
             BrokerRegistrationRecord {
                 // Discard port: refuses connections immediately.
                 port: 9,
-                ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
+                ..broker_registration(krabka_raft::NodeId(2))
             },
         ));
 
         let client = plaintext_client();
         let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
-        let local_partition = crate::test_support::open_partition(
+        let local_partition = open_partition(
             dir.path(),
-            crate::test_support::StandalonePartitionSetup {
+            StandalonePartitionSetup {
                 topic: "local-topic",
                 ..Default::default()
             },
@@ -479,7 +484,7 @@ mod tests {
                 "another broker takes the partition first",
                 false,
                 vec![],
-                Some(crate::codes::NOT_LEADER_OR_FOLLOWER),
+                Some(NOT_LEADER_OR_FOLLOWER),
             ),
         ];
         let mut actual = Vec::new();
@@ -488,9 +493,9 @@ mod tests {
             let partitions =
                 std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
             let dir = tempfile::tempdir().expect("tempdir");
-            let part = crate::test_support::open_partition(
+            let part = open_partition(
                 dir.path(),
-                crate::test_support::StandalonePartitionSetup {
+                StandalonePartitionSetup {
                     topic: "t",
                     ..Default::default()
                 },

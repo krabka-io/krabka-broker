@@ -14,7 +14,10 @@ use krabka_protocol::owned::common::{
 };
 
 use super::results::{per_topic_with_refusals, verify_partitions};
-use crate::{codes, txn::state::TopicPartition};
+use crate::{
+    codes,
+    txn::{coordinator::TxnCoordinator, state::TopicPartition},
+};
 
 /// Processes one `transactional_id`, `producer_id`, and `producer_epoch`
 /// triple. It returns per-topic and per-partition result entries. A topic
@@ -51,7 +54,7 @@ pub(super) struct TransactionRequest<'a> {
 // walks the request's topics and locks the entry.
 #[cfg_attr(test, mutants::skip)]
 pub(super) async fn process_one_txn(
-    coord: &crate::txn::coordinator::TxnCoordinator,
+    coord: &TxnCoordinator,
     request: TransactionRequest<'_>,
 ) -> Vec<AddPartitionsToTxnTopicResult> {
     let TransactionRequest {

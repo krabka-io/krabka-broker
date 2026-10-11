@@ -28,6 +28,7 @@ use krabka_security::Principal;
 use crate::{
     authorizer::{AuthorizationResult, Authorizer, authorize_topics},
     codes,
+    config::BrokerConfig,
 };
 
 /// Who sent the request, and so which topics need a `Write` check.
@@ -39,7 +40,7 @@ pub(super) enum TopicAuthorization<'a> {
         authorizer: &'a dyn Authorizer,
         principal: &'a Principal,
         peer: &'a SocketAddr,
-        config: &'a crate::config::BrokerConfig,
+        config: &'a BrokerConfig,
     },
     /// Versions 4 and later: a broker that holds `ClusterAction`. Every topic
     /// is authorized.

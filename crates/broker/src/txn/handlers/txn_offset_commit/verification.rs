@@ -26,6 +26,7 @@ use crate::{
     coordinator::bootstrap::OFFSETS_TOPIC,
     error::BrokerError,
     partition::ProducerAppendCheck,
+    time_util::now_ms,
     txn::{
         coordinator::produce_verification::{
             INTERNAL_REGISTRATION_VERSION, TransactionCheck, partition_verification_enabled,
@@ -90,10 +91,7 @@ pub(super) async fn verify_producer(
         .start_transaction_verification(
             batch,
             supports_epoch_bump,
-            (
-                crate::time_util::now_ms(),
-                broker.config.producer_id_expiration.millis_i64(),
-            ),
+            (now_ms(), broker.config.producer_id_expiration.millis_i64()),
         )
         .await
         .map_err(|refusal| {

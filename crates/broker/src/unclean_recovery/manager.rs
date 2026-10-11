@@ -25,7 +25,9 @@ use super::{
     select_leader,
 };
 use crate::{
-    heartbeat::controller_state::ControllerLivenessState, network::client::InterBrokerClient,
+    elr::TopicElr, heartbeat::controller_state::ControllerLivenessState,
+    metadata_epoch::next_partition_change, metadata_source::MetadataSource,
+    network::client::InterBrokerClient,
 };
 
 #[cfg(test)]
@@ -38,7 +40,7 @@ mod tests;
 /// of them through `submit_change`: an eligible leader replica if one
 /// answered, and otherwise the most complete log that did.
 pub(crate) struct UncleanRecoveryManager {
-    controller: Arc<dyn crate::metadata_source::MetadataSource>,
+    controller: Arc<dyn MetadataSource>,
     liveness: Arc<ControllerLivenessState>,
     node_id: NodeId,
     inter_broker_client: Arc<InterBrokerClient>,
@@ -53,7 +55,7 @@ impl UncleanRecoveryManager {
     /// enqueues jobs. The loop exits when `shutdown` fires or when the last
     /// handle drops.
     pub(crate) fn spawn(
-        controller: Arc<dyn crate::metadata_source::MetadataSource>,
+        controller: Arc<dyn MetadataSource>,
         liveness: Arc<ControllerLivenessState>,
         node_id: NodeId,
         inter_broker_client: Arc<InterBrokerClient>,
@@ -135,7 +137,7 @@ impl UncleanRecoveryManager {
         // KIP-966: the replicas that are known to hold every committed record.
         // Read here, with the rest of the partition state, so the selection and
         // the break-glass rule below both see one image.
-        let eligible = crate::elr::TopicElr::of_topic(&image, &job.topic)
+        let eligible = TopicElr::of_topic(&image, &job.topic)
             .partition(job.partition)
             .eligible_leader_replicas;
         // KIP-966's other lossless rule, and the first disjunct of Kafka's
@@ -316,7 +318,7 @@ impl UncleanRecoveryManager {
             };
         }
         let Some((partition_epoch, leader_epoch)) =
-            crate::metadata_epoch::next_partition_change(pr.partition_epoch, pr.leader_epoch, true)
+            next_partition_change(pr.partition_epoch, pr.leader_epoch, true)
         else {
             warn!(
                 topic = %job.topic,

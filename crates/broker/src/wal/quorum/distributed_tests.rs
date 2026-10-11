@@ -14,7 +14,7 @@ use super::{
     QuorumWalStore,
     test_support::{append_source, batch, distributed_store, open_log, source_log},
 };
-use crate::wal::WalStore;
+use crate::wal::{WalStore, quorum::registry::ShardId};
 
 /// Wait until the spawned `sync_durable` has fsynced `offset` and recorded the
 /// leader's own vote for it. The fsync runs off the test thread, so a fixed
@@ -41,7 +41,7 @@ async fn distributed_wal_waits_for_a_remote_fsync_ack() {
     let store = Arc::new(distributed_store(source, Uuid::from_u128(99), 3));
     let metrics = crate::metrics::BrokerMetrics::new();
     store.engine.attach_observability(
-        crate::wal::quorum::registry::ShardId {
+        ShardId {
             topic_id: Uuid::from_u128(99),
             partition: PartitionIndex(0),
         },

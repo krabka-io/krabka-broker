@@ -18,6 +18,7 @@ use super::{Election, RecoveryJob};
 use crate::{
     break_glass::{action_name, metrics as break_glass_metrics},
     config::{BackgroundUncleanRecovery, BreakGlassConfig},
+    metrics::BrokerMetrics,
     operator_keys::approver_set_fingerprint,
     time_util::now_ms,
 };
@@ -141,7 +142,7 @@ impl BackgroundRecovery {
         job: &RecoveryJob,
         node_id: NodeId,
         election: Election,
-        metrics: &crate::metrics::BrokerMetrics,
+        metrics: &BrokerMetrics,
     ) {
         if !self.enabled || self.mode == BackgroundUncleanRecovery::Off {
             return;

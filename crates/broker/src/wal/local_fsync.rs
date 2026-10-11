@@ -9,7 +9,7 @@ use krabka_ids::Offset;
 use krabka_log::Log;
 
 use super::WalStore;
-use crate::error::BrokerError;
+use crate::{blocking::run_blocking, error::BrokerError};
 
 /// A [`WalStore`] backed by the partition's local `Log` plus an explicit
 /// `fsync` (`Log::sync`).
@@ -30,7 +30,7 @@ impl WalStore for LocalFsyncWal {
         let log = self.log.clone();
         // fsync off the async poller, through the seam
         // run_produce_append_batch uses.
-        let res = crate::blocking::run_blocking(move || {
+        let res = run_blocking(move || {
             log.lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .sync()
@@ -45,7 +45,7 @@ impl WalStore for LocalFsyncWal {
 
     async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, BrokerError> {
         let log = self.log.clone();
-        let result = crate::blocking::run_blocking(move || {
+        let result = run_blocking(move || {
             log.lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .trim_to_offset(new_start)
@@ -77,7 +77,7 @@ mod tests {
     async fn append_assigns_sequential_offsets_then_sync_advances_durable() {
         let dir = tempfile::tempdir().unwrap();
         let w = wal(dir.path());
-        let (results, leo, _) = crate::partition_writer::run_produce_append_batch(
+        let (results, leo, _) = run_produce_append_batch(
             w.log.clone(),
             None,
             (
@@ -115,7 +115,7 @@ mod tests {
     async fn trim_advances_the_local_wal_start() {
         let dir = tempfile::tempdir().unwrap();
         let w = wal(dir.path());
-        let (_results, leo, _) = crate::partition_writer::run_produce_append_batch(
+        let (_results, leo, _) = run_produce_append_batch(
             w.log.clone(),
             None,
             (
@@ -135,9 +135,12 @@ mod tests {
         assert!(w.log.lock().unwrap().log_start_offset() == start);
     }
 
-    fn sample_owned(setup: crate::test_support::EmptyPayloadBatchSetup) -> ProduceData {
+    fn sample_owned(setup: EmptyPayloadBatchSetup) -> ProduceData {
         ProduceData::Owned(sample_batch(setup))
     }
 
-    use crate::test_support::default_records_batch as sample_batch;
+    use crate::{
+        partition_writer::run_produce_append_batch,
+        test_support::{EmptyPayloadBatchSetup, default_records_batch as sample_batch},
+    };
 }

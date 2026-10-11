@@ -19,6 +19,7 @@ use krabka_protocol::owned::{
 use super::TxnCoordinator;
 use crate::{
     codes,
+    config::BrokerConfig,
     txn::{
         bootstrap,
         state::{TopicPartition, TxnState},
@@ -53,7 +54,7 @@ pub(crate) const PARTITION_VERIFICATION_ENABLE: &str = "transaction.partition.ve
 /// next one.
 pub(crate) fn partition_verification_enabled(
     image: &krabka_metadata::MetadataImage,
-    config: &crate::config::BrokerConfig,
+    config: &BrokerConfig,
 ) -> bool {
     image
         .broker_config(config.node_id)

@@ -35,6 +35,8 @@ use super::{
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
     codes,
+    config::BrokerConfig,
+    txn::version::TxnVersion,
 };
 
 /// The request-independent collaborators both version paths need: the
@@ -44,13 +46,13 @@ use crate::{
 pub(super) struct HandlerDependencies<'a> {
     pub(super) coord: &'a crate::txn::coordinator::TxnCoordinator,
     pub(super) image: &'a MetadataImage,
-    pub(super) txnv: crate::txn::version::TxnVersion,
+    pub(super) txnv: TxnVersion,
     pub(super) authorizer: &'a dyn Authorizer,
     pub(super) principal: &'a Principal,
     pub(super) peer: &'a SocketAddr,
     /// The broker config, which names the internal topics a client can never
     /// add.
-    pub(super) config: &'a crate::config::BrokerConfig,
+    pub(super) config: &'a BrokerConfig,
 }
 
 /// One transaction of a request, in the form both version paths share.
@@ -362,7 +364,7 @@ mod tests {
         ];
 
         let (broker_handle, _dir) = start_coordinator(Arc::new(
-            crate::test_support::ControllerPeerAllowed(crate::test_support::DenyAll),
+            crate::test_support::ControllerPeerAllowed(DenyAll),
         ))
         .await;
         let broker = broker_handle.broker_arc_for_test();
