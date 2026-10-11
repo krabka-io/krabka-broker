@@ -207,14 +207,15 @@ fn embedded_create_topics(topic: &str) -> Bytes {
     );
     // The length prefix belongs to the outer connection, not to `request_data`
     // — KIP-590 wraps the header and body only.
-    let framed = request_frame(RequestFrameSetup {
+    let setup = RequestFrameSetup {
+        body: &body,
+        client_id: Some("adminclient-1".as_bytes()),
         api_key: krabka_ids::ApiKey(krabka_protocol::owned::create_topics_request::API_KEY),
         api_version: krabka_ids::ApiVersion(version),
         correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-        client_id: Some("adminclient-1".as_bytes()),
         tagged: Some(&[0]),
-        body: &body,
-    });
+    };
+    let framed = request_frame(setup);
     framed.slice(4..)
 }
 

@@ -34,10 +34,10 @@ crate::test_support::codec_helpers!(
 const GZIP: i8 = 1;
 const NONE: i8 = 0;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 struct SubscriptionId(i32);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TelemetryCompressionCode(i8);
 
 #[derive(Clone, Copy, Default)]

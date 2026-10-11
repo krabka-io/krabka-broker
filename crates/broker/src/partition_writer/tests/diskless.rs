@@ -326,15 +326,15 @@ async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
         },
     );
 
-    let (ack, ack_rx) = oneshot::channel();
+    let (trunc_tx, trunc_rx) = oneshot::channel();
     tx.send(WriterMessage::Truncate {
         offset: Offset(0),
-        ack,
+        ack: trunc_tx,
     })
     .await
     .expect("send truncate");
 
-    ack_rx
+    trunc_rx
         .await
         .expect("truncate ack")
         .expect("truncate succeeds");

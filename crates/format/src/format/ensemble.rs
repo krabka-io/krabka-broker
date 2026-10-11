@@ -228,13 +228,12 @@ mod tests {
                 "another node's directory",
                 formatted(&[("/a", meta(0xc1, 2, 0x1000))]),
                 Some(c1),
-                Err(
+                Err(format!(
                     "Stored node id 2 doesn't match previous node id 1 in /a/meta.properties. \
                      If you moved your data, make sure your configured node id matches. If you \
                      intend to create a new node, you should remove all data in your data \
                      directories."
-                        .to_owned(),
-                ),
+                )),
             ),
         ];
         for (what, ensemble, expected, want) in cases {

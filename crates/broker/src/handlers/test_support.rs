@@ -356,10 +356,10 @@ pub(crate) struct ReplicatedPartitionSetup<'a> {
     #[default("orders")]
     pub topic: &'a str,
     pub partition: krabka_ids::PartitionIndex,
-    #[default(krabka_metadata::NodeId(1))]
-    pub leader: krabka_metadata::NodeId,
     #[default(&[krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)])]
     pub replicas: &'a [krabka_metadata::NodeId],
+    #[default(krabka_metadata::NodeId(1))]
+    pub leader: krabka_metadata::NodeId,
 }
 
 pub(crate) fn replicated_partition(

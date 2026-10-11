@@ -224,8 +224,10 @@ impl ReaperBackend for TxnCoordinator {
     // cargo-mutants: I/O over live entry locks + raft persistence
     #[cfg_attr(test, mutants::skip)]
     async fn prepare_abort(&self, tid: &str, now_ms: i64, txnv: TxnVersion) -> Option<TxnEntry> {
-        let _state_partition_write = self.lock_state_partition_for(tid).await;
-        let handle = self.get(tid)?;
+        let _partition_lock = self.lock_state_partition_for(tid).await;
+        let Some(handle) = self.get(tid) else {
+            return None;
+        };
         let entry = handle.lock().await;
         if !handle_is_current(self, tid, &handle) {
             return None;

@@ -97,13 +97,11 @@ async fn start_cluster() -> Cluster {
     let topology = endpoints.topology();
 
     let controller_dir = TempDir::new().unwrap();
-    let ctrl_cfg = topology.config(
-        controller_dir.path(),
-        RoleNodeSetup {
-            role: NodeRole::Controller,
-            ..Default::default()
-        },
-    );
+    let setup = RoleNodeSetup {
+        role: NodeRole::Controller,
+        ..Default::default()
+    };
+    let ctrl_cfg = topology.config(controller_dir.path(), setup);
     let controller = support::start_held_node(
         ctrl_cfg,
         &mut ctrl_listeners,

@@ -110,7 +110,8 @@ async fn one_member_is_asked_and_its_push_is_described() {
     let (_broker, bootstrap, _dir) = boot_with_plugin().await;
     let client = connect(&bootstrap).await;
     finalize_streams_version(&client).await;
-    create_topic(&client, SOURCE, 1).await;
+    let source_topic = SOURCE;
+    create_topic(&client, source_topic, 1).await;
 
     let first = client
         .send(first_join(GROUP, topology(SOURCE, vec![])))

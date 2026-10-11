@@ -171,7 +171,7 @@ fn bench_append_handoff(c: &mut Criterion) {
         let (_dir, log, batch, rt) = async_verbatim_fixture();
         b.iter_custom(|iters| {
             rt.block_on(async {
-                let start = Instant::now();
+                let t0 = Instant::now();
                 for _ in 0..iters {
                     let log = Arc::clone(&log);
                     let batch = batch.clone();
@@ -181,7 +181,7 @@ fn bench_append_handoff(c: &mut Criterion) {
                     .await
                     .unwrap();
                 }
-                start.elapsed()
+                t0.elapsed()
             })
         });
     });

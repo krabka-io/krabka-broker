@@ -8,11 +8,8 @@ async fn timestamp_lookup_matches_the_first_record_in_the_isolation_prefix() {
     const TOPIC: &str = "list-offsets-timestamp-visibility";
     const TIMESTAMPS: [i64; 5] = [100, 300, 200, 400, 300];
     list_offsets_topic_fixture!((broker, _dir, client), TOPIC);
-    let broker_arc = broker.broker_arc_for_test();
-    let partition = broker_arc
-        .partitions
-        .get(TOPIC, krabka_ids::PartitionIndex(0))
-        .expect("partition");
+    let part_idx0 = krabka_ids::PartitionIndex(0);
+    let partition = broker.broker_arc_for_test().partitions.get(TOPIC, part_idx0).expect("partition");
     for (index, timestamp) in TIMESTAMPS.into_iter().enumerate() {
         let offset =
             produce_one_at_timestamp(&partition, 0, timestamp, (index == 2).then_some(77)).await;

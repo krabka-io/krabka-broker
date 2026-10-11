@@ -9,7 +9,8 @@
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
+use krabka_ids::ApiKey as WireApiKey;
+use krabka_ids::ApiVersion as WireApiVersion;
 use krabka_protocol::{Decode, Encode};
 use tokio::net::TcpStream;
 

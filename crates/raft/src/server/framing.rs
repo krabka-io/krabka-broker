@@ -337,10 +337,11 @@ mod tests {
         frame: Vec<u8>,
         router: Option<&dyn ControllerAdminRouter>,
     ) -> DecodedFrame {
-        let (mut client, mut server) = tokio::io::duplex(128);
-        let writer = tokio::spawn(async move {
+        let (mut client, mut server) = tokio::io::duplex(256);
+        let write_fut = async move {
             client.write_all(&frame).await.unwrap();
-        });
+        };
+        let writer = tokio::spawn(write_fut);
         let request = super::read_one_request(&mut server, router, MAX_REQUEST_BYTES)
             .await
             .expect("decode");

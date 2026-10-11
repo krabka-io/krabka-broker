@@ -301,7 +301,7 @@ mod tests {
 
         use crate::txn::state::TxnEntry;
 
-        let version = krabka_protocol::owned::list_transactions_response::MAX_VERSION;
+        let max_ver = krabka_protocol::owned::list_transactions_response::MAX_VERSION;
         broker_fixture!((broker_handle, _dir, broker), allow_all);
 
         // Lead the __transaction_state partition this tid hashes to so the
@@ -323,7 +323,7 @@ mod tests {
             duration_filter: -1,
             ..Default::default()
         };
-        let resp = handle(&broker, req, version, &ctx).await.expect("handle");
+        let resp = handle(&broker, req, max_ver, &ctx).await.expect("handle");
 
         let pids: Vec<i64> = resp
             .transaction_states

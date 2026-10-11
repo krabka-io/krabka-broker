@@ -6,7 +6,8 @@
 //! PLAIN-authenticated request drive, and the PBKDF2 salting that the
 //! validation cases in `alter_scram_validation` reuse.
 
-use std::{io, net::SocketAddr};
+use std::io;
+use std::net::SocketAddr;
 
 use assert2::{assert, check};
 use krabka_broker::Broker;

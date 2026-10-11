@@ -532,11 +532,11 @@ mod tests {
         strategy: RecoveryStrategy,
         unclean_enabled: bool,
     ) -> super::FailoverDecision {
-        let alive: std::collections::HashSet<NodeId> = alive.iter().copied().map(NodeId).collect();
+        let alive_set: std::collections::HashSet<NodeId> = alive.iter().map(|&id| NodeId(id)).collect();
         failover_one(
             pr,
             NodeId(dead),
-            &alive,
+            &alive_set,
             &witnesses(witness_ids),
             &elr(eligible, &[]),
             strategy,

@@ -7,7 +7,8 @@ use std::sync::Arc;
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
-use krabka_metadata::{MetadataImage, NodeId};
+use krabka_metadata::MetadataImage;
+use krabka_metadata::NodeId;
 use tempfile::TempDir;
 
 use super::*;
