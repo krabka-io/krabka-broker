@@ -9,10 +9,13 @@ use assert2::check;
 use krabka_log::name;
 use krabka_restore::{EXIT_OK, run_from_args};
 
-use crate::fixture::build_fixture;
+use crate::{
+    args::RestoreOptions,
+    fixture::{Fixture, build_fixture},
+};
 
 struct CliRestore {
-    fixture: crate::fixture::Fixture,
+    fixture: Fixture,
     _target: tempfile::TempDir,
     log_dir: std::path::PathBuf,
 }
@@ -24,7 +27,7 @@ async fn cli_restore(extra: &[&str]) -> CliRestore {
     let code = run_from_args(crate::args::restore_argv(
         fixture.archive_root.path(),
         &log_dir,
-        crate::args::RestoreOptions {
+        RestoreOptions {
             extra,
             ..Default::default()
         },

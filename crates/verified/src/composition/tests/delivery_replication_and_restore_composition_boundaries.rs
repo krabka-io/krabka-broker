@@ -1,6 +1,7 @@
 use assert2::assert;
 
 use super::*;
+use crate::restore::RestoreTimestampType;
 
 #[test]
 fn delivery_replication_and_restore_composition_boundaries() {
@@ -118,7 +119,7 @@ fn delivery_replication_and_restore_composition_boundaries() {
     let frame = RestoreBatchFrame {
         base_offset: 4,
         last_offset_delta: 1,
-        timestamp_type: crate::restore::RestoreTimestampType::CreateTime,
+        timestamp_type: RestoreTimestampType::CreateTime,
         base_timestamp: 10,
         max_timestamp: 11,
     };
@@ -208,10 +209,10 @@ fn restore_selection_matches_oracle(
                 .base_offset
                 .checked_add(i64::from(record.offset_delta))?;
             let timestamp = match frame.timestamp_type {
-                crate::restore::RestoreTimestampType::CreateTime => {
+                RestoreTimestampType::CreateTime => {
                     frame.base_timestamp.checked_add(record.timestamp_delta)?
                 }
-                crate::restore::RestoreTimestampType::LogAppendTime => frame.max_timestamp,
+                RestoreTimestampType::LogAppendTime => frame.max_timestamp,
             };
             if offset_bound.is_none_or(|bound| offset <= bound)
                 && timestamp_bound.is_none_or(|bound| timestamp < bound)

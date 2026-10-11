@@ -84,9 +84,12 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::compact::test_support::{
-        control_batch, make_record, superseded_records, transactional_record, write_sealed_batches,
-        write_sealed_segment,
+    use crate::{
+        ProducerId,
+        compact::test_support::{
+            TransactionalRecordSetup, control_batch, make_record, superseded_records,
+            transactional_record, write_sealed_batches, write_sealed_segment,
+        },
     };
 
     fn offset_map_for(segments: &[&Segment], aborted: Vec<AbortedTxn>) -> HashMap<Bytes, Offset> {
@@ -166,20 +169,20 @@ mod tests {
         let seg = write_sealed_batches(
             dir.path(),
             &[
-                transactional_record(crate::compact::test_support::TransactionalRecordSetup {
+                transactional_record(TransactionalRecordSetup {
                     offset: crate::Offset(5),
                     payload: (b"k", b"committed"),
                     ..Default::default()
                 }),
                 control_batch(6, 1000, 1 /* COMMIT */),
-                transactional_record(crate::compact::test_support::TransactionalRecordSetup {
+                transactional_record(TransactionalRecordSetup {
                     offset: crate::Offset(10),
-                    producer: crate::ProducerId(2000),
+                    producer: ProducerId(2000),
                     payload: (b"k", b"aborted"),
                 }),
-                transactional_record(crate::compact::test_support::TransactionalRecordSetup {
+                transactional_record(TransactionalRecordSetup {
                     offset: crate::Offset(11),
-                    producer: crate::ProducerId(2000),
+                    producer: ProducerId(2000),
                     payload: (b"only-aborted", b"v"),
                 }),
                 control_batch(12, 2000, 0 /* ABORT */),

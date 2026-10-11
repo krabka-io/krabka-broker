@@ -24,7 +24,19 @@ use super::{
     *,
 };
 use crate::{
-    config_keys::registry::ConfigType, handlers::describe_configs::test_support::TopicConfigSetup,
+    api_catalog::UnstableApiVersions,
+    client_metrics::config::{KEY_INTERVAL_MS, KEY_METRICS},
+    codes::{INVALID_REQUEST, INVALID_TOPIC_EXCEPTION, UNKNOWN_TOPIC_OR_PARTITION},
+    config::BrokerConfig,
+    config_keys::{
+        KAFKA_TRUNK_TOPIC_KEYS, broker_dynamic::TOPIC_DEFAULT_SYNONYMS, group::KAFKA_GROUP_KEYS,
+        registry::ConfigType,
+    },
+    coordinator::unified::streams::config::StreamsGroupConfig,
+    file_config::FileConfig,
+    handlers::describe_configs::test_support::{TopicConfigSetup, set_topic_config},
+    test_support::string_pairs,
+    throttle::{FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY},
 };
 
 fn seed_metrics_subscription(image: &mut MetadataImage) {
@@ -82,7 +94,7 @@ fn static_view(result: &DescribeConfigsResult) -> Vec<DescribeConfigsResourceRes
         .configs
         .iter()
         .filter(|entry| {
-            !crate::config_keys::broker_dynamic::TOPIC_DEFAULT_SYNONYMS
+            !TOPIC_DEFAULT_SYNONYMS
                 .iter()
                 .any(|(broker, _)| *broker == entry.name)
                 && (EMITTED_ELSEWHERE.contains(&entry.name.as_str())
@@ -127,7 +139,7 @@ fn describe_at(
                 node_id: 1,
                 levels: &levels,
             },
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
+            unstable_api_versions: UnstableApiVersions::Enabled,
         },
         300_000,
         options,
@@ -202,7 +214,7 @@ fn describe_with_loggers(
             node: serving_node_for(resource_type, resource_name),
             static_broker: untuned(),
             loggers,
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
+            unstable_api_versions: UnstableApiVersions::Enabled,
         },
         300_000,
         options,
@@ -332,10 +344,7 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
         DEFAULT_BROKER_CONFIG_NODE_ID,
         &[(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
     );
-    crate::handlers::describe_configs::test_support::set_topic_config(
-        &mut image,
-        TopicConfigSetup::default(),
-    );
+    set_topic_config(&mut image, TopicConfigSetup::default());
 
     let result = describe_topic(
         &image,
@@ -431,7 +440,7 @@ fn a_topic_override_stays_at_the_head_of_the_chain_above_the_cluster_default() {
         DEFAULT_BROKER_CONFIG_NODE_ID,
         &[(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
     );
-    crate::handlers::describe_configs::test_support::set_topic_config(
+    set_topic_config(
         &mut image,
         TopicConfigSetup {
             key: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
@@ -538,7 +547,7 @@ fn an_internal_topic_key_is_reported_only_when_the_topic_sets_it() {
         SERVING_NODE,
         "orders",
         &std::collections::BTreeMap::new(),
-        crate::api_catalog::UnstableApiVersions::Enabled,
+        UnstableApiVersions::Enabled,
         &std::collections::BTreeMap::new(),
     );
     check!(
@@ -553,7 +562,7 @@ fn an_internal_topic_key_is_reported_only_when_the_topic_sets_it() {
         &maplit::btreemap! {
             config_keys::INTERNAL_SEGMENT_BYTES.to_string() => "4096".to_string(),
         },
-        crate::api_catalog::UnstableApiVersions::Enabled,
+        UnstableApiVersions::Enabled,
         &std::collections::BTreeMap::new(),
     );
     check!(
@@ -605,11 +614,11 @@ fn the_fixed_data_path_key_is_read_only_and_typed() {
 fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
     let mut image = image_with_broker_config(
         krabka_metadata::NodeId(2),
-        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+        &[(LEADER_THROTTLED_RATE_KEY, "1024")],
     );
     image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
         node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
-        config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.to_owned(),
+        config_name: LEADER_THROTTLED_RATE_KEY.to_owned(),
         config_value: Some("512".to_owned()),
     }));
 
@@ -679,7 +688,7 @@ fn the_cluster_default_resource_reports_the_defaults_and_no_node_id() {
     // static `node.id` entry a numeric name carries has no place in it.
     let image = image_with_broker_config(
         DEFAULT_BROKER_CONFIG_NODE_ID,
-        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+        &[(LEADER_THROTTLED_RATE_KEY, "1024")],
     );
 
     let result = describe(&image, RESOURCE_TYPE_BROKER, "", None, EVERYTHING);
@@ -823,7 +832,7 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
 fn the_static_expiry_keys_belong_to_a_named_broker_alone() {
     let image = image_with_broker_config(
         DEFAULT_BROKER_CONFIG_NODE_ID,
-        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+        &[(LEADER_THROTTLED_RATE_KEY, "1024")],
     );
 
     for (label, resource_name, expected) in [
@@ -862,8 +871,8 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
     let image = image_with_broker_config(
         krabka_metadata::NodeId(2),
         &[
-            (crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024"),
-            (crate::throttle::FOLLOWER_THROTTLED_RATE_KEY, "512"),
+            (LEADER_THROTTLED_RATE_KEY, "1024"),
+            (FOLLOWER_THROTTLED_RATE_KEY, "512"),
         ],
     );
 
@@ -921,12 +930,9 @@ fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
     // resource type, so every type it reaches is checked here.
     let mut image = image_with_broker_config(
         krabka_metadata::NodeId(2),
-        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+        &[(LEADER_THROTTLED_RATE_KEY, "1024")],
     );
-    crate::handlers::describe_configs::test_support::set_topic_config(
-        &mut image,
-        TopicConfigSetup::default(),
-    );
+    set_topic_config(&mut image, TopicConfigSetup::default());
     seed_metrics_subscription(&mut image);
     image.apply(&MetadataRecord::V1GroupConfig(
         krabka_metadata::GroupConfigRecord {
@@ -1020,7 +1026,7 @@ fn a_controller_managed_broker_key_is_read_only_wherever_it_is_reported() {
 fn a_broker_resource_that_names_another_node_is_refused() {
     let image = image_with_broker_config(
         krabka_metadata::NodeId(2),
-        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+        &[(LEADER_THROTTLED_RATE_KEY, "1024")],
     );
 
     let result = describe_at(
@@ -1052,7 +1058,7 @@ fn a_broker_resource_that_names_another_node_is_refused() {
 fn the_cluster_default_broker_resource_is_served_by_any_node() {
     let image = image_with_broker_config(
         DEFAULT_BROKER_CONFIG_NODE_ID,
-        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+        &[(LEADER_THROTTLED_RATE_KEY, "1024")],
     );
 
     let result = describe_at(
@@ -1082,19 +1088,19 @@ fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
         (
             RESOURCE_TYPE_TOPIC,
             "missing",
-            crate::codes::UNKNOWN_TOPIC_OR_PARTITION,
+            UNKNOWN_TOPIC_OR_PARTITION,
             None,
         ),
         (
             RESOURCE_TYPE_TOPIC,
             "",
-            crate::codes::INVALID_TOPIC_EXCEPTION,
+            INVALID_TOPIC_EXCEPTION,
             Some("Topic name is invalid: the empty string is not allowed"),
         ),
         (
             RESOURCE_TYPE_TOPIC,
             "bad/name",
-            crate::codes::INVALID_TOPIC_EXCEPTION,
+            INVALID_TOPIC_EXCEPTION,
             Some(
                 "Topic name is invalid: 'bad/name' contains one or more characters other than \
                  ASCII alphanumerics, '.', '_' and '-'",
@@ -1103,25 +1109,25 @@ fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
         (
             RESOURCE_TYPE_CLIENT_METRICS,
             "",
-            crate::codes::INVALID_REQUEST,
+            INVALID_REQUEST,
             Some("Client metrics subscription name must not be empty"),
         ),
         (
             RESOURCE_TYPE_GROUP,
             "",
-            crate::codes::INVALID_REQUEST,
+            INVALID_REQUEST,
             Some("Group name must not be empty"),
         ),
         (
             RESOURCE_TYPE_BROKER,
             "abc",
-            crate::codes::INVALID_REQUEST,
+            INVALID_REQUEST,
             Some("Broker id must be an integer, but it is: abc"),
         ),
         (
             RESOURCE_TYPE_BROKER,
             "-1",
-            crate::codes::INVALID_REQUEST,
+            INVALID_REQUEST,
             Some("Unexpected broker id, expected 1 or empty string, but received -1"),
         ),
     ];
@@ -1170,8 +1176,8 @@ fn a_client_metrics_subscription_reports_all_three_keys_typed() {
         None,
         EVERYTHING,
     );
-    let metrics = entry_named(&result, crate::client_metrics::config::KEY_METRICS);
-    let interval = entry_named(&result, crate::client_metrics::config::KEY_INTERVAL_MS);
+    let metrics = entry_named(&result, KEY_METRICS);
+    let interval = entry_named(&result, KEY_INTERVAL_MS);
     let matcher = entry_named(&result, crate::client_metrics::config::KEY_MATCH);
 
     check!(metrics.value == Some("org.apache.kafka".to_owned()));
@@ -1198,8 +1204,7 @@ fn a_group_reports_its_override_above_the_streams_default() {
         },
     ));
 
-    let defaults = crate::coordinator::unified::streams::config::StreamsGroupConfig::default()
-        .group_config_values();
+    let defaults = StreamsGroupConfig::default().group_config_values();
     let fallback = defaults
         .iter()
         .find(|(key, _)| *key == KEY_NUM_STANDBY_REPLICAS)
@@ -1233,8 +1238,8 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
     let image = MetadataImage::new(Uuid::nil());
     // A running broker states the streams assignor it runs, which Kafka's
     // `GroupConfig` has no default for.
-    let mut config = crate::config::BrokerConfig::default();
-    config.features.unstable_api_versions = crate::api_catalog::UnstableApiVersions::Enabled;
+    let mut config = BrokerConfig::default();
+    config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     let settings = static_settings(&config);
     let group = describe_at(
         settings_for((RESOURCE_TYPE_GROUP, "streams-1"), &settings),
@@ -1253,10 +1258,7 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
     );
 
     let reported: Vec<&str> = group.configs.iter().map(|e| e.name.as_str()).collect();
-    let expected: Vec<&str> = crate::config_keys::group::KAFKA_GROUP_KEYS
-        .iter()
-        .map(|key| key.name)
-        .collect();
+    let expected: Vec<&str> = KAFKA_GROUP_KEYS.iter().map(|key| key.name).collect();
 
     check!(reported == expected);
     for entry in group.configs.iter().chain(&subscription.configs) {
@@ -1283,7 +1285,7 @@ fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
                 node_id: 1,
                 levels: &levels,
             },
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+            unstable_api_versions: UnstableApiVersions::Disabled,
         },
         300_000,
         EVERYTHING,
@@ -1348,7 +1350,7 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
         .map(|entry| entry.name)
         .collect()
     };
-    let trunk_topic_keys = crate::config_keys::KAFKA_TRUNK_TOPIC_KEYS;
+    let trunk_topic_keys = KAFKA_TRUNK_TOPIC_KEYS;
     let trunk_broker_keys = [
         "log.remote.copy.lag.bytes",
         "log.remote.copy.lag.ms",
@@ -1739,7 +1741,7 @@ fn image_with_topic(overrides: &[(&str, &str)], cluster: &[(&str, &str)]) -> Met
     }));
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: "t".into(),
-        overrides: crate::test_support::string_pairs(overrides),
+        overrides: string_pairs(overrides),
     }));
     image
 }
@@ -1861,7 +1863,7 @@ fn a_broker_reports_its_topic_default_keys_typed() {
         (entry.value.as_deref(), entry.config_source, entry.read_only)
             == (Some("1048588"), CONFIG_SOURCE_DEFAULT, false)
     );
-    for (key, _) in crate::config_keys::broker_dynamic::TOPIC_DEFAULT_SYNONYMS {
+    for (key, _) in TOPIC_DEFAULT_SYNONYMS {
         check!(
             named.configs.iter().any(|entry| entry.name == *key),
             "{key}"
@@ -2088,9 +2090,8 @@ fn a_named_broker_reports_an_authentication_limit_the_operator_named() {
             named(delay, "100", "100"),
         ),
     ] {
-        let file: crate::file_config::FileConfig =
-            toml::from_str(source).expect("parse runtime config");
-        let mut config = crate::config::BrokerConfig::default();
+        let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+        let mut config = BrokerConfig::default();
         file.apply_to(&mut config).expect("apply runtime config");
         let settings = static_settings(&config);
         let result = describe_at(
@@ -2202,7 +2203,7 @@ fn a_topic_reports_the_static_synonyms_the_broker_was_started_with() {
         SERVING_NODE,
         "orders",
         &std::collections::BTreeMap::new(),
-        crate::api_catalog::UnstableApiVersions::Disabled,
+        UnstableApiVersions::Disabled,
         &settings,
     );
     let created_entry = |key: &str| {
@@ -2264,8 +2265,8 @@ fn a_topic_and_a_named_broker_report_the_log_roll_ms_the_node_runs() {
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
     for (label, src, topic_chain, broker_chain) in cases {
-        let file: crate::file_config::FileConfig = toml::from_str(src).expect("parse");
-        let mut config = crate::config::BrokerConfig::default();
+        let file: FileConfig = toml::from_str(src).expect("parse");
+        let mut config = BrokerConfig::default();
         file.apply_to(&mut config).expect("apply");
         let settings = static_settings(&config);
         let chain = |resource_type, name: &str, key: &str| {
@@ -2375,7 +2376,7 @@ fn a_topic_reports_the_computing_nodes_own_min_insync_replicas() {
             node,
             "orders",
             &std::collections::BTreeMap::new(),
-            crate::api_catalog::UnstableApiVersions::Disabled,
+            UnstableApiVersions::Disabled,
             &std::collections::BTreeMap::new(),
         );
         let entry = created
@@ -2397,7 +2398,7 @@ fn a_topic_reports_the_computing_nodes_own_min_insync_replicas() {
 /// named nothing reports Kafka's defaults.
 #[test]
 fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
-    let file: crate::file_config::FileConfig = toml::from_str(
+    let file: FileConfig = toml::from_str(
         "[runtime]\nconsumer_group_session_timeout = \"60s\"\n\
          consumer_group_heartbeat_interval = \"5s\"\n\
          share_group_record_lock_duration = \"45s\"\n\
@@ -2405,7 +2406,7 @@ fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
          socket_send_buffer = \"1MiB\"\n",
     )
     .expect("parse runtime config");
-    let mut config = crate::config::BrokerConfig::default();
+    let mut config = BrokerConfig::default();
     file.apply_to(&mut config).expect("apply runtime config");
     let settings = static_settings(&config);
     let mut image = MetadataImage::new(Uuid::nil());
@@ -2532,10 +2533,7 @@ fn a_group_reports_every_kafka_group_key_with_its_broker_synonym() {
         .iter()
         .map(|entry| entry.name.as_str())
         .collect();
-    let kafka: Vec<&str> = crate::config_keys::group::KAFKA_GROUP_KEYS
-        .iter()
-        .map(|key| key.name)
-        .collect();
+    let kafka: Vec<&str> = KAFKA_GROUP_KEYS.iter().map(|key| key.name).collect();
     check!(names == kafka);
 
     let cases = [
@@ -2678,8 +2676,8 @@ fn a_named_broker_reports_the_static_layer_of_the_partition_verification_key() {
         ),
     ];
     for (label, source, (dynamic, chain)) in cases {
-        let file: crate::file_config::FileConfig = toml::from_str(source).expect("parse the file");
-        let mut config = crate::config::BrokerConfig::default();
+        let file: FileConfig = toml::from_str(source).expect("parse the file");
+        let mut config = BrokerConfig::default();
         file.apply_to(&mut config).expect("apply the file");
         let settings = static_settings(&config);
         let mut image = MetadataImage::new(Uuid::nil());

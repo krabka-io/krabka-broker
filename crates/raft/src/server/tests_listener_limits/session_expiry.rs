@@ -4,17 +4,18 @@ use assert2::assert;
 use krabka_protocol::{Encode as _, owned::describe_quorum_request::DescribeQuorumRequest};
 
 use super::*;
+use crate::ClusterGrants;
 
 struct CountingGrants(Arc<AtomicUsize>);
 
-impl crate::ClusterGrants for CountingGrants {
+impl ClusterGrants for CountingGrants {
     fn allows(&self, _: crate::ClusterOperation) -> bool {
         self.0.fetch_add(1, Ordering::Relaxed);
         true
     }
 
     fn cluster_authorized_operations(&self) -> i32 {
-        crate::ClusterGrants::cluster_authorized_operations(&AllowAllGrants)
+        ClusterGrants::cluster_authorized_operations(&AllowAllGrants)
     }
 }
 

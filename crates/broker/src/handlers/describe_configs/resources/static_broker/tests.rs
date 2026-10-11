@@ -16,7 +16,7 @@ use super::{
     },
     *,
 };
-use crate::{api_catalog::UnstableApiVersions, config::BrokerConfig};
+use crate::{api_catalog::UnstableApiVersions, config::BrokerConfig, file_config::FileConfig};
 
 const BOTH: EntryOptions = EntryOptions {
     include_synonyms: true,
@@ -427,8 +427,7 @@ fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
     ];
 
     for (label, metadata_log_dir, source, expected) in cases {
-        let file: crate::file_config::FileConfig =
-            toml::from_str(source).expect("parse runtime config");
+        let file: FileConfig = toml::from_str(source).expect("parse runtime config");
         let mut config = BrokerConfig {
             metadata_log_dir: metadata_log_dir.map(std::path::PathBuf::from),
             ..BrokerConfig::default()

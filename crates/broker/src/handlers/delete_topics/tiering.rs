@@ -10,8 +10,9 @@ use krabka_ids::PartitionIndex;
 use krabka_remote_storage::TopicIdPartition;
 
 use crate::{
-    broker::Broker, partition_registry::PartitionRegistry,
-    remote_log_manager::cascade_remote_partition_delete,
+    broker::Broker,
+    partition_registry::PartitionRegistry,
+    remote_log_manager::{ArchiveMode, cascade_remote_partition_delete},
 };
 
 /// Snapshots the `(topic_id, partition_id)` of every tiered partition of
@@ -60,9 +61,7 @@ pub(super) fn tiered_partitions(
 pub(super) fn spawn_remote_cascades(broker: &Broker, tiered_to_cascade: Vec<TopicIdPartition>) {
     if let Some(reader) = broker.remote_reader.as_ref() {
         let broker_id = broker.config.broker_id;
-        let archive = crate::remote_log_manager::ArchiveMode::from_worm(
-            broker.config.remote_storage_worm.as_ref(),
-        );
+        let archive = ArchiveMode::from_worm(broker.config.remote_storage_worm.as_ref());
         for tp in tiered_to_cascade {
             let rsm = reader.rsm.clone();
             let rlmm = reader.rlmm.clone();

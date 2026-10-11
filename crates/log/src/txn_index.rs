@@ -20,7 +20,10 @@ use zerocopy::{
     byteorder::{I16, I64},
 };
 
-use crate::{error::LogError, index::open_index};
+use crate::{
+    error::LogError,
+    index::{open_index, rewrite_sidecar_file},
+};
 
 const ENTRY_BYTES: usize = 34;
 
@@ -160,7 +163,7 @@ impl TxnIndex {
             &self.entries,
             |entry| entry.last_offset < offset,
             |entries| {
-                let mut file = crate::index::rewrite_sidecar_file(&self.path)?;
+                let mut file = rewrite_sidecar_file(&self.path)?;
                 for entry in entries {
                     let raw = AbortedTxnRaw::new(*entry);
                     file.write_all(raw.as_bytes()).map_err(LogError::Io)?;
@@ -209,6 +212,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::test_support::{AbortedTxnSetup, aborted_txn};
 
     fn populated_index(name: &str, entries: &[AbortedTxn]) -> (TempDir, PathBuf, TxnIndex) {
         let dir = TempDir::new().unwrap();
@@ -222,7 +226,7 @@ mod tests {
 
     /// The same three-offset entry seeds retry, mutation and disk-round-trip cases.
     fn retry_entry() -> AbortedTxn {
-        crate::test_support::aborted_txn(crate::test_support::AbortedTxnSetup {
+        aborted_txn(AbortedTxnSetup {
             bounds: Offset(5)..=Offset(7),
             stable: Offset(8),
             ..Default::default()
@@ -239,13 +243,11 @@ mod tests {
     fn ranged_index(setup: RangedIndexSetup<'_>) -> (TempDir, PathBuf, TxnIndex) {
         populated_index(
             setup.name,
-            &[crate::test_support::aborted_txn(
-                crate::test_support::AbortedTxnSetup {
-                    producer: crate::ProducerId(1),
-                    bounds: Offset(10)..=Offset(20),
-                    stable: Offset(21),
-                },
-            )],
+            &[aborted_txn(AbortedTxnSetup {
+                producer: crate::ProducerId(1),
+                bounds: Offset(10)..=Offset(20),
+                stable: Offset(21),
+            })],
         )
     }
 
@@ -254,7 +256,7 @@ mod tests {
         [
             (
                 "inverted",
-                crate::test_support::aborted_txn(crate::test_support::AbortedTxnSetup {
+                aborted_txn(AbortedTxnSetup {
                     producer: crate::ProducerId(1),
                     bounds: Offset(8)..=Offset(7),
                     stable: Offset(8),
@@ -262,7 +264,7 @@ mod tests {
             ),
             (
                 "negative-producer",
-                crate::test_support::aborted_txn(crate::test_support::AbortedTxnSetup {
+                aborted_txn(AbortedTxnSetup {
                     producer: crate::ProducerId(-1),
                     bounds: Offset(7)..=Offset(8),
                     stable: Offset(9),
@@ -281,7 +283,7 @@ mod tests {
     /// `last_offset`, and `last_stable_offset`, each a big-endian i64.
     #[test]
     fn append_writes_the_exact_kafka_wire_layout() {
-        let entry = crate::test_support::aborted_txn(crate::test_support::AbortedTxnSetup {
+        let entry = aborted_txn(AbortedTxnSetup {
             bounds: crate::Offset(5)..=crate::Offset(9),
             stable: crate::Offset(10),
             ..Default::default()
@@ -306,13 +308,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("00.txnindex");
         let entries = [
-            crate::test_support::aborted_txn(crate::test_support::AbortedTxnSetup::default()),
-            crate::test_support::aborted_txn(crate::test_support::AbortedTxnSetup {
+            aborted_txn(AbortedTxnSetup::default()),
+            aborted_txn(AbortedTxnSetup {
                 producer: crate::ProducerId(2000),
                 bounds: crate::Offset(4)..=crate::Offset(6),
                 stable: crate::Offset(7),
             }),
-            crate::test_support::aborted_txn(crate::test_support::AbortedTxnSetup {
+            aborted_txn(AbortedTxnSetup {
                 producer: crate::ProducerId(3000),
                 bounds: crate::Offset(8)..=crate::Offset(10),
                 stable: crate::Offset(11),
@@ -438,13 +440,11 @@ mod tests {
         let path = dir.path().join("00.txnindex");
         let mut idx = TxnIndex::open(path.clone()).unwrap();
         idx.append(retry_entry()).unwrap();
-        idx.append(crate::test_support::aborted_txn(
-            crate::test_support::AbortedTxnSetup {
-                bounds: crate::Offset(10)..=crate::Offset(12),
-                stable: crate::Offset(13),
-                ..Default::default()
-            },
-        ))
+        idx.append(aborted_txn(AbortedTxnSetup {
+            bounds: crate::Offset(10)..=crate::Offset(12),
+            stable: crate::Offset(13),
+            ..Default::default()
+        }))
         .unwrap();
 
         let idx2 = TxnIndex::open(path).unwrap();
@@ -500,21 +500,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("00.txnindex");
         let mut idx = TxnIndex::open(path).unwrap();
-        idx.append(crate::test_support::aborted_txn(
-            crate::test_support::AbortedTxnSetup {
-                producer: crate::ProducerId(1),
-                bounds: crate::Offset(0)..=crate::Offset(4),
-                stable: crate::Offset(5),
-            },
-        ))
+        idx.append(aborted_txn(AbortedTxnSetup {
+            producer: crate::ProducerId(1),
+            bounds: crate::Offset(0)..=crate::Offset(4),
+            stable: crate::Offset(5),
+        }))
         .unwrap();
-        idx.append(crate::test_support::aborted_txn(
-            crate::test_support::AbortedTxnSetup {
-                producer: crate::ProducerId(2),
-                bounds: crate::Offset(10)..=crate::Offset(14),
-                stable: crate::Offset(15),
-            },
-        ))
+        idx.append(aborted_txn(AbortedTxnSetup {
+            producer: crate::ProducerId(2),
+            bounds: crate::Offset(10)..=crate::Offset(14),
+            stable: crate::Offset(15),
+        }))
         .unwrap();
 
         let in_3_to_12 = idx

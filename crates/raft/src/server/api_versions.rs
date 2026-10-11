@@ -16,7 +16,10 @@ pub use self::{
     client_software::is_valid_client_info,
     features::{finalized_feature_keys, supported_feature_key, supported_feature_keys},
 };
-use crate::{UnstableApiVersions, UnstableFeatureVersions, error::RaftError};
+use crate::{
+    ControllerAdminRouter, ControllerApiVersion, UnstableApiVersions, UnstableFeatureVersions,
+    error::RaftError, kafka_4_3_1_max,
+};
 
 mod client_software;
 mod features;
@@ -41,7 +44,7 @@ pub fn api_versions_max_version(unstable: UnstableApiVersions) -> i16 {
     match unstable {
         UnstableApiVersions::Enabled => API_VERSIONS_MAX_VERSION,
         UnstableApiVersions::Disabled => {
-            crate::kafka_4_3_1_max(API_KEY_API_VERSIONS).unwrap_or(API_VERSIONS_MAX_VERSION)
+            kafka_4_3_1_max(API_KEY_API_VERSIONS).unwrap_or(API_VERSIONS_MAX_VERSION)
         }
     }
 }
@@ -64,7 +67,7 @@ pub(crate) struct ApiVersionsView<'a> {
     /// `FeaturesPublisher` takes it from `image.provenance().lastContainedOffset()`.
     pub(crate) metadata_offset: i64,
     /// The KIP-919 Admin surface the broker attaches, if any.
-    pub(crate) admin_router: Option<&'a dyn crate::ControllerAdminRouter>,
+    pub(crate) admin_router: Option<&'a dyn ControllerAdminRouter>,
     /// Kafka's `unstable.api.versions.enable`. It caps both the API table and
     /// the supported features: the controller listener's
     /// `SimpleApiVersionManager` is built with it and takes no
@@ -171,10 +174,10 @@ fn encode_body(response: &ApiVersionsResponse, version: i16) -> Bytes {
 /// the enabled table does not have -- one Kafka 4.3.1 lacks, while unstable
 /// api versions are disabled -- is left out.
 pub(super) fn advertised_api_keys(
-    admin_router: Option<&dyn crate::ControllerAdminRouter>,
+    admin_router: Option<&dyn ControllerAdminRouter>,
     unstable: UnstableApiVersions,
 ) -> Vec<ApiVersionEntry> {
-    let entry = |version: &crate::ControllerApiVersion| {
+    let entry = |version: &ControllerApiVersion| {
         version
             .enabled_max(unstable)
             .map(|max_version| ApiVersionEntry {
@@ -201,7 +204,7 @@ pub(super) fn advertised_api_keys(
 pub(super) fn is_disabled_version(
     api_key: i16,
     version: i16,
-    admin_router: Option<&dyn crate::ControllerAdminRouter>,
+    admin_router: Option<&dyn ControllerAdminRouter>,
     unstable: UnstableApiVersions,
 ) -> bool {
     let router_apis = admin_router.map_or(&[][..], |router| router.api_versions());
@@ -267,6 +270,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::{ControllerAdminRouter, ControllerApiVersion};
 
     /// The view a listener with no Admin router and the default unstable
     /// setting answers from, at metadata offset `metadata_offset`.
@@ -335,10 +339,10 @@ mod tests {
         use krabka_protocol::owned::api_versions_response::ApiVersionsResponse;
 
         struct HeartbeatRouter;
-        impl crate::ControllerAdminRouter for HeartbeatRouter {
-            fn api_versions(&self) -> &[crate::ControllerApiVersion] {
+        impl ControllerAdminRouter for HeartbeatRouter {
+            fn api_versions(&self) -> &[ControllerApiVersion] {
                 use krabka_protocol::owned::broker_heartbeat_request;
-                &[crate::ControllerApiVersion {
+                &[ControllerApiVersion {
                     api_key: broker_heartbeat_request::API_KEY,
                     min_version: broker_heartbeat_request::MIN_VERSION,
                     max_version: broker_heartbeat_request::MAX_VERSION,
@@ -383,9 +387,9 @@ mod tests {
     /// Kafka's `InitProducerId` v6 (`latestVersionUnstable`).
     struct UnstableRouter;
 
-    impl crate::ControllerAdminRouter for UnstableRouter {
-        fn api_versions(&self) -> &[crate::ControllerApiVersion] {
-            &[crate::ControllerApiVersion {
+    impl ControllerAdminRouter for UnstableRouter {
+        fn api_versions(&self) -> &[ControllerApiVersion] {
+            &[ControllerApiVersion {
                 api_key: 22,
                 min_version: 0,
                 max_version: 6,
@@ -441,9 +445,9 @@ mod tests {
     #[test]
     fn an_api_kafka_4_3_1_lacks_follows_unstable_api_versions_enable() {
         struct TrunkRouter;
-        impl crate::ControllerAdminRouter for TrunkRouter {
-            fn api_versions(&self) -> &[crate::ControllerApiVersion] {
-                &[crate::ControllerApiVersion {
+        impl ControllerAdminRouter for TrunkRouter {
+            fn api_versions(&self) -> &[ControllerApiVersion] {
+                &[ControllerApiVersion {
                     api_key: 94,
                     min_version: 0,
                     max_version: 0,

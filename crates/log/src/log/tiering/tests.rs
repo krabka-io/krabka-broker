@@ -9,7 +9,11 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{rolled_log, sample_batch, sample_batch_with_epoch, test_log},
+    log::test_support::{
+        rolled_log, sample_batch, sample_batch_with_epoch, sample_log, stamped_rolling_log,
+        test_log,
+    },
+    test_support::{log_file_count, segmented_log},
 };
 
 /// An epoch covers `[start_offset, next.start_offset)`, so one ending
@@ -54,7 +58,7 @@ fn an_epoch_ending_where_the_range_begins_does_not_overlap_it() {
 
 #[test]
 fn tiered_local_delete_removes_only_deleted_segment_stamp_indexes() {
-    let (_dir, mut log) = crate::log::test_support::stamped_rolling_log(10, 1, 3);
+    let (_dir, mut log) = stamped_rolling_log(10, 1, 3);
 
     check!(log.sealed_txn_indexes.contains_key(&Offset(0)));
     check!(log.delete_local_segments_through(Offset(1)).unwrap() == 1);
@@ -67,7 +71,7 @@ fn tiered_local_delete_removes_only_deleted_segment_stamp_indexes() {
 #[test]
 fn tierable_segments_excludes_active_and_reports_paths() {
     // small so we roll fast
-    let (dir, mut log) = crate::log::test_support::sample_log(
+    let (dir, mut log) = sample_log(
         LogConfig {
             segment_size: bytes(200),
             ..LogConfig::default()
@@ -76,7 +80,7 @@ fn tierable_segments_excludes_active_and_reports_paths() {
         2,
     );
     log.sync().unwrap();
-    let sealed_count = crate::test_support::log_file_count(dir.path()) - 1; // minus the active segment's .log
+    let sealed_count = log_file_count(dir.path()) - 1; // minus the active segment's .log
 
     let exports = log.tierable_segments();
     assert2::assert!(exports.len() == sealed_count);
@@ -106,7 +110,7 @@ fn tierable_segments_empty_for_single_active_segment() {
 
 #[test]
 fn tierable_segments_last_offset_matches_next_base() {
-    let (_dir, mut log) = crate::log::test_support::sample_log(
+    let (_dir, mut log) = sample_log(
         LogConfig {
             segment_size: bytes(200),
             ..LogConfig::default()
@@ -125,7 +129,7 @@ fn tierable_segments_last_offset_matches_next_base() {
 #[test]
 fn tierable_segments_carry_leader_epochs() {
     let dir = tempdir().unwrap();
-    let mut log = crate::test_support::segmented_log(dir.path(), bytes(200));
+    let mut log = segmented_log(dir.path(), bytes(200));
     // epoch 0 for the first few, then epoch 1.
     for _ in 0..4 {
         let mut b = sample_batch_with_epoch(2, 0);

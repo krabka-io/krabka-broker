@@ -141,7 +141,7 @@ mod tests {
     use super::*;
     use crate::set::{
         decode_message_set,
-        test_support::{sample_records_v0, sample_records_v1},
+        test_support::{compressed_bytes, sample_records_v0, sample_records_v1},
     };
 
     #[test]
@@ -201,8 +201,7 @@ mod tests {
             key: None,
             value: Some(Bytes::from_static(b"v")),
         }];
-        let buf =
-            crate::set::test_support::compressed_bytes(&recs, Magic::V1, CompressionType::Gzip);
+        let buf = compressed_bytes(&recs, Magic::V1, CompressionType::Gzip);
 
         // Inspect the raw wrapper message's own timestamp before unwrapping.
         let mut cur: &[u8] = &buf[..];

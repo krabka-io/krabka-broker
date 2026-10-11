@@ -10,7 +10,8 @@ use super::*;
 use crate::{
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        log_append_time_log, sample_batch, test_batch_at, test_log, verbatim_from,
+        install_stamps, log_append_time_log, sample_batch, stamped_test_log, test_batch_at,
+        test_log, verbatim_from,
     },
 };
 
@@ -240,7 +241,7 @@ fn append_verbatim_transactional_holds_lso() {
 /// on that path, which the owned-append tests above do not exercise.
 #[test]
 fn append_verbatim_stamps_full_offset_range() {
-    let (dir, mut log) = crate::log::test_support::stamped_test_log(500, 1);
+    let (dir, mut log) = stamped_test_log(500, 1);
 
     // A four-record producer batch, appended verbatim, spans offsets 0..=3.
     let mut producer = sample_batch(4);
@@ -389,7 +390,7 @@ fn verbatim_append_flush_logic() {
     assert!(sync_observer::take_segment_flushes().is_empty());
 
     // With stamp_source, non-transactional flushes
-    crate::log::test_support::install_stamps(&mut log, 10, 1);
+    install_stamps(&mut log, 10, 1);
     sync_observer::take_segment_flushes();
     log.append_verbatim(&vb).unwrap();
     assert!(!sync_observer::take_segment_flushes().is_empty());

@@ -216,7 +216,7 @@ mod tests {
     use super::*;
     use crate::{
         config::LogConfig,
-        log::test_support::{test_log, tiny_segments, ts_batch},
+        log::test_support::{configured_test_log, gzip_value, test_log, tiny_segments, ts_batch},
         segment::Segment,
     };
 
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn configured_io_policy_reaches_reads_and_timestamp_scans() {
-        let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+        let (_dir, mut log) = configured_test_log(LogConfig {
             read_buffer_cap: bytes(1),
             timestamp_scan_window: bytes(1),
             ..LogConfig::default()
@@ -387,7 +387,7 @@ mod tests {
     /// A gzip batch of one record stamped `ts` with a `value_len`-byte value.
     fn gzip_batch(ts: i64, value_len: usize) -> krabka_protocol::records::RecordBatch {
         let mut batch = ts_batch(ts);
-        crate::log::test_support::gzip_value(&mut batch, value_len);
+        gzip_value(&mut batch, value_len);
         batch
     }
 
@@ -409,7 +409,7 @@ mod tests {
     /// 300 (small), 200 (oversized).
     #[test]
     fn the_checked_lookups_hold_a_decompressed_batch_to_the_record_limit() {
-        let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+        let (_dir, mut log) = configured_test_log(LogConfig {
             max_decompressed_record: Some(bytes(100)),
             ..tiny_segments()
         });
@@ -473,7 +473,7 @@ mod tests {
     /// uncompressed: Kafka reads them in place.
     #[test]
     fn the_checked_lookups_never_hold_an_uncompressed_batch_to_the_limit() {
-        let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+        let (_dir, mut log) = configured_test_log(LogConfig {
             max_decompressed_record: Some(bytes(100)),
             ..LogConfig::default()
         });

@@ -21,7 +21,12 @@ use super::{
     batch_reader::read_all_batches, retain_decision,
 };
 use crate::{
-    error::LogError, record_limit::check_records_read, segment::Segment, txn_index::TxnIndex,
+    error::LogError,
+    io::{IoTarget, write_all},
+    record_limit::check_records_read,
+    recovery::swap::cleaned_path,
+    segment::Segment,
+    txn_index::TxnIndex,
 };
 
 #[cfg(test)]
@@ -40,7 +45,7 @@ fn write_rewritten_batch(
 ) -> Result<Offset, LogError> {
     let mut bytes = BytesMut::with_capacity(batch.encoded_len());
     batch.encode(&mut bytes)?;
-    crate::io::write_all(io, crate::io::IoTarget::CompactionSwap, file, &bytes)?;
+    write_all(io, IoTarget::CompactionSwap, file, &bytes)?;
     Ok(previous_last.max(Offset(
         batch.base_offset + i64::from(batch.last_offset_delta),
     )))
@@ -353,7 +358,7 @@ pub fn rewrite_segments(
 
         last_kept_offset = write_rewritten_batch(io, &log_file, &out_batch, last_kept_offset)?;
     }
-    io.sync_file(crate::io::IoTarget::CompactionSwap, &log_file)?;
+    io.sync_file(IoTarget::CompactionSwap, &log_file)?;
 
     // Rebuild the `.txnindex` from the aborted transactions the walk kept an
     // abort marker for, as Kafka's `CleanedTransactionMetadata` appends them
@@ -421,5 +426,5 @@ fn bare_header(batch: &RecordBatch) -> RecordBatch {
 }
 
 fn swap_path(dir: &Path, base_offset: i64, ext: &str) -> PathBuf {
-    crate::recovery::swap::cleaned_path(dir, base_offset, ext)
+    cleaned_path(dir, base_offset, ext)
 }

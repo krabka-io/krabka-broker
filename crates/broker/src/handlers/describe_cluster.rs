@@ -189,7 +189,7 @@ mod tests {
     use crate::{
         authorizer::{AllowAllAuthorizer, Authorizer},
         broker::{Broker, BrokerHandle},
-        test_support::{ControllerPeerAllowed, DenyAll, peer, principal},
+        test_support::{ControllerPeerAllowed, DenyAll, broker_registration, peer, principal},
     };
 
     const VERSION: i16 = 2;
@@ -479,7 +479,7 @@ mod tests {
                     protocol: ListenerProtocol::Plaintext,
                 })
                 .collect(),
-            ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
+            ..broker_registration(krabka_raft::NodeId(node_id))
         }
     }
 

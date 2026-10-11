@@ -51,7 +51,10 @@ mod tests {
     use krabka_metadata::{AclOperation, PatternType, PermissionType};
 
     use super::*;
-    use crate::handlers::delete_acls::test_support::{acl, filter};
+    use crate::{
+        handlers::delete_acls::test_support::{acl, filter},
+        test_support::AllowAclSetup,
+    };
 
     #[test]
     fn build_filter_keeps_empty_strings_and_decodes_axes() {
@@ -88,7 +91,7 @@ mod tests {
 
     #[test]
     fn exact_filter_matches_only_its_entry() {
-        let entry = acl(crate::test_support::AllowAclSetup::default());
+        let entry = acl(AllowAclSetup::default());
         let neighbours = [
             AclEntry {
                 pattern_type: PatternType::Prefixed,
@@ -102,15 +105,15 @@ mod tests {
                 host: "10.0.0.1".into(),
                 ..entry.clone()
             },
-            acl(crate::test_support::AllowAclSetup {
+            acl(AllowAclSetup {
                 operation: AclOperation::Write,
                 ..Default::default()
             }),
-            acl(crate::test_support::AllowAclSetup {
+            acl(AllowAclSetup {
                 principal: "User:bob",
                 ..Default::default()
             }),
-            acl(crate::test_support::AllowAclSetup {
+            acl(AllowAclSetup {
                 resource_name: "order",
                 ..Default::default()
             }),

@@ -30,6 +30,7 @@ use crate::{
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
     log_start_offset_checkpoint, name,
     producer_snapshot::{self, ProducerSnapshotEntry},
+    recovery::{deleted_orphan_recover, swap_orphan_recover},
     segment::Segment,
     txn_index::TxnIndex,
 };
@@ -63,11 +64,11 @@ impl Log {
 
         // Heal any orphaned compaction `.swap` files before
         // we scan the directory for segments.
-        crate::recovery::swap_orphan_recover(&dir)?;
+        swap_orphan_recover(&dir)?;
         // …and reclaim what an interrupted segment deletion left: `.deleted`
         // tombstones, and sidecars whose `.log` the scan below can no longer
         // see. Both are invisible to every later pass otherwise.
-        crate::recovery::deleted_orphan_recover(&FileIo, &dir)?;
+        deleted_orphan_recover(&FileIo, &dir)?;
 
         let mut base_offsets: Vec<i64> = Vec::new();
         for entry in fs::read_dir(&dir)? {

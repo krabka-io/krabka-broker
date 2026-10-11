@@ -5,9 +5,10 @@ use moxy::{
     token::{Span, TokenStream, TokenTree},
 };
 
+use crate::meta::mode;
+
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
-    let (endpoint_doc, access_doc, secret_doc) = match crate::meta::mode(meta, ["file", "runtime"])?
-    {
+    let (endpoint_doc, access_doc, secret_doc) = match mode(meta, ["file", "runtime"])? {
         "file" => (
             moxy::template! { /// Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2).
             },

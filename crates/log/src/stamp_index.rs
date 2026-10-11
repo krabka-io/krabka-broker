@@ -27,8 +27,8 @@ use zerocopy::{
 
 use crate::{
     error::LogError,
-    index::open_index,
-    io::{IoTarget, LogIo},
+    index::{open_index, rewrite_retained_entries},
+    io::{IoTarget, LogIo, write_all},
 };
 
 const ENTRY_BYTES: usize = 24;
@@ -239,7 +239,7 @@ impl StampIndex {
             bytes.extend_from_slice(&STAMP_INDEX_VERSION.to_be_bytes());
         }
         bytes.extend_from_slice(StampEntryRaw::new(entry).as_bytes());
-        crate::io::write_all(&*self.io, IoTarget::StampIndex, &f, &bytes).map_err(LogError::Io)?;
+        write_all(&*self.io, IoTarget::StampIndex, &f, &bytes).map_err(LogError::Io)?;
         self.io
             .sync_file(IoTarget::StampIndex, &f)
             .map_err(LogError::Io)?;
@@ -287,7 +287,7 @@ impl StampIndex {
     /// # Errors
     /// Returns an error when rewriting or syncing the sidecar fails.
     pub fn truncate_from(&mut self, offset: Offset) -> Result<(), LogError> {
-        if let Some(entries) = crate::index::rewrite_retained_entries(
+        if let Some(entries) = rewrite_retained_entries(
             &self.entries,
             |entry| entry.last_offset < offset,
             |entries| self.rewrite(entries),
@@ -328,8 +328,7 @@ impl StampIndex {
         for &entry in entries {
             bytes.extend_from_slice(StampEntryRaw::new(entry).as_bytes());
         }
-        crate::io::write_all(&*self.io, IoTarget::StampIndex, &file, &bytes)
-            .map_err(LogError::Io)?;
+        write_all(&*self.io, IoTarget::StampIndex, &file, &bytes).map_err(LogError::Io)?;
         self.io
             .sync_file(IoTarget::StampIndex, &file)
             .map_err(LogError::Io)
@@ -373,11 +372,11 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::{index::index_fixture, test_support::stamp_entry};
 
     fn index_with(entries: &[StampEntry]) -> (TempDir, PathBuf, StampIndex) {
-        let (dir, path, mut index) = crate::index::index_fixture("00.stampindex", |path| {
-            StampIndex::open(path.to_path_buf())
-        });
+        let (dir, path, mut index) =
+            index_fixture("00.stampindex", |path| StampIndex::open(path.to_path_buf()));
         for entry in entries {
             index.append(*entry).unwrap();
         }
@@ -518,10 +517,8 @@ mod tests {
 
     #[test]
     fn stamp_append_round_trips_through_disk() {
-        let (_dir, path, _idx) = index_with(&[
-            crate::test_support::stamp_entry(5, 7, 1_000),
-            crate::test_support::stamp_entry(10, 12, 2_000),
-        ]);
+        let (_dir, path, _idx) =
+            index_with(&[stamp_entry(5, 7, 1_000), stamp_entry(10, 12, 2_000)]);
 
         let idx2 = StampIndex::open(path).unwrap();
         assert2::assert!(
@@ -560,8 +557,8 @@ mod tests {
     #[test]
     fn open_canonicalizes_retries_and_rejects_malformed_ranges() {
         let dir = TempDir::new().unwrap();
-        let first = crate::test_support::stamp_entry(0, 2, 100);
-        let second = crate::test_support::stamp_entry(10, 12, 200);
+        let first = stamp_entry(0, 2, 100);
+        let second = stamp_entry(10, 12, 200);
         let path = dir.path().join("retries.stampindex");
         write_entries(&path, &[second, first, second]);
         assert2::assert!(StampIndex::open(path).unwrap().entries() == [first, second]);
@@ -592,8 +589,8 @@ mod tests {
     #[test]
     fn out_of_order_append_stays_canonical_across_reopen() {
         let (_dir, path, mut idx) = index_with(&[]);
-        let first = crate::test_support::stamp_entry(0, 2, 100);
-        let second = crate::test_support::stamp_entry(10, 12, 200);
+        let first = stamp_entry(0, 2, 100);
+        let second = stamp_entry(10, 12, 200);
         idx.append(second).unwrap();
         idx.append(first).unwrap();
         assert2::assert!(idx.entries() == [first, second]);
@@ -604,7 +601,7 @@ mod tests {
     fn mutation_io_failures_leave_the_in_memory_index_unchanged() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("00.stampindex");
-        let original = crate::test_support::stamp_entry(0, 2, 100);
+        let original = stamp_entry(0, 2, 100);
         let mut idx = StampIndex::open(path.clone()).unwrap();
         idx.append(original).unwrap();
         std::fs::remove_file(&path).unwrap();
@@ -630,10 +627,7 @@ mod tests {
 
     #[test]
     fn stamp_for_offset_finds_covering_range() {
-        let (_dir, _path, idx) = index_with(&[
-            crate::test_support::stamp_entry(0, 4, 100),
-            crate::test_support::stamp_entry(10, 14, 200),
-        ]);
+        let (_dir, _path, idx) = index_with(&[stamp_entry(0, 4, 100), stamp_entry(10, 14, 200)]);
 
         // Inclusive endpoints and interior offsets resolve to their range.
         for (offset, expected) in [
@@ -652,35 +646,28 @@ mod tests {
     #[test]
     fn append_rejects_overlapping_ranges_but_accepts_exact_retry() {
         let (_dir, _path, mut idx) = index_with(&[]);
-        let entry = crate::test_support::stamp_entry(5, 7, 100);
+        let entry = stamp_entry(5, 7, 100);
         idx.append(entry).unwrap();
         idx.append(entry).unwrap();
         assert2::assert!(idx.entries() == [entry]);
 
-        let error = idx
-            .append(crate::test_support::stamp_entry(7, 9, 200))
-            .unwrap_err();
+        let error = idx.append(stamp_entry(7, 9, 200)).unwrap_err();
         assert2::assert!(let LogError::Corrupt(_) = error);
 
-        let error = idx
-            .append(crate::test_support::stamp_entry(10, 9, 300))
-            .unwrap_err();
+        let error = idx.append(stamp_entry(10, 9, 300)).unwrap_err();
         assert2::assert!(let LogError::InvalidArgument(_) = error);
     }
 
     #[test]
     fn upsert_replaces_only_an_exact_range() {
-        let (_dir, path, mut idx) = index_with(&[crate::test_support::stamp_entry(5, 7, 100)]);
+        let (_dir, path, mut idx) = index_with(&[stamp_entry(5, 7, 100)]);
 
-        idx.upsert(crate::test_support::stamp_entry(5, 7, 200))
-            .unwrap();
+        idx.upsert(stamp_entry(5, 7, 200)).unwrap();
         assert2::assert!(idx.stamp_for_offset(Offset(6)) == Some(200));
         assert2::assert!(StampIndex::open(path).unwrap().entries() == idx.entries());
 
         for (base, last) in [(5, 8), (4, 7)] {
-            let error = idx
-                .upsert(crate::test_support::stamp_entry(base, last, 300))
-                .unwrap_err();
+            let error = idx.upsert(stamp_entry(base, last, 300)).unwrap_err();
             assert2::assert!(let LogError::Corrupt(_) = error);
         }
     }
@@ -688,9 +675,9 @@ mod tests {
     #[test]
     fn truncate_from_removes_tail_entries_on_disk() {
         let (_dir, path, mut idx) = index_with(&[
-            crate::test_support::stamp_entry(0, 2, 100),
-            crate::test_support::stamp_entry(3, 6, 103),
-            crate::test_support::stamp_entry(10, 12, 110),
+            stamp_entry(0, 2, 100),
+            stamp_entry(3, 6, 103),
+            stamp_entry(10, 12, 110),
         ]);
 
         idx.truncate_from(Offset(6)).unwrap();
@@ -702,10 +689,7 @@ mod tests {
 
     #[test]
     fn remove_ranges_requires_both_exact_boundaries() {
-        let (_dir, path, mut idx) = index_with(&[
-            crate::test_support::stamp_entry(0, 1, 10),
-            crate::test_support::stamp_entry(2, 3, 20),
-        ]);
+        let (_dir, path, mut idx) = index_with(&[stamp_entry(0, 1, 10), stamp_entry(2, 3, 20)]);
 
         idx.remove_ranges(&[(Offset(0), Offset(9)), (Offset(9), Offset(3))])
             .unwrap();
@@ -720,12 +704,10 @@ mod tests {
 
     #[test]
     fn append_rejects_overlapping_single_offset_range_as_corrupt() {
-        let (_dir, _path, mut idx) = index_with(&[crate::test_support::stamp_entry(0, 5, 10)]);
+        let (_dir, _path, mut idx) = index_with(&[stamp_entry(0, 5, 10)]);
 
         // Overlapping single-offset range (last_offset == base_offset)
-        let err = idx
-            .append(crate::test_support::stamp_entry(2, 2, 20))
-            .unwrap_err();
+        let err = idx.append(stamp_entry(2, 2, 20)).unwrap_err();
         assert2::assert!(let LogError::Corrupt(_) = err);
     }
 
@@ -749,8 +731,7 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let (_dir, _path, mut idx) = index_with(&[]);
         idx.set_io(Arc::new(SpyIo(called.clone())));
-        idx.append(crate::test_support::stamp_entry(0, 0, 1))
-            .unwrap();
+        idx.append(stamp_entry(0, 0, 1)).unwrap();
         assert2::assert!(called.load(Ordering::SeqCst));
     }
 }

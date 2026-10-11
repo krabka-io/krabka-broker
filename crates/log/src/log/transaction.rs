@@ -182,11 +182,12 @@ mod tests {
     use super::*;
     use crate::{
         log::test_support::{
-            abort_marker, append_transaction, commit_marker, sample_batch, test_batch_at, test_log,
-            tiny_segments, transaction_entries, transaction_fields, transactional_batch,
-            verbatim_from,
+            abort_marker, append_transaction, commit_marker, install_stamps, sample_batch,
+            test_batch_at, test_log, tiny_segments, transaction_entries, transaction_fields,
+            transactional_batch, verbatim_from,
         },
         name,
+        test_support::open_log,
     };
 
     // ---- transactional LSO / txnindex tests ----
@@ -216,8 +217,8 @@ mod tests {
     fn negative_producer_ids_never_create_transaction_state() {
         let dir = tempdir().unwrap();
         {
-            let mut log = crate::test_support::open_log(dir.path());
-            crate::log::test_support::install_stamps(&mut log, 40, 1);
+            let mut log = open_log(dir.path());
+            install_stamps(&mut log, 40, 1);
 
             let mut owned = sample_batch(1);
             owned.producer_id = -2;
@@ -244,7 +245,7 @@ mod tests {
             assert2::assert!(log.producer_state_snapshot().is_empty());
         }
 
-        let reopened = crate::test_support::open_log(dir.path());
+        let reopened = open_log(dir.path());
         assert2::assert!(reopened.lso() == reopened.log_end_offset());
         assert2::assert!(transaction_fields(&reopened, ProducerId(-2)) == (-1, None));
         assert2::assert!(transaction_fields(&reopened, ProducerId(-3)) == (-1, None));
@@ -407,7 +408,7 @@ mod tests {
         for case in ["malformed", "different-producer"] {
             let dir = tempdir().unwrap();
             {
-                let mut log = crate::test_support::open_log(dir.path());
+                let mut log = open_log(dir.path());
                 append_transaction(&mut log, (1000, 0), &["a", "b"]);
                 let held = log.lso();
                 let mut marker = if case == "malformed" {
@@ -433,7 +434,7 @@ mod tests {
                     "case {case}"
                 );
             }
-            let reopened = crate::test_support::open_log(dir.path());
+            let reopened = open_log(dir.path());
             assert2::assert!(reopened.lso() == Offset(0), "case {case}");
             assert2::assert!(
                 reopened.pending_transaction_start(ProducerId(1000)) == Some(Offset(0)),
@@ -517,12 +518,12 @@ mod tests {
     fn a_reopened_log_holds_a_complete_transaction_until_the_high_watermark_passes() {
         let dir = tempdir().unwrap();
         {
-            let mut log = crate::test_support::open_log(dir.path());
+            let mut log = open_log(dir.path());
             log.append(&mut sample_batch(10)).unwrap(); // offsets 0 to 9
             append_transaction(&mut log, (1000, 0), &["a", "b"]); // offsets 10 and 11
             log.append(&mut abort_marker(1000, 0)).unwrap(); // offset 12
         }
-        let mut reopened = crate::test_support::open_log(dir.path());
+        let mut reopened = open_log(dir.path());
         assert2::assert!(
             [12, 13, 11].map(|hw| reopened.last_stable_offset(Offset(hw)))
                 == [Offset(10), Offset(13), Offset(11)]

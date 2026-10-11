@@ -78,6 +78,7 @@ use crate::{
         self,
         registry::{self, ConfigScope},
     },
+    cordoned_log_dirs::CORDONED_LOG_DIRS,
 };
 
 /// One static broker setting as this node holds it: the value it runs with,
@@ -197,10 +198,7 @@ pub(crate) fn static_settings(
         settings.insert("metadata.log.dir", dir.display().to_string());
     }
     if let Some(cordoned) = &config.cordoned_log_dirs {
-        settings.insert(
-            crate::cordoned_log_dirs::CORDONED_LOG_DIRS,
-            cordoned.clone(),
-        );
+        settings.insert(CORDONED_LOG_DIRS, cordoned.clone());
     }
     let supplied = config.static_config_origins.log;
     if supplied.message_max_bytes {

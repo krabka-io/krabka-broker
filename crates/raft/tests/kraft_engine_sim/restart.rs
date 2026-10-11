@@ -1,11 +1,9 @@
 //! Restart recovery: a follower that snapshots, dies, and is reopened over its
 //! own data dir rebuilds its metadata image from the checkpoint plus the log.
 
-use crate::{
-    harness as fixture,
-    harness::{
-        STAGGERED_TIMEOUTS, await_single_leader, await_until, metadata_log, topic_record, voter_set,
-    },
+use crate::harness::{
+    self as fixture, STAGGERED_TIMEOUTS, SimClusterSetup, await_single_leader, await_until,
+    metadata_log, shutdown_nodes, start_engines, topic_record, voter_set,
 };
 
 /// 4. Restart recovery: commit, snapshot, drop one engine, reopen it over its
@@ -20,9 +18,9 @@ async fn restart_recovers_image() {
     let dirs: fixture::HashMap<_, _> = ids
         .iter()
         .copied()
-        .zip(crate::harness::start_engines(
+        .zip(start_engines(
             &net,
-            crate::harness::SimClusterSetup {
+            SimClusterSetup {
                 ids: &ids,
                 cluster_id: cid,
                 ..Default::default()
@@ -89,5 +87,5 @@ async fn restart_recovers_image() {
     assert2::assert!(reopened.current_image().topic("persistent").is_some());
     net.register(victim, reopened);
 
-    crate::harness::shutdown_nodes(&net, &ids).await;
+    shutdown_nodes(&net, &ids).await;
 }

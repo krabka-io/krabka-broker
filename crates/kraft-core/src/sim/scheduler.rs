@@ -14,7 +14,9 @@ use super::{
 use crate::{
     action::Action,
     event::Event,
-    simulation_support::SimulationTimer as SimTimer,
+    simulation_support::{
+        SimulationTimer as SimTimer, StableFingerprint, clear_timer, reconcile_timers,
+    },
     types::{Epoch, NodeId},
 };
 
@@ -41,7 +43,7 @@ impl Sim {
     /// Both the curated scenarios and the playground's "settle" button call
     /// this method.
     pub fn run_until_stable(&mut self, max_ticks: usize) {
-        let mut stability = crate::simulation_support::StableFingerprint::new(self.fingerprint());
+        let mut stability = StableFingerprint::new(self.fingerprint());
         for _ in 0..max_ticks {
             if let Some(msg) = self.queue.pop_front() {
                 self.deliver(&msg);
@@ -77,7 +79,7 @@ impl Sim {
         }
         {
             let node = self.nodes.get_mut(&id).unwrap();
-            crate::simulation_support::clear_timer(
+            clear_timer(
                 kind,
                 &mut node.election_deadline,
                 &mut node.fetch_deadline,
@@ -138,7 +140,7 @@ impl Sim {
 
     pub(super) fn reconcile_timers_for_role(&mut self, id: NodeId) {
         let node = self.nodes.get_mut(&id).unwrap();
-        crate::simulation_support::reconcile_timers(
+        reconcile_timers(
             node.machine.role(),
             &mut node.election_deadline,
             &mut node.fetch_deadline,

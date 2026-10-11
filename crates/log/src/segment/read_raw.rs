@@ -192,7 +192,9 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        DENSE_INDEX, NO_LIMIT, sample_batch, test_batch_at, test_segment,
+        DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_TWO_RECORD_BATCH,
+        SampleBatchSetup, THIRD_TWO_RECORD_BATCH, THREE_RECORD_BATCH, TWO_RECORD_BATCH,
+        sample_batch, seeded_fixture, test_batch_at, test_segment, two_record_fixture,
     };
 
     /// A fetch reads nothing when it starts past the segment, and nothing when
@@ -204,10 +206,10 @@ mod tests {
     fn append_two_record_batches(seg: &mut Segment, count: BatchCount) {
         for i in 0..count.0 {
             seg.append(
-                &sample_batch(crate::segment::test_support::SampleBatchSetup {
+                &sample_batch(SampleBatchSetup {
                     offset: crate::Offset(i * 2),
-                    records: crate::segment::test_support::RecordCount(2),
-                    timestamp: crate::segment::test_support::RecordTimestamp(100 + i),
+                    records: RecordCount(2),
+                    timestamp: RecordTimestamp(100 + i),
                 }),
                 DENSE_INDEX,
             )
@@ -217,14 +219,12 @@ mod tests {
 
     #[test]
     fn a_fetch_past_the_segment_or_at_the_limit_reads_nothing() {
-        let (_dir, seg) = crate::segment::test_support::seeded_fixture(
-            crate::segment::test_support::SeededSegmentSetup {
-                batches: &[
-                    crate::segment::test_support::THREE_RECORD_BATCH, // offsets 0..=2
-                ],
-                ..Default::default()
-            },
-        );
+        let (_dir, seg) = seeded_fixture(crate::segment::test_support::SeededSegmentSetup {
+            batches: &[
+                THREE_RECORD_BATCH, // offsets 0..=2
+            ],
+            ..Default::default()
+        });
 
         let past = seg.read_raw(Offset(3), Offset(99), NO_LIMIT).unwrap();
         check!(past.is_empty(), "a fetch past the last offset");
@@ -244,27 +244,17 @@ mod tests {
     /// out of the middle of a record.
     #[test]
     fn a_fetch_mid_segment_steps_over_the_batches_before_it() {
-        let (_dir, mut seg) = crate::segment::test_support::test_segment();
+        let (_dir, mut seg) = test_segment();
         // A sparse index, so only the first batch gets an entry and the lookup
         // lands at the segment head. The walk then has to step over the two
         // batches before the one asked for -- with a dense index it would jump
         // straight there and never step at all.
         let sparse = mebibytes(1);
-        seg.append(
-            &sample_batch(crate::segment::test_support::TWO_RECORD_BATCH),
-            sparse,
-        )
-        .unwrap(); // 0..=1
-        seg.append(
-            &sample_batch(crate::segment::test_support::SECOND_TWO_RECORD_BATCH),
-            sparse,
-        )
-        .unwrap(); // 2..=3
-        seg.append(
-            &sample_batch(crate::segment::test_support::THIRD_TWO_RECORD_BATCH),
-            sparse,
-        )
-        .unwrap(); // 4..=5
+        seg.append(&sample_batch(TWO_RECORD_BATCH), sparse).unwrap(); // 0..=1
+        seg.append(&sample_batch(SECOND_TWO_RECORD_BATCH), sparse)
+            .unwrap(); // 2..=3
+        seg.append(&sample_batch(THIRD_TWO_RECORD_BATCH), sparse)
+            .unwrap(); // 4..=5
 
         let read = seg
             .read_raw_with_policy(
@@ -291,7 +281,7 @@ mod tests {
     /// reading from anywhere else returns a different batch, or nothing.
     #[test]
     fn a_batch_too_large_for_the_first_read_is_fetched_from_its_own_position() {
-        let (_dir, mut seg) = crate::segment::test_support::test_segment();
+        let (_dir, mut seg) = test_segment();
         append_two_record_batches(&mut seg, BatchCount(4));
 
         // A one-byte budget makes the first read header-sized, so the batch
@@ -308,25 +298,19 @@ mod tests {
 
     #[test]
     fn batch_too_large_with_nonzero_start_pos_and_pos() {
-        let (_dir, mut seg) = crate::segment::test_support::two_record_fixture();
+        let (_dir, mut seg) = two_record_fixture();
         let p1 = seg.log_size;
-        seg.append(
-            &sample_batch(crate::segment::test_support::SECOND_TWO_RECORD_BATCH),
-            DENSE_INDEX,
-        )
-        .unwrap();
+        seg.append(&sample_batch(SECOND_TWO_RECORD_BATCH), DENSE_INDEX)
+            .unwrap();
         let b1_len = seg.log_size - p1;
         let no_index = mebibytes(1);
+        seg.append(&sample_batch(THIRD_TWO_RECORD_BATCH), no_index)
+            .unwrap();
         seg.append(
-            &sample_batch(crate::segment::test_support::THIRD_TWO_RECORD_BATCH),
-            no_index,
-        )
-        .unwrap();
-        seg.append(
-            &sample_batch(crate::segment::test_support::SampleBatchSetup {
+            &sample_batch(SampleBatchSetup {
                 offset: crate::Offset(6),
-                records: crate::segment::test_support::RecordCount(2),
-                timestamp: crate::segment::test_support::RecordTimestamp(400),
+                records: RecordCount(2),
+                timestamp: RecordTimestamp(400),
             }),
             no_index,
         )
@@ -343,7 +327,7 @@ mod tests {
     /// small budget returns fewer batches than an unlimited one.
     #[test]
     fn the_byte_budget_bounds_how_much_a_fetch_returns() {
-        let (_dir, mut seg) = crate::segment::test_support::test_segment();
+        let (_dir, mut seg) = test_segment();
         append_two_record_batches(&mut seg, BatchCount(6));
 
         let everything = seg.read_raw(Offset(0), Offset(99), NO_LIMIT).unwrap();
@@ -359,10 +343,7 @@ mod tests {
             everything.last_offset
         );
 
-        let batch_size = u32::try_from(
-            sample_batch(crate::segment::test_support::TWO_RECORD_BATCH).encoded_len(),
-        )
-        .unwrap();
+        let batch_size = u32::try_from(sample_batch(TWO_RECORD_BATCH).encoded_len()).unwrap();
         let two_batches = seg
             .read_raw(Offset(0), Offset(99), bytes(batch_size * 2))
             .unwrap();

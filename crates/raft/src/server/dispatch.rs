@@ -10,12 +10,16 @@ use super::metadata_rpc::{
     dispatch_delegation_token_mutation, dispatch_metadata_fetch, dispatch_submit_change,
 };
 use crate::{
+    RaftShardRouter,
     error::RaftError,
     kraft::{
         KraftController,
         transport::{Inbound, PeerApi},
     },
-    wire::{API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE},
+    wire::{
+        API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
+        unsupported_version_response,
+    },
 };
 
 /// APIs owned by the Raft listener itself rather than its KIP-919 Admin
@@ -54,7 +58,7 @@ pub(super) async fn dispatch_with_router(
     version: i16,
     body: Bytes,
     engine: &KraftController,
-    shard_router: Option<&dyn crate::RaftShardRouter>,
+    shard_router: Option<&dyn RaftShardRouter>,
     principal: Option<&krabka_security::Principal>,
 ) -> Result<Bytes, RaftError> {
     if let Some(router) = shard_router
@@ -74,7 +78,7 @@ pub(super) async fn dispatch_with_router(
     // A krabka-private request at a version this build does not implement
     // gets `UNSUPPORTED_VERSION` in the v0 response shape, which every 1.x
     // sender decodes, rather than a body decoded at the wrong version.
-    if let Some(refusal) = crate::wire::unsupported_version_response(api_key_n.get(), version)? {
+    if let Some(refusal) = unsupported_version_response(api_key_n.get(), version)? {
         return Ok(refusal);
     }
     match api_key_n {
