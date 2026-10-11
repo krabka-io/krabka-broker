@@ -14,7 +14,7 @@ use krabka_raft::NodeId;
 use crate::{
     partition::Partition,
     replica_state::FollowerStats,
-    test_support::{FakeMetadataSource, broker_registration},
+    test_support::{FakeMetadataSource, PartitionEpoch, broker_registration},
 };
 
 pub(super) fn reg(id: NodeId) -> MetadataRecord {
@@ -57,7 +57,7 @@ pub(super) struct IsrSetup<'a> {
     #[default(NodeId(1))]
     pub leader: NodeId,
     pub leader_epoch: LeaderEpoch,
-    pub partition_epoch: crate::test_support::PartitionEpoch,
+    pub partition_epoch: PartitionEpoch,
     pub stale_followers: &'a [(NodeId, Duration)],
 }
 

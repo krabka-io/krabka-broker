@@ -44,6 +44,7 @@ use crate::{
     internal_topics::{is_internal_topic, produce_internal_topics_allowed},
     metrics::RequestPhases,
     partition::Partition,
+    topic_resolve::resolve,
 };
 
 mod append;
@@ -357,21 +358,20 @@ pub(crate) async fn handle(
         // a topic this broker hosts — which is every topic that gets past the
         // gates below — the per-partition accounting is then a refcount bump
         // and no allocation at all.
-        let topic_name: Arc<str> =
-            match crate::topic_resolve::resolve(&image, &topic.name, topic.topic_id) {
-                Ok(rec) => partitions.shared_topic_name(&rec.name),
-                Err(codes::UNKNOWN_TOPIC_OR_PARTITION) if version < FIRST_TOPIC_ID_VERSION => {
-                    partitions.shared_topic_name(&topic.name)
-                }
-                Err(codes::UNKNOWN_TOPIC_OR_PARTITION) => {
-                    topic_results.push(build_topic_error_response(&topic, codes::UNKNOWN_TOPIC_ID));
-                    continue;
-                }
-                Err(code) => {
-                    topic_results.push(build_topic_error_response(&topic, code));
-                    continue;
-                }
-            };
+        let topic_name: Arc<str> = match resolve(&image, &topic.name, topic.topic_id) {
+            Ok(rec) => partitions.shared_topic_name(&rec.name),
+            Err(codes::UNKNOWN_TOPIC_OR_PARTITION) if version < FIRST_TOPIC_ID_VERSION => {
+                partitions.shared_topic_name(&topic.name)
+            }
+            Err(codes::UNKNOWN_TOPIC_OR_PARTITION) => {
+                topic_results.push(build_topic_error_response(&topic, codes::UNKNOWN_TOPIC_ID));
+                continue;
+            }
+            Err(code) => {
+                topic_results.push(build_topic_error_response(&topic, code));
+                continue;
+            }
+        };
 
         // Account for the topic in Prometheus before consuming
         // `partition_data`. We count even for authorize-denied / unknown-topic

@@ -35,7 +35,7 @@ use self::{
 use crate::{
     broker::Broker,
     codes,
-    handlers::{RequestContext, audit_resource, cluster_alter_denied},
+    handlers::{RequestContext, audit_admin_success, audit_resource, cluster_alter_denied},
 };
 
 /// `NOT_CONTROLLER`'s answer when the write reaches a node that has lost the
@@ -165,7 +165,7 @@ pub(crate) async fn answer(
         }
     }
 
-    crate::handlers::audit_admin_success(
+    audit_admin_success(
         broker.audit_log.as_ref(),
         ctx,
         "UpdateFeatures",

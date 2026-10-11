@@ -13,8 +13,11 @@ use tokio::net::TcpStream;
 
 use super::serve_connection_stream;
 use crate::{
-    broker::Broker, config::ListenerSpec, metrics::ConnectionCloseReason,
-    network::auth::subject_dn_rfc2253, platform::Sockets,
+    broker::Broker,
+    config::ListenerSpec,
+    metrics::{BrokerMetrics, ConnectionCloseReason},
+    network::auth::subject_dn_rfc2253,
+    platform::Sockets,
 };
 
 /// Per-listener entrypoint.
@@ -140,7 +143,7 @@ async fn handshake_within_idle_window<F, T>(
     handshake: F,
     idle: Option<std::time::Duration>,
     peer: SocketAddr,
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
 ) -> Option<T>
 where
     F: Future<Output = std::io::Result<T>>,
@@ -174,7 +177,7 @@ async fn authenticated_tls<F, S>(
     handshake: F,
     idle: Option<std::time::Duration>,
     peer: SocketAddr,
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
     spec: &ListenerSpec,
 ) -> Option<(
     tokio_rustls::server::TlsStream<S>,

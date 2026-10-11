@@ -294,7 +294,7 @@ mod tests {
     use crate::{
         health::metadata_progress,
         metadata_observer::test_support::{api_versions_response_v0, observer_config},
-        metadata_source::ObserverSource,
+        metadata_source::{MetadataWriter, ObserverSource},
         test_support::{BrokenTimer, TimerFailure, mock_request_broker, single_partition_topic},
     };
 
@@ -303,7 +303,7 @@ mod tests {
     struct NoWrites;
 
     #[async_trait::async_trait]
-    impl crate::metadata_source::MetadataWriter for NoWrites {
+    impl MetadataWriter for NoWrites {
         async fn submit_change(
             &self,
             _records: Vec<krabka_metadata::MetadataRecord>,

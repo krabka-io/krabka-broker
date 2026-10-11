@@ -12,7 +12,7 @@ use tempfile::TempDir;
 use crate::{
     log_dir::partition_dir,
     partition::Partition,
-    test_support::{CommittedPartitionSetup, block_log_artifact_paths},
+    test_support::{CommittedPartitionSetup, block_log_artifact_paths, committed_partition},
 };
 
 /// One record at `base`, timestamped at the epoch so every retention setting
@@ -53,7 +53,7 @@ pub(super) async fn expired_partition(
         let mut batch = epoch_batch(idx, format!("value-{idx}").as_bytes());
         log.append(&mut batch).expect("append expired batch");
     }
-    crate::test_support::committed_partition(root.path(), log, setup).await
+    committed_partition(root.path(), log, setup).await
 }
 
 /// The base offsets of the segment files currently on disk for `topic`.

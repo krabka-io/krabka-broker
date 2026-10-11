@@ -31,11 +31,14 @@ use crate::{
     codes,
     handlers::test_support::{
         ClientTopicSetup, ProduceRecordsSetup, ShareWireSetup, TopicPartitionCount,
-        acquired_share_records, produce_records, share_fetch_topics, share_fetch_wire,
-        share_record_states,
+        acquired_share_records, initialize_earliest_share, produce_records, share_fetch_topics,
+        share_fetch_wire, share_record_states,
     },
     share_partition::state::RecordState::{self, Acquired, Available},
-    test_support::{decode_response, encode_request, peer, principal, start_broker_no_audit_with},
+    test_support::{
+        decode_response, encode_request, peer, principal, start_broker_no_audit_with,
+        try_dispatch_context,
+    },
 };
 
 const VERSION: i16 = 2;
@@ -77,13 +80,7 @@ async fn produce(broker: &BrokerHandle, topic: &str, partition: i32) {
 
 /// Starts `group` at the earliest offset of each partition of `topic_id`.
 async fn earliest(broker: &BrokerHandle, group: &str, topic_id: WireUuid, partitions: i32) {
-    crate::handlers::test_support::initialize_earliest_share(
-        broker,
-        group,
-        topic_id,
-        0..partitions,
-    )
-    .await;
+    initialize_earliest_share(broker, group, topic_id, 0..partitions).await;
 }
 
 /// One request row: `(partition, acknowledgement batches)`.
@@ -467,7 +464,7 @@ async fn fetch_with_limits(
         client_id = "share-client"
     );
     let started = Instant::now();
-    let response = crate::test_support::try_dispatch_context(
+    let response = try_dispatch_context(
         &shared,
         krabka_protocol::owned::share_fetch_request::API_KEY,
         VERSION,

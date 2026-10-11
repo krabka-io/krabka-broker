@@ -9,16 +9,19 @@ use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
 use krabka_protocol::records::RecordBatch;
 
 use crate::{
+    api_catalog::UnstableApiVersions,
     config_keys::MIN_INSYNC_REPLICAS,
     freeze::resolve::FreezeMutationResolution,
-    handlers::test_support::{PartitionSpawnSetup, ReplicatedPartitionSetup, replicated_partition},
+    handlers::test_support::{
+        PartitionSpawnSetup, ReplicatedPartitionSetup, replicated_partition, spawn_partition,
+    },
     log_dir_status::LogDirRegistry,
     metrics::{BrokerMetrics, RequestPhases},
     partition::Partition,
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
     producer_state::ProducerState,
-    test_support::string_pairs,
+    test_support::{replica_nodes, string_pairs},
     txn::coordinator::TxnCoordinator,
 };
 
@@ -80,7 +83,7 @@ impl PipelineFixture {
         setup: PipelinePartitionSetup<'_>,
     ) -> Arc<Partition> {
         let PipelinePartitionSetup { topic, log_config } = setup;
-        let partition = crate::handlers::test_support::spawn_partition(
+        let partition = spawn_partition(
             root,
             PartitionSpawnSetup {
                 topic,
@@ -139,7 +142,7 @@ impl PipelineFixture {
             metrics: &self.metrics,
             phases: &self.phases,
             schema_validator: None,
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+            unstable_api_versions: UnstableApiVersions::Disabled,
         }
     }
 }
@@ -177,7 +180,7 @@ pub(crate) fn image_with_topic(topic: &str, isr: &[u64]) -> MetadataImage {
             replicated_partition(ReplicatedPartitionSetup {
                 topic,
                 leader: krabka_audit::NodeId(*isr.first().unwrap_or(&1)),
-                replicas: &crate::test_support::replica_nodes(isr),
+                replicas: &replica_nodes(isr),
                 ..Default::default()
             })
         },

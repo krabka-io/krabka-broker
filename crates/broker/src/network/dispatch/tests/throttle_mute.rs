@@ -29,8 +29,10 @@ use crate::{
     BrokerHandle,
     network::{
         codec::KafkaCodec,
+        dispatch::test_support::plaintext_loop,
         test_support::{FrameCorrelationId, RequestFrameSetup},
     },
+    test_support::start_broker_with,
 };
 
 /// `Produce` wire `api_key`.
@@ -128,7 +130,7 @@ async fn seed_anonymous_quotas(handle: &crate::broker::BrokerHandle, quotas: &[(
 async fn connect_to_serve_loop(
     handle: &crate::broker::BrokerHandle,
 ) -> (tokio::task::JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
-    crate::network::dispatch::test_support::plaintext_loop(handle.broker_arc_for_test()).await
+    plaintext_loop(handle.broker_arc_for_test()).await
 }
 
 async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
@@ -776,7 +778,7 @@ krabka_macros::create_topic_fixture!(configured_topic_request);
 async fn broker_with_throttle(
     throttle_max: Time,
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|cfg| cfg.quota_throttle_max = throttle_max).await
+    start_broker_with(|cfg| cfg.quota_throttle_max = throttle_max).await
 }
 
 async fn response_frame(

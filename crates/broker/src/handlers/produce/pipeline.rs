@@ -33,7 +33,8 @@ use crate::{
     codes,
     error::BrokerError,
     freeze::resolve::{FreezeMutationResolution, FreezeVerdict},
-    metrics::BrokerMetrics,
+    log_dir_status::LogDirRegistry,
+    metrics::{BrokerMetrics, RequestPhases},
     partition::{Partition, ReplicationTarget},
     partition_registry::PartitionRegistry,
     producer_state::ProducerState,
@@ -98,7 +99,7 @@ pub(super) struct PartitionServices<'a> {
     pub(super) partitions: &'a Arc<PartitionRegistry>,
     pub(super) txn_coordinator: &'a Arc<TxnCoordinator>,
     pub(super) producer_state: &'a Arc<ProducerState>,
-    pub(super) log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
+    pub(super) log_dir_status: &'a LogDirRegistry,
     pub(super) image: &'a Arc<krabka_metadata::MetadataImage>,
     pub(super) broker_policy: BrokerProducePolicy,
     pub(super) record_decompression_policy: RecordDecompressionPolicy,
@@ -106,7 +107,7 @@ pub(super) struct PartitionServices<'a> {
     /// The request's phase accumulator. The append charges the writer
     /// round-trip and the `acks=-1` high-watermark gate to it, and the handler
     /// observes the totals once the whole request is done.
-    pub(super) phases: &'a crate::metrics::RequestPhases,
+    pub(super) phases: &'a RequestPhases,
     /// The broker's KFC-7 validator. `None` is "no `[schema_registry]`
     /// section", and a topic that asks for validation on such a broker is
     /// rejected rather than admitted unchecked.

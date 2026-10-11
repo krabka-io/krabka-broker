@@ -159,12 +159,12 @@ mod tests {
     };
 
     use super::*;
-    use crate::codes::NOT_CONTROLLER;
+    use crate::codes::{NONE, NOT_CONTROLLER};
 
     #[test]
     fn encode_response_round_trips_protocol_body() {
         let resp = ApiVersionsResponse {
-            error_code: crate::codes::NONE,
+            error_code: NONE,
             api_keys: vec![ApiVersion {
                 api_key: 18,
                 min_version: 0,

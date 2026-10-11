@@ -257,7 +257,8 @@ mod tests {
 
     use super::*;
     use crate::handlers::{
-        DESCRIBE_BARRIER_GROUPS_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR, TRIGGER_BARRIER_API_KEY,
+        ALTER_BARRIER_GROUPS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,
+        KRABKA_PRIVATE_API_KEY_FLOOR, LIST_BARRIER_CUTS_API_KEY, TRIGGER_BARRIER_API_KEY,
         WRITE_BARRIER_MARKERS_API_KEY,
     };
 
@@ -374,16 +375,10 @@ mod tests {
     #[test]
     fn api_key_label_name_names_every_krabka_private_api() {
         let cases = [
-            (
-                crate::handlers::ALTER_BARRIER_GROUPS_API_KEY,
-                "AlterBarrierGroups",
-            ),
+            (ALTER_BARRIER_GROUPS_API_KEY, "AlterBarrierGroups"),
             (DESCRIBE_BARRIER_GROUPS_API_KEY, "DescribeBarrierGroups"),
             (TRIGGER_BARRIER_API_KEY, "TriggerBarrier"),
-            (
-                crate::handlers::LIST_BARRIER_CUTS_API_KEY,
-                "ListBarrierCuts",
-            ),
+            (LIST_BARRIER_CUTS_API_KEY, "ListBarrierCuts"),
             (WRITE_BARRIER_MARKERS_API_KEY, "WriteBarrierMarkers"),
             // A Kafka api key still resolves through the generated enum, and
             // so does the one krabka-private key that has a generated schema.

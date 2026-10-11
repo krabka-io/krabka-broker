@@ -370,12 +370,15 @@ mod tests {
         DEFAULT_SOCKET_BUFFER, InterBrokerClient, to_client_creds, tune_outbound_socket,
         unbracket_host,
     };
-    use crate::{config::InterBrokerCredentials, network::test_support::tcp_pair};
+    use crate::{
+        config::InterBrokerCredentials,
+        network::test_support::{check_socket_tuning, tcp_pair},
+    };
 
     #[tokio::test]
     async fn outbound_socket_tuning_sets_nodelay_and_large_buffers() {
         let (server, client) = tcp_pair().await;
-        crate::network::test_support::check_socket_tuning(&client, |socket| {
+        check_socket_tuning(&client, |socket| {
             tune_outbound_socket(socket, kibibytes(64), kibibytes(128));
         });
         drop(server);

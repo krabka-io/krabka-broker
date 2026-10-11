@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 pub use krabka_log::name::{FUTURE_SUFFIX, parse_partition_dir, partition_dir};
 
-use crate::error::BrokerError;
+use crate::{cordoned_log_dirs::CordonedLogDirs, error::BrokerError};
 
 /// Builds the future-log directory path for a (topic, partition) in `log_dir`.
 ///
@@ -145,7 +145,7 @@ pub fn place_partition_dir(log_dirs: &[PathBuf], topic: &str, partition: i32) ->
 #[must_use]
 pub(crate) fn place_partition_dir_avoiding(
     log_dirs: &[PathBuf],
-    cordoned: &crate::cordoned_log_dirs::CordonedLogDirs,
+    cordoned: &CordonedLogDirs,
     topic: &str,
     partition: i32,
 ) -> PathBuf {

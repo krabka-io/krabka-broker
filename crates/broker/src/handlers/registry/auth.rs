@@ -13,6 +13,7 @@ use futures_util::future::BoxFuture;
 use krabka_units::convert::TimeExt as _;
 
 use crate::{
+    authorizer::AuthorizationResult,
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
     error::BrokerError,
@@ -65,7 +66,7 @@ pub(super) fn alter_replica_log_dirs_adapter<'a>(
                 resource_name: CLUSTER_RESOURCE_NAME,
                 operation: krabka_metadata::AclOperation::Alter,
             },
-        ) == crate::authorizer::AuthorizationResult::Allow;
+        ) == AuthorizationResult::Allow;
 
         if !authorized {
             let mut cur = body;

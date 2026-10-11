@@ -10,8 +10,9 @@ use super::{ACKS_ALL, INVALID_OFFSET, durability_frontier, prepare::PreparedBatc
 use crate::{
     api_catalog::UnstableApiVersions,
     codes,
+    error::BrokerError,
     partition::{Partition, ProducerAppendCheck},
-    producer_state::{Checked, Decision},
+    producer_state::{Checked, Decision, ProducerState, SequenceContext},
     time_util::now_ms,
     txn::{
         coordinator::produce_verification::{
@@ -164,7 +165,7 @@ pub(super) async fn verify_transactional_produce(
         .await
         .map_err(|refusal| {
             (
-                codes::from_broker_error(&crate::error::BrokerError::TransactionAppend(refusal)),
+                codes::from_broker_error(&BrokerError::TransactionAppend(refusal)),
                 None,
             )
         })?;
@@ -296,7 +297,7 @@ pub(super) fn produce_verification_code(code: i16, version: i16) -> (i16, Option
 /// `LogAppendResult.errorMessage` gives none for it.
 pub(super) async fn handle_duplicate(
     batch: &PreparedBatch,
-    producer_state: &crate::producer_state::ProducerState,
+    producer_state: &ProducerState,
     partition: &Partition,
     (topic_name, partition_index): (&str, i32),
     acks: i16,
@@ -305,7 +306,7 @@ pub(super) async fn handle_duplicate(
     if batch.producer_id < 0 {
         return DedupOutcome::Append;
     }
-    let context = crate::producer_state::SequenceContext {
+    let context = SequenceContext {
         log_empty: partition.log_end_offset() == Offset(0),
         unstable,
     };
@@ -399,6 +400,7 @@ mod tests {
         codes,
         handlers::produce::{
             framing::PartitionPayload,
+            leadership::current_effective_min_isr,
             pipeline::{PartitionInput, PartitionOutcome, PartitionServices, process_partition},
             prepare::PreparedSource,
             test_support::{encode_batch, image_with_topic, pipeline_input},
@@ -696,7 +698,7 @@ mod tests {
                 ack.finish(
                     std::time::Instant::now() + Duration::from_millis(50),
                     |partition, admitted_topic_id| {
-                        crate::handlers::produce::leadership::current_effective_min_isr(
+                        current_effective_min_isr(
                             &image,
                             (&partition.topic, partition.index.0),
                             admitted_topic_id,

@@ -16,6 +16,7 @@ use crate::{
         ElectionSetup, ElrFinalization, ExpectedPartitionSetup, expected_partition,
         img_with_partition,
     },
+    metrics::BrokerMetrics,
 };
 
 /// Liveness where each of `alive` heartbeated inside the current window.
@@ -33,7 +34,7 @@ async fn restart_batch(image: &MetadataImage, alive_nodes: &[u64]) -> FailoverPl
         image,
         NodeId(3),
         &alive(alive_nodes).await,
-        &crate::metrics::BrokerMetrics::new(),
+        &BrokerMetrics::new(),
     )
     .await
 }

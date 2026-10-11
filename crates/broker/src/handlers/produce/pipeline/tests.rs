@@ -21,7 +21,7 @@ use crate::{
         },
         test_support::{ReplicatedPartitionSetup, replicated_partition},
     },
-    schema_validation::ValidationMode,
+    schema_validation::{SchemaGate, ValidationMode},
 };
 
 #[tokio::test]
@@ -55,7 +55,7 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
 
     let resp = process_partition(
         PartitionInput {
-            schema: Some(crate::schema_validation::SchemaGate {
+            schema: Some(SchemaGate {
                 key: false,
                 value: true,
                 mode: ValidationMode::Full,

@@ -38,6 +38,7 @@ use krabka_protocol::owned::{
 use krabka_security::Principal;
 
 use crate::{
+    authorizer::AllowAllAuthorizer,
     broker::{Broker, BrokerHandle},
     codes,
     error::BrokerError,
@@ -126,7 +127,7 @@ struct Env {
 impl Env {
     async fn start() -> Self {
         let (handle, dir) = start_broker_with(|cfg| {
-            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.authorizer = Arc::new(AllowAllAuthorizer);
             cfg.streams_group.enable = true;
             cfg.classic_group_initial_rebalance_delay = krabka_units::secs(0);
         })

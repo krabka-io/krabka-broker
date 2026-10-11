@@ -15,7 +15,9 @@ use krabka_protocol::owned::{
 use krabka_units::convert::TimeExt as _;
 
 use crate::{
-    codes, coordinator::unified::actor::GroupActorMessage, handlers::ErrorCodeResponse as _,
+    codes,
+    coordinator::unified::actor::GroupActorMessage,
+    handlers::{ApiVersion, ErrorCodeResponse as _},
     task_util::ask,
 };
 
@@ -71,10 +73,7 @@ context_handler! {
 
 /// Kafka's `SyncGroupRequest.areMandatoryProtocolTypeAndNamePresent`: from v5
 /// the request must name both its protocol type and its protocol name.
-fn mandatory_protocol_type_and_name_present(
-    req: &SyncGroupRequest,
-    version: crate::handlers::ApiVersion,
-) -> bool {
+fn mandatory_protocol_type_and_name_present(req: &SyncGroupRequest, version: ApiVersion) -> bool {
     version < 5 || (req.protocol_type.is_some() && req.protocol_name.is_some())
 }
 

@@ -16,12 +16,13 @@ use crate::{
     },
     metadata_source::MetadataSource,
     metrics::BrokerMetrics,
+    unclean_recovery::UncleanRecoveryHandle,
 };
 
 struct SweepFixture {
     liveness: Arc<ControllerLivenessState>,
     metrics: BrokerMetrics,
-    recovery: crate::unclean_recovery::UncleanRecoveryHandle,
+    recovery: UncleanRecoveryHandle,
     state: LivenessTickState,
 }
 

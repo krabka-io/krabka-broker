@@ -11,6 +11,7 @@ use crate::{
     codes,
     partition::{Partition, ReplicationTarget},
     partition_registry::PartitionRegistry,
+    replica_state::ReplicaState,
 };
 
 pub(super) struct PartitionGateError {
@@ -175,7 +176,7 @@ pub(super) fn replication_target_matches_image(
 }
 
 pub(super) fn replica_state_matches_image(
-    state: &crate::replica_state::ReplicaState,
+    state: &ReplicaState,
     record: &krabka_metadata::PartitionRecord,
 ) -> bool {
     state.current_leader_epoch == krabka_ids::LeaderEpoch(record.leader_epoch.0)
@@ -200,7 +201,7 @@ mod tests {
     use super::*;
     use crate::{
         codes::{NOT_ENOUGH_REPLICAS, NOT_LEADER_OR_FOLLOWER},
-        config_keys::{MIN_INSYNC_REPLICAS, WITNESS_TRUE},
+        config_keys::{BROKER_WITNESS, MIN_INSYNC_REPLICAS, WITNESS_TRUE},
         handlers::{
             produce::test_support::image_with_topic,
             test_support::{ReplicatedPartitionSetup, replicated_partition},
@@ -664,7 +665,7 @@ mod tests {
         let mut image = image_with_topic("orders", &[1, 2]);
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
             node_id: krabka_audit::NodeId(2),
-            config_name: crate::config_keys::BROKER_WITNESS.into(),
+            config_name: BROKER_WITNESS.into(),
             config_value: Some(WITNESS_TRUE.into()),
         }));
         let got = produce_gate(&image, krabka_audit::NodeId(1), false, false);

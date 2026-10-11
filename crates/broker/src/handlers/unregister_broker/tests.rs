@@ -24,7 +24,7 @@ use crate::{
     broker::Broker,
     config::BreakGlassConfig,
     handlers::test_support::ReplicatedPartitionSetup,
-    metrics::{BreakGlassAction as MetricBreakGlassAction, BreakGlassActionLabel},
+    metrics::{BreakGlassAction as MetricBreakGlassAction, BreakGlassActionLabel, BrokerMetrics},
     test_support::{
         DenyAll, PartitionCount, PartitionEpoch, broker_registration, peer, principal,
         request_context,
@@ -207,7 +207,7 @@ fn a_broker_with_no_approver_set_gates_nothing() {
 }
 
 /// The `break_glass_refusals` count for this action.
-fn refusals(metrics: &crate::metrics::BrokerMetrics) -> u64 {
+fn refusals(metrics: &BrokerMetrics) -> u64 {
     metrics
         .break_glass_refusals
         .get_or_create(&BreakGlassActionLabel {

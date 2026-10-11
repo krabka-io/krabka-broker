@@ -247,6 +247,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::network::test_support::assert_authentication_event;
 
     /// The mTLS binding is the one authentication with no SASL frame behind
     /// it, so `initial_connection_auth` is the only place that can record it.
@@ -278,7 +279,7 @@ mod tests {
         );
 
         let event = rx.try_recv().expect("the mTLS authentication row");
-        crate::network::test_support::assert_authentication_event(
+        assert_authentication_event(
             &event,
             krabka_audit::AuditOutcome::Success,
             "SSL",

@@ -26,9 +26,10 @@ use krabka_protocol::{
 use crate::{
     broker::BrokerHandle,
     codes,
+    error::BrokerError,
     handlers::test_support::{
         AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup,
-        ProduceRecordsSetup, RecordCount, ShareSessionEpoch, produce_records,
+        ProduceRecordsSetup, RecordCount, ShareSessionEpoch, ShareWireSetup, produce_records,
         send_acknowledgements, share_fetch_partition_rows,
     },
     share_coordinator::bootstrap::TOPIC,
@@ -109,12 +110,7 @@ async fn share_fetch(
         }],
         ..Default::default()
     };
-    let rows = share_fetch_partition_rows(
-        broker,
-        &request,
-        crate::handlers::test_support::ShareWireSetup::default(),
-    )
-    .await;
+    let rows = share_fetch_partition_rows(broker, &request, ShareWireSetup::default()).await;
     rows.into_iter().next().unwrap_or_default()
 }
 
@@ -355,7 +351,7 @@ async fn a_read_of_an_uninitialized_state_fails_until_the_state_is_initialized()
         .read_state(GROUP, topic_uuid(topic_id), 0, 0)
         .await
     {
-        Err(crate::error::BrokerError::SharePartitionState { code, .. }) => Some(code),
+        Err(BrokerError::SharePartitionState { code, .. }) => Some(code),
         _ => None,
     };
     let refused = share_fetch(&broker, GROUP, 0, topic_id, None).await;

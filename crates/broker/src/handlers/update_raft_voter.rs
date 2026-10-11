@@ -111,7 +111,7 @@ mod tests {
     };
 
     use crate::{
-        handlers::add_raft_voter::handle as add_raft_voter_handle,
+        handlers::{add_raft_voter::handle as add_raft_voter_handle, remove_raft_voter::handle},
         test_support::{
             DenyAll, decode_response as decode_other_response,
             encode_request as encode_other_request,
@@ -405,11 +405,9 @@ mod tests {
                         ..Default::default()
                     };
                     let req_bytes = encode_other_request(&req, version);
-                    let resp = crate::handlers::remove_raft_voter::handle(
-                        &broker, version, &req_bytes, &ctx,
-                    )
-                    .await
-                    .expect("handle");
+                    let resp = handle(&broker, version, &req_bytes, &ctx)
+                        .await
+                        .expect("handle");
                     decode_other_response::<RemoveRaftVoterResponse>(&resp, version).error_code
                 }
             };

@@ -10,12 +10,12 @@ use super::*;
 use crate::{
     authorizer::AllowAllAuthorizer,
     broker::Broker,
-    features::METADATA_VERSION,
+    features::{LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION},
     handlers::update_features::test_support::{
         apply_request, call, call_with, metadata_update, named_update, start_broker, validate_only,
         wait_for_finalized_feature,
     },
-    test_support::DenyAll,
+    test_support::{DenyAll, start_broker_no_audit_with},
 };
 
 const PREFIX: &str =
@@ -183,12 +183,12 @@ async fn wait_for_group_version_off(broker: &Broker) {
 async fn handle_persists_a_lossless_metadata_downgrade() {
     // 4.4-IV0 is a Kafka trunk level: the controller supports it only under
     // `unstable.feature.versions.enable`.
-    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
+    let (broker_handle, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
     })
     .await;
-    let target = crate::features::LATEST_PRODUCTION_METADATA_VERSION - 1;
+    let target = LATEST_PRODUCTION_METADATA_VERSION - 1;
     // 4.3-IV0 changed metadata, so step up to 4.4-IV0 first and back down
     // to 4.3-IV0, a downgrade across 4.4-IV0 alone.
     let up = Box::pin(call(

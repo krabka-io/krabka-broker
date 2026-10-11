@@ -28,7 +28,7 @@ use krabka_protocol::{
 
 use super::{FIRST_TOPIC_ID_VERSION, handle};
 use crate::{
-    broker::Broker,
+    broker::{Broker, BrokerHandle},
     codes,
     handlers::test_support::{CreateTopicSetup, configured_topic_request},
     test_support::{
@@ -74,7 +74,7 @@ const TXN_ID: &str = "t1";
 /// A grant string a `GrantsInPrincipalName` principal needs to create topics.
 const ADMIN_GRANTS: &str = "Cluster:Create";
 
-async fn boot() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+async fn boot() -> (BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = start_transaction_grant_broker().await;
     handle.wait_until_controller_leader().await;
     handle.wait_until_brokers_registered(1).await;

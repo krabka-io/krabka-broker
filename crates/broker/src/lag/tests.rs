@@ -31,7 +31,7 @@ use crate::{
     partition::Partition,
     test_support::{
         FakeMetadataSource, RecordCount, RepeatedRecordsSetup, StandalonePartitionSetup,
-        open_partition, repeated_records_batch,
+        UnixMillis, open_partition, repeated_records_batch, single_partition_topic,
     },
 };
 
@@ -96,7 +96,7 @@ fn append_records(partition: &Partition, count: i32) {
         partition_leader_epoch: -1,
         ..repeated_records_batch(RepeatedRecordsSetup {
             count: RecordCount(count),
-            timestamp: crate::test_support::UnixMillis(1_700_000_000),
+            timestamp: UnixMillis(1_700_000_000),
         })
     };
     partition
@@ -338,9 +338,10 @@ async fn evicting_the_worst_follower_lowers_the_max_rollup() {
 fn coordinator_image() -> MetadataImage {
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     for (name, topic_id) in [(TOPIC, 1_u128), (OFFSETS_TOPIC, 2_u128)] {
-        image.apply(&MetadataRecord::V1Topic(
-            crate::test_support::single_partition_topic(name, uuid::Uuid::from_u128(topic_id)),
-        ));
+        image.apply(&MetadataRecord::V1Topic(single_partition_topic(
+            name,
+            uuid::Uuid::from_u128(topic_id),
+        )));
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: name.into(),
             partition: 0,

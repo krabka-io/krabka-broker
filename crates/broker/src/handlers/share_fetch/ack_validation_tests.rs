@@ -31,9 +31,10 @@ use crate::{
     broker::BrokerHandle,
     codes,
     handlers::test_support::{
-        AcknowledgementMode, AcknowledgementPartitionSetup, ClientTopicSetup, ProduceRecordsSetup,
-        ShareSessionEpoch, ShareWireSetup, acknowledge_batches_request, initialize_earliest_share,
-        share_acknowledge_wire, share_fetch_wire, share_record_states,
+        AcknowledgementMode, AcknowledgementPartitionSetup, AcknowledgementSetup, ClientTopicSetup,
+        ProduceRecordsSetup, ShareSessionEpoch, ShareWireSetup, acknowledge_batches_request,
+        acquired_share_records, initialize_earliest_share, produce_records, share_acknowledge_wire,
+        share_fetch_wire, share_record_states,
     },
     share_partition::state::RecordState::{self, Acquired},
     test_support::start_broker_no_audit_with,
@@ -89,7 +90,7 @@ async fn create_topic(broker: &BrokerHandle) -> WireUuid {
 
 /// Appends one batch of three records to partition 0.
 async fn produce(broker: &BrokerHandle) {
-    crate::handlers::test_support::produce_records(
+    produce_records(
         broker,
         ProduceRecordsSetup {
             topic: TOPIC,
@@ -113,8 +114,7 @@ async fn acquire_all(broker: &BrokerHandle, group: &str, topic_id: WireUuid) {
         },
     )
     .await;
-    let acquired: Vec<_> =
-        crate::handlers::test_support::acquired_share_records(&response.responses[0].partitions[0]);
+    let acquired: Vec<_> = acquired_share_records(&response.responses[0].partitions[0]);
     assert!(acquired == vec![(0, 2)], "{response:?}");
 }
 
@@ -184,13 +184,12 @@ async fn share_acknowledge(
     broker: &BrokerHandle,
     setup: ValidationAcknowledgeSetup<'_>,
 ) -> ShareAcknowledgeResponse {
-    let request =
-        acknowledge_batches_request(crate::handlers::test_support::AcknowledgementSetup {
-            group: setup.group,
-            topic_id: setup.topic_id,
-            partition: setup.partition,
-            ..Default::default()
-        });
+    let request = acknowledge_batches_request(AcknowledgementSetup {
+        group: setup.group,
+        topic_id: setup.topic_id,
+        partition: setup.partition,
+        ..Default::default()
+    });
     share_acknowledge_wire(
         broker,
         &request,

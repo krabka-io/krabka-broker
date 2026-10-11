@@ -11,7 +11,10 @@ use tracing::Instrument as _;
 use super::{AfterResponse, response::encode_response, session::principal_or_anonymous};
 use crate::{
     error::BrokerError,
-    handlers::fetch::{encode_fetch_response, handle},
+    handlers::{
+        RequestContext,
+        fetch::{encode_fetch_response, handle},
+    },
     network::{
         codec::{KafkaCodec, response_frame_length},
         fetch_writer::{SendfileSink, WriteOp, resolve_records_inline, write_fetch_plan},
@@ -110,7 +113,7 @@ async fn handle_fetch_frame_from_parsed(
     assert2::assert!((parsed.api_key) == (1));
 
     let principal = principal_or_anonymous(auth);
-    let ctx = crate::handlers::RequestContext::new(
+    let ctx = RequestContext::new(
         principal,
         peer,
         parsed.client_id,

@@ -17,7 +17,7 @@ use krabka_protocol::{
 
 use super::super::{PartitionInput, process_partition};
 use crate::{
-    codes::INVALID_TOPIC_EXCEPTION,
+    codes::{INVALID_TOPIC_EXCEPTION, NONE},
     config::BrokerConfig,
     handlers::produce::{
         framing::PartitionPayload,
@@ -149,7 +149,7 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
             "__admin_client",
             PartitionProduceResponse {
                 index: 0,
-                error_code: crate::codes::NONE,
+                error_code: NONE,
                 base_offset: 1,
                 log_start_offset: 0,
                 ..Default::default()

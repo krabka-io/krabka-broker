@@ -294,10 +294,12 @@ mod tests {
 
     use super::*;
     use crate::{
+        authorizer::AllowAllAuthorizer,
         broker::BrokerHandle,
         share_partition::session::FetchPartitions,
         test_support::{
-            ShareApiSupport, ShareBrokerSetup, peer, principal, start_share_broker, test_ctx,
+            ShareApiSupport, ShareBrokerSetup, dispatch_wire, peer, principal, start_share_broker,
+            test_ctx,
         },
     };
 
@@ -327,7 +329,7 @@ mod tests {
     async fn handle_disabled_feature_returns_top_level_unsupported_version() {
         let version = share_acknowledge_response::MAX_VERSION;
         let (broker_handle, _dir) = start_share_broker(
-            std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
+            std::sync::Arc::new(AllowAllAuthorizer),
             ShareBrokerSetup {
                 support: ShareApiSupport::Disabled,
             },
@@ -399,7 +401,7 @@ mod tests {
         request.member_id = Some(member.into());
         request.share_session_epoch = 1;
         // Both ends of the version range: the response is read off the wire.
-        crate::test_support::dispatch_wire(
+        dispatch_wire(
             &shared,
             krabka_protocol::owned::share_acknowledge_request::API_KEY,
             version,

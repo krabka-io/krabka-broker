@@ -11,7 +11,7 @@ use krabka_units::{bytes, millis};
 
 use super::*;
 use crate::{
-    codes::NONE,
+    codes::{INVALID_TIMESTAMP, NONE},
     config_keys::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
     handlers::produce::{
         framing::PartitionPayload,
@@ -222,7 +222,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             now_ms + 300_000,
             PartitionProduceResponse {
                 index: 0,
-                error_code: crate::codes::INVALID_TIMESTAMP,
+                error_code: INVALID_TIMESTAMP,
                 base_offset: -1,
                 ..Default::default()
             },
@@ -232,7 +232,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             now_ms + 7_200_000,
             PartitionProduceResponse {
                 index: 0,
-                error_code: crate::codes::INVALID_TIMESTAMP,
+                error_code: INVALID_TIMESTAMP,
                 base_offset: -1,
                 ..Default::default()
             },

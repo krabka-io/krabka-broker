@@ -16,6 +16,7 @@ use crate::{
         test_support::{encode_batch, image_with_topic},
         topic_settings::{kafka_stock_broker_default, resolve_timestamp_policy},
     },
+    metrics::BrokerMetrics,
     time_util::now_ms,
 };
 
@@ -82,7 +83,7 @@ fn a_compacted_topic_names_every_keyless_record_on_both_paths() {
                 vec![1],
             ),
         ] {
-            let metrics = crate::metrics::BrokerMetrics::new();
+            let metrics = BrokerMetrics::new();
             let prepared = prepare_batch(
                 PartitionPayload::Slice(encode_batch(input)),
                 topic_compression,

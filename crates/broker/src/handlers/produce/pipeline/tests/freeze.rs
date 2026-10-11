@@ -24,10 +24,11 @@ use crate::{
     handlers::{
         produce::{
             framing::PartitionPayload,
-            test_support::{encode_batch, image_with_topic},
+            test_support::{encode_batch, image_with_topic, pipeline_input},
         },
         test_support::single_replica_partition,
     },
+    log_dir::partition_dir,
     metrics::TopicLabel,
     test_support::{FreezeSetup, topic_freeze_record},
 };
@@ -136,7 +137,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
         crate::handlers::produce::test_support::PipelineFixture::new(krabka_ids::NodeId(1));
 
     for topic in ["frozen", "control"] {
-        let part_dir = crate::log_dir::partition_dir(dir.path(), topic, 0);
+        let part_dir = partition_dir(dir.path(), topic, 0);
         std::fs::create_dir_all(&part_dir).expect("partition directory");
         let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default())
             .expect("open the log");
@@ -217,7 +218,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
         let resp = process_partition(
             PartitionInput {
                 freeze,
-                ..crate::handlers::produce::test_support::pipeline_input(topic, payload)
+                ..pipeline_input(topic, payload)
             },
             fixture.services(&image),
         )

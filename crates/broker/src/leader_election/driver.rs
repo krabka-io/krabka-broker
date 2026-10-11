@@ -18,7 +18,7 @@ use crate::{
     },
     metadata_source::MetadataSource,
     metrics::BrokerMetrics,
-    unclean_recovery::UncleanRecoveryHandle,
+    unclean_recovery::{RecoveryJob, UncleanRecoveryHandle},
 };
 
 #[cfg(test)]
@@ -250,7 +250,7 @@ async fn fail_over_dead_broker(
     // forget — the failover path does not await the outcome.
     for (topic, partition, strategy) in plan.recoveries {
         recovery
-            .enqueue(crate::unclean_recovery::RecoveryJob {
+            .enqueue(RecoveryJob {
                 topic,
                 partition,
                 strategy,

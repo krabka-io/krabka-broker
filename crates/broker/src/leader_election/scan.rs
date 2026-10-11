@@ -24,7 +24,7 @@ use crate::{
         RecoveryStrategy, resolve_recovery_strategy, resolve_unclean_leader_election_enabled,
         witness_node_ids,
     },
-    elr::{ElrPublisher, TopicElr, state::PartitionElr},
+    elr::{ElrPublisher, TopicElr, state::PartitionElr, withdraw_elr_membership},
     heartbeat::controller_state::ControllerLivenessState,
     metadata_epoch::next_partition_change,
     metrics::BrokerMetrics,
@@ -398,7 +398,7 @@ pub(crate) async fn compute_unclean_restart_changes(
         mut recoveries,
         mut unavailable,
     } = FailoverPlan {
-        changes: crate::elr::withdraw_elr_membership(image, returning),
+        changes: withdraw_elr_membership(image, returning),
         ..Default::default()
     };
     let (alive, witnesses, mut elr) = scan_inputs(image, liveness).await;

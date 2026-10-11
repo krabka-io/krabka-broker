@@ -17,6 +17,7 @@ use crate::{
     config_keys::{BROKER_WITNESS, ELIGIBLE_LEADER_REPLICAS, WITNESS_TRUE},
     elr::state::test_records,
     heartbeat::controller_state::{ControllerLivenessState, TestClock},
+    metrics::BrokerMetrics,
     test_support::{FakeMetadataSource, broker_registration, finalize_elr_version},
     unclean_recovery::UncleanRecoveryHandle,
 };
@@ -110,13 +111,7 @@ pub async fn failover(
     dead: NodeId,
     liveness: &ControllerLivenessState,
 ) -> super::policy::FailoverPlan {
-    super::scan::compute_failover_changes(
-        image,
-        dead,
-        liveness,
-        &crate::metrics::BrokerMetrics::new(),
-    )
-    .await
+    super::scan::compute_failover_changes(image, dead, liveness, &BrokerMetrics::new()).await
 }
 
 /// Run a scan with a fresh liveness registry containing the given live brokers.

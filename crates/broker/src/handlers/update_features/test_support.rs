@@ -17,7 +17,7 @@ use super::answer;
 use crate::{
     authorizer::Authorizer,
     broker::{Broker, BrokerHandle},
-    features::ELR_VERSION,
+    features::{ELR_VERSION, METADATA_VERSION},
     handlers::RequestContext,
     test_support::{peer, principal, request_context, start_broker_no_audit_with},
 };
@@ -38,7 +38,7 @@ pub(super) fn named_update(name: &str, level: i16, upgrade_type: i8) -> FeatureU
 }
 
 pub(super) fn metadata_update(level: i16, upgrade_type: i8) -> FeatureUpdateKey {
-    feature_update(crate::features::METADATA_VERSION, level, upgrade_type)
+    feature_update(METADATA_VERSION, level, upgrade_type)
 }
 
 pub(super) fn elr_update(level: i16, upgrade_type: i8) -> FeatureUpdateKey {

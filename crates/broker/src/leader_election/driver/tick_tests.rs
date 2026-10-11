@@ -13,6 +13,7 @@ use crate::{
         ElectionSetup, expected_clean_election, fake_source, fencing_updates, img_with_partition,
         one_partition_change, partition_batches, recovery_handle_for_tests, register_brokers,
     },
+    metadata_source::MetadataSource,
     metrics::BrokerMetrics,
     test_support::FakeMetadataSource,
     unclean_recovery::UncleanRecoveryHandle,
@@ -53,7 +54,7 @@ impl TickFixture {
     }
 
     async fn tick(&mut self) {
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = self.source.clone();
+        let controller: Arc<dyn MetadataSource> = self.source.clone();
         run_liveness_tick(
             &controller,
             NodeId(2),

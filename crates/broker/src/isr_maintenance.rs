@@ -20,8 +20,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{
-    metadata_source::MetadataSource, metrics::BrokerMetrics, partition::Partition,
-    partition_registry::PartitionRegistry,
+    controller_endpoint::ControllerDialer, metadata_source::MetadataSource, metrics::BrokerMetrics,
+    partition::Partition, partition_registry::PartitionRegistry,
 };
 
 mod alter_partition;
@@ -38,7 +38,7 @@ use self::{
 
 pub(crate) struct Config {
     /// How a leader reaches the CONTROLLER listener of the active controller.
-    pub dialer: crate::controller_endpoint::ControllerDialer,
+    pub dialer: ControllerDialer,
     pub node_id: NodeId,
     pub scan_interval: Time,
     pub partitions: Arc<PartitionRegistry>,
@@ -157,7 +157,7 @@ mod tests {
             IsrSetup, fake_source, fixture_partition, partition, set_replica_state, topic,
         },
         metadata_source::MetadataSource,
-        test_support::{StandalonePartitionSetup, plaintext_controller_dialer},
+        test_support::{PartitionEpoch, StandalonePartitionSetup, plaintext_controller_dialer},
     };
 
     /// One scan of a leader partition whose only follower last caught up
@@ -195,7 +195,7 @@ mod tests {
         image.apply(&topic("t", uuid::Uuid::from_u128(1)));
         image.apply(&partition(IsrSetup {
             leader_epoch: krabka_ids::LeaderEpoch(10),
-            partition_epoch: crate::test_support::PartitionEpoch(4),
+            partition_epoch: PartitionEpoch(4),
             ..Default::default()
         }));
 

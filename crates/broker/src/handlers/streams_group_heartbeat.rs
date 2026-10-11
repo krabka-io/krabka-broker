@@ -155,23 +155,24 @@ mod tests {
     use crate::{
         authorizer::AllowAllAuthorizer,
         broker::{Broker, BrokerHandle},
+        config::BrokerConfig,
         handlers::{
-            encode_response,
+            RequestContext, encode_response,
             group_heartbeat_test_support::{
-                GroupTopicSetup, check_group_read_denied, topic_with_partitions,
+                GroupAclSetup, GroupTopicSetup, check_group_read_denied, topic_with_partitions,
             },
         },
         task_util::ask,
         test_support::{
-            ControllerPeerAllowed, GrantsInPrincipalName, dispatch_wire, peer, principal,
-            start_group_broker_with,
+            ControllerPeerAllowed, GrantsInPrincipalName, PartitionCount, dispatch_wire, peer,
+            principal, request_context, start_group_broker_with,
         },
     };
 
     /// Dispatch every version through its wire codec so omitted fields stay observable.
     async fn wire_heartbeat(
         broker: &Broker,
-        ctx: &crate::handlers::RequestContext<'_>,
+        ctx: &RequestContext<'_>,
         req: StreamsGroupHeartbeatRequest,
         version: i16,
     ) -> StreamsGroupHeartbeatResponse {
@@ -198,7 +199,7 @@ mod tests {
             .submit_change(topic_with_partitions(GroupTopicSetup {
                 name,
                 topic_id: uuid::Uuid::new_v4(),
-                partitions: crate::test_support::PartitionCount(1),
+                partitions: PartitionCount(1),
                 node: broker.config.node_id,
             }))
             .await
@@ -708,7 +709,7 @@ mod tests {
     crate::test_support::context_helper!(client_id = "streams-client");
 
     async fn configured_streams_broker(
-        configure: impl FnOnce(&mut crate::config::BrokerConfig),
+        configure: impl FnOnce(&mut BrokerConfig),
     ) -> (BrokerHandle, tempfile::TempDir, Arc<Broker>) {
         let (handle, directory) = start_group_broker_with(|cfg| {
             cfg.authorizer = Arc::new(AllowAllAuthorizer);
@@ -914,7 +915,7 @@ mod tests {
         assert!(view.members[0].client_host == "/127.0.0.1");
 
         let peer: SocketAddr = "127.0.0.2:9093".parse().unwrap();
-        let ctx = crate::test_support::request_context(&principal, &peer, "streams-client-b");
+        let ctx = request_context(&principal, &peer, "streams-client-b");
         let req = StreamsGroupHeartbeatRequest {
             group_id: "identity-group".into(),
             member_id: view.members[0].member_id.clone(),
@@ -943,12 +944,10 @@ mod tests {
     fn group_read_denied_yields_group_authorization_failed() {
         use krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse;
 
-        check_group_read_denied(
-            crate::handlers::group_heartbeat_test_support::GroupAclSetup {
-                client_id: "streams-client",
-                ..Default::default()
-            },
-        );
+        check_group_read_denied(GroupAclSetup {
+            client_id: "streams-client",
+            ..Default::default()
+        });
 
         let bytes = encode_response(
             &reply(codes::GROUP_AUTHORIZATION_FAILED, None),

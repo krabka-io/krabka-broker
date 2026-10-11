@@ -24,6 +24,7 @@ use super::{
 use crate::{
     codes,
     error::BrokerError,
+    metrics::RequestPhases,
     partition::{
         AppendedBatch, Partition, ProduceData, ProduceJob, ProducerAppendCheck, ReplicationTarget,
         WriterMessage,
@@ -47,7 +48,7 @@ pub(super) struct AppendContext<'a> {
     /// charged to the local phase here; its `acks=-1` high-watermark wait is
     /// charged to the remote phase once, by the handler, around the one wait
     /// that covers every partition of the request.
-    pub(super) phases: &'a crate::metrics::RequestPhases,
+    pub(super) phases: &'a RequestPhases,
     /// The transaction check the log runs just before the append.
     pub(super) producer_check: Option<ProducerAppendCheck>,
 }
@@ -463,9 +464,11 @@ mod tests {
     use super::PendingAck;
     use crate::{
         codes,
+        error::BrokerError,
         log_dir::partition_dir,
         metrics::{BrokerMetrics, RequestPhases},
         partition::{AppendedBatch, test_support::test_partition},
+        partition_writer::storage_failure_error,
         test_support::spawn_standalone_partition,
     };
 
@@ -612,7 +615,7 @@ mod tests {
     /// `answer` once `delay` has passed. Returns the partition's row.
     async fn append_answered_by_the_writer(
         delay: std::time::Duration,
-        answer: Result<AppendedBatch, crate::error::BrokerError>,
+        answer: Result<AppendedBatch, BrokerError>,
     ) -> PartitionProduceResponse {
         use bytes::Bytes;
         use krabka_compression::RecordDecompressionPolicy;
@@ -691,10 +694,7 @@ mod tests {
     async fn an_io_failure_of_the_append_is_a_storage_error() {
         let row = append_answered_by_the_writer(
             std::time::Duration::ZERO,
-            Err(crate::partition_writer::storage_failure_error(
-                "append failed",
-                "synthetic EIO",
-            )),
+            Err(storage_failure_error("append failed", "synthetic EIO")),
         )
         .await;
 

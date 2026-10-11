@@ -15,7 +15,7 @@ use crate::{
         block_segment_deletion, expired_partition, log_size, segment_files,
     },
     metrics::{CleanerFailureLabel, CleanerFailureReason},
-    test_support::{CommittedPartitionSetup, FreezeSetup, topic_freeze_record},
+    test_support::{CommittedPartitionSetup, FreezeSetup, topic_freeze_record, topic_thaw_record},
 };
 
 /// The failure counter's value for one `(topic, partition, reason)`.
@@ -169,9 +169,10 @@ async fn a_frozen_topic_is_not_trimmed_until_it_thaws() {
 
     // The thaw record clears the entry, and the next sweep trims with no
     // operator step in between.
-    image.apply(&MetadataRecord::V1TopicFreeze(
-        crate::test_support::topic_thaw_record("frozen", PatternType::Literal),
-    ));
+    image.apply(&MetadataRecord::V1TopicFreeze(topic_thaw_record(
+        "frozen",
+        PatternType::Literal,
+    )));
     tick_all(&registry, Some(&image), &metrics).await;
 
     check!(

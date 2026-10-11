@@ -145,7 +145,7 @@ mod tests {
     use super::*;
     use crate::{
         broker::Broker,
-        handlers::group_heartbeat_test_support::topic_with_partitions,
+        handlers::group_heartbeat_test_support::{GroupTopicSetup, topic_with_partitions},
         test_support::{
             DenyAll, PartitionCount, ShareApiSupport, ShareBrokerSetup, peer, principal,
             start_share_broker, test_ctx,
@@ -232,14 +232,12 @@ mod tests {
         topic_id: uuid::Uuid,
         node: krabka_raft::NodeId,
     ) -> Vec<krabka_metadata::MetadataRecord> {
-        topic_with_partitions(
-            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
-                name,
-                topic_id,
-                partitions: PartitionCount(1),
-                node,
-            },
-        )
+        topic_with_partitions(GroupTopicSetup {
+            name,
+            topic_id,
+            partitions: PartitionCount(1),
+            node,
+        })
     }
 
     /// Seeds share group `group_id` with member `m1` assigned partition 0 of

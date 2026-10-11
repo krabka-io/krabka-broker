@@ -30,6 +30,7 @@ use crate::{
         topology::{InternalTopicSpec, status as topo_status},
     },
     handlers::{RequestContext, acl_denied, acl_wire::CLUSTER_RESOURCE_NAME},
+    time_util::now_ms,
     topic_creator::ForwardedIdentity,
 };
 
@@ -93,7 +94,7 @@ pub(super) fn create_internal_topics(
         .auto_topic_creation
         .streams_internal_topic_creation_errors(
             specs.iter().map(|spec| spec.name.as_str()),
-            crate::time_util::now_ms(),
+            now_ms(),
         );
     if errors.is_empty() {
         return;

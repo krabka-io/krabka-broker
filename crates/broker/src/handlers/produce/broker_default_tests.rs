@@ -25,7 +25,7 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
-    handlers::test_support::produce_wire,
+    handlers::test_support::{ClientTopicSetup, produce_wire},
     test_support::{start_broker_no_audit_with, start_broker_with_authorizer_no_audit},
 };
 
@@ -35,7 +35,7 @@ const VERSION: i16 = 9;
 async fn create_topic(broker: &BrokerHandle, name: &str) {
     crate::handlers::test_support::create_topic(
         broker,
-        crate::handlers::test_support::ClientTopicSetup {
+        ClientTopicSetup {
             client_id: "broker-default-test",
             name,
             ..Default::default()

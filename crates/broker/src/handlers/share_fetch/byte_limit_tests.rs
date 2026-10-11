@@ -30,9 +30,13 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
-    handlers::test_support::{
-        AcknowledgementPartitionSetup, AcknowledgementSetup, ShareSessionEpoch, ShareWireSetup,
-        TopicPartitionCount, acquired_share_records, share_fetch_wire,
+    handlers::{
+        produce::handle,
+        test_support::{
+            AcknowledgementPartitionSetup, AcknowledgementSetup, ShareSessionEpoch, ShareWireSetup,
+            TopicPartitionCount, acknowledge_batches_request, acquired_share_records,
+            share_acknowledge_wire, share_fetch_wire,
+        },
     },
     test_support::{
         decode_response, encode_request, initialize_share_state, peer, principal,
@@ -129,7 +133,7 @@ async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
         ..Default::default()
     };
     let request_bytes = encode_request(&request, PRODUCE_VERSION);
-    let response_bytes = crate::handlers::produce::handle(
+    let response_bytes = handle(
         &shared,
         PRODUCE_VERSION,
         &request_bytes,
@@ -608,17 +612,16 @@ async fn release(
     (first_offset, last_offset): (i64, i64),
 ) {
     let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
-    let request =
-        crate::handlers::test_support::acknowledge_batches_request(AcknowledgementSetup {
-            member,
+    let request = acknowledge_batches_request(AcknowledgementSetup {
+        member,
 
-            partition: AcknowledgementPartitionSetup::single_batch(
-                krabka_log::Offset(first_offset)..=krabka_log::Offset(last_offset),
-                crate::handlers::test_support::AcknowledgementCode(RELEASE),
-            ),
-            ..AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
-        });
-    let response = crate::handlers::test_support::share_acknowledge_wire(
+        partition: AcknowledgementPartitionSetup::single_batch(
+            krabka_log::Offset(first_offset)..=krabka_log::Offset(last_offset),
+            crate::handlers::test_support::AcknowledgementCode(RELEASE),
+        ),
+        ..AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
+    });
+    let response = share_acknowledge_wire(
         broker,
         &request,
         ShareWireSetup {

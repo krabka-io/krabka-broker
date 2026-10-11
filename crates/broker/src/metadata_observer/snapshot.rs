@@ -201,7 +201,7 @@ mod tests {
     use super::*;
     use crate::{
         metadata_observer::{
-            fetch::fetch_once,
+            fetch::{FetchOutcome, fetch_once},
             test_support::{api_versions_response_v0, observer_config},
         },
         test_support::single_partition_topic,
@@ -233,7 +233,7 @@ mod tests {
             }
         }
 
-        async fn fetch(&mut self) -> Option<crate::metadata_observer::fetch::FetchOutcome> {
+        async fn fetch(&mut self) -> Option<FetchOutcome> {
             fetch_once(
                 &self.config,
                 &self.config.voters[0].1,

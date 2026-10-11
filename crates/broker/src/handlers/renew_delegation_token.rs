@@ -40,8 +40,9 @@ use crate::{
     codes::{
         DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_NOT_FOUND,
         DELEGATION_TOKEN_OWNER_MISMATCH, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, INVALID_REQUEST,
+        UNSUPPORTED_VERSION,
     },
-    features::METADATA_VERSION,
+    features::{METADATA_VERSION, require_feature},
     handlers::ErrorCodeResponse as _,
     metadata_source::MetadataSource,
     network::auth::ConnectionAuth,
@@ -149,14 +150,14 @@ pub(crate) fn admit_token_request<'a>(
 
     let image = controller.current_image();
     // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
-    if crate::features::require_feature(
+    if require_feature(
         &image,
         METADATA_VERSION,
         krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
     )
     .is_err()
     {
-        return refuse(crate::codes::UNSUPPORTED_VERSION);
+        return refuse(UNSUPPORTED_VERSION);
     }
     let Some(token) = image
         .delegation_token_by_hmac(secret_key.as_bytes(), hmac)

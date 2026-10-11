@@ -35,7 +35,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     handlers::test_support::{
-        ClientTopicSetup, RecordCount, TopicPartitionCount, share_fetch_topics,
+        ClientTopicSetup, ProduceRecordsSetup, RecordCount, ShareWireSetup, TopicPartitionCount,
+        share_fetch_partition_rows, share_fetch_topics,
     },
     test_support::{initialize_share_state, peer, principal, start_broker_no_audit_with},
 };
@@ -67,7 +68,7 @@ async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) ->
 async fn produce_records(broker: &BrokerHandle, topic: &str, partition_index: i32, count: i32) {
     crate::handlers::test_support::produce_records(
         broker,
-        crate::handlers::test_support::ProduceRecordsSetup {
+        ProduceRecordsSetup {
             topic,
             partition_index: krabka_ids::PartitionIndex(partition_index),
             count: RecordCount(count),
@@ -166,12 +167,7 @@ async fn share_fetch_rows(
         ),
         ..Default::default()
     };
-    crate::handlers::test_support::share_fetch_partition_rows(
-        broker,
-        &request,
-        crate::handlers::test_support::ShareWireSetup::default(),
-    )
-    .await
+    share_fetch_partition_rows(broker, &request, ShareWireSetup::default()).await
 }
 
 async fn share_fetch_one(broker: &BrokerHandle, setup: ShareFetchRowsSetup<'_>) -> PartitionData {

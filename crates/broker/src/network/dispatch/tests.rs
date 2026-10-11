@@ -19,7 +19,9 @@ use crate::{
         SaslMechanismLabel, UNKNOWN_LABEL,
     },
     network::{
-        dispatch::test_support::serve_loop, response_header_len, test_support::RequestFrameSetup,
+        dispatch::test_support::{plaintext_loop, serve_loop},
+        response_header_len,
+        test_support::RequestFrameSetup,
     },
     test_support::start_broker_with,
 };
@@ -122,7 +124,7 @@ async fn raft_voter_registry_routes_to_real_handlers() {
     .await;
     let broker = handle.broker_arc_for_test();
 
-    let (server, mut framed) = crate::network::dispatch::test_support::plaintext_loop(broker).await;
+    let (server, mut framed) = plaintext_loop(broker).await;
 
     let add_body = encode_default::<add_req::AddRaftVoterRequest>(add_req::MAX_VERSION);
     let raw = round_trip(&mut framed, 80, add_req::MAX_VERSION, &add_body).await;
@@ -885,7 +887,7 @@ mod request_budget {
     use futures_util::{SinkExt as _, StreamExt as _};
 
     use super::{KafkaCodec, RequestFrameSetup, active_closes, request_frame};
-    use crate::{BrokerHandle, broker::Broker};
+    use crate::{BrokerHandle, broker::Broker, network::dispatch::test_support::plaintext_loop};
 
     /// One connection served by the loop, and the client end already framed.
     struct Served {
@@ -894,9 +896,7 @@ mod request_budget {
     }
 
     async fn serve(broker: &std::sync::Arc<Broker>) -> Served {
-        let (loop_task, client) =
-            crate::network::dispatch::test_support::plaintext_loop(std::sync::Arc::clone(broker))
-                .await;
+        let (loop_task, client) = plaintext_loop(std::sync::Arc::clone(broker)).await;
         Served { client, loop_task }
     }
 
@@ -1087,7 +1087,7 @@ mod log_levels {
     use super::{DEFAULT_MAX_FRAME_BYTES, RequestFrameSetup, request_frame};
     use crate::{
         broker::Broker,
-        network::{codec, dispatch::test_support::serve_loop},
+        network::{codec, dispatch::test_support::serve_loop, test_support::broker_config},
         test_support::LogCapture,
     };
 
@@ -1105,7 +1105,7 @@ mod log_levels {
     // Serves one connection to `peer`, and returns what the dispatch module
     // logged at DEBUG or above about that connection.
     async fn logged_serving(peer: Peer) -> Vec<(Level, String)> {
-        let (_dir, mut cfg) = crate::network::test_support::broker_config();
+        let (_dir, mut cfg) = broker_config();
         if matches!(peer, Peer::Idle) {
             cfg.connections_max_idle = Some(krabka_units::millis(100));
         }
@@ -1228,7 +1228,10 @@ mod request_limit {
     use super::{RequestFrameSetup, request_frame};
     use crate::{
         broker::Broker,
-        network::test_support::{FrameCorrelationId, broker_config},
+        network::{
+            dispatch::test_support::plaintext_loop,
+            test_support::{FrameCorrelationId, broker_config},
+        },
     };
 
     /// The limit of the broker under test: well over its own requests to
@@ -1272,8 +1275,7 @@ mod request_limit {
         let broker = handle.broker_arc_for_test();
 
         // The client's own codec is not the broker's limit.
-        let (loop_task, mut client) =
-            crate::network::dispatch::test_support::plaintext_loop(broker).await;
+        let (loop_task, mut client) = plaintext_loop(broker).await;
         client
             .send(request.freeze())
             .await

@@ -13,7 +13,7 @@ use crate::{
     error::BrokerError,
     handlers::RequestContext,
     metrics::QuotaType,
-    quota::{consume_producer_quota, throttle_time_ms},
+    quota::{QuotaDelay, consume_producer_quota, throttle_time_ms},
 };
 
 /// First `Produce` response version that carries the KIP-951 `CurrentLeader`
@@ -41,7 +41,7 @@ pub(super) fn finish_produce_response(
     // Kafka's `KafkaApis.handleProduceRequest` charges no request quota for
     // `acks = 0`, which `request_quota_start` holds as `None`. The byte-rate
     // quota above still applies.
-    let request_delay = request_quota_start.map_or_else(crate::quota::QuotaDelay::zero, |start| {
+    let request_delay = request_quota_start.map_or_else(QuotaDelay::zero, |start| {
         context.charge_request_quota(broker, image, start)
     });
     // KIP-219: the connection is muted for the larger of the two delays.
@@ -99,14 +99,14 @@ mod tests {
 
     use crate::quota::{
         QuotaBuckets, consume_producer_quota,
-        test_support::{QuotaRecordSetup, QuotaValue},
+        test_support::{QuotaRecordSetup, QuotaValue, image_with_quota},
     };
 
     #[test]
     fn consume_producer_quota_tuple_match_overage_throttles() {
         use krabka_units::{Time, convert::TimeExt};
 
-        let img = crate::quota::test_support::image_with_quota(QuotaRecordSetup {
+        let img = image_with_quota(QuotaRecordSetup {
             entity: vec![("user", Some("alice")), ("client-id", Some("app-x"))],
             value: QuotaValue(1024.0),
             ..Default::default()

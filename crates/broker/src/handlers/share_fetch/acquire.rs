@@ -30,7 +30,8 @@ use crate::{
     error::BrokerError,
     partition::Partition,
     share_partition::{
-        group_settings::GroupShareSettings, manager::persistence::fences_the_partition,
+        group_settings::GroupShareSettings,
+        manager::{SharePartitionLeaderManager, persistence::fences_the_partition},
         state::AcquisitionState,
     },
 };
@@ -54,7 +55,7 @@ const SHARE_DELIVERY_MAX_DEFERRED_RECORDS: i64 = 1_000;
 #[derive(Clone, Copy)]
 pub(super) struct AcquireContext<'a> {
     pub(super) broker: &'a Broker,
-    pub(super) manager: &'a Arc<crate::share_partition::manager::SharePartitionLeaderManager>,
+    pub(super) manager: &'a Arc<SharePartitionLeaderManager>,
     pub(super) group: &'a str,
     pub(super) member: &'a str,
     pub(super) max_records: i32,
@@ -632,14 +633,16 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::delivery::test_support::DeliveryPartitionSetup;
+    use crate::{
+        delivery::test_support::DeliveryPartitionSetup, share_partition::state::AcquisitionState,
+    };
 
     #[test]
     fn materialization_stops_at_the_deferred_record_bound() {
         let bound = SHARE_DELIVERY_MAX_DEFERRED_RECORDS;
         let inflight = i32::try_from(bound).expect("the bound fits an inflight budget");
         for (deferred, expected_end) in [(bound - 1, bound + 9), (bound, bound)] {
-            let mut state = crate::share_partition::state::AcquisitionState::new(Offset(0));
+            let mut state = AcquisitionState::new(Offset(0));
             state.materialize(Offset(deferred), inflight);
             state.defer_internal(Offset(0), Offset(deferred - 1));
             assert!(state.deferred_records() == deferred);
@@ -729,7 +732,7 @@ mod tests {
                     ..Default::default()
                 },
             );
-            let mut state = crate::share_partition::state::AcquisitionState::new(Offset(0));
+            let mut state = AcquisitionState::new(Offset(0));
 
             grow_readable_window(
                 &mut state,

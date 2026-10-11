@@ -329,7 +329,8 @@ mod tests {
     use super::*;
     use crate::{
         config_keys::{
-            DELIVERY_MODE_IMMEDIATE, MIN_INSYNC_REPLICAS, effective_min_insync_replicas,
+            COMPRESSION_TYPE, DELIVERY_MODE_IMMEDIATE, MIN_INSYNC_REPLICAS,
+            effective_min_insync_replicas,
         },
         handlers::produce::test_support::{image_with_overrides, image_with_topic, set_min_isr},
     };
@@ -557,10 +558,7 @@ mod tests {
         for (config_value, want) in cases {
             let mut img = image_with_topic("t", &[1]);
             let mut overrides = BTreeMap::new();
-            overrides.insert(
-                crate::config_keys::COMPRESSION_TYPE.into(),
-                config_value.into(),
-            );
+            overrides.insert(COMPRESSION_TYPE.into(), config_value.into());
             img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: "t".into(),
                 overrides,

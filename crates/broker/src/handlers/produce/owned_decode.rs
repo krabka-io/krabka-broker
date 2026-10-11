@@ -84,6 +84,7 @@ mod tests {
     use crate::{
         handlers::produce::{
             framing::PartitionPayload,
+            hot_path::TimestampPolicy,
             prepare::{DecodeEnv, PreparedSource, prepare_batch},
         },
         metrics::BrokerMetrics,
@@ -165,7 +166,7 @@ mod tests {
         let prepared = prepare_batch(
             PartitionPayload::Owned(RecordsPayload::Legacy(legacy.freeze())),
             None,
-            crate::handlers::produce::hot_path::TimestampPolicy::default(),
+            TimestampPolicy::default(),
             false,
             DecodeEnv {
                 topic_name: &Arc::from("orders"),

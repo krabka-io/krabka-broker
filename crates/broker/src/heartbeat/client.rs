@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::{
-    codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
+    codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, NOT_CONTROLLER},
     controller_endpoint::leader_endpoint,
     cordoned_log_dirs::CordonedLogDirs,
     log_dir_id::LogDirIds,
@@ -343,7 +343,7 @@ pub(crate) async fn run(mut cfg: Config) {
         .await;
         match resp {
             Ok(Ok(r)) => {
-                if r.error_code == crate::codes::NOT_CONTROLLER {
+                if r.error_code == NOT_CONTROLLER {
                     open.connection.close();
                 } else {
                     channel = Some(open);
@@ -430,7 +430,7 @@ mod tests {
         log_dir_id::LogDirIds,
         log_dir_status::LogDirRegistry,
         metadata_source::MetadataSource,
-        test_support::{FakeMetadataSource, two_log_dirs},
+        test_support::{FakeMetadataSource, broker_registration, two_log_dirs},
     };
 
     // How a fake controller answers a heartbeat.
@@ -556,7 +556,7 @@ mod tests {
                     BrokerRegistrationRecord {
                         broker_epoch: 11,
                         host: "localhost".into(),
-                        ..crate::test_support::broker_registration(krabka_raft::NodeId(7))
+                        ..broker_registration(krabka_raft::NodeId(7))
                     },
                 )])
                 .leader(Some(krabka_raft::NodeId(1)))

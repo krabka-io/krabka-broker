@@ -608,6 +608,7 @@ mod tests {
     use crate::network::{
         auth::{ConnectionAuth, test_support::plain_request},
         request::ParsedRequest,
+        test_support::assert_authentication_event,
     };
 
     fn request(
@@ -720,7 +721,7 @@ mod tests {
         );
 
         let event = rx.try_recv().expect("the failed authentication row");
-        crate::network::test_support::assert_authentication_event(
+        assert_authentication_event(
             &event,
             krabka_audit::AuditOutcome::Failure,
             "PLAIN",

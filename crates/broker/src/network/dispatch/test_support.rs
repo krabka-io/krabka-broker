@@ -9,6 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 
 use crate::{
+    SslPrincipalMapper,
     broker::Broker,
     config::ListenerSpec,
     network::codec::{KafkaCodec, frame},
@@ -36,7 +37,7 @@ pub(super) async fn serve_loop(
         protocol,
         tls_config: None,
         sasl_mechanisms,
-        principal_mapper: crate::SslPrincipalMapper::default(),
+        principal_mapper: SslPrincipalMapper::default(),
     };
     (addr, async move {
         for _ in 0..connections {

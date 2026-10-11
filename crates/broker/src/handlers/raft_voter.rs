@@ -17,7 +17,7 @@ use crate::{
     broker::Broker,
     codes::CLUSTER_AUTHORIZATION_FAILED,
     error::BrokerError,
-    handlers::{RequestContext, decode_request, encode_response},
+    handlers::{ErrorResponse, RequestContext, decode_request, encode_response},
 };
 
 /// A cluster ACL gate: `true` when the authorizer denies `ctx`'s principal.
@@ -147,7 +147,7 @@ pub(super) struct Refusals<R> {
     pub(super) not_leader: R,
 }
 
-impl<R: crate::handlers::ErrorResponse> Refusals<R> {
+impl<R: ErrorResponse> Refusals<R> {
     /// The add/remove leader-only refusals keep the caller's nullable messages.
     /// Kafka sets only the error code on a failed leader check, so those callers
     /// explicitly pass the generated empty-string default rather than null.
@@ -211,7 +211,7 @@ pub(super) async fn prelude<Req: for<'a> Decode<'a>, Resp: Encode>(
 /// # Errors
 ///
 /// Returns [`BrokerError`] when the response does not encode.
-pub(super) fn respond<R: crate::handlers::ErrorResponse + Encode>(
+pub(super) fn respond<R: ErrorResponse + Encode>(
     version: i16,
     error_code: i16,
     error_message: Option<String>,

@@ -33,7 +33,10 @@ use crate::{
         },
     },
     handlers::test_support::single_replica_partition,
-    test_support::{controller_peer_allowed, peer, request_context, start_group_broker_with},
+    test_support::{
+        controller_peer_allowed, dispatch_wire, peer, principal, request_context,
+        start_group_broker_with,
+    },
 };
 
 fn request(group_ids: &[&str]) -> StreamsGroupDescribeRequest {
@@ -119,7 +122,7 @@ pub(super) async fn unfinalize_streams_version(broker: &Broker) {
 use crate::handlers::test_support::set_streams_version;
 
 pub(super) async fn describe(broker: &Broker, group_ids: &[&str]) -> StreamsGroupDescribeResponse {
-    let principal = crate::test_support::principal("admin");
+    let principal = principal("admin");
     describe_as(broker, &principal, group_ids, false).await
 }
 
@@ -162,7 +165,7 @@ pub(super) async fn describe_at(
         ..request(group_ids)
     };
     // Over the wire: the fields `version` lacks must not reach the answer.
-    crate::test_support::dispatch_wire(
+    dispatch_wire(
         broker,
         krabka_protocol::owned::streams_group_describe_request::API_KEY,
         version,

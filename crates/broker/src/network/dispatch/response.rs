@@ -16,10 +16,12 @@ use crate::{
     handlers::{ApiKeyCode, ApiVersion, CorrelationId},
     metrics::{QuotaCharge, QuotaType},
     network::{
-        auth::ConnectionAuth, codec, request::ParsedRequest, response_header_len,
-        response_header_v1,
+        auth::ConnectionAuth,
+        codec::{self, KafkaCodec},
+        request::ParsedRequest,
+        response_header_len, response_header_v1,
     },
-    quota::{QuotaDelay, throttle_time_ms},
+    quota::{QuotaDelay, consume_request_quota, throttle_time_ms},
 };
 
 /// A framed response together with the KIP-219 window the connection must
@@ -53,7 +55,7 @@ impl ThrottledResponse {
 
 /// Write before enforcing the window, and close on exactly the same framing failure.
 pub(super) async fn send_throttled_response<S: tokio::io::AsyncWrite + Unpin>(
-    framed: &mut tokio_util::codec::Framed<S, crate::network::codec::KafkaCodec>,
+    framed: &mut tokio_util::codec::Framed<S, KafkaCodec>,
     response: ThrottledResponse,
 ) -> super::AfterResponse {
     use futures_util::SinkExt as _;
@@ -129,7 +131,7 @@ pub(super) fn apply_request_quota(
             None => QuotaDelay::zero(),
             Some(principal) => {
                 let image = broker.controller.current_image();
-                crate::quota::consume_request_quota(
+                consume_request_quota(
                     &image,
                     &broker.quota_buckets,
                     &principal.name,

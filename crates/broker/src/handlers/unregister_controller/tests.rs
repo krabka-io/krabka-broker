@@ -9,7 +9,7 @@ use krabka_protocol::owned::unregister_controller_response::MAX_VERSION;
 
 use super::*;
 use crate::{
-    handlers::update_features::answer,
+    handlers::{RequestContext, update_features::answer},
     test_support::{GrantsInPrincipalName, start_broker_with},
 };
 
@@ -175,7 +175,7 @@ async fn send(
         crate::test_support::principal(principal),
         crate::test_support::peer()
     );
-    let ctx = crate::handlers::RequestContext::new(
+    let ctx = RequestContext::new(
         &principal,
         &peer,
         "kafka-cluster",
