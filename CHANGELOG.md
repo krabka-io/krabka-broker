@@ -83,6 +83,9 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   known-failure system tests fail, snippet anchors match exactly, and release,
   benchmark, Clippy, profiling, stamp-helper and API comments describe the
   implemented behavior and preconditions.
+- Sendfile fetches read only batch headers when scanning large batches, avoiding
+  synchronous reads of cold payload pages during backlog consumption. Small
+  batches retain buffered header scans.
 
 ### Changed
 
