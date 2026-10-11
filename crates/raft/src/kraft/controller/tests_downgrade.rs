@@ -15,7 +15,7 @@ use crate::{
             topic_record, voter_set,
         },
     },
-    snapshot::SnapshotReader,
+    snapshot::{SnapshotReader, SnapshotWriter},
 };
 
 fn metadata_version_update(level: i16) -> Vec<MetadataRecord> {
@@ -213,8 +213,7 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
         .downgrade_snapshot_pending
         .clone()
         .expect("downgrade remains pending");
-    let bytes = crate::snapshot::SnapshotWriter::serialize(&pending.image, 0)
-        .expect("serialize pending image");
+    let bytes = SnapshotWriter::serialize(&pending.image, 0).expect("serialize pending image");
     write_checkpoint(dir.path(), pending.end_offset.0, pending.epoch, &bytes)
         .expect("simulate checkpoint-before-prune crash");
     assert2::assert!(engine.log.log_start_offset() < pending.end_offset);

@@ -17,7 +17,7 @@ use crate::{
     cluster::boot,
     principals::ALICE,
     proposals::{ACTION_UNREGISTER_BROKER, approved_proposal},
-    support::client::metadata_fetch,
+    support::{client::metadata_fetch, records::metadata_batches as decode_metadata_batches},
     transitions::{BROKER_ID, unregister},
 };
 
@@ -35,7 +35,7 @@ async fn metadata_batches(
     let response = metadata_fetch(broker.controller_addr(), "break-glass-test", from).await;
 
     let mut batches = Vec::new();
-    for batch in crate::support::records::metadata_batches(&response.records) {
+    for batch in decode_metadata_batches(&response.records) {
         if batch.attributes.is_control_batch() {
             continue;
         }

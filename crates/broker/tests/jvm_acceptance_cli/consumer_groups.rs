@@ -8,9 +8,12 @@ use std::io::Write as _;
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{
-    KAFKA_IMAGE, broker0_advertised, describe_console_group, docker_run_kafka_tool,
-    start_console_group,
+use crate::{
+    jvm_acceptance::{
+        KAFKA_IMAGE, broker0_advertised, describe_console_group, docker_run_kafka_tool,
+        start_console_group,
+    },
+    oracle::OracleComparison,
 };
 
 /// `kafka-consumer-groups --list` and `--describe` round-trip after a
@@ -364,7 +367,7 @@ async fn reset_offsets_modes_match_apache_kafka() {
 
     // Kafka first. A wrong rule fails here, on somebody else's broker, before
     // krabka is asked the same question.
-    let comparison = crate::oracle::OracleComparison::start("reset-offsets").await;
+    let comparison = OracleComparison::start("reset-offsets").await;
     let [oracle_side, krabka_side] = comparison.sides();
 
     for side in [&oracle_side, &krabka_side] {
@@ -533,7 +536,7 @@ async fn group_delete_and_reset_refusals_match_apache_kafka() {
     const EMPTY_GROUP: &str = "krabka-group-empty-grp";
     const ABSENT_GROUP: &str = "krabka-group-absent-grp";
 
-    let comparison = crate::oracle::OracleComparison::start("group-lifecycle").await;
+    let comparison = OracleComparison::start("group-lifecycle").await;
     let [oracle_side, krabka_side] = comparison.sides();
 
     for side in [&oracle_side, &krabka_side] {

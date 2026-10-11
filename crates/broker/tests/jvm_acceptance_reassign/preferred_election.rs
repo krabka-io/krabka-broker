@@ -13,6 +13,7 @@ use crate::{
         KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
         wait_jvm_isr_contains, wait_jvm_partition_any_leader, wait_jvm_partition_leader,
     },
+    oracle::OracleComparison,
 };
 
 /// JVM acceptance test for `kafka-leader-election --election-type preferred`.
@@ -231,7 +232,7 @@ fn selector_partitions() -> Vec<TopicPartition> {
 async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {
     // Kafka first: the claim that a healthy partition answers 84 rather than
     // succeeding is a claim about Kafka, and this is where a wrong one fails.
-    let comparison = crate::oracle::OracleComparison::start("elect-selectors").await;
+    let comparison = OracleComparison::start("elect-selectors").await;
     let [oracle_side, krabka_side] = comparison.sides();
 
     let document = election_json(&selector_partitions());

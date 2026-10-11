@@ -15,7 +15,7 @@ use krabka_protocol::krabka::freeze::SetTopicFreezeRequest;
 
 use crate::{
     host_broker::{JvmBroker, start_jvm_broker},
-    jvm_acceptance::break_glass::propose,
+    jvm_acceptance::break_glass::{approve as approve_proposal, propose},
     support,
     vocabulary::{APPROVER_ONE, APPROVER_TWO, PROPOSER, WIRE_UNCLEAN_ELECT_LEADERS},
 };
@@ -129,8 +129,7 @@ async fn approve(
     operator: (&str, &str),
     proposal_id: krabka_protocol::primitives::uuid::Uuid,
 ) -> Approvals {
-    let (held, required) =
-        crate::jvm_acceptance::break_glass::approve(bootstrap, operator, proposal_id).await;
+    let (held, required) = approve_proposal(bootstrap, operator, proposal_id).await;
     Approvals { held, required }
 }
 

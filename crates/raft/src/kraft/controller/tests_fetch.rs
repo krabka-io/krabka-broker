@@ -24,6 +24,7 @@ use crate::{
                 submit_change_with_timeout, topic_record,
             },
         },
+        event::SuccessorRank,
         transport::{PeerSender, wire::FETCH_VERSION},
         types::LogOffsetMetadata,
     },
@@ -873,7 +874,7 @@ async fn rejected_fetch_responses_leave_log_watermark_and_snapshot_unchanged() {
             engine.on_event(Event::ReceiveEndQuorumEpoch {
                 leader_id: NodeId(2),
                 leader_epoch: 3,
-                successor_rank: crate::kraft::event::SuccessorRank::default(),
+                successor_rank: SuccessorRank::default(),
             });
             assert2::assert!(matches!(engine.core.role(), Role::Prospective { .. }));
         }

@@ -59,8 +59,7 @@ async fn alter_scram_creds_super_user_can_provision() {
         scram_admin_fixture(vec![SaslMechanism::Plain, SaslMechanism::ScramSha512]).await;
 
     let req = alice_sha512_request();
-    let resp =
-        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion").await;
+    let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion").await;
     assert!(resp.results.len() == 1, "one result row per upsertion");
     check!(
         resp.results[0].error_code == 0,
@@ -98,9 +97,7 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
         })],
         ..Default::default()
     };
-    let resp =
-        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion (SHA-256)")
-            .await;
+    let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion (SHA-256)").await;
     assert!(resp.results.len() == 1);
     check!(
         resp.results[0].error_code == 0,

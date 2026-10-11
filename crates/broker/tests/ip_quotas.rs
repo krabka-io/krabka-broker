@@ -35,7 +35,7 @@ use crate::{
         start_single_broker_sasl_plaintext_with_users,
     },
     kafka_wire::{
-        ExchangeSetup as WireExchangeSetup,
+        ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup,
         quotas::{QuotaAlterSetup, QuotaDescribeSetup},
     },
     quota_admin::{drive_alter_client_quotas_sasl, drive_describe_client_quotas_sasl},
@@ -61,7 +61,7 @@ async fn ip_quota_alter_then_describe_round_trip() {
             vec![("connection_creation_rate".into(), 2.0, false)],
         )],
         &QuotaAlterSetup {
-            authentication: crate::kafka_wire::PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
             ..Default::default()
         },
     )
@@ -83,7 +83,7 @@ async fn ip_quota_alter_then_describe_round_trip() {
         addr,
         vec![("ip".into(), /*ANY*/ 2, None)],
         &QuotaDescribeSetup {
-            authentication: crate::kafka_wire::PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
             ..Default::default()
         },
     )

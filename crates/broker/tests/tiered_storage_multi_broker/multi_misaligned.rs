@@ -34,7 +34,7 @@ use crate::{
     support::{client::connect_owned, storage::topic_remote_log_files, topics::AssignedTopicSetup},
     topic_fixture::{
         AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup, await_tiered_replicas,
-        create_assigned_topic,
+        create_assigned_topic, produce_records as produce_tiered_records,
     },
 };
 
@@ -86,7 +86,7 @@ fn remote_segments(root: &Path) -> Vec<RemoteSegment> {
 /// Produces `count` single-record batches through `client`, one request each,
 /// so both replicas see many small batches and roll on their own byte budget.
 async fn produce_records(client: &Client, topic_id: WireUuid, prefix: &str, count: usize) {
-    crate::topic_fixture::produce_records(
+    produce_tiered_records(
         client,
         |index| bytes::Bytes::from(format!("{prefix}-record-{index}")),
         TieredRecordsSetup {

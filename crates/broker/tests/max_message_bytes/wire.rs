@@ -13,7 +13,7 @@ use krabka_protocol::{
 
 use crate::support::{
     InProcess,
-    client::BatchProduceSetup,
+    client::{BatchProduceSetup, produce_batch as client_produce_batch},
     records::{batch_from_records, value_record},
     start, topic_id_for,
     topics::{CreateTopicSetup, configured_topic_request},
@@ -144,7 +144,7 @@ pub(super) async fn produce_batch(
     topic_id: WireUuid,
     batch: RecordBatch,
 ) -> PartitionProduceResponse {
-    crate::support::client::produce_batch(
+    client_produce_batch(
         client,
         batch,
         BatchProduceSetup {

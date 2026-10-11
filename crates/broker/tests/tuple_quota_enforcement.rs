@@ -115,7 +115,7 @@ async fn tuple_quota_throttles_only_matching_client_id() {
         )],
         &QuotaAlterSetup {
             authentication: PlainAuthenticationSetup {
-                client_id: crate::CLIENT_ID,
+                client_id: CLIENT_ID,
                 user: "admin",
                 password: admin_password.as_bytes().to_vec(),
             },

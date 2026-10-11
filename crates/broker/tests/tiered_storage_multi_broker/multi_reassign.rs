@@ -43,6 +43,7 @@ use crate::{
     support::{client::connect_owned, storage::topic_remote_log_files, topics::AssignedTopicSetup},
     topic_fixture::{
         AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup, create_assigned_topic,
+        produce_records as produce_tiered_records,
     },
 };
 
@@ -82,7 +83,7 @@ fn local_log_bytes(partition_dir: &Path) -> u64 {
 
 /// Produces `count` single-record batches through `client`, one request each.
 async fn produce_records(client: &Client, topic_id: WireUuid, count: usize) {
-    crate::topic_fixture::produce_records(
+    produce_tiered_records(
         client,
         |index| {
             let mut value = format!("record-{index}-").into_bytes();

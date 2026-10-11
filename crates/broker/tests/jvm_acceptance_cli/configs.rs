@@ -3,10 +3,13 @@
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{
-    alter_console_topic_config, broker0_advertised, docker_run_kafka_tool,
-    docker_run_kafka_tool_allowing_failure, nc_check_connectivity, start_console_broker,
-    start_host_broker, tool_output,
+use crate::{
+    jvm_acceptance::{
+        alter_console_topic_config, broker0_advertised, docker_run_kafka_tool,
+        docker_run_kafka_tool_allowing_failure, nc_check_connectivity, start_console_broker,
+        start_host_broker, tool_output,
+    },
+    oracle::OracleComparison,
 };
 
 /// `kafka-configs --alter --add-config retention.ms=60000 --topic t` then
@@ -410,7 +413,7 @@ async fn kafka_configs_entity_types_round_trip_as_apache_kafka_does() {
     // Kafka first: a key one release calls a group config and the other does
     // not fails here, on the stock broker, rather than being read as a krabka
     // bug.
-    let comparison = crate::oracle::OracleComparison::start("configs-entities").await;
+    let comparison = OracleComparison::start("configs-entities").await;
     let [oracle_side, krabka_side] = comparison.sides();
 
     for case in ENTITY_CASES {

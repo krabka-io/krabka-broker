@@ -10,7 +10,8 @@ use crate::{
     admin_harness::build_client,
     support::{
         quorum::{
-            follower_config, metadata_quorum_request as describe_quorum_request, two_node_leader,
+            describe_quorum_request as support_describe_quorum_request, follower_config,
+            metadata_quorum_request as describe_quorum_request, two_node_leader,
         },
         shutdown_cluster, start_n_node_client, start_n_node_with_retry,
     },
@@ -160,7 +161,7 @@ async fn describe_quorum_for_another_topic_is_unknown_topic_or_partition() {
     let (_, cfg, _dir) = &cluster[0];
     let client = build_client(cfg.listen_addr).await;
 
-    let req = crate::support::quorum::describe_quorum_request("not-the-metadata-topic", vec![0]);
+    let req = support_describe_quorum_request("not-the-metadata-topic", vec![0]);
     let resp = client.send(req).await.expect("describe_quorum");
 
     check!(resp.error_code == 0, "top-level error_code");

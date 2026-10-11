@@ -10,7 +10,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use super::*;
 use crate::{
     MetadataLogConfig,
-    error::PersistedFormatError,
+    error::{MetadataReplayError, PersistedFormatError},
     kraft::controller::{
         control_state::voter_set_to_wire,
         quorum_state_file::{load_quorum_state, save_quorum_state},
@@ -246,7 +246,7 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
     };
     check!(
         fault
-            == crate::error::MetadataReplayError::InvalidControlRecord {
+            == MetadataReplayError::InvalidControlRecord {
                 offset: 2,
                 reason: "negative kraft.version -1".into(),
             }

@@ -15,8 +15,8 @@ use tracing::instrument;
 use super::Log;
 use crate::{
     compact::{
-        CleaningRound, RewriteOutput, RewriteRetention, atomic_swap, atomic_swap_retiring,
-        build_offset_map, rewrite_segments,
+        CleanedTransactionMetadata, CleaningRound, RewriteOutput, RewriteRetention, atomic_swap,
+        atomic_swap_retiring, build_offset_map, rewrite_segments,
     },
     error::LogError,
     retention,
@@ -414,7 +414,7 @@ impl Log {
                 self.aborted_in_range(sealed_refs[0].base_offset(), consumed_end),
                 record_limit,
             )?;
-            let mut txn_meta = crate::compact::CleanedTransactionMetadata::default();
+            let mut txn_meta = CleanedTransactionMetadata::default();
             let sizes: Vec<ByteSize> = sealed_refs.iter().map(|segment| segment.size()).collect();
             let groups = Self::group_segments_by_size(&sizes, segment_bytes);
             rewrites.reserve_exact(groups.len());

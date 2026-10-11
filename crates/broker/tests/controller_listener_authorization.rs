@@ -54,6 +54,7 @@ use tokio_rustls::rustls::{
 
 use crate::support::{
     acl::{ClusterAclSetup, cluster_acl_record},
+    quorum::describe_quorum_request as support_describe_quorum_request,
     start_with_bound_listeners,
     tls::{PinnedCertVerifier, fixture_signature_schemes},
     topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
@@ -241,7 +242,7 @@ fn submit_change_response(bytes: &Bytes) -> KrabkaSubmitChangeResponse {
 
 fn describe_quorum() -> Bytes {
     encode(
-        &crate::support::quorum::describe_quorum_request("__cluster_metadata".to_owned(), vec![0]),
+        &support_describe_quorum_request("__cluster_metadata".to_owned(), vec![0]),
         describe_quorum_request::MAX_VERSION,
     )
 }

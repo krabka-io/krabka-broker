@@ -52,8 +52,10 @@ use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
 use crate::{
     cluster::offline_for_partition,
     jvm_acceptance::{
-        SaslClusterSetup, break_glass::propose, broker0_advertised, plain_client_properties,
-        start_registered_sasl_cluster, wait_three_brokers_registered,
+        SaslClusterSetup,
+        break_glass::{approve as approve_proposal, propose},
+        broker0_advertised, plain_client_properties, start_registered_sasl_cluster,
+        wait_three_brokers_registered,
     },
     oracle::{AssignedTopicCommandSetup, CliRun, Side, ToolFile},
     tool_output::{Assignment, TopicPartition, parse_cancelled, reassignment_json},
@@ -226,7 +228,7 @@ async fn approve(
     operator: (&str, &str),
     proposal_id: krabka_protocol::primitives::uuid::Uuid,
 ) -> (i32, i32) {
-    crate::jvm_acceptance::break_glass::approve(bootstrap, operator, proposal_id).await
+    approve_proposal(bootstrap, operator, proposal_id).await
 }
 
 /// The gate off, then on and unapproved, then on and approved -- the same

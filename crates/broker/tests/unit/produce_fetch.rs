@@ -15,7 +15,7 @@ use crate::{
     support,
     support::{
         fetch::{
-            RequestWaitMillis, SinglePartitionFetchSetup, check_record_count,
+            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, check_record_count,
             single_partition_fetch,
         },
         offsets::{list_offset_partition, single_partition_list_offsets},
@@ -99,7 +99,7 @@ async fn produce_then_fetch_round_trip() {
     let fetch = single_partition_fetch(SinglePartitionFetchSetup {
         topic: "round".into(),
         topic_id,
-        limits: crate::support::fetch::FetchLimits::wait_for_data(RequestWaitMillis(100)),
+        limits: FetchLimits::wait_for_data(RequestWaitMillis(100)),
         ..Default::default()
     });
     let fresp = p.client.send(fetch).await.expect("Fetch");

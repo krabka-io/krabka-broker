@@ -17,7 +17,7 @@ use super::{
     ConnectionContext, ListenerApiVersions, handle_conn,
     test_support::{read_frame, single_voter_engine},
 };
-use crate::{AllowAllGrants, ControllerApiVersions as _};
+use crate::{AllowAllGrants, ControllerApiVersions as _, kraft::KraftController};
 
 krabka_macros::vector_request_fixture!(request_frame, i32);
 
@@ -90,7 +90,7 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
                 unstable,
                 limits: crate::ListenerLimits::default(),
             },
-            crate::kraft::KraftController::wall_clock_ms,
+            KraftController::wall_clock_ms,
         ));
 
         for (correlation_id, (version, body, body_version, error_code, full)) in (1..).zip(rows) {

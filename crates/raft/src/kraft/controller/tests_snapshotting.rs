@@ -8,7 +8,7 @@ use assert2::assert;
 use super::*;
 use crate::{
     kraft::{
-        NullPeerSender,
+        Activation, NullPeerSender,
         controller::{
             checkpoint::{
                 checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
@@ -445,7 +445,7 @@ async fn a_restart_recovers_the_header_timestamp_from_the_checkpoint() {
         krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
-        crate::kraft::Activation::default(),
+        Activation::default(),
     )
     .expect("reopen over the same data dir");
     reopened.trigger_snapshot().await.expect("trigger snapshot");

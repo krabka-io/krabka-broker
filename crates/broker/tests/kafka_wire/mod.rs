@@ -261,8 +261,8 @@ pub async fn create_topic_as_super_user(addr: SocketAddr, setup: AutomaticTopicS
         request_as_plain(
             addr,
             &request,
-            &crate::kafka_wire::PlainRequestSetup {
-                authentication: crate::kafka_wire::PlainAuthenticationSetup::admin(setup.client_id),
+            &PlainRequestSetup {
+                authentication: PlainAuthenticationSetup::admin(setup.client_id),
                 api: ApiRequestSetup {
                     api_key: krabka_ids::ApiKey(19),
                     version: krabka_ids::ApiVersion(7),
@@ -341,7 +341,7 @@ where
         )));
     }
 
-    let payload = crate::kafka_wire::plain_payload(user, password);
+    let payload = plain_payload(user, password);
     let auth_body = encode_named(
         &SaslAuthenticateRequest {
             auth_bytes: payload,

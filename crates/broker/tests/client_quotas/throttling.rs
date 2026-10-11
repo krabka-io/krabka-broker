@@ -221,7 +221,7 @@ async fn consumer_byte_rate_throttles_fetch() {
     let alter_resp = alter_user_quota(
         addr,
         UserQuotaSetup {
-            authentication: PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
             key: "consumer_byte_rate",
             value: QuotaValue(128.0),
             ..Default::default()
@@ -313,7 +313,7 @@ async fn user_client_tuple_overrides_user_specific() {
     let alter_user = alter_user_quota(
         addr,
         UserQuotaSetup {
-            authentication: PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
             value: QuotaValue(8192.0),
             ..Default::default()
         },
@@ -332,7 +332,7 @@ async fn user_client_tuple_overrides_user_specific() {
             vec![("producer_byte_rate".into(), 128.0, false)],
         )],
         &QuotaAlterSetup {
-            authentication: PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
             ..Default::default()
         },
     )
@@ -605,7 +605,7 @@ async fn prepare_quota_topic(
     create_topic_as_admin(
         addr,
         AutomaticTopicSetup {
-            client_id: crate::CLIENT_ID,
+            client_id: CLIENT_ID,
             topic: ConfiguredTopicSetup {
                 name: (topic).into(),
                 ..Default::default()

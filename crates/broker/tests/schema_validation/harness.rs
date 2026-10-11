@@ -142,7 +142,7 @@ pub fn boot(
     Box::pin(async move {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-        crate::harness::apply_registry_config(
+        apply_registry_config(
             &mut config,
             &format!(
                 r#"
@@ -177,7 +177,7 @@ pub fn mock_topic_fixture(
         let id = create_topic(
             &broker,
             &client,
-            crate::harness::SchemaTopicSetup {
+            SchemaTopicSetup {
                 name: topic,
                 configs,
                 ..Default::default()

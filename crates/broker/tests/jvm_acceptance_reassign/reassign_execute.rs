@@ -14,7 +14,7 @@ use crate::{
         reassignment_cluster, removed_replica,
     },
     jvm_acceptance::{KAFKA_IMAGE_TXN, broker0_advertised, verify_console_reassignment},
-    oracle::{AssignedTopicCommandSetup, CliRun},
+    oracle::{AssignedTopicCommandSetup, CliRun, OracleComparison},
     support::{ContainerInput, JvmDockerSetup, jvm_docker_command},
 };
 
@@ -220,7 +220,7 @@ async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
     const TOPIC: &str = "krabka-generate-itest";
     const PARTITIONS: i32 = 3;
 
-    let comparison = crate::oracle::OracleComparison::start("reassign-generate").await;
+    let comparison = OracleComparison::start("reassign-generate").await;
     let [oracle_side, krabka_side] = comparison.sides();
 
     let document = topics_to_move_json(&[TOPIC]);

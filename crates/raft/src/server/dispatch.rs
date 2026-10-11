@@ -104,7 +104,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        kraft::transport::api_key,
+        kraft::transport::{api_key, wire::METADATA_TOPIC_ID},
         server::{
             api_versions::table::CONTROLLER_LISTENER_APIS,
             test_support::{encoded, single_voter_engine, wait_for_leader},
@@ -335,7 +335,7 @@ mod tests {
             },
             topics: vec![fetch_req::FetchTopic {
                 topic: METADATA.into(),
-                topic_id: crate::kraft::transport::wire::METADATA_TOPIC_ID,
+                topic_id: METADATA_TOPIC_ID,
                 partitions: vec![fetch_req::FetchPartition::default()],
                 ..Default::default()
             }],

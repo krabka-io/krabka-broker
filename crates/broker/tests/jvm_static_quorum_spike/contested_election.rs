@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use crate::{
     static_quorum_harness::{
-        docker_rm, jvm_controller_properties, kafka_cluster_id_string, start_jvm_controller,
+        MixedQuorum, docker_rm, jvm_controller_properties, kafka_cluster_id_string,
+        start_jvm_controller,
     },
     support,
 };
@@ -48,8 +49,7 @@ async fn contested_election_krabka_counts_jvm_prevote() {
     let cid_str = kafka_cluster_id_string(cluster_id);
 
     let ([p1, p2, p3], [c1, c2], [_dir1, _dir2]) =
-        crate::static_quorum_harness::MixedQuorum::start(cluster_id, Some(krabka_units::secs(2)))
-            .await;
+        MixedQuorum::start(cluster_id, Some(krabka_units::secs(2))).await;
 
     // JVM voter id 3: release the dead leader fast, self-nominate slowly.
     let props = jvm_controller_properties(

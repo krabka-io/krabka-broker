@@ -12,11 +12,12 @@ use crate::{
     log::{
         RawRead,
         test_support::{
-            NO_LIMIT, append_samples, sample_batch, test_batch_at, test_log, tiny_segments,
+            NO_LIMIT, append_samples, configured_test_log, sample_batch, test_batch_at, test_log,
+            tiny_segments,
         },
     },
     segment::Segment,
-    test_support::segmented_log,
+    test_support::{RecordedAdvice, segmented_log},
 };
 
 /// Read a complete raw response and check every byte against the written wire image.
@@ -505,13 +506,13 @@ fn configured_read_ahead_max_reaches_both_verbatim_reads() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for (read_ahead_max, hinted) in [(0, 1_000), (100, 1_100)] {
-        let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+        let (_dir, mut log) = configured_test_log(LogConfig {
             read_ahead_max: ByteSize::from_bytes(read_ahead_max),
             ..LogConfig::default()
         });
-        crate::log::test_support::append_samples(&mut log, 40, 1);
+        append_samples(&mut log, 40, 1);
         check!(log.active.as_ref().unwrap().size().bytes_u64() > 2 * budget.bytes_u64());
-        let advice = std::sync::Arc::new(crate::test_support::RecordedAdvice::default());
+        let advice = std::sync::Arc::new(RecordedAdvice::default());
         log.test_set_io(advice.clone());
         let end = log.log_end_offset();
 
