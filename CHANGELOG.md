@@ -23,6 +23,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
+### Fixed
+
+- Queued ordinary Produce batches under `preallocate=true` share one aligned
+  Direct I/O write when they fit in the active segment and total at most 1 MiB.
+  This reduces synchronous writes and repeated block padding under load.
+
 ## [1.0.2] - 2026-10-10
 
 1.0.2 changes no on-disk format, so it upgrades from 1.0.1 in place and
