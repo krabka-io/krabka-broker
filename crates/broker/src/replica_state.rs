@@ -502,7 +502,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::test_support::TopicSetup;
+    use crate::{
+        config_keys::MIN_INSYNC_REPLICAS,
+        test_support::{TopicSetup, topic_image},
+    };
 
     /// Shorthand for wrapping a raw offset in the test asserts below.
     fn o(v: i64) -> Offset {
@@ -1071,7 +1074,7 @@ mod tests {
     }
 
     fn policy_image() -> MetadataImage {
-        crate::test_support::topic_image(TopicSetup {
+        topic_image(TopicSetup {
             topic: "t",
             ..Default::default()
         })
@@ -1094,12 +1097,9 @@ mod tests {
         let mut image = policy_image();
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
-            overrides: [(
-                crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
-                "2".to_string(),
-            )]
-            .into_iter()
-            .collect(),
+            overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
+                .into_iter()
+                .collect(),
         }));
         image.apply(&register(1, 11, false, false));
         image.apply(&register(2, 12, false, true));
@@ -1172,7 +1172,7 @@ mod tests {
         for (node, value) in [(DEFAULT_BROKER_CONFIG_NODE_ID, "2"), (NodeId(1), "3")] {
             image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
                 node_id: node,
-                config_name: crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                config_name: MIN_INSYNC_REPLICAS.to_string(),
                 config_value: Some(value.to_string()),
             }));
         }

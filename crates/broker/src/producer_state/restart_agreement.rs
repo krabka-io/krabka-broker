@@ -21,6 +21,8 @@ use super::{
     test_support::{ProducerEpoch, ProducerSequence},
 };
 use crate::{
+    log_dir_status::LogDirRegistry,
+    partition::Partition,
     test_support::RecordCount,
     txn::marker::{MarkerType, build_marker_batch},
 };
@@ -88,11 +90,7 @@ pub(super) fn data_batch(setup: DataBatchSetup) -> RecordBatch {
 }
 
 /// A live producer tracker sharing the real writer's root-level log fixture.
-pub(super) fn producer_partition() -> (
-    tempfile::TempDir,
-    Arc<ProducerState>,
-    Arc<crate::partition::Partition>,
-) {
+pub(super) fn producer_partition() -> (tempfile::TempDir, Arc<ProducerState>, Arc<Partition>) {
     let directory = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(ProducerState::new());
     let log = Log::open(directory.path(), LogConfig::default()).expect("open log");
@@ -101,7 +99,7 @@ pub(super) fn producer_partition() -> (
         PARTITION,
         directory.path().to_path_buf(),
         log,
-        crate::log_dir_status::LogDirRegistry::default(),
+        LogDirRegistry::default(),
         Arc::clone(&state),
         false,
     );
@@ -111,7 +109,7 @@ pub(super) fn producer_partition() -> (
 /// Run the steps on a live partition, as the Produce handler and the marker
 /// fan-out do. The handler records each accepted data batch in the tracker
 /// after the append.
-async fn run_steps(partition: &crate::partition::Partition, state: &ProducerState, steps: &[Step]) {
+async fn run_steps(partition: &Partition, state: &ProducerState, steps: &[Step]) {
     for step in steps {
         match *step {
             Step::Data(setup) => {

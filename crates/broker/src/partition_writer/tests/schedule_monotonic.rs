@@ -14,6 +14,7 @@ use super::*;
 use crate::{
     codes,
     delivery::test_support::{NOW_MS, batch_at},
+    partition_writer::test_support::ProduceAck,
 };
 
 /// A scheduled, monotonic log.
@@ -45,12 +46,7 @@ fn spawn_writer(
     )
 }
 
-async fn queued_descending_batches(
-    tx: &mpsc::Sender<WriterMessage>,
-) -> (
-    crate::partition_writer::test_support::ProduceAck,
-    crate::partition_writer::test_support::ProduceAck,
-) {
+async fn queued_descending_batches(tx: &mpsc::Sender<WriterMessage>) -> (ProduceAck, ProduceAck) {
     let later = queue_batch(tx, batch_at(NOW_MS + 60_000)).await;
     let earlier = queue_batch(tx, batch_at(NOW_MS)).await;
     (later, earlier)

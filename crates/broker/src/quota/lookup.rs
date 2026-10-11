@@ -327,14 +327,17 @@ mod tests {
     use krabka_metadata::{ClientQuotaRecord, MetadataImage};
 
     use super::*;
-    use crate::quota::test_support::{image_with_quotas, quota_record as rec};
+    use crate::quota::test_support::{
+        QuotaEntitySpec, QuotaRecordSetup, QuotaValue, image_with_quotas, producer_quota_image,
+        quota_record as rec,
+    };
 
     fn img_with(records: Vec<ClientQuotaRecord>) -> MetadataImage {
         image_with_quotas(records)
     }
 
     /// Both identities must resolve the configured 1,024-byte producer quota.
-    fn assert_alice_app1_entity(entity: crate::quota::test_support::QuotaEntitySpec<'_>) {
+    fn assert_alice_app1_entity(entity: QuotaEntitySpec<'_>) {
         let img = img_with(vec![rec(crate::quota::test_support::QuotaRecordSetup {
             entity,
             value: crate::quota::test_support::QuotaValue(1024.0),
@@ -535,7 +538,7 @@ mod tests {
             ),
         ];
         for (label, configured, principal, client_id, expected) in cases {
-            let img = crate::quota::test_support::producer_quota_image(configured);
+            let img = producer_quota_image(configured);
             check!(
                 lookup_quota_with_key(&img, principal, Some(client_id), "producer_byte_rate")
                     == expected,
@@ -628,7 +631,7 @@ mod tests {
             ),
         ];
         for (label, configured, principal, null_expected, empty_expected) in cases {
-            let img = crate::quota::test_support::producer_quota_image(configured);
+            let img = producer_quota_image(configured);
             check!(
                 lookup_quota_with_key(&img, principal, None, "producer_byte_rate") == null_expected,
                 "null: {label}"
@@ -725,11 +728,11 @@ mod tests {
         #[default("connection_creation_rate")]
         key: &'a str,
         #[default(crate::quota::test_support::QuotaValue(1.0))]
-        value: crate::quota::test_support::QuotaValue,
+        value: QuotaValue,
     }
 
     fn rec_ip(setup: IpQuotaSetup<'_>) -> ClientQuotaRecord {
-        rec(crate::quota::test_support::QuotaRecordSetup {
+        rec(QuotaRecordSetup {
             entity: vec![("ip", setup.ip)],
             key: setup.key,
             value: setup.value,
@@ -1006,9 +1009,9 @@ mod tests {
                 configured
                     .into_iter()
                     .map(|(entity, value)| {
-                        rec(crate::quota::test_support::QuotaRecordSetup {
+                        rec(QuotaRecordSetup {
                             entity,
-                            value: crate::quota::test_support::QuotaValue(value),
+                            value: QuotaValue(value),
                             ..Default::default()
                         })
                     })
@@ -1031,7 +1034,7 @@ mod tests {
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct QuotaCandidatesSetup<'a> {
-        entities: &'a [crate::quota::test_support::QuotaEntitySpec<'a>],
+        entities: &'a [QuotaEntitySpec<'a>],
         mask: QuotaCandidateMask,
         #[default("k")]
         key: &'a str,
@@ -1045,10 +1048,10 @@ mod tests {
             .enumerate()
             .filter(|(index, _)| setup.mask.0 & (1 << index) != 0)
             .map(|(index, entity)| {
-                rec(crate::quota::test_support::QuotaRecordSetup {
+                rec(QuotaRecordSetup {
                     entity: entity.clone(),
                     key: setup.key,
-                    value: crate::quota::test_support::QuotaValue(CAND_VALS[index]),
+                    value: QuotaValue(CAND_VALS[index]),
                 })
             })
             .collect()

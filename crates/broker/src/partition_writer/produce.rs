@@ -26,6 +26,7 @@ use crate::{
     partition::{ProduceData, ProduceJob, WriterMessage},
     producer_state::ProducerState,
     replica_state::ReplicaState,
+    wal::OffsetSequencer,
 };
 
 pub(super) async fn handle_produce(
@@ -46,7 +47,7 @@ pub(super) async fn handle_produce(
     ),
     diskless: (
         Option<&crate::wal::SharedWal>,
-        Option<&Arc<dyn crate::wal::OffsetSequencer>>,
+        Option<&Arc<dyn OffsetSequencer>>,
     ),
 ) {
     let (first, max_produce_group) = group;

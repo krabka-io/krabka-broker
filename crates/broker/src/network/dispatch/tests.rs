@@ -9,11 +9,24 @@ use futures_util::StreamExt;
 use tokio::net::TcpStream;
 
 use super::{test_support::DEFAULT_MAX_FRAME_BYTES, *};
-use crate::{codes, network::test_support::RequestFrameSetup};
+use crate::{
+    api_catalog::{INTER_BROKER_ONLY_APIS, dispatched_apis},
+    codes,
+    config::BrokerConfig,
+    handlers::registry::build_registry,
+    metrics::{
+        ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel,
+        SaslMechanismLabel, UNKNOWN_LABEL,
+    },
+    network::{
+        dispatch::test_support::serve_loop, response_header_len, test_support::RequestFrameSetup,
+    },
+    test_support::start_broker_with,
+};
 
 mod throttle_mute;
 
-use crate::network::test_support::request_frame;
+use crate::network::test_support::{FrameCorrelationId, broker_config, request_frame};
 
 #[test]
 fn peek_api_key_reads_first_two_bytes_big_endian() {
@@ -36,7 +49,7 @@ fn peek_api_key_rejects_short_frame() {
 /// flexible request headers.
 #[test]
 fn raft_voter_rpcs_peek_and_flex_routing() {
-    let registry = crate::handlers::registry::build_registry();
+    let registry = build_registry();
 
     for api_key in [80i16, 81, 82] {
         let mut buf = BytesMut::new();
@@ -83,7 +96,7 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         let frame = request_frame(RequestFrameSetup {
             api_key: krabka_ids::ApiKey(api_key),
             api_version: krabka_ids::ApiVersion(version),
-            correlation_id: crate::network::test_support::FrameCorrelationId(7),
+            correlation_id: FrameCorrelationId(7),
             tagged: Some(&[0]),
             body,
             ..Default::default()
@@ -103,7 +116,7 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         body
     }
 
-    let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+    let (handle, _dir) = start_broker_with(|cfg| {
         cfg.authorizer = std::sync::Arc::new(DenyAll);
     })
     .await;
@@ -144,10 +157,10 @@ async fn raft_voter_registry_routes_to_real_handlers() {
 /// does not matter, because the scope check runs before any body is decoded.
 #[tokio::test]
 async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
-    let registry = crate::handlers::registry::build_registry();
-    let dispatched = crate::api_catalog::dispatched_apis();
+    let registry = build_registry();
+    let dispatched = dispatched_apis();
 
-    for &api_key in crate::api_catalog::INTER_BROKER_ONLY_APIS {
+    for &api_key in INTER_BROKER_ONLY_APIS {
         let version = dispatched
             .iter()
             .find(|a| a.api_key == api_key)
@@ -157,10 +170,10 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
             .get(api_key)
             .unwrap_or_else(|| panic!("registry carries api_key {api_key}"));
 
-        let (handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
+        let (handle, _dir) = start_broker_with(|_| {}).await;
         let broker = handle.broker_arc_for_test();
 
-        let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
+        let (addr, serve) = serve_loop(
             broker,
             "EXTERNAL",
             krabka_security::ListenerProtocol::Plaintext,
@@ -175,7 +188,7 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
         let frame = request_frame(RequestFrameSetup {
             api_key: krabka_ids::ApiKey(api_key),
             api_version: krabka_ids::ApiVersion(version),
-            correlation_id: crate::network::test_support::FrameCorrelationId(7),
+            correlation_id: FrameCorrelationId(7),
             tagged: entry.body_flexible(version).then_some(&[0][..]),
             ..Default::default()
         });
@@ -205,18 +218,18 @@ enum Outcome {
 /// started from `cfg` and returns what the serve loop did with it, and the
 /// broker's metrics once every connection is done.
 async fn drive_one_frame_per_connection(
-    cfg: crate::config::BrokerConfig,
+    cfg: BrokerConfig,
     requests: &[(i16, i16)],
-) -> (Vec<Outcome>, crate::metrics::BrokerMetrics) {
+) -> (Vec<Outcome>, BrokerMetrics) {
     use krabka_protocol::{Decode, owned::api_versions_response::ApiVersionsResponse};
 
     let handle = Broker::start(cfg).await.expect("start broker");
     let broker = handle.broker_arc_for_test();
     let metrics = broker.metrics.clone();
-    let registry = crate::handlers::registry::build_registry();
+    let registry = build_registry();
     let connections = requests.len();
 
-    let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
+    let (addr, serve) = serve_loop(
         broker,
         "PLAINTEXT",
         krabka_security::ListenerProtocol::Plaintext,
@@ -237,7 +250,7 @@ async fn drive_one_frame_per_connection(
         let frame = request_frame(RequestFrameSetup {
             api_key: krabka_ids::ApiKey(api_key),
             api_version: krabka_ids::ApiVersion(version),
-            correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
+            correlation_id: FrameCorrelationId(correlation_id),
             tagged: flexible.then_some(&[0][..]),
             ..Default::default()
         });
@@ -294,7 +307,7 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
         ..Default::default()
     };
     let mut cases: Vec<(i16, i16, Outcome)> = Vec::new();
-    for api in crate::api_catalog::dispatched_apis() {
+    for api in dispatched_apis() {
         let outcome = || {
             if api.api_key == API_VERSIONS_KEY {
                 Outcome::ApiVersionsV0(api_versions_v0.clone())
@@ -311,7 +324,7 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
     }
     cases.push((i16::MAX, 0, Outcome::Closed));
 
-    let (_dir, cfg) = crate::network::test_support::broker_config();
+    let (_dir, cfg) = broker_config();
     let requests: Vec<(i16, i16)> = cases
         .iter()
         .map(|(key, version, _)| (*key, *version))
@@ -321,8 +334,8 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
         check!(actual == expected, "api_key {api_key} at version {version}");
     }
 
-    let unknown = crate::metrics::ApiKeyLabel {
-        api_key: crate::metrics::UNKNOWN_LABEL.into(),
+    let unknown = ApiKeyLabel {
+        api_key: UNKNOWN_LABEL.into(),
     };
     check!(metrics.api_requests.get_or_create(&unknown).get() == 1);
 }
@@ -388,14 +401,14 @@ async fn a_gated_version_is_refused_unless_its_switch_is_on() {
         (2, "ListOffsets", 0, Strict, Legacy, false),
     ];
     for &(api_key, name, frame_version, unstable, legacy, refused) in cases {
-        let (_dir, mut cfg) = crate::network::test_support::broker_config();
+        let (_dir, mut cfg) = broker_config();
         cfg.features.unstable_api_versions = unstable;
         cfg.features.legacy_request_versions = legacy;
         let (outcomes, metrics) =
             drive_one_frame_per_connection(cfg, &[(api_key, frame_version)]).await;
         let label = format!("{name} v{frame_version} {unstable:?} {legacy:?}");
         check!(outcomes == vec![Outcome::Closed], "{label}");
-        let metric = crate::metrics::ApiKeyLabel {
+        let metric = ApiKeyLabel {
             api_key: name.into(),
         };
         check!(
@@ -418,7 +431,7 @@ async fn a_gated_version_is_refused_unless_its_switch_is_on() {
 async fn api_versions_v5_is_unsupported_unless_unstable_api_versions_are_enabled() {
     use krabka_protocol::owned::api_versions_response::{ApiVersion, ApiVersionsResponse};
 
-    let (_dir, cfg) = crate::network::test_support::broker_config();
+    let (_dir, cfg) = broker_config();
     let (outcomes, _) = drive_one_frame_per_connection(cfg, &[(API_VERSIONS_KEY, 5)]).await;
     check!(
         outcomes
@@ -442,15 +455,12 @@ async fn serve_frames(
     protocol: krabka_security::ListenerProtocol,
     mechanisms: Option<Vec<krabka_security::SaslMechanism>>,
     requests: Vec<bytes::Bytes>,
-) -> crate::metrics::BrokerMetrics {
-    let (handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
+) -> BrokerMetrics {
+    let (handle, _dir) = start_broker_with(|_| {}).await;
     let broker = handle.broker_arc_for_test();
     let metrics = broker.metrics.clone();
 
-    let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
-        broker, "TESTS", protocol, mechanisms, None, 1,
-    )
-    .await;
+    let (addr, serve) = serve_loop(broker, "TESTS", protocol, mechanisms, None, 1).await;
     let server = tokio::spawn(serve);
 
     let mut framed = test_support::connect_framed(addr, "connect").await;
@@ -467,22 +477,22 @@ async fn serve_frames(
 
 /// Every `connection_closes` series, in the enum's own order, so a test can
 /// compare the whole family rather than one label of it.
-fn close_counts(metrics: &crate::metrics::BrokerMetrics) -> Vec<(&'static str, u64)> {
-    crate::metrics::ConnectionCloseReason::ALL
+fn close_counts(metrics: &BrokerMetrics) -> Vec<(&'static str, u64)> {
+    ConnectionCloseReason::ALL
         .into_iter()
         .map(|reason| {
             (
                 reason.as_str(),
                 metrics
                     .connection_closes
-                    .get_or_create(&crate::metrics::ConnectionCloseReasonLabel { reason })
+                    .get_or_create(&ConnectionCloseReasonLabel { reason })
                     .get(),
             )
         })
         .collect()
 }
 
-fn active_closes(metrics: &crate::metrics::BrokerMetrics) -> Vec<(&'static str, u64)> {
+fn active_closes(metrics: &BrokerMetrics) -> Vec<(&'static str, u64)> {
     close_counts(metrics)
         .into_iter()
         .filter(|(_, count)| *count > 0)
@@ -563,11 +573,7 @@ async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mecha
     };
 
     let cases = [
-        (
-            "no handshake",
-            vec![produce()],
-            crate::metrics::UNKNOWN_LABEL,
-        ),
+        ("no handshake", vec![produce()], UNKNOWN_LABEL),
         (
             "after a PLAIN handshake",
             vec![handshake(), produce()],
@@ -582,7 +588,7 @@ async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mecha
         )
         .await;
 
-        let label = crate::metrics::SaslMechanismLabel {
+        let label = SaslMechanismLabel {
             mechanism: mechanism.to_string(),
         };
         check!(
@@ -643,7 +649,7 @@ struct EncodedFrameSetup {
     api_key: krabka_ids::ApiKey,
     api_version: krabka_ids::ApiVersion,
     #[default(crate::network::test_support::FrameCorrelationId(1))]
-    correlation_id: crate::network::test_support::FrameCorrelationId,
+    correlation_id: FrameCorrelationId,
     header: RequestHeader,
 }
 
@@ -789,7 +795,7 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
         ),
     ];
 
-    let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+    let (handle, _dir) = start_broker_with(|cfg| {
         cfg.authorizer = std::sync::Arc::new(DenyCertificatePrincipal);
         cfg.plain_credentials
             .insert("alice".to_string(), "wonderland".to_string());
@@ -799,15 +805,7 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
     for (case, protocol, mtls_principal, sasl_frame, expected_answer, expected_topic_error) in cases
     {
         let broker = handle.broker_arc_for_test();
-        let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
-            broker,
-            "TESTS",
-            protocol,
-            None,
-            mtls_principal,
-            1,
-        )
-        .await;
+        let (addr, serve) = serve_loop(broker, "TESTS", protocol, None, mtls_principal, 1).await;
         let server = tokio::spawn(serve);
         let mut framed = test_support::connect_framed(addr, "connect").await;
 
@@ -819,12 +817,12 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
             .expect("a SASL response, and the connection stays open")
             .expect("SASL response frame");
         let answer = if sasl_key == HANDSHAKE {
-            let body = &response[crate::network::response_header_len(HANDSHAKE, false)..];
+            let body = &response[response_header_len(HANDSHAKE, false)..];
             SaslAnswer::Handshake(
                 SaslHandshakeResponse::decode(&mut &body[..], 1).expect("decode SaslHandshake"),
             )
         } else {
-            let body = &response[crate::network::response_header_len(AUTHENTICATE, true)..];
+            let body = &response[response_header_len(AUTHENTICATE, true)..];
             SaslAnswer::Authenticate(
                 SaslAuthenticateResponse::decode(&mut &body[..], 2)
                     .expect("decode SaslAuthenticate"),
@@ -845,7 +843,7 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
                 EncodedFrameSetup {
                     api_key: krabka_ids::ApiKey(METADATA),
                     api_version: krabka_ids::ApiVersion(12),
-                    correlation_id: crate::network::test_support::FrameCorrelationId(2),
+                    correlation_id: FrameCorrelationId(2),
                     header: RequestHeader::Flexible,
                 },
             ))
@@ -856,7 +854,7 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
             .await
             .expect("a Metadata response")
             .expect("Metadata response frame");
-        let body = &response[crate::network::response_header_len(METADATA, true)..];
+        let body = &response[response_header_len(METADATA, true)..];
         let metadata = MetadataResponse::decode(&mut &body[..], 12).expect("decode Metadata");
         check!(
             metadata.topics
@@ -887,7 +885,7 @@ mod request_budget {
     use futures_util::{SinkExt as _, StreamExt as _};
 
     use super::{KafkaCodec, RequestFrameSetup, active_closes, request_frame};
-    use crate::broker::Broker;
+    use crate::{BrokerHandle, broker::Broker};
 
     /// One connection served by the loop, and the client end already framed.
     struct Served {
@@ -913,7 +911,7 @@ mod request_budget {
     /// loop answers without any authorization or metadata in the way.
     fn api_versions_frame(correlation_id: i32) -> bytes::Bytes {
         request_frame(RequestFrameSetup {
-            correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
+            correlation_id: FrameCorrelationId(correlation_id),
             ..Default::default()
         })
         .freeze()
@@ -930,9 +928,11 @@ mod request_budget {
         .freeze()
     }
 
-    use crate::test_support::start_broker_with as broker_with;
+    use crate::{
+        network::test_support::FrameCorrelationId, test_support::start_broker_with as broker_with,
+    };
 
-    async fn byte_budget_broker() -> (crate::BrokerHandle, tempfile::TempDir) {
+    async fn byte_budget_broker() -> (BrokerHandle, tempfile::TempDir) {
         broker_with(|cfg| cfg.queued_max_request_bytes = Some(budget())).await
     }
 
@@ -1085,7 +1085,11 @@ mod log_levels {
     use tracing::{Instrument as _, Level};
 
     use super::{DEFAULT_MAX_FRAME_BYTES, RequestFrameSetup, request_frame};
-    use crate::{broker::Broker, network::codec, test_support::LogCapture};
+    use crate::{
+        broker::Broker,
+        network::{codec, dispatch::test_support::serve_loop},
+        test_support::LogCapture,
+    };
 
     // What the client end of the one connection does.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1110,7 +1114,7 @@ mod log_levels {
 
         let capture = LogCapture::default();
         let _capturing = tracing::dispatcher::set_default(&capture.dispatch());
-        let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
+        let (addr, serve) = serve_loop(
             broker,
             "PLAINTEXT",
             krabka_security::ListenerProtocol::Plaintext,
@@ -1222,7 +1226,10 @@ mod request_limit {
     };
 
     use super::{RequestFrameSetup, request_frame};
-    use crate::broker::Broker;
+    use crate::{
+        broker::Broker,
+        network::test_support::{FrameCorrelationId, broker_config},
+    };
 
     /// The limit of the broker under test: well over its own requests to
     /// itself, and well under the answer to a documentation-bearing
@@ -1248,7 +1255,7 @@ mod request_limit {
         request_frame(RequestFrameSetup {
             api_key: krabka_ids::ApiKey(32),
             api_version: krabka_ids::ApiVersion(4),
-            correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
+            correlation_id: FrameCorrelationId(correlation_id),
             tagged: Some(&[0]),
             body: &body,
             ..Default::default()
@@ -1259,7 +1266,7 @@ mod request_limit {
     /// [`LIMIT`], sends `request`, and returns the response frame, or `None`
     /// when the broker closed the connection instead.
     async fn answer_under_limit(request: bytes::BytesMut) -> Option<bytes::BytesMut> {
-        let (_dir, mut cfg) = crate::network::test_support::broker_config();
+        let (_dir, mut cfg) = broker_config();
         cfg.socket_request_max = krabka_units::bytes(u32::try_from(LIMIT).expect("limit"));
         let handle = Broker::start(cfg).await.expect("start broker");
         let broker = handle.broker_arc_for_test();
@@ -1287,7 +1294,7 @@ mod request_limit {
         assert!(small_request.len() - 4 <= LIMIT);
         // An ApiVersions v0 request whose client id alone is over the limit.
         let oversize_request = request_frame(RequestFrameSetup {
-            correlation_id: crate::network::test_support::FrameCorrelationId(8),
+            correlation_id: FrameCorrelationId(8),
             client_id: Some(&[b'c'; LIMIT + 1]),
             ..Default::default()
         });

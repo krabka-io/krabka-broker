@@ -300,8 +300,9 @@ mod tests {
 
     use super::*;
     use crate::remote_reader::test_support::{
-        caching_sparse_remote_segment_reader, sparse_fixture_batch_bytes,
-        sparse_fixture_second_batch_len, sparse_remote_segment_reader, tp,
+        caching_sparse_remote_segment_reader, empty_reader, not_ready_reader,
+        sparse_fixture_batch_bytes, sparse_fixture_second_batch_len, sparse_remote_segment_reader,
+        tp,
     };
 
     // Kafka's `RemoteLogManager.read` returns the segment's own bytes from the
@@ -507,7 +508,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_batch_returns_none_when_segment_not_in_rlmm() {
-        let (_remote_dir, reader) = crate::remote_reader::test_support::empty_reader();
+        let (_remote_dir, reader) = empty_reader();
         // RLMM is empty → no segment for `tp` at epoch 0.
         let got = reader
             .fetch_batch(&tp(), LeaderEpoch(0), 0, 4096)
@@ -550,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_batch_propagates_not_ready() {
-        let (_remote_dir, reader) = crate::remote_reader::test_support::not_ready_reader();
+        let (_remote_dir, reader) = not_ready_reader();
         let err = reader
             .fetch_batch(&tp(), LeaderEpoch(0), 0, 4096)
             .await

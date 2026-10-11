@@ -30,6 +30,8 @@ mod refresh;
 pub(crate) use expiry::run as run_expiry;
 pub use refresh::run;
 
+use crate::throttle::MICROS_PER_TOKEN;
+
 /// Result of consuming a client quota, carrying the delay and the resolved
 /// entity identity (`user` and `client_id`) that the match was charged to (#418).
 #[derive(Debug, Clone, PartialEq, derive_more::Deref)]
@@ -160,8 +162,7 @@ fn consume_configured_quota(
 /// The debt a bucket reports, in tokens with its fractional part, or `None`
 /// when the bucket owes nothing.
 pub(crate) fn debt_tokens(debt_micros: u64) -> Option<f64> {
-    (debt_micros > 0)
-        .then(|| u64_to_f64(debt_micros) / u64_to_f64(crate::throttle::MICROS_PER_TOKEN))
+    (debt_micros > 0).then(|| u64_to_f64(debt_micros) / u64_to_f64(MICROS_PER_TOKEN))
 }
 
 /// A quota delay as Kafka's `throttle_time_ms` wire field: the delay in
@@ -390,6 +391,7 @@ mod tests {
     use krabka_units::secs;
 
     use super::{test_support::image_with_quota, *};
+    use crate::throttle::MICROS_PER_TOKEN;
 
     /// `throttle_time_ms` rounds to the nearest millisecond, half up, as
     /// Kafka's `Math.round` does: 0.4 ms reports `0`, 0.6 ms and 1.6 ms report
@@ -447,7 +449,7 @@ mod tests {
     /// that owes nothing has none.
     #[test]
     fn debt_tokens_is_the_exact_debt() {
-        let m = crate::throttle::MICROS_PER_TOKEN;
+        let m = MICROS_PER_TOKEN;
         let cases = [
             (0, None),
             (1, Some(0.000_001)),

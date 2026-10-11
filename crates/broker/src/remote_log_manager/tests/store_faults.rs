@@ -32,13 +32,11 @@ use krabka_remote_storage::{RemoteLogSegmentState, RemoteStorageManager, S3Remot
 
 use super::*;
 use crate::{
+    api_catalog::UnstableApiVersions,
     metrics::TopicLabel,
-    remote_log_manager::{
-        test_support as fixtures,
-        test_support::{
-            TEST_COPY_TIMEOUT, copy_exports, partition_snapshot,
-            rolled_tiered_partition_with_config,
-        },
+    remote_log_manager::test_support::{
+        self as fixtures, TEST_COPY_TIMEOUT, copy_exports, partition_snapshot,
+        rolled_tiered_partition_with_config,
     },
 };
 
@@ -363,10 +361,7 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
             &exports,
             &config,
             &rlmm,
-            (
-                crate::api_catalog::UnstableApiVersions::Disabled,
-                now_ms() + 1_000_000,
-            ),
+            (UnstableApiVersions::Disabled, now_ms() + 1_000_000),
         )
         .await;
 

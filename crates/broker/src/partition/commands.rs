@@ -7,6 +7,7 @@ use krabka_protocol::records::RecordBatch;
 use tokio::sync::oneshot;
 
 use crate::{
+    config_keys::apply_to_log_config,
     error::BrokerError,
     partition::{Partition, ProduceData, ProduceJob, ProducerAppendCheck, WriterMessage},
     task_util::{AskError, ask},
@@ -98,7 +99,7 @@ impl Partition {
         overrides: &std::collections::BTreeMap<String, String>,
         base: &krabka_log::LogConfig,
     ) -> Result<(), BrokerError> {
-        let merged = crate::config_keys::apply_to_log_config(overrides, base);
+        let merged = apply_to_log_config(overrides, base);
         self.ask_writer(|ack| WriterMessage::SetLogConfig {
             config: merged,
             ack,

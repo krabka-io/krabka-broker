@@ -8,12 +8,14 @@ use krabka_units::{bytes, millis};
 
 use super::*;
 use crate::{
+    api_catalog::UnstableApiVersions,
+    partition::Partition,
     remote_log_manager::{
-        ArchiveMode, test_support as fixtures,
+        ArchiveMode,
         test_support::{
-            archived_backends, batch, copy_exports, leading_partition_over, local_backends,
-            partition_log_fixture, partition_snapshot, rolled_tiered_partition_with_config,
-            synth_export, three_exports, tier, tp,
+            self as fixtures, archived_backends, batch, copy_exports, leading_partition_over,
+            local_backends, partition_log_fixture, partition_snapshot,
+            rolled_tiered_partition_with_config, synth_export, three_exports, tier, tp,
         },
     },
     test_support::UnixMillis,
@@ -33,9 +35,7 @@ fn sealed_ranges(log: &mut Log) -> Vec<(Offset, Offset)> {
 }
 
 /// A rolled, tiered partition whose sealed segments expire after one millisecond.
-fn short_retention_partition(
-    log_dir: &std::path::Path,
-) -> std::sync::Arc<crate::partition::Partition> {
+fn short_retention_partition(log_dir: &std::path::Path) -> std::sync::Arc<Partition> {
     rolled_tiered_partition_with_config(
         log_dir,
         LogConfig {
@@ -654,7 +654,7 @@ async fn local_retention_pass_deletes_finished_segments_and_returns_count() {
     let (exports, _rsm, _rlmm, removed) = fixtures::archived_local_retention(
         &partition,
         remote_dir.path(),
-        crate::api_catalog::UnstableApiVersions::Disabled,
+        UnstableApiVersions::Disabled,
     )
     .await;
 
@@ -681,10 +681,7 @@ async fn local_retention_still_evicts_under_a_write_once_archive() {
         &exports,
         &log_config,
         &rlmm,
-        (
-            crate::api_catalog::UnstableApiVersions::Disabled,
-            now_ms() + 1_000_000,
-        ),
+        (UnstableApiVersions::Disabled, now_ms() + 1_000_000),
     )
     .await;
 

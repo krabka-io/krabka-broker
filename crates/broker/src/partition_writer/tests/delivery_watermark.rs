@@ -6,7 +6,7 @@ use krabka_log::{LogConfig, Offset};
 use tempfile::tempdir;
 
 use super::*;
-use crate::partition_writer::test_support::sample_batch;
+use crate::{partition_writer::test_support::sample_batch, test_support::RecordCount};
 
 #[tokio::test]
 async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_scheduler() {
@@ -95,7 +95,7 @@ async fn a_produce_to_an_immediate_topic_keeps_the_mirror_at_the_log_end() {
     let ack_rx = queue_batch(
         &tx,
         sample_batch(crate::test_support::EmptyPayloadBatchSetup {
-            count: crate::test_support::RecordCount(3),
+            count: RecordCount(3),
         }),
     )
     .await;

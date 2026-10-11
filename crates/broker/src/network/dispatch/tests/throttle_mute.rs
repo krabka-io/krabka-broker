@@ -25,7 +25,13 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use super::request_frame;
-use crate::network::{codec::KafkaCodec, test_support::RequestFrameSetup};
+use crate::{
+    BrokerHandle,
+    network::{
+        codec::KafkaCodec,
+        test_support::{FrameCorrelationId, RequestFrameSetup},
+    },
+};
 
 /// `Produce` wire `api_key`.
 const PRODUCE_KEY: i16 = 0;
@@ -148,7 +154,7 @@ async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
 async fn send_api_versions(framed: &mut Framed<TcpStream, KafkaCodec>, correlation_id: i32) {
     let frame = request_frame(RequestFrameSetup {
         api_key: krabka_ids::ApiKey(super::API_VERSIONS_KEY),
-        correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
+        correlation_id: FrameCorrelationId(correlation_id),
         ..Default::default()
     })
     .freeze();
@@ -167,7 +173,7 @@ async fn send_request(
     let frame = request_frame(RequestFrameSetup {
         api_key: krabka_ids::ApiKey(api_key),
         api_version: krabka_ids::ApiVersion(version),
-        correlation_id: crate::network::test_support::FrameCorrelationId(correlation_id),
+        correlation_id: FrameCorrelationId(correlation_id),
         tagged: Some(&[0]),
         body,
         ..Default::default()
@@ -796,7 +802,7 @@ async fn close_serve_loop(
 async fn finish_muted_connection(
     mut framed: Framed<TcpStream, KafkaCodec>,
     server: tokio::task::JoinHandle<()>,
-    handle: crate::BrokerHandle,
+    handle: BrokerHandle,
     answered_at: Instant,
     window: Time,
 ) {
@@ -808,7 +814,7 @@ async fn finish_muted_connection(
 async fn request_quota_connection(
     window: Time,
 ) -> (
-    crate::BrokerHandle,
+    BrokerHandle,
     tempfile::TempDir,
     tokio::task::JoinHandle<()>,
     Framed<TcpStream, KafkaCodec>,

@@ -273,7 +273,9 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::quota::test_support::{image_with_quota, image_with_quotas, quota_record};
+    use crate::quota::test_support::{
+        QuotaRecordSetup, QuotaValue, image_with_quota, image_with_quotas, quota_record,
+    };
 
     /// An IP literal names one address whatever its spelling, and an
     /// IPv4-mapped IPv6 address is the IPv4 address it maps to.
@@ -377,15 +379,15 @@ mod tests {
     #[test]
     fn update_forgets_a_host_whose_entity_is_gone() {
         let names = IpNames::default();
-        let with_host = image_with_quota(crate::quota::test_support::QuotaRecordSetup {
+        let with_host = image_with_quota(QuotaRecordSetup {
             entity: vec![("ip", Some("db"))],
             key: "connection_creation_rate",
-            value: crate::quota::test_support::QuotaValue(1.0),
+            value: QuotaValue(1.0),
         });
-        let without = image_with_quota(crate::quota::test_support::QuotaRecordSetup {
+        let without = image_with_quota(QuotaRecordSetup {
             entity: vec![("ip", Some("other"))],
             key: "connection_creation_rate",
-            value: crate::quota::test_support::QuotaValue(1.0),
+            value: QuotaValue(1.0),
         });
         let db = IpAddr::from([10, 0, 0, 9]);
 
@@ -401,10 +403,10 @@ mod tests {
     #[tokio::test]
     async fn resolve_maps_a_host_name_to_an_address_the_resolver_returns() {
         let names = IpNames::default();
-        let image = image_with_quota(crate::quota::test_support::QuotaRecordSetup {
+        let image = image_with_quota(QuotaRecordSetup {
             entity: vec![("ip", Some("localhost"))],
             key: "connection_creation_rate",
-            value: crate::quota::test_support::QuotaValue(1.0),
+            value: QuotaValue(1.0),
         });
         let unresolved = names.update(&image);
         names
@@ -430,10 +432,10 @@ mod tests {
     }
 
     fn host_image(name: &str) -> MetadataImage {
-        image_with_quota(crate::quota::test_support::QuotaRecordSetup {
+        image_with_quota(QuotaRecordSetup {
             entity: vec![("ip", Some(name))],
             key: "connection_creation_rate",
-            value: crate::quota::test_support::QuotaValue(1.0),
+            value: QuotaValue(1.0),
         })
     }
 

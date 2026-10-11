@@ -8,7 +8,11 @@ use krabka_security::{ListenerProtocol, Principal, SaslMechanism};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 
-use crate::{broker::Broker, network::codec::KafkaCodec};
+use crate::{
+    broker::Broker,
+    config::ListenerSpec,
+    network::codec::{KafkaCodec, frame},
+};
 
 /// Bind the real serve loop and return its future so callers can instrument
 /// it before spawning. Multiple-connection cases keep one listener and run
@@ -25,7 +29,7 @@ pub(super) async fn serve_loop(
         .await
         .expect("bind loopback");
     let addr = listener.local_addr().expect("listener addr");
-    let spec = crate::config::ListenerSpec {
+    let spec = ListenerSpec {
         name: name.to_string(),
         bind_addr: addr,
         advertised: "127.0.0.1:9092".to_string(),
@@ -73,5 +77,5 @@ pub(super) async fn connect_framed(
     context: &str,
 ) -> Framed<TcpStream, KafkaCodec> {
     let client = TcpStream::connect(addr).await.expect(context);
-    crate::network::codec::frame(client, DEFAULT_MAX_FRAME_BYTES)
+    frame(client, DEFAULT_MAX_FRAME_BYTES)
 }

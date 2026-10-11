@@ -24,7 +24,7 @@ use krabka_log::{Log, LogConfig, LogError, Offset};
 use krabka_protocol::records::RecordBatch;
 
 use crate::{
-    error::BrokerError, log_dir_status::LogDirRegistry, partition::Partition,
+    config::BrokerConfig, error::BrokerError, log_dir_status::LogDirRegistry, partition::Partition,
     producer_state::ProducerState,
 };
 
@@ -66,7 +66,7 @@ impl ReplicaSeam {
                             Arc::new(ProducerState::new()),
                             None,
                         ),
-                        crate::config::BrokerConfig::default().max_produce_group,
+                        BrokerConfig::default().max_produce_group,
                         None,
                     ))
                 },

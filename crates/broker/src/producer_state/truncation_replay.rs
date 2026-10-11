@@ -8,11 +8,12 @@ use super::{
         producer_batch,
     },
 };
+use crate::{producer_state::test_support::opened_log, test_support::default_records_batch};
 
 #[tokio::test]
 async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
     for cut in 0..=5 {
-        let (dir, config, mut log) = crate::producer_state::test_support::opened_log();
+        let (dir, config, mut log) = opened_log();
         for sequence in [0, 2] {
             log.append(&mut producer_batch(ProducerBatchSetup {
                 delta: SequenceDelta(1),
@@ -21,7 +22,7 @@ async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
             }))
             .unwrap();
         }
-        log.append(&mut crate::test_support::default_records_batch(
+        log.append(&mut default_records_batch(
             crate::test_support::EmptyPayloadBatchSetup::default(),
         ))
         .unwrap();

@@ -22,10 +22,17 @@ use krabka_units::{ByteSize, bytes};
 use uuid::Uuid;
 
 use crate::{
-    metrics::BrokerMetrics,
+    api_catalog::UnstableApiVersions,
+    broker::spawn_partition,
+    metadata_source::MetadataSource,
+    metrics::{BrokerMetrics, TopicLabel},
     partition::Partition,
+    partition_registry::PartitionRegistry,
+    producer_state::ProducerState,
     remote_log_manager::{ArchiveMode, RemoteTier},
-    test_support::{FakeMetadataSource, UnixMillis},
+    test_support::{
+        FakeMetadataSource, KeyedBatchSetup, KeyedRecordCount, UnixMillis, keyed_records_batch,
+    },
 };
 
 /// A `BrokerMetrics` shared by every tier a unit test builds.
@@ -72,7 +79,7 @@ pub(crate) fn tier<'a>(
 pub struct TierSetup<'a> {
     pub archive: ArchiveMode,
     pub copy_timeout: krabka_units::Time,
-    pub unstable_api_versions: crate::api_catalog::UnstableApiVersions,
+    pub unstable_api_versions: UnstableApiVersions,
     pub metrics: &'a BrokerMetrics,
     pub index_cache: &'a Arc<krabka_remote_storage::RemoteIndexCache>,
 }
@@ -82,7 +89,7 @@ impl Default for TierSetup<'_> {
         Self {
             archive: ArchiveMode::Mutable,
             copy_timeout: TEST_COPY_TIMEOUT,
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+            unstable_api_versions: UnstableApiVersions::Disabled,
             metrics: shared_test_metrics(),
             index_cache: shared_test_index_cache(),
         }
@@ -164,8 +171,8 @@ pub async fn copy_all_exports(tier: &RemoteTier<'_>, exports: &[SegmentExport]) 
 
 /// One default-concurrency sweep by the fixture broker (node and broker ID 1).
 pub async fn sweep_once(
-    partitions: &crate::partition_registry::PartitionRegistry,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    partitions: &PartitionRegistry,
+    controller: &dyn MetadataSource,
     tier: &RemoteTier<'_>,
 ) {
     super::tick_all(
@@ -291,8 +298,8 @@ pub fn tp() -> TopicIdPartition {
 }
 
 pub fn batch(n: i32) -> RecordBatch {
-    crate::test_support::keyed_records_batch(crate::test_support::KeyedBatchSetup {
-        records: crate::test_support::KeyedRecordCount(n),
+    keyed_records_batch(KeyedBatchSetup {
+        records: KeyedRecordCount(n),
         ..Default::default()
     })
 }
@@ -344,13 +351,13 @@ pub fn leading_partition_over(
     log: Log,
 ) -> Arc<Partition> {
     let log_end = log.log_end_offset();
-    let partition = crate::broker::spawn_partition(
+    let partition = spawn_partition(
         "orders".to_string(),
         index,
         log_dir.to_path_buf(),
         log,
         crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
+        Arc::new(ProducerState::new()),
         false,
     );
     partition.current_leader.store(1, Ordering::Relaxed);
@@ -544,8 +551,8 @@ pub fn temporary_dirs() -> (tempfile::TempDir, tempfile::TempDir) {
     (local, remote)
 }
 
-pub fn orders_label() -> crate::metrics::TopicLabel {
-    crate::metrics::TopicLabel {
+pub fn orders_label() -> TopicLabel {
+    TopicLabel {
         topic: Arc::from(tp().topic.as_str()),
     }
 }
@@ -576,7 +583,7 @@ pub async fn local_retention_at(
     exports: &[SegmentExport],
     config: &LogConfig,
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
-    policy: (crate::api_catalog::UnstableApiVersions, i64),
+    policy: (UnstableApiVersions, i64),
 ) -> usize {
     super::local_retention_pass(
         &tp(),
@@ -593,8 +600,8 @@ pub async fn local_retention_at(
 }
 
 pub async fn sweep_mutable(
-    partitions: &crate::partition_registry::PartitionRegistry,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    partitions: &PartitionRegistry,
+    controller: &dyn MetadataSource,
     rsm: &Arc<dyn RemoteStorageManager>,
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
 ) {
@@ -743,7 +750,7 @@ pub(crate) use registered_sweep_fixture;
 pub async fn archived_local_retention(
     partition: &Partition,
     remote_dir: &std::path::Path,
-    unstable: crate::api_catalog::UnstableApiVersions,
+    unstable: UnstableApiVersions,
 ) -> (
     Vec<SegmentExport>,
     Arc<dyn RemoteStorageManager>,

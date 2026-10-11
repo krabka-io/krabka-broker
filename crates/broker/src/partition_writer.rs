@@ -18,10 +18,12 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::{
     delivery::DeliveryHandles,
+    error::BrokerError,
     log_dir_status::LogDirRegistry,
     partition::{SwapOutcome, WriterMessage},
     producer_state::ProducerState,
     replica_state::ReplicaState,
+    wal::{OffsetSequencer, SharedWal},
 };
 
 mod append;
@@ -67,11 +69,7 @@ pub type WriterSignals = (
 );
 
 /// Storage health, producer state, and optional shared WAL used by the writer.
-pub type WriterServices = (
-    LogDirRegistry,
-    Arc<ProducerState>,
-    Option<crate::wal::SharedWal>,
-);
+pub type WriterServices = (LogDirRegistry, Arc<ProducerState>, Option<SharedWal>);
 
 /// Loop on the receive side of the partition's `WriterMessage` channel.
 ///
@@ -103,7 +101,7 @@ pub async fn run_with_sequencer(
     signals: WriterSignals,
     services: WriterServices,
     max_produce_group: usize,
-    sequencer: Option<Arc<dyn crate::wal::OffsetSequencer>>,
+    sequencer: Option<Arc<dyn OffsetSequencer>>,
 ) {
     let (topic, partition) = identity;
     let (log, log_dir) = storage;
@@ -126,7 +124,7 @@ pub async fn run_with_sequencer(
                 move || {
                     lock_log(&maintenance_log)
                         .maintain(std::time::SystemTime::now())
-                        .map_err(crate::error::BrokerError::from)
+                        .map_err(BrokerError::from)
                 },
                 "log maintenance task panicked",
                 (&log_dir, &log_dir_status),
@@ -184,11 +182,7 @@ pub async fn run_with_sequencer(
                 } else {
                     let log = Arc::clone(&log);
                     storage::run_log_mutation(
-                        move || {
-                            lock_log(&log)
-                                .sync()
-                                .map_err(crate::error::BrokerError::from)
-                        },
+                        move || lock_log(&log).sync().map_err(BrokerError::from),
                         "durable sync task panicked",
                         (&log_dir, &log_dir_status),
                     )
@@ -277,9 +271,11 @@ pub async fn run_with_sequencer(
             }
             #[cfg(any(test, feature = "test-helpers"))]
             WriterMessage::TestSetLogStart { new_start, ack } => {
+                use crate::error::BrokerError;
+
                 let result = lock_log(&log)
                     .set_log_start_offset(new_start)
-                    .map_err(crate::error::BrokerError::from);
+                    .map_err(BrokerError::from);
                 let _ = ack.send(result);
             }
             WriterMessage::SwapFutureLog {

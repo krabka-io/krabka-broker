@@ -35,7 +35,7 @@ use super::{
         handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
     },
 };
-use crate::codes;
+use crate::{codes, partition::Partition};
 
 /// What the fetcher should do with one partition after reading its row.
 ///
@@ -61,10 +61,7 @@ pub(super) enum RowAction {
 
 /// The action for a partition whose append just failed: [`RowAction::Offline`]
 /// when the failure took its log directory offline, and `None` otherwise.
-fn offline_after_failed_append(
-    part: &crate::partition::Partition,
-    cfg: &Config,
-) -> Option<RowAction> {
+fn offline_after_failed_append(part: &Partition, cfg: &Config) -> Option<RowAction> {
     cfg.log_dir_status
         .is_offline(&part.log_dir.load())
         .then_some(RowAction::Offline)
@@ -83,11 +80,7 @@ fn offline_after_failed_append(
 /// A diskless partition's local log start is the flusher's trim frontier, and
 /// its delete floor travels through the WAL index instead, so it is left
 /// alone here.
-async fn follow_leader_log_start(
-    part: &crate::partition::Partition,
-    cfg: &Config,
-    leader_log_start: i64,
-) {
+async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_start: i64) {
     if part.diskless {
         return;
     }
@@ -349,7 +342,7 @@ pub(super) async fn handle_partition_response(
 }
 
 async fn replicate_raw_batches(
-    part: &crate::partition::Partition,
+    part: &Partition,
     cfg: &Config,
     mut remaining: bytes::Bytes,
 ) -> RowAction {

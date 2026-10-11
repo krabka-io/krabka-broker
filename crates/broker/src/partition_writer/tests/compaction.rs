@@ -20,6 +20,7 @@ use crate::{
     partition::{ProduceData, ProduceJob},
     replica_state::ReplicaState,
     test_support::UnixMillis,
+    time_util::now_ms,
     txn::marker::{MarkerType, build_marker_batch},
 };
 
@@ -396,7 +397,7 @@ async fn compacted(role: Role, history: &History, now_ms: i64) -> Vec<Kept> {
 /// therefore keeps the same batches as its leader.
 #[tokio::test]
 async fn compaction_keeps_the_last_record_of_each_active_producer_on_every_replica() {
-    let now_ms = crate::time_util::now_ms();
+    let now_ms = now_ms();
     for history in histories(UnixMillis(now_ms)) {
         for role in [Role::Leader, Role::Follower] {
             let kept = compacted(role, &history, now_ms).await;
