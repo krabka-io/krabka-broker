@@ -38,22 +38,25 @@ fn preferred_replica_alone_in_isr() -> krabka_metadata::MetadataImage {
     })
 }
 
+async fn assert_failover_clean_election(img: &MetadataImage, expected_leader: NodeId) {
+    let plan = failover_with_alive(img, NodeId(1), &[2u64, 3]).await;
+    assert!(plan.recoveries.is_empty());
+    let pr = one_partition_change(&plan.changes);
+    let expected = expected_clean_election(
+        expected_leader,
+        &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
+        vec![],
+    );
+    assert!(*pr == expected);
+}
+
 #[tokio::test]
 async fn failover_picks_alive_isr_member_when_available() {
     // Leader 1 dies, ISR {1, 2, 3}, both 2 and 3 alive — pick 2.
     let img = img_with_partition(ElectionSetup {
         ..Default::default()
     });
-    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
-    assert!(plan.recoveries.is_empty());
-    let pr = one_partition_change(&plan.changes);
-    // leader_epoch and partition_epoch must both bump on election.
-    let expected = expected_clean_election(
-        krabka_raft::NodeId(2),
-        &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
-        vec![],
-    );
-    assert!(*pr == expected);
+    assert_failover_clean_election(&img, NodeId(2)).await;
 }
 
 #[tokio::test]
@@ -328,15 +331,7 @@ async fn failover_scan_reads_the_witness_role_out_of_the_image() {
         ..Default::default()
     });
     mark_witnesses_in_image(&mut img, &[2]);
-    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
-    assert!(plan.recoveries.is_empty());
-    let pr = one_partition_change(&plan.changes);
-    let expected = expected_clean_election(
-        krabka_raft::NodeId(3),
-        &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
-        vec![],
-    );
-    assert!(*pr == expected);
+    assert_failover_clean_election(&img, NodeId(3)).await;
 }
 
 #[tokio::test]

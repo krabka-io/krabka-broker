@@ -2429,13 +2429,13 @@ mod tests {
 
         fn authorize_by_resource_type(
             &self,
-            _source: &dyn AclSource,
-            _principal: &krabka_security::Principal,
-            _host: &std::net::SocketAddr,
-            _resource_type: krabka_metadata::ResourceType,
-            _operation: krabka_metadata::AclOperation,
+            src: &dyn AclSource,
+            p: &krabka_security::Principal,
+            h: &std::net::SocketAddr,
+            r: krabka_metadata::ResourceType,
+            o: krabka_metadata::AclOperation,
         ) -> AuthorizationResult {
-            AuthorizationResult::Allow
+            AllowAllAuthorizer.authorize_by_resource_type(src, p, h, r, o)
         }
     }
 

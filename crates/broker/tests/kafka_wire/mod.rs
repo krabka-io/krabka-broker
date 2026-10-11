@@ -877,6 +877,16 @@ pub async fn create_topic_plaintext(
     create_topic_on(&mut stream, client_id, topic).await;
 }
 
+pub async fn create_topic_from_setup(
+    addr: SocketAddr,
+    client_id: &str,
+    setup: crate::support::topics::CreateTopicSetup<'_>,
+) {
+    let mut req = crate::support::topics::configured_topic_request(setup);
+    let topic = req.topics.pop().expect("configured topic");
+    create_topic_plaintext(addr, client_id, topic).await;
+}
+
 /// Automatic placement and client identity, with a one-partition orders topic by default.
 #[derive(krabka_macros::FieldDefaults)]
 pub struct AutomaticTopicSetup<'a> {

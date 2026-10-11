@@ -23,7 +23,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     harness::round_trip,
-    inter_broker::drive_inter_broker_client_then_apiversions,
+    inter_broker::run_inter_broker_auth_test,
     support::{
         manifest_dir,
         sasl::sasl_temp_config,
@@ -147,20 +147,15 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
         max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
 
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-
-    let client = krabka_broker::network::client::InterBrokerClient::new(
-        None,
-        Some(krabka_broker::config::InterBrokerCredentials::Gssapi {
+    let result = run_inter_broker_auth_test(
+        cfg,
+        krabka_broker::config::InterBrokerCredentials::Gssapi {
             keytab_path: fixtures.join("alice.keytab"),
             client_principal: "alice@CRABKA.TEST".to_string(),
             service_name: "kafka".to_string(),
             kdc_url,
-        }),
-    );
-
-    let result = drive_inter_broker_client_then_apiversions(&client, addr).await;
-    handle.shutdown().await;
+        },
+    )
+    .await;
     result.expect("InterBrokerClient GSSAPI auth + ApiVersions round-trip must succeed");
 }
