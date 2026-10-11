@@ -133,8 +133,7 @@ async fn the_kfc9_gauges_and_counters_move_on_real_requests() {
     );
     let req = DeleteTopicsRequest {
         topics: vec![DeleteTopicState {
-            name: Some(String::from("doomed")),
-            topic_id: uuid::Uuid::nil(),
+            name: Some("doomed".into()),
             ..Default::default()
         }],
         topic_names: vec!["doomed".into()],

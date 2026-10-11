@@ -117,10 +117,9 @@ async fn non_super_user_without_acl_denied() {
         if r.iter().all(|(_, ec)| *ec == 31) {
             break r;
         }
-        assert!(
-            Instant::now() <= deadline_auth,
-            "ACL shim still active or wrong error after 5s; got {r:?}"
-        );
+        if Instant::now() > deadline_auth {
+            panic!("ACL shim still active or wrong error after 5s; got {r:?}");
+        }
         // intentional: backoff between bounded RPC-response retries that
         // re-drive the SASL ElectLeaders wire path to observe the authorizer's
         // decision; the awaited state is on the request path, not in the
@@ -132,7 +131,7 @@ async fn non_super_user_without_acl_denied() {
 
     // Per-row error code must be 31 (CLUSTER_AUTHORIZATION_FAILED).
     assert!(
-        resp == vec![(0, 31)],
+        resp == [(0, 31)],
         "expected CLUSTER_AUTHORIZATION_FAILED (31) for alice; got {resp:?}"
     );
 }

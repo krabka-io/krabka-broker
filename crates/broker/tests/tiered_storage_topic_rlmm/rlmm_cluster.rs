@@ -48,6 +48,7 @@ pub(crate) async fn start_configured_topic_rlmm(
     let log_dir = TempDir::new().expect("log tempdir");
     let remote_dir = TempDir::new().expect("remote tempdir");
 
+    let mut cfg = bare_config(log_dir.path(), listen, controller_addrs[0]);
     cfg.remote_log_manager_interval = krabka_units::secs(1);
     cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
         dir: remote_dir.path().into(),

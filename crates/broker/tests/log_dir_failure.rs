@@ -19,10 +19,11 @@
 
 use std::{
     collections::BTreeMap,
-    os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 
 use assert2::assert;
 use bytes::Bytes;
@@ -182,10 +183,12 @@ fn directory_id(dir: &Path) -> uuid::Uuid {
 
 /// `chmod a-w -R` over a directory tree, undone when dropped so the temporary
 /// directory can be removed.
+#[cfg(unix)]
 struct ReadOnlyTree {
     paths: Vec<(PathBuf, u32)>,
 }
 
+#[cfg(unix)]
 impl ReadOnlyTree {
     fn new(root: &Path) -> Self {
         let mut paths = Vec::new();
@@ -219,11 +222,26 @@ impl ReadOnlyTree {
     }
 }
 
+#[cfg(unix)]
 impl Drop for ReadOnlyTree {
     fn drop(&mut self) {
         for (path, mode) in &self.paths {
             let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode));
         }
+    }
+}
+
+#[cfg(not(unix))]
+struct ReadOnlyTree;
+
+#[cfg(not(unix))]
+impl ReadOnlyTree {
+    fn new(_root: &Path) -> Self {
+        Self
+    }
+
+    fn refuses_writes(&self) -> bool {
+        false
     }
 }
 

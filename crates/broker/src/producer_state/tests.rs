@@ -233,14 +233,11 @@ async fn truncate_drops_dedup_entry_at_exact_offset_boundary() {
     // Truncating at an entry's last_offset removes that entry: the last
     // accepted record is no longer below the log end being retained.
     let s = ProducerState::new();
-    commit_fixture(
-        &s,
-        ProducerCommitSetup {
-            offset: krabka_log::Offset(100),
-            ..Default::default()
-        },
-    )
-    .await; // last_offset 104
+    let setup = ProducerCommitSetup {
+        offset: krabka_log::Offset(100),
+        ..Default::default()
+    };
+    commit_fixture(&s, setup).await; // last_offset 104
     s.truncate("t", PartitionIndex(0), 104).await;
     assert!(s.check("t", PartitionIndex(0), 1000, 0, 0, 4).await == Decision::Append);
 }

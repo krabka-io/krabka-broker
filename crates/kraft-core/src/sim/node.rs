@@ -35,8 +35,7 @@ pub(super) struct Node {
     pub(super) election_deadline: Option<SimInstant>,
     pub(super) fetch_deadline: Option<SimInstant>,
     pub(super) heartbeat_deadline: Option<SimInstant>,
-    /// Leader-side check-quorum deadline. Armed by the core's `ResetTimer`, and
-    /// cleared for every role that is not the leadership.
+    /// Leader check-quorum expiry.
     pub(super) check_quorum_deadline: Option<SimInstant>,
 }
 

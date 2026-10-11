@@ -65,22 +65,19 @@ impl Sim {
                 ],
             )
         }));
-        let Some((deadline, id, kind)) = best else {
-            return false;
+        let (deadline, id, kind) = match best {
+            Some(hit) => hit,
+            None => return false,
         };
-        if deadline > self.now {
-            self.now = deadline;
-        }
-        {
-            let node = self.nodes.get_mut(&id).unwrap();
-            clear_timer(
-                kind,
-                &mut node.election_deadline,
-                &mut node.fetch_deadline,
-                &mut node.heartbeat_deadline,
-                &mut node.check_quorum_deadline,
-            );
-        }
+        self.now = self.now.max(deadline);
+        let node = self.nodes.get_mut(&id).unwrap();
+        clear_timer(
+            kind,
+            &mut node.election_deadline,
+            &mut node.fetch_deadline,
+            &mut node.heartbeat_deadline,
+            &mut node.check_quorum_deadline,
+        );
         match kind {
             SimTimer::Heartbeat => {
                 self.fire_leader_heartbeat(id);

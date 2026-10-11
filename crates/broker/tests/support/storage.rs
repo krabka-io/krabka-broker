@@ -94,6 +94,11 @@ pub fn host_directory_user(path: &std::path::Path) -> String {
     format!("{}:{}", metadata.uid(), metadata.gid())
 }
 
+#[cfg(not(unix))]
+pub fn host_directory_user(_path: &std::path::Path) -> String {
+    "0:0".to_string()
+}
+
 /// The readiness a storage scenario requires before it reads partition state.
 #[derive(Clone, Copy, Default)]
 pub(crate) enum PartitionReadiness {

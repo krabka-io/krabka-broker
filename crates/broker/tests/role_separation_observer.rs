@@ -808,7 +808,7 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
     // directory holds the metadata partition only, and the broker-only node's
     // holds no partition: its observer keeps a checkpoint there only once it
     // installs or writes one.
-    let mut want_data: Vec<String> = topics.iter().map(|topic| format!("{topic}-0")).collect();
+    let mut want_data: Vec<String> = topic_names.iter().map(|topic| format!("{topic}-0")).collect();
     want_data.sort();
     let partitions_in = |dir: &std::path::Path| -> Vec<String> {
         entries(dir)
@@ -858,7 +858,7 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
     std::fs::remove_dir_all(&broker_data).unwrap();
     std::fs::remove_dir_all(&broker_metadata).unwrap();
     let (restarted, _health) = restart_broker_only(&broker_cfg).await;
-    for topic in &topics {
+    for topic in &topic_names {
         restarted.wait_until_partition_present(topic, 0).await;
     }
 

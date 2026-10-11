@@ -36,15 +36,18 @@ fn make_verbatim_batch(n: i32, payload_size: usize) -> VerbatimBatch {
 fn make_verbatim_from_batch(batch: &RecordBatch) -> VerbatimBatch {
     let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
     batch.encode(&mut buf).unwrap();
+    let is_txn = batch.attributes.is_transactional();
+    let epoch = LeaderEpoch(batch.partition_leader_epoch);
+    let pid = ProducerId(batch.producer_id);
     VerbatimBatch {
         bytes: buf.freeze(),
         last_offset_delta: batch.last_offset_delta,
         max_timestamp: batch.max_timestamp,
-        leader_epoch: LeaderEpoch(batch.partition_leader_epoch),
-        producer_id: ProducerId(batch.producer_id),
+        leader_epoch: epoch,
+        producer_id: pid,
         producer_epoch: batch.producer_epoch,
         base_sequence: batch.base_sequence,
-        is_transactional: batch.attributes.is_transactional(),
+        is_transactional: is_txn,
     }
 }
 

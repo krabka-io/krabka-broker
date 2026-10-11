@@ -12,12 +12,12 @@ use krabka_metadata::{LeaderEpoch, MetadataRecord};
 use crate::{
     docker::{produce_lines_via_jvm, set_container_paused},
     dump_log::{dump_log_in_container, max_offset_in_dump},
-    mixed_cluster::{
-        DivergenceDirection, PartitionEpochDelta, SingleLeaderSetup, prepare_divergence,
-        single_leader_record,
-    },
-    topic_admin::{LEADER_WAIT, wait_for_described_leader},
 };
+use crate::mixed_cluster::{
+    DivergenceDirection, PartitionEpochDelta, SingleLeaderSetup, prepare_divergence,
+    single_leader_record,
+};
+use crate::topic_admin::{LEADER_WAIT, wait_for_described_leader};
 
 /// Step 2 of Task 11, reverse direction. A Krabka follower replicates from a
 /// JVM leader. The test parks replication behind a phantom leader, appends a

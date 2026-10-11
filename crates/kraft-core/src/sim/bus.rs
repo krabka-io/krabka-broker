@@ -46,11 +46,15 @@ impl Sim {
     fn advance_simulated_watermark(&mut self, id: NodeId, hwm: i64) {
         let node = self.nodes.get_mut(&id).unwrap();
         node.high_watermark = hwm;
-        for peer in self.all_node_ids() {
-            if peer != id && !self.partitioned.contains(&peer) {
-                let p = self.nodes.get_mut(&peer).unwrap();
-                p.high_watermark = hwm.min(p.log.end_offset());
-            }
+        let eligible_peers: Vec<_> = self
+            .all_node_ids()
+            .into_iter()
+            .filter(|&peer| peer != id && !self.partitioned.contains(&peer))
+            .collect();
+        for peer in eligible_peers {
+            let target = self.nodes.get_mut(&peer).unwrap();
+            let capped = hwm.min(target.log.end_offset());
+            target.high_watermark = capped;
         }
     }
 

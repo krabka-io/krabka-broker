@@ -670,12 +670,11 @@ mod tests {
 
     #[test]
     fn exhausted_epochs_block_reassignment_transitions() {
-        let image = img(ReassignmentSetup {
-            adding: vec![krabka_ids::NodeId(3)],
-            removing: vec![krabka_ids::NodeId(2)],
-            leader: krabka_ids::NodeId(2),
-            ..Default::default()
-        });
+        let mut setup = ReassignmentSetup::default();
+        setup.adding = vec![krabka_ids::NodeId(3)];
+        setup.removing = vec![krabka_ids::NodeId(2)];
+        setup.leader = krabka_ids::NodeId(2);
+        let image = img(setup);
         let mut record = image.partition("foo", 0).expect("seeded partition").clone();
         let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3)]);
 

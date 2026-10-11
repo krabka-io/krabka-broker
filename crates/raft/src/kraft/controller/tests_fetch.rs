@@ -537,26 +537,26 @@ async fn quorum_epoch_requests_teach_the_leader_endpoints() {
             ("CONTROLLER", "c4.example", 9_093),
         ]
     };
+    let mut bqe_part = bqe::PartitionData::default();
+    bqe_part.leader_id = 4;
+    bqe_part.leader_epoch = 3;
+    let bqe_endpoints: Vec<_> = endpoints()
+        .into_iter()
+        .map(|(name, host, port)| bqe::LeaderEndpoint {
+            name: name.into(),
+            host: host.into(),
+            port,
+            ..Default::default()
+        })
+        .collect();
     let mut begin = BeginQuorumEpochRequest {
         voter_id: 1,
         topics: vec![bqe::TopicData {
             topic_name: wire::METADATA_TOPIC.into(),
-            partitions: vec![bqe::PartitionData {
-                leader_id: 4,
-                leader_epoch: 3,
-                ..Default::default()
-            }],
+            partitions: vec![bqe_part],
             ..Default::default()
         }],
-        leader_endpoints: endpoints()
-            .into_iter()
-            .map(|(name, host, port)| bqe::LeaderEndpoint {
-                name: name.into(),
-                host: host.into(),
-                port,
-                ..Default::default()
-            })
-            .collect(),
+        leader_endpoints: bqe_endpoints,
         ..Default::default()
     };
     let end = EndQuorumEpochRequest {

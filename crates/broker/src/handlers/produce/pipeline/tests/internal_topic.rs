@@ -15,7 +15,10 @@ use krabka_protocol::{
     records::{Record, RecordBatch},
 };
 
-use super::super::{PartitionInput, process_partition};
+use super::{
+    seed_batch,
+    super::{PartitionInput, process_partition},
+};
 use crate::{
     codes::{INVALID_TOPIC_EXCEPTION, NONE},
     config::BrokerConfig,
@@ -187,15 +190,4 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
         "the seed batch plus the admin client's one append; the ordinary \
          application's refused batch must not have landed"
     );
-}
-
-// One record, enough to seed a partition or to be refused.
-fn seed_batch() -> RecordBatch {
-    RecordBatch {
-        records: vec![Record {
-            value: Some(Bytes::from_static(b"v")),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
 }

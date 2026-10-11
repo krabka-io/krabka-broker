@@ -22,14 +22,14 @@ pub(super) struct Message {
 /// A node and everything the harness owns on its behalf.
 pub(super) struct Node<L: SimNodeLog> {
     pub(super) id: NodeId,
-    pub(super) machine: QuorumStateMachine,
     pub(super) log: L,
+    pub(super) machine: QuorumStateMachine,
+    /// Next election-timer deadline, if armed.
+    pub(super) election_deadline: Option<SimInstant>,
     /// Harness mirror of the leader's high watermark. The `Role::Leader`
     /// variant also carries it, but the harness tracks it here for non-leaders
     /// and observers.
     pub(super) high_watermark: i64,
-    /// Next election-timer deadline, if armed.
-    pub(super) election_deadline: Option<SimInstant>,
     /// Next fetch-timer deadline, if armed.
     pub(super) fetch_deadline: Option<SimInstant>,
     /// Next leader heartbeat deadline, if armed.

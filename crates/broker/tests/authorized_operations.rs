@@ -177,14 +177,15 @@ async fn metadata_topic_authorized_operations_default_is_not_present() {
         .await
         .expect("Metadata");
 
-    let row = resp
+    let ops = resp
         .topics
-        .iter()
+        .into_iter()
         .find(|t| t.name.as_deref() == Some("foo"))
+        .map(|t| t.topic_authorized_operations)
         .expect("foo row present");
     assert!(
-        row.topic_authorized_operations == i32::MIN,
-        "opt-out must leave the sentinel: {row:?}"
+        ops == i32::MIN,
+        "opt-out must leave the sentinel: {ops}"
     );
     h.shutdown().await;
 }

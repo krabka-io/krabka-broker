@@ -109,22 +109,18 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
     );
     assert!(scrape(metrics_addr).await.contains(&expected));
 
-    let altered = client
-        .send(AlterShareGroupOffsetsRequest {
-            group_id: GROUP.into(),
-            topics: vec![AlterShareGroupOffsetsRequestTopic {
-                topic_name: TOPIC.into(),
-                partitions: vec![AlterShareGroupOffsetsRequestPartition {
-                    partition_index: 0,
-                    start_offset: 5,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    let mut alter_part = AlterShareGroupOffsetsRequestPartition::default();
+    alter_part.partition_index = 0;
+    alter_part.start_offset = 5;
+    let mut alter_topic = AlterShareGroupOffsetsRequestTopic::default();
+    alter_topic.topic_name = TOPIC.into();
+    alter_topic.partitions = vec![alter_part];
+    let alter_req = AlterShareGroupOffsetsRequest {
+        group_id: GROUP.into(),
+        topics: vec![alter_topic],
+        ..Default::default()
+    };
+    let altered = client.send(alter_req).await.unwrap();
     assert!(altered.error_code == 0, "{altered:?}");
     assert!(
         altered.responses[0].partitions[0].error_code == 0,

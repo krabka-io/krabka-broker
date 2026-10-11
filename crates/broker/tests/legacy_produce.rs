@@ -67,21 +67,12 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
     let p = support::start_legacy().await;
 
     // 1. Create topic "legacy_v0" with 1 partition using the typed client.
-    let cr = p
-        .client
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup {
-                name: ("legacy_v0").into(),
-                ..Default::default()
-            },
-        )))
-        .await
-        .expect("CreateTopics");
-    assert!(
-        cr.topics[0].error_code == 0,
-        "CreateTopics error: {}",
-        cr.topics[0].error_code
-    );
+    let topic_setup = ConfiguredTopicSetup {
+        name: "legacy_v0".into(),
+        ..Default::default()
+    };
+    let cr = p.client.send(create_topic_request(creatable_topic(topic_setup))).await.expect("CreateTopics");
+    assert_eq!(cr.topics[0].error_code, 0, "CreateTopics error: {}", cr.topics[0].error_code);
 
     // 2. Open a raw TCP connection to the broker to send the v0 Produce.
     let addr = p.broker.listen_addr();

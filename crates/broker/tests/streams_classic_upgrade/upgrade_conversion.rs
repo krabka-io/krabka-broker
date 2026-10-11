@@ -8,7 +8,7 @@
 use assert2::assert;
 use krabka_protocol::owned::{
     leave_group_request::{LeaveGroupRequest, MemberIdentity},
-    offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
+    offset_commit_request::OffsetCommitRequest,
 };
 
 use crate::{
@@ -48,20 +48,18 @@ async fn drained_classic_group_converts_and_preserves_offsets() {
             group_id: "g".into(),
             generation_id_or_member_epoch: generation_id,
             member_id: member_id.clone(),
-            topics: vec![offset_commit_topic(
-                "in",
-                topic_id,
-                vec![OffsetCommitRequestPartition {
-                    committed_leader_epoch: 0,
-                    ..offset_commit_partition(0, 42, Some(String::new()))
-                }],
-            )],
+            topics: vec![{
+                let mut p = offset_commit_partition(0, 42, Some(String::new()));
+                p.committed_leader_epoch = 0;
+                offset_commit_topic("in", topic_id, vec![p])
+            }],
             ..Default::default()
         })
         .await
         .expect("OffsetCommit");
-    assert!(
-        cr.topics[0].partitions[0].error_code == ERR_NONE,
+    assert_eq!(
+        cr.topics[0].partitions[0].error_code,
+        ERR_NONE,
         "OffsetCommit failed: {cr:?}"
     );
 

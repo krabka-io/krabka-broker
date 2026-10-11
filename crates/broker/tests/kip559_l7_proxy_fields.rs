@@ -60,7 +60,7 @@ async fn bootstrap_member(p: &support::InProcess) -> (String, i32) {
 
     // Step 2: re-join with the assigned member_id, falls out as leader.
     let mut rejoin = join_setup();
-    rejoin.member_id = member_id;
+    rejoin.member_id = member_id.clone();
     let r2 = p
         .client
         .send(classic_join_request(rejoin))
@@ -79,7 +79,7 @@ async fn bootstrap_member(p: &support::InProcess) -> (String, i32) {
         "JoinGroup must echo protocol_name: {r2:?}"
     );
 
-    (mid, r2.generation_id)
+    (member_id, r2.generation_id)
 }
 
 #[tokio::test]

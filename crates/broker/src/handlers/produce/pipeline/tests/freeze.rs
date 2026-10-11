@@ -16,7 +16,10 @@ use krabka_protocol::{
 };
 use uuid::Uuid;
 
-use super::super::{PartitionInput, process_partition};
+use super::{
+    seed_batch,
+    super::{PartitionInput, process_partition},
+};
 use crate::{
     broker::spawn_partition,
     codes::{NONE, POLICY_VIOLATION},
@@ -257,15 +260,4 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
         "the gate counts once per refused partition row"
     );
     check!(rejections("control") == 0);
-}
-
-// One record, enough to seed a partition or to be refused.
-fn seed_batch() -> RecordBatch {
-    RecordBatch {
-        records: vec![Record {
-            value: Some(Bytes::from_static(b"v")),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
 }
