@@ -119,9 +119,8 @@ mod tests {
         BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord, TopicConfigRecord,
     };
 
+    use super::*;
     use crate::test_support::single_partition_topic;
-
-use super::*;
 
     const NODE: NodeId = NodeId(1);
 
@@ -129,9 +128,10 @@ use super::*;
     /// `(node, key, value)`.
     fn image(overrides: &[(&str, &str)], broker: &[(NodeId, &str, &str)]) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(
-            single_partition_topic("t", uuid::Uuid::from_u128(1)),
-        ));
+        image.apply(&MetadataRecord::V1Topic(single_partition_topic(
+            "t",
+            uuid::Uuid::from_u128(1),
+        )));
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
             overrides: overrides

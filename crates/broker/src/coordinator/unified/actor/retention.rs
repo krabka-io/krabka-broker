@@ -345,7 +345,12 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::{
-        actor::test_support::subscription_blob, classic_state::{ClassicGroup, Member, OffsetEntry}, consumer_state::{GroupState as ConsumerState, ResolvedRegularExpression, test_support::member}, persistence_next_gen::{NextGenKey, encode_key as encode_next_gen_key},
+        actor::test_support::subscription_blob,
+        classic_state::{ClassicGroup, Member, OffsetEntry},
+        consumer_state::{
+            GroupState as ConsumerState, ResolvedRegularExpression, test_support::member,
+        },
+        persistence_next_gen::{NextGenKey, encode_key as encode_next_gen_key},
     };
 
     const RETENTION_MS: i64 = 1_000;

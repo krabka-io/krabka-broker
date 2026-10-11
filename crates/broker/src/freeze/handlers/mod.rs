@@ -38,7 +38,9 @@ use krabka_protocol::krabka::freeze::{
 // not reach into another subsystem for an ACL gate.
 pub(crate) use crate::handlers::cluster_describe_denied;
 use crate::{
-    break_glass::handlers::{PrivilegedAudit, privileged_event}, handlers::{DESCRIBE_TOPIC_FREEZES_API_KEY, RequestContext, SET_TOPIC_FREEZE_API_KEY}, operator_keys::approver_set_fingerprint,
+    break_glass::handlers::{PrivilegedAudit, privileged_event},
+    handlers::{DESCRIBE_TOPIC_FREEZES_API_KEY, RequestContext, SET_TOPIC_FREEZE_API_KEY},
+    operator_keys::approver_set_fingerprint,
 };
 
 // The dispatch constant and the codec must name one api key. The registry

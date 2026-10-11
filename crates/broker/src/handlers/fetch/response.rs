@@ -97,9 +97,7 @@ pub(super) fn downconvert_legacy_responses(
             let Some(payload) = partition.records.take() else {
                 continue;
             };
-            match down_convert_payload_for_fetch(
-                &payload, version,
-            ) {
+            match down_convert_payload_for_fetch(&payload, version) {
                 Ok(Some(converted)) => {
                     if converted.payload_len() > 0 {
                         partition.records = Some(converted);
@@ -200,10 +198,13 @@ mod tests {
     };
 
     use super::{group_into_topic_responses, withhold_current_leader_before_kip_951};
-    use crate::{codes::{FENCED_LEADER_EPOCH, UNKNOWN_TOPIC_ID}, handlers::fetch::{
-        PendingRead,
-        plan::{refused_partition, refused_read},
-    }};
+    use crate::{
+        codes::{FENCED_LEADER_EPOCH, UNKNOWN_TOPIC_ID},
+        handlers::fetch::{
+            PendingRead,
+            plan::{refused_partition, refused_read},
+        },
+    };
 
     fn row(topic: &str, topic_id: u8, out: PartitionData) -> PendingRead {
         PendingRead {

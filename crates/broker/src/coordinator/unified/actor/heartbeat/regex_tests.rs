@@ -9,7 +9,10 @@ use krabka_protocol::primitives::uuid::Uuid;
 
 use super::*;
 use crate::coordinator::unified::{
-    actor::{seed::apply_seed, test_support::StaticMetadata}, persistence_next_gen::RegularExpressionValue, reconciler::ReconcileInput, regex_resolver::FixedRegexResolver,
+    actor::{seed::apply_seed, test_support::StaticMetadata},
+    persistence_next_gen::RegularExpressionValue,
+    reconciler::ReconcileInput,
+    regex_resolver::FixedRegexResolver,
 };
 
 const A1: Uuid = Uuid([1; 16]);

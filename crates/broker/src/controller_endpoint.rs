@@ -140,9 +140,8 @@ pub(crate) struct ControllerDialer {
 mod tests {
     use assert2::assert;
 
+    use super::*;
     use crate::test_support::{VoterImageSetup, voter_image};
-
-use super::*;
 
     fn endpoints(named: &[(&str, &str, u16)]) -> Vec<krabka_metadata::VoterEndpoint> {
         named

@@ -58,7 +58,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::{producer_state::Decision, test_support::{RepeatedRecordsSetup, repeated_records_batch}, txn::marker::{MarkerType, build_marker_batch}};
+    use crate::{
+        producer_state::Decision,
+        test_support::{RepeatedRecordsSetup, repeated_records_batch},
+        txn::marker::{MarkerType, build_marker_batch},
+    };
 
     fn idempotent_batch(base_offset: i64, base_sequence: i32, count: i32) -> RecordBatch {
         RecordBatch {
@@ -68,12 +72,10 @@ mod tests {
             producer_id: 42,
             producer_epoch: 3,
             base_sequence,
-            ..repeated_records_batch(
-                RepeatedRecordsSetup {
-                    count: crate::test_support::RecordCount(count),
-                    ..Default::default()
-                },
-            )
+            ..repeated_records_batch(RepeatedRecordsSetup {
+                count: crate::test_support::RecordCount(count),
+                ..Default::default()
+            })
         }
     }
 

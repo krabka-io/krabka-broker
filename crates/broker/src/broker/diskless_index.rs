@@ -10,7 +10,15 @@ use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    broker::rlmm::{KafkaSwapKickoff, metadata_log_config, rlmm_bootstrap_backoff}, config::KafkaRlmmConfig, diskless::{flusher::{FlushConfig, FlusherContext, FlusherExit, run}, index_log::{DISKLESS_WAL_INDEX_TOPIC, DisklessIndexLog}, wal_index::WalIndexCache}, error::BrokerError, partition_registry::PartitionRegistry,
+    broker::rlmm::{KafkaSwapKickoff, metadata_log_config, rlmm_bootstrap_backoff},
+    config::KafkaRlmmConfig,
+    diskless::{
+        flusher::{FlushConfig, FlusherContext, FlusherExit, run},
+        index_log::{DISKLESS_WAL_INDEX_TOPIC, DisklessIndexLog},
+        wal_index::WalIndexCache,
+    },
+    error::BrokerError,
+    partition_registry::PartitionRegistry,
 };
 
 /// Opens the index event log for one bootstrap attempt.
@@ -43,8 +51,7 @@ pub(super) struct DisklessFlusherStartup {
     /// Where each new index log is published so `DeleteRecords` can write its
     /// floor through whichever incarnation is live. Cleared while the
     /// bootstrap is rebuilding one.
-    pub(super) index_log_slot:
-        Arc<arc_swap::ArcSwapOption<DisklessIndexLog>>,
+    pub(super) index_log_slot: Arc<arc_swap::ArcSwapOption<DisklessIndexLog>>,
     pub(super) partitions: Arc<PartitionRegistry>,
     pub(super) image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     pub(super) object_store: Arc<dyn object_store::ObjectStore>,
@@ -109,12 +116,8 @@ async fn bootstrap_from_source(
         };
         let index_log = match opened {
             Ok(log) => {
-                DisklessIndexLog::start_with_cache(
-                    log,
-                    Arc::clone(&cache),
-                    flusher.metrics.clone(),
-                )
-                .await
+                DisklessIndexLog::start_with_cache(log, Arc::clone(&cache), flusher.metrics.clone())
+                    .await
             }
             Err(error) => Err(error),
         };
@@ -184,9 +187,15 @@ mod tests {
     use assert2::assert;
     use tempfile::tempdir;
 
-    use crate::{broker::rlmm::test_kickoff, config::KafkaRlmmConfig, diskless::{flusher::FlushConfig, index_log::test_support::ReplayPace, wal_index::WalFlushRecord}, metrics::BrokerMetrics};
-
-use super::*;
+    use super::*;
+    use crate::{
+        broker::rlmm::test_kickoff,
+        config::KafkaRlmmConfig,
+        diskless::{
+            flusher::FlushConfig, index_log::test_support::ReplayPace, wal_index::WalFlushRecord,
+        },
+        metrics::BrokerMetrics,
+    };
 
     fn test_startup(ready: Arc<AtomicBool>) -> DisklessFlusherStartup {
         let (_image_tx, image_rx) = tokio::sync::watch::channel(Arc::new(

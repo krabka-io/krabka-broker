@@ -9,7 +9,9 @@ use krabka_metadata::{
 
 use super::{ElrPublisher, leaderless_partition_elr, next_partition_elr};
 use crate::{
-    config_keys::{MIN_INSYNC_REPLICAS, RETENTION_MS}, elr::state::{PartitionElr, TopicElr}, test_support::finalize_elr_version,
+    config_keys::{MIN_INSYNC_REPLICAS, RETENTION_MS},
+    elr::state::{PartitionElr, TopicElr},
+    test_support::finalize_elr_version,
 };
 
 const TOPIC: &str = "orders";

@@ -11,10 +11,14 @@ use std::{
 use krabka_protocol::primitives::uuid::Uuid;
 
 use crate::coordinator::unified::{
-    actor::MetadataProvider, assignor::{GroupSpec, MemberSubscription, SubscriptionShape, subscription_type}, reconciler::ReconcileInput, share::{
+    actor::MetadataProvider,
+    assignor::{GroupSpec, MemberSubscription, SubscriptionShape, subscription_type},
+    reconciler::ReconcileInput,
+    share::{
         assignor::ShareGroupAssignor,
         state::{ShareGroupState, ShareMemberState},
-    }, wall_clock_ms,
+    },
+    wall_clock_ms,
 };
 
 /// The group epoch cannot move past `i32::MAX`.
@@ -55,10 +59,7 @@ pub(super) fn reconcile(
     }
     state.metadata_hash = metadata_hash;
     if state.target.epoch >= state.group_epoch
-        || state.assignment_delayed(
-            assignment_interval,
-            wall_clock_ms(),
-        )
+        || state.assignment_delayed(assignment_interval, wall_clock_ms())
     {
         return Ok(None);
     }
@@ -99,10 +100,7 @@ pub(super) fn reconcile(
         assignable.entry(*topic_id).or_default().insert(*partition);
     }
     let assignment = ShareGroupAssignor.assign(&group, &topics, Some(&assignable));
-    Ok(Some(state.install_target(
-        assignment,
-        wall_clock_ms(),
-    )))
+    Ok(Some(state.install_target(assignment, wall_clock_ms())))
 }
 
 /// Kafka's `ModernGroup.computeMetadataHash` over the topics that the

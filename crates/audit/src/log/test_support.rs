@@ -15,7 +15,12 @@ use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
 
 use super::{AuditLog, AuditReceiver, AuditWriter, AuditWriterParams};
 use crate::{
-    FileEd25519Signer, NodeId, event::{AuditEvent, LifecycleKind}, ocsf::ProductInfo, sink::{AuditError, AuditRecord, AuditSink, MemorySink}, spool::Spool, stats::AuditStats,
+    FileEd25519Signer, NodeId,
+    event::{AuditEvent, LifecycleKind},
+    ocsf::ProductInfo,
+    sink::{AuditError, AuditRecord, AuditSink, MemorySink},
+    spool::Spool,
+    stats::AuditStats,
 };
 
 pub fn product() -> ProductInfo {
@@ -148,11 +153,7 @@ impl FailableSink {
 
 #[async_trait::async_trait]
 impl AuditSink for FailableSink {
-    async fn write(
-        &self,
-        record: AuditRecord,
-        durable: bool,
-    ) -> Result<(), AuditError> {
+    async fn write(&self, record: AuditRecord, durable: bool) -> Result<(), AuditError> {
         if durable {
             self.durable_requests.fetch_add(1, SeqCst);
         }

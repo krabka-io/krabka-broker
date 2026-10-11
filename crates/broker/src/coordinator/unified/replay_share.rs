@@ -331,11 +331,16 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::{
-        persistence_next_gen::GroupMetadataValue, share::persistence::{
+        persistence_next_gen::GroupMetadataValue,
+        share::persistence::{
             ShareGroupCurrentMemberAssignmentValue, ShareGroupKey, ShareGroupMetadataValue,
             ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
             ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo,
-        }, test_support::{AssignmentDeletionSetup, check_replay_cases, proto_uuid, replay_fixtures, replay_tombstone_constructor, share_member},
+        },
+        test_support::{
+            AssignmentDeletionSetup, check_replay_cases, proto_uuid, replay_fixtures,
+            replay_tombstone_constructor, share_member,
+        },
     };
 
     /// What a log leaves: the group that replay holds, or the message of

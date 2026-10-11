@@ -62,10 +62,13 @@ use super::{
     state::{self, StreamsGroupState},
 };
 use crate::{
-    codes, coordinator::unified::{
+    codes,
+    coordinator::unified::{
         actor::CommitFence,
         offsets_log::{OffsetsLog, write_failure_code},
-    }, metadata_source::MetadataSource, task_util::spawn_mailbox,
+    },
+    metadata_source::MetadataSource,
+    task_util::spawn_mailbox,
 };
 
 /// Messages accepted by a [`StreamsGroupActorHandle`].

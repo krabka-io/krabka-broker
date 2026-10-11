@@ -32,11 +32,21 @@ use self::{
     validation::validate_registration,
 };
 use crate::{
-    codes, cordoned_log_dirs::registration_change, handlers::{
+    codes,
+    cordoned_log_dirs::registration_change,
+    handlers::{
         ErrorCodeResponse as _, cluster_action_denied, forward_to_controller::is_active_controller,
-    }, heartbeat::{controller_state::{
-        BrokerControlState, ControllerLivenessState, HeartbeatFacts, HeartbeatWants, next_broker_state,
-    }, fencing::is_fenced}, metadata_source::MetadataSource, metrics::BrokerMetrics,
+    },
+    heartbeat::{
+        controller_state::{
+            BrokerControlState, ControllerLivenessState, HeartbeatFacts, HeartbeatWants,
+            next_broker_state,
+        },
+        fencing::is_fenced,
+    },
+    leader_election::compute_unfence_changes,
+    metadata_source::MetadataSource,
+    metrics::BrokerMetrics,
 };
 
 context_handler! {
@@ -250,7 +260,7 @@ async fn advance_broker_state(
     let partition_changes = if leaves {
         left.changes
     } else if unfences {
-        crate::leader_election::compute_unfence_changes(&image, broker, liveness, metrics).await
+        compute_unfence_changes(&image, broker, liveness, metrics).await
     } else {
         Vec::new()
     };

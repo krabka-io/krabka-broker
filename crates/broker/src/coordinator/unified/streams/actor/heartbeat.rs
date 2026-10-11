@@ -24,11 +24,20 @@ use super::{
     response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
 };
 use crate::{
-    api_catalog::UnstableApiVersions, codes, coordinator::unified::{
-        ClientIdentity, GroupCoordinator, offsets_log::OffsetsLog, streams::{
-            config::StreamsGroupConfig, persistence::{PendingStreamsRecords, StoredSubtopology, StreamsGroupTopologyValue}, state::{OwnedTasks, RoleTasks, StoredTopologyHandle, StreamsMemberState}, topology,
+    api_catalog::UnstableApiVersions,
+    codes,
+    coordinator::unified::{
+        ClientIdentity, GroupCoordinator,
+        offsets_log::OffsetsLog,
+        streams::{
+            config::StreamsGroupConfig,
+            persistence::{PendingStreamsRecords, StoredSubtopology, StreamsGroupTopologyValue},
+            state::{OwnedTasks, RoleTasks, StoredTopologyHandle, StreamsMemberState},
+            topology,
         },
-    }, error::BrokerError, metadata_source::MetadataSource,
+    },
+    error::BrokerError,
+    metadata_source::MetadataSource,
 };
 
 /// Fences each member silent past the session timeout, and each member past
@@ -456,9 +465,7 @@ fn same_topology(a: &StreamsGroupTopologyValue, b: &StreamsGroupTopologyValue) -
     a.epoch == b.epoch && subtopologies_by_id(a) == subtopologies_by_id(b)
 }
 
-fn subtopologies_by_id(
-    topology: &StreamsGroupTopologyValue,
-) -> BTreeMap<&str, &StoredSubtopology> {
+fn subtopologies_by_id(topology: &StreamsGroupTopologyValue) -> BTreeMap<&str, &StoredSubtopology> {
     topology
         .subtopologies
         .iter()
@@ -570,9 +577,7 @@ type MetadataFields = (
 );
 
 /// The fields whose replacement changes this member's durable metadata.
-fn metadata_fields(
-    m: &StreamsMemberState,
-) -> MetadataFields {
+fn metadata_fields(m: &StreamsMemberState) -> MetadataFields {
     (
         m.instance_id.clone(),
         m.rack_id.clone(),
@@ -589,10 +594,7 @@ fn metadata_fields(
 /// request carries replaces the stored value, and an absent field (or a
 /// rebalance timeout of -1) keeps it. A rejoin at epoch 0 sets the user
 /// endpoint also when the request has none. Returns `true` if a field changed.
-fn update_member_metadata(
-    m: &mut StreamsMemberState,
-    req: &StreamsGroupHeartbeatRequest,
-) -> bool {
+fn update_member_metadata(m: &mut StreamsMemberState, req: &StreamsGroupHeartbeatRequest) -> bool {
     let before = metadata_fields(m);
     if req.instance_id.is_some() {
         m.instance_id.clone_from(&req.instance_id);

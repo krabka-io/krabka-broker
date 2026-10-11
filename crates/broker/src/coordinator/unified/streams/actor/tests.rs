@@ -11,18 +11,24 @@ use super::{
     },
     *,
 };
-use crate::{api_catalog::UnstableApiVersions, coordinator::unified::{
-    offsets_log::fake::InMemoryOffsetsLog, streams::{config::KEY_NUM_STANDBY_REPLICAS, persistence::{LastAssignmentConfig, PendingStreamsRecords, StreamsGroupMetadataValue}, state::{StreamsGroupState, StreamsMemberState}}, test_support::{MemberEpoch, assert_single_member_limit, heartbeat_write_failures},
-}, test_support::{StreamsJoinSetup, streams_join_request}};
+use crate::{
+    api_catalog::UnstableApiVersions,
+    coordinator::unified::{
+        offsets_log::fake::InMemoryOffsetsLog,
+        streams::{
+            config::KEY_NUM_STANDBY_REPLICAS,
+            persistence::{LastAssignmentConfig, PendingStreamsRecords, StreamsGroupMetadataValue},
+            state::{StreamsGroupState, StreamsMemberState},
+        },
+        test_support::{MemberEpoch, assert_single_member_limit, heartbeat_write_failures},
+    },
+    test_support::{StreamsJoinSetup, streams_join_request},
+};
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
 
 fn epoch_five_member() -> StreamsMemberState {
-    let mut member = StreamsMemberState::joining(
-        "m1",
-        "client",
-        "/127.0.0.1",
-    );
+    let mut member = StreamsMemberState::joining("m1", "client", "/127.0.0.1");
     member.member_epoch = 5;
     member
 }
@@ -119,12 +125,7 @@ async fn member_limit_rejects_only_new_members() {
         log,
     );
     let handle = coord.get_or_create_streams("g");
-    assert_single_member_limit(
-        &handle,
-        member_request,
-        heartbeat,
-    )
-    .await;
+    assert_single_member_limit(&handle, member_request, heartbeat).await;
 }
 
 /// Kafka 4.3.1's `throwIfStreamsGroupIsFull(group)` runs on every join and
@@ -363,25 +364,22 @@ async fn leave_removes_member() {
         member_metadata: vec![(join.member_id.clone(), None)],
         target_per_member: vec![(join.member_id.clone(), None)],
         current_per_member: vec![(join.member_id.clone(), None)],
-        group_metadata: Some(
-            StreamsGroupMetadataValue {
-                epoch: join.member_epoch + 1,
-                metadata_hash: seed.metadata_hash,
-                validated_topology_epoch: seed.validated_topology_epoch,
-                last_assignment_configs: Some(
-                    seed.last_assignment_configs
-                        .iter()
-                        .map(|(key, value)| {
-                            LastAssignmentConfig {
-                                key: key.clone(),
-                                value: value.clone(),
-                            }
-                        })
-                        .collect(),
-                ),
-                description: crate::coordinator::unified::streams::persistence::DescriptionEpochs::default(),
-            },
-        ),
+        group_metadata: Some(StreamsGroupMetadataValue {
+            epoch: join.member_epoch + 1,
+            metadata_hash: seed.metadata_hash,
+            validated_topology_epoch: seed.validated_topology_epoch,
+            last_assignment_configs: Some(
+                seed.last_assignment_configs
+                    .iter()
+                    .map(|(key, value)| LastAssignmentConfig {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            ),
+            description:
+                crate::coordinator::unified::streams::persistence::DescriptionEpochs::default(),
+        }),
         ..Default::default()
     }
     .into_batch("g", 0)

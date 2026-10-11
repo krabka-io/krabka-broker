@@ -12,13 +12,30 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    auto_topic_creation::AutoTopicCreation, barrier::coordinator::BarrierCoordinator, broker::{
+    auto_topic_creation::AutoTopicCreation,
+    barrier::coordinator::BarrierCoordinator,
+    broker::{
         Broker, BrokerHandle, DisklessRuntime,
         diskless_index::{DisklessFlusherStartup, bootstrap_diskless_index_log},
         listeners::{ListenerStartup, bind_listeners_and_recover_moves, spawn_listener_tasks},
         rlmm::{KafkaSwapKickoff, bootstrap_topic_rlmm},
         runtime::BrokerRuntimeStartup,
-    }, config::BrokerConfig, controller_admin::BrokerControllerAdminRouter, coordinator::GroupCoordinator, diskless::{flusher::FlushConfig, read::DisklessReadHandle}, error::BrokerError, handlers::registry::build_registry, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, network::dispatch::RequestByteBudget, partition_registry::PartitionRegistry, producer_id_manager::ProducerIdManager, share_coordinator::coordinator::ShareCoordinator, share_partition::manager::SharePartitionLeaderManager, time_util::now_ms, txn::coordinator::TxnCoordinator,
+    },
+    config::BrokerConfig,
+    controller_admin::BrokerControllerAdminRouter,
+    coordinator::GroupCoordinator,
+    diskless::{flusher::FlushConfig, read::DisklessReadHandle},
+    error::BrokerError,
+    handlers::registry::build_registry,
+    log_dir_status::LogDirRegistry,
+    metadata_source::MetadataSource,
+    network::dispatch::RequestByteBudget,
+    partition_registry::PartitionRegistry,
+    producer_id_manager::ProducerIdManager,
+    share_coordinator::coordinator::ShareCoordinator,
+    share_partition::manager::SharePartitionLeaderManager,
+    time_util::now_ms,
+    txn::coordinator::TxnCoordinator,
 };
 
 pub(super) type BrokerCoordinatorSet = (

@@ -14,14 +14,17 @@ use krabka_units::{
     convert::{ByteSizeExt as _, TimeExt as _},
 };
 
-use crate::{authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer}, config::{BrokerConfig, InterBrokerCredentials, NodeRole}, schema_validation::SchemaValidator};
-#[cfg(target_family = "wasm")]
-use crate::network::auth::GssapiConfig;
-
 use super::{
     AuthzType, FileAuditConfig, FileAuthorizationConfig, FileConfigError, FileGssapiConfig,
     FileInterBrokerCredentials, FileProcessConfig, FileSchemaRegistryConfig,
     gssapi::DEFAULT_KERBEROS_SERVICE_NAME, parse_bootstrap_server, parse_quorum_voter,
+};
+#[cfg(target_family = "wasm")]
+use crate::network::auth::GssapiConfig;
+use crate::{
+    authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
+    config::{BrokerConfig, InterBrokerCredentials, NodeRole},
+    schema_validation::SchemaValidator,
 };
 
 pub(super) struct FileConfigTail {
@@ -247,9 +250,7 @@ fn apply_audit(audit: FileAuditConfig, cfg: &mut BrokerConfig) {
 
 /// Resolve the `[gssapi]` section into the accept-path configuration.
 #[cfg(not(target_family = "wasm"))]
-fn gssapi_config(
-    gssapi: FileGssapiConfig,
-) -> Result<GssapiConfig, FileConfigError> {
+fn gssapi_config(gssapi: FileGssapiConfig) -> Result<GssapiConfig, FileConfigError> {
     let max_time_skew = gssapi
         .max_time_skew
         .unwrap_or(krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
@@ -286,9 +287,7 @@ fn gssapi_config(
 /// wasm32-wasip1 has no Kerberos stack, so a `[gssapi]` section is an error
 /// there.
 #[cfg(target_family = "wasm")]
-fn gssapi_config(
-    _gssapi: FileGssapiConfig,
-) -> Result<GssapiConfig, FileConfigError> {
+fn gssapi_config(_gssapi: FileGssapiConfig) -> Result<GssapiConfig, FileConfigError> {
     Err(FileConfigError::InvalidConfig(
         "SASL/GSSAPI is unavailable on this platform".to_owned(),
     ))
@@ -298,7 +297,7 @@ fn gssapi_config(
 mod tests {
     use assert2::assert;
 
-use crate::file_config::test_support::configured;
+    use crate::file_config::test_support::configured;
 
     #[test]
     fn apply_to_absent_controller_server_name_leaves_default() {

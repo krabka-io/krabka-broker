@@ -7,9 +7,8 @@
 use krabka_protocol::owned::create_delegation_token_response::CreateDelegationTokenResponse;
 use krabka_security::KafkaPrincipal;
 
-use crate::codes::NONE;
-
 use super::lifetime::TokenDeadlines;
+use crate::codes::NONE;
 
 /// A refusal decided on the broker before Kafka forwards the request.
 ///

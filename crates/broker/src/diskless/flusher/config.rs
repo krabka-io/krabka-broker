@@ -7,7 +7,8 @@ use std::time::Duration;
 use krabka_units::{ByteSize, convert::TimeExt as _};
 
 use crate::config::{
-    BrokerConfig, DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE, DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
+    BrokerConfig, DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
+    DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
 };
 
 #[derive(Debug, Clone, krabka_macros::FieldDefaults)]
@@ -41,9 +42,8 @@ impl FlushConfig {
 mod tests {
     use assert2::assert;
 
+    use super::*;
     use crate::config::BrokerConfig;
-
-use super::*;
 
     #[tokio::test]
     async fn default_config_enables_safe_trim_lag() {

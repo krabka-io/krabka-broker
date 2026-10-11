@@ -143,9 +143,8 @@ mod tests {
     use assert2::assert;
     use clap::Parser as _;
 
+    use super::*;
     use crate::test_support::env_guard;
-
-use super::*;
 
     #[test]
     fn parse_roles_arg_maps_strings() {

@@ -8,12 +8,16 @@ use krabka_protocol::records::RecordBatch;
 
 use crate::{
     coordinator::unified::{
-        GroupCoordinator, OffsetRecordBatchBuilder, member_records::{MemberRecordFamilies, MemberRecordLists}, persistence::{Key, encode_key}, persistence_next_gen::{
+        GroupCoordinator, OffsetRecordBatchBuilder,
+        member_records::{MemberRecordFamilies, MemberRecordLists},
+        persistence::{Key, encode_key},
+        persistence_next_gen::{
             CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
             RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
             encode_key,
         },
-    }, error::BrokerError,
+    },
+    error::BrokerError,
 };
 
 /// The key of the deprecated k4 `ConsumerGroupPartitionMetadata` record.
@@ -225,14 +229,7 @@ impl PendingRecords {
         let group = || group_id.to_owned();
 
         if self.classic_group_metadata_tombstone {
-            batch.push(
-                encode_key(
-                    &Key::GroupMetadata {
-                        group_id: group(),
-                    },
-                )?,
-                None,
-            );
+            batch.push(encode_key(&Key::GroupMetadata { group_id: group() })?, None);
         }
         let removed: Vec<&String> = self
             .member_metadata
@@ -344,11 +341,7 @@ impl PendingRecords {
         }
         if let Some(v) = &self.classic_group_metadata {
             batch.push(
-                encode_key(
-                    &Key::GroupMetadata {
-                        group_id: group(),
-                    },
-                )?,
+                encode_key(&Key::GroupMetadata { group_id: group() })?,
                 Some(v.encode_value()?),
             );
         }
@@ -422,10 +415,15 @@ mod tests {
     use super::*;
     use crate::{
         coordinator::unified::{
-            ClientIdentity, GroupSeed, actor::{
-                persistence::full_pending_records, test_support::{ConsumerMemberSetup, make_coordinator, subscribed_member},
-            }, consumer_state::{ClassicMemberFacade, GroupState}, persistence_next_gen::MemberAssignmentState,
-        }, error::BrokerError,
+            ClientIdentity, GroupSeed,
+            actor::{
+                persistence::full_pending_records,
+                test_support::{ConsumerMemberSetup, make_coordinator, subscribed_member},
+            },
+            consumer_state::{ClassicMemberFacade, GroupState},
+            persistence_next_gen::MemberAssignmentState,
+        },
+        error::BrokerError,
     };
 
     #[test]
@@ -603,29 +601,22 @@ mod tests {
         state.group_epoch = 7;
         state.target.epoch = 6;
 
-        let mut m = subscribed_member(
-            ConsumerMemberSetup {
-                client: ClientIdentity {
-                    id: "client-a",
-                    host: "h",
-                },
-                now: Instant::now(),
-                ..Default::default()
+        let mut m = subscribed_member(ConsumerMemberSetup {
+            client: ClientIdentity {
+                id: "client-a",
+                host: "h",
             },
-        );
+            now: Instant::now(),
+            ..Default::default()
+        });
         m.member_epoch = 7;
         m.previous_member_epoch = 6;
         m.assigned_partitions.insert(topic, vec![0, 1]);
         m.assignment_epochs.insert(topic, [(0, 4), (1, 7)].into());
-        m.classic = Some(
-            ClassicMemberFacade {
-                supported_protocols: vec![(
-                    "range".to_string(),
-                    bytes::Bytes::from_static(b"meta"),
-                )],
-                session_timeout: Duration::from_secs(45),
-            },
-        );
+        m.classic = Some(ClassicMemberFacade {
+            supported_protocols: vec![("range".to_string(), bytes::Bytes::from_static(b"meta"))],
+            session_timeout: Duration::from_secs(45),
+        });
         state
             .target
             .per_member

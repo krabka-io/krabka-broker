@@ -36,9 +36,8 @@ mod rpc;
 mod test_support;
 mod voter_updates;
 
-use crate::{metadata_source::MetadataSource, network::client::InterBrokerClient};
-
 pub(crate) use self::{join_loop::run, voter_updates::run_voter_updates};
+use crate::{metadata_source::MetadataSource, network::client::InterBrokerClient};
 
 /// Everything the auto-join driver needs, pulled out of `BrokerConfig` +
 /// `Broker` so the loop can be spawned *before* the full `Broker` Arc exists.

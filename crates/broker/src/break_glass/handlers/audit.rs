@@ -129,7 +129,13 @@ mod tests {
     use krabka_units::prelude::{hours, mebibytes};
 
     use super::*;
-    use crate::{break_glass::{ALL_ACTIONS, handlers::tests::{audit_channel, context, peer, principal}}, broker::Broker};
+    use crate::{
+        break_glass::{
+            ALL_ACTIONS,
+            handlers::tests::{audit_channel, context, peer, principal},
+        },
+        broker::Broker,
+    };
 
     const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
 

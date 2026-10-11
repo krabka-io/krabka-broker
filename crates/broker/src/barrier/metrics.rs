@@ -5,7 +5,10 @@
 
 use krabka_units::{Time, convert::TimeExt as _};
 
-use crate::{barrier::persistence::CutStatus, metrics::{BarrierGroupLabel, BrokerMetrics}};
+use crate::{
+    barrier::persistence::CutStatus,
+    metrics::{BarrierGroupLabel, BrokerMetrics},
+};
 
 /// What one finished injection reported.
 #[derive(Debug, Clone, Copy, PartialEq)]

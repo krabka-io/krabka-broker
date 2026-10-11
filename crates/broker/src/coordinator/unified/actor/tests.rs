@@ -14,7 +14,11 @@ use super::{
     test_support::{empty_metadata, make_coordinator},
 };
 use crate::{
-    codes, coordinator::unified::{config::NextGenConfig, group::CoordinatorGroup, regex_resolver::no_topic_regex_resolver}, test_support::{BrokenTimer, TimerFailure},
+    codes,
+    coordinator::unified::{
+        config::NextGenConfig, group::CoordinatorGroup, regex_resolver::no_topic_regex_resolver,
+    },
+    test_support::{BrokenTimer, TimerFailure},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

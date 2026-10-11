@@ -6,10 +6,14 @@
 use krabka_security::ListenerProtocol::{self, Plaintext, SaslPlaintext, SaslSsl, Ssl};
 
 use super::*;
-use crate::{SslPrincipalMapper, config::{
-    BrokerConfig, ListenerSpec,
-    NodeRole::{self, Broker, Controller},
-}, file_config::FileConfig};
+use crate::{
+    SslPrincipalMapper,
+    config::{
+        BrokerConfig, ListenerSpec,
+        NodeRole::{self, Broker, Controller},
+    },
+    file_config::FileConfig,
+};
 
 /// The five keys, in the name order that `describe_one` reports them in.
 const LISTENER_KEYS: [&str; 5] = [

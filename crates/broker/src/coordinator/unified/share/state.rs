@@ -11,9 +11,11 @@ use std::{
 
 use krabka_protocol::primitives::uuid::Uuid;
 
-use crate::{codes::FENCED_MEMBER_EPOCH, coordinator::unified::{actor::MetadataProvider, member_helpers::new_target_assignment}};
-
 use super::super::INITIAL_GROUP_EPOCH;
+use crate::{
+    codes::FENCED_MEMBER_EPOCH,
+    coordinator::unified::{actor::MetadataProvider, member_helpers::new_target_assignment},
+};
 
 /// One member of a share group.
 #[derive(Debug, Clone)]
@@ -432,11 +434,8 @@ impl ShareGroupState {
         per_member: HashMap<String, HashMap<Uuid, Vec<i32>>>,
         now_ms: i64,
     ) -> Vec<String> {
-        let (target, changed) = new_target_assignment(
-            self.members.keys(),
-            per_member,
-            &self.target.per_member,
-        );
+        let (target, changed) =
+            new_target_assignment(self.members.keys(), per_member, &self.target.per_member);
         self.target = ShareTargetAssignment {
             epoch: self.group_epoch,
             per_member: target,

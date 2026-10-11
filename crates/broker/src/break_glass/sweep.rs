@@ -128,9 +128,7 @@ mod tests {
     impl MockController {
         fn holding(proposals: &[BreakGlassProposalRecord]) -> Arc<Self> {
             Arc::new(Self {
-                image: Mutex::new(Arc::new(image_of(
-                    proposals,
-                ))),
+                image: Mutex::new(Arc::new(image_of(proposals))),
                 submitted: Mutex::new(Vec::new()),
             })
         }

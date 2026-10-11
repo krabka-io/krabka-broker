@@ -27,7 +27,15 @@ use super::{
     site_broker_views, topic_exists_result,
 };
 use crate::{
-    broker::Broker, codes, config_keys::{self, resolve_preferred_leader_site}, handlers::{offline_replicas::unavailable_brokers, partition_materialization::PartitionMaterialization}, quota::ControllerMutationQuota, site_placement::PlacementRng, topic_policy::check,
+    broker::Broker,
+    codes,
+    config_keys::{self, resolve_preferred_leader_site},
+    handlers::{
+        offline_replicas::unavailable_brokers, partition_materialization::PartitionMaterialization,
+    },
+    quota::ControllerMutationQuota,
+    site_placement::PlacementRng,
+    topic_policy::check,
 };
 
 /// A topic that passed every check, and was committed unless the request is
@@ -199,8 +207,7 @@ impl<'a> TopicCreation<'a> {
         // broker out. A manual assignment may name any registered broker,
         // because Kafka 4.3.1 checks only that the broker is registered, and
         // the ISR again leaves out the inactive ones.
-        let unavailable =
-            unavailable_brokers(broker, image).await;
+        let unavailable = unavailable_brokers(broker, image).await;
         let inactive = inactive_brokers(image, &unavailable);
         let manual = !topic_req.assignments.is_empty();
         let no_exclusion = std::collections::HashSet::new();

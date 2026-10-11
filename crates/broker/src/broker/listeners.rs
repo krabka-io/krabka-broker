@@ -16,7 +16,14 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    broker::{Broker, accept::accept_loop}, config::{BrokerConfig, ListenerSpec}, error::BrokerError, future_log::{FutureLogState, MovePolicy}, log_dir, partition_registry::PartitionRegistry, platform::{Sockets, bind_listener}, throttle::ThrottleState,
+    broker::{Broker, accept::accept_loop},
+    config::{BrokerConfig, ListenerSpec},
+    error::BrokerError,
+    future_log::{FutureLogState, MovePolicy},
+    log_dir,
+    partition_registry::PartitionRegistry,
+    platform::{Sockets, bind_listener},
+    throttle::ThrottleState,
 };
 
 pub(super) struct ListenerStartup {
@@ -25,8 +32,7 @@ pub(super) struct ListenerStartup {
     /// listener when none has that name. `None` on a node without the broker
     /// role, which binds no data-plane listener.
     pub(super) listen_addr: Option<SocketAddr>,
-    pub(super) future_logs:
-        Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    pub(super) future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
 }
 
 /// Binds the default data-plane listener before the broker registers itself,
@@ -200,10 +206,13 @@ mod tests {
     use krabka_security::ListenerProtocol;
 
     use super::*;
-    use crate::{SslPrincipalMapper, config::{
-        ListenerSpec,
-        NodeRole::{Broker, Controller},
-    }};
+    use crate::{
+        SslPrincipalMapper,
+        config::{
+            ListenerSpec,
+            NodeRole::{Broker, Controller},
+        },
+    };
 
     fn spec(name: &str, bind_addr: SocketAddr) -> ListenerSpec {
         ListenerSpec {

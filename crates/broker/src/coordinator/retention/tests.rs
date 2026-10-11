@@ -19,14 +19,30 @@ use tokio::sync::oneshot;
 
 use super::sweep;
 use crate::{
-    authorizer::AllowAllAuthorizer, broker::{Broker, BrokerHandle}, codes, coordinator::{
-        bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group, persistence::{Key, OffsetCommitValue, parse_key}, test_support::{commit_request, fetch_offset}, unified::{
-            GroupType, actor::{GroupActorMessage, GroupKindTag, test_support::classic_member}, classic_state::{ClassicGroup, GroupState, OffsetEntry}, group::{CoordinatorGroup, GroupKind},
+    authorizer::AllowAllAuthorizer,
+    broker::{Broker, BrokerHandle},
+    codes,
+    coordinator::{
+        bootstrap::OFFSETS_TOPIC,
+        partitioner::partition_for_group,
+        persistence::{Key, OffsetCommitValue, parse_key},
+        test_support::{commit_request, fetch_offset},
+        unified::{
+            GroupType,
+            actor::{GroupActorMessage, GroupKindTag, test_support::classic_member},
+            classic_state::{ClassicGroup, GroupState, OffsetEntry},
+            group::{CoordinatorGroup, GroupKind},
         },
-    }, handlers::{offset_commit::handle, test_support::{CreateTopicSetup, configured_topic_request}}, test_support::{
+    },
+    handlers::{
+        offset_commit::handle,
+        test_support::{CreateTopicSetup, configured_topic_request},
+    },
+    test_support::{
         UnixMillis, dispatch_context, encode_request, peer, principal, request_context,
         start_broker_with_authorizer_no_audit,
-    }, time_util::now_ms,
+    },
+    time_util::now_ms,
 };
 
 const GROUP: &str = "retention-group";
@@ -70,19 +86,15 @@ fn deleted_group(reaped: Vec<(String, i32)>) -> Vec<(String, super::ReapOutcome)
 /// Start a broker that holds `TOPIC`, since `OffsetCommit` answers
 /// `UNKNOWN_TOPIC_OR_PARTITION` for a topic the image does not hold.
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    let (broker, dir) =
-        start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer))
-            .await;
+    let (broker, dir) = start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
     broker.wait_until_group_coordinator_ready().await;
     let admin = principal("admin");
     let address = peer();
     let ctx = request_context(&admin, &address, "retention-admin");
-    let request = configured_topic_request(
-        CreateTopicSetup {
-            topic: TOPIC,
-            ..Default::default()
-        },
-    );
+    let request = configured_topic_request(CreateTopicSetup {
+        topic: TOPIC,
+        ..Default::default()
+    });
     dispatch_context(
         &broker.broker_arc_for_test(),
         create_topics_request::API_KEY,
@@ -96,11 +108,8 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 /// Leave a real group memberless with its committed offset still retained.
-async fn memberless_group_with_committed_offset() -> (
-    BrokerHandle,
-    tempfile::TempDir,
-    std::sync::Arc<Broker>,
-) {
+async fn memberless_group_with_committed_offset()
+-> (BrokerHandle, tempfile::TempDir, std::sync::Arc<Broker>) {
     let (handle, dir) = start().await;
     let broker = handle.broker_arc_for_test();
     seed_group_with_member(&broker);

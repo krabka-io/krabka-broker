@@ -49,7 +49,16 @@ use krabka_security::{KafkaPrincipal, SecretBytes, compute_token_hmac};
 use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission};
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer}, codes::{DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_AUTHORIZATION_FAILED, INVALID_REQUEST, UNKNOWN_SERVER_ERROR, UNSUPPORTED_VERSION}, features::require_feature, network::auth::ConnectionAuth, time_util::now_ms,
+    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+    codes::{
+        DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_AUTHORIZATION_FAILED,
+        DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, INVALID_PRINCIPAL_TYPE, INVALID_REQUEST,
+        UNKNOWN_SERVER_ERROR, UNSUPPORTED_VERSION,
+    },
+    features::{METADATA_VERSION, require_feature},
+    metadata_source::MetadataSource,
+    network::auth::ConnectionAuth,
+    time_util::now_ms,
 };
 
 /// What the KIP-373 `CreateTokens` check reads: the broker's authorizer and
@@ -103,7 +112,7 @@ pub(crate) async fn handle(
     secret_key: Option<&SecretBytes>,
     max_lifetime_ms: DurationMs,
     default_renew_period_ms: DurationMs,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
     acl: TokenAcl<'_>,
 ) -> CreateDelegationTokenResponse {
     let requester = auth
@@ -118,11 +127,7 @@ pub(crate) async fn handle(
     };
 
     if auth.token_api_admission(TokenApi::Create) == TokenApiAdmission::Reject {
-        return broker_refusal(
-            crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-            &owner,
-            &requester,
-        );
+        return broker_refusal(DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, &owner, &requester);
     }
     let image = controller.current_image();
     let authorize_create_tokens = |resource_name: &str| {
@@ -140,31 +145,23 @@ pub(crate) async fn handle(
         })
     };
     if !may_create_for(&owner, &requester, authorize_create_tokens) {
-        return broker_refusal(
-            DELEGATION_TOKEN_AUTHORIZATION_FAILED,
-            &owner,
-            &requester,
-        );
+        return broker_refusal(DELEGATION_TOKEN_AUTHORIZATION_FAILED, &owner, &requester);
     }
     if req
         .renewers
         .iter()
         .any(|renewer| renewer.principal_type != USER_PRINCIPAL_TYPE)
     {
-        return broker_refusal(crate::codes::INVALID_PRINCIPAL_TYPE, &owner, &requester);
+        return broker_refusal(INVALID_PRINCIPAL_TYPE, &owner, &requester);
     }
 
     let Some(secret_key) = secret_key else {
-        return controller_refusal(
-            DELEGATION_TOKEN_AUTH_DISABLED,
-            &owner,
-            &requester,
-        );
+        return controller_refusal(DELEGATION_TOKEN_AUTH_DISABLED, &owner, &requester);
     };
     // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
     if require_feature(
         &image,
-        crate::features::METADATA_VERSION,
+        METADATA_VERSION,
         krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
     )
     .is_err()

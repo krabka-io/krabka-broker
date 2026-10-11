@@ -17,11 +17,15 @@ use super::{
     test_support::{bare_coordinator, classic_group_record},
 };
 use crate::{
-    codes, coordinator::{
-        persistence::{self, GroupMetadataValue, MemberMetadata}, unified::{
-            actor::{GroupActorHandle, GroupActorMessage, JoinResult, JoinResultMember}, classic_state::{
+    codes,
+    coordinator::{
+        persistence::{self, GroupMetadataValue, MemberMetadata},
+        unified::{
+            actor::{GroupActorHandle, GroupActorMessage, JoinResult, JoinResultMember},
+            classic_state::{
                 ClassicGroup as ClassicState, GroupState as ClassicGroupState, Member,
-            }, regex_resolver::no_topic_regex_resolver,
+            },
+            regex_resolver::no_topic_regex_resolver,
         },
     },
 };

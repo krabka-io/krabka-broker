@@ -4,11 +4,10 @@
 use assert2::assert;
 use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId};
 
-use crate::test_support::broker_registration;
-
 use super::{
     FILE_NAME, FORMAT_VERSION, ProofError, UNPROVEN, decode, encode, restart_was_clean, take, write,
 };
+use crate::test_support::broker_registration;
 
 const NODE: NodeId = NodeId(2);
 

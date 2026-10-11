@@ -31,10 +31,18 @@ use tokio::{task::JoinSet, time::Instant};
 use tracing::{info, warn};
 
 use crate::{
-    failover::{kill_broker_pod, try_client}, hist, ids::{MessageCount, TimeOffsetMs, WallclockMs}, numeric::{
+    failover::{kill_broker_pod, try_client},
+    hist,
+    ids::{MessageCount, TimeOffsetMs, WallclockMs},
+    numeric::{
         event_rate, nonnegative_i64_to_u64, saturating_u64_to_i64, saturating_u128_to_u64, to_f64,
-    }, payload, prom::PromClient, rate::Pacer, scenario::{
-        BrokerSample, Disturbance, LatencyPercentiles, LoadMode, ModeTag, Resource, RunOutput, Sample, Scenario, Stack, Throughput, Topology,
+    },
+    payload,
+    prom::PromClient,
+    rate::Pacer,
+    scenario::{
+        BrokerSample, Disturbance, LatencyPercentiles, LoadMode, ModeTag, Resource, RunOutput,
+        Sample, Scenario, Stack, Throughput, Topology,
     },
 };
 

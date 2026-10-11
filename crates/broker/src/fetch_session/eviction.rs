@@ -118,8 +118,12 @@ mod tests {
 
     use super::*;
     use crate::fetch_session::{
-        SessionDecision, order::MIN_EVICTION, test_support::{
-            NAME_FETCH_VERSION, RequestSessionEpoch, RequestSessionId, SessionAllocationSetup, SessionPrivilege, SessionRequestSetup, SessionSlotCount, TICK, allocate_session, manual_cache, req,
+        SessionDecision,
+        order::MIN_EVICTION,
+        test_support::{
+            NAME_FETCH_VERSION, RequestSessionEpoch, RequestSessionId, SessionAllocationSetup,
+            SessionPrivilege, SessionRequestSetup, SessionSlotCount, TICK, allocate_session,
+            manual_cache, req,
         },
     };
 
@@ -198,11 +202,7 @@ mod tests {
 
     /// An incremental fetch on `id` that changes nothing: it uses the session,
     /// which is what Kafka's `touch` records.
-    fn use_session(
-        cache: &FetchSessionCache,
-        id: RequestSessionId,
-        epoch: RequestSessionEpoch,
-    ) {
+    fn use_session(cache: &FetchSessionCache, id: RequestSessionId, epoch: RequestSessionEpoch) {
         assert!(matches!(
             cache.classify(
                 &req(SessionRequestSetup {
@@ -282,8 +282,7 @@ mod tests {
             ),
         ];
         for (label, holder_is_follower, newcomer_is_follower) in cases {
-            let (cache, clock) =
-                manual_cache(SessionSlotCount(2));
+            let (cache, clock) = manual_cache(SessionSlotCount(2));
             let stale = allocate_session(
                 &cache,
                 SessionAllocationSetup {
@@ -348,11 +347,7 @@ mod tests {
         clock
             .advance(Duration::from_secs(100))
             .expect("manual time moves forward");
-        use_session(
-            &cache,
-            RequestSessionId(busy),
-            RequestSessionEpoch(1),
-        );
+        use_session(&cache, RequestSessionId(busy), RequestSessionEpoch(1));
         clock
             .advance(Duration::from_secs(30))
             .expect("manual time moves forward");
@@ -383,8 +378,7 @@ mod tests {
             ("smaller", 1, false),
         ];
         for (label, newcomer_partitions, displaces) in cases {
-            let (cache, clock) =
-                manual_cache(SessionSlotCount(1));
+            let (cache, clock) = manual_cache(SessionSlotCount(1));
             let held = allocate_session(
                 &cache,
                 SessionAllocationSetup {
@@ -398,11 +392,7 @@ mod tests {
                 .expect("manual time moves forward");
             // The use just now is what makes the session evictable by its age,
             // and it keeps the session from being stale.
-            use_session(
-                &cache,
-                RequestSessionId(held),
-                RequestSessionEpoch(1),
-            );
+            use_session(&cache, RequestSessionId(held), RequestSessionEpoch(1));
 
             let newcomer = allocate_session(
                 &cache,

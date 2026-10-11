@@ -27,8 +27,12 @@ use plotly::{
 
 use crate::{
     aggregate::{
-        CellAgg, CellKey, ScalarMetric, StackAgg, TsSeries, aggregate_cells, averaged_timeseries, scalar_metrics,
-    }, ids::TimeOffsetMs, numeric::mebibytes_f64, scenario::{RunOutput, Stack},
+        CellAgg, CellKey, ScalarMetric, StackAgg, TsSeries, aggregate_cells, averaged_timeseries,
+        scalar_metrics,
+    },
+    ids::TimeOffsetMs,
+    numeric::mebibytes_f64,
+    scenario::{RunOutput, Stack},
 };
 
 fn push_fmt(output: &mut String, args: Arguments<'_>) {

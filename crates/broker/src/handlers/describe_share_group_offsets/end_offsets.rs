@@ -278,9 +278,8 @@ mod tests {
         ListOffsetsPartitionResponse, ListOffsetsTopicResponse,
     };
 
+    use super::*;
     use crate::handlers::test_support::single_replica_partition;
-
-use super::*;
 
     fn tp(topic: &str, partition: i32) -> TopicPartition {
         (topic.to_owned(), partition)
@@ -361,13 +360,11 @@ use super::*;
             replication_factor: 1,
         }));
         for (partition, leader) in [(0, 1), (1, 2), (2, 1)] {
-            image.apply(&MetadataRecord::V1Partition(
-                single_replica_partition(
-                    "a",
-                    krabka_ids::PartitionIndex(partition),
-                    NodeId(leader),
-                ),
-            ));
+            image.apply(&MetadataRecord::V1Partition(single_replica_partition(
+                "a",
+                krabka_ids::PartitionIndex(partition),
+                NodeId(leader),
+            )));
         }
         let grouped = group_by_leader(&image, &[tp("a", 0), tp("a", 1), tp("a", 2), tp("a", 3)]);
         let expected = (

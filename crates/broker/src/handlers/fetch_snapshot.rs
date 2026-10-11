@@ -118,9 +118,11 @@ mod tests {
     };
     use krabka_raft::SnapshotRange;
 
-    use crate::{authorizer::AllowAllAuthorizer, test_support::{GrantsInPrincipalName, decode_response, peer, start_broker_no_audit_with}};
-
-use super::*;
+    use super::*;
+    use crate::{
+        authorizer::AllowAllAuthorizer,
+        test_support::{GrantsInPrincipalName, decode_response, peer, start_broker_no_audit_with},
+    };
 
     /// A request for partition 0 of the metadata topic, at the given id,
     /// leader epoch and position.
@@ -235,8 +237,7 @@ use super::*;
                 version,
                 address
             );
-            let served =
-                decode_response::<FetchSnapshotResponse>(&bytes, version);
+            let served = decode_response::<FetchSnapshotResponse>(&bytes, version);
             check!(served.error_code == codes::NONE, "v{version}");
             check!(served.topics.len() == 1, "v{version}");
         }
@@ -379,8 +380,7 @@ use super::*;
             )
             .await
             .expect("handle");
-            let resp =
-                decode_response::<FetchSnapshotResponse>(&bytes, version);
+            let resp = decode_response::<FetchSnapshotResponse>(&bytes, version);
 
             check!(resp.error_code == top_level, "{what}: top-level code");
             if top_level != codes::NONE {

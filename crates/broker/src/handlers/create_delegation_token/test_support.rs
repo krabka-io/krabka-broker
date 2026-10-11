@@ -14,9 +14,7 @@ pub(super) fn super_users_with(names: &[&str]) -> SimpleAclAuthorizer {
 }
 
 /// The `CreateTokens` check inputs over `authorizer`, from a fixed peer.
-pub(super) fn token_acl(
-    authorizer: &SimpleAclAuthorizer,
-) -> super::TokenAcl<'_> {
+pub(super) fn token_acl(authorizer: &SimpleAclAuthorizer) -> super::TokenAcl<'_> {
     static PEER: std::sync::LazyLock<std::net::SocketAddr> =
         std::sync::LazyLock::new(|| "127.0.0.1:50000".parse().expect("static addr"));
     super::TokenAcl {

@@ -12,7 +12,29 @@ use crate::{
     broker::{
         DisklessRuntime,
         partition_spawn::{PartitionSpawnConfig, try_spawn_partition_with_replication_target},
-    }, config::BrokerConfig, config_keys::resolve_diskless, coordinator::{GroupCoordinator, bootstrap::{bootstrap, bootstrap_audit_topic}, unified::{ImageMetadataProvider, offsets_log::ProductionOffsetsLog}}, diskless::recovery::{open_config, recover_open_log}, error::BrokerError, log_dir, log_dir_id::LogDirIds, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, partition::{PartitionRuntimeConfig, ReplicationTarget}, partition_registry::PartitionRegistry, producer_id_manager::ProducerIdManager, producer_state::ProducerState, replicator_supervisor::desired_wal_placements, wal::{OffsetSequencer, quorum::{follower::hydrate_on_promotion, registry::ShardId}},
+    },
+    config::BrokerConfig,
+    config_keys::resolve_diskless,
+    coordinator::{
+        GroupCoordinator,
+        bootstrap::{bootstrap, bootstrap_audit_topic},
+        unified::{ImageMetadataProvider, offsets_log::ProductionOffsetsLog},
+    },
+    diskless::recovery::{open_config, recover_open_log},
+    error::BrokerError,
+    log_dir,
+    log_dir_id::LogDirIds,
+    log_dir_status::LogDirRegistry,
+    metadata_source::MetadataSource,
+    partition::{PartitionRuntimeConfig, ReplicationTarget},
+    partition_registry::PartitionRegistry,
+    producer_id_manager::ProducerIdManager,
+    producer_state::ProducerState,
+    replicator_supervisor::desired_wal_placements,
+    wal::{
+        OffsetSequencer,
+        quorum::{follower::hydrate_on_promotion, registry::ShardId},
+    },
 };
 
 pub(super) struct StorageStartup {
@@ -30,8 +52,7 @@ pub(super) async fn recover_storage_and_groups(
     diskless_runtime: &DisklessRuntime,
 ) -> Result<StorageStartup, BrokerError> {
     let log_dirs = config.all_log_dirs();
-    let log_dir_status = LogDirRegistry::probe(&log_dirs)
-        .with_metadata_dir(config.metadata_dir());
+    let log_dir_status = LogDirRegistry::probe(&log_dirs).with_metadata_dir(config.metadata_dir());
     let log_dir_ids = LogDirIds::provision(
         &log_dirs,
         config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
@@ -48,10 +69,8 @@ pub(super) async fn recover_storage_and_groups(
     if config.is_broker() {
         let startup_image = controller.current_image();
         let scan_dirs = log_dir_status.online_subset(&log_dirs);
-        let wal_placements = desired_wal_placements(
-            &startup_image,
-            config.diskless_wal_local_replica_count,
-        );
+        let wal_placements =
+            desired_wal_placements(&startup_image, config.diskless_wal_local_replica_count);
         for (topic, partition_id, owning_dir) in log_dir::scan_all(&scan_dirs)? {
             let directory = log_dir::partition_dir(&owning_dir, &topic, partition_id);
             let diskless = resolve_diskless(startup_image.topic_config(&topic));
@@ -139,8 +158,7 @@ pub(super) async fn recover_storage_and_groups(
                             diskless.then(|| {
                                 Arc::new(crate::wal::ControllerSequencer::new(Arc::clone(
                                     controller,
-                                )))
-                                    as Arc<dyn OffsetSequencer>
+                                ))) as Arc<dyn OffsetSequencer>
                             }),
                         ),
                     ),
@@ -150,13 +168,11 @@ pub(super) async fn recover_storage_and_groups(
             partitions.insert(Arc::from(topic), PartitionIndex(partition_id), partition);
         }
     }
-    let offsets_log = Arc::new(
-        ProductionOffsetsLog::new(
-            Arc::clone(&partitions),
-            Arc::clone(controller),
-            config.node_id,
-        ),
-    );
+    let offsets_log = Arc::new(ProductionOffsetsLog::new(
+        Arc::clone(&partitions),
+        Arc::clone(controller),
+        config.node_id,
+    ));
     let mut consumer_group = config.next_gen_consumer_group.as_ref().clone();
     consumer_group.session_expiry_tick = config.coordinator_session_expiry_tick.to_std();
     consumer_group.actor_mailbox_capacity = config.coordinator_actor_mailbox_capacity;

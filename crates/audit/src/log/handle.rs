@@ -206,7 +206,10 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::{NodeId, log::test_support::{emit_lifecycle, life}};
+    use crate::{
+        NodeId,
+        log::test_support::{emit_lifecycle, life},
+    };
 
     #[tokio::test]
     async fn close_ends_stream_for_every_log_clone_after_queued_events() {

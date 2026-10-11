@@ -140,12 +140,18 @@ mod tests {
 
     use super::*;
     use crate::{
-        codes, coordinator::unified::{
-            actor::test_support::topic_reconcile_input, consumer_state::ResolvedRegularExpression, migration::serve_classic_heartbeat, persistence_next_gen::{
+        codes,
+        coordinator::unified::{
+            actor::test_support::topic_reconcile_input,
+            consumer_state::ResolvedRegularExpression,
+            migration::serve_classic_heartbeat,
+            persistence_next_gen::{
                 ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
                 MemberAssignmentState, MemberMetadataValue, RegularExpressionValue,
                 TargetAssignmentMemberValue,
-            }, reconciler::ReconcileInput, test_support::MemberEpoch,
+            },
+            reconciler::ReconcileInput,
+            test_support::MemberEpoch,
         },
     };
 

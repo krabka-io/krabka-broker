@@ -4,9 +4,8 @@
 //! every admin RPC reports the principal, the source endpoint, and the changed
 //! resources in the same shape.
 
-use crate::time_util::now_ms;
-
 use super::RequestContext;
+use crate::time_util::now_ms;
 
 /// Emits an `AdminOperation` audit event for a completed admin request.
 ///

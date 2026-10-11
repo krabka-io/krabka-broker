@@ -8,7 +8,15 @@ use std::sync::Arc;
 use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
-use crate::{client_metrics::{ClientMetrics, ClientMetricsManager, prometheus_sink::SharedClientMetricsCollector}, config::BrokerConfig, error::BrokerError, metrics::BrokerMetrics, metrics_server::run};
+use crate::{
+    client_metrics::{
+        ClientMetrics, ClientMetricsManager, prometheus_sink::SharedClientMetricsCollector,
+    },
+    config::BrokerConfig,
+    error::BrokerError,
+    metrics::BrokerMetrics,
+    metrics_server::run,
+};
 
 pub(super) struct ObservabilityStartup {
     pub(super) metrics_bound_addr: Option<std::net::SocketAddr>,
@@ -51,11 +59,13 @@ pub(super) async fn start_observability(
         metrics.client_metrics_otlp_dropped_total.clone(),
         metrics.client_metrics_otlp_failed_total.clone(),
     ));
-    metrics.registry.lock().await.register_collector(Box::new(
-        SharedClientMetricsCollector(
+    metrics
+        .registry
+        .lock()
+        .await
+        .register_collector(Box::new(SharedClientMetricsCollector(
             client_metrics.prometheus.clone(),
-        ),
-    ));
+        )));
     let eviction_metrics = Arc::clone(&client_metrics);
     let eviction_shutdown = shutdown.child_token();
     let eviction_tick = config.client_metrics_eviction_tick;

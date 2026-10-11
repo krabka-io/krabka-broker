@@ -7,7 +7,11 @@ use bytes::Bytes;
 use tokio::sync::oneshot;
 
 use crate::coordinator::{
-    test_support::{TopicDeletionTombstonesSetup, offset_entry, parsed_offset_records, topic_deletion_tombstones}, unified::{
+    test_support::{
+        TopicDeletionTombstonesSetup, offset_entry, parsed_offset_records,
+        topic_deletion_tombstones,
+    },
+    unified::{
         actor::{
             GroupActorMessage,
             test_support::{make_coordinator, rpc},
@@ -64,16 +68,14 @@ async fn deleting_a_topic_tombstones_its_offsets_in_the_group() {
             deleted: vec!["orders"],
             append_result: AppendResult::Success,
             expected_reply: vec![key("orders", 0), key("orders", 1), key("orders", 2)],
-            expected_records: topic_deletion_tombstones(
-                TopicDeletionTombstonesSetup {
-                    partitions: &[
-                        krabka_ids::PartitionIndex(0),
-                        krabka_ids::PartitionIndex(1),
-                        krabka_ids::PartitionIndex(2),
-                    ],
-                    ..Default::default()
-                },
-            ),
+            expected_records: topic_deletion_tombstones(TopicDeletionTombstonesSetup {
+                partitions: &[
+                    krabka_ids::PartitionIndex(0),
+                    krabka_ids::PartitionIndex(1),
+                    krabka_ids::PartitionIndex(2),
+                ],
+                ..Default::default()
+            }),
             expected_committed: HashSet::from([key("orders", 3), key("payments", 0)]),
             expected_pending: HashSet::from([key("payments", 1)]),
         },

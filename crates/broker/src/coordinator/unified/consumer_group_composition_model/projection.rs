@@ -15,10 +15,13 @@ use super::{
     TOPIC,
     state::{CgcState, MemberProj},
 };
-use crate::coordinator::{test_support::sorted_epoch_pairs, unified::{
-    actor::reconciliation_model_support::{assert_member_epochs, model_epoch_assertion},
-    consumer_state::GroupState,
-}};
+use crate::coordinator::{
+    test_support::sorted_epoch_pairs,
+    unified::{
+        actor::reconciliation_model_support::{assert_member_epochs, model_epoch_assertion},
+        consumer_state::GroupState,
+    },
+};
 
 fn epochs_of(map: &HashMap<Uuid, HashMap<i32, i32>>) -> Vec<(i32, i32)> {
     sorted_epoch_pairs(map.get(&TOPIC))

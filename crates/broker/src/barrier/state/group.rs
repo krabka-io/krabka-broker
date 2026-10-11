@@ -11,7 +11,10 @@ use std::collections::BTreeMap;
 use krabka_units::Time;
 
 use super::NO_EPOCH_YET;
-use crate::{barrier::persistence::{CutValue, GroupValue, InjectionStartValue}, metadata_epoch::next_i64};
+use crate::{
+    barrier::persistence::{CutValue, GroupValue, InjectionStartValue},
+    metadata_epoch::next_i64,
+};
 
 /// The definition a caller supplies for a barrier group.
 ///

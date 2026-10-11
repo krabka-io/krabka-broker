@@ -4,7 +4,11 @@ use assert2::{assert, check};
 use krabka_metadata::{BrokerRegistrationRecord, MetadataError};
 
 use super::*;
-use crate::{config::NodeRole, coordinator::AUDIT_TOPIC, test_support::{FakeMetadataSource, broker_registration}};
+use crate::{
+    config::NodeRole,
+    coordinator::AUDIT_TOPIC,
+    test_support::{FakeMetadataSource, broker_registration},
+};
 
 // The isolated controller of the Kafka system tests that surfaced the defect.
 const CONTROLLER: NodeId = NodeId(3001);

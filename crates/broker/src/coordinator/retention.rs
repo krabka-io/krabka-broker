@@ -50,7 +50,10 @@ use super::{
         actor::{GroupActorMessage, ReapOutcome},
     },
 };
-use crate::{coordinator::unified::actor::GroupActorHandle, metadata_source::MetadataSource, task_util::run_every, time_util::now_ms};
+use crate::{
+    coordinator::unified::actor::GroupActorHandle, metadata_source::MetadataSource,
+    task_util::run_every, time_util::now_ms,
+};
 
 #[cfg(test)]
 mod tests;
@@ -148,11 +151,7 @@ fn sweepable(coordinator: &GroupCoordinator, group_id: &str) -> bool {
 /// reaped handle out. Clearing it unconditionally would strip the
 /// replacement's protocol-type lock, which routing and KIP-848 migration read,
 /// and its durable seed, which a later respawn replays from.
-fn forget_group(
-    coordinator: &GroupCoordinator,
-    group_id: &str,
-    handle: &Arc<GroupActorHandle>,
-) {
+fn forget_group(coordinator: &GroupCoordinator, group_id: &str, handle: &Arc<GroupActorHandle>) {
     if coordinator
         .groups
         .remove_if(group_id, |_, live| Arc::ptr_eq(live, handle))

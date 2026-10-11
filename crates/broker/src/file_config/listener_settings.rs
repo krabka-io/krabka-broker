@@ -9,9 +9,16 @@
 use krabka_security::ListenerProtocol;
 use krabka_units::Time;
 
-use crate::{SslPrincipalMapper, config::BrokerConfig, config_keys::{AUTO_CREATE_TOPICS_ENABLE, DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, INTER_BROKER_LISTENER_NAME, LOG_ROLL_MS, NUM_PARTITIONS}, txn::coordinator::produce_verification::PARTITION_VERIFICATION_ENABLE};
-
 use super::{FileClientAuthMode, FileConfigError, FileListener, FileTlsConfig};
+use crate::{
+    SslPrincipalMapper,
+    config::BrokerConfig,
+    config_keys::{
+        AUTO_CREATE_TOPICS_ENABLE, DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE,
+        INTER_BROKER_LISTENER_NAME, LOG_ROLL_MS, NUM_PARTITIONS,
+    },
+    txn::coordinator::produce_verification::PARTITION_VERIFICATION_ENABLE,
+};
 
 pub(super) struct ListenerSettings {
     pub(super) listeners: Vec<FileListener>,
@@ -44,8 +51,7 @@ fn apply_topic_creation_properties(
     if !origins.default_replication_factor
         && let Some(value) = properties.get(DEFAULT_REPLICATION_FACTOR)
     {
-        cfg.default_replication_factor =
-            parse_positive(DEFAULT_REPLICATION_FACTOR, value)?;
+        cfg.default_replication_factor = parse_positive(DEFAULT_REPLICATION_FACTOR, value)?;
         origins.default_replication_factor = true;
     }
     Ok(())
@@ -96,9 +102,7 @@ fn apply_boolean_properties(
         cfg.delete_topic_enable = enabled;
         cfg.static_config_origins.topic_admin.delete_topic_enable = true;
     }
-    if let Some(enabled) =
-        boolean_property(properties, AUTO_CREATE_TOPICS_ENABLE)?
-    {
+    if let Some(enabled) = boolean_property(properties, AUTO_CREATE_TOPICS_ENABLE)? {
         cfg.auto_create_topics_enable = enabled;
         cfg.static_config_origins
             .topic_admin
@@ -332,10 +336,10 @@ pub(super) fn apply_listener_settings(
         use krabka_security::{ClientAuthMode, TlsConfig};
         cfg.tls_principal_mapper = SslPrincipalMapper::parse(&tls.principal_mapping_rules)
             .map_err(|error| {
-            FileConfigError::InvalidConfig(format!(
-                "invalid ssl principal mapping rule in tls_config: {error}"
-            ))
-        })?;
+                FileConfigError::InvalidConfig(format!(
+                    "invalid ssl principal mapping rule in tls_config: {error}"
+                ))
+            })?;
         cfg.tls_config = Some(TlsConfig {
             cert_chain_path: tls.cert_path,
             private_key_path: tls.key_path,
@@ -355,12 +359,15 @@ pub(super) fn apply_listener_settings(
 mod tests {
     use assert2::{assert, check};
 
-    use crate::{config::BrokerConfig, file_config::{FileConfig, FileConfigError, test_support::{configured, configured_feature, configured_unwrap_parse}}};
+    use crate::{
+        config::BrokerConfig,
+        file_config::{
+            FileConfig, FileConfigError,
+            test_support::{configured, configured_feature, configured_unwrap_parse},
+        },
+    };
 
-    fn file_outcome<T>(
-        source: &str,
-        read: impl FnOnce(&BrokerConfig) -> T,
-    ) -> Result<T, String> {
+    fn file_outcome<T>(source: &str, read: impl FnOnce(&BrokerConfig) -> T) -> Result<T, String> {
         let file: FileConfig = toml::from_str(source).expect("parse");
         let mut cfg = BrokerConfig::default();
         file.apply_to(&mut cfg)
@@ -837,9 +844,7 @@ connections_max_idle = "5s"
                 ),
             ),
         ] {
-            let applied = configured_feature(toml, |cfg| {
-                cfg.features.unstable_api_versions
-            });
+            let applied = configured_feature(toml, |cfg| cfg.features.unstable_api_versions);
             assert!(applied == expected, "{toml}");
         }
     }
@@ -869,9 +874,7 @@ connections_max_idle = "5s"
                 ),
             ),
         ] {
-            let applied = configured_feature(toml, |cfg| {
-                cfg.features.unstable_feature_versions
-            });
+            let applied = configured_feature(toml, |cfg| cfg.features.unstable_feature_versions);
             assert!(applied == expected, "{toml}");
         }
     }
@@ -998,9 +1001,7 @@ key_path = "/etc/krabka/tls/node.key"
             ),
         ];
         for (name, rules, expected) in cases {
-            let cfg =
-                configured(&format!("{base}{rules}"), "parse")
-                    .unwrap();
+            let cfg = configured(&format!("{base}{rules}"), "parse").unwrap();
             check!(
                 cfg.tls_principal_mapper.apply(dn).as_deref() == expected,
                 "{name}"

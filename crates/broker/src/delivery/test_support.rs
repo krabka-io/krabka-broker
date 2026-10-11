@@ -23,9 +23,13 @@ use qubit_clock::{ManualMonotonicClock, WallClock};
 use tokio::sync::{Notify, mpsc};
 
 use crate::{
-    delivery::{DeliveryHandles, PartitionDelivery, metrics::DeliveryMetrics}, partition::{
+    delivery::{DeliveryHandles, PartitionDelivery, metrics::DeliveryMetrics},
+    partition::{
         Partition, WriterMessage, empty_marker_materialization, initial_replication_target,
-    }, partition_registry::PartitionRegistry, replica_state::ReplicaState, test_support::UnixMillis,
+    },
+    partition_registry::PartitionRegistry,
+    replica_state::ReplicaState,
+    test_support::UnixMillis,
 };
 
 /// A fixed clock reading, so a schedule in a test is exact rather than nearly

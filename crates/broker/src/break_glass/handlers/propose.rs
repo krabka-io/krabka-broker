@@ -25,7 +25,11 @@ use crate::{
             PrivilegedAudit, Refusal, UNKNOWN_ACTION, admit_privileged_request, audit_privileged,
             principal_name, submit_error, to_wire_uuid,
         },
-    }, broker::Broker, codes, handlers::{RequestContext, cluster_alter_denied, encode_response}, time_util::now_ms,
+    },
+    broker::Broker,
+    codes,
+    handlers::{RequestContext, cluster_alter_denied, encode_response},
+    time_util::now_ms,
 };
 
 /// The `ttl_ms` value that asks for the configured lifetime.

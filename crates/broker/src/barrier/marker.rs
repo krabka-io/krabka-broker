@@ -162,7 +162,10 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::{coordinator::unified::persistence::MAX_STRING_BYTES, txn::marker::{MarkerType, build_marker_batch}};
+    use crate::{
+        coordinator::unified::persistence::MAX_STRING_BYTES,
+        txn::marker::{MarkerType, build_marker_batch},
+    };
 
     fn sample() -> BarrierMarker {
         BarrierMarker {

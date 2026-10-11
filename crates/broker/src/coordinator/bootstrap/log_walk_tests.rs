@@ -6,7 +6,9 @@ use assert2::check;
 use krabka_protocol::records::RecordBatch;
 
 use super::replay::replay_records;
-use crate::coordinator::{persistence::OffsetCommitValue, test_support::temp_log, unified::actor::test_support::rpc};
+use crate::coordinator::{
+    persistence::OffsetCommitValue, test_support::temp_log, unified::actor::test_support::rpc,
+};
 
 fn append_record(log: &mut krabka_log::Log, record: krabka_protocol::records::Record) {
     let mut batch = RecordBatch {

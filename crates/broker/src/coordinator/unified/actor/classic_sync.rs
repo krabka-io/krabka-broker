@@ -89,10 +89,15 @@ mod tests {
     use super::*;
     use crate::coordinator::unified::{
         actor::{
-            DescribeMember, GroupActorMessage, test_support::{
-                decode_assignment, last_classic_metadata, make_coordinator, make_coordinator_with_topic_policy, rpc, seed_and_upgrade, seed_completing_classic, upgrade_and_rejoin_classic, upgrade_coordinator,
+            DescribeMember, GroupActorMessage,
+            test_support::{
+                decode_assignment, last_classic_metadata, make_coordinator,
+                make_coordinator_with_topic_policy, rpc, seed_and_upgrade, seed_completing_classic,
+                upgrade_and_rejoin_classic, upgrade_coordinator,
             },
-        }, classic_state::GroupState as ClassicGroupState, config::ConsumerGroupMigrationPolicy,
+        },
+        classic_state::GroupState as ClassicGroupState,
+        config::ConsumerGroupMigrationPolicy,
     };
 
     /// Partitions by topic id.
@@ -110,11 +115,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_leader_sync_persists_complete_stable_snapshot() {
         let (coord, log) = make_coordinator();
-        let (handle, generation) =
-            seed_completing_classic(
-                &coord,
-                &["m1", "m2"],
-            );
+        let (handle, generation) = seed_completing_classic(&coord, &["m1", "m2"]);
         let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicSync {
             req: rpc::assignment_sync_request(generation, "m1", Bytes::from_static(b"assignment")),
             reply: tx,
@@ -149,11 +150,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_sync_append_failure_rolls_back_and_can_retry() {
         let (coord, log) = make_coordinator();
-        let (handle, generation) =
-            seed_completing_classic(
-                &coord,
-                &["m1"],
-            );
+        let (handle, generation) = seed_completing_classic(&coord, &["m1"]);
         log.fail_next
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let request =
@@ -339,11 +336,8 @@ mod tests {
     /// sync writes nothing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_hosted_member_syncs_its_assigned_partitions_not_its_target() {
-        let (coord, log) = make_coordinator_with_topic_policy(
-            "t",
-            2,
-            ConsumerGroupMigrationPolicy::Upgrade,
-        );
+        let (coord, log) =
+            make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Upgrade);
         let handle = seed_and_upgrade(&coord, "t").await;
         let join = rpc::classic_join(&handle, "m-classic", "t").await;
         assert!(

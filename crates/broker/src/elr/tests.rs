@@ -20,7 +20,15 @@ use krabka_protocol::owned::{
 
 use super::{ElrPublisher, TopicElr, state::PartitionElr};
 use crate::{
-    broker::Broker, codes, handlers::broker_registration::handle, heartbeat::controller_state::BrokerControlState, test_support::{IsrResponseCheck, LiveIsrSetup, WireBrokerId, accepted_isr_proposal, broker_registration, end_heartbeat_session, finalized_broker_features, peer, principal, request_context, started_controller_broker, topic_partitions_request},
+    broker::Broker,
+    codes,
+    handlers::broker_registration::handle,
+    heartbeat::controller_state::BrokerControlState,
+    test_support::{
+        IsrResponseCheck, LiveIsrSetup, WireBrokerId, accepted_isr_proposal, broker_registration,
+        end_heartbeat_session, finalized_broker_features, peer, principal, request_context,
+        started_controller_broker, topic_partitions_request,
+    },
 };
 
 const TOPIC: &str = "orders";
@@ -129,11 +137,7 @@ async fn activate_followers(broker: &Broker) {
         broker.liveness.record_fenced_heartbeat(node).await;
         broker
             .liveness
-            .touch(
-                node,
-                BrokerControlState::Unfenced,
-                0,
-            )
+            .touch(node, BrokerControlState::Unfenced, 0)
             .await;
     }
 }
@@ -257,10 +261,9 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) {
     let principal = principal("replica");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "broker-client");
-    let response =
-        handle(broker, request, REGISTER_VERSION, &ctx)
-            .await
-            .expect("BrokerRegistration");
+    let response = handle(broker, request, REGISTER_VERSION, &ctx)
+        .await
+        .expect("BrokerRegistration");
     assert!(response.error_code == codes::NONE, "{response:?}");
 }
 
@@ -310,10 +313,7 @@ async fn rejoin_follower_and_check_isr(broker: &Arc<Broker>) {
     accepted_isr_proposal(
         broker,
         LiveIsrSetup {
-            new_isr: &[
-                WireBrokerId(1),
-                WireBrokerId(2),
-            ],
+            new_isr: &[WireBrokerId(1), WireBrokerId(2)],
             ..Default::default()
         },
         IsrResponseCheck::EnvelopeAndPartition,

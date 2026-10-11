@@ -9,7 +9,10 @@
 use krabka_ids::PartitionIndex;
 use krabka_remote_storage::TopicIdPartition;
 
-use crate::{broker::Broker, partition_registry::PartitionRegistry, remote_log_manager::cascade_remote_partition_delete};
+use crate::{
+    broker::Broker, partition_registry::PartitionRegistry,
+    remote_log_manager::cascade_remote_partition_delete,
+};
 
 /// Snapshots the `(topic_id, partition_id)` of every tiered partition of
 /// `topic_name` BEFORE the controller commits the delete and the broker tears

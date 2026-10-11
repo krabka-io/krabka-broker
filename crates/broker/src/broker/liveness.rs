@@ -8,7 +8,19 @@ use std::sync::Arc;
 use krabka_units::{Time, convert::TimeExt as _};
 use tokio_util::sync::CancellationToken;
 
-use crate::{config::BrokerConfig, cordoned_log_dirs::CordonedLogDirs, heartbeat::{client::{Config, InitialUnfence, run}, controller_state::ControllerLivenessState}, leader_election::{LivenessTickState, run_liveness_tick}, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, metrics::BrokerMetrics, unclean_recovery::{RecoveryPolicy, UncleanRecoveryHandle}};
+use crate::{
+    config::BrokerConfig,
+    cordoned_log_dirs::CordonedLogDirs,
+    heartbeat::{
+        client::{Config, InitialUnfence, run},
+        controller_state::ControllerLivenessState,
+    },
+    leader_election::{LivenessTickState, run_liveness_tick},
+    log_dir_status::LogDirRegistry,
+    metadata_source::MetadataSource,
+    metrics::BrokerMetrics,
+    unclean_recovery::{RecoveryPolicy, UncleanRecoveryHandle},
+};
 
 /// Drives broker-death failover from the liveness registry. Every
 /// `tick_interval` it runs [`crate::leader_election::run_liveness_tick`]. That
@@ -150,8 +162,7 @@ pub(super) struct LivenessStartup {
     pub(super) should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
     pub(super) unclean_recovery: UncleanRecoveryHandle,
     /// Where this broker's first unfencing stands.
-    pub(super) initial_unfence:
-        tokio::sync::watch::Receiver<InitialUnfence>,
+    pub(super) initial_unfence: tokio::sync::watch::Receiver<InitialUnfence>,
 }
 
 pub(super) fn start_liveness_services(
@@ -171,39 +182,34 @@ pub(super) fn start_liveness_services(
     ),
 ) -> LivenessStartup {
     let (metrics, audit_log) = observability;
-    let liveness = Arc::new(
-        ControllerLivenessState::new(config.heartbeat_timeout),
-    );
+    let liveness = Arc::new(ControllerLivenessState::new(config.heartbeat_timeout));
     let (want_shutdown, want_shutdown_rx) = tokio::sync::watch::channel(false);
     let (should_shutdown, _) = tokio::sync::watch::channel(false);
     let want_shutdown = Arc::new(want_shutdown);
     let should_shutdown = Arc::new(should_shutdown);
-    let (unfenced, initial_unfence) =
-        tokio::sync::watch::channel(InitialUnfence::Pending);
-    tokio::spawn(run(
-        Config {
-            broker_id: config.broker_id,
-            broker_epoch: config.broker_epoch,
-            interval: config.heartbeat_interval,
-            controller: Arc::clone(controller),
-            shutdown: shutdown.child_token(),
-            outbound_client: Arc::clone(inter_broker_client),
-            controller_listener_protocol: config.controller_listener_protocol,
-            controller_server_name: config
-                .controller_server_name
-                .clone()
-                .unwrap_or_else(|| "localhost".to_owned()),
-            controller_quorum_voters: config.controller_quorum_voters.clone(),
-            want_shutdown: want_shutdown_rx,
-            should_shutdown: Arc::clone(&should_shutdown),
-            unfenced,
-            log_dir_status: log_dirs.0.clone(),
-            log_dir_ids: log_dirs.1.clone(),
-            all_log_dirs: config.all_log_dirs(),
-            supervisor_shutdown: shutdown.clone(),
-            cordoned_log_dirs: log_dirs.2.clone(),
-        },
-    ));
+    let (unfenced, initial_unfence) = tokio::sync::watch::channel(InitialUnfence::Pending);
+    tokio::spawn(run(Config {
+        broker_id: config.broker_id,
+        broker_epoch: config.broker_epoch,
+        interval: config.heartbeat_interval,
+        controller: Arc::clone(controller),
+        shutdown: shutdown.child_token(),
+        outbound_client: Arc::clone(inter_broker_client),
+        controller_listener_protocol: config.controller_listener_protocol,
+        controller_server_name: config
+            .controller_server_name
+            .clone()
+            .unwrap_or_else(|| "localhost".to_owned()),
+        controller_quorum_voters: config.controller_quorum_voters.clone(),
+        want_shutdown: want_shutdown_rx,
+        should_shutdown: Arc::clone(&should_shutdown),
+        unfenced,
+        log_dir_status: log_dirs.0.clone(),
+        log_dir_ids: log_dirs.1.clone(),
+        all_log_dirs: config.all_log_dirs(),
+        supervisor_shutdown: shutdown.clone(),
+        cordoned_log_dirs: log_dirs.2.clone(),
+    }));
     let unclean_recovery = crate::unclean_recovery::UncleanRecoveryManager::spawn(
         Arc::clone(controller),
         Arc::clone(&liveness),
@@ -263,7 +269,10 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::{broker::test_support::fake_source, metadata_source::MetadataSource, test_support::broker_registration};
+    use crate::{
+        broker::test_support::fake_source, metadata_source::MetadataSource,
+        test_support::broker_registration,
+    };
 
     fn image_with_registered_broker(node_id: u64) -> krabka_metadata::MetadataImage {
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());

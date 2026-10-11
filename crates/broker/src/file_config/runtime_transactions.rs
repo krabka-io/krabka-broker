@@ -7,8 +7,6 @@
 
 use krabka_units::{ByteSize, Time, convert::TimeExt, kibibytes};
 
-use crate::config::BrokerConfig;
-
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
@@ -16,6 +14,7 @@ use super::{
         positive_usize, whole_bytes_usize, whole_millis_i32_time, whole_millis_i64_time,
     },
 };
+use crate::config::BrokerConfig;
 
 impl RuntimeFileConfig {
     pub(super) fn apply_transactions(
@@ -145,10 +144,7 @@ impl RuntimeFileConfig {
     /// `barrier_min_injection_interval` is a floor. A group asks for its own
     /// periodic interval through `AlterBarrierGroups`, and the coordinator
     /// refuses one below this value.
-    pub(super) fn apply_barrier(
-        &mut self,
-        cfg: &mut BrokerConfig,
-    ) -> Result<(), FileConfigError> {
+    pub(super) fn apply_barrier(&mut self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
         set_runtime! {
             runtime => cfg;
@@ -188,7 +184,10 @@ mod tests {
     use assert2::assert;
     use krabka_units::{mebibytes, secs};
 
-    use crate::{config::BrokerConfig, file_config::{FileConfig, test_support::configured}};
+    use crate::{
+        config::BrokerConfig,
+        file_config::{FileConfig, test_support::configured},
+    };
 
     #[test]
     fn barrier_runtime_keys_land_in_the_broker_config() {

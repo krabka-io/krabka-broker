@@ -11,7 +11,9 @@ use krabka_units::{
 };
 
 use crate::{
-    BrokerError, config::{BrokerConfig, RlmmKind}, internal_topics::validate_audit_topic_name,
+    BrokerError,
+    config::{BrokerConfig, RlmmKind},
+    internal_topics::validate_audit_topic_name,
 };
 
 impl BrokerConfig {
@@ -375,7 +377,10 @@ mod tests {
     use krabka_units::{Time, bytes, millis};
 
     use super::*;
-    use crate::config::{PlainCredentials, RemoteStorageBackend, test_support::{RuntimeInvalidator, assert_invalid_runtime, base}};
+    use crate::config::{
+        PlainCredentials, RemoteStorageBackend,
+        test_support::{RuntimeInvalidator, assert_invalid_runtime, base},
+    };
 
     /// Kafka's `super.users` accepts any principal, `User:ANONYMOUS`
     /// included. A cluster with a `PLAINTEXT` controller listener and a

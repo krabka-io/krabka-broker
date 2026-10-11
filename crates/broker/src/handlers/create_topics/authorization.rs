@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use krabka_metadata::AclOperation;
 
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics}, broker::Broker, handlers::{RequestContext, acl_denied_quiet, cluster_shortcut_denied},
+    authorizer::{AuthorizationResult, authorize_topics},
+    broker::Broker,
+    handlers::{RequestContext, acl_denied_quiet, cluster_shortcut_denied},
 };
 
 /// The `Create` decision for a set of candidate topic names: an Allow for

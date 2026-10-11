@@ -289,7 +289,9 @@ mod tests {
     use krabka_log::Offset;
 
     use super::*;
-    use crate::coordinator::unified::actor::test_support::{classic_member, make_coordinator, rpc, seed_completing_classic};
+    use crate::coordinator::unified::actor::test_support::{
+        classic_member, make_coordinator, rpc, seed_completing_classic,
+    };
 
     /// Kafka's `GroupMetadataManager.onUnloaded` answers every awaiting
     /// `JoinGroup` of a `PreparingRebalance` group, under the member's own id,
@@ -323,11 +325,7 @@ mod tests {
 
         // A follower that waits in `SyncGroup` for the leader.
         let (coord, _log) = make_coordinator();
-        let (handle, generation) =
-            seed_completing_classic(
-                &coord,
-                &["m1", "m2"],
-            );
+        let (handle, generation) = seed_completing_classic(&coord, &["m1", "m2"]);
         let sync_rx = rpc::begin_classic_sync(
             &handle,
             SyncGroupRequest {

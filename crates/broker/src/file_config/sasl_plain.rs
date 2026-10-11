@@ -6,9 +6,8 @@
 //! credential file, kept out of the TOML so the secret can be a mounted
 //! `Secret` rather than a config-map value.
 
-use crate::config::{BrokerConfig, PlainCredentials};
-
 use super::FileConfigError;
+use crate::config::{BrokerConfig, PlainCredentials};
 
 /// TOML shape of `[sasl_plain]`. Maps to
 /// [`crate::BrokerConfig::plain_credentials`].
@@ -87,7 +86,10 @@ pub(super) fn apply_sasl_plain(
 mod tests {
     use assert2::assert;
 
-    use crate::{config::{BrokerConfig, InterBrokerCredentials}, file_config::{FileConfig, test_support::configured_unwrap_parse}};
+    use crate::{
+        config::{BrokerConfig, InterBrokerCredentials},
+        file_config::{FileConfig, test_support::configured_unwrap_parse},
+    };
 
     fn apply_credential_file(body: &str) -> Result<BrokerConfig, String> {
         let dir = tempfile::tempdir().unwrap();

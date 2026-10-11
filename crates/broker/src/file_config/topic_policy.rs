@@ -3,9 +3,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::{config::BrokerConfig, topic_policy::TopicPolicy};
-
 use super::{FileConfigError, validate::positive_usize};
+use crate::{config::BrokerConfig, topic_policy::TopicPolicy};
 
 /// TOML shape of `[topic_policy]`. Maps to
 /// [`crate::topic_policy::TopicPolicy`].

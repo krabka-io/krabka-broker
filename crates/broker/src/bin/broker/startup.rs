@@ -413,9 +413,8 @@ mod tests {
     use assert2::assert;
     use tempfile::tempdir;
 
+    use super::*;
     use crate::test_support::env_guard;
-
-use super::*;
 
     // Kafka 4.3 supports `metadata.version` up to 30, and 33 (`4.4-IV2`) is one
     // of trunk's unstable levels.

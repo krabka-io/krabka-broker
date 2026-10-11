@@ -12,7 +12,9 @@ use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::config::{DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_TOPIC};
+use crate::config::{
+    DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_TOPIC,
+};
 
 /// `[audit]` section of `broker.toml` (`FedRAMP` 20x MLA).
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]

@@ -73,7 +73,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        barrier::test_support::open_partition, coordinator::unified::persistence::MAX_STRING_BYTES, partition_registry::PartitionRegistry, test_support::StandalonePartitionSetup,
+        barrier::test_support::open_partition, coordinator::unified::persistence::MAX_STRING_BYTES,
+        partition_registry::PartitionRegistry, test_support::StandalonePartitionSetup,
     };
 
     async fn leader_partition(dir: &std::path::Path) -> std::sync::Arc<Partition> {

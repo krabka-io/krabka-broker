@@ -348,9 +348,7 @@ impl BrokerHandle {
             use crate::handlers::offline_replicas::live_brokers;
 
             let image = self.broker.controller.current_image();
-            live_brokers(&self.broker, &image)
-                .await
-                .contains(&node)
+            live_brokers(&self.broker, &image).await.contains(&node)
         })
         .await;
         assert2::assert!(

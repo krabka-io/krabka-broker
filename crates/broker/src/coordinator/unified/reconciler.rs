@@ -262,7 +262,9 @@ mod tests {
     use assert2::{assert, check};
 
     use super::{super::assignor::UniformAssignor, *};
-    use crate::coordinator::unified::consumer_state::{MemberState, ResolvedRegularExpression, test_support::subscribed_member};
+    use crate::coordinator::unified::consumer_state::{
+        MemberState, ResolvedRegularExpression, test_support::subscribed_member,
+    };
 
     fn fresh_member(id: &str, topic: &str) -> MemberState {
         subscribed_member(id, &[topic])

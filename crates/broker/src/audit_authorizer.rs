@@ -6,7 +6,9 @@ use std::sync::Arc;
 use krabka_audit::{AuditEndpoint, AuditEvent, AuditLog, AuditPrincipal};
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer}, metrics::BrokerMetrics, time_util::now_ms,
+    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+    metrics::BrokerMetrics,
+    time_util::now_ms,
 };
 
 /// Wraps an [`Authorizer`]. It forwards decisions, bumps
@@ -122,7 +124,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer}, metrics::{AuthorizationDeniedLabel, BrokerMetrics}, test_support::{DenyAll, principal},
+        authorizer::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer},
+        metrics::{AuthorizationDeniedLabel, BrokerMetrics},
+        test_support::{DenyAll, principal},
     };
 
     // Expand the setup in the caller so receiver and metrics keep their scopes.

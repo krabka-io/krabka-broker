@@ -11,7 +11,22 @@ use std::sync::{
 use krabka_ids::PartitionIndex;
 
 use crate::{
-    config::BrokerConfig, delivery::DeliveryHandles, diskless::hot_tail::HotTailCache, error::BrokerError, log_dir_status::LogDirRegistry, partition::{Partition, PartitionRuntimeConfig, ReplicationTarget, WriterMessage, empty_marker_materialization, initial_replication_target}, partition_writer::run_with_sequencer, producer_state::ProducerState, replica_state::ReplicaState, wal::{SharedWal, quorum::{QuorumWalStore, engine::WalShardEngine, registry::WalShardRegistry}},
+    config::BrokerConfig,
+    delivery::DeliveryHandles,
+    diskless::hot_tail::HotTailCache,
+    error::BrokerError,
+    log_dir_status::LogDirRegistry,
+    partition::{
+        Partition, PartitionRuntimeConfig, ReplicationTarget, WriterMessage,
+        empty_marker_materialization, initial_replication_target,
+    },
+    partition_writer::run_with_sequencer,
+    producer_state::ProducerState,
+    replica_state::ReplicaState,
+    wal::{
+        SharedWal,
+        quorum::{QuorumWalStore, engine::WalShardEngine, registry::WalShardRegistry},
+    },
 };
 
 type PartitionWal = (
@@ -106,9 +121,7 @@ pub(crate) fn spawn_partition_with_replication_target() -> Arc<Partition> {
     let wal_shards = replication_target.topic_id.map(|topic_id| {
         use crate::wal::quorum::registry::{ShardId, WalPlacement};
 
-        let registry = Arc::new(WalShardRegistry::new(
-            krabka_raft::NodeId(0),
-        ));
+        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(0)));
         registry.replace_placements(&std::collections::HashMap::from([(
             ShardId {
                 topic_id,

@@ -11,7 +11,11 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    break_glass::{metrics::record_proposal_states, sweep::{BreakGlassController, PROPOSAL_RETENTION, SWEEP_INTERVAL, run}}, broker::{
+    break_glass::{
+        metrics::record_proposal_states,
+        sweep::{BreakGlassController, PROPOSAL_RETENTION, SWEEP_INTERVAL, run},
+    },
+    broker::{
         DisklessRuntime,
         adapters::ControllerAdapter,
         audit::start_audit_pipeline,
@@ -22,7 +26,29 @@ use crate::{
         remote_storage::{RemoteStorageStartup, start_remote_storage},
         replication::{ReplicatorStorage, spawn_replicator_supervisor},
         rlmm::{KafkaSwapKickoff, kafka_swap_kickoff},
-    }, client_metrics::ClientMetrics, config::BrokerConfig, cordoned_log_dirs::spawn_watcher, delegation_token_cleanup::{DelegationTokenController, run}, diskless::read::DisklessReadHandle, error::BrokerError, fetch_session::FetchSessionCache, health::HealthState, log_dir_id::LogDirIds, log_dir_status::LogDirRegistry, metadata_source::{MetadataSource, watch_image_loop}, metrics::{BrokerMetrics, spawn_metric_series_evictor}, network::client::InterBrokerClient, partition_registry::PartitionRegistry, producer_state::ProducerState, quota::{QuotaBuckets, run, run_expiry}, remote_reader::RemoteReader, share_coordinator::coordinator::ShareCoordinator, throttle::{ThrottleState, apply_image}, time_util::now_ms, tls_reload::run, txn::{coordinator::TxnCoordinator, expiration::run, id_expiration::run},
+    },
+    client_metrics::ClientMetrics,
+    config::BrokerConfig,
+    cordoned_log_dirs::spawn_watcher,
+    delegation_token_cleanup::{DelegationTokenController, run},
+    diskless::read::DisklessReadHandle,
+    error::BrokerError,
+    fetch_session::FetchSessionCache,
+    health::HealthState,
+    log_dir_id::LogDirIds,
+    log_dir_status::LogDirRegistry,
+    metadata_source::{MetadataSource, watch_image_loop},
+    metrics::{BrokerMetrics, spawn_metric_series_evictor},
+    network::client::InterBrokerClient,
+    partition_registry::PartitionRegistry,
+    producer_state::ProducerState,
+    quota::{QuotaBuckets, run, run_expiry},
+    remote_reader::RemoteReader,
+    share_coordinator::coordinator::ShareCoordinator,
+    throttle::{ThrottleState, apply_image},
+    time_util::now_ms,
+    tls_reload::run,
+    txn::{coordinator::TxnCoordinator, expiration::run, id_expiration::run},
 };
 
 struct RuntimeCaches {
@@ -54,12 +80,7 @@ fn spawn_break_glass_gauges(
             metrics.record_topic_freezes_active(
                 i64::try_from(image.topic_freezes().count()).unwrap_or(i64::MAX),
             );
-            record_proposal_states(
-                &metrics,
-                image,
-                &break_glass,
-                now_ms(),
-            );
+            record_proposal_states(&metrics, image, &break_glass, now_ms());
         },
     ));
 }
@@ -111,24 +132,18 @@ fn start_runtime_watchers(
     ));
     if config.delegation_token_secret_key.is_some() {
         let interval = config.delegation_token_expiry_check_interval;
-        let token_controller: Arc<dyn DelegationTokenController> =
-            Arc::new(ControllerAdapter {
-                handle: Arc::clone(controller),
-                node_id: config.node_id,
-            });
-        tokio::spawn(run(
-            token_controller,
-            interval,
-            shutdown.child_token(),
-        ));
-    }
-    // KFC-9. Every broker sweeps, the tombstone is idempotent, and a broker
-    // that never sweeps is still safe, so the sweep needs no config gate.
-    let break_glass_controller: Arc<dyn BreakGlassController> =
-        Arc::new(ControllerAdapter {
+        let token_controller: Arc<dyn DelegationTokenController> = Arc::new(ControllerAdapter {
             handle: Arc::clone(controller),
             node_id: config.node_id,
         });
+        tokio::spawn(run(token_controller, interval, shutdown.child_token()));
+    }
+    // KFC-9. Every broker sweeps, the tombstone is idempotent, and a broker
+    // that never sweeps is still safe, so the sweep needs no config gate.
+    let break_glass_controller: Arc<dyn BreakGlassController> = Arc::new(ControllerAdapter {
+        handle: Arc::clone(controller),
+        node_id: config.node_id,
+    });
     tokio::spawn(run(
         break_glass_controller,
         SWEEP_INTERVAL,
@@ -205,18 +220,11 @@ pub(super) async fn start_broker_runtime(
         &LogDirRegistry,
         &LogDirIds,
     ),
-    coordinators: (
-        &Arc<TxnCoordinator>,
-        &Arc<ShareCoordinator>,
-    ),
+    coordinators: (&Arc<TxnCoordinator>, &Arc<ShareCoordinator>),
     // The three things the runtime needs pre-built: the diskless WAL runtime,
     // the metric registry the coordinators already report into, and the
     // health state the readiness probe and the gauge sampler both read.
-    runtime_deps: (
-        &DisklessRuntime,
-        BrokerMetrics,
-        Option<HealthState>,
-    ),
+    runtime_deps: (&DisklessRuntime, BrokerMetrics, Option<HealthState>),
 ) -> Result<BrokerRuntimeStartup, BrokerError> {
     let (diskless_runtime, metrics, health) = runtime_deps;
     let supervisor_shutdown = CancellationToken::new();

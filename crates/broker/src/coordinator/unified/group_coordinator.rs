@@ -11,8 +11,6 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 
-use crate::{coordinator::leadership::ShardTerms, metadata_source::MetadataSource, metrics::BrokerMetrics, share_coordinator::persister_client::SharePersister};
-
 use super::{
     actor::{GroupActorHandle, MetadataProvider},
     config::NextGenConfig,
@@ -20,6 +18,10 @@ use super::{
     seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
     share::{actor::ShareGroupActorHandle, config::ShareGroupConfig},
     streams::{actor::StreamsGroupActorHandle, config::StreamsGroupConfig},
+};
+use crate::{
+    coordinator::leadership::ShardTerms, metadata_source::MetadataSource, metrics::BrokerMetrics,
+    share_coordinator::persister_client::SharePersister,
 };
 
 /// Locked protocol identity for a `group_id`.
@@ -70,8 +72,7 @@ pub struct GroupCoordinator {
     /// [`Self::share_persister`] to drive the Initialize and Delete lifecycle
     /// calls after reconcile. It is `None` in the pure-coordinator unit tests,
     /// where the lifecycle hook does nothing.
-    pub(crate) share_persister:
-        std::sync::OnceLock<Arc<SharePersister>>,
+    pub(crate) share_persister: std::sync::OnceLock<Arc<SharePersister>>,
 
     // ── KIP-1071 streams groups ──────────────────────────────────────────
     pub streams_config: Arc<StreamsGroupConfig>,
@@ -123,9 +124,7 @@ pub struct GroupCoordinator {
 /// The trait object itself is not `Debug`. This wrapper prints an opaque
 /// placeholder.
 #[derive(Clone, derive_more::Debug)]
-pub(crate) struct MetadataSourceHandle(
-    #[debug(skip)] pub(crate) Arc<dyn MetadataSource>,
-);
+pub(crate) struct MetadataSourceHandle(#[debug(skip)] pub(crate) Arc<dyn MetadataSource>);
 
 impl GroupCoordinator {
     pub fn new(
@@ -165,10 +164,7 @@ impl GroupCoordinator {
     /// `Broker::start` calls this once. A second call does nothing, because
     /// the `OnceLock` keeps the first value. Construction order therefore does
     /// not matter.
-    pub(crate) fn set_share_persister(
-        &self,
-        persister: Arc<SharePersister>,
-    ) {
+    pub(crate) fn set_share_persister(&self, persister: Arc<SharePersister>) {
         let _ = self.share_persister.set(persister);
     }
 
@@ -186,9 +182,7 @@ impl GroupCoordinator {
     /// It is `None` in the unit tests that construct a bare
     /// `GroupCoordinator`. The lifecycle hook then does nothing.
     #[must_use]
-    pub(crate) fn share_persister(
-        &self,
-    ) -> Option<&Arc<SharePersister>> {
+    pub(crate) fn share_persister(&self) -> Option<&Arc<SharePersister>> {
         self.share_persister.get()
     }
 
@@ -206,9 +200,7 @@ impl GroupCoordinator {
     /// `GroupCoordinator`. The streams reconcile then does nothing and returns
     /// `NotReady`.
     #[must_use]
-    pub(crate) fn metadata_source(
-        &self,
-    ) -> Option<Arc<dyn MetadataSource>> {
+    pub(crate) fn metadata_source(&self) -> Option<Arc<dyn MetadataSource>> {
         self.metadata_source.get().map(|h| h.0.clone())
     }
 

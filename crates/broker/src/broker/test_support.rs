@@ -9,7 +9,15 @@ use std::sync::Arc;
 use assert2::assert;
 use krabka_ids::{LeaderEpoch, NodeId, PartitionIndex};
 
-use crate::{broker::BrokerHandle, log_dir::partition_dir, partition::Partition, test_support::{FakeMetadataSource, StandalonePartitionSetup, single_partition_topic, spawn_standalone_partition}};
+use crate::{
+    broker::BrokerHandle,
+    log_dir::partition_dir,
+    partition::Partition,
+    test_support::{
+        FakeMetadataSource, StandalonePartitionSetup, single_partition_topic,
+        spawn_standalone_partition,
+    },
+};
 
 /// A metadata source over `image`, with `leader` as the controller leader and
 /// a loopback controller listener for the gauges and adapter paths to report.
@@ -90,9 +98,7 @@ pub(super) fn metadata_topic_record(
     topic: &str,
     topic_id: uuid::Uuid,
 ) -> krabka_metadata::MetadataRecord {
-    krabka_metadata::MetadataRecord::V1Topic(single_partition_topic(
-        topic, topic_id,
-    ))
+    krabka_metadata::MetadataRecord::V1Topic(single_partition_topic(topic, topic_id))
 }
 
 #[derive(Clone)]

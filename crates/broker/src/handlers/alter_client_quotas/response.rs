@@ -17,7 +17,10 @@ use krabka_protocol::{
     },
 };
 
-use crate::{codes::{COORDINATOR_NOT_AVAILABLE, NONE}, handlers::stamp_unset};
+use crate::{
+    codes::{COORDINATOR_NOT_AVAILABLE, NONE},
+    handlers::stamp_unset,
+};
 
 fn entity_rows(entity: &[(String, Option<String>)]) -> Vec<RespEntity> {
     entity

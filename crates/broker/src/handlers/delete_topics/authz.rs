@@ -23,7 +23,10 @@ use krabka_protocol::{
 
 use super::{request::TopicNameRequest, wire::delete_topic_result};
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics}, broker::Broker, codes, handlers::RequestContext,
+    authorizer::{AuthorizationResult, authorize_topics},
+    broker::Broker,
+    codes,
+    handlers::RequestContext,
 };
 
 /// The topics of one request that the principal may describe and may delete.

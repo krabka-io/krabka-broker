@@ -15,7 +15,10 @@ use super::{
     projection::rebuild_group,
     state::{CgcState, EpochKind, committed_map, member},
 };
-use crate::{codes::{STALE_MEMBER_EPOCH, UNKNOWN_MEMBER_ID}, coordinator::unified::actor::CommitFence};
+use crate::{
+    codes::{STALE_MEMBER_EPOCH, UNKNOWN_MEMBER_ID},
+    coordinator::unified::actor::CommitFence,
+};
 
 /// INDEPENDENT oracle for the `OffsetCommit` fence: the expected decision for a
 /// native member that presents `epoch` for partition `part`. It reads the

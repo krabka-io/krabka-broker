@@ -12,12 +12,14 @@ use krabka_units::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::config::{BrokerConfig, DEFAULT_RLMM_TOPIC_MIN_ISR, DEFAULT_RLMM_TOPIC_NUM_PARTITIONS, DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind};
-
 use super::{
     FileConfigError,
     object_store::{FileRemoteStorageGcsConfig, FileRemoteStorageS3Config, FileWormConfig},
     validate::invalid_runtime_value,
+};
+use crate::config::{
+    BrokerConfig, DEFAULT_RLMM_TOPIC_MIN_ISR, DEFAULT_RLMM_TOPIC_NUM_PARTITIONS,
+    DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind,
 };
 
 /// TOML shape of `[remote_storage]`. Maps to
@@ -273,8 +275,7 @@ pub(super) fn apply_remote_storage(
     } else if let Some(s3) = &rs.s3 {
         cfg.remote_storage_backend = Some(RemoteStorageBackend::S3(s3_config(s3)));
     } else if let Some(gcs) = &rs.gcs {
-        cfg.remote_storage_backend =
-            Some(RemoteStorageBackend::Gcs(gcs_config(gcs)));
+        cfg.remote_storage_backend = Some(RemoteStorageBackend::Gcs(gcs_config(gcs)));
     }
 
     // WORM archive mode layers over whichever object store was just
@@ -284,10 +285,7 @@ pub(super) fn apply_remote_storage(
         // Keyed off the resolved backend, not off `rs`, so a `storage_dir`
         // inherited from the caller's `BrokerConfig` is caught too.
         match &cfg.remote_storage_backend {
-            Some(
-                RemoteStorageBackend::S3(_)
-                | RemoteStorageBackend::Gcs(_),
-            ) => {}
+            Some(RemoteStorageBackend::S3(_) | RemoteStorageBackend::Gcs(_)) => {}
             Some(RemoteStorageBackend::Local { .. }) => {
                 return Err(FileConfigError::InvalidConfig(
                     "[remote_storage.worm] requires an object-store backend \
@@ -388,7 +386,10 @@ mod tests {
     use assert2::{assert, check};
     use krabka_units::{gibibytes, mebibytes, millis, secs};
 
-    use crate::{config::{BrokerConfig, DEFAULT_REMOTE_COPY_TIMEOUT, KafkaRlmmConfig, RlmmKind}, file_config::{FileConfig, test_support::configured_unwrap_parse}};
+    use crate::{
+        config::{BrokerConfig, DEFAULT_REMOTE_COPY_TIMEOUT, KafkaRlmmConfig, RlmmKind},
+        file_config::{FileConfig, test_support::configured_unwrap_parse},
+    };
 
     #[test]
     fn remote_storage_section_enables_and_sets_dir() {
@@ -406,8 +407,7 @@ storage_dir = "/var/lib/krabka/tier"
     }
     #[test]
     fn no_remote_storage_section_leaves_backend_none() {
-        let cfg =
-            configured_unwrap_parse("broker_id = 1").unwrap();
+        let cfg = configured_unwrap_parse("broker_id = 1").unwrap();
         assert!(cfg.remote_storage_backend.is_none());
         // No remote_storage section: RLMM stays at the production default (TopicBacked).
         assert!(matches!(
@@ -612,8 +612,7 @@ bucket = "b"
                 "cannot set",
             ),
         ] {
-            let error =
-                configured_unwrap_parse(source).unwrap_err();
+            let error = configured_unwrap_parse(source).unwrap_err();
             let rendered = error.to_string();
             assert!(
                 rendered.contains(expected),

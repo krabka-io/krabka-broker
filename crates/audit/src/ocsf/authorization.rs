@@ -4,9 +4,8 @@
 
 use serde_json::json;
 
-use crate::event::{AuditEndpoint, AuditPrincipal};
-
 use super::{ProductInfo, envelope::metadata};
+use crate::event::{AuditEndpoint, AuditPrincipal};
 
 pub(super) fn ocsf_authorization_denied(
     principal: &AuditPrincipal,

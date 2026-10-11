@@ -10,12 +10,19 @@ use std::sync::Arc;
 use super::replay::Replayed;
 use crate::{
     coordinator::{
-        GroupCoordinator, persistence::{GroupMetadataValue, Key, OffsetCommitValue}, unified::{
+        GroupCoordinator,
+        persistence::{GroupMetadataValue, Key, OffsetCommitValue},
+        unified::{
             classic_state::{
                 ClassicGroup as ClassicState, GroupState as ClassicGroupState, Member,
-            }, persistence_next_gen::NextGenKey, replay_policy::{ExistingGroup, GroupLookup, ModernGroupType, persisted_group}, share::persistence::ShareGroupKey, streams::persistence::StreamsGroupKey,
+            },
+            persistence_next_gen::NextGenKey,
+            replay_policy::{ExistingGroup, GroupLookup, ModernGroupType, persisted_group},
+            share::persistence::ShareGroupKey,
+            streams::persistence::StreamsGroupKey,
         },
-    }, error::BrokerError,
+    },
+    error::BrokerError,
 };
 
 /// Decodes `value` as the value of `key`'s record type and drops the result.

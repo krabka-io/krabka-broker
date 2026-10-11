@@ -345,12 +345,17 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::{
-        persistence_next_gen::GroupMetadataValue, streams::persistence::{
+        persistence_next_gen::GroupMetadataValue,
+        streams::persistence::{
             LastAssignmentConfig, StreamsGroupCurrentMemberAssignmentValue, StreamsGroupKey,
             StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMemberValue,
             StreamsGroupTargetAssignmentMetadataValue, StreamsGroupTopologyValue,
             StreamsMemberWireState,
-        }, test_support::{AssignmentDeletionProtocol, check_replay_cases, replay_fixtures, replay_tombstone_constructor, streams_member},
+        },
+        test_support::{
+            AssignmentDeletionProtocol, check_replay_cases, replay_fixtures,
+            replay_tombstone_constructor, streams_member,
+        },
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -477,8 +482,7 @@ mod tests {
             StreamsGroupSeed::new_group,
             tombstone,
             crate::coordinator::unified::test_support::AssignmentDeletionSetup {
-                protocol:
-                    AssignmentDeletionProtocol::Streams,
+                protocol: AssignmentDeletionProtocol::Streams,
                 ..Default::default()
             },
         );

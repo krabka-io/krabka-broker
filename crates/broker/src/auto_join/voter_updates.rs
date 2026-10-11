@@ -177,7 +177,10 @@ mod tests {
     use krabka_raft::{Node, NodeId};
 
     use super::*;
-    use crate::{auto_join::test_support::{ResponseHeaderMode, ResponseWireSetup, voter_update_params}, test_support::FakeMetadataSource};
+    use crate::{
+        auto_join::test_support::{ResponseHeaderMode, ResponseWireSetup, voter_update_params},
+        test_support::FakeMetadataSource,
+    };
 
     #[test]
     fn build_update_raft_voter_request_carries_identity_and_endpoints() {

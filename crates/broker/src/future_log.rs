@@ -174,9 +174,8 @@ mod tests {
     use assert2::assert;
     use krabka_units::{kibibytes, millis};
 
+    use super::*;
     use crate::throttle::TokenBucket;
-
-use super::*;
 
     #[test]
     fn move_policy_preserves_nondefault_values() {

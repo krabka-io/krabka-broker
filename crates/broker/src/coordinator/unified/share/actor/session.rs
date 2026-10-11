@@ -10,12 +10,15 @@ use super::{
     records::{chrono_now_ms, flush_pending},
     share_state::cleanup_deleted_topics,
 };
-use crate::{coordinator::unified::{
-    GroupCoordinator,
-    actor::MetadataProvider,
-    offsets_log::OffsetsLog,
-    share::{config::ShareGroupConfig, state::ShareGroupState},
-}, error::BrokerError};
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator,
+        actor::MetadataProvider,
+        offsets_log::OffsetsLog,
+        share::{config::ShareGroupConfig, state::ShareGroupState},
+    },
+    error::BrokerError,
+};
 
 /// Called on every heartbeat-interval tick. Each member whose session
 /// expired is fenced on its own, with a batch of its own, as each of Kafka's
@@ -34,9 +37,7 @@ pub(super) async fn handle_session_tick(
     let expired = state.expired_members(Instant::now(), config.session_timeout);
     for member_id in expired {
         let Some(pending) = fence_member(state, metadata, &member_id) else {
-            return Err(BrokerError::Share(
-                "group epoch is exhausted".to_owned(),
-            ));
+            return Err(BrokerError::Share("group epoch is exhausted".to_owned()));
         };
         if let Err(e) =
             flush_pending(state, pending, offsets_log, coordinator, chrono_now_ms()).await
@@ -60,20 +61,23 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::{coordinator::unified::{
-        config::NextGenConfig,
-        share::{
-            actor::{
-                records::PendingShareRecords,
-                test_support::{
-                    TopicMetadataSetup, make_coordinator_with_config, metadata_with_topic,
+    use crate::{
+        coordinator::unified::{
+            config::NextGenConfig,
+            share::{
+                actor::{
+                    records::PendingShareRecords,
+                    test_support::{
+                        TopicMetadataSetup, make_coordinator_with_config, metadata_with_topic,
+                    },
                 },
+                persistence::ShareGroupMetadataValue,
+                state::ShareMemberState,
             },
-            persistence::ShareGroupMetadataValue,
-            state::ShareMemberState,
+            test_support::check_two_members_expired,
         },
-        test_support::check_two_members_expired,
-    }, test_support::PartitionCount};
+        test_support::PartitionCount,
+    };
 
     /// Kafka runs a session timer per member, and each one that fires runs
     /// `shareGroupFenceMember` for its member alone: two members that expire

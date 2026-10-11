@@ -72,10 +72,13 @@ use super::super::{
     entry::{DefaultLayer, EntryOptions, Layer, config_entry},
     wire::CONFIG_SOURCE_STATIC_BROKER,
 };
-use crate::{config::{BrokerConfig, KAFKA_STATIC_KEYS, NodeRole}, config_keys::{
-    self,
-    registry::{self, ConfigScope},
-}};
+use crate::{
+    config::{BrokerConfig, KAFKA_STATIC_KEYS, NodeRole},
+    config_keys::{
+        self,
+        registry::{self, ConfigScope},
+    },
+};
 
 /// One static broker setting as this node holds it: the value it runs with,
 /// and whether its own configuration named the key.

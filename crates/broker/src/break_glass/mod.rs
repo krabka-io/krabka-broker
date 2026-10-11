@@ -150,12 +150,11 @@ mod tests {
     use assert2::check;
     use krabka_metadata::BreakGlassAction;
 
-    use crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS;
-
-use super::{
+    use super::{
         ALL_ACTIONS, action_from_name, action_from_wire, action_name, action_targets_partition,
         action_to_wire,
     };
+    use crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS;
 
     #[test]
     fn every_action_round_trips_through_its_wire_value() {

@@ -16,8 +16,19 @@ use krabka_protocol::{
 
 use super::{GroupActorHandle, test_support::StaticMetadata};
 use crate::{
-    codes, coordinator::unified::{
-        GroupCoordinator, actor::test_support::rpc::consumer_request_as_client, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig, test_support::{check_group_assignment_timing, check_group_session_timeout, fixed_source, group_config_image},
+    codes,
+    coordinator::unified::{
+        GroupCoordinator,
+        actor::test_support::rpc::consumer_request_as_client,
+        config::NextGenConfig,
+        offsets_log::fake::InMemoryOffsetsLog,
+        reconciler::ReconcileInput,
+        share::config::ShareGroupConfig,
+        streams::config::StreamsGroupConfig,
+        test_support::{
+            check_group_assignment_timing, check_group_session_timeout, fixed_source,
+            group_config_image,
+        },
     },
 };
 
@@ -102,11 +113,7 @@ async fn a_group_expires_a_member_by_its_own_session_timeout() {
         },
         &[("brief", &[("consumer.session.timeout.ms", "1")])],
     );
-    check_group_session_timeout(
-        |id| coordinator.get_or_create_consumer(id),
-        heartbeat,
-    )
-    .await;
+    check_group_session_timeout(|id| coordinator.get_or_create_consumer(id), heartbeat).await;
 }
 
 /// Kafka's `canComputeNextTargetAssignment`: a second member that joins

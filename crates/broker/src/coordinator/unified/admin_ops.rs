@@ -15,7 +15,9 @@ use super::{
     streams::{self, actor::StreamsGroupActorMessage},
 };
 use crate::{
-    coordinator::{DeleteGroupError, GroupSnapshot}, task_util::{ask, cloned_registry_values, shutdown_actor}, time_util::now_ms,
+    coordinator::{DeleteGroupError, GroupSnapshot},
+    task_util::{ask, cloned_registry_values, shutdown_actor},
+    time_util::now_ms,
 };
 
 impl GroupCoordinator {
@@ -125,12 +127,8 @@ impl GroupCoordinator {
         }
         // Drained group: per-member records (k16/k20/k21) were already tombstoned
         // on member leave/expiry, so only the group-level keys remain.
-        let batch = streams::migration::streams_records_tombstone_batch(
-            group_id,
-            &[],
-            now_ms(),
-        )
-        .map_err(|_| DeleteGroupError::Internal)?;
+        let batch = streams::migration::streams_records_tombstone_batch(group_id, &[], now_ms())
+            .map_err(|_| DeleteGroupError::Internal)?;
         self.offsets_log
             .append(group_id, batch)
             .await

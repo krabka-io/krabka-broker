@@ -11,7 +11,9 @@ use krabka_metadata::{
 
 use super::withdraw_elr_membership;
 use crate::{
-    config_keys::MIN_INSYNC_REPLICAS, elr::state::{PartitionElr, TopicElr}, test_support::finalize_elr_version,
+    config_keys::MIN_INSYNC_REPLICAS,
+    elr::state::{PartitionElr, TopicElr},
+    test_support::finalize_elr_version,
 };
 
 fn nodes(ids: &[u64]) -> Vec<NodeId> {

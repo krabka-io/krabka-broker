@@ -7,16 +7,22 @@ use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeart
 
 use super::*;
 use crate::coordinator::unified::{
-    ClientIdentity, actor::{
-        GroupActorHandle, GroupActorMessage, member_state::build_member, test_support::{bidirectional_coordinator, bidirectional_with_members, last_classic_metadata, make_coordinator, rpc, seed_completing_classic, seed_stable_classic},
-    }, classic_state::GroupState as ClassicGroupState,
+    ClientIdentity,
+    actor::{
+        GroupActorHandle, GroupActorMessage,
+        member_state::build_member,
+        test_support::{
+            bidirectional_coordinator, bidirectional_with_members, last_classic_metadata,
+            make_coordinator, rpc, seed_completing_classic, seed_stable_classic,
+        },
+    },
+    classic_state::GroupState as ClassicGroupState,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_last_member_persists_empty_generation() {
     let (coord, log) = make_coordinator();
-    let (handle, prior_generation) =
-        seed_stable_classic(&coord, &["m1"]);
+    let (handle, prior_generation) = seed_stable_classic(&coord, &["m1"]);
     let result = rpc::classic_leave_member(&handle, "m1").await;
     rpc::check_successful_classic_leave(&result);
     let view = rpc::classic_inspect(&handle).await;
@@ -32,11 +38,7 @@ async fn classic_leave_last_member_persists_empty_generation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_with_members_remaining_does_not_commit_empty_generation() {
     let (coord, log) = make_coordinator();
-    let (handle, prior_generation) =
-        seed_stable_classic(
-            &coord,
-            &["m1", "m2"],
-        );
+    let (handle, prior_generation) = seed_stable_classic(&coord, &["m1", "m2"]);
     let result = rpc::classic_leave_member(&handle, "m1").await;
     rpc::check_successful_classic_leave(&result);
     let view = rpc::classic_inspect(&handle).await;
@@ -49,8 +51,7 @@ async fn classic_leave_with_members_remaining_does_not_commit_empty_generation()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_legacy_append_failure_rolls_back_and_reports_error() {
     let (coord, log) = make_coordinator();
-    let (handle, _generation) =
-        seed_stable_classic(&coord, &["m1"]);
+    let (handle, _generation) = seed_stable_classic(&coord, &["m1"]);
     log.fail_next
         .store(true, std::sync::atomic::Ordering::SeqCst);
     let result = rpc::classic_leave_request(
@@ -86,8 +87,7 @@ async fn classic_delete_append_failure_keeps_group_registered() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_removes_a_hosted_member_from_an_upgraded_group() {
-    let (_coord, _log, handle, native) =
-        bidirectional_with_members().await;
+    let (_coord, _log, handle, native) = bidirectional_with_members().await;
 
     let response = rpc::classic_leave(&handle, "m-classic").await;
     check!(response.len() == 1);
@@ -416,11 +416,7 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_in_completing_rebalance_reopens_the_rebalance() {
     let (coord, _log) = make_coordinator();
-    let (handle, generation) =
-        seed_completing_classic(
-            &coord,
-            &["m1", "m2", "m3"],
-        );
+    let (handle, generation) = seed_completing_classic(&coord, &["m1", "m2", "m3"]);
     let sync_rx = rpc::begin_classic_sync(
         &handle,
         krabka_protocol::owned::sync_group_request::SyncGroupRequest {

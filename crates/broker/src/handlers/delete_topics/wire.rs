@@ -9,7 +9,9 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use crate::codes::{INVALID_REQUEST, THROTTLING_QUOTA_EXCEEDED, UNKNOWN_TOPIC_ID, UNKNOWN_TOPIC_OR_PARTITION};
+use crate::codes::{
+    INVALID_REQUEST, THROTTLING_QUOTA_EXCEEDED, UNKNOWN_TOPIC_ID, UNKNOWN_TOPIC_OR_PARTITION,
+};
 
 /// Kafka's `Errors.TOPIC_AUTHORIZATION_FAILED.message()`.
 pub(super) const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";

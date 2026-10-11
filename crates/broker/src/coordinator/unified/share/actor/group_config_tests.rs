@@ -17,11 +17,14 @@ use super::{
 };
 // A metadata image that holds each group config in `overrides`: a group id
 // and its `share.*` entries.
-use crate::coordinator::unified::{share::actor::test_support::InitializedTopicSetup, test_support::{check_group_assignment_timing, group_config_image as group_image}};
 use crate::coordinator::unified::{
     GroupCoordinator,
     share::{actor::test_support::TopicMetadataSetup, config::ShareGroupConfig},
     test_support::fixed_source,
+};
+use crate::coordinator::unified::{
+    share::actor::test_support::InitializedTopicSetup,
+    test_support::{check_group_assignment_timing, group_config_image as group_image},
 };
 
 /// A coordinator over topic `t` with four partitions, whose metadata image

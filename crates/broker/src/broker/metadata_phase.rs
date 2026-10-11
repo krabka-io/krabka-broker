@@ -9,13 +9,28 @@ use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use tokio::net::TcpListener;
 
 use crate::{
-    auto_join::{AutoJoinParams, run, run_voter_updates}, bootstrap::{initial_voters, load_bootstrap_records}, broker::{
+    auto_join::{AutoJoinParams, run, run_voter_updates},
+    bootstrap::{initial_voters, load_bootstrap_records},
+    broker::{
         endpoints::static_controller_voter_set,
         registration::{
             register_broker, register_controller, spawn_deferred_controller_registration,
             submit_stretch_defaults,
         },
-    }, config::BrokerConfig, controller_admin::BrokerControllerAdminRouter, controller_endpoint::CONTROLLER_LISTENER_NAME, error::BrokerError, features::LATEST_PRODUCTION_METADATA_VERSION, host_port::parse_host_port, incarnation::load_or_generate, metadata_observer::ObserverConfig, metadata_source::{MetadataSource, ObserverSource, QuorumForwarder, or_fatal_fault}, network::client::{InterBrokerClient, InterBrokerDialer}, platform::{Sockets, bind_listener}, raft_handshake::{AuditLogArc, BrokerRaftHandshake}, wal::quorum::registry::{WalShardRegistry, WalShardRouter},
+    },
+    config::BrokerConfig,
+    controller_admin::BrokerControllerAdminRouter,
+    controller_endpoint::CONTROLLER_LISTENER_NAME,
+    error::BrokerError,
+    features::LATEST_PRODUCTION_METADATA_VERSION,
+    host_port::parse_host_port,
+    incarnation::load_or_generate,
+    metadata_observer::ObserverConfig,
+    metadata_source::{MetadataSource, ObserverSource, QuorumForwarder, or_fatal_fault},
+    network::client::{InterBrokerClient, InterBrokerDialer},
+    platform::{Sockets, bind_listener},
+    raft_handshake::{AuditLogArc, BrokerRaftHandshake},
+    wal::quorum::registry::{WalShardRegistry, WalShardRouter},
 };
 
 struct RaftTransport {
@@ -210,9 +225,7 @@ async fn start_metadata_source(
             cluster_id: config.cluster_id,
             dialer,
             handshake,
-            shard_router: Some(Arc::new(WalShardRouter::new(
-                wal_shards,
-            ))),
+            shard_router: Some(Arc::new(WalShardRouter::new(wal_shards))),
             admin_router: admin_router
                 .clone()
                 .map(|router| router as Arc<dyn krabka_raft::ControllerAdminRouter>),
@@ -223,8 +236,7 @@ async fn start_metadata_source(
             // controller listener's own name.
             listener_limits: krabka_raft::ListenerLimits {
                 max_request_size: config.socket_request_max,
-                max_idle: config
-                    .connections_max_idle_for(CONTROLLER_LISTENER_NAME),
+                max_idle: config.connections_max_idle_for(CONTROLLER_LISTENER_NAME),
                 max_connections: config.max_connections,
                 max_connections_per_ip: config.max_connections_per_ip,
             },
@@ -255,30 +267,28 @@ async fn start_metadata_source(
 
     drop(controller_listener);
     let dialer = dialer.expect("broker-only node requires a raft dialer");
-    let observer = crate::metadata_observer::MetadataObserver::start(
-        ObserverConfig {
-            client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
-            client_frame_max: config.client_frame_max,
-            voters: config.controller_quorum_voters.clone(),
-            bootstrap_servers: config.bootstrap_servers.clone(),
-            dialer: Arc::clone(&dialer),
-            client_id: format!("krabka-broker-{}-observer", config.broker_id),
-            cluster_id: config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
-            node_id: config.node_id,
-            directory_id: config.directory_id,
-            // The metadata partition directory. The observer keeps its
-            // checkpoints in a subdirectory of their own, never beside the
-            // controller's: an observer checkpoint has no log to match its
-            // boundary, so a controller must not load one. See
-            // `metadata_observer::store`.
-            data_dir: krabka_raft::metadata_partition_dir(config.metadata_dir()),
-            snapshot_interval_records: config.metadata_snapshot_interval_records,
-            snapshot_fetch_max: observer_snapshot_fetch_max(config)?,
-            max_bytes: config.observer_fetch_max,
-            poll_interval: config.observer_poll_interval,
-            timer: crate::time_util::system_timer(),
-        },
-    );
+    let observer = crate::metadata_observer::MetadataObserver::start(ObserverConfig {
+        client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
+        client_frame_max: config.client_frame_max,
+        voters: config.controller_quorum_voters.clone(),
+        bootstrap_servers: config.bootstrap_servers.clone(),
+        dialer: Arc::clone(&dialer),
+        client_id: format!("krabka-broker-{}-observer", config.broker_id),
+        cluster_id: config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
+        node_id: config.node_id,
+        directory_id: config.directory_id,
+        // The metadata partition directory. The observer keeps its
+        // checkpoints in a subdirectory of their own, never beside the
+        // controller's: an observer checkpoint has no log to match its
+        // boundary, so a controller must not load one. See
+        // `metadata_observer::store`.
+        data_dir: krabka_raft::metadata_partition_dir(config.metadata_dir()),
+        snapshot_interval_records: config.metadata_snapshot_interval_records,
+        snapshot_fetch_max: observer_snapshot_fetch_max(config)?,
+        max_bytes: config.observer_fetch_max,
+        poll_interval: config.observer_poll_interval,
+        timer: crate::time_util::system_timer(),
+    });
     let forwarder = QuorumForwarder {
         client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
         client_frame_max: config.client_frame_max,
@@ -290,10 +300,7 @@ async fn start_metadata_source(
         leader: observer.watch_leader(),
     };
     Ok(MetadataControlPlane {
-        source: Arc::new(ObserverSource::new(
-            observer,
-            Arc::new(forwarder),
-        )),
+        source: Arc::new(ObserverSource::new(observer, Arc::new(forwarder))),
         admin_router: None,
     })
 }
@@ -402,8 +409,7 @@ async fn bind_ephemeral_controller_listener(
         return Ok(prebound);
     }
     let listener = bind_listener(config.controller_listen_addr).await?;
-    let bound = Sockets::TARGET
-        .listener_address(&listener, config.controller_listen_addr)?;
+    let bound = Sockets::TARGET.listener_address(&listener, config.controller_listen_addr)?;
     publish_bound_controller_addr(config, bound);
     Ok(Some(listener))
 }
@@ -510,7 +516,10 @@ mod tests {
     use tracing::Level;
 
     use super::*;
-    use crate::{config::NodeRole, features::LATEST_PRODUCTION_METADATA_VERSION, network::client::InterBrokerClient, test_support::LogCapture};
+    use crate::{
+        config::NodeRole, features::LATEST_PRODUCTION_METADATA_VERSION,
+        network::client::InterBrokerClient, test_support::LogCapture,
+    };
 
     // A node warns that its controller listener is PLAINTEXT only when it has
     // one, which only a node with the controller role binds.
@@ -579,9 +588,8 @@ mod tests {
                 voters: krabka_metadata::VoterSet::default(),
             }),
         ];
-        let defaults = krabka_metadata::bootstrap_feature_records(
-            LATEST_PRODUCTION_METADATA_VERSION,
-        );
+        let defaults =
+            krabka_metadata::bootstrap_feature_records(LATEST_PRODUCTION_METADATA_VERSION);
         // (what, the bootstrap stream, the records the controller writes)
         let cases = [
             ("no stream", vec![], defaults.clone()),

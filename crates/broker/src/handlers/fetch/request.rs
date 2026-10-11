@@ -9,7 +9,9 @@ use krabka_metadata::AclOperation;
 use krabka_protocol::{owned::fetch_request::FetchRequest, primitives::uuid::Uuid as WireUuid};
 
 use crate::{
-    broker::Broker, fetch_session::{CachedPartitionState, FetchSessionKey, SessionDecision}, handlers::{RequestContext, cluster_action_denied, denied_topics, requested_topic_name},
+    broker::Broker,
+    fetch_session::{CachedPartitionState, FetchSessionKey, SessionDecision},
+    handlers::{RequestContext, cluster_action_denied, denied_topics, requested_topic_name},
 };
 
 /// Projection of `FetchRequest::topics` or of the cached session partitions.

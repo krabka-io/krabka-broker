@@ -11,7 +11,20 @@ use assert2::assert;
 use krabka_raft::ControllerHandle;
 
 use crate::{
-    coordinator::{GroupCoordinator, persistence::{GroupMetadataValue, parse_key}, test_support::{default_coordinator, offset_record}, unified::{ImageMetadataProvider, actor::test_support::empty_metadata, config::NextGenConfig, offsets_log::{OffsetsLog, fake::InMemoryOffsetsLog}}}, error::BrokerError, metadata_source::MetadataSource, partition_registry::PartitionRegistry,
+    coordinator::{
+        GroupCoordinator,
+        persistence::{GroupMetadataValue, parse_key},
+        test_support::{default_coordinator, offset_record},
+        unified::{
+            ImageMetadataProvider,
+            actor::test_support::empty_metadata,
+            config::NextGenConfig,
+            offsets_log::{OffsetsLog, fake::InMemoryOffsetsLog},
+        },
+    },
+    error::BrokerError,
+    metadata_source::MetadataSource,
+    partition_registry::PartitionRegistry,
 };
 
 /// Start a controller, wait until it reports a leader, and return the
@@ -59,9 +72,7 @@ pub(super) fn test_coordinator(
 /// replay tests. A test can drive the `apply_record`, `apply_tombstone`,
 /// and `finalize` replay path directly with it.
 pub(super) fn bare_coordinator() -> Arc<GroupCoordinator> {
-    bare_coordinator_with_mailbox(
-        NextGenConfig::default().actor_mailbox_capacity,
-    )
+    bare_coordinator_with_mailbox(NextGenConfig::default().actor_mailbox_capacity)
 }
 
 /// A [`bare_coordinator`] whose group actors have a mailbox of exactly
@@ -231,14 +242,12 @@ pub(super) fn commit_record_for_group(
     partition: i32,
     offset: i64,
 ) -> krabka_protocol::records::Record {
-    offset_record(
-        crate::coordinator::test_support::OffsetRecordSetup {
-            group,
-            partition: krabka_ids::PartitionIndex(partition),
-            offset: krabka_log::Offset(offset),
-            ..Default::default()
-        },
-    )
+    offset_record(crate::coordinator::test_support::OffsetRecordSetup {
+        group,
+        partition: krabka_ids::PartitionIndex(partition),
+        offset: krabka_log::Offset(offset),
+        ..Default::default()
+    })
 }
 
 /// Write each `(key, value)` record (a `None` value is a tombstone) to a fresh

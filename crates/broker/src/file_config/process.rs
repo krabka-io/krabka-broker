@@ -5,9 +5,8 @@
 //! table is all-or-nothing: a half-written profile would let the broker start
 //! with a site layout no other node agrees on.
 
-use crate::config::StretchProfile;
-
 use super::FileConfigError;
+use crate::config::StretchProfile;
 
 /// `[process]` TOML section — `KRaft` `process.roles`.
 #[krabka_macros::config_table(strict)]
@@ -166,8 +165,8 @@ mod tests {
                 "stretch.preferred_leader_site",
             ),
         ] {
-            let error = configured(toml, "parse")
-                .expect_err("a half-built stretch profile is rejected");
+            let error =
+                configured(toml, "parse").expect_err("a half-built stretch profile is rejected");
             assert!(matches!(error, FileConfigError::InvalidConfig(_)));
             assert!(
                 error.to_string().contains(missing),
@@ -181,8 +180,7 @@ mod tests {
             [process]
             roles = ["wizard"]
         "#;
-        let err = configured(toml, "parse")
-            .expect_err("unknown role rejected");
+        let err = configured(toml, "parse").expect_err("unknown role rejected");
         assert!(matches!(err, FileConfigError::InvalidConfig(_)));
     }
     #[test]

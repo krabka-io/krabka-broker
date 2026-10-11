@@ -207,9 +207,8 @@ mod tests {
     use assert2::assert;
     use krabka_units::{kibibytes, millis};
 
+    use super::*;
     use crate::{network::test_support::check_socket_tuning, test_support::wait_tasks_started};
-
-use super::*;
 
     #[tokio::test]
     async fn accepted_socket_tuning_sets_nodelay_and_large_buffers() {

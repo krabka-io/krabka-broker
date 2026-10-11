@@ -7,13 +7,25 @@ use krabka_ids::PartitionIndex;
 use krabka_protocol::primitives::uuid::Uuid;
 
 use super::*;
-use crate::{coordinator::unified::{
-    ClientIdentity, actor::{
-        member_state::build_member, test_support::{
-            StaticMetadata, empty_metadata, make_coordinator, make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc::{self, consumer_request}, seed_classic_member, subscription_blob,
+use crate::{
+    coordinator::unified::{
+        ClientIdentity,
+        actor::{
+            member_state::build_member,
+            test_support::{
+                StaticMetadata, empty_metadata, make_coordinator, make_coordinator_with_topic,
+                make_coordinator_with_topic_policy,
+                rpc::{self, consumer_request},
+                seed_classic_member, subscription_blob,
+            },
         },
-    }, offsets_log::fake::InMemoryOffsetsLog, persistence_next_gen::GroupMetadataValue, reconciler::{ReconcileInput, metadata_hash}, test_support::{ConsumerJoinSetup, MemberEpoch, consumer_join_request},
-}, test_support::KafkaErrorCode};
+        offsets_log::fake::InMemoryOffsetsLog,
+        persistence_next_gen::GroupMetadataValue,
+        reconciler::{ReconcileInput, metadata_hash},
+        test_support::{ConsumerJoinSetup, MemberEpoch, consumer_join_request},
+    },
+    test_support::KafkaErrorCode,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn first_join_emits_one_batch() {
@@ -155,13 +167,11 @@ fn handoff_heartbeat(
 fn handoff_join(state: &mut GroupState, member_id: &str) -> HeartbeatStep {
     handoff_heartbeat(
         state,
-        consumer_join_request(
-            ConsumerJoinSetup {
-                group_id: "",
-                member_id,
-                ..Default::default()
-            },
-        ),
+        consumer_join_request(ConsumerJoinSetup {
+            group_id: "",
+            member_id,
+            ..Default::default()
+        }),
     )
 }
 
@@ -382,10 +392,7 @@ fn identity_ok(setup: IdentityExpectationSetup<'_>) -> ConsumerGroupHeartbeatRes
     }
 }
 
-fn identity_error(
-    error_code: KafkaErrorCode,
-    message: &str,
-) -> ConsumerGroupHeartbeatResponse {
+fn identity_error(error_code: KafkaErrorCode, message: &str) -> ConsumerGroupHeartbeatResponse {
     ConsumerGroupHeartbeatResponse {
         error_code: error_code.0,
         error_message: Some(message.into()),
@@ -643,10 +650,7 @@ fn heartbeat_identity_rules_follow_kafka() {
         let mut state = identity_group();
         // The group recorded the hash of its topics, so its first heartbeat's
         // refresh finds nothing new.
-        state.record_metadata_hash(metadata_hash(
-            &state,
-            &metadata.input,
-        ));
+        state.record_metadata_hash(metadata_hash(&state, &metadata.input));
         if row.static_member == StaticMemberPresence::Released {
             let released = step_heartbeat(
                 &mut state,
@@ -868,12 +872,10 @@ fn a_leave_bumps_the_epoch_and_the_next_heartbeat_assigns() {
         host: "host",
     };
     let join = |member_id: &str| {
-        consumer_join_request(
-            ConsumerJoinSetup {
-                member_id,
-                ..Default::default()
-            },
-        )
+        consumer_join_request(ConsumerJoinSetup {
+            member_id,
+            ..Default::default()
+        })
     };
     let mut state = GroupState::new("g");
     let step = |state: &mut GroupState, req: &ConsumerGroupHeartbeatRequest| {

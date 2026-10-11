@@ -25,10 +25,7 @@ pub(super) async fn submit(broker: &Broker, accepted: Accepted) -> Result<Accept
         Err(error) => {
             tracing::warn!(%error, "set-topic-freeze submit failed");
             Err(Refusal {
-                code: submit_failure_code(
-                    &error,
-                    codes::COORDINATOR_NOT_AVAILABLE,
-                ),
+                code: submit_failure_code(&error, codes::COORDINATOR_NOT_AVAILABLE),
                 message: format!("submit failed: {error}"),
                 signature_verified: accepted.signature_verified,
             })

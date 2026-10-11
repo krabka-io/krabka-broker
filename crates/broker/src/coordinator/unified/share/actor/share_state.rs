@@ -29,7 +29,10 @@ use crate::{
             config::ShareGroupConfig, persistence::ShareGroupStatePartitionMetadataValue,
             state::ShareGroupState,
         },
-    }, share_coordinator::{coordinator::UNINITIALIZED_START_OFFSET, persister_client::SharePersister},
+    },
+    share_coordinator::{
+        coordinator::UNINITIALIZED_START_OFFSET, persister_client::SharePersister,
+    },
 };
 
 /// The share partitions that a heartbeat initializes, and the group epoch
@@ -377,7 +380,8 @@ mod tests {
         *,
     };
     use crate::{
-        codes, coordinator::unified::{
+        codes,
+        coordinator::unified::{
             ShareGroupSeed,
             share::{
                 actor::test_support::{
@@ -388,7 +392,8 @@ mod tests {
                 state::ShareMemberState,
             },
             test_support::{fixed_source, make_share_persister},
-        }, test_support::PartitionCount,
+        },
+        test_support::PartitionCount,
     };
 
     /// Kafka's `subscribedTopicsChangeMap`: every partition of a subscribed

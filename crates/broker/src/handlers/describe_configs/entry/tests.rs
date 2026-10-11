@@ -12,7 +12,10 @@ use super::{
     },
     *,
 };
-use crate::config_keys::{BROKER_WITNESS, DISKLESS, WRITE_FREEZE, registry::{self, ConfigScope, ConfigType, ValueCheck}};
+use crate::config_keys::{
+    BROKER_WITNESS, DISKLESS, WRITE_FREEZE,
+    registry::{self, ConfigScope, ConfigType, ValueCheck},
+};
 
 const BOTH: EntryOptions = EntryOptions {
     include_synonyms: true,
@@ -300,11 +303,7 @@ fn the_read_only_flag_comes_from_the_registry_row() {
         (ConfigScope::Topic, DISKLESS, true),
         (ConfigScope::Topic, WRITE_FREEZE, true),
         (ConfigScope::Topic, crate::config_keys::RETENTION_MS, false),
-        (
-            ConfigScope::Broker,
-            BROKER_WITNESS,
-            true,
-        ),
+        (ConfigScope::Broker, BROKER_WITNESS, true),
         (
             ConfigScope::Broker,
             crate::config_keys::registry::NODE_ID,

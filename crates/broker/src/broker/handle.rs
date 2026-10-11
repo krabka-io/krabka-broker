@@ -10,7 +10,14 @@ use tokio::task::JoinHandle;
 
 #[cfg(test)]
 use crate::broker::Broker;
-use crate::{broker::BrokerHandle, clean_shutdown::write, error::BrokerError, future_log::{abort_moves, shutdown_moves}, partition_registry::PartitionRegistry, time_util::now_ms};
+use crate::{
+    broker::BrokerHandle,
+    clean_shutdown::write,
+    error::BrokerError,
+    future_log::{abort_moves, shutdown_moves},
+    partition_registry::PartitionRegistry,
+    time_util::now_ms,
+};
 
 #[cfg(any(test, feature = "test-helpers"))]
 mod cluster;

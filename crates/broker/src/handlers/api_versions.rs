@@ -45,7 +45,16 @@ mod tests;
 pub(crate) use krabka_raft::is_valid_client_info;
 
 use self::feature_keys::{finalized_feature_keys, supported_feature_keys};
-use crate::{api_catalog::supported_apis, broker::Broker, cluster_id::matches, codes, error::BrokerError, handlers::{RequestContext, decode_request, encode_response}, quota::throttle_time_ms};
+use crate::{
+    api_catalog::{UnstableApiVersions, supported_apis},
+    broker::Broker,
+    cluster_id::matches,
+    codes,
+    error::BrokerError,
+    handlers::{RequestContext, decode_request, encode_response},
+    metrics::QuotaType,
+    quota::throttle_time_ms,
+};
 
 /// First `ApiVersions` request version that carries the KIP-511
 /// `client_software_name` and `client_software_version` fields.
@@ -63,7 +72,7 @@ const ROUTING_IDENTITY_MIN_VERSION: i16 = 5;
 /// retries with, and nothing else. The controller listener answers with the
 /// same bytes, from the same `krabka_raft::unsupported_version_response`.
 pub(crate) fn unsupported_version_response(
-    unstable: crate::api_catalog::UnstableApiVersions,
+    unstable: UnstableApiVersions,
 ) -> Result<Bytes, BrokerError> {
     let response = krabka_raft::unsupported_version_response(unstable);
     encode_response(&response, 0)
@@ -85,7 +94,7 @@ fn charge_request_quota(
     let request_delay = context.charge_request_quota(broker, image, handler_start);
     let delay = broker.metrics.record_applied_throttle(
         krabka_protocol::api_key::ApiKey::ApiVersions as i16,
-        &[(crate::metrics::QuotaType::Request, request_delay).into()],
+        &[(QuotaType::Request, request_delay).into()],
     );
     // KIP-219: the response goes out now and the connection is muted for the
     // window afterwards. Sleeping here would hold the handshake back past the
@@ -125,8 +134,7 @@ pub(crate) fn handle<'a>(
         } else if version >= ROUTING_IDENTITY_MIN_VERSION
             && !pre_authentication
             && let Some(cluster_id) = &req.cluster_id
-            && (!matches(cluster_id, expected_cluster_id)
-                || Some(req.node_id) != expected_node_id)
+            && (!matches(cluster_id, expected_cluster_id) || Some(req.node_id) != expected_node_id)
         {
             Some(codes::REBOOTSTRAP_REQUIRED)
         } else {

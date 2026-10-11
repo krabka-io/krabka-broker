@@ -9,9 +9,31 @@ use futures_util::future::BoxFuture;
 use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 
 use crate::{
-    auto_topic_creation::AutoTopicCreation, barrier::scheduler::run, broker::{
-        Broker, BrokerHandle, DisklessRuntime, coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators}, finish::{BrokerStorageStartup, finish_broker_startup}, listeners::bind_ephemeral_data_plane_listener, metadata_phase::{MetadataControlPlane, MetadataPhase, start_metadata_phase}, runtime::start_broker_runtime, storage::{StorageStartup, recover_storage_and_groups}, transport::{StartupTransport, prepare_startup_transport},
-    }, config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG}, controller_admin::BrokerControllerAdminRouter, coordinator::{retention::run, topic_deletion::spawn}, delivery::{config::DeliveryConfig, metrics::BrokerDeliveryMetrics, scheduler::run}, error::BrokerError, health::{HealthState, metadata_progress}, heartbeat::client::InitialUnfence, lag::{LAG_POLL_INTERVAL, LagPoller}, metadata_source::{MetadataSource, or_fatal_fault}, metrics::BrokerMetrics, raft_handshake::AuditLogArc, share_coordinator::coordinator::jobs::spawn, share_partition::backlog_poller::BacklogPoller,
+    auto_topic_creation::AutoTopicCreation,
+    barrier::scheduler::run,
+    broker::{
+        Broker, BrokerHandle, DisklessRuntime,
+        coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators},
+        finish::{BrokerStorageStartup, finish_broker_startup},
+        listeners::bind_ephemeral_data_plane_listener,
+        metadata_phase::{MetadataControlPlane, MetadataPhase, start_metadata_phase},
+        runtime::start_broker_runtime,
+        storage::{StorageStartup, recover_storage_and_groups},
+        transport::{StartupTransport, prepare_startup_transport},
+    },
+    config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG},
+    controller_admin::BrokerControllerAdminRouter,
+    coordinator::{retention::run, topic_deletion::spawn},
+    delivery::{config::DeliveryConfig, metrics::BrokerDeliveryMetrics, scheduler::run},
+    error::BrokerError,
+    health::{HealthState, metadata_progress},
+    heartbeat::client::InitialUnfence,
+    lag::{LAG_POLL_INTERVAL, LagPoller},
+    metadata_source::{MetadataSource, or_fatal_fault},
+    metrics::BrokerMetrics,
+    raft_handshake::AuditLogArc,
+    share_coordinator::coordinator::jobs::spawn,
+    share_partition::backlog_poller::BacklogPoller,
 };
 
 impl Broker {
@@ -137,11 +159,7 @@ impl Broker {
         // supplied none. `start_metadata_phase` below registers this node
         // with the controller, and that registration must carry the bound
         // port, not a `:0` that names nothing a peer can dial.
-        bind_ephemeral_data_plane_listener(
-            &mut config,
-            &mut data_plane_listeners,
-        )
-        .await?;
+        bind_ephemeral_data_plane_listener(&mut config, &mut data_plane_listeners).await?;
         let transport = prepare_startup_transport(&config).await?;
         let metrics = BrokerMetrics::new();
         let diskless_runtime = DisklessRuntime::new(
@@ -287,8 +305,7 @@ impl Broker {
         // The share persister and the barrier coordinator create their topics
         // on first use. The broker binds itself to the component once it is
         // built.
-        let auto_topic_creation =
-            Arc::new(AutoTopicCreation::default());
+        let auto_topic_creation = Arc::new(AutoTopicCreation::default());
         // The barrier coordinator reports through the process registry, and it
         // is built here rather than inside the runtime because the coordinators
         // start first. BrokerMetrics clones cheaply.
@@ -403,9 +420,7 @@ impl Broker {
             Arc::clone(&partitions),
             config.node_id,
             DeliveryConfig::default(),
-            Arc::new(BrokerDeliveryMetrics::new(
-                runtime.metrics.clone(),
-            )),
+            Arc::new(BrokerDeliveryMetrics::new(runtime.metrics.clone())),
             Arc::new(crate::delivery::DeliveryWaker::new()),
             runtime.supervisor_shutdown.child_token(),
         ));

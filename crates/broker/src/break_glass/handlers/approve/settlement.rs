@@ -18,7 +18,11 @@ use crate::{
             PrivilegedAudit, Refusal, admit_privileged_request, from_wire_uuid, principal_name,
             submit_error,
         },
-    }, broker::Broker, codes, handlers::RequestContext, time_util::now_ms,
+    },
+    broker::Broker,
+    codes,
+    handlers::RequestContext,
+    time_util::now_ms,
 };
 
 /// Apply the request to the stored proposal and write the result.

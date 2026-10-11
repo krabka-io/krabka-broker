@@ -15,7 +15,16 @@ use super::{
     share::{self, config::ShareGroupConfig},
     streams::{self, config::StreamsGroupConfig},
 };
-use crate::{codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR}, coordinator::unified::offsets_log::fake::InMemoryOffsetsLog, error::BrokerError, metadata_source::MetadataSource, network::client::InterBrokerClient, partition_registry::PartitionRegistry, share_coordinator::{config::ShareCoordinatorConfig, persister_client::SharePersister}, test_support::{FakeMetadataSource, KafkaErrorCode, UnixMillis, string_pairs}};
+use crate::{
+    codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
+    coordinator::unified::offsets_log::fake::InMemoryOffsetsLog,
+    error::BrokerError,
+    metadata_source::MetadataSource,
+    network::client::InterBrokerClient,
+    partition_registry::PartitionRegistry,
+    share_coordinator::{config::ShareCoordinatorConfig, persister_client::SharePersister},
+    test_support::{FakeMetadataSource, KafkaErrorCode, UnixMillis, string_pairs},
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct MemberEpoch(pub i32);
@@ -45,10 +54,7 @@ pub(crate) fn make_coord() -> Arc<GroupCoordinator> {
     make_coord_with_log().0
 }
 
-pub(crate) fn make_coord_with_log() -> (
-    Arc<GroupCoordinator>,
-    Arc<InMemoryOffsetsLog>,
-) {
+pub(crate) fn make_coord_with_log() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     use crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog;
     let metadata: Arc<dyn MetadataProvider> = Arc::new(ImageMetadatalessProvider);
     let offsets_log = Arc::new(InMemoryOffsetsLog::default());
@@ -122,9 +128,7 @@ pub(crate) fn make_coord_with_metadata(
 
 /// A metadata source over `image`, with node 1 reported as the controller
 /// leader.
-pub(super) fn fixed_source(
-    image: krabka_metadata::MetadataImage,
-) -> Arc<dyn MetadataSource> {
+pub(super) fn fixed_source(image: krabka_metadata::MetadataImage) -> Arc<dyn MetadataSource> {
     Arc::new(
         FakeMetadataSource::builder()
             .image(image)
@@ -133,9 +137,7 @@ pub(super) fn fixed_source(
     )
 }
 
-pub(super) fn make_share_persister(
-    source: Arc<dyn MetadataSource>,
-) -> Arc<SharePersister> {
+pub(super) fn make_share_persister(source: Arc<dyn MetadataSource>) -> Arc<SharePersister> {
     let share_coordinator = Arc::new(
         crate::share_coordinator::coordinator::ShareCoordinator::new(
             krabka_metadata::NodeId(1),
@@ -143,17 +145,15 @@ pub(super) fn make_share_persister(
             ShareCoordinatorConfig::default(),
         ),
     );
-    Arc::new(
-        SharePersister::new(
-            krabka_metadata::NodeId(1),
-            share_coordinator,
-            source,
-            Arc::default(),
-            Arc::new(InterBrokerClient::new(None, None)),
-            krabka_security::ListenerProtocol::Plaintext,
-            "PLAINTEXT".into(),
-        ),
-    )
+    Arc::new(SharePersister::new(
+        krabka_metadata::NodeId(1),
+        share_coordinator,
+        source,
+        Arc::default(),
+        Arc::new(InterBrokerClient::new(None, None)),
+        krabka_security::ListenerProtocol::Plaintext,
+        "PLAINTEXT".into(),
+    ))
 }
 
 pub(super) fn proto_uuid(byte: u8) -> krabka_protocol::primitives::uuid::Uuid {
@@ -389,15 +389,12 @@ impl HeartbeatWriteFailure {
 
 /// The three independent failure expectations for a heartbeat's durable write.
 pub(crate) fn heartbeat_write_failures() -> [HeartbeatWriteFailure; 3] {
-    let uncommitted =
-        |code| Some(BrokerError::CoordinatorWriteUncommitted { partition: 0, code });
+    let uncommitted = |code| Some(BrokerError::CoordinatorWriteUncommitted { partition: 0, code });
     [
         HeartbeatWriteFailure {
             label: "the partition writer is gone",
             failure: None,
-            expected: KafkaErrorCode(
-                COORDINATOR_LOAD_IN_PROGRESS,
-            ),
+            expected: KafkaErrorCode(COORDINATOR_LOAD_IN_PROGRESS),
         },
         HeartbeatWriteFailure {
             label: "the leadership moved before the write committed",
@@ -413,10 +410,7 @@ pub(crate) fn heartbeat_write_failures() -> [HeartbeatWriteFailure; 3] {
 }
 
 /// A successful leave appends exactly one batch containing a tombstone.
-pub(crate) async fn assert_next_tombstone_batch(
-    log: &InMemoryOffsetsLog,
-    pre_leave: usize,
-) {
+pub(crate) async fn assert_next_tombstone_batch(log: &InMemoryOffsetsLog, pre_leave: usize) {
     let batches = log.batches().await;
     assert2::assert!(batches.len() == pre_leave + 1);
     let leave_batch = &batches[batches.len() - 1];

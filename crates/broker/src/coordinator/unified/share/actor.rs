@@ -54,7 +54,10 @@ use self::{
     share_state::apply_initialized,
 };
 use super::{config::ShareGroupConfig, state::ShareGroupState};
-use crate::{coordinator::unified::{actor::MetadataProvider, offsets_log::write_failure_code}, task_util::spawn_mailbox};
+use crate::{
+    coordinator::unified::{actor::MetadataProvider, offsets_log::write_failure_code},
+    task_util::spawn_mailbox,
+};
 
 #[derive(Debug)]
 pub enum ShareGroupActorMessage {

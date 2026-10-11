@@ -45,7 +45,10 @@ mod tests;
 
 use self::response::{describe_token, empty_response};
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer}, codes::{DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED}, handlers::ErrorCodeResponse as _, network::auth::ConnectionAuth,
+    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+    codes::{DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED},
+    handlers::ErrorCodeResponse as _,
+    network::auth::ConnectionAuth,
 };
 
 // `async` matches the call-site shape used by every other
@@ -70,19 +73,13 @@ pub(crate) fn handle(
     // reaching the per-token filter below and reading a sibling token's
     // HMAC.
     if auth.token_api_admission(TokenApi::Describe) == TokenApiAdmission::Reject {
-        return DescribeDelegationTokenResponse::error(
-            DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-        );
+        return DescribeDelegationTokenResponse::error(DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     }
     let Some(secret_key) = secret_key else {
-        return DescribeDelegationTokenResponse::error(
-            DELEGATION_TOKEN_AUTH_DISABLED,
-        );
+        return DescribeDelegationTokenResponse::error(DELEGATION_TOKEN_AUTH_DISABLED);
     };
     let ConnectionAuth::Authenticated { principal, .. } = auth else {
-        return DescribeDelegationTokenResponse::error(
-            DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-        );
+        return DescribeDelegationTokenResponse::error(DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     };
     let caller = principal.to_kafka();
 

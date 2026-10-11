@@ -9,22 +9,25 @@
 //! [`apply_seed`] is their inverse for bootstrap replay and respawn.
 
 use super::ActorState;
-use crate::{coordinator::unified::{
-    GroupCoordinator, StreamsGroupSeed,
-    member_records::MemberValues,
-    offsets_log::OffsetsLog,
-    streams::{
-        persistence::{
-            DescriptionEpochs, LastAssignmentConfig, PendingStreamsRecords, StreamsEndpoint,
-            StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
-            StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMemberValue,
-            StreamsGroupTargetAssignmentMetadataValue,
-        },
-        state::{
-            StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState,
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator, StreamsGroupSeed,
+        member_records::MemberValues,
+        offsets_log::OffsetsLog,
+        streams::{
+            persistence::{
+                DescriptionEpochs, LastAssignmentConfig, PendingStreamsRecords, StreamsEndpoint,
+                StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
+                StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMemberValue,
+                StreamsGroupTargetAssignmentMetadataValue,
+            },
+            state::{
+                StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState,
+            },
         },
     },
-}, metadata_source::MetadataSource};
+    metadata_source::MetadataSource,
+};
 
 /// The records of one streams-group transition, as Kafka's
 /// `GroupMetadataManager` writes them: a record only where the transition
@@ -384,9 +387,10 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::coordinator::unified::{streams::persistence::{
-        StreamsGroupTopologyValue, StreamsMemberWireState,
-    }, test_support::stable_streams_assignment};
+    use crate::coordinator::unified::{
+        streams::persistence::{StreamsGroupTopologyValue, StreamsMemberWireState},
+        test_support::stable_streams_assignment,
+    };
 
     #[test]
     fn seed_hydrates_state() {

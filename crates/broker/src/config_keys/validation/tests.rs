@@ -3,8 +3,6 @@
 use assert2::{assert, check};
 use krabka_log::CleanupPolicy;
 
-use crate::{test_support::config_map, throttle::{FOLLOWER_THROTTLED_REPLICAS_KEY, LEADER_THROTTLED_REPLICAS_KEY}};
-
 use super::{
     super::{
         DELETE_RETENTION_MS, ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, FILE_DELETE_DELAY_MS,
@@ -17,6 +15,10 @@ use super::{
         SEGMENT_JITTER_MS, SEGMENT_MS, delivery::DELIVERY_MODE_IMMEDIATE,
     },
     *,
+};
+use crate::{
+    test_support::config_map,
+    throttle::{FOLLOWER_THROTTLED_REPLICAS_KEY, LEADER_THROTTLED_REPLICAS_KEY},
 };
 
 /// A name Kafka has no `TopicConfig` entry for, which its own `LogConfig`

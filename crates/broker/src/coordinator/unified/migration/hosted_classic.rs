@@ -315,9 +315,8 @@ mod tests {
     use assert2::check;
     use krabka_protocol::primitives::uuid::Uuid;
 
+    use super::*;
     use crate::coordinator::unified::actor::test_support::topic_reconcile_input;
-
-use super::*;
 
     const TOPIC: Uuid = Uuid([7; 16]);
     const TARGET_EPOCH: i32 = 5;

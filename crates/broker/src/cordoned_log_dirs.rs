@@ -320,9 +320,8 @@ mod tests {
     use assert2::{assert, check};
     use krabka_metadata::{BrokerConfigRecord, MetadataRecord};
 
+    use super::*;
     use crate::test_support::broker_registration;
-
-use super::*;
 
     /// A label, the registered directory ids, the cordoned ids, and whether
     /// placement may use the broker.

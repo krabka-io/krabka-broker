@@ -25,16 +25,20 @@ use super::{
     kafka_broker::roster,
     parse::{check_one_of, check_range, int_value, java_trim, parse_bool, parse_int, parse_long},
 };
-use crate::{api_catalog::UnstableApiVersions, config::BrokerConfig, coordinator::unified::{
-    config::NextGenConfig,
-    share::config::ShareGroupConfig,
-    streams::config::{
-        KEY_ACCEPTABLE_RECOVERY_LAG, KEY_ASSIGNOR_NAME, KEY_HEARTBEAT_INTERVAL_MS,
-        KEY_NUM_STANDBY_REPLICAS, KEY_NUM_WARMUP_REPLICAS, KEY_RACK_AWARE_ASSIGNMENT_TAGS,
-        KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET, KEY_TASK_OFFSET_INTERVAL_MS,
-        ShareAutoOffsetReset, StreamsGroupConfig,
+use crate::{
+    api_catalog::UnstableApiVersions,
+    config::BrokerConfig,
+    coordinator::unified::{
+        config::NextGenConfig,
+        share::config::ShareGroupConfig,
+        streams::config::{
+            KEY_ACCEPTABLE_RECOVERY_LAG, KEY_ASSIGNOR_NAME, KEY_HEARTBEAT_INTERVAL_MS,
+            KEY_NUM_STANDBY_REPLICAS, KEY_NUM_WARMUP_REPLICAS, KEY_RACK_AWARE_ASSIGNMENT_TAGS,
+            KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET, KEY_TASK_OFFSET_INTERVAL_MS,
+            ShareAutoOffsetReset, StreamsGroupConfig,
+        },
     },
-}};
+};
 
 /// One key of Kafka's `GroupConfig.CONFIG_DEF`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,8 +124,7 @@ pub(crate) fn served_group_keys(
     unstable: UnstableApiVersions,
 ) -> impl Iterator<Item = &'static GroupKey> {
     KAFKA_GROUP_KEYS.iter().filter(move |key| {
-        unstable == UnstableApiVersions::Enabled
-            || !KAFKA_TRUNK_GROUP_KEYS.contains(&key.name)
+        unstable == UnstableApiVersions::Enabled || !KAFKA_TRUNK_GROUP_KEYS.contains(&key.name)
     })
 }
 

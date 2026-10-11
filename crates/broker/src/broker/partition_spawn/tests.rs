@@ -1,9 +1,11 @@
 use assert2::assert;
 use tempfile::tempdir;
 
-use crate::{log_dir::partition_dir, wal::quorum::{registry::ShardId, wire::fetch_request}};
-
 use super::*;
+use crate::{
+    log_dir::partition_dir,
+    wal::quorum::{registry::ShardId, wire::fetch_request},
+};
 
 #[tokio::test]
 async fn nondefault_partition_writer_queue_depth_backpressures_at_bound() {

@@ -272,8 +272,7 @@ advertised = "localhost:9094"
 protocol = "Ssl"
 tls_config = { cert_path = "/tls/c", key_path = "/tls/k", client_auth = "Required", principal_mapping_rules = ["RULE:^CN=(.*?),.*$/$1/", "DEFAULT"] }
 "#;
-        let cfg = configured_unwrap_parse(toml)
-            .expect("apply listener");
+        let cfg = configured_unwrap_parse(toml).expect("apply listener");
         let listener = cfg
             .listeners
             .iter()

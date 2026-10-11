@@ -24,7 +24,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::handlers::{assign_replicas_to_dirs::test_support::{VERSION, decode_response}, encode_response};
+    use crate::handlers::{
+        assign_replicas_to_dirs::test_support::{VERSION, decode_response},
+        encode_response,
+    };
 
     #[test]
     fn not_controller_response_preserves_error_code() {

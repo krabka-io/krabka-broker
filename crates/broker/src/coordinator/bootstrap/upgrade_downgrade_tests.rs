@@ -16,7 +16,9 @@ use super::{
         replay_stream,
     },
 };
-use crate::coordinator::{persistence::GroupMetadataValue, unified::actor::test_support::rpc::describe};
+use crate::coordinator::{
+    persistence::GroupMetadataValue, unified::actor::test_support::rpc::describe,
+};
 
 /// PROBLEM A, the downgrade trap: a group that started classic, then was
 /// UPGRADED to next-gen, then was DOWNGRADED back to classic must replay

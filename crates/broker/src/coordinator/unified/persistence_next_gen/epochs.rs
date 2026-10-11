@@ -42,9 +42,8 @@ epoch_value!(TargetAssignmentMetadataValue("ConsumerGroupTargetAssignmentMetadat
 mod tests {
     use assert2::{assert, check};
 
+    use super::*;
     use crate::coordinator::unified::test_support::AssignmentMetadataGoldenSetup;
-
-use super::*;
 
     /// `ConsumerGroupMetadataValue` as Kafka 4.3.1's generated writer lays it
     /// out: i16 version 0, i32 `Epoch`, then the tagged-field trailer, which

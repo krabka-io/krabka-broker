@@ -12,7 +12,10 @@ use krabka_units::{
     days, hours, mebibytes, millis, minutes, secs,
 };
 
-use crate::{config::BrokerConfig, file_config::{FileConfig, test_support::configured}};
+use crate::{
+    config::BrokerConfig,
+    file_config::{FileConfig, test_support::configured},
+};
 
 #[test]
 fn runtime_file_config_applies_representative_values() {
@@ -209,8 +212,8 @@ fn runtime_file_config_rejects_relational_conflicts() {
     )];
 
     for (source, message) in cases {
-        let error = configured(source, "parse runtime config")
-            .expect_err("relational conflict must fail");
+        let error =
+            configured(source, "parse runtime config").expect_err("relational conflict must fail");
         assert!(error.to_string().contains(message));
     }
 }

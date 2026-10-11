@@ -9,7 +9,11 @@ use krabka_log::{Log, LogConfig};
 use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 use uuid::Uuid;
 
-use crate::{barrier::marker::BarrierMarker, partition_registry::PartitionRegistry, test_support::{FakeMetadataSource, StandalonePartitionSetup, spawn_standalone_partition}};
+use crate::{
+    barrier::marker::BarrierMarker,
+    partition_registry::PartitionRegistry,
+    test_support::{FakeMetadataSource, StandalonePartitionSetup, spawn_standalone_partition},
+};
 
 /// The topic and partition records of one topic, with one leader for every
 /// partition and a leader epoch of 3.

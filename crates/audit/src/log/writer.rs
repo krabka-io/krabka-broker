@@ -335,11 +335,19 @@ mod tests {
 
     use super::*;
     use crate::{
-        NodeId, chain::{GENESIS_HEAD, chain_hash}, event::AuditEventClass, log::{
-            AuditLog, test_support::{
-                AuditEventCount, CheckpointFrequency, CheckpointSetup, ROOMY_CAP, await_until, failed_sink_stats, finish_lifecycle_writer, finish_writer, header, life, params, quiet_params, roomy_spool, spawn_writer, test_signer,
+        NodeId,
+        chain::{GENESIS_HEAD, chain_hash},
+        event::AuditEventClass,
+        log::{
+            AuditLog,
+            test_support::{
+                AuditEventCount, CheckpointFrequency, CheckpointSetup, ROOMY_CAP, await_until,
+                failed_sink_stats, finish_lifecycle_writer, finish_writer, header, life, params,
+                quiet_params, roomy_spool, spawn_writer, test_signer,
             },
-        }, sink::{AuditSink, MemorySink}, spool::PendingLosses,
+        },
+        sink::{AuditSink, MemorySink},
+        spool::PendingLosses,
     };
 
     #[derive(
@@ -364,9 +372,7 @@ mod tests {
             Self {
                 capacity: QueueCapacity(16),
                 checkpoints: CheckpointSetup {
-                    frequency: CheckpointFrequency::Every(
-                        AuditEventCount(1_000_000),
-                    ),
+                    frequency: CheckpointFrequency::Every(AuditEventCount(1_000_000)),
                     ..Default::default()
                 },
             }
@@ -384,10 +390,7 @@ mod tests {
         let spool = Spool::open(directory, ROOMY_CAP).unwrap();
         let (log, receiver) = AuditLog::new(capacity.0);
         let sink = Arc::new(MemorySink::default());
-        let handle = spawn_writer(
-            receiver,
-            quiet_params(sink.clone(), spool, checkpoints),
-        );
+        let handle = spawn_writer(receiver, quiet_params(sink.clone(), spool, checkpoints));
         (log, sink, handle)
     }
 
@@ -460,12 +463,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (log, sink, handle) = memory_writer(dir.path(), MemoryWriterSetup::default());
 
-        finish_lifecycle_writer(
-            log,
-            handle,
-            &[NodeId(1), NodeId(2), NodeId(3)],
-        )
-        .await;
+        finish_lifecycle_writer(log, handle, &[NodeId(1), NodeId(2), NodeId(3)]).await;
 
         let recs = sink.records();
         check!((recs.len(), recs[0].class) == (3, AuditEventClass::ApplicationLifecycle));
@@ -479,12 +477,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // no signer, huge interval => no checkpoints, just chaining
         let (log, sink, h) = memory_writer(dir.path(), MemoryWriterSetup::default());
-        finish_lifecycle_writer(
-            log,
-            h,
-            &[NodeId(1), NodeId(2)],
-        )
-        .await;
+        finish_lifecycle_writer(log, h, &[NodeId(1), NodeId(2)]).await;
 
         let recs = sink.records();
         check!(recs.len() == 2); // no checkpoints (no signer)
@@ -500,11 +493,7 @@ mod tests {
                 )
         );
         // record 1 prev_hash == chain_hash(genesis, 0, value0)
-        let expect = crate::chain::to_hex(&chain_hash(
-            &GENESIS_HEAD,
-            0,
-            &recs[0].value,
-        ));
+        let expect = crate::chain::to_hex(&chain_hash(&GENESIS_HEAD, 0, &recs[0].value));
         check!(header(&recs[1], "prev_hash") == Some(expect));
     }
 
@@ -513,9 +502,7 @@ mod tests {
         // checkpoint every 2 records; long interval so only count triggers
         let (pubkey, _dir, (log, sink, h)) = signed_writer(SignedWriterSetup {
             capacity: QueueCapacity(64),
-            frequency: CheckpointFrequency::Every(
-                AuditEventCount(2),
-            ),
+            frequency: CheckpointFrequency::Every(AuditEventCount(2)),
         });
         for i in 0..4 {
             log.emit(life(NodeId(i)));
@@ -551,12 +538,7 @@ mod tests {
     async fn shutdown_emits_final_checkpoint_for_pending_tail() {
         // every_n large so only the shutdown path emits
         let (pubkey, _dir, (log, sink, h)) = signed_writer(SignedWriterSetup::default());
-        finish_lifecycle_writer(
-            log,
-            h,
-            &[NodeId(1), NodeId(2), NodeId(3)],
-        )
-        .await;
+        finish_lifecycle_writer(log, h, &[NodeId(1), NodeId(2), NodeId(3)]).await;
 
         let recs = sink.records();
         let cps: Vec<_> = recs
@@ -587,8 +569,7 @@ mod tests {
         let (_dir, spool) = roomy_spool();
         let sink = Arc::new(MemorySink::default());
         let (log, rx) = AuditLog::new(16);
-        let mut params =
-            params(sink.clone(), spool, Arc::new(AuditStats::new()));
+        let mut params = params(sink.clone(), spool, Arc::new(AuditStats::new()));
         params.timer = Arc::new(DeadTimer(StdMonotonicClock::new()));
         let handle = spawn_writer(rx, params);
 
@@ -641,14 +622,11 @@ mod tests {
         let handle = spawn_writer(rx, params);
 
         log.emit(life(NodeId(1)));
-        await_until(
-            "loss marker, event, and checkpoint reached sink",
-            || {
-                sink.records()
-                    .iter()
-                    .any(|r| r.class == AuditEventClass::Checkpoint)
-            },
-        )
+        await_until("loss marker, event, and checkpoint reached sink", || {
+            sink.records()
+                .iter()
+                .any(|r| r.class == AuditEventClass::Checkpoint)
+        })
         .await;
         finish_writer(log, handle).await;
 

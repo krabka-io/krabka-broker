@@ -51,10 +51,13 @@ mod tests {
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
 
     use super::*;
-    use crate::{coordinator::unified::streams::{
-        persistence::StoredTopicInfo,
-        topology::test_support::{image_with, sub},
-    }, test_support::broker_registration};
+    use crate::{
+        coordinator::unified::streams::{
+            persistence::StoredTopicInfo,
+            topology::test_support::{image_with, sub},
+        },
+        test_support::broker_registration,
+    };
 
     fn topology() -> StreamsGroupTopologyValue {
         let mut s0 = sub("0");

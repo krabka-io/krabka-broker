@@ -14,7 +14,10 @@ use tokio::{
 };
 
 use super::AutoJoinParams;
-use crate::{metadata_source::MetadataSource, network::client::InterBrokerClient, test_support::FakeMetadataSource};
+use crate::{
+    metadata_source::MetadataSource, network::client::InterBrokerClient,
+    test_support::FakeMetadataSource,
+};
 
 pub(super) async fn read_frame(socket: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     let mut length = [0u8; 4];

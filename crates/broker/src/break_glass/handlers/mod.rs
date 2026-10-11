@@ -265,9 +265,8 @@ pub(crate) mod tests {
     use assert2::{assert, check};
     use krabka_security::Principal;
 
+    use super::*;
     use crate::test_support::sasl_principal;
-
-use super::*;
 
     pub(crate) fn principal(name: &str) -> Principal {
         sasl_principal(name)

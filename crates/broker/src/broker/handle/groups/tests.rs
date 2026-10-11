@@ -3,7 +3,22 @@ use std::sync::Arc;
 use assert2::{assert, check};
 
 use super::*;
-use crate::{broker::Broker, coordinator::unified::{GroupSeed, StreamsGroupSeed, actor::GroupKindTag, classic_state::{ClassicGroup, Member}, group::CoordinatorGroup, streams::{actor::StreamsGroupActorMessage, persistence::{StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue}}}, test_support::start_broker_with};
+use crate::{
+    broker::Broker,
+    coordinator::unified::{
+        GroupSeed, StreamsGroupSeed,
+        actor::GroupKindTag,
+        classic_state::{ClassicGroup, Member},
+        group::CoordinatorGroup,
+        streams::{
+            actor::StreamsGroupActorMessage,
+            persistence::{
+                StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
+            },
+        },
+    },
+    test_support::start_broker_with,
+};
 
 fn consumer_group_seed(member_id: &str) -> GroupSeed {
     let mut seed = GroupSeed {
@@ -28,10 +43,7 @@ fn consumer_group_seed(member_id: &str) -> GroupSeed {
     seed
 }
 
-fn classic_group_with_member(
-    group_id: &str,
-    member_id: &str,
-) -> Box<CoordinatorGroup> {
+fn classic_group_with_member(group_id: &str, member_id: &str) -> Box<CoordinatorGroup> {
     let mut classic = ClassicGroup::new(group_id);
     classic.protocol_type = Some("consumer".to_string());
     classic.generation_id = 1;
@@ -44,13 +56,11 @@ fn classic_group_with_member(
         vec![("range".to_string(), bytes::Bytes::from_static(b"metadata"))],
     );
     let _ = classic.add_member(member);
-    Box::new(
-        CoordinatorGroup::seeded(
-            group_id,
-            crate::coordinator::unified::group::GroupKind::Classic(classic),
-            std::collections::HashMap::new(),
-        ),
-    )
+    Box::new(CoordinatorGroup::seeded(
+        group_id,
+        crate::coordinator::unified::group::GroupKind::Classic(classic),
+        std::collections::HashMap::new(),
+    ))
 }
 
 fn streams_group_seed(member_id: &str) -> StreamsGroupSeed {
@@ -89,7 +99,8 @@ fn streams_group_seed(member_id: &str) -> StreamsGroupSeed {
         StreamsGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
-            state: crate::coordinator::unified::streams::persistence::StreamsMemberWireState::Stable,
+            state:
+                crate::coordinator::unified::streams::persistence::StreamsMemberWireState::Stable,
             active,
             standby: std::collections::BTreeMap::new(),
             warmup: std::collections::BTreeMap::new(),
@@ -128,11 +139,9 @@ async fn assert_streams_group_helpers_observe_live_actor_view(
         .get_or_create_streams(streams_group_id);
     streams_actor
         .tx
-        .send(
-            StreamsGroupActorMessage::Seed(
-                streams_group_seed(streams_member_id),
-            ),
-        )
+        .send(StreamsGroupActorMessage::Seed(streams_group_seed(
+            streams_member_id,
+        )))
         .await
         .expect("seed streams group");
     assert!(
@@ -186,10 +195,9 @@ async fn group_handle_helpers_observe_live_actor_views() {
 
     let group_id = "handle-next-gen-group-mutant";
     let member_id = "member-1";
-    let actor = broker.group_coordinator.get_or_create_group(
-        group_id,
-        GroupKindTag::Consumer,
-    );
+    let actor = broker
+        .group_coordinator
+        .get_or_create_group(group_id, GroupKindTag::Consumer);
     actor
         .tx
         .send(crate::coordinator::unified::actor::GroupActorMessage::Seed(
@@ -222,10 +230,9 @@ async fn group_handle_helpers_observe_live_actor_views() {
     );
 
     let empty_group_id = "handle-empty-group-mutant";
-    let _ = broker.group_coordinator.get_or_create_group(
-        empty_group_id,
-        GroupKindTag::Consumer,
-    );
+    let _ = broker
+        .group_coordinator
+        .get_or_create_group(empty_group_id, GroupKindTag::Consumer);
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_secs(1),

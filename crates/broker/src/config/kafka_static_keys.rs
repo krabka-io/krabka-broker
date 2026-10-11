@@ -24,9 +24,15 @@ use krabka_units::{
     convert::{ByteSizeExt as _, TimeExt as _},
 };
 
-use crate::{api_catalog::UnstableApiVersions, config_keys::{broker_dynamic::{TOPIC_DEFAULT_SYNONYMS, topic_broker_synonyms}, in_topic_unit, kafka_broker::lookup}};
-
 use super::BrokerConfig;
+use crate::{
+    api_catalog::UnstableApiVersions,
+    config_keys::{
+        broker_dynamic::{TOPIC_DEFAULT_SYNONYMS, topic_broker_synonyms},
+        in_topic_unit,
+        kafka_broker::lookup,
+    },
+};
 
 /// One `KafkaConfig` key and how this node states its value.
 pub(crate) struct KafkaStaticKey {
@@ -322,9 +328,7 @@ impl KafkaStaticKey {
                     .find(|(broker, _)| *broker == self.name)?;
                 topic_broker_synonyms(topic)
                     .iter()
-                    .find_map(|synonym| {
-                        in_topic_unit(topic, synonym.name, synonym.default?)
-                    })
+                    .find_map(|synonym| in_topic_unit(topic, synonym.name, synonym.default?))
             })
     }
 
@@ -336,8 +340,7 @@ impl KafkaStaticKey {
         // Streams assignor setting is part of trunk's GroupConfig surface and
         // is only visible when Kafka's unstable API versions are enabled.
         if self.name == "group.streams.assignors"
-            && config.features.unstable_api_versions
-                == UnstableApiVersions::Disabled
+            && config.features.unstable_api_versions == UnstableApiVersions::Disabled
         {
             return None;
         }
@@ -354,9 +357,8 @@ impl KafkaStaticKey {
 mod tests {
     use assert2::check;
 
+    use super::*;
     use crate::{api_catalog::UnstableApiVersions, file_config::RuntimeFileConfig};
-
-use super::*;
 
     /// The keys whose value a default `BrokerConfig` runs differently from
     /// Kafka 4.3.1's default: the 1 MiB socket buffers that the network layer
@@ -397,9 +399,8 @@ use super::*;
     /// names would never be recorded.
     #[test]
     fn every_runtime_field_is_one_the_table_has() {
-        let serde_json::Value::Object(fields) =
-            serde_json::to_value(RuntimeFileConfig::default())
-                .expect("serialize the runtime table")
+        let serde_json::Value::Object(fields) = serde_json::to_value(RuntimeFileConfig::default())
+            .expect("serialize the runtime table")
         else {
             panic!("the runtime table serializes as an object");
         };

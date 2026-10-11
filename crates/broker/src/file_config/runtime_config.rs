@@ -9,9 +9,8 @@ use krabka_units::{ByteSize, Ratio, Time};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::BrokerConfig;
-
 use super::FileConfigError;
+use crate::config::BrokerConfig;
 
 /// Validated operational policy loaded from `[runtime]`.
 #[krabka_macros::runtime_policy_fields(toml)]
@@ -426,10 +425,7 @@ impl RuntimeFileConfig {
     /// # Errors
     ///
     /// Returns [`FileConfigError::InvalidConfig`] for an invalid value.
-    pub fn apply_to(
-        mut self,
-        cfg: &mut BrokerConfig,
-    ) -> Result<(), FileConfigError> {
+    pub fn apply_to(mut self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         self.record_supplied_kafka_keys(cfg);
         self.apply_core(cfg)?;
         self.apply_replication(cfg)?;

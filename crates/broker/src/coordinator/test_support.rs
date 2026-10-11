@@ -15,16 +15,24 @@ use krabka_protocol::{
 };
 
 use crate::{
-    broker::Broker, codes::COORDINATOR_NOT_AVAILABLE, coordinator::{bootstrap::OFFSETS_TOPIC, persistence::{Key, OffsetCommitValue}, unified::{
-        GroupCoordinator,
-        actor::MetadataProvider,
-        classic_state::OffsetEntry,
-        config::NextGenConfig,
-        offsets_log::OffsetsLog,
-        persistence::{Key, parse_key},
-        share::config::ShareGroupConfig,
-        streams::config::StreamsGroupConfig,
-    }}, handlers::offset_fetch::handle, test_support::{KafkaErrorCode, peer, principal, request_context},
+    broker::Broker,
+    codes::COORDINATOR_NOT_AVAILABLE,
+    coordinator::{
+        bootstrap::OFFSETS_TOPIC,
+        persistence::{Key, OffsetCommitValue},
+        unified::{
+            GroupCoordinator,
+            actor::MetadataProvider,
+            classic_state::OffsetEntry,
+            config::NextGenConfig,
+            offsets_log::OffsetsLog,
+            persistence::{Key, parse_key},
+            share::config::ShareGroupConfig,
+            streams::config::StreamsGroupConfig,
+        },
+    },
+    handlers::offset_fetch::handle,
+    test_support::{KafkaErrorCode, peer, principal, request_context},
 };
 
 krabka_macros::single_replica_partition_fixture!(single_replica_partition);
@@ -272,14 +280,7 @@ pub(crate) fn offset_record(setup: OffsetRecordSetup<'_>) -> krabka_protocol::re
         topic_id: None,
     };
     krabka_protocol::records::Record {
-        key: Some(
-            OffsetCommitValue::encode_key(
-                group,
-                topic,
-                partition.0,
-            )
-            .unwrap(),
-        ),
+        key: Some(OffsetCommitValue::encode_key(group, topic, partition.0).unwrap()),
         value: Some(value.encode_value()),
         ..Default::default()
     }
@@ -369,12 +370,8 @@ impl CommitWaitOutcome {
     pub(crate) fn kafka_error(self) -> Option<KafkaErrorCode> {
         match self {
             Self::Committed => None,
-            Self::NotLeader => Some(KafkaErrorCode(
-                crate::codes::NOT_COORDINATOR,
-            )),
-            Self::TimedOut => Some(KafkaErrorCode(
-                COORDINATOR_NOT_AVAILABLE,
-            )),
+            Self::NotLeader => Some(KafkaErrorCode(crate::codes::NOT_COORDINATOR)),
+            Self::TimedOut => Some(KafkaErrorCode(COORDINATOR_NOT_AVAILABLE)),
         }
     }
 }

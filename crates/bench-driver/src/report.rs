@@ -10,7 +10,11 @@ use anyhow::{Context, Result};
 use krabka_units::{fmt::Human as _, prelude::*};
 
 use crate::{
-    aggregate::CellKey, graph::render_html, ids::{MessageCount, TimeOffsetMs}, numeric::{mebibytes_f64, millis_f64, to_f64}, scenario::{Disturbance, LatencyPercentiles, RunOutput, Sample, Stack},
+    aggregate::CellKey,
+    graph::render_html,
+    ids::{MessageCount, TimeOffsetMs},
+    numeric::{mebibytes_f64, millis_f64, to_f64},
+    scenario::{Disturbance, LatencyPercentiles, RunOutput, Sample, Stack},
 };
 
 fn push_fmt(output: &mut String, args: Arguments<'_>) {
@@ -688,10 +692,7 @@ fn require_rate_samples(
     }
 }
 
-fn mean_failover_value(
-    runs: &[&RunOutput],
-    value: impl Fn(&Disturbance) -> f64,
-) -> Option<f64> {
+fn mean_failover_value(runs: &[&RunOutput], value: impl Fn(&Disturbance) -> f64) -> Option<f64> {
     let vals: Vec<f64> = runs
         .iter()
         .filter_map(|r| r.disturbance.as_ref())
@@ -1117,7 +1118,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        ids::WallclockMs, numeric::{event_rate, nonnegative_i64_to_u64}, scenario::{Disturbance, FailoverSpec, LatencyPercentiles, ModeTag, Resource, Sample, Throughput, Topology, fixture::scenario},
+        ids::WallclockMs,
+        numeric::{event_rate, nonnegative_i64_to_u64},
+        scenario::{
+            Disturbance, FailoverSpec, LatencyPercentiles, ModeTag, Resource, Sample, Throughput,
+            Topology, fixture::scenario,
+        },
     };
 
     fn fake_run(stack: Stack, msgs: u64) -> RunOutput {

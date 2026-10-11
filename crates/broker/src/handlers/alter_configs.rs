@@ -36,10 +36,17 @@ mod test_support;
 mod tests;
 
 use self::resource::process_resource;
-use crate::{codes::{INVALID_CONFIG, INVALID_REQUEST, NONE, NOT_CONTROLLER, UNKNOWN_SERVER_ERROR}, config_keys::{MIN_INSYNC_REPLICAS, is_controller_managed_topic_config}, handlers::{audit_resource, describe_configs::{
-    RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
-    RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
-}}};
+use crate::{
+    codes::{INVALID_CONFIG, INVALID_REQUEST, NONE, NOT_CONTROLLER, UNKNOWN_SERVER_ERROR},
+    config_keys::{MIN_INSYNC_REPLICAS, is_controller_managed_topic_config},
+    handlers::{
+        audit_resource,
+        describe_configs::{
+            RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
+            RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+        },
+    },
+};
 
 /// Both config APIs validate and audit resources in request order.
 macro_rules! config_alter_handler {
@@ -149,10 +156,7 @@ fn audit_resources_for(
             .map(|config| config.name.clone())
             .collect(),
     };
-    out.extend(
-        keys.into_iter()
-            .map(|key| audit_resource("ConfigKey", key)),
-    );
+    out.extend(keys.into_iter().map(|key| audit_resource("ConfigKey", key)));
     out
 }
 
@@ -245,10 +249,7 @@ pub(super) fn validate_resource_shape<'a>(
     let configs: Vec<(&str, bool)> = configs.into_iter().collect();
     let mut seen = std::collections::BTreeSet::new();
     if configs.iter().any(|(name, _)| !seen.insert(*name)) {
-        return Err((
-            INVALID_REQUEST,
-            "Error due to duplicate config keys".into(),
-        ));
+        return Err((INVALID_REQUEST, "Error due to duplicate config keys".into()));
     }
     let null_names: Vec<&str> = configs
         .iter()
@@ -281,9 +282,7 @@ pub(super) fn changes_min_isr(
                 && image
                     .topic_config(&config.topic)
                     .and_then(|current| current.get(MIN_INSYNC_REPLICAS))
-                    != config
-                        .overrides
-                        .get(MIN_INSYNC_REPLICAS)
+                    != config.overrides.get(MIN_INSYNC_REPLICAS)
         }
         krabka_metadata::MetadataRecord::V1BrokerConfig(config) => {
             config.node_id == krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID

@@ -4,9 +4,8 @@ use std::{collections::BTreeMap, str::FromStr, sync::Arc, time::Duration};
 
 use qubit_clock::Timer;
 
-use crate::time_util::system_timer;
-
 use super::assignor::{Assignor, RangeAssignor, UniformAssignor};
+use crate::time_util::system_timer;
 
 /// `group.consumer.migration.policy` governs classic ↔ next-gen consumer
 /// group conversion. The default is `Bidirectional`, which matches Apache

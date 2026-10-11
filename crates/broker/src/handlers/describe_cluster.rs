@@ -187,7 +187,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AllowAllAuthorizer, Authorizer}, broker::{Broker, BrokerHandle}, test_support::{ControllerPeerAllowed, DenyAll, peer, principal},
+        authorizer::{AllowAllAuthorizer, Authorizer},
+        broker::{Broker, BrokerHandle},
+        test_support::{ControllerPeerAllowed, DenyAll, peer, principal},
     };
 
     const VERSION: i16 = 2;
@@ -233,10 +235,7 @@ mod tests {
     /// gated below by `the_authorized_operations_bitfield` table.
     #[tokio::test]
     async fn a_principal_without_describe_still_gets_full_cluster_data() {
-        let (broker_handle, _dir) = start_broker(Arc::new(
-            ControllerPeerAllowed(DenyAll),
-        ))
-        .await;
+        let (broker_handle, _dir) = start_broker(Arc::new(ControllerPeerAllowed(DenyAll))).await;
         seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "alice");
@@ -256,8 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn broker_endpoint_response_preserves_non_default_fields() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "admin");
@@ -439,8 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn fenced_brokers_require_explicit_opt_in() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         broker.liveness.record_fenced_heartbeat(42).await;
@@ -515,8 +512,7 @@ mod tests {
             ),
         ];
 
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
         broker_handle
             .broker_arc_for_test()
             .controller

@@ -8,7 +8,9 @@ use tempfile::TempDir;
 
 use super::{FileBreakGlassConfig, FileFreezeConfig, FileOperatorKey};
 use crate::{
-    break_glass::action_name, config::{BackgroundUncleanRecovery, BrokerConfig}, file_config::{FileConfig, FileConfigError, test_support::configured},
+    break_glass::action_name,
+    config::{BackgroundUncleanRecovery, BrokerConfig},
+    file_config::{FileConfig, FileConfigError, test_support::configured},
 };
 
 fn check_operator_key_refusal(file: FileConfig, cfg: &mut BrokerConfig, case: &str) {
@@ -183,10 +185,7 @@ fn background_unclean_recovery_accepts_exactly_three_spellings() {
 }
 
 /// Apply privileged-action sections beside the fixture's Alice operator key.
-fn configured_privileged_actions(
-    directory: &TempDir,
-    sections: &str,
-) -> BrokerConfig {
+fn configured_privileged_actions(directory: &TempDir, sections: &str) -> BrokerConfig {
     let source = format!(
         "{}\n{sections}",
         operator_key_fixture(directory, "alice-yubi", "User:alice")
@@ -226,8 +225,7 @@ fn freeze_and_break_glass_sections_apply_their_documented_defaults() {
 
 #[test]
 fn absent_privileged_action_sections_retain_the_broker_defaults() {
-    let cfg = configured("", "parse empty config")
-        .expect("apply empty config");
+    let cfg = configured("", "parse empty config").expect("apply empty config");
 
     check!(cfg.operator_keys.is_empty());
     check!(cfg.freeze == crate::config::FreezeConfig::default());

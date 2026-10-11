@@ -7,7 +7,7 @@ use krabka_protocol::owned::create_partitions_response::{
 };
 use krabka_units::Time;
 
-use crate::{metrics::QuotaType, quota::throttle_time_ms};
+use crate::{handlers::RequestContext, metrics::QuotaType, quota::throttle_time_ms};
 
 pub(super) fn create_partitions_response(
     results: Vec<CreatePartitionsTopicResult>,
@@ -21,7 +21,7 @@ pub(super) fn create_partitions_response(
 }
 
 pub(super) fn finish_response(
-    context: &crate::handlers::RequestContext<'_>,
+    context: &RequestContext<'_>,
     delay: Time,
     results: Vec<CreatePartitionsTopicResult>,
 ) -> CreatePartitionsResponse {

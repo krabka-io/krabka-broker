@@ -7,7 +7,10 @@ use krabka_protocol::{
 };
 
 use super::{TIERED_TOPIC, out_of_range_at, tiered_broker, tiered_topic_id};
-use crate::{broker::spawn_partition, remote_log_manager::{ArchiveMode, copy_eligible, test_support::tier}};
+use crate::{
+    broker::spawn_partition,
+    remote_log_manager::{ArchiveMode, copy_eligible, test_support::tier},
+};
 
 fn data_batch(transactional: bool) -> RecordBatch {
     RecordBatch {

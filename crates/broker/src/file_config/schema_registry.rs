@@ -78,7 +78,13 @@ mod tests {
     use krabka_units::millis;
 
     use super::*;
-    use crate::{config::BrokerConfig, file_config::{FileConfig, FileConfigError, test_support::{configured, configured_unwrap_parse}}};
+    use crate::{
+        config::BrokerConfig,
+        file_config::{
+            FileConfig, FileConfigError,
+            test_support::{configured, configured_unwrap_parse},
+        },
+    };
 
     #[test]
     fn schema_registry_section_round_trips_every_key() {
@@ -144,9 +150,8 @@ failopen = true
 [schema_registry]
 url = "http://schema-registry.invalid:8081"
 "#;
-        let cfg =
-            configured(toml, "parse schema_registry section")
-                .expect("apply schema_registry section");
+        let cfg = configured(toml, "parse schema_registry section")
+            .expect("apply schema_registry section");
 
         assert!(cfg.schema_validator.is_some());
     }
@@ -189,8 +194,7 @@ basic_auth_password_path = "{}"
 
     #[test]
     fn schema_registry_section_absent_leaves_no_validator() {
-        let cfg = configured("", "parse empty config")
-            .expect("apply empty config");
+        let cfg = configured("", "parse empty config").expect("apply empty config");
 
         assert!(cfg.schema_validator.is_none());
     }

@@ -15,9 +15,14 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use super::{ShareGroupActorHandle, ShareGroupActorMessage};
-use crate::{coordinator::unified::{
-    GroupCoordinator, actor::MetadataProvider, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput, share::config::ShareGroupConfig, test_support::fixed_source,
-}, test_support::PartitionCount};
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator, actor::MetadataProvider, config::NextGenConfig,
+        offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
+        share::config::ShareGroupConfig, test_support::fixed_source,
+    },
+    test_support::PartitionCount,
+};
 
 #[derive(Debug)]
 struct StaticMetadata {
@@ -76,11 +81,9 @@ pub(super) fn unavailable_persister_coordinator(
     let (metadata, topic_id) = metadata_with_topic(setup);
     let (coordinator, log) = make_coordinator(metadata);
     coordinator.set_share_persister(
-        crate::coordinator::unified::test_support::make_share_persister(
-            fixed_source(
-                krabka_metadata::MetadataImage::default(),
-            ),
-        ),
+        crate::coordinator::unified::test_support::make_share_persister(fixed_source(
+            krabka_metadata::MetadataImage::default(),
+        )),
     );
     (coordinator, log, topic_id)
 }

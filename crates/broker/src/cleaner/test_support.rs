@@ -10,7 +10,10 @@ use krabka_metadata::NodeId;
 use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::TempDir;
 
-use crate::{log_dir::partition_dir, log_dir_status::LogDirRegistry, partition::Partition, partition_registry::PartitionRegistry, test_support::CommittedPartitionSetup};
+use crate::{
+    log_dir::partition_dir, log_dir_status::LogDirRegistry, partition::Partition,
+    partition_registry::PartitionRegistry, test_support::CommittedPartitionSetup,
+};
 
 fn keyed_batch(base: i64, key: &[u8], value: &[u8]) -> RecordBatch {
     RecordBatch {

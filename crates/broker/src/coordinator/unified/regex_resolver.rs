@@ -20,7 +20,10 @@ use krabka_metadata::{AclOperation, MetadataImage};
 use krabka_security::Principal;
 
 use super::consumer_state::ResolvedRegularExpression;
-use crate::{authorizer::{AuthorizationResult, Authorizer, authorize_topics_logged}, time_util::now_ms};
+use crate::{
+    authorizer::{AuthorizationResult, Authorizer, authorize_topics_logged},
+    time_util::now_ms,
+};
 
 /// Resolves regular expressions to topics. See the module documentation.
 pub trait TopicRegexResolver: Send + Sync + fmt::Debug {
@@ -247,7 +250,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer}, test_support::{AllowAclSetup, peer, sasl_principal}, time_util::now_ms,
+        authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
+        test_support::{AllowAclSetup, peer, sasl_principal},
+        time_util::now_ms,
     };
 
     fn image_with_topics(names: &[&str]) -> MetadataImage {
@@ -268,13 +273,11 @@ mod tests {
     }
 
     fn describe_acl(topic: &str) -> MetadataRecord {
-        MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
-            AllowAclSetup {
-                resource_name: topic,
-                operation: AclOperation::Describe,
-                ..Default::default()
-            },
-        ))
+        MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(AllowAclSetup {
+            resource_name: topic,
+            operation: AclOperation::Describe,
+            ..Default::default()
+        }))
     }
 
     fn resolver(image: MetadataImage, authorizer: Arc<dyn Authorizer>) -> ImageTopicRegexResolver {

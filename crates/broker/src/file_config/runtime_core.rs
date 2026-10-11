@@ -5,8 +5,6 @@
 //! backoffs. They share a module because both write the timings the broker
 //! needs before it serves a single request.
 
-use crate::config::BrokerConfig;
-
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
@@ -14,12 +12,10 @@ use super::{
         whole_millis_i32_time,
     },
 };
+use crate::config::BrokerConfig;
 
 impl RuntimeFileConfig {
-    pub(super) fn apply_core(
-        &mut self,
-        cfg: &mut BrokerConfig,
-    ) -> Result<(), FileConfigError> {
+    pub(super) fn apply_core(&mut self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
 
         set_runtime! {

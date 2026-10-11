@@ -11,7 +11,11 @@ use super::records::{
     target_assignment_value,
 };
 use crate::coordinator::unified::{
-    ShareGroupSeed, share::{persistence::TopicPartitionsInfo, state::{ShareGroupState, ShareMemberState}},
+    ShareGroupSeed,
+    share::{
+        persistence::TopicPartitionsInfo,
+        state::{ShareGroupState, ShareMemberState},
+    },
 };
 
 pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {

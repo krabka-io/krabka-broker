@@ -38,7 +38,9 @@ use krabka_verified::{
 
 use self::codec::{HEADER_LEN, decode_record, encode_frame, file_header, strip_file_header};
 use crate::{
-    event::AuditEventClass, ids::{MaxSpoolBytes, RecordCount, SpoolBytes}, sink::{AuditError, AuditRecord},
+    event::AuditEventClass,
+    ids::{MaxSpoolBytes, RecordCount, SpoolBytes},
+    sink::{AuditError, AuditRecord},
 };
 
 mod codec;

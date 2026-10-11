@@ -16,9 +16,8 @@ use qubit_clock::ManualMonotonicClock;
 use uuid::Uuid;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
-use crate::test_support::sasl_principal;
-
 use super::*;
+use crate::test_support::sasl_principal;
 
 fn test_principal(name: &str) -> Principal {
     sasl_principal(name)

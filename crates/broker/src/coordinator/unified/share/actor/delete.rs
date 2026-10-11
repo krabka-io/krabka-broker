@@ -187,16 +187,19 @@ mod tests {
     use bytes::Bytes;
 
     use super::*;
-    use crate::{coordinator::unified::{
-        ShareGroupSeed,
-        share::{
-            actor::ShareGroupActorMessage,
-            persistence::{
-                DeletingTopic, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
+    use crate::{
+        coordinator::unified::{
+            ShareGroupSeed,
+            share::{
+                actor::ShareGroupActorMessage,
+                persistence::{
+                    DeletingTopic, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
+                },
             },
+            test_support::{fixed_source, make_coord_with_log, make_share_persister, share_member},
         },
-        test_support::{fixed_source, make_coord_with_log, make_share_persister, share_member},
-    }, metrics::{BrokerMetrics, ShareGroupIdLabel}};
+        metrics::{BrokerMetrics, ShareGroupIdLabel},
+    };
 
     /// `(key, value)` of every record appended to `__consumer_offsets`.
     type Appended = Vec<(Option<Bytes>, Option<Bytes>)>;

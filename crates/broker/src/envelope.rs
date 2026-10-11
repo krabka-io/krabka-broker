@@ -42,7 +42,10 @@ use krabka_protocol::{
 };
 
 use crate::{
-    api_catalog::UnstableApiVersions, codes, handlers::{ApiKeyCode, ApiVersion, CorrelationId}, network::{request::parse_request, response_header_v1},
+    api_catalog::UnstableApiVersions,
+    codes,
+    handlers::{ApiKeyCode, ApiVersion, CorrelationId},
+    network::{request::parse_request, response_header_v1},
 };
 
 /// A failure serving one `Envelope`, and the `EnvelopeResponse.error_code`
@@ -148,14 +151,9 @@ pub(crate) fn is_forwardable(api_key: ApiKeyCode) -> bool {
 /// `StopReplica`, `UpdateMetadata` and `ControlledShutdown` (keys 4 to 7) have
 /// no valid version. Trunk's own keys are known while
 /// `unstable.api.versions.enable` is on.
-fn is_known_api_key(
-    api_key: ApiKeyCode,
-    unstable: UnstableApiVersions,
-) -> bool {
+fn is_known_api_key(api_key: ApiKeyCode, unstable: UnstableApiVersions) -> bool {
     match unstable {
-        UnstableApiVersions::Disabled => {
-            krabka_raft::kafka_4_3_1_api(api_key).is_some()
-        }
+        UnstableApiVersions::Disabled => krabka_raft::kafka_4_3_1_api(api_key).is_some(),
         UnstableApiVersions::Enabled => {
             krabka_protocol::api_key::ApiKey::from_i16(api_key).is_some()
         }
@@ -403,8 +401,8 @@ pub(crate) fn unwrap_request<F>(
 where
     F: Fn(ApiKeyCode, ApiVersion) -> bool,
 {
-    let parsed = parse_request(request_data, flexible_for)
-        .map_err(|_| EnvelopeError::UnsupportedVersion)?;
+    let parsed =
+        parse_request(request_data, flexible_for).map_err(|_| EnvelopeError::UnsupportedVersion)?;
     if !is_known_api_key(parsed.api_key, unstable) {
         return Err(EnvelopeError::UnsupportedVersion);
     }
@@ -496,9 +494,8 @@ fn encode_response(
 mod tests {
     use assert2::{assert, check};
 
+    use super::*;
     use crate::api_catalog::UnstableApiVersions;
-
-use super::*;
 
     /// `DefaultKafkaPrincipalBuilder.serialize(new KafkaPrincipal("User",
     /// "alice"))` in `mirror.gcr.io/apache/kafka:4.3.1`, captured verbatim:
@@ -526,8 +523,7 @@ use super::*;
         body.to_vec()
     }
 
-    const UNSTABLE_OFF: UnstableApiVersions =
-        UnstableApiVersions::Disabled;
+    const UNSTABLE_OFF: UnstableApiVersions = UnstableApiVersions::Disabled;
 
     /// The bytes a real JVM forwarder puts in `request_principal` decode into
     /// the identity that JVM meant. These buffers are the oracle: they were

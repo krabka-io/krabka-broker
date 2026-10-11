@@ -8,7 +8,11 @@ use std::sync::Arc;
 use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
-use crate::{config::BrokerConfig, config_keys::resolve_broker_witness, health::HealthState, heartbeat::controller_state::ControllerLivenessState, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry};
+use crate::{
+    config::BrokerConfig, config_keys::resolve_broker_witness, health::HealthState,
+    heartbeat::controller_state::ControllerLivenessState, log_dir_status::LogDirRegistry,
+    metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry,
+};
 
 /// Epoch milliseconds for the KIP-835 time-since-last-applied-record gauge.
 fn epoch_now_ms() -> i64 {
@@ -53,10 +57,7 @@ fn leader_site_drift_partitions(
         .count()
 }
 
-fn update_metadata_health_metrics(
-    metrics: &BrokerMetrics,
-    controller: &dyn MetadataSource,
-) {
+fn update_metadata_health_metrics(metrics: &BrokerMetrics, controller: &dyn MetadataSource) {
     let quorum_snapshot = controller.quorum_snapshot();
     if let Some(snap) = &quorum_snapshot {
         for state_label in crate::metrics::RaftStateLabel::ALL {
@@ -109,17 +110,11 @@ fn update_metadata_health_metrics(
 /// state the broker-state gauge reads; they travel together because every
 /// sample writes the first from the second.
 pub(super) fn spawn_broker_gauge_updater(
-    storage: (
-        Arc<PartitionRegistry>,
-        LogDirRegistry,
-    ),
+    storage: (Arc<PartitionRegistry>, LogDirRegistry),
     controller: Arc<dyn MetadataSource>,
     liveness: Arc<ControllerLivenessState>,
     node_id: krabka_metadata::NodeId,
-    observability: (
-        BrokerMetrics,
-        Option<HealthState>,
-    ),
+    observability: (BrokerMetrics, Option<HealthState>),
     config: &BrokerConfig,
     shutdown: CancellationToken,
 ) {
@@ -200,9 +195,9 @@ pub(super) fn spawn_broker_gauge_updater(
             metrics.leader_site_drift_partitions.set(
                 i64::try_from(leader_site_drift_partitions(&image, node_id)).unwrap_or(i64::MAX),
             );
-            metrics.witness_role.set(i64::from(u8::from(
-                resolve_broker_witness(&image, node_id),
-            )));
+            metrics
+                .witness_role
+                .set(i64::from(u8::from(resolve_broker_witness(&image, node_id))));
             metrics
                 .active_controller
                 .set(i64::from(u8::from(is_controller)));
@@ -316,7 +311,12 @@ mod tests {
     use krabka_units::{millis, secs};
 
     use super::*;
-    use crate::{broker::test_support::fake_source, handlers::test_support::{ReplicatedPartitionSetup, replicated_partition}, metrics::BrokerMetrics, test_support::{broker_registration, single_partition_topic}};
+    use crate::{
+        broker::test_support::fake_source,
+        handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+        metrics::BrokerMetrics,
+        test_support::{broker_registration, single_partition_topic},
+    };
 
     #[test]
     fn active_controller_applied_timestamp_lag_stays_zero() {
@@ -450,14 +450,12 @@ mod tests {
         for partition in 0..=led {
             let leader = if partition < led { 1 } else { 2 };
             image.apply(&krabka_metadata::MetadataRecord::V1Partition(
-                replicated_partition(
-                    ReplicatedPartitionSetup {
-                        topic: "stretch-topic",
-                        partition: krabka_ids::PartitionIndex(partition),
-                        leader: krabka_metadata::NodeId(leader),
-                        ..Default::default()
-                    },
-                ),
+                replicated_partition(ReplicatedPartitionSetup {
+                    topic: "stretch-topic",
+                    partition: krabka_ids::PartitionIndex(partition),
+                    leader: krabka_metadata::NodeId(leader),
+                    ..Default::default()
+                }),
             ));
         }
         image

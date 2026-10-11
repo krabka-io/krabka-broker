@@ -7,9 +7,8 @@
 
 use krabka_units::{Time, convert::TimeExt as _};
 
-use crate::config::BrokerConfig;
-
 use super::{FileConfigError, validate::positive_i64};
+use crate::config::BrokerConfig;
 
 /// TOML shape of `[delegation_token]`. Maps to the three `delegation_token_*`
 /// fields on [`crate::BrokerConfig`].
@@ -70,7 +69,10 @@ mod tests {
     use assert2::{assert, check};
     use krabka_units::{days, hours};
 
-    use crate::{config::BrokerConfig, file_config::{FileConfig, test_support::configured_unwrap_parse}};
+    use crate::{
+        config::BrokerConfig,
+        file_config::{FileConfig, test_support::configured_unwrap_parse},
+    };
 
     /// Serializes any test that mutates process-wide env vars. Tests in
     /// the same `cargo test` process run on multiple threads by default,

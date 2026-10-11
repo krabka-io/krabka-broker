@@ -7,8 +7,6 @@
 //! keys fill only while the target still holds its default so an explicit CLI
 //! or environment value keeps precedence.
 
-use crate::{config::{BrokerConfig, DEFAULT_BROKER_ID}, replica_selector::ReplicaSelectorKind};
-
 use super::{
     FileConfig, FileConfigError,
     delegation_token::apply_delegation_tokens,
@@ -20,6 +18,10 @@ use super::{
     tail::{FileConfigTail, apply_config_tail},
     topic_policy::apply_topic_policy,
     validate::positive_time,
+};
+use crate::{
+    config::{BrokerConfig, DEFAULT_BROKER_ID},
+    replica_selector::ReplicaSelectorKind,
 };
 
 impl FileConfig {
@@ -104,10 +106,7 @@ impl FileConfig {
             cfg.stretch = Some(stretch.into_profile()?);
         }
         if let Some(sel) = self.replica_selector {
-            cfg.replica_selector = ReplicaSelectorKind::from_config_str(
-                &sel,
-            )
-            .map_err(|bad| {
+            cfg.replica_selector = ReplicaSelectorKind::from_config_str(&sel).map_err(|bad| {
                 FileConfigError::InvalidConfig(format!("unknown replica_selector: {bad}"))
             })?;
         }
@@ -248,7 +247,10 @@ mod tests {
     use krabka_units::{millis, secs};
 
     use super::*;
-    use crate::{config::BrokerConfig, file_config::{FileListener, test_support::configured_unwrap_parse}};
+    use crate::{
+        config::BrokerConfig,
+        file_config::{FileListener, test_support::configured_unwrap_parse},
+    };
 
     #[test]
     fn empty_toml_round_trips() {

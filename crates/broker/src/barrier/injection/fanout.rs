@@ -203,11 +203,20 @@ mod tests {
     use super::{MarkerFanout, RemoteMarkerWriter};
     use crate::{
         barrier::{
-            config::BarrierConfig, injection::{
+            config::BarrierConfig,
+            injection::{
                 MarkerPlacement, MockRemoteMarkerWriter,
                 test_support::{at, fast_config, marker, source},
-            }, metrics::BrokerBarrierMetrics, state::TargetPartition, test_support::{check_control_marker, open_partition, topic_records},
-        }, error::BrokerError, metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry, test_support::StandalonePartitionSetup,
+            },
+            metrics::BrokerBarrierMetrics,
+            state::TargetPartition,
+            test_support::{check_control_marker, open_partition, topic_records},
+        },
+        error::BrokerError,
+        metadata_source::MetadataSource,
+        metrics::BrokerMetrics,
+        partition_registry::PartitionRegistry,
+        test_support::StandalonePartitionSetup,
     };
 
     fn test_fanout<'a>(
@@ -227,9 +236,7 @@ mod tests {
         }
     }
 
-    async fn place_local(
-        registry: &PartitionRegistry,
-    ) -> BTreeMap<TargetPartition, Offset> {
+    async fn place_local(registry: &PartitionRegistry) -> BTreeMap<TargetPartition, Offset> {
         let controller = source(&topic_records("orders", 2, NodeId(1)));
         let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
         let config = fast_config();
@@ -242,9 +249,7 @@ mod tests {
             .await
     }
 
-    async fn place_one(
-        fanout: MarkerFanout<'_>,
-    ) -> BTreeMap<TargetPartition, Offset> {
+    async fn place_one(fanout: MarkerFanout<'_>) -> BTreeMap<TargetPartition, Offset> {
         fanout
             .run(
                 &marker(),
@@ -277,10 +282,7 @@ mod tests {
         };
     }
 
-    fn placements(
-        targets: &[TargetPartition],
-        offset: Offset,
-    ) -> Vec<MarkerPlacement> {
+    fn placements(targets: &[TargetPartition], offset: Offset) -> Vec<MarkerPlacement> {
         targets
             .iter()
             .map(|target| MarkerPlacement {
@@ -332,11 +334,7 @@ mod tests {
     async fn a_partition_that_is_not_open_locally_stays_unmarked() {
         let dir = tempdir().expect("tempdir");
         let registry = PartitionRegistry::new();
-        open_partition(
-            &registry,
-            dir.path(),
-            StandalonePartitionSetup::default(),
-        );
+        open_partition(&registry, dir.path(), StandalonePartitionSetup::default());
         registry
             .get("orders", PartitionIndex(0))
             .expect("the partition is open")

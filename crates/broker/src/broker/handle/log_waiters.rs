@@ -232,7 +232,10 @@ mod tests {
     use krabka_units::{kibibytes, mebibytes, secs};
 
     use super::*;
-    use crate::{broker::test_support::{LocalPartitionSetup, local_partition_with_records}, test_support::start_broker_with};
+    use crate::{
+        broker::test_support::{LocalPartitionSetup, local_partition_with_records},
+        test_support::start_broker_with,
+    };
 
     #[tokio::test]
     async fn single_broker_handle_local_log_helpers_observe_real_state() {

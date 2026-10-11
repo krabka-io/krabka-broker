@@ -8,13 +8,12 @@
 
 use krabka_units::{Time, convert::TimeExt as _};
 
-use crate::config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE};
-#[cfg(not(target_family = "wasm"))]
-use crate::oauth_introspection::ReqwestIntrospectionClient;
-
 #[cfg(not(target_family = "wasm"))]
 use super::oauthbearer::{DEFAULT_ALLOWABLE_CLOCK_SKEW, DEFAULT_INTROSPECTION_HTTP_TIMEOUT};
 use super::{FileConfigError, oauthbearer::FileOAuthBearerConfig};
+use crate::config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE};
+#[cfg(not(target_family = "wasm"))]
+use crate::oauth_introspection::ReqwestIntrospectionClient;
 
 #[cfg(not(target_family = "wasm"))]
 fn configure_introspection_validator(
@@ -274,7 +273,13 @@ mod tests {
     use assert2::{assert, check};
     use krabka_units::{minutes, secs};
 
-    use crate::{config::BrokerConfig, file_config::{FileConfig, FileConfigError, test_support::{configured, configured_unwrap_parse}}};
+    use crate::{
+        config::BrokerConfig,
+        file_config::{
+            FileConfig, FileConfigError,
+            test_support::{configured, configured_unwrap_parse},
+        },
+    };
 
     fn check_unsecured(cfg: &BrokerConfig) {
         assert!(cfg.oauthbearer_jwks_endpoint.is_none());

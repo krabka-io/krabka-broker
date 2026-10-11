@@ -2,9 +2,13 @@ use assert2::{assert, check};
 use krabka_units::{mebibytes, millis, minutes, secs};
 use tempfile::tempdir;
 
-use crate::{config::{KafkaRlmmConfig, RemoteStorageBackend}, diskless::index_log::DISKLESS_WAL_INDEX_TOPIC, handlers::test_support::{ReplicatedPartitionSetup, replicated_partition}, test_support::replica_nodes};
-
 use super::*;
+use crate::{
+    config::{KafkaRlmmConfig, RemoteStorageBackend},
+    diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
+    handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+    test_support::replica_nodes,
+};
 
 #[test]
 fn loopback_bootstrap_maps_wildcard_to_loopback() {
@@ -121,16 +125,14 @@ fn needed_metadata_partitions_covers_led_and_followed() {
         (1, 8, vec![8, 7]),
         (2, 8, vec![8, 9]),
     ] {
-        image.apply(&MetadataRecord::V1Partition(
-            replicated_partition(
-                ReplicatedPartitionSetup {
-                    partition: krabka_ids::PartitionIndex(partition),
-                    leader: krabka_audit::NodeId(leader),
-                    replicas: &replica_nodes(&replicas),
-                    ..Default::default()
-                },
-            ),
-        ));
+        image.apply(&MetadataRecord::V1Partition(replicated_partition(
+            ReplicatedPartitionSetup {
+                partition: krabka_ids::PartitionIndex(partition),
+                leader: krabka_audit::NodeId(leader),
+                replicas: &replica_nodes(&replicas),
+                ..Default::default()
+            },
+        )));
     }
 
     let got = needed_metadata_partitions(&image, krabka_audit::NodeId(7), 50);

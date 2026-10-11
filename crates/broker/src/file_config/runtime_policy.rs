@@ -6,8 +6,6 @@
 //! delegation-token lifetimes — the knobs that govern the broker as a whole
 //! rather than one subsystem.
 
-use crate::config::BrokerConfig;
-
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
@@ -16,6 +14,7 @@ use super::{
         positive_u64, whole_bytes_u64, whole_millis_i32_time, whole_millis_i64_time,
     },
 };
+use crate::config::BrokerConfig;
 
 impl RuntimeFileConfig {
     pub(super) fn apply_broker_policy(

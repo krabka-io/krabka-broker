@@ -12,9 +12,8 @@ use std::{
 
 use bytes::Bytes;
 
-use crate::metadata_epoch::next_i32;
-
 use super::group::{ClassicGroup, GroupState, InitialDelayedJoin};
+use crate::metadata_epoch::next_i32;
 
 impl ClassicGroup {
     /// True once every member currently in `members` has sent a `JoinGroup`

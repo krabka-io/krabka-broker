@@ -17,7 +17,12 @@ use super::{
     *,
 };
 use crate::{
-    broker::BrokerHandle, codes::INVALID_REQUEST, test_support::{DenyAll, grant_cluster_operation, peer, principal, start_broker_with_authorizer as start_broker, test_ctx},
+    broker::BrokerHandle,
+    codes::INVALID_REQUEST,
+    test_support::{
+        DenyAll, grant_cluster_operation, peer, principal,
+        start_broker_with_authorizer as start_broker, test_ctx,
+    },
 };
 
 crate::test_support::context_helper!(client_id = "admin-client");

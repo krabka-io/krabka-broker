@@ -37,6 +37,7 @@ use crate::{
     codes,
     error::BrokerError,
     future_log::{self, MoveError},
+    handlers::encode_response,
 };
 
 pub(crate) fn handle(
@@ -140,7 +141,7 @@ pub(crate) fn handle(
             results,
             ..Default::default()
         };
-        crate::handlers::encode_response(&resp, version)
+        encode_response(&resp, version)
     })
 }
 
@@ -151,9 +152,8 @@ mod tests {
         AlterReplicaLogDir, AlterReplicaLogDirTopic,
     };
 
+    use super::*;
     use crate::{broker::spawn_partition, log_dir::partition_dir};
-
-use super::*;
 
     crate::test_support::codec_helpers!(AlterReplicaLogDirsRequest, AlterReplicaLogDirsResponse);
 

@@ -8,7 +8,13 @@ use krabka_protocol::owned::create_topics_response::{
 };
 use krabka_units::Time;
 
-use crate::{broker::Broker, codes, handlers::{audit_admin_success, audit_resource}, metrics::QuotaType, quota::throttle_time_ms};
+use crate::{
+    broker::Broker,
+    codes,
+    handlers::{audit_admin_success, audit_resource},
+    metrics::QuotaType,
+    quota::throttle_time_ms,
+};
 
 pub(super) fn topic_error_result(
     name: String,

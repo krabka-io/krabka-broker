@@ -13,7 +13,12 @@ use super::{
     OFFSETS_PARTITION, OFFSETS_TOPIC, bootstrap,
     test_support::{controller_with_leader, test_coordinator},
 };
-use crate::{auto_topic_creation::creatable_topic, config::BrokerConfig, coordinator::GroupCoordinator, log_dir, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, partition_registry::PartitionRegistry, share_coordinator::bootstrap::TOPIC, txn::bootstrap::TOPIC};
+use crate::{
+    auto_topic_creation::creatable_topic, config::BrokerConfig, coordinator::GroupCoordinator,
+    log_dir, log_dir_status::LogDirRegistry, metadata_source::MetadataSource,
+    partition_registry::PartitionRegistry, share_coordinator::bootstrap::TOPIC,
+    txn::bootstrap::TOPIC,
+};
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
 
@@ -146,14 +151,10 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
         .expect("start broker");
     let broker = handle.broker_arc_for_test();
     let request = CreateTopicsRequest {
-        topics: [
-            OFFSETS_TOPIC,
-            TOPIC,
-            TOPIC,
-        ]
-        .into_iter()
-        .map(|topic| creatable_topic(&broker.config, topic))
-        .collect(),
+        topics: [OFFSETS_TOPIC, TOPIC, TOPIC]
+            .into_iter()
+            .map(|topic| creatable_topic(&broker.config, topic))
+            .collect(),
         ..Default::default()
     };
     let response = crate::topic_creator::TopicCreator::new(&broker)

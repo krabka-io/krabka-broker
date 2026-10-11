@@ -7,7 +7,10 @@
 use assert2::check;
 
 use super::*;
-use crate::{event::*, test_support::{admin, authentication, denied, privileged_freeze}};
+use crate::{
+    event::*,
+    test_support::{admin, authentication, denied, privileged_freeze},
+};
 
 fn product() -> ProductInfo {
     ProductInfo {
@@ -25,11 +28,7 @@ fn check_fields(value: &serde_json::Value, expected: &[(&str, serde_json::Value)
 
 #[test]
 fn authentication_failure_maps_to_3002() {
-    let ev = authentication(
-        51120,
-        Some("authentication failed"),
-        1_700_000_000_000,
-    );
+    let ev = authentication(51120, Some("authentication failed"), 1_700_000_000_000);
     let j = to_ocsf(&ev, &product());
     check_fields(
         &j,

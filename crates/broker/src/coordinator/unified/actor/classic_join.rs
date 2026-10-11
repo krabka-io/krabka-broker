@@ -32,8 +32,17 @@ use super::{
     waiters::{complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member},
 };
 use crate::{
-    codes, coordinator::unified::{
-        ClientIdentity, classic_ops, classic_state::{ClassicGroup, GroupState as ClassicGroupState}, config::{ConsumerGroupMigrationPolicy, NextGenConfig}, consumer_state::GroupState as ConsumerState, first_join_member_id, group::{CoordinatorGroup, GroupKind}, migration, reconciler::ReconcileInput, regex_resolver::TopicRegexResolver,
+    codes,
+    coordinator::unified::{
+        ClientIdentity, classic_ops,
+        classic_state::{ClassicGroup, GroupState as ClassicGroupState},
+        config::{ConsumerGroupMigrationPolicy, NextGenConfig},
+        consumer_state::GroupState as ConsumerState,
+        first_join_member_id,
+        group::{CoordinatorGroup, GroupKind},
+        migration,
+        reconciler::ReconcileInput,
+        regex_resolver::TopicRegexResolver,
     },
 };
 
@@ -87,11 +96,7 @@ pub(super) async fn handle_classic_join_message(
             services
                 .coordinator
                 .mark_classic_after_downgrade(&group.group_id);
-            *group.kind_mut() = GroupKind::Classic(
-                ClassicGroup::new(
-                    group.group_id.clone(),
-                ),
-            );
+            *group.kind_mut() = GroupKind::Classic(ClassicGroup::new(group.group_id.clone()));
         } else if services.config.migration_policy == ConsumerGroupMigrationPolicy::Disabled {
             // `throwIfClassicMemberCannotJoinConsumerGroup`: the error
             // response of `GroupCoordinatorService.joinGroup` carries only
@@ -638,10 +643,18 @@ mod tests {
     use super::*;
     use crate::coordinator::unified::{
         actor::{
-            GroupActorHandle, GroupActorMessage, GroupKindTag, SyncResult, test_support::{
-                completing_classic_group, decode_assignment, last_classic_metadata, make_coordinator, make_coordinator_with_config, make_coordinator_with_topic_config, make_coordinator_with_topic_policy, marked_classic_handle, rpc, seed_and_upgrade,
+            GroupActorHandle, GroupActorMessage, GroupKindTag, SyncResult,
+            test_support::{
+                completing_classic_group, decode_assignment, last_classic_metadata,
+                make_coordinator, make_coordinator_with_config, make_coordinator_with_topic_config,
+                make_coordinator_with_topic_policy, marked_classic_handle, rpc, seed_and_upgrade,
             },
-        }, classic_state::GroupState as ClassicGroupState, config::{ConsumerGroupMigrationPolicy as Policy, NextGenConfig}, offsets_log::fake::InMemoryOffsetsLog, persistence_next_gen::NextGenKey, regex_resolver::{FixedRegexResolver, no_topic_regex_resolver},
+        },
+        classic_state::GroupState as ClassicGroupState,
+        config::{ConsumerGroupMigrationPolicy as Policy, NextGenConfig},
+        offsets_log::fake::InMemoryOffsetsLog,
+        persistence_next_gen::NextGenKey,
+        regex_resolver::{FixedRegexResolver, no_topic_regex_resolver},
     };
 
     /// Kafka's `group.initial.rebalance.delay.ms = 0`: the first member of a
@@ -657,8 +670,7 @@ mod tests {
             classic_initial_rebalance_delay: std::time::Duration::ZERO,
             ..NextGenConfig::assigning_at_once()
         });
-        let handle =
-            marked_classic_handle(&coord, "g");
+        let handle = marked_classic_handle(&coord, "g");
 
         let assigned = rpc::classic_join(&handle, "", "t").await;
         check!(assigned.error_code == codes::MEMBER_ID_REQUIRED);
@@ -694,9 +706,7 @@ mod tests {
                 classic_initial_rebalance_delay: Duration::ZERO,
                 ..NextGenConfig::assigning_at_once()
             });
-            let handle = marked_classic_handle(
-                &coord, "g",
-            );
+            let handle = marked_classic_handle(&coord, "g");
             let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicJoin {
                 req: JoinGroupRequest {
                     group_id: "g".into(),
@@ -712,8 +722,7 @@ mod tests {
                 version,
                 client_id: "client-a".into(),
                 client_host: "127.0.0.1".into(),
-                regex_resolver:
-                    no_topic_regex_resolver(),
+                regex_resolver: no_topic_regex_resolver(),
                 reply: tx,
             })
             .await;
@@ -763,10 +772,7 @@ mod tests {
         (group, request)
     }
 
-    async fn send_join(
-        handle: &GroupActorHandle,
-        req: JoinGroupRequest,
-    ) -> JoinResult {
+    async fn send_join(handle: &GroupActorHandle, req: JoinGroupRequest) -> JoinResult {
         send_join_at(handle, req, 4).await
     }
 
@@ -856,11 +862,8 @@ mod tests {
     async fn new_classic_member_joins_upgraded_group_and_gets_assignment() {
         // `Upgrade` policy: keep the group consumer-kind after the native
         // member leaves in `seed_and_upgrade` (see the note above).
-        let (coord, _log) = make_coordinator_with_topic_policy(
-            "t",
-            2,
-            ConsumerGroupMigrationPolicy::Upgrade,
-        );
+        let (coord, _log) =
+            make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Upgrade);
         let handle = seed_and_upgrade(&coord, "t").await;
 
         // First bring m-classic fully in sync so it holds a stable assignment.
@@ -1202,11 +1205,7 @@ mod tests {
 
     /// A native consumer member `member_id` that joins subscribed to `t`, as
     /// the static member `instance_id` when one is given.
-    async fn native_join(
-        handle: &GroupActorHandle,
-        member_id: &str,
-        instance_id: Option<&str>,
-    ) {
+    async fn native_join(handle: &GroupActorHandle, member_id: &str, instance_id: Option<&str>) {
         let joined = rpc::consumer_request(
             handle,
             ConsumerGroupHeartbeatRequest {
@@ -1224,9 +1223,7 @@ mod tests {
     }
 
     /// The member ids `Describe` reports, sorted.
-    async fn member_ids(
-        handle: &GroupActorHandle,
-    ) -> Vec<String> {
+    async fn member_ids(handle: &GroupActorHandle) -> Vec<String> {
         let mut ids: Vec<String> = rpc::describe(handle)
             .await
             .members

@@ -84,7 +84,16 @@ use self::{
     response::{delete_records_response, error_partition_result, partition_result, topic_result},
 };
 use crate::{
-    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition}, broker::Broker, codes, diskless::read::DisklessReadHandle, error::BrokerError, freeze::resolve::{FreezeMutationResolution, FreezeVerdict, resolve_freeze_mutation}, handlers::{RequestContext, submit_failure_code}, internal_topics::is_internal_topic, partition::Partition, partition_registry::PartitionRegistry,
+    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
+    broker::Broker,
+    codes,
+    diskless::read::DisklessReadHandle,
+    error::BrokerError,
+    freeze::resolve::{FreezeMutationResolution, FreezeVerdict, resolve_freeze_mutation},
+    handlers::{RequestContext, submit_failure_code},
+    internal_topics::is_internal_topic,
+    partition::Partition,
+    partition_registry::PartitionRegistry,
 };
 
 context_handler! {
@@ -233,11 +242,7 @@ async fn publish_diskless_delete_floor(
 ///
 /// `None` for a partition with no object tier behind it, which trims against
 /// its local log start like any other.
-async fn diskless_logical_start(
-    env: &TrimEnv<'_>,
-    topic: &str,
-    part: &Partition,
-) -> Option<i64> {
+async fn diskless_logical_start(env: &TrimEnv<'_>, topic: &str, part: &Partition) -> Option<i64> {
     let (handle, topic_id) = diskless_index(env, topic, part)?;
     let covered = handle
         .index
@@ -363,12 +368,7 @@ async fn trim_one(
     // freeze is not a break-glass act, and the registry entry that caused it is
     // already in the metadata log.
     if let FreezeMutationResolution::Frozen(record) =
-        resolve_freeze_mutation(
-            env.image,
-            topic,
-            true,
-            FreezeMutationKind::DeleteRecords,
-        )
+        resolve_freeze_mutation(env.image, topic, true, FreezeMutationKind::DeleteRecords)
     {
         let verdict = FreezeVerdict::from(record);
         tracing::warn!(

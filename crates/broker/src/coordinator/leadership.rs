@@ -343,9 +343,24 @@ mod tests {
     use assert2::check;
     use krabka_metadata::{MetadataRecord, PartitionRecord};
 
-    use crate::{broker::Broker, codes::{COORDINATOR_LOAD_IN_PROGRESS, NONE}, coordinator::{test_support::default_coordinator, unified::{ImageMetadataProvider, offsets_log::fake::InMemoryOffsetsLog}}, handlers::{delete_groups::handle, join_group::handle, leave_group::handle, list_groups::handle, offset_commit::handle, offset_fetch::handle}, metrics::{BrokerMetrics, ShareGroupIdLabel}, test_support::{FakeMetadataSource, peer, principal, request_context, start_broker_no_audit_with}, txn::handlers::txn_offset_commit::handle};
-
-use super::*;
+    use super::*;
+    use crate::{
+        broker::Broker,
+        codes::{COORDINATOR_LOAD_IN_PROGRESS, NONE},
+        coordinator::{
+            test_support::default_coordinator,
+            unified::{ImageMetadataProvider, offsets_log::fake::InMemoryOffsetsLog},
+        },
+        handlers::{
+            delete_groups::handle, join_group::handle, leave_group::handle, list_groups::handle,
+            offset_commit::handle, offset_fetch::handle,
+        },
+        metrics::{BrokerMetrics, ShareGroupIdLabel},
+        test_support::{
+            FakeMetadataSource, peer, principal, request_context, start_broker_no_audit_with,
+        },
+        txn::handlers::txn_offset_commit::handle,
+    };
 
     #[test]
     fn led_partitions_track_every_local_offsets_leader_and_its_epoch() {
@@ -373,11 +388,8 @@ use super::*;
 
     /// A coordinator that leads the one partition of the offsets topic, its
     /// image, and the metrics it reports to.
-    fn coordinator_of_the_offsets_partition() -> (
-        Arc<GroupCoordinator>,
-        MetadataImage,
-        BrokerMetrics,
-    ) {
+    fn coordinator_of_the_offsets_partition()
+    -> (Arc<GroupCoordinator>, MetadataImage, BrokerMetrics) {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
             name: OFFSETS_TOPIC.into(),
@@ -517,10 +529,7 @@ use super::*;
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 9, &ctx)
-                    .await
-                    .unwrap()
-                    .error_code
+                handle(broker, request, 9, &ctx).await.unwrap().error_code
             }
             GroupRpc::Heartbeat => {
                 let request = HeartbeatRequest {
@@ -543,10 +552,7 @@ use super::*;
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 5, &ctx)
-                    .await
-                    .unwrap()
-                    .error_code
+                handle(broker, request, 5, &ctx).await.unwrap().error_code
             }
             GroupRpc::OffsetCommit => {
                 let request = OffsetCommitRequest {
@@ -564,12 +570,7 @@ use super::*;
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 8, &ctx)
-                    .await
-                    .unwrap()
-                    .topics[0]
-                    .partitions[0]
-                    .error_code
+                handle(broker, request, 8, &ctx).await.unwrap().topics[0].partitions[0].error_code
             }
             GroupRpc::TxnOffsetCommit => {
                 let request = TxnOffsetCommitRequest {
@@ -590,12 +591,7 @@ use super::*;
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 4, &ctx)
-                    .await
-                    .unwrap()
-                    .topics[0]
-                    .partitions[0]
-                    .error_code
+                handle(broker, request, 4, &ctx).await.unwrap().topics[0].partitions[0].error_code
             }
             GroupRpc::OffsetFetch => {
                 let request = OffsetFetchRequest {
@@ -606,11 +602,7 @@ use super::*;
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 8, &ctx)
-                    .await
-                    .unwrap()
-                    .groups[0]
-                    .error_code
+                handle(broker, request, 8, &ctx).await.unwrap().groups[0].error_code
             }
             GroupRpc::ListGroups => {
                 handle(broker, ListGroupsRequest::default(), 4, &ctx)
@@ -623,11 +615,7 @@ use super::*;
                     groups_names: vec!["g".into()],
                     ..Default::default()
                 };
-                handle(broker, request, 2, &ctx)
-                    .await
-                    .unwrap()
-                    .results[0]
-                    .error_code
+                handle(broker, request, 2, &ctx).await.unwrap().results[0].error_code
             }
         }
     }
@@ -665,37 +653,16 @@ use super::*;
         check!(!broker.group_coordinator.is_loading(partition.get(), epoch));
 
         let rows = [
-            (
-                GroupRpc::JoinGroup,
-                COORDINATOR_LOAD_IN_PROGRESS,
-            ),
+            (GroupRpc::JoinGroup, COORDINATOR_LOAD_IN_PROGRESS),
             (GroupRpc::Heartbeat, NONE),
-            (
-                GroupRpc::LeaveGroup,
-                COORDINATOR_LOAD_IN_PROGRESS,
-            ),
-            (
-                GroupRpc::OffsetCommit,
-                COORDINATOR_LOAD_IN_PROGRESS,
-            ),
-            (
-                GroupRpc::TxnOffsetCommit,
-                COORDINATOR_LOAD_IN_PROGRESS,
-            ),
-            (
-                GroupRpc::OffsetFetch,
-                COORDINATOR_LOAD_IN_PROGRESS,
-            ),
-            (
-                GroupRpc::DeleteGroups,
-                COORDINATOR_LOAD_IN_PROGRESS,
-            ),
+            (GroupRpc::LeaveGroup, COORDINATOR_LOAD_IN_PROGRESS),
+            (GroupRpc::OffsetCommit, COORDINATOR_LOAD_IN_PROGRESS),
+            (GroupRpc::TxnOffsetCommit, COORDINATOR_LOAD_IN_PROGRESS),
+            (GroupRpc::OffsetFetch, COORDINATOR_LOAD_IN_PROGRESS),
+            (GroupRpc::DeleteGroups, COORDINATOR_LOAD_IN_PROGRESS),
             // Kafka's `listGroups` reads every local shard, so one loading
             // shard fails the whole answer.
-            (
-                GroupRpc::ListGroups,
-                COORDINATOR_LOAD_IN_PROGRESS,
-            ),
+            (GroupRpc::ListGroups, COORDINATOR_LOAD_IN_PROGRESS),
         ];
         for unserved in [Unserved::Loading, Unserved::NotTakenUp, Unserved::OlderTerm] {
             let coordinator = &broker.group_coordinator;

@@ -12,11 +12,13 @@ use super::{
     StreamsDescribeView, StreamsGroupActorHandle, StreamsGroupActorMessage, StreamsHeartbeatResult,
 };
 use crate::{
-    codes::NONE, coordinator::unified::{
+    codes::NONE,
+    coordinator::unified::{
         GroupCoordinator, actor::MetadataProvider, config::NextGenConfig,
         offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
         share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
-    }, task_util::ask,
+    },
+    task_util::ask,
 };
 
 pub(super) fn undelayed() -> StreamsGroupConfig {

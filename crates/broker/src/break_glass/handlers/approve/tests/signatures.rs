@@ -16,7 +16,11 @@ use crate::{
         gate::tests::config,
         handlers::approve::{Attempt, decide},
         signing::approval_signing_bytes,
-    }, codes, config::BreakGlassConfig, operator_keys::{OperatorKeyEntry, OperatorKeys}, test_support::OperatorKeyFileSetup,
+    },
+    codes,
+    config::BreakGlassConfig,
+    operator_keys::{OperatorKeyEntry, OperatorKeys},
+    test_support::OperatorKeyFileSetup,
 };
 
 // An operator key bound to `principal`, plus the signer for it.

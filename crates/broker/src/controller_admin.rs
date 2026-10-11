@@ -9,7 +9,16 @@ use krabka_raft::{
 };
 
 use crate::{
-    api_catalog::is_disabled_version, authorizer::{AuthorizationRequest, AuthorizationResult}, broker::Broker, envelope::{self, EnvelopeError, ForwardedRequest}, error::BrokerError, handlers::{ApiKeyCode, ApiVersion, CorrelationId, DispatchKind, RequestContext, acl_wire::CLUSTER_RESOURCE_NAME}, network::auth::ConnectionAuth,
+    api_catalog::is_disabled_version,
+    authorizer::{AuthorizationRequest, AuthorizationResult},
+    broker::Broker,
+    envelope::{self, EnvelopeError, ForwardedRequest},
+    error::BrokerError,
+    handlers::{
+        ApiKeyCode, ApiVersion, CorrelationId, DispatchKind, RequestContext,
+        acl_wire::CLUSTER_RESOURCE_NAME,
+    },
+    network::auth::ConnectionAuth,
 };
 
 /// `Envelope`'s api key. KIP-590 forwarding is the one controller-listener API
@@ -235,12 +244,13 @@ async fn invoke_registered_handler(
         principal,
         authenticated_via_token,
     } = invocation;
-    let entry = broker.handlers().get(api_key).ok_or_else(|| {
-        BrokerError::UnsupportedApi {
+    let entry = broker
+        .handlers()
+        .get(api_key)
+        .ok_or_else(|| BrokerError::UnsupportedApi {
             api_key,
             version: api_version,
-        }
-    })?;
+        })?;
     match entry.kind() {
         // Every krabka-registered controller-listener handler is a context
         // dispatch, so it receives a principal to authorize: `AssignReplicasToDirs`
@@ -440,9 +450,8 @@ mod tests {
     use assert2::check;
     use bytes::Bytes;
 
+    use super::*;
     use crate::test_support::start_controller;
-
-use super::*;
 
     /// The Kafka 4.x controller-listener set, as a live
     /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same

@@ -81,9 +81,8 @@ pub(crate) fn scope_covers_internal_topic(pattern_type: PatternType, scope: &str
 mod tests {
     use assert2::check;
 
+    use super::*;
     use crate::internal_topics::INTERNAL_TOPICS;
-
-use super::*;
 
     #[test]
     fn a_pattern_type_names_itself_as_kafka_acls_spell_it() {

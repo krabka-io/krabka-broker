@@ -94,7 +94,8 @@ mod tests {
     use crate::{
         handlers::{
             create_topics::InitialLeadership, partition_materialization::should_materialize_locally,
-        }, partition::{Partition, test_support::test_partition},
+        },
+        partition::{Partition, test_support::test_partition},
     };
 
     /// What an installed leadership left on a partition.
@@ -207,9 +208,7 @@ mod tests {
             ),
         ];
         for (name, leader, diskless, checkpoint_fails, installs, expected) in cases {
-            let (mut partition, _dir) = test_partition(Arc::new(
-                tokio::sync::Notify::new(),
-            ));
+            let (mut partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
             partition.diskless = diskless;
             if checkpoint_fails {
                 partition

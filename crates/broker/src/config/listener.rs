@@ -6,7 +6,11 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
 
-use crate::{BrokerError, api_catalog::ClientMetricsReceiver, config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE}};
+use crate::{
+    BrokerError,
+    api_catalog::ClientMetricsReceiver,
+    config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE},
+};
 
 /// A single named listener: the port the broker binds and the address it
 /// gives to clients.
@@ -287,7 +291,11 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::{BrokerError as BrokerStartError, SslPrincipalMapper, config::test_support::base, test_support::{OAuthTokenContents, oauth_token_file}};
+    use crate::{
+        BrokerError as BrokerStartError, SslPrincipalMapper,
+        config::test_support::base,
+        test_support::{OAuthTokenContents, oauth_token_file},
+    };
 
     #[test]
     fn accepts_distinct_listener_bind_addresses() {
@@ -405,9 +413,7 @@ mod tests {
 
     #[test]
     fn outbound_oauthbearer_credentials_validate_for_data_and_controller_listeners() {
-        let (_dir, token_path) = oauth_token_file(
-            OAuthTokenContents::Nonempty,
-        );
+        let (_dir, token_path) = oauth_token_file(OAuthTokenContents::Nonempty);
         let credentials = Some(InterBrokerCredentials::OAuthBearer { token_path });
         let data_listener = ListenerSpec {
             name: "OAUTH".into(),
@@ -490,8 +496,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_outbound_oauthbearer_token() {
-        let (_dir, token_path) =
-            oauth_token_file(OAuthTokenContents::Empty);
+        let (_dir, token_path) = oauth_token_file(OAuthTokenContents::Empty);
         let c = BrokerConfig {
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer { token_path }),
             ..BrokerConfig::default()
@@ -705,7 +710,10 @@ mod connections_max_idle_tests {
     use assert2::assert;
     use krabka_units::{Time, convert::TimeExt as _, millis, secs};
 
-    use crate::{config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE}, test_support::listener_time_overrides};
+    use crate::{
+        config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE},
+        test_support::listener_time_overrides,
+    };
 
     /// A broker-wide window of `idle` with the named per-listener overrides.
     fn config(idle: Time, overrides: &[(&str, Time)]) -> BrokerConfig {

@@ -7,13 +7,12 @@
 
 use std::sync::Arc;
 
-use crate::error::BrokerError;
-
 use super::{
     actor::GroupActorMessage,
     group_coordinator::{GroupCoordinator, GroupType},
     streams,
 };
+use crate::error::BrokerError;
 
 impl GroupCoordinator {
     /// The `error_message` of the `GROUP_ID_NOT_FOUND` answer to a

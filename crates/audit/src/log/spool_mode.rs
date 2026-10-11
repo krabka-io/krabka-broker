@@ -133,11 +133,19 @@ mod tests {
 
     use super::*;
     use crate::{
-        NodeId, chain::GENESIS_HEAD, event::AuditEventClass, log::{
-            AuditLog, AuditMode, test_support::{
-                FailableSink, REPLAY_EVERY, ROOMY_CAP, await_until, emit_lifecycle, failed_sink_stats, finish_writer, healthy_sink_stats, life, params, params_with_clock, product, record_sequences, spawn_writer, test_signer,
+        NodeId,
+        chain::GENESIS_HEAD,
+        event::AuditEventClass,
+        log::{
+            AuditLog, AuditMode,
+            test_support::{
+                FailableSink, REPLAY_EVERY, ROOMY_CAP, await_until, emit_lifecycle,
+                failed_sink_stats, finish_writer, healthy_sink_stats, life, params,
+                params_with_clock, product, record_sequences, spawn_writer, test_signer,
             },
-        }, spool::Spool, stats::AuditStats,
+        },
+        spool::Spool,
+        stats::AuditStats,
     };
 
     struct FailingSpoolFixture {
@@ -468,10 +476,7 @@ mod tests {
         let (params, clock) = params_with_clock(sink.clone(), spool, stats.clone());
         let handle = spawn_writer(receiver, params);
 
-        emit_lifecycle(
-            &log,
-            &[NodeId(0), NodeId(1), NodeId(2)],
-        );
+        emit_lifecycle(&log, &[NodeId(0), NodeId(1), NodeId(2)]);
         await_until("one spooled and two lost", || stats.dropped() == 2).await;
         check_spool_within_capacity(dir.path(), one);
 

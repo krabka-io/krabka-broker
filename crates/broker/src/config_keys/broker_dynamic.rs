@@ -24,7 +24,13 @@ use super::{
     serves_topic_key,
     validation::canonical_value,
 };
-use crate::{api_catalog::UnstableApiVersions, codes, cordoned_log_dirs::{CORDONED_LOG_DIRS, resolve, validate_value_type}, features::ELR_VERSION, throttle::{FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY}};
+use crate::{
+    api_catalog::UnstableApiVersions,
+    codes,
+    cordoned_log_dirs::{CORDONED_LOG_DIRS, resolve, validate_value_type},
+    features::ELR_VERSION,
+    throttle::{FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY},
+};
 
 /// The live facts used by either broker-configuration mutation API.
 #[derive(Clone, Copy)]
@@ -698,10 +704,7 @@ mod tests {
         for (name, kind) in [
             ("log.cleanup.policy", BrokerKeyKind::List),
             ("log.retention.ms", BrokerKeyKind::Scalar),
-            (
-                LEADER_THROTTLED_RATE_KEY,
-                BrokerKeyKind::Scalar,
-            ),
+            (LEADER_THROTTLED_RATE_KEY, BrokerKeyKind::Scalar),
             // Kafka types the operation off `KafkaConfig`'s whole `ConfigDef`,
             // the keys that are not dynamic included.
             ("listeners", BrokerKeyKind::List),

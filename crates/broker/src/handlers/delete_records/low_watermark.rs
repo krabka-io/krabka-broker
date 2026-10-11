@@ -19,7 +19,9 @@ use krabka_log::Offset;
 use krabka_protocol::owned::delete_records_response::DeleteRecordsTopicResult;
 
 use super::response::{error_partition_result, partition_result};
-use crate::{broker::Broker, codes, handlers::offline_replicas::live_brokers, partition::Partition};
+use crate::{
+    broker::Broker, codes, handlers::offline_replicas::live_brokers, partition::Partition,
+};
 
 /// How often a waiting request reads the followers' progress again. A
 /// follower reports its new log start in its next Fetch, which a caught-up

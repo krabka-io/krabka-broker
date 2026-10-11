@@ -76,7 +76,9 @@ use crate::{
         group::{ConsumerState, CoordinatorGroup},
         offsets_log::OffsetsLog,
         reconciler::ReconcileInput,
-    }, task_util::spawn_mailbox, time_util,
+    },
+    task_util::spawn_mailbox,
+    time_util,
 };
 
 /// A Kafka wire `error_code` value, as carried in response `error_code`

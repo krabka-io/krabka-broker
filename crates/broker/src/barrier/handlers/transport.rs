@@ -241,7 +241,9 @@ mod tests {
 
     use super::{build_request, endpoint_of, placements};
     use crate::{
-        barrier::{injection::MarkerPlacement, marker::BarrierMarker, state::TargetPartition}, codes, test_support::broker_registration,
+        barrier::{injection::MarkerPlacement, marker::BarrierMarker, state::TargetPartition},
+        codes,
+        test_support::broker_registration,
     };
 
     fn marker() -> BarrierMarker {

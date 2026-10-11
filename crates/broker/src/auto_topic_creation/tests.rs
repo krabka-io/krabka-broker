@@ -11,7 +11,13 @@ use krabka_protocol::{
 };
 
 use super::*;
-use crate::{barrier::STATE_TOPIC, coordinator::bootstrap::OFFSETS_TOPIC, share_coordinator::bootstrap::TOPIC, test_support::{PartitionCount, ReplicationFactor, start_broker_no_audit}, txn::bootstrap::TOPIC};
+use crate::{
+    barrier::STATE_TOPIC,
+    coordinator::bootstrap::OFFSETS_TOPIC,
+    share_coordinator::bootstrap::TOPIC,
+    test_support::{PartitionCount, ReplicationFactor, start_broker_no_audit},
+    txn::bootstrap::TOPIC,
+};
 
 fn configs(pairs: &[(&str, &str)]) -> Vec<CreatableTopicConfig> {
     pairs

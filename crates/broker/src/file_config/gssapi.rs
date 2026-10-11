@@ -77,7 +77,12 @@ mod tests {
     use assert2::{assert, check};
     use krabka_units::secs;
 
-    use crate::{config::{BrokerConfig, InterBrokerCredentials}, file_config::{FileConfig, FileConfigError, test_support::configured_unwrap_parse}, network::auth::KerberosRule, test_support::{OAuthTokenContents, oauth_token_file}};
+    use crate::{
+        config::{BrokerConfig, InterBrokerCredentials},
+        file_config::{FileConfig, FileConfigError, test_support::configured_unwrap_parse},
+        network::auth::KerberosRule,
+        test_support::{OAuthTokenContents, oauth_token_file},
+    };
 
     #[test]
     fn apply_to_gssapi_maps_all_fields() {
@@ -237,9 +242,7 @@ kdc_url = "tcp://kdc:88"
 
     #[test]
     fn apply_to_inter_broker_credentials_oauthbearer_reads_redacted_token_file() {
-        let (_dir, token_path) = oauth_token_file(
-            OAuthTokenContents::Nonempty,
-        );
+        let (_dir, token_path) = oauth_token_file(OAuthTokenContents::Nonempty);
         let src = format!(
             r#"
 [inter_broker_credentials]
@@ -262,8 +265,7 @@ token_path = {}
 
     #[test]
     fn apply_to_inter_broker_credentials_oauthbearer_rejects_empty_token_file() {
-        let (_dir, token_path) =
-            oauth_token_file(OAuthTokenContents::Empty);
+        let (_dir, token_path) = oauth_token_file(OAuthTokenContents::Empty);
         let src = format!(
             r#"
 [inter_broker_credentials]

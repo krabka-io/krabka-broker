@@ -17,9 +17,14 @@ use tokio::sync::oneshot;
 
 use super::{ClassicView, DescribeView, ErrorCode, ReapOutcome};
 use crate::{
-    codes, coordinator::{
-        DeleteGroupError, GroupSnapshot, unified::{
-            GroupSeed, classic_state::OffsetEntry, group::{CoordinatorGroup, GroupOffsets, OffsetFetchMember}, regex_resolver::TopicRegexResolver,
+    codes,
+    coordinator::{
+        DeleteGroupError, GroupSnapshot,
+        unified::{
+            GroupSeed,
+            classic_state::OffsetEntry,
+            group::{CoordinatorGroup, GroupOffsets, OffsetFetchMember},
+            regex_resolver::TopicRegexResolver,
         },
     },
 };
@@ -36,8 +41,7 @@ pub enum GroupActorMessage {
         /// `TopicRegexResolver` does with the request context of the
         /// heartbeat. The actor calls it only when the group's resolutions
         /// need to be made or refreshed.
-        regex_resolver:
-            std::sync::Arc<dyn TopicRegexResolver>,
+        regex_resolver: std::sync::Arc<dyn TopicRegexResolver>,
         reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
     },
     /// Validate an `OffsetCommit` or `TxnOffsetCommit` against the group's
@@ -62,8 +66,7 @@ pub enum GroupActorMessage {
         /// Resolves a consumer group's regular expressions with this
         /// principal, as Kafka's `maybeUpdateRegularExpressions` does with the
         /// request context of a classic join to a consumer group.
-        regex_resolver:
-            std::sync::Arc<dyn TopicRegexResolver>,
+        regex_resolver: std::sync::Arc<dyn TopicRegexResolver>,
         reply: oneshot::Sender<JoinResult>,
     },
     ClassicSync {

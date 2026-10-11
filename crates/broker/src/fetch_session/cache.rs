@@ -176,8 +176,11 @@ mod tests {
 
     use super::*;
     use crate::fetch_session::{
-        SessionDecision, test_support::{
-            ForgottenTopicSetup, NAME_FETCH_VERSION, RequestSessionId, SessionAllocationSetup, SessionKeySetup, SessionRequestSetup, allocate_session, allocated_cache, forgotten_topic, req, session_key, topic,
+        SessionDecision,
+        test_support::{
+            ForgottenTopicSetup, NAME_FETCH_VERSION, RequestSessionId, SessionAllocationSetup,
+            SessionKeySetup, SessionRequestSetup, allocate_session, allocated_cache,
+            forgotten_topic, req, session_key, topic,
         },
     };
 
@@ -311,9 +314,7 @@ mod tests {
                 ],
             )],
             forgotten,
-            ..SessionRequestSetup::incremental(
-                RequestSessionId(id),
-            )
+            ..SessionRequestSetup::incremental(RequestSessionId(id))
         });
         check_incremental_count(&cache, &r, CachedPartitionCount(3));
 
@@ -338,9 +339,7 @@ mod tests {
                     krabka_ids::PartitionIndex(4),
                 ],
             )],
-            ..SessionRequestSetup::incremental(
-                RequestSessionId(id),
-            )
+            ..SessionRequestSetup::incremental(RequestSessionId(id))
         });
         check_incremental_count(&cache, &r, CachedPartitionCount(5));
     }

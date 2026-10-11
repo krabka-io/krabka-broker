@@ -70,7 +70,14 @@ use self::{
 };
 pub(crate) use self::{plan::PendingRead, read::LiveOffsets};
 use crate::{
-    broker::Broker, codes::CLUSTER_AUTHORIZATION_FAILED, error::BrokerError, fetch_session::INVALID_SESSION_ID, handlers::{ApiKeyCode, RequestContext}, metrics::RequestPhases, network::fetch_writer::records_to_serve, wal::quorum::wire::KIP_595_FETCH_VERSION,
+    broker::Broker,
+    codes::CLUSTER_AUTHORIZATION_FAILED,
+    error::BrokerError,
+    fetch_session::INVALID_SESSION_ID,
+    handlers::{ApiKeyCode, RequestContext},
+    metrics::RequestPhases,
+    network::fetch_writer::records_to_serve,
+    wal::quorum::wire::KIP_595_FETCH_VERSION,
 };
 
 /// This handler's own wire api key, for the `api_key` label the request-phase
@@ -542,7 +549,13 @@ mod tests {
     }
 
     use crate::{
-        BrokerHandle, authorizer::AuthorizationResult, broker::Broker, config::BrokerConfig, handlers::RequestContext, test_support::{peer, sasl_principal}, wal::quorum::{
+        BrokerHandle,
+        authorizer::AuthorizationResult,
+        broker::Broker,
+        config::BrokerConfig,
+        handlers::RequestContext,
+        test_support::{peer, sasl_principal},
+        wal::quorum::{
             engine::WalShardEngine,
             registry::ShardId,
             wire::{KIP_595_FETCH_VERSION, QuorumGroup, fetch_request},
@@ -563,13 +576,10 @@ mod tests {
     /// Start a broker holding one routable diskless-WAL shard, so a KIP-595
     /// Fetch addressed at it takes the routed branch of [`super::handle`].
     /// Returns the handle and the shard's topic id.
-    async fn broker_with_routable_wal_shard(
-        dir: &std::path::Path,
-    ) -> (BrokerHandle, uuid::Uuid) {
-        let broker_handle =
-            Broker::start(BrokerConfig::for_tests(dir.to_path_buf()))
-                .await
-                .expect("start broker");
+    async fn broker_with_routable_wal_shard(dir: &std::path::Path) -> (BrokerHandle, uuid::Uuid) {
+        let broker_handle = Broker::start(BrokerConfig::for_tests(dir.to_path_buf()))
+            .await
+            .expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
         let source = std::sync::Arc::new(Mutex::new(
             Log::open(dir.join("wal-source"), LogConfig::default()).expect("open log"),

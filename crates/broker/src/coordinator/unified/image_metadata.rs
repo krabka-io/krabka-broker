@@ -65,7 +65,10 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::{coordinator::unified::test_support::{fixed_source, real_uuid}, test_support::{InSyncPartitionSetup, broker_registration, in_sync_partition}};
+    use crate::{
+        coordinator::unified::test_support::{fixed_source, real_uuid},
+        test_support::{InSyncPartitionSetup, broker_registration, in_sync_partition},
+    };
 
     #[test]
     fn image_metadata_provider_snapshot_projects_topics_partitions_and_racks() {
@@ -162,15 +165,15 @@ mod tests {
             ));
         }
         for (partition, replicas) in [(0, vec![1, 2, 3]), (1, vec![3])] {
-            image.apply(&MetadataRecord::V1Partition(
-                in_sync_partition(InSyncPartitionSetup {
+            image.apply(&MetadataRecord::V1Partition(in_sync_partition(
+                InSyncPartitionSetup {
                     topic: "input",
                     partition: krabka_ids::PartitionIndex(partition),
                     directories: replicas.iter().map(|_| real_uuid(1)).collect(),
                     replicas: replicas.iter().copied().map(NodeId).collect(),
                     ..Default::default()
-                }),
-            ));
+                },
+            )));
         }
         let snapshot = ImageMetadataProvider {
             controller: fixed_source(image.clone()),

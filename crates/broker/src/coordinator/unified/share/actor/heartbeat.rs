@@ -16,7 +16,8 @@ use super::{
     share_state::{cleanup_deleted_topics, prepare_initialize, start_initialize},
 };
 use crate::{
-    codes, coordinator::unified::{
+    codes,
+    coordinator::unified::{
         ClientIdentity, GroupCoordinator,
         actor::MetadataProvider,
         offsets_log::OffsetsLog,
@@ -24,7 +25,9 @@ use crate::{
             config::ShareGroupConfig,
             state::{ShareGroupState, ShareMemberState},
         },
-    }, error::BrokerError, metadata_epoch::next_i32,
+    },
+    error::BrokerError,
+    metadata_epoch::next_i32,
 };
 
 pub(super) async fn handle_heartbeat(
@@ -221,9 +224,14 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::{
-        config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog, share::actor::test_support::{
-            InitializedTopicSetup, ShareSubscriptionSetup, TopicMetadataSetup, heartbeat, make_coordinator, metadata_with_topic, seed_initialized, subscribed_group, subscribed_request,
-        }, test_support::{MemberEpoch, assignment_interval_fixture, heartbeat_write_failures},
+        config::NextGenConfig,
+        offsets_log::fake::InMemoryOffsetsLog,
+        share::actor::test_support::{
+            InitializedTopicSetup, ShareSubscriptionSetup, TopicMetadataSetup, heartbeat,
+            make_coordinator, metadata_with_topic, seed_initialized, subscribed_group,
+            subscribed_request,
+        },
+        test_support::{MemberEpoch, assignment_interval_fixture, heartbeat_write_failures},
     };
 
     /// Kafka's `shareGroupHeartbeat`: only initialized partitions are
@@ -293,7 +301,18 @@ mod tests {
             let (coord, _log) = make_coordinator(metadata.clone());
             let handle = coord.get_or_create_share("g");
             if let Some(partitions) = initialized {
-                seed_initialized(&handle, InitializedTopicSetup { topic_id: id, partitions: partitions.into_iter().map(krabka_ids::PartitionIndex).collect(), ..Default::default() }).await;
+                seed_initialized(
+                    &handle,
+                    InitializedTopicSetup {
+                        topic_id: id,
+                        partitions: partitions
+                            .into_iter()
+                            .map(krabka_ids::PartitionIndex)
+                            .collect(),
+                        ..Default::default()
+                    },
+                )
+                .await;
             }
             for (step, (req, expected)) in steps.into_iter().enumerate() {
                 let resp = heartbeat(&handle, req).await;
@@ -402,10 +421,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stale_epoch_is_fenced() {
-        let (_coord, _log, handle) =
-            subscribed_group(
-                TopicMetadataSetup::four_partitions(),
-            );
+        let (_coord, _log, handle) = subscribed_group(TopicMetadataSetup::four_partitions());
         let joined = heartbeat(
             &handle,
             subscribed_request(ShareSubscriptionSetup::default()),
@@ -443,10 +459,7 @@ mod tests {
         ];
 
         for (index, (member_id, member_epoch, accepted)) in rows.into_iter().enumerate() {
-            let (_coord, _log, handle) =
-                subscribed_group(
-                    TopicMetadataSetup::four_partitions(),
-                );
+            let (_coord, _log, handle) = subscribed_group(TopicMetadataSetup::four_partitions());
             check!(
                 heartbeat(&handle, request(ShareSubscriptionSetup::default()))
                     .await
@@ -593,8 +606,7 @@ mod tests {
     async fn the_replayed_assignment_timestamp_holds_the_interval() {
         use crate::coordinator::unified::{ShareGroupSeed, wall_clock_ms};
 
-        let (rows, mut cases) =
-            assignment_interval_fixture();
+        let (rows, mut cases) = assignment_interval_fixture();
 
         for (case, ago, wanted) in rows {
             let (coordinator, _) = super::super::test_support::topic_coordinator(

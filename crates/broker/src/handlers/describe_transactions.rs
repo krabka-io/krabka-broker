@@ -181,8 +181,10 @@ mod tests {
     use super::*;
     use crate::{
         test_support::{
-            grant_topic_operation, lead_transaction_state_partitions, peer, principal, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
-        }, txn::{state::TopicPartition, version::TxnVersion},
+            grant_topic_operation, lead_transaction_state_partitions, peer, principal,
+            start_broker_with_authorizer_no_audit as start_broker, test_ctx,
+        },
+        txn::{state::TopicPartition, version::TxnVersion},
     };
 
     fn entry() -> TxnEntry {
@@ -352,11 +354,7 @@ mod tests {
         let peer = peer();
         let tid = "tx";
 
-        lead_transaction_state_partitions(
-            &broker_handle,
-            &[coordinator.partition_for(tid)],
-        )
-        .await;
+        lead_transaction_state_partitions(&broker_handle, &[coordinator.partition_for(tid)]).await;
 
         let mut entry = TxnEntry::new_empty(tid.to_string(), ProducerId(100), 3, 60_000, 0);
         entry.state = TxnState::Ongoing;
@@ -416,13 +414,7 @@ mod tests {
         } in cases
         {
             if let Some((grant_topic, operation)) = topic_grant {
-                grant_topic_operation(
-                    &broker_handle,
-                    user,
-                    grant_topic,
-                    operation,
-                )
-                .await;
+                grant_topic_operation(&broker_handle, user, grant_topic, operation).await;
             }
             // `grant_topic_operation` grants on the `Topic` resource; grant
             // `Describe` on `TransactionalId(tid)` too, since that gate runs

@@ -262,8 +262,12 @@ mod tests {
     use super::{NO_OFFSET, mark, refused_topic, request_refusal, row};
     use crate::{
         barrier::{
-            marker::BarrierMarker, test_support::{check_control_marker, open_partition, topic_records},
-        }, codes, coordinator::unified::persistence::MAX_STRING_BYTES, partition_registry::PartitionRegistry,
+            marker::BarrierMarker,
+            test_support::{check_control_marker, open_partition, topic_records},
+        },
+        codes,
+        coordinator::unified::persistence::MAX_STRING_BYTES,
+        partition_registry::PartitionRegistry,
     };
 
     const LOCAL: NodeId = NodeId(1);

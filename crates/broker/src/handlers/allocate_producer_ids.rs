@@ -85,9 +85,8 @@ async fn serve(
 mod tests {
     use assert2::{assert, check};
 
+    use super::*;
     use crate::test_support::{dispatch_wire, peer, principal, request_context};
-
-use super::*;
 
     /// Serves a request as a principal that the default `AllowAllAuthorizer`
     /// allows.

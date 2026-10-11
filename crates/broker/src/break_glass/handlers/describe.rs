@@ -184,7 +184,8 @@ mod tests {
 
     use super::*;
     use crate::break_glass::{
-        ALL_ACTIONS, action_name, gate::tests::{CREATED_MS, EXPIRES_MS, NOW_MS, image_of, proposal, signed_approval},
+        ALL_ACTIONS, action_name,
+        gate::tests::{CREATED_MS, EXPIRES_MS, NOW_MS, image_of, proposal, signed_approval},
     };
 
     fn ids(described: &[DescribedBreakGlassProposal]) -> Vec<Uuid> {

@@ -11,7 +11,23 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    blocking::spawn_blocking, broker::adapters::ControllerAdapter, cleaner::{CleanerConfig, run}, config::BrokerConfig, controller_endpoint::ControllerDialer, disk_scanner::DiskScanner, heartbeat::controller_state::ControllerLivenessState, isr_maintenance::{Config, run}, leader_rebalance::{AutoRebalanceConfig, ControllerLike, run}, log_retention::{LogRetentionConfig, run}, metadata_source::MetadataSource, metrics::BrokerMetrics, network::client::InterBrokerClient, partition_registry::PartitionRegistry, producer_state::ProducerState, reassignment::run, time_util::now_ms,
+    blocking::spawn_blocking,
+    broker::adapters::ControllerAdapter,
+    cleaner::{CleanerConfig, run},
+    config::BrokerConfig,
+    controller_endpoint::ControllerDialer,
+    disk_scanner::DiskScanner,
+    heartbeat::controller_state::ControllerLivenessState,
+    isr_maintenance::{Config, run},
+    leader_rebalance::{AutoRebalanceConfig, ControllerLike, run},
+    log_retention::{LogRetentionConfig, run},
+    metadata_source::MetadataSource,
+    metrics::BrokerMetrics,
+    network::client::InterBrokerClient,
+    partition_registry::PartitionRegistry,
+    producer_state::ProducerState,
+    reassignment::run,
+    time_util::now_ms,
 };
 
 pub(super) fn spawn_storage_security_maintenance(
@@ -22,31 +38,29 @@ pub(super) fn spawn_storage_security_maintenance(
     metrics: &BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> Option<JoinHandle<()>> {
-    tokio::spawn(run(
-        Config {
-            // Kafka sends `AlterPartition` to the active controller on its
-            // CONTROLLER listener, as it sends `BrokerHeartbeat`. An isolated
-            // controller has no broker listener at all.
-            dialer: ControllerDialer {
-                outbound_client: Arc::clone(inter_broker_client),
-                listener_protocol: config.controller_listener_protocol,
-                server_name: config
-                    .controller_server_name
-                    .clone()
-                    .unwrap_or_else(|| "localhost".to_owned()),
-                quorum_voters: config.controller_quorum_voters.clone(),
-            },
-            node_id: config.node_id,
-            partitions: Arc::clone(partitions),
-            controller: Arc::clone(controller),
-            replica_lag_time_max: config.replica_lag_time_max,
-            default_min_insync_replicas: config.default_min_insync_replicas,
-            scan_interval: config.isr_scan_interval,
-            broker_id: config.broker_id,
-            shutdown: shutdown.child_token(),
-            metrics: metrics.clone(),
+    tokio::spawn(run(Config {
+        // Kafka sends `AlterPartition` to the active controller on its
+        // CONTROLLER listener, as it sends `BrokerHeartbeat`. An isolated
+        // controller has no broker listener at all.
+        dialer: ControllerDialer {
+            outbound_client: Arc::clone(inter_broker_client),
+            listener_protocol: config.controller_listener_protocol,
+            server_name: config
+                .controller_server_name
+                .clone()
+                .unwrap_or_else(|| "localhost".to_owned()),
+            quorum_voters: config.controller_quorum_voters.clone(),
         },
-    ));
+        node_id: config.node_id,
+        partitions: Arc::clone(partitions),
+        controller: Arc::clone(controller),
+        replica_lag_time_max: config.replica_lag_time_max,
+        default_min_insync_replicas: config.default_min_insync_replicas,
+        scan_interval: config.isr_scan_interval,
+        broker_id: config.broker_id,
+        shutdown: shutdown.child_token(),
+        metrics: metrics.clone(),
+    }));
     let disk_scanner = (config.partition_disk_scan_interval > <Time as TimeExt>::ZERO).then(|| {
         let scanner = DiskScanner {
             log_dirs: config.all_log_dirs(),
@@ -165,11 +179,10 @@ pub(super) fn spawn_cluster_data_maintenance(
     shutdown: &CancellationToken,
 ) {
     if config.features.auto_leader_rebalance_enable {
-        let adapter: Arc<dyn ControllerLike> =
-            Arc::new(ControllerAdapter {
-                handle: Arc::clone(controller),
-                node_id: config.node_id,
-            });
+        let adapter: Arc<dyn ControllerLike> = Arc::new(ControllerAdapter {
+            handle: Arc::clone(controller),
+            node_id: config.node_id,
+        });
         tokio::spawn(run(
             adapter,
             Arc::clone(liveness),
@@ -220,8 +233,7 @@ pub(super) fn spawn_cluster_data_maintenance(
     // `LogManager.cleanupLogs` runs over every log the broker hosts, so a
     // follower trims its own replica rather than accumulating segments until
     // it is elected.
-    let mut retention =
-        LogRetentionConfig::system(config.log_retention_check_interval);
+    let mut retention = LogRetentionConfig::system(config.log_retention_check_interval);
     retention.metadata = Some(Arc::clone(controller));
     tokio::spawn(run(
         Arc::clone(partitions),

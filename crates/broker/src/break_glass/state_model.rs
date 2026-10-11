@@ -31,8 +31,15 @@ use uuid::Uuid;
 
 use crate::{
     break_glass::{
-        config::BreakGlassPolicy, gate, handlers::{Refusal, approve::{self, Attempt}},
-    }, config::BreakGlassConfig, operator_keys::OperatorKeys,
+        config::BreakGlassPolicy,
+        gate,
+        handlers::{
+            Refusal,
+            approve::{self, Attempt},
+        },
+    },
+    config::BreakGlassConfig,
+    operator_keys::OperatorKeys,
 };
 
 /// The logical millisecond at which the proposal expires.

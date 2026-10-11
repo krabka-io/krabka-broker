@@ -34,9 +34,18 @@ use super::{
     },
 };
 use crate::{
-    codes, coordinator::unified::{
-        ClientIdentity, config::NextGenConfig, consumer_state::GroupState, first_join_member_id, group::{CoordinatorGroup, GroupKind}, migration, reconciler, regex_resolver::TopicRegexResolver, registry::consumer_group_not_found,
-    }, error::BrokerError,
+    codes,
+    coordinator::unified::{
+        ClientIdentity,
+        config::NextGenConfig,
+        consumer_state::GroupState,
+        first_join_member_id,
+        group::{CoordinatorGroup, GroupKind},
+        migration, reconciler,
+        regex_resolver::TopicRegexResolver,
+        registry::consumer_group_not_found,
+    },
+    error::BrokerError,
 };
 
 mod identity;
@@ -136,12 +145,10 @@ pub(super) async fn handle_actor_heartbeat(
     if request.member_epoch != 0 && !state.is_persisted() && state.members.is_empty() {
         let _ = reply.send(ConsumerGroupHeartbeatResponse {
             error_code: codes::GROUP_ID_NOT_FOUND,
-            error_message: Some(
-                consumer_group_not_found(
-                    &state.group_id,
-                    request.member_epoch,
-                ),
-            ),
+            error_message: Some(consumer_group_not_found(
+                &state.group_id,
+                request.member_epoch,
+            )),
             ..Default::default()
         });
         return true;

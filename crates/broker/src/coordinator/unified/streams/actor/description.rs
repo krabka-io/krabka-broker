@@ -29,7 +29,8 @@ use super::{
     records::{flush_pending, group_metadata_value},
 };
 use crate::{
-    codes, coordinator::unified::{
+    codes,
+    coordinator::unified::{
         GroupCoordinator,
         offsets_log::OffsetsLog,
         streams::{
@@ -38,7 +39,8 @@ use crate::{
             persistence::PendingStreamsRecords,
             topology::status,
         },
-    }, error::BrokerError,
+    },
+    error::BrokerError,
 };
 
 /// A `StreamsGroupTopologyDescriptionUpdate` that the handler passed to the

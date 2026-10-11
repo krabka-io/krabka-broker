@@ -12,7 +12,13 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::{
-    cleaner::test_support::{CompactionSetup, block_compaction_swap, compactable_partition, record_count, register_compactable}, metrics::{CleanerFailureLabel, CleanerFailureReason}, partition::Partition, test_support::{append_partition_batch, topic_thaw_record},
+    cleaner::test_support::{
+        CompactionSetup, block_compaction_swap, compactable_partition, record_count,
+        register_compactable,
+    },
+    metrics::{CleanerFailureLabel, CleanerFailureReason},
+    partition::Partition,
+    test_support::{append_partition_batch, topic_thaw_record},
 };
 
 struct HostedCompactPartition {
@@ -217,9 +223,10 @@ use crate::test_support::frozen_topics_image as image_with_freezes;
 /// The thaw record for `scope`: the same entry with `frozen` cleared,
 /// which is what removes it from the registry.
 fn thaw(image: &mut MetadataImage, scope: &str, pattern_type: PatternType) {
-    image.apply(&MetadataRecord::V1TopicFreeze(
-        topic_thaw_record(scope, pattern_type),
-    ));
+    image.apply(&MetadataRecord::V1TopicFreeze(topic_thaw_record(
+        scope,
+        pattern_type,
+    )));
 }
 
 /// Register one compactable, locally-led partition per topic and report
@@ -231,8 +238,7 @@ async fn compactable_topics(
 ) -> Vec<(&'static str, Arc<Partition>, usize)> {
     let mut built = Vec::new();
     for &topic in topics {
-        let (partition, before) =
-            register_compactable(dir, registry, topic).await;
+        let (partition, before) = register_compactable(dir, registry, topic).await;
         built.push((topic, partition, before));
     }
     built

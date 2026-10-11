@@ -1,9 +1,11 @@
 use assert2::assert;
 use tempfile::tempdir;
 
-use crate::{config::{NodeRole, StretchProfile}, file_config::FileConfig};
-
 use super::*;
+use crate::{
+    config::{NodeRole, StretchProfile},
+    file_config::FileConfig,
+};
 
 /// The gap `wait_for_self_registration_published` closes: a `submit_change`
 /// reply that has already committed and applied the registration, while the
@@ -467,7 +469,15 @@ mod unclean_restart {
     use krabka_metadata::{LeaderEpoch, MetadataRecord, NodeId, PartitionRecord};
 
     use crate::{
-        authorizer::AllowAllAuthorizer, broker::{Broker, registration::register_broker}, clean_shutdown::{take, write}, config::BrokerConfig, elr::{TopicElr, state::PartitionElr}, test_support::{IsrResponseCheck, LiveIsrSetup, accepted_isr_proposal, elr_topic_records, start_broker_with_authorizer, started_controller_broker, wait_for_controller_leader},
+        authorizer::AllowAllAuthorizer,
+        broker::{Broker, registration::register_broker},
+        clean_shutdown::{take, write},
+        config::BrokerConfig,
+        elr::{TopicElr, state::PartitionElr},
+        test_support::{
+            IsrResponseCheck, LiveIsrSetup, accepted_isr_proposal, elr_topic_records,
+            start_broker_with_authorizer, started_controller_broker, wait_for_controller_leader,
+        },
     };
 
     const TOPIC: &str = "orders";
@@ -569,8 +579,7 @@ mod unclean_restart {
     /// may be shorter than the records its ELR membership asserts it holds.
     #[tokio::test]
     async fn a_crashed_broker_loses_its_elr_membership_on_restart() {
-        let (handle, _dir) =
-            start_broker_with_authorizer(Arc::new(AllowAllAuthorizer)).await;
+        let (handle, _dir) = start_broker_with_authorizer(Arc::new(AllowAllAuthorizer)).await;
         let broker = handle.broker_arc_for_test();
         let (mut config, _victim_dir, _epoch) = cluster_with_node_two_eligible(&broker).await;
 
@@ -615,8 +624,7 @@ mod unclean_restart {
     /// cluster still holds for it, and keeps its membership.
     #[tokio::test]
     async fn a_gracefully_stopped_broker_keeps_its_elr_membership_on_restart() {
-        let (handle, _dir) =
-            start_broker_with_authorizer(Arc::new(AllowAllAuthorizer)).await;
+        let (handle, _dir) = start_broker_with_authorizer(Arc::new(AllowAllAuthorizer)).await;
         let broker = handle.broker_arc_for_test();
         let (mut config, victim_dir, epoch) = cluster_with_node_two_eligible(&broker).await;
 

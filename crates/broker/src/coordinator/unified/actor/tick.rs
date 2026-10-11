@@ -13,9 +13,10 @@ use super::{
     persistence::{flush_classic_metadata, flush_pending},
     waiters::settle_removed_classic_waiters,
 };
-use crate::{coordinator::unified::{
-    classic_state::ClassicGroup as ClassicState, group::CoordinatorGroup,
-}, metadata_epoch::next_i32};
+use crate::{
+    coordinator::unified::{classic_state::ClassicGroup as ClassicState, group::CoordinatorGroup},
+    metadata_epoch::next_i32,
+};
 
 pub(super) async fn handle_actor_tick(
     group: &mut CoordinatorGroup,
@@ -175,12 +176,26 @@ mod tests {
 
     use super::*;
     use crate::{
-        codes, coordinator::unified::{
-            ClientIdentity, GroupCoordinator, actor::{
-                GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution, test_support::{
-                    ConsumerMemberSetup, completing_classic_group, empty_metadata, last_classic_metadata, make_coordinator, parked_follower, rpc, subscribed_member,
+        codes,
+        coordinator::unified::{
+            ClientIdentity, GroupCoordinator,
+            actor::{
+                GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution,
+                test_support::{
+                    ConsumerMemberSetup, completing_classic_group, empty_metadata,
+                    last_classic_metadata, make_coordinator, parked_follower, rpc,
+                    subscribed_member,
                 },
-            }, classic_state::GroupState as ClassicGroupState, config::NextGenConfig, consumer_state::GroupState, group::GroupKind, offsets_log::fake::InMemoryOffsetsLog, persistence_next_gen::GroupMetadataValue, reconciler::ReconcileInput, regex_resolver::no_topic_regex_resolver, test_support::check_two_members_expired,
+            },
+            classic_state::GroupState as ClassicGroupState,
+            config::NextGenConfig,
+            consumer_state::GroupState,
+            group::GroupKind,
+            offsets_log::fake::InMemoryOffsetsLog,
+            persistence_next_gen::GroupMetadataValue,
+            reconciler::ReconcileInput,
+            regex_resolver::no_topic_regex_resolver,
+            test_support::check_two_members_expired,
         },
     };
 
@@ -222,17 +237,15 @@ mod tests {
         let metadata = empty_metadata();
         let mut state = GroupState::new("g");
         for member_id in ["m1", "m2"] {
-            let mut m = subscribed_member(
-                ConsumerMemberSetup {
-                    member_id,
-                    client: ClientIdentity {
-                        id: "client-a",
-                        host: "h",
-                    },
-                    now: Instant::now(),
-                    ..Default::default()
+            let mut m = subscribed_member(ConsumerMemberSetup {
+                member_id,
+                client: ClientIdentity {
+                    id: "client-a",
+                    host: "h",
                 },
-            );
+                now: Instant::now(),
+                ..Default::default()
+            });
             m.last_seen = crate::coordinator::unified::test_support::expired_session_last_seen();
             state.add_or_update_member(m);
         }
@@ -260,12 +273,10 @@ mod tests {
                 member_metadata: member_tombstones(member_id),
                 target_per_member: member_tombstones(member_id),
                 current_per_member: member_tombstones(member_id),
-                group_metadata: Some(
-                    GroupMetadataValue {
-                        epoch,
-                        metadata_hash: 0,
-                    },
-                ),
+                group_metadata: Some(GroupMetadataValue {
+                    epoch,
+                    metadata_hash: 0,
+                }),
                 ..PendingRecords::default()
             }
             .to_batch("g", 0)
@@ -488,8 +499,7 @@ mod tests {
                     client_id: "c".into(),
                     client_host: "h".into(),
                     reply,
-                    regex_resolver:
-                        no_topic_regex_resolver(),
+                    regex_resolver: no_topic_regex_resolver(),
                 })
                 .await;
                 response.await.unwrap()

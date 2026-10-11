@@ -14,20 +14,25 @@ use krabka_protocol::owned::{
 };
 
 use super::*;
-use crate::{coordinator::unified::{
-    StreamsGroupSeed,
-    offsets_log::fake::InMemoryOffsetsLog,
-    persistence::{Key, parse_key},
-    streams::{
-        actor::{
-            StreamsGroupActorHandle, StreamsGroupActorMessage,
-            test_support::{coordinator_with_log, describe, heartbeat_result_at, undelayed},
+use crate::{
+    coordinator::unified::{
+        StreamsGroupSeed,
+        offsets_log::fake::InMemoryOffsetsLog,
+        persistence::{Key, parse_key},
+        streams::{
+            actor::{
+                StreamsGroupActorHandle, StreamsGroupActorMessage,
+                test_support::{coordinator_with_log, describe, heartbeat_result_at, undelayed},
+            },
+            description::{
+                DescriptionEpochs, Node, NodeKind, Subtopology, TopologyDescriptionPlugin,
+            },
+            persistence::{StreamsGroupKey, StreamsGroupMetadataValue},
+            topology::to_stored_topology,
         },
-        description::{DescriptionEpochs, Node, NodeKind, Subtopology, TopologyDescriptionPlugin},
-        persistence::{StreamsGroupKey, StreamsGroupMetadataValue},
-        topology::to_stored_topology,
     },
-}, task_util::ask};
+    task_util::ask,
+};
 
 fn coordinator(plugin: TopologyDescriptionPlugin) -> Arc<GroupCoordinator> {
     coordinator_and_log(plugin).0

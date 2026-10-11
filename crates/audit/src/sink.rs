@@ -5,7 +5,9 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 
 use crate::{
-    chain::to_hex, event::{AuditEvent, AuditEventClass}, ocsf::{ProductInfo, to_ocsf},
+    chain::to_hex,
+    event::{AuditEvent, AuditEventClass},
+    ocsf::{ProductInfo, to_ocsf},
 };
 
 /// Record-header key for the per-broker chain sequence number in decimal ASCII.
@@ -46,10 +48,8 @@ impl AuditRecord {
     pub fn push_chain_headers(&mut self, seq: u64, prev_head: &[u8; 32]) {
         self.headers
             .push((HEADER_SEQ.to_string(), seq.to_string().into_bytes()));
-        self.headers.push((
-            HEADER_PREV_HASH.to_string(),
-            to_hex(prev_head).into_bytes(),
-        ));
+        self.headers
+            .push((HEADER_PREV_HASH.to_string(), to_hex(prev_head).into_bytes()));
     }
 
     /// Serialize an event to OCSF JSON and attach the SIEM-filterable headers.
@@ -175,9 +175,8 @@ impl AuditSink for MemorySink {
 mod tests {
     use assert2::check;
 
+    use super::*;
     use crate::test_support::authentication;
-
-use super::*;
 
     #[test]
     fn io_error_displays() {

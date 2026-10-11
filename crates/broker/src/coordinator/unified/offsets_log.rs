@@ -7,9 +7,14 @@ use krabka_protocol::records::RecordBatch;
 use tokio::sync::{oneshot, watch};
 
 use crate::{
-    codes, coordinator::partitioner::partition_for_group, error::BrokerError, metadata_source::MetadataSource, partition::{
+    codes,
+    coordinator::partitioner::partition_for_group,
+    error::BrokerError,
+    metadata_source::MetadataSource,
+    partition::{
         Partition, ProduceData, ProduceJob, ProducerAppendCheck, Uncommitted, WriterMessage,
-    }, partition_registry::PartitionRegistry,
+    },
+    partition_registry::PartitionRegistry,
 };
 
 #[cfg(test)]
@@ -64,10 +69,7 @@ impl ProductionOffsetsLog {
 #[async_trait]
 impl OffsetsLog for ProductionOffsetsLog {
     async fn append(&self, group_id: &str, batch: RecordBatch) -> Result<(), BrokerError> {
-        let partition_id = partition_for_group(
-            &self.controller.current_image(),
-            group_id,
-        );
+        let partition_id = partition_for_group(&self.controller.current_image(), group_id);
         append_as_leader(
             (&self.partitions, &*self.controller, self.node_id),
             partition_id,
@@ -135,11 +137,7 @@ impl LeaderAppend {
 /// [`BrokerError::PartitionWriterDied`] when the partition has no live writer
 /// here, and the writer's own error when the log refuses the batch.
 pub(crate) async fn append_as_leader(
-    (partitions, controller, node_id): (
-        &PartitionRegistry,
-        &dyn MetadataSource,
-        NodeId,
-    ),
+    (partitions, controller, node_id): (&PartitionRegistry, &dyn MetadataSource, NodeId),
     partition_id: i32,
     mut batch: RecordBatch,
     producer_check: Option<ProducerAppendCheck>,
@@ -281,9 +279,8 @@ pub mod fake {
     use krabka_protocol::records::RecordBatch;
     use tokio::sync::Mutex;
 
+    use super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, async_trait};
     use crate::coordinator::unified::persistence_next_gen::NextGenKey;
-
-use super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, async_trait};
 
     /// Which classic metadata operation a test expects in the append log.
     #[derive(Clone, Copy)]
@@ -421,10 +418,7 @@ use super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, async_trait};
             .await
         }
 
-        async fn has_next_gen_tombstone(
-            &self,
-            expected: &NextGenKey,
-        ) -> bool {
+        async fn has_next_gen_tombstone(&self, expected: &NextGenKey) -> bool {
             use crate::coordinator::unified::persistence::{Key, parse_key};
             self.appended
                 .lock()

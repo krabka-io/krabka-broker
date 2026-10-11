@@ -15,7 +15,12 @@ use super::{
     pending_records::{PartitionMetadataWrite, PendingRecords},
 };
 use crate::coordinator::unified::{
-    classic_state::ClassicGroup, consumer_state::{GroupState, MemberState}, member_records::{MemberValues, append_target_records}, offsets_log::OffsetsLog, persistence::{GroupMetadataValue, sorted_partitions}, persistence_next_gen::{
+    classic_state::ClassicGroup,
+    consumer_state::{GroupState, MemberState},
+    member_records::{MemberValues, append_target_records},
+    offsets_log::OffsetsLog,
+    persistence::{GroupMetadataValue, sorted_partitions},
+    persistence_next_gen::{
         ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
         GroupMetadataValue, MemberMetadataValue, TargetAssignmentMemberValue,
         TargetAssignmentMetadataValue,

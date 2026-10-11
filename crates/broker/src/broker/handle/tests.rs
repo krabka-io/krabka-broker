@@ -6,9 +6,16 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     broker::{
-        Broker, test_support::{LocalPartitionSetup, local_partition_with_records, submit_metadata_topic_partition},
-    }, config::BrokerConfig, partition::{Partition, WriterMessage}, test_support::{
-        UNSUPPORTED_LEVEL_FAULT, broker_registration, finalize_unstable_metadata_version, write_bootstrap_records,
+        Broker,
+        test_support::{
+            LocalPartitionSetup, local_partition_with_records, submit_metadata_topic_partition,
+        },
+    },
+    config::BrokerConfig,
+    partition::{Partition, WriterMessage},
+    test_support::{
+        UNSUPPORTED_LEVEL_FAULT, broker_registration, finalize_unstable_metadata_version,
+        write_bootstrap_records,
     },
 };
 
@@ -100,9 +107,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
                     port: 19_092,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 }],
-                ..broker_registration(krabka_raft::NodeId(
-                    handle.node_id() + 1,
-                ))
+                ..broker_registration(krabka_raft::NodeId(handle.node_id() + 1))
             },
         ))
         .await

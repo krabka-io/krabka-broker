@@ -49,7 +49,16 @@ pub(crate) use self::{
         validate_manual_partition_assignment,
     },
 };
-use crate::{api_catalog::UnstableApiVersions, authorizer::AuthorizationResult, broker::Broker, codes, config::BrokerConfig, handlers::describe_configs::{effective_topic_configs, static_settings}, metadata_source::MetadataSource, wal::quorum::placement::select_voters_from_sorted_racks};
+use crate::{
+    api_catalog::UnstableApiVersions,
+    authorizer::AuthorizationResult,
+    broker::Broker,
+    codes,
+    config::BrokerConfig,
+    handlers::describe_configs::{effective_topic_configs, static_settings},
+    metadata_source::MetadataSource,
+    wal::quorum::placement::select_voters_from_sorted_racks,
+};
 
 /// Leader epoch that a freshly created partition starts at. The committed
 /// `PartitionRecord` and the handler-side leader-cache install must agree.
@@ -76,10 +85,7 @@ pub(crate) fn diskless_wal_placement_error(
         .enumerate()
         .find_map(|(offset, leadership)| {
             let leader = leadership.leader;
-            let available = select_voters_from_sorted_racks(
-                &brokers, leader, required,
-            )
-            .len();
+            let available = select_voters_from_sorted_racks(&brokers, leader, required).len();
             (available != required).then(|| {
                 let partition =
                     first_partition.saturating_add(i32::try_from(offset).unwrap_or(i32::MAX));
@@ -384,16 +390,14 @@ fn disclose_created_topic(
             // `computeEffectiveTopicConfigs(creationConfigs)`: it builds
             // the row from the request's own map, and `validateOnly`
             // discards the records alone.
-            result.configs = Some(creatable_topic_configs(
-                effective_topic_configs(
-                    &created.controller.current_image(),
-                    broker.config.node_id,
-                    &result.name,
-                    created.overrides,
-                    broker.config.features.unstable_api_versions,
-                    &static_settings(&broker.config),
-                ),
-            ));
+            result.configs = Some(creatable_topic_configs(effective_topic_configs(
+                &created.controller.current_image(),
+                broker.config.node_id,
+                &result.name,
+                created.overrides,
+                broker.config.features.unstable_api_versions,
+                &static_settings(&broker.config),
+            )));
         }
     } else {
         // Kafka leaves the partition count and the replication factor

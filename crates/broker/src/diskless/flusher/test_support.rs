@@ -11,7 +11,14 @@ use krabka_log::{Log, LogConfig};
 use krabka_metadata::NodeId;
 use krabka_protocol::records::RecordBatch;
 
-use crate::{broker::spawn_partition, diskless::index_log::DisklessIndexLog, log_dir_status::LogDirRegistry, partition::Partition, test_support::{RecordCount, StorageMode, UnixMillis, repeated_records_batch}, time_util::now_ms};
+use crate::{
+    broker::spawn_partition,
+    diskless::index_log::DisklessIndexLog,
+    log_dir_status::LogDirRegistry,
+    partition::Partition,
+    test_support::{RecordCount, StorageMode, UnixMillis, repeated_records_batch},
+    time_util::now_ms,
+};
 
 /// A batch of `count` records, stamped with the wall clock the way a real
 /// producer stamps one. The timestamp matters: `retention.ms` reads the
@@ -76,9 +83,9 @@ pub(super) fn test_partition(root: &Path, setup: FlusherPartitionSetup<'_>) -> A
 
 /// A real in-memory metadata log and its live diskless index projection.
 pub(super) async fn test_index_log() -> DisklessIndexLog {
-    DisklessIndexLog::start(
-        krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-    )
+    DisklessIndexLog::start(krabka_remote_storage_topic::InProcessMetadataEventLog::new(
+        1,
+    ))
     .await
     .unwrap()
 }

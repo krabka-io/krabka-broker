@@ -11,7 +11,9 @@ use krabka_audit::{AuditError, AuditRecord, AuditSink};
 use krabka_ids::PartitionIndex;
 use krabka_protocol::records::{Record, RecordBatch, RecordHeader};
 
-use crate::{metrics::BrokerMetrics, partition::ProduceBatchError, partition_registry::PartitionRegistry};
+use crate::{
+    metrics::BrokerMetrics, partition::ProduceBatchError, partition_registry::PartitionRegistry,
+};
 
 /// Writes audit records to a single partition of the audit topic that this
 /// broker leads.
@@ -94,12 +96,8 @@ impl AuditSink for KafkaTopicAuditSink {
         if let Err(error) = result {
             self.metrics.audit_write_failures.inc();
             return Err(match error {
-                ProduceBatchError::Rejected(error) => {
-                    AuditError::Sink(error.to_string())
-                }
-                ProduceBatchError::Indeterminate(error) => {
-                    AuditError::Indeterminate(error)
-                }
+                ProduceBatchError::Rejected(error) => AuditError::Sink(error.to_string()),
+                ProduceBatchError::Indeterminate(error) => AuditError::Indeterminate(error),
             });
         }
         self.metrics.audit_events.inc();

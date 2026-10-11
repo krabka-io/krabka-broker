@@ -49,11 +49,13 @@
 //! min ISR -- can only clear the set early. It cannot leave a replica in it
 //! that an accepted write has moved past.
 
-use crate::{elr::unclean_restart::clear_published_elr_for_topic, features::{ELR_VERSION, feature_enabled}};
-
 use super::{
     MIN_INSYNC_REPLICAS,
     lookup::{topic_node_or_cluster_default, topic_or_cluster_default},
+};
+use crate::{
+    elr::unclean_restart::clear_published_elr_for_topic,
+    features::{ELR_VERSION, feature_enabled},
 };
 
 pub(crate) fn clear_elr_records(

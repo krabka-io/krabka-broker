@@ -40,9 +40,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{codes::{FENCED_MEMBER_EPOCH, UNKNOWN_MEMBER_ID}, coordinator::unified::INITIAL_GROUP_EPOCH, metadata_epoch::next_i32};
-
 use self::current_assignment::{TaskOwners, next_member_state};
+use crate::{
+    codes::{FENCED_MEMBER_EPOCH, UNKNOWN_MEMBER_ID},
+    coordinator::unified::INITIAL_GROUP_EPOCH,
+    metadata_epoch::next_i32,
+};
 
 mod current_assignment;
 mod member;

@@ -19,7 +19,10 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{index_log::DisklessIndexLog, wal_index::WalFlushRecord};
-use crate::{error::BrokerError, partition::Partition, partition_registry::PartitionRegistry, time_util::now_ms};
+use crate::{
+    error::BrokerError, partition::Partition, partition_registry::PartitionRegistry,
+    time_util::now_ms,
+};
 
 mod config;
 mod object_flush;
@@ -167,8 +170,7 @@ async fn flush_tick(
     let image = context.image_rx.borrow().clone();
     tombstone_deleted_topics(context, &image).await?;
     let mut partitions = flushable_partitions(&context.partitions, &image, context.node_id).await;
-    expire_retention_breached_ranges(context, &image, &partitions, now_ms())
-        .await?;
+    expire_retention_breached_ranges(context, &image, &partitions, now_ms()).await?;
     if !partitions.is_empty() {
         let start = rotation % partitions.len();
         partitions.rotate_left(start);
@@ -405,7 +407,14 @@ mod tests {
         *,
     };
     use crate::{
-        diskless::{flusher::test_support::FlusherPartitionSetup, index_log::test_support::{PacedReplayLog, ReplayPace, WalFlushSetup}, wal_index::WalIndexCache}, test_support::{FreezeSetup, StorageMode, UnixMillis, single_partition_topic, topic_freeze_record},
+        diskless::{
+            flusher::test_support::FlusherPartitionSetup,
+            index_log::test_support::{PacedReplayLog, ReplayPace, WalFlushSetup},
+            wal_index::WalIndexCache,
+        },
+        test_support::{
+            FreezeSetup, StorageMode, UnixMillis, single_partition_topic, topic_freeze_record,
+        },
     };
 
     // Keep field evaluation order, including metrics and readiness allocation.
@@ -659,13 +668,11 @@ mod tests {
         let cache = index.cache();
         for key in ["diskless-wal/9/old.ckwl", "diskless-wal/7/new.ckwl"] {
             index
-                .publish_flush(&flush_record(
-                    WalFlushSetup {
-                        topic_id,
-                        object_key: key,
-                        ..WalFlushSetup::three_records()
-                    },
-                ))
+                .publish_flush(&flush_record(WalFlushSetup {
+                    topic_id,
+                    object_key: key,
+                    ..WalFlushSetup::three_records()
+                }))
                 .await
                 .unwrap();
             wait_for_object(&cache, topic_id, key).await;
@@ -718,13 +725,11 @@ mod tests {
         let index = test_index_log().await;
         let cache = index.cache();
         index
-            .publish_flush(&flush_record(
-                WalFlushSetup {
-                    topic_id,
-                    object_key,
-                    ..WalFlushSetup::three_records()
-                },
-            ))
+            .publish_flush(&flush_record(WalFlushSetup {
+                topic_id,
+                object_key,
+                ..WalFlushSetup::three_records()
+            }))
             .await
             .unwrap();
         wait_for_object(&cache, topic_id, object_key).await;
@@ -790,9 +795,9 @@ mod tests {
             );
         }
         let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(
-            single_partition_topic("orders", topic_id),
-        ));
+        image.apply(&MetadataRecord::V1Topic(single_partition_topic(
+            "orders", topic_id,
+        )));
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image.clone()));
         (
             test_context!(partitions, image_rx, Arc::clone(&store), index),
@@ -869,13 +874,13 @@ mod tests {
     async fn a_write_freeze_holds_the_retention_pass() {
         retention_fixture!(dir, topic_id, context, store, handle; mut image);
         set_retention(&handle, krabka_units::millis(1));
-        image.apply(&MetadataRecord::V1TopicFreeze(
-            topic_freeze_record(FreezeSetup {
+        image.apply(&MetadataRecord::V1TopicFreeze(topic_freeze_record(
+            FreezeSetup {
                 pattern_type: krabka_metadata::PatternType::Literal,
                 reason: "a cutover is in flight",
                 ..Default::default()
-            }),
-        ));
+            },
+        )));
         let partitions = [flush_partition(topic_id, &handle)];
 
         // The same clock and retention that expire the aged range in
@@ -1057,16 +1062,14 @@ mod tests {
         let seed = DisklessIndexLog::start(Arc::clone(&event_log))
             .await
             .unwrap();
-        seed.publish_flush(&flush_record(
-            WalFlushSetup {
-                topic_id,
-                object_key: "diskless-wal/7/seed.ckwl",
-                first_offset: krabka_log::Offset(0),
-                last_offset: krabka_log::Offset(2),
-                max_timestamp: UnixMillis(0),
-                ..Default::default()
-            },
-        ))
+        seed.publish_flush(&flush_record(WalFlushSetup {
+            topic_id,
+            object_key: "diskless-wal/7/seed.ckwl",
+            first_offset: krabka_log::Offset(0),
+            last_offset: krabka_log::Offset(2),
+            max_timestamp: UnixMillis(0),
+            ..Default::default()
+        }))
         .await
         .unwrap();
 
@@ -1205,9 +1208,10 @@ mod tests {
             let dir = tempdir().unwrap();
             let partitions = led_orders_partition(dir.path());
             let mut image = MetadataImage::new(Uuid::nil());
-            image.apply(&MetadataRecord::V1Topic(
-                single_partition_topic("orders", Uuid::from_u128(11)),
-            ));
+            image.apply(&MetadataRecord::V1Topic(single_partition_topic(
+                "orders",
+                Uuid::from_u128(11),
+            )));
             let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
             let store = Arc::new(FaultInjectingStore::new(
                 Arc::new(InMemory::new()),

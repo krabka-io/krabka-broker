@@ -4,9 +4,11 @@
 use assert2::{assert, check};
 use krabka_units::convert::{ByteSizeExt as _, RatioExt as _, TimeExt as _};
 
-use crate::throttle::{ALTER_LOG_DIRS_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_REPLICAS_KEY, LEADER_THROTTLED_RATE_KEY, LEADER_THROTTLED_REPLICAS_KEY};
-
 use super::*;
+use crate::throttle::{
+    ALTER_LOG_DIRS_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_RATE_KEY,
+    FOLLOWER_THROTTLED_REPLICAS_KEY, LEADER_THROTTLED_RATE_KEY, LEADER_THROTTLED_REPLICAS_KEY,
+};
 
 #[test]
 fn config_type_wire_bytes_match_kafka() {
@@ -54,14 +56,8 @@ fn topic_key_types_match_apache_kafka() {
         (LOCAL_RETENTION_MS, ConfigType::Long),
         (LOCAL_RETENTION_BYTES, ConfigType::Long),
         (DELETE_RETENTION_MS, ConfigType::Long),
-        (
-            LEADER_THROTTLED_REPLICAS_KEY,
-            ConfigType::List,
-        ),
-        (
-            FOLLOWER_THROTTLED_REPLICAS_KEY,
-            ConfigType::List,
-        ),
+        (LEADER_THROTTLED_REPLICAS_KEY, ConfigType::List),
+        (FOLLOWER_THROTTLED_REPLICAS_KEY, ConfigType::List),
         (SEGMENT_MS, ConfigType::Long),
         (SEGMENT_INDEX_BYTES, ConfigType::Int),
         (SEGMENT_JITTER_MS, ConfigType::Long),
@@ -86,14 +82,8 @@ fn topic_key_types_match_apache_kafka() {
 fn broker_key_types_match_apache_kafka() {
     for (name, expected) in [
         (LEADER_THROTTLED_RATE_KEY, ConfigType::Long),
-        (
-            FOLLOWER_THROTTLED_RATE_KEY,
-            ConfigType::Long,
-        ),
-        (
-            ALTER_LOG_DIRS_THROTTLED_RATE_KEY,
-            ConfigType::Long,
-        ),
+        (FOLLOWER_THROTTLED_RATE_KEY, ConfigType::Long),
+        (ALTER_LOG_DIRS_THROTTLED_RATE_KEY, ConfigType::Long),
         (UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean),
         (REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, ConfigType::Long),
         // `GroupCoordinatorConfig`: `offsets.retention.minutes` is `INT` and

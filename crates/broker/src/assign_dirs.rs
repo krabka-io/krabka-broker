@@ -122,9 +122,7 @@ pub(crate) async fn send_assignments(
         return Err("no controller leader".into());
     };
     let image = controller.current_image();
-    let Some((host, port)) =
-        leader_endpoint(&image, &dialer.quorum_voters, leader_id)
-    else {
+    let Some((host, port)) = leader_endpoint(&image, &dialer.quorum_voters, leader_id) else {
         return Err("controller leader has no known controller endpoint".into());
     };
 
@@ -189,9 +187,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::BrokerHandle;
-use crate::metadata_source::MetadataSource;
-use crate::test_support::FakeMetadataSource;
+    use crate::{BrokerHandle, metadata_source::MetadataSource, test_support::FakeMetadataSource};
 
     #[test]
     fn build_request_groups_correctly() {
@@ -272,8 +268,9 @@ use crate::test_support::FakeMetadataSource;
         }
     }
 
-    use crate::test_support::VoterImageSetup;
-use crate::test_support::plaintext_controller_dialer_with_voters as plaintext_dialer;
+    use crate::test_support::{
+        VoterImageSetup, plaintext_controller_dialer_with_voters as plaintext_dialer,
+    };
 
     /// What a broker-only node sees of a controller-only leader: a voter with a
     /// CONTROLLER endpoint, and no broker registration anywhere in the image.
@@ -329,9 +326,7 @@ use crate::test_support::plaintext_controller_dialer_with_voters as plaintext_di
         }
     }
 
-    fn voter_only_source(
-        controller_addr: std::net::SocketAddr,
-    ) -> Arc<dyn MetadataSource> {
+    fn voter_only_source(controller_addr: std::net::SocketAddr) -> Arc<dyn MetadataSource> {
         Arc::new(
             FakeMetadataSource::builder()
                 .image(voter_only_image(NodeId(1), controller_addr))

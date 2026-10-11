@@ -5,15 +5,21 @@
 //! partition, and `FindCoordinator` then reports the host and port of the
 //! broker that does.
 
-use crate::{broker::Broker, codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR, UNKNOWN_SERVER_ERROR}, coordinator::GroupCoordinator, features::STREAMS_VERSION, task_util::AskError};
+use crate::{
+    broker::Broker,
+    codes::{
+        COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR,
+        UNKNOWN_SERVER_ERROR,
+    },
+    coordinator::{GroupCoordinator, bootstrap::OFFSETS_TOPIC},
+    features::{STREAMS_VERSION, feature_enabled},
+    task_util::AskError,
+};
 
 /// Return the Kafka routing error for a group RPC sent to the wrong broker,
 /// `COORDINATOR_LOAD_IN_PROGRESS` while this broker still replays the group's
 /// offsets partition, or `None` when this broker serves the group.
-pub(crate) fn group_coordinator_error(
-    broker: &Broker,
-    group_id: &str,
-) -> Option<i16> {
+pub(crate) fn group_coordinator_error(broker: &Broker, group_id: &str) -> Option<i16> {
     use crate::coordinator::partitioner::{GroupRoutingError, local_partition_for_group};
 
     match local_partition_for_group(
@@ -31,14 +37,11 @@ pub(crate) fn group_coordinator_error(
 /// `partition` it leads, or has not yet taken up the leadership term the
 /// current image names, as Kafka's `CoordinatorRuntime` answers for a shard
 /// that is not `ACTIVE`.
-pub(crate) fn group_partition_loading(
-    broker: &Broker,
-    partition: i32,
-) -> Option<i16> {
+pub(crate) fn group_partition_loading(broker: &Broker, partition: i32) -> Option<i16> {
     let epoch = broker
         .controller
         .current_image()
-        .partition(crate::coordinator::bootstrap::OFFSETS_TOPIC, partition)
+        .partition(OFFSETS_TOPIC, partition)
         .map(|record| record.leader_epoch);
     epoch
         .is_none_or(|epoch| broker.group_coordinator.is_loading(partition, epoch))
@@ -58,7 +61,7 @@ pub(crate) fn any_group_partition_loading(broker: &Broker) -> bool {
         || broker
             .controller
             .current_image()
-            .partitions_of(crate::coordinator::bootstrap::OFFSETS_TOPIC)
+            .partitions_of(OFFSETS_TOPIC)
             .filter(|record| record.leader == broker.config.node_id)
             .any(|record| coordinator.is_loading(record.partition, record.leader_epoch))
 }
@@ -75,11 +78,7 @@ pub(crate) fn streams_protocol_enabled(
     image: &krabka_metadata::MetadataImage,
 ) -> bool {
     broker.config.streams_group.enable
-        && crate::features::feature_enabled(
-            image,
-            STREAMS_VERSION,
-            STREAMS_VERSION_MIN_LEVEL,
-        )
+        && feature_enabled(image, STREAMS_VERSION, STREAMS_VERSION_MIN_LEVEL)
 }
 
 /// Minimum finalized `group.version` at which the broker serves the KIP-848
@@ -89,7 +88,7 @@ const NEXT_GEN_MIN_GROUP_VERSION: i16 = 1;
 /// `true` while `image` does not finalize `group.version >= 1`, the KIP-848
 /// gate of `ConsumerGroupHeartbeat` and `ConsumerGroupDescribe`.
 pub(crate) fn group_version_disabled(image: &krabka_metadata::MetadataImage) -> bool {
-    !crate::features::feature_enabled(
+    !feature_enabled(
         image,
         krabka_metadata::group_version::GROUP_VERSION_FEATURE,
         NEXT_GEN_MIN_GROUP_VERSION,

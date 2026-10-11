@@ -11,7 +11,9 @@ use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
 use crate::{
-    api_catalog::UnstableApiVersions, codes, config_keys::group::{GroupBounds, validate_group_configs},
+    api_catalog::UnstableApiVersions,
+    codes,
+    config_keys::group::{GroupBounds, validate_group_configs},
 };
 
 /// Build the authoritative `V1GroupConfig` record for a GROUP resource. The
@@ -46,18 +48,16 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::{api_catalog::UnstableApiVersions, coordinator::unified::streams::config::{KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS}, handlers::alter_configs::test_support::group_resource};
+    use crate::{
+        api_catalog::UnstableApiVersions,
+        coordinator::unified::streams::config::{KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS},
+        handlers::alter_configs::test_support::group_resource,
+    };
 
     #[test]
     fn group_replacement_builds_authoritative_override_map() {
         let record = group_config_record(
-            &group_resource(
-                "streams-app",
-                &[(
-                    KEY_NUM_STANDBY_REPLICAS,
-                    "1",
-                )],
-            ),
+            &group_resource("streams-app", &[(KEY_NUM_STANDBY_REPLICAS, "1")]),
             &GroupBounds::default(),
             UnstableApiVersions::Enabled,
         )
@@ -87,13 +87,7 @@ mod tests {
     #[test]
     fn group_replacement_rejects_out_of_bounds_value() {
         let error = group_config_record(
-            &group_resource(
-                "streams-app",
-                &[(
-                    KEY_SESSION_TIMEOUT_MS,
-                    "1000",
-                )],
-            ),
+            &group_resource("streams-app", &[(KEY_SESSION_TIMEOUT_MS, "1000")]),
             &GroupBounds::default(),
             UnstableApiVersions::Enabled,
         )

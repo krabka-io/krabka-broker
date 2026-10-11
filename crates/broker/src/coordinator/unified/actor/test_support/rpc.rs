@@ -23,8 +23,12 @@ use crate::{
         actor::{
             ClassicView, CommitFence, CommitRequest, DescribeMember, DescribeView,
             GroupActorHandle, GroupActorMessage, JoinResult, LeaveResult, SyncResult,
-        }, classic_state::OffsetEntry, group::GroupOffsets, regex_resolver::no_topic_regex_resolver,
-    }, task_util::ask,
+        },
+        classic_state::OffsetEntry,
+        group::GroupOffsets,
+        regex_resolver::no_topic_regex_resolver,
+    },
+    task_util::ask,
 };
 
 /// Sends a request without awaiting its reply, so tests can retain the exact

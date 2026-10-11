@@ -17,7 +17,10 @@ use crate::{
     break_glass::{
         gate::{self, BreakGlassDenial},
         persistence::spend_before_local_action,
-    }, broker::Broker, codes, handlers::partition_transition::audit_refusal,
+    },
+    broker::Broker,
+    codes,
+    handlers::partition_transition::audit_refusal,
 };
 
 crate::handlers::partition_transition::authorizer! {

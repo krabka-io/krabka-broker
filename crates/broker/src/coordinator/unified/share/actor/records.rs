@@ -11,9 +11,12 @@ use krabka_protocol::{primitives::uuid::Uuid, records::RecordBatch};
 use super::seed::snapshot_seed;
 use crate::{
     coordinator::unified::{
-        OffsetRecordBatchBuilder, member_records::{
-            MemberRecordFamilies, MemberRecordLists, MemberTombstone, MemberValues, append_removed_members, append_target_records,
-        }, share::{
+        OffsetRecordBatchBuilder,
+        member_records::{
+            MemberRecordFamilies, MemberRecordLists, MemberTombstone, MemberValues,
+            append_removed_members, append_target_records,
+        },
+        share::{
             persistence::{
                 DeletingTopic, ShareGroupCurrentMemberAssignmentValue, ShareGroupKey,
                 ShareGroupMemberMetadataValue, ShareGroupMetadataValue,
@@ -23,7 +26,8 @@ use crate::{
             },
             state::{ShareGroupState, ShareMemberState},
         },
-    }, error::BrokerError,
+    },
+    error::BrokerError,
 };
 
 #[derive(Debug, Default, PartialEq)]

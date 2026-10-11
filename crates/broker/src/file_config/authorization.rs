@@ -125,7 +125,11 @@ mod tests {
     use krabka_units::{Time, convert::TimeExt as _};
 
     use super::*;
-    use crate::{authorizer::opa::OpaAuthorizer, file_config::test_support::configured_unwrap_parse, test_support::{peer, sasl_principal}};
+    use crate::{
+        authorizer::opa::OpaAuthorizer,
+        file_config::test_support::configured_unwrap_parse,
+        test_support::{peer, sasl_principal},
+    };
 
     /// Both `super_users` lists take Kafka's `User:<name>` form, and
     /// `User:ANONYMOUS` is a super user as in Kafka.

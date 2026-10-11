@@ -11,7 +11,8 @@ use super::{
     envelope::{metadata, status_id},
 };
 use crate::{
-    chain::to_hex, event::{AuditEndpoint, AuditOutcome, AuditPrincipal, AuditResource, PrivilegedPhase},
+    chain::to_hex,
+    event::{AuditEndpoint, AuditOutcome, AuditPrincipal, AuditResource, PrivilegedPhase},
 };
 
 pub(super) fn ocsf_admin_operation(

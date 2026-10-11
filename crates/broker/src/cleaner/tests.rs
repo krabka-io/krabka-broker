@@ -9,7 +9,9 @@ use qubit_clock::Timer;
 
 use super::*;
 use crate::{
-    cleaner::test_support::{compactable_partition, record_count}, partition::Partition, test_support::{BrokenTimer, TimerFailure, park_manual_timer, sweep_registry_fixture},
+    cleaner::test_support::{compactable_partition, record_count},
+    partition::Partition,
+    test_support::{BrokenTimer, TimerFailure, park_manual_timer, sweep_registry_fixture},
 };
 
 #[tokio::test]
@@ -92,11 +94,7 @@ async fn spawn_on(
     dir: &tempfile::TempDir,
     topic: &str,
     timer: Arc<dyn Timer>,
-) -> (
-    tokio::task::JoinHandle<()>,
-    Arc<Partition>,
-    usize,
-) {
+) -> (tokio::task::JoinHandle<()>, Arc<Partition>, usize) {
     let registry = Arc::new(PartitionRegistry::new());
     let (partition, before) =
         super::test_support::register_compactable(dir, &registry, topic).await;

@@ -19,9 +19,16 @@ use super::{
     },
     views::preferred_server_assignor,
 };
-use crate::{coordinator::unified::{
-    ClientIdentity, assignor::Assignor, config::NextGenConfig, consumer_state::{GroupState, MemberState}, reconciler, wall_clock_ms,
-}, re2j::check};
+use crate::{
+    coordinator::unified::{
+        ClientIdentity,
+        assignor::Assignor,
+        config::NextGenConfig,
+        consumer_state::{GroupState, MemberState},
+        reconciler, wall_clock_ms,
+    },
+    re2j::check,
+};
 
 /// The partitions a member reports that it owns in its heartbeat, or `None`
 /// when the heartbeat carries no `topic_partitions`. The Java client sends the
@@ -263,10 +270,7 @@ pub(super) fn maybe_update_target(
     metadata: &dyn MetadataProvider,
 ) -> Option<Vec<String>> {
     if !state.target_is_stale()
-        || state.assignment_delayed(
-            config.assignment_interval,
-            wall_clock_ms(),
-        )
+        || state.assignment_delayed(config.assignment_interval, wall_clock_ms())
     {
         return None;
     }
@@ -348,9 +352,20 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::{
-        ClientIdentity, actor::{
-            heartbeat::step_heartbeat, regex_resolution::apply_regex_result, test_support::{StaticMetadata, coordinator_with_log, empty_metadata, rpc::consumer_request},
-        }, assignor::{Assignment, GroupSpec, TopicMetadata}, consumer_state::GroupState, offsets_log::fake::InMemoryOffsetsLog, persistence_next_gen::MemberAssignmentState, reconciler::ReconcileInput, regex_resolver::FixedRegexResolver,
+        ClientIdentity,
+        actor::{
+            heartbeat::step_heartbeat,
+            regex_resolution::apply_regex_result,
+            test_support::{
+                StaticMetadata, coordinator_with_log, empty_metadata, rpc::consumer_request,
+            },
+        },
+        assignor::{Assignment, GroupSpec, TopicMetadata},
+        consumer_state::GroupState,
+        offsets_log::fake::InMemoryOffsetsLog,
+        persistence_next_gen::MemberAssignmentState,
+        reconciler::ReconcileInput,
+        regex_resolver::FixedRegexResolver,
     };
 
     /// Kafka's `consumerGroupHeartbeat` for a subscription change: the
@@ -1010,11 +1025,7 @@ mod tests {
             .unwrap();
 
         let log = Arc::new(InMemoryOffsetsLog::default());
-        let coord = coordinator_with_log(
-            config,
-            empty_metadata(),
-            log,
-        );
+        let coord = coordinator_with_log(config, empty_metadata(), log);
         let handle = coord.get_or_create_consumer("g");
 
         let resp = consumer_request(

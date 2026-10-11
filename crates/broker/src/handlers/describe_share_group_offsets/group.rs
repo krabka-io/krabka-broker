@@ -20,7 +20,11 @@ use super::{
     topics::initialized_topics,
 };
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics}, broker::Broker, codes, coordinator::GroupCoordinator, handlers::{RequestContext, group_coordinator_error, group_describe_denied},
+    authorizer::{AuthorizationResult, authorize_topics},
+    broker::Broker,
+    codes,
+    coordinator::GroupCoordinator,
+    handlers::{RequestContext, group_coordinator_error, group_describe_denied},
 };
 
 /// Resolve one requested group into its response row.
@@ -37,12 +41,7 @@ pub(super) async fn describe_group(
 
     // ── ACL preamble ────────────────────────────────────
     // Per-group `Describe` check. On Deny → group `error_code = 30`.
-    if group_describe_denied(
-        broker.config.authorizer.as_ref(),
-        image,
-        ctx,
-        gid.as_str(),
-    ) {
+    if group_describe_denied(broker.config.authorizer.as_ref(), image, ctx, gid.as_str()) {
         return DescribeShareGroupOffsetsResponseGroup {
             group_id: gid,
             error_code: codes::GROUP_AUTHORIZATION_FAILED,
@@ -169,9 +168,15 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AuthorizationResult, Authorizer}, coordinator::unified::share::persistence::{
+        authorizer::{AuthorizationResult, Authorizer},
+        coordinator::unified::share::persistence::{
             ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
-        }, handlers::{RequestContext, describe_share_group_offsets::test_support::{image_with_topic, register_topic}}, test_support::peer,
+        },
+        handlers::{
+            RequestContext,
+            describe_share_group_offsets::test_support::{image_with_topic, register_topic},
+        },
+        test_support::peer,
     };
 
     /// Denies topic `Describe` on one named topic, and allows every other

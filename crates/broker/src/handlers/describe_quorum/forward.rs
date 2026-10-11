@@ -72,10 +72,7 @@ pub(super) fn unwrap_response(
         } else {
             codes::NOT_LEADER_OR_FOLLOWER
         };
-        return encode_response(
-            &super::top_level_error_response(error_code),
-            version,
-        );
+        return encode_response(&super::top_level_error_response(error_code), version);
     }
 
     // A served envelope's `response_data` is the embedded `ResponseHeader`

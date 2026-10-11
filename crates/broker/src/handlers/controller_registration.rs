@@ -142,9 +142,8 @@ mod tests {
     use krabka_protocol::owned::controller_registration_request::Listener;
     use krabka_security::ListenerProtocol;
 
+    use super::*;
     use crate::test_support::principal;
-
-use super::*;
 
     crate::test_support::context_helper!(client_id = "controller");
 

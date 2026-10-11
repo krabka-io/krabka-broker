@@ -57,13 +57,12 @@
 
 use krabka_metadata::BreakGlassAction;
 
-use crate::model_check::check_model;
-
 use self::{
     transitions::CrossSpendModel,
     universe::{EXPIRES_AT, ProposalSpec, Request},
 };
 use super::state_model::config;
+use crate::model_check::check_model;
 
 mod properties;
 mod transitions;

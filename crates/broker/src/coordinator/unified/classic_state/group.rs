@@ -9,9 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::codes::{FENCED_INSTANCE_ID, UNKNOWN_MEMBER_ID};
-
 use super::member::Member;
+use crate::codes::{FENCED_INSTANCE_ID, UNKNOWN_MEMBER_ID};
 
 /// Four-state machine for a live consumer group, matching the Apache Kafka
 /// classic protocol (KIP-62 / KIP-394).

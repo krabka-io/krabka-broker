@@ -28,12 +28,11 @@ use krabka_metadata::{MetadataImage, NodeId};
 use krabka_protocol::records::TimestampType;
 use krabka_units::ByteSize;
 
-use crate::config::BrokerConfig;
-
 use super::{
     MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS,
     broker_dynamic::TOPIC_DEFAULT_SYNONYMS, log_config::apply_to_log_config, parse::long_value,
 };
+use crate::config::BrokerConfig;
 
 /// The dynamic broker-wide defaults for `node`, by the topic key each one is
 /// the default of: this node's own value where it has one, else the

@@ -6,7 +6,11 @@
 
 use std::sync::Arc;
 
-use crate::{config::BrokerConfig, error::BrokerError, network::{client::InterBrokerClient, ktls_probe::probe_ktls_support}};
+use crate::{
+    config::BrokerConfig,
+    error::BrokerError,
+    network::{client::InterBrokerClient, ktls_probe::probe_ktls_support},
+};
 
 pub(super) struct StartupTransport {
     pub(super) tls_dynamic: Option<Arc<krabka_security::DynamicServerConfig>>,

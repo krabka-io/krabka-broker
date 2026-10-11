@@ -287,13 +287,18 @@ mod tests {
 
     use crate::{
         barrier::{
-            STATE_TOPIC, coordinator::{
-                BarrierCoordinator, GroupDescription, RetainedCut, test_support::{Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec},
-            }, error::BarrierError, persistence::{
+            STATE_TOPIC,
+            coordinator::{
+                BarrierCoordinator, GroupDescription, RetainedCut,
+                test_support::{Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec},
+            },
+            error::BarrierError,
+            persistence::{
                 CutStatus, GroupValue, InjectionStartValue, MissingPartition, RecordKey,
                 encode_injection_start,
             },
-        }, metadata_source::MetadataSource,
+        },
+        metadata_source::MetadataSource,
     };
 
     #[tokio::test]

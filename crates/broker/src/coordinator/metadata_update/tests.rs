@@ -16,11 +16,18 @@ use krabka_protocol::owned::{
 use uuid::Uuid;
 
 use super::{changed_topics, on_metadata_update, regex_resolution_may_change};
-use crate::{coordinator::{
-    test_support::metadata_delta_image as image, unified::{
-        actor::test_support::rpc::consumer_request_as_client as heartbeat, test_support::{SwitchableMetadata, consumer_join_request, make_coord_with_metadata, snapshot_of},
+use crate::{
+    coordinator::{
+        test_support::metadata_delta_image as image,
+        unified::{
+            actor::test_support::rpc::consumer_request_as_client as heartbeat,
+            test_support::{
+                SwitchableMetadata, consumer_join_request, make_coord_with_metadata, snapshot_of,
+            },
+        },
     },
-}, test_support::{AllowAclSetup, allow_acl}};
+    test_support::{AllowAclSetup, allow_acl},
+};
 
 fn topic(name: &str, id: u128) -> MetadataRecord {
     MetadataRecord::V1Topic(TopicRecord {
@@ -121,13 +128,11 @@ fn changed_topics_are_the_created_changed_and_deleted_topics() {
 }
 
 fn describe_acl(topic: &str) -> MetadataRecord {
-    MetadataRecord::V1AccessControlEntry(allow_acl(
-        AllowAclSetup {
-            resource_name: topic,
-            operation: krabka_metadata::AclOperation::Describe,
-            ..Default::default()
-        },
-    ))
+    MetadataRecord::V1AccessControlEntry(allow_acl(AllowAclSetup {
+        resource_name: topic,
+        operation: krabka_metadata::AclOperation::Describe,
+        ..Default::default()
+    }))
 }
 
 /// A created topic and a changed ACL can change what a regular expression

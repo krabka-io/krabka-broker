@@ -36,13 +36,17 @@ use self::{
     assignment::resolve_new_partition_assignments, response::finish_response,
 };
 use crate::{
-    codes, config_keys::resolve_preferred_leader_site, handlers::{
+    codes,
+    config_keys::resolve_preferred_leader_site,
+    handlers::{
         create_topics::{
             automatic_leaderships, automatic_placement_exclusions, diskless_wal_placement_error,
             inactive_brokers, manual_leaderships, site_broker_views,
         },
         partition_materialization::PartitionMaterialization,
-    }, quota::ControllerMutationQuota, site_placement::PlacementRng,
+    },
+    quota::ControllerMutationQuota,
+    site_placement::PlacementRng,
 };
 
 context_handler! {

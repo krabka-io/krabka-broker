@@ -15,7 +15,15 @@ use krabka_protocol::{
 };
 
 use super::*;
-use crate::{api_catalog::{ClientMetricsReceiver, ListenerKind, VersionGates, supported_apis}, cluster_id::encode, codes, config::ListenerSpec, test_support::{peer, principal, start_broker_with}};
+use crate::{
+    api_catalog::{
+        ClientMetricsReceiver, ListenerKind, UnstableApiVersions, VersionGates, supported_apis,
+    },
+    cluster_id::encode,
+    codes,
+    config::ListenerSpec,
+    test_support::{decode_response, peer, principal, start_broker_with},
+};
 
 const API_VERSIONS_V3: i16 = 3;
 const API_VERSIONS_V5: i16 = 5;
@@ -47,7 +55,7 @@ fn routing_request(cluster_id: Option<String>, node_id: i32) -> Bytes {
 }
 
 fn decode_response(version: i16, bytes: &Bytes) -> ApiVersionsResponse {
-    crate::test_support::decode_response(bytes, version)
+    decode_response(bytes, version)
 }
 
 /// The anonymous, plaintext context the dispatch loop builds for a handshake
@@ -149,11 +157,7 @@ fn api_versions_advertises_the_deliberate_ranges() {
             ],
         ),
     ] {
-        let table = supported_apis(
-            ListenerKind::Client,
-            ClientMetricsReceiver::Absent,
-            gates,
-        );
+        let table = supported_apis(ListenerKind::Client, ClientMetricsReceiver::Absent, gates);
         let pinned: Vec<ApiVersion> = table
             .into_iter()
             .filter(|api| [0, 1, 2, 18, 22].contains(&api.api_key))
@@ -254,7 +258,7 @@ async fn api_versions_answers_every_version_on_every_listener_shape() {
                 "{listener} telemetry={telemetry} v{version}"
             );
         }
-        let body = unsupported_version_response(crate::api_catalog::UnstableApiVersions::Disabled)
+        let body = unsupported_version_response(UnstableApiVersions::Disabled)
             .expect("unsupported answer");
         check!(
             decode_response(0, &body) == unsupported,

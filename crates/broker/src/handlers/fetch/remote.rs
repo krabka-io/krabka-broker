@@ -15,7 +15,12 @@ use super::{
     plan::{PendingRead, refused_read},
     read::LiveOffsets,
 };
-use crate::{broker::Broker, codes, metrics::{BrokerMetrics, RemoteTierPath}, partition::Partition};
+use crate::{
+    broker::Broker,
+    codes,
+    metrics::{BrokerMetrics, RemoteTierPath},
+    partition::Partition,
+};
 
 /// Whether a batch the remote tier returned may go out to a consumer now.
 ///
@@ -435,7 +440,13 @@ mod tests {
     use krabka_log::{DeliveryPolicy, Log, LogConfig};
     use krabka_units::prelude::millis;
 
-use crate::{broker::{Broker, BrokerHandle}, config::{RemoteStorageBackend, RlmmKind}, delivery::test_support::batch_at, metrics::BrokerMetrics, partition::Partition};
+    use crate::{
+        broker::{Broker, BrokerHandle},
+        config::{RemoteStorageBackend, RlmmKind},
+        delivery::test_support::batch_at,
+        metrics::BrokerMetrics,
+        partition::Partition,
+    };
 
     /// KIP-405 splits the floors, and only the global one bounds the remote
     /// tier: an offset a `DeleteRecords` deleted is gone from every tier, so
@@ -568,11 +579,7 @@ use crate::{broker::{Broker, BrokerHandle}, config::{RemoteStorageBackend, RlmmK
 
     /// A broker with a local archive and an in-memory RLMM, and the
     /// directories both live in.
-    async fn tiered_broker() -> (
-        BrokerHandle,
-        tempfile::TempDir,
-        tempfile::TempDir,
-    ) {
+    async fn tiered_broker() -> (BrokerHandle, tempfile::TempDir, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let remote_dir = tempfile::tempdir().expect("remote tempdir");
         let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -580,9 +587,7 @@ use crate::{broker::{Broker, BrokerHandle}, config::{RemoteStorageBackend, RlmmK
             dir: remote_dir.path().to_path_buf(),
         });
         config.remote_log_metadata = RlmmKind::InMemory;
-        let handle = Broker::start(config)
-            .await
-            .expect("start broker");
+        let handle = Broker::start(config).await.expect("start broker");
         (handle, dir, remote_dir)
     }
 
@@ -616,10 +621,7 @@ use crate::{broker::{Broker, BrokerHandle}, config::{RemoteStorageBackend, RlmmK
 
     /// A `PendingRead` for offset 0 that the local log has already answered
     /// `OFFSET_OUT_OF_RANGE`, with the all -1 row `do_read` leaves behind.
-    fn out_of_range_at(
-        part: &std::sync::Arc<Partition>,
-        fetch_offset: i64,
-    ) -> super::PendingRead {
+    fn out_of_range_at(part: &std::sync::Arc<Partition>, fetch_offset: i64) -> super::PendingRead {
         use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
         use crate::codes;

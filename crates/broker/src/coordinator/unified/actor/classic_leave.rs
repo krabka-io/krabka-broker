@@ -22,13 +22,16 @@ use super::{
     waiters::settle_removed_classic_waiters,
 };
 use crate::{
-    codes, coordinator::{
+    codes,
+    coordinator::{
         DeleteGroupError,
         unified::{
             classic_ops, consumer_state::GroupState, group::CoordinatorGroup,
             offsets_log::OffsetsLog,
         },
-    }, error::BrokerError, metadata_epoch::next_i32,
+    },
+    error::BrokerError,
+    metadata_epoch::next_i32,
 };
 
 #[cfg(test)]

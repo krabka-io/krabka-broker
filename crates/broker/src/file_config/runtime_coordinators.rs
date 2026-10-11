@@ -312,9 +312,8 @@ mod tests {
 
     use assert2::assert;
 
+    use super::*;
     use crate::{config::BrokerConfig, file_config::FileConfig};
-
-use super::*;
 
     fn with(change: fn(&mut ShareGroupConfig)) -> Result<ShareGroupConfig, String> {
         let mut config = ShareGroupConfig::default();

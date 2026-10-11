@@ -10,7 +10,9 @@ use krabka_protocol::owned::{
 use krabka_security::SaslMechanism;
 
 use crate::{
-    broker::Broker, codes::{CLUSTER_AUTHORIZATION_FAILED, DUPLICATE_RESOURCE, RESOURCE_NOT_FOUND}, handlers::cluster_describe_denied,
+    broker::Broker,
+    codes::{CLUSTER_AUTHORIZATION_FAILED, DUPLICATE_RESOURCE, RESOURCE_NOT_FOUND},
+    handlers::cluster_describe_denied,
 };
 
 /// Kafka's `ScramImage.DESCRIBE_DUPLICATE_USER`; the row message appends the

@@ -5,7 +5,11 @@ use krabka_raft::NodeId;
 use tokio::net::TcpListener;
 
 use super::*;
-use crate::{broker::test_support::{MetadataPartitionSetup, submit_metadata_topic_partition}, config::BrokerConfig, test_support::start_broker_with};
+use crate::{
+    broker::test_support::{MetadataPartitionSetup, submit_metadata_topic_partition},
+    config::BrokerConfig,
+    test_support::start_broker_with,
+};
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct StaticVoterSetup<'a> {

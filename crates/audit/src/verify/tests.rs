@@ -8,7 +8,13 @@ use krabka_protocol::records::{Record, RecordBatch, RecordHeader};
 
 use super::*;
 use crate::{
-    FileEd25519Signer, chain::{ChainState, GENESIS_HEAD}, checkpoint::Checkpoint, event::AuditEventClass, ids::EpochMs, sink::AuditRecord, test_support::shared_signer as signer,
+    FileEd25519Signer,
+    chain::{ChainState, GENESIS_HEAD},
+    checkpoint::Checkpoint,
+    event::AuditEventClass,
+    ids::EpochMs,
+    sink::AuditRecord,
+    test_support::shared_signer as signer,
 };
 
 fn audit_record_to_batch(rec: &AuditRecord, base_offset: i64) -> RecordBatch {

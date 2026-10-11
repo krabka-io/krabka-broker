@@ -6,8 +6,6 @@
 use assert2::{assert, check};
 use krabka_protocol::owned::describe_configs_response::DescribeConfigsSynonym;
 
-use crate::{api_catalog::UnstableApiVersions, config::BrokerConfig};
-
 use super::{
     super::{
         super::wire::CONFIG_SOURCE_DEFAULT,
@@ -18,6 +16,7 @@ use super::{
     },
     *,
 };
+use crate::{api_catalog::UnstableApiVersions, config::BrokerConfig};
 
 const BOTH: EntryOptions = EntryOptions {
     include_synonyms: true,

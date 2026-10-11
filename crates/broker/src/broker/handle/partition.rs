@@ -8,9 +8,9 @@ use std::sync::atomic::Ordering;
 use krabka_ids::PartitionIndex;
 use krabka_units::convert::TimeExt;
 
-use crate::{broker::BrokerHandle, partition::Partition};
 #[cfg(any(test, feature = "test-helpers"))]
 use crate::error::BrokerError;
+use crate::{broker::BrokerHandle, partition::Partition};
 
 impl BrokerHandle {
     /// This broker's partition `topic-partition`, or a
@@ -25,9 +25,7 @@ impl BrokerHandle {
             .partitions
             .get(topic, PartitionIndex(partition))
             .ok_or_else(|| {
-                BrokerError::Replication(format!(
-                    "partition {topic}-{partition} not local"
-                ))
+                BrokerError::Replication(format!("partition {topic}-{partition} not local"))
             })
     }
 

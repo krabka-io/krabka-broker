@@ -45,9 +45,8 @@ mod tests {
     use assert2::check;
     use krabka_metadata::{FeatureLevelRecord, KRaftVersionRecord, MetadataRecord};
 
-    use crate::features::LATEST_PRODUCTION_METADATA_VERSION;
-
-use super::*;
+    use super::*;
+    use crate::features::{LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION_MIN};
 
     krabka_macros::supported_feature_fixture!(supported);
     krabka_macros::supported_features_fixture!(modern_supported, supported);
@@ -61,7 +60,7 @@ use super::*;
     fn supported_features_follow_kafkas_minimums() {
         let metadata_version = supported(
             "metadata.version",
-            crate::features::METADATA_VERSION_MIN,
+            METADATA_VERSION_MIN,
             LATEST_PRODUCTION_METADATA_VERSION,
         );
         let modern = modern_supported(metadata_version.clone(), 1);

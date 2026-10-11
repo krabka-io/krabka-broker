@@ -254,9 +254,10 @@ pub(crate) fn new_target_assignment<'a>(
         for partitions in assignment.values_mut() {
             partitions.sort_unstable();
         }
-        if !held.get(member_id).is_some_and(|held| {
-            same_assignment(held, &assignment)
-        }) {
+        if !held
+            .get(member_id)
+            .is_some_and(|held| same_assignment(held, &assignment))
+        {
             changed.push(member_id.clone());
         }
         target.insert(member_id.clone(), assignment);

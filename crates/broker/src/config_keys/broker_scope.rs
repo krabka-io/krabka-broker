@@ -228,12 +228,11 @@ mod tests {
 
     use assert2::assert;
 
-    use crate::test_support::broker_registration;
-
-use super::{
+    use super::{
         super::validation::{is_recognized, validate_topic_config},
         *,
     };
+    use crate::test_support::broker_registration;
 
     /// Register `node_id` and, when `witness` is set, publish
     /// `broker.witness=true` for it. This is the path the broker takes at
@@ -244,9 +243,9 @@ use super::{
         witness: Option<&str>,
     ) {
         use krabka_metadata::{BrokerConfigRecord, MetadataRecord, NodeId};
-        img.apply(&MetadataRecord::V1BrokerRegistration(
-            broker_registration(krabka_raft::NodeId(node_id)),
-        ));
+        img.apply(&MetadataRecord::V1BrokerRegistration(broker_registration(
+            krabka_raft::NodeId(node_id),
+        )));
         if let Some(value) = witness {
             img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
                 node_id: NodeId(node_id),

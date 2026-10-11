@@ -7,7 +7,13 @@ use std::{net::SocketAddr, path::PathBuf};
 use krabka_raft::NodeId;
 use krabka_units::{Time, convert::TimeExt, millis, secs};
 
-use crate::{config::{BrokerConfig, RlmmKind, feature_flags::test_feature_flags}, coordinator::unified::{config::NextGenConfig, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig}, share_coordinator::config::ShareCoordinatorConfig};
+use crate::{
+    config::{BrokerConfig, RlmmKind, feature_flags::test_feature_flags},
+    coordinator::unified::{
+        config::NextGenConfig, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
+    },
+    share_coordinator::config::ShareCoordinatorConfig,
+};
 
 impl BrokerConfig {
     /// Builds a test config that listens on an OS-assigned port under a
@@ -72,24 +78,20 @@ impl BrokerConfig {
                 regex_refresh_min_interval: std::time::Duration::ZERO,
                 ..NextGenConfig::default()
             }),
-            share_group: Box::new(
-                ShareGroupConfig {
-                    assignment_interval: std::time::Duration::ZERO,
-                    ..ShareGroupConfig::default()
-                },
-            ),
+            share_group: Box::new(ShareGroupConfig {
+                assignment_interval: std::time::Duration::ZERO,
+                ..ShareGroupConfig::default()
+            }),
             // Tests drive streams heartbeats directly and expect each change to
             // be assigned at once, so they run without Kafka's initial
             // rebalance delay and assignment interval, as Kafka's own
             // integration tests set `group.streams.initial.rebalance.delay.ms`
             // to 0.
-            streams_group: Box::new(
-                StreamsGroupConfig {
-                    initial_rebalance_delay: std::time::Duration::ZERO,
-                    assignment_interval: std::time::Duration::ZERO,
-                    ..StreamsGroupConfig::default()
-                },
-            ),
+            streams_group: Box::new(StreamsGroupConfig {
+                initial_rebalance_delay: std::time::Duration::ZERO,
+                assignment_interval: std::time::Duration::ZERO,
+                ..StreamsGroupConfig::default()
+            }),
             share_coordinator: Box::new(ShareCoordinatorConfig {
                 state_topic_replication_factor: 1,
                 state_topic_min_isr: 1,

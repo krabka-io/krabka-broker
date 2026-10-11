@@ -53,7 +53,12 @@ use self::{
     response::{apply_submit_error, err_result},
     validation::{CLUSTER_ALTER_DENIED_MESSAGE, SCRAM_UNSUPPORTED_MESSAGE},
 };
-use crate::{broker::Broker, codes, features::{METADATA_VERSION, require_feature}, handlers::{RequestContext, audit_resource, cluster_alter_denied}};
+use crate::{
+    broker::Broker,
+    codes,
+    features::{METADATA_VERSION, require_feature},
+    handlers::{RequestContext, audit_admin_success, audit_resource, cluster_alter_denied},
+};
 
 context_handler! {
     /// The `typed` dispatch entry point: [`answer`] at any version, which the
@@ -84,8 +89,7 @@ async fn answer(
     // bypass short-circuits inside `authorize` → ALLOW when `super_users`
     // is configured.
     let image = broker.controller.current_image();
-    let authorized =
-        !cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx);
+    let authorized = !cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx);
     if !authorized {
         // Kafka's `AlterUserScramCredentialsRequest.getErrorResponse` gives
         // one row per distinct user, sorted by name.
@@ -144,7 +148,7 @@ async fn answer(
     // KIP-554 redaction: the request carries the client-side PBKDF2 output and
     // the broker derives `stored_key` and `server_key` from it. None of the
     // three reaches the audit record — only the user whose credential changed.
-    crate::handlers::audit_admin_success(
+    audit_admin_success(
         broker.audit_log.as_ref(),
         ctx,
         "AlterUserScramCredentials",

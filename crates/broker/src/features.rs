@@ -167,9 +167,8 @@ pub(crate) fn share_dlq_supported(image: &krabka_metadata::MetadataImage) -> boo
 mod tests {
     use assert2::assert;
 
+    use super::*;
     use crate::codes::UNSUPPORTED_VERSION;
-
-use super::*;
 
     #[test]
     fn feature_enabled_treats_absence_as_disabled() {
@@ -376,11 +375,7 @@ use super::*;
             name: METADATA_VERSION.to_string(),
             level: 10,
         }));
-        for (required_level, want) in [
-            (11, Err(UNSUPPORTED_VERSION)),
-            (10, Ok(())),
-            (7, Ok(())),
-        ] {
+        for (required_level, want) in [(11, Err(UNSUPPORTED_VERSION)), (10, Ok(())), (7, Ok(()))] {
             assert!(
                 require_feature(&image, METADATA_VERSION, required_level) == want,
                 "level {required_level}"

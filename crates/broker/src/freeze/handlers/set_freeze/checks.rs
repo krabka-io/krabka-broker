@@ -15,12 +15,18 @@ use uuid::Uuid;
 use super::outcome::{Accepted, Refusal};
 pub(super) use crate::break_glass::gate::consumed_proposal_id;
 use crate::{
-    break_glass::{gate, handlers::principal_name}, cluster_id::encode, codes, config::BrokerConfig, freeze::{
+    break_glass::{gate, handlers::principal_name},
+    cluster_id::encode,
+    codes,
+    config::BrokerConfig,
+    freeze::{
         freeze_target,
         handlers::pattern_type_concrete,
         scope_covers_internal_topic,
         signing::{FreezeSignatureCheck, verify_freeze_signature},
-    }, handlers::{RequestContext, cluster_alter_denied}, time_util::now_ms,
+    },
+    handlers::{RequestContext, cluster_alter_denied},
+    time_util::now_ms,
 };
 
 /// Everything the checks read, and nothing they write.

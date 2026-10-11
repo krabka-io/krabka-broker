@@ -44,7 +44,9 @@ use super::{
     state::DpState,
 };
 use crate::{
-    config_keys::effective_min_insync_replicas, elr::{maintain::next_partition_elr, state::PartitionElr}, test_support::elr_model_image,
+    config_keys::effective_min_insync_replicas,
+    elr::{maintain::next_partition_elr, state::PartitionElr},
+    test_support::elr_model_image,
 };
 
 /// The one topic the modelled cluster holds.

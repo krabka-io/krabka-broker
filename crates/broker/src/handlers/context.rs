@@ -5,9 +5,15 @@ use std::net::SocketAddr;
 
 use krabka_security::Principal;
 
-use crate::{broker::Broker, client_metrics::manager::ClientAttributes, quota::{ControllerMutationQuota, QuotaDelay, QuotaRequest, ThrottleSlot, consume_request_quota}};
-
 use super::CorrelationId;
+use crate::{
+    broker::Broker,
+    client_metrics::manager::ClientAttributes,
+    metrics::QuotaCharge,
+    quota::{
+        ControllerMutationQuota, QuotaDelay, QuotaRequest, ThrottleSlot, consume_request_quota,
+    },
+};
 
 /// Per-request connection metadata. Constructed once per frame in
 /// `network::dispatch` from the authenticated `ConnectionAuth`, the
@@ -177,7 +183,7 @@ impl<'a> RequestContext<'a> {
     /// Leaves a quota charge for the dispatch loop to resolve with the request
     /// quota in one metrics call, and records its window. See
     /// [`crate::quota::ThrottleSlot::defer`].
-    pub(crate) fn defer_quota_charge(&self, charge: crate::metrics::QuotaCharge) {
+    pub(crate) fn defer_quota_charge(&self, charge: QuotaCharge) {
         self.throttle.defer(charge);
     }
 
@@ -241,10 +247,7 @@ impl<'a> TelemetryContext<'a> {
     }
 
     /// The subscription identity and source fields shared by both telemetry APIs.
-    pub(crate) fn client_attributes(
-        &self,
-        instance: uuid::Uuid,
-    ) -> ClientAttributes {
+    pub(crate) fn client_attributes(&self, instance: uuid::Uuid) -> ClientAttributes {
         ClientAttributes {
             connection_id: self.connection_id.to_string(),
             client_instance_id: instance,

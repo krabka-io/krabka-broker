@@ -65,9 +65,12 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::coordinator::unified::{share::persistence::{
-        KEY_SHARE_GROUP_METADATA, KEY_SHARE_TARGET_ASSIGNMENT_METADATA, ShareGroupKey,
-    }, test_support::{AssignmentMetadataGoldenSetup, assignment_metadata_golden_cases}};
+    use crate::coordinator::unified::{
+        share::persistence::{
+            KEY_SHARE_GROUP_METADATA, KEY_SHARE_TARGET_ASSIGNMENT_METADATA, ShareGroupKey,
+        },
+        test_support::{AssignmentMetadataGoldenSetup, assignment_metadata_golden_cases},
+    };
 
     /// i16 version | i32 `Epoch` | i64 `MetadataHash` | uvarint tagged count, as
     /// Kafka 4.3.1's generated writer lays `ShareGroupMetadataValue` out. The
@@ -124,9 +127,7 @@ mod tests {
     /// the default 0.
     #[test]
     fn target_assignment_metadata_bytes_match_kafka_schema() {
-        let rows = assignment_metadata_golden_cases(
-            AssignmentMetadataGoldenSetup::default(),
-        );
+        let rows = assignment_metadata_golden_cases(AssignmentMetadataGoldenSetup::default());
         for row in rows {
             let case = row.description;
             let bytes = row.bytes;

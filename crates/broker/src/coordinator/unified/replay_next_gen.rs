@@ -380,7 +380,12 @@ mod tests {
         persistence_next_gen::{
             AssignedTopicPartitions, GroupMetadataValue, NextGenKey, RegularExpressionValue,
             TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
-        }, share::persistence::ShareGroupMetadataValue, test_support::{check_replay_cases, deletion_replay_cases, next_current, next_member, proto_uuid, replay_tombstone_constructor},
+        },
+        share::persistence::ShareGroupMetadataValue,
+        test_support::{
+            check_replay_cases, deletion_replay_cases, next_current, next_member, proto_uuid,
+            replay_tombstone_constructor,
+        },
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -642,13 +647,7 @@ mod tests {
                 Err("Group g is not a consumer group".into()),
             ),
         ];
-        rows.splice(
-            5..5,
-            deletion_replay_cases(
-                full_group(),
-                kafka_deletion(),
-            ),
-        );
+        rows.splice(5..5, deletion_replay_cases(full_group(), kafka_deletion()));
         check_replay_cases(
             &rows,
             replay,

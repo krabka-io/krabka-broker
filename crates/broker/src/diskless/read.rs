@@ -10,7 +10,13 @@ use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
 use super::wal_index::WalIndexCache;
-use crate::{broker::Broker, codes, error::BrokerError, handlers::fetch::{LiveOffsets, PendingRead}, partition::Partition};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::fetch::{LiveOffsets, PendingRead},
+    partition::Partition,
+};
 
 /// Shared state that serves diskless offsets. The broker trimmed these offsets
 /// locally, but the committed WAL object index still covers them.
@@ -77,9 +83,9 @@ impl DisklessReadHandle {
         else {
             return Ok(None);
         };
-        let range_end = byte_start.checked_add(byte_len).ok_or_else(|| {
-            BrokerError::Txn("diskless WAL byte range overflow".into())
-        })?;
+        let range_end = byte_start
+            .checked_add(byte_len)
+            .ok_or_else(|| BrokerError::Txn("diskless WAL byte range overflow".into()))?;
         self.store
             .get_opts(
                 &Path::from(object_key),
@@ -166,9 +172,7 @@ pub(crate) async fn try_diskless_read(
     let bytes_est = records.len();
     // The row may carry the refused out-of-range answer (all -1); a served read
     // reports the partition's live bounds, as a local read does.
-    LiveOffsets::of(part)
-        .await
-        .report(&mut p.out);
+    LiveOffsets::of(part).await.report(&mut p.out);
     p.out.error_code = codes::NONE;
     if p.read_committed && !p.is_follower_fetch {
         p.out.aborted_transactions = Some(Vec::new());
@@ -237,7 +241,11 @@ mod tests {
     use object_store::{ObjectStoreExt, PutPayload, path::Path};
 
     use super::*;
-    use crate::{broker::spawn_partition, config::{RemoteStorageBackend, RlmmKind}, diskless::wal_index::WalFlushRecord};
+    use crate::{
+        broker::spawn_partition,
+        config::{RemoteStorageBackend, RlmmKind},
+        diskless::wal_index::WalFlushRecord,
+    };
 
     fn batch(base_offset: i64, value: &'static [u8]) -> RecordBatch {
         RecordBatch {

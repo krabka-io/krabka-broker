@@ -49,7 +49,9 @@ use self::{
     response::whole_request_error,
 };
 use crate::{
-    codes::{CLUSTER_AUTHORIZATION_FAILED, COORDINATOR_NOT_AVAILABLE, NONE, POLICY_VIOLATION}, freeze::resolve::resolve_freeze_mutation, handlers::{audit_resource, stamp_unset},
+    codes::{CLUSTER_AUTHORIZATION_FAILED, COORDINATOR_NOT_AVAILABLE, NONE, POLICY_VIOLATION},
+    freeze::resolve::resolve_freeze_mutation,
+    handlers::{audit_resource, stamp_unset},
 };
 
 context_handler! {

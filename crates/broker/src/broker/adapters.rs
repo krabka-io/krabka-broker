@@ -96,12 +96,16 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::{break_glass::sweep::BreakGlassController, broker::test_support::{fake_source, metadata_topic_record}, delegation_token_cleanup::DelegationTokenController, leader_rebalance::ControllerLike, metadata_source::MetadataSource, reassignment::ReassignmentController};
+    use crate::{
+        break_glass::sweep::BreakGlassController,
+        broker::test_support::{fake_source, metadata_topic_record},
+        delegation_token_cleanup::DelegationTokenController,
+        leader_rebalance::ControllerLike,
+        metadata_source::MetadataSource,
+        reassignment::ReassignmentController,
+    };
 
-    fn adapter(
-        source: &Arc<dyn MetadataSource>,
-        node: u64,
-    ) -> ControllerAdapter {
+    fn adapter(source: &Arc<dyn MetadataSource>, node: u64) -> ControllerAdapter {
         ControllerAdapter {
             handle: Arc::clone(source),
             node_id: krabka_raft::NodeId(node),
@@ -169,20 +173,10 @@ mod tests {
         let adapter = adapter(&source, 1);
 
         let results = [
-            ControllerLike::submit_change(&adapter, vec![record.clone()])
-                .await,
-            ReassignmentController::submit_change(
-                &adapter,
-                vec![record.clone()],
-            )
-            .await,
-            BreakGlassController::submit_change(&adapter, vec![record])
-                .await,
-            DelegationTokenController::submit_mutations(
-                &adapter,
-                Vec::new(),
-            )
-            .await,
+            ControllerLike::submit_change(&adapter, vec![record.clone()]).await,
+            ReassignmentController::submit_change(&adapter, vec![record.clone()]).await,
+            BreakGlassController::submit_change(&adapter, vec![record]).await,
+            DelegationTokenController::submit_mutations(&adapter, Vec::new()).await,
         ];
         for result in results {
             assert!(result.is_err());

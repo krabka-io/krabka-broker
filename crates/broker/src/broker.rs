@@ -20,7 +20,26 @@ use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use crate::network::client::InterBrokerClient;
 use crate::{
-    auto_topic_creation::AutoTopicCreation, barrier::coordinator::BarrierCoordinator, client_metrics::ClientMetrics, config::BrokerConfig, coordinator::GroupCoordinator, diskless::{hot_tail::HotTailCache, read::DisklessReadHandle}, fetch_session::FetchSessionCache, handlers::DispatchRegistry, heartbeat::controller_state::ControllerLivenessState, metadata_source::MetadataSource, metrics::BrokerMetrics, network::dispatch::RequestByteBudget, partition_registry::PartitionRegistry, producer_id_manager::ProducerIdManager, producer_state::ProducerState, share_coordinator::coordinator::ShareCoordinator, share_partition::manager::SharePartitionLeaderManager, throttle::ThrottleState, txn::coordinator::TxnCoordinator, wal::quorum::registry::WalShardRegistry,
+    auto_topic_creation::AutoTopicCreation,
+    barrier::coordinator::BarrierCoordinator,
+    client_metrics::ClientMetrics,
+    config::BrokerConfig,
+    coordinator::GroupCoordinator,
+    diskless::{hot_tail::HotTailCache, read::DisklessReadHandle},
+    fetch_session::FetchSessionCache,
+    handlers::DispatchRegistry,
+    heartbeat::controller_state::ControllerLivenessState,
+    metadata_source::MetadataSource,
+    metrics::BrokerMetrics,
+    network::dispatch::RequestByteBudget,
+    partition_registry::PartitionRegistry,
+    producer_id_manager::ProducerIdManager,
+    producer_state::ProducerState,
+    share_coordinator::coordinator::ShareCoordinator,
+    share_partition::manager::SharePartitionLeaderManager,
+    throttle::ThrottleState,
+    txn::coordinator::TxnCoordinator,
+    wal::quorum::registry::WalShardRegistry,
 };
 
 mod accept;
@@ -96,8 +115,7 @@ pub struct Broker {
     pub(crate) txn_coordinator: Arc<TxnCoordinator>,
     pub(crate) share_coordinator: Arc<ShareCoordinator>,
     pub(crate) barrier_coordinator: Arc<BarrierCoordinator>,
-    pub(crate) share_partition_leaders:
-        Arc<SharePartitionLeaderManager>,
+    pub(crate) share_partition_leaders: Arc<SharePartitionLeaderManager>,
     pub(crate) supervisor_shutdown: tokio_util::sync::CancellationToken,
     pub(crate) supervisor_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
     /// Handle for the periodic disk-usage scanner spawned when
@@ -238,9 +256,7 @@ impl DisklessRuntime {
         metrics: BrokerMetrics,
     ) -> Self {
         Self {
-            hot_tail: Arc::new(HotTailCache::new(
-                hot_tail_max_bytes,
-            )),
+            hot_tail: Arc::new(HotTailCache::new(hot_tail_max_bytes)),
             wal_shards: Arc::new(
                 WalShardRegistry::new(node_id)
                     .with_metrics(metrics)
@@ -272,9 +288,7 @@ impl Broker {
 
     /// Test-only: clone the shared inter-broker client (same reason).
     #[cfg(test)]
-    pub(crate) fn inter_broker_client_for_test(
-        &self,
-    ) -> Arc<InterBrokerClient> {
+    pub(crate) fn inter_broker_client_for_test(&self) -> Arc<InterBrokerClient> {
         self.inter_broker_client.clone()
     }
 }

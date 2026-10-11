@@ -481,9 +481,10 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::{test_support::sorted_epoch_pairs, unified::consumer_state::test_support::{
-        Topics, member, subscribed_member,
-    }};
+    use crate::coordinator::{
+        test_support::sorted_epoch_pairs,
+        unified::consumer_state::test_support::{Topics, member, subscribed_member},
+    };
 
     #[test]
     fn state_name_follows_kafka_consumer_group_state() {
@@ -820,11 +821,7 @@ mod tests {
         let mut g = GroupState::new("g");
         let topics = Topics(vec![("t", T)]);
         g.add_or_update_member(subscribed_member("m1", &["t"]));
-        let epochs = |g: &GroupState| {
-            sorted_epoch_pairs(
-                g.members["m1"].assignment_epochs.get(&T),
-            )
-        };
+        let epochs = |g: &GroupState| sorted_epoch_pairs(g.members["m1"].assignment_epochs.get(&T));
         let mut steps = Vec::new();
 
         // Epoch 1: granted partitions 0 and 1.
