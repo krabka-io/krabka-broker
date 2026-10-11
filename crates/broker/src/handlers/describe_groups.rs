@@ -203,9 +203,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        coordinator::unified::actor::ClassicMemberView,
-        handlers::authorized_operations::authorized_operations_bits,
-        test_support::{DenyAll, peer, principal, test_ctx},
+        authorizer::AllowAllAuthorizer, coordinator::unified::actor::ClassicMemberView, handlers::authorized_operations::authorized_operations_bits, test_support::{AllowAclSetup, DenyAll, KafkaErrorCode, allow_acl, peer, principal, request_context, start_group_broker_no_audit, test_ctx},
     };
 
     const VERSION: krabka_ids::ApiVersion =
@@ -242,7 +240,7 @@ mod tests {
     /// its wire default, `authorized_operations` included.
     fn error_row(
         group_id: &str,
-        error_code: crate::test_support::KafkaErrorCode,
+        error_code: KafkaErrorCode,
     ) -> DescribedGroup {
         tagged_wire!(DescribedGroup {
             error_code: error_code.0,
@@ -273,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn a_denied_group_is_refused_per_row() {
         let (broker_handle, _dir) =
-            crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
+            start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
 
         let resp = drive(
@@ -312,7 +310,7 @@ mod tests {
     struct DeadGroupSetup<'a> {
         #[default("never-seen")]
         group: &'a str,
-        error: crate::test_support::KafkaErrorCode,
+        error: KafkaErrorCode,
         message: Option<&'a str>,
         #[default(AuthorizedGroupOperations(i32::MIN))]
         operations: AuthorizedGroupOperations,
@@ -336,9 +334,9 @@ mod tests {
         let all_bits = {
             let p = principal("admin");
             authorized_operations_bits(
-                &crate::authorizer::AllowAllAuthorizer,
+                &AllowAllAuthorizer,
                 &krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
-                &crate::test_support::request_context(&p, &peer(), "test-client"),
+                &request_context(&p, &peer(), "test-client"),
                 ResourceType::Group,
                 "x",
             )
@@ -365,7 +363,7 @@ mod tests {
                 "never-seen",
                 OperationsDisclosure::Include,
                 dead(DeadGroupSetup {
-                    error: crate::test_support::KafkaErrorCode(codes::GROUP_ID_NOT_FOUND),
+                    error: KafkaErrorCode(codes::GROUP_ID_NOT_FOUND),
                     message: Some("Group never-seen not found."),
                     ..Default::default()
                 }),
@@ -385,7 +383,7 @@ mod tests {
                 OperationsDisclosure::Omit,
                 dead(DeadGroupSetup {
                     group: "next-gen",
-                    error: crate::test_support::KafkaErrorCode(codes::GROUP_ID_NOT_FOUND),
+                    error: KafkaErrorCode(codes::GROUP_ID_NOT_FOUND),
                     message: Some("Group next-gen is not a classic group."),
                     ..Default::default()
                 }),
@@ -457,7 +455,7 @@ mod tests {
             protocol_type: "consumer".into(),
             protocol_data: protocol_data.into(),
             members: vec![m],
-            ..error_row("classic", crate::test_support::KafkaErrorCode(codes::NONE))
+            ..error_row("classic", KafkaErrorCode(codes::NONE))
         };
         // (view, expected row)
         let rows = [
@@ -514,9 +512,9 @@ mod tests {
     /// principal holds, so the field moves off its sentinel.
     #[tokio::test]
     async fn the_authorized_operations_bitfield_is_filled_only_on_opt_in() {
-        let authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        let authorizer = Arc::new(AllowAllAuthorizer);
         let (broker_handle, _dir) =
-            crate::test_support::start_group_broker_no_audit(Arc::clone(&authorizer) as _).await;
+            start_group_broker_no_audit(Arc::clone(&authorizer) as _).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker.group_coordinator.get_or_create_classic("classic-a");
 
@@ -534,7 +532,7 @@ mod tests {
         let expected = authorized_operations_bits(
             authorizer.as_ref(),
             &broker.controller.current_image(),
-            &crate::test_support::request_context(&p, &peer, "test-client"),
+            &request_context(&p, &peer, "test-client"),
             ResourceType::Group,
             "classic-a",
         );
@@ -550,8 +548,8 @@ mod tests {
     }
 
     fn allow(group: &str, operation: AclOperation) -> krabka_metadata::MetadataRecord {
-        krabka_metadata::MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
-            crate::test_support::AllowAclSetup {
+        krabka_metadata::MetadataRecord::V1AccessControlEntry(allow_acl(
+            AllowAclSetup {
                 resource_type: ResourceType::Group,
                 resource_name: group,
                 principal: "User:admin",
@@ -570,7 +568,7 @@ mod tests {
         DescribedGroup {
             group_state: "Empty".into(),
             authorized_operations,
-            ..error_row(group_id, crate::test_support::KafkaErrorCode(codes::NONE))
+            ..error_row(group_id, KafkaErrorCode(codes::NONE))
         }
     }
 
@@ -632,7 +630,7 @@ mod tests {
             let authorizer =
                 crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
             let (broker_handle, _dir) =
-                crate::test_support::start_group_broker_no_audit(Arc::new(authorizer)).await;
+                start_group_broker_no_audit(Arc::new(authorizer)).await;
             let broker = broker_handle.broker_arc_for_test();
             broker
                 .controller

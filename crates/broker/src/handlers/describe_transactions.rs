@@ -181,9 +181,8 @@ mod tests {
     use super::*;
     use crate::{
         test_support::{
-            peer, principal, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
-        },
-        txn::state::TopicPartition,
+            grant_topic_operation, lead_transaction_state_partitions, peer, principal, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
+        }, txn::{state::TopicPartition, version::TxnVersion},
     };
 
     fn entry() -> TxnEntry {
@@ -239,7 +238,7 @@ mod tests {
 
         // Two ids this broker coordinates, and one it does not.
         let (ongoing_id, dead_id) = ("tx-ongoing", "tx-dead");
-        crate::test_support::lead_transaction_state_partitions(
+        lead_transaction_state_partitions(
             &broker_handle,
             &[
                 coordinator.partition_for(ongoing_id),
@@ -258,7 +257,7 @@ mod tests {
             entry.state = state;
             entry.start_ms = 7;
             coordinator
-                .put(entry, crate::txn::version::TxnVersion::Classic)
+                .put(entry, TxnVersion::Classic)
                 .await
                 .expect("seed the transaction");
         }
@@ -353,7 +352,7 @@ mod tests {
         let peer = peer();
         let tid = "tx";
 
-        crate::test_support::lead_transaction_state_partitions(
+        lead_transaction_state_partitions(
             &broker_handle,
             &[coordinator.partition_for(tid)],
         )
@@ -371,7 +370,7 @@ mod tests {
             partition: krabka_ids::PartitionIndex(1),
         });
         coordinator
-            .put(entry, crate::txn::version::TxnVersion::Classic)
+            .put(entry, TxnVersion::Classic)
             .await
             .expect("seed the transaction");
 
@@ -417,7 +416,7 @@ mod tests {
         } in cases
         {
             if let Some((grant_topic, operation)) = topic_grant {
-                crate::test_support::grant_topic_operation(
+                grant_topic_operation(
                     &broker_handle,
                     user,
                     grant_topic,

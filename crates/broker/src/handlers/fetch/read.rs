@@ -12,7 +12,7 @@ use krabka_protocol::{
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
 use super::{FetchWatermarks, VisibilityWindow, compute_visibility_window, plan::refused_read};
-use crate::{codes, error::BrokerError, log_dir_status::LogDirRegistry, partition::Partition};
+use crate::{blocking::run_blocking_catching, codes, error::BrokerError, log_dir_status::LogDirRegistry, partition::Partition};
 
 /// Hold the partition's log mutex for a short time to read the offsets, and
 /// optionally the verbatim on-disk batch bytes through `Log::read_raw`.
@@ -296,7 +296,7 @@ async fn run_blocking_read(
 ) -> Result<(Option<RecordsPayload>, Vec<AbortedTransaction>), BrokerError> {
     let log = Arc::clone(log);
     let read = BlockingRead { ..*read };
-    let served = crate::blocking::run_blocking_catching(move || read_records(&log, &read))
+    let served = run_blocking_catching(move || read_records(&log, &read))
         .await
         .map_err(|error| read_task_panicked(&error))?;
     let (records, aborted) = served?;
@@ -631,7 +631,7 @@ mod tests {
     use krabka_units::prelude::{ByteSizeExt as _, mebibytes};
 
     use super::read_task_panicked;
-    use crate::{error::BrokerError, log_dir_status::LogDirRegistry};
+    use crate::{blocking::inline_blocking_on_this_thread, codes::{CORRUPT_MESSAGE, KAFKA_STORAGE_ERROR, NONE, OFFSET_OUT_OF_RANGE, UNKNOWN_SERVER_ERROR}, error::BrokerError, handlers::test_support::default_records_batch, log_dir_status::LogDirRegistry, partition::{Partition, test_support::test_partition}, time_util::now_ms};
 
     /// The read budget for the hand-off test: larger than the log it reads, so
     /// the served bytes are the whole batch under either runtime flavor.
@@ -660,7 +660,7 @@ mod tests {
     /// returned because dropping it deletes the segments underneath the log.
     fn two_record_log() -> (tempfile::TempDir, Log) {
         let (dir, mut log) = empty_log();
-        log.append(&mut crate::handlers::test_support::default_records_batch(
+        log.append(&mut default_records_batch(
             &[b"first", b"second"],
         ))
         .expect("append the batch under test");
@@ -722,7 +722,7 @@ mod tests {
                 .expect("build a multi-threaded runtime"),
         );
         let inline = {
-            let _inline = crate::blocking::inline_blocking_on_this_thread();
+            let _inline = inline_blocking_on_this_thread();
             served(
                 tokio::runtime::Builder::new_current_thread()
                     .build()
@@ -937,10 +937,10 @@ mod tests {
     #[tokio::test]
     async fn do_read_serves_the_window_its_plan_decided() {
         let (partition, _dir) =
-            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+            test_partition(Arc::new(tokio::sync::Notify::new()));
         let (limit, records) = {
             let mut log = partition.log.lock().expect("log mutex poisoned");
-            log.append(&mut crate::handlers::test_support::default_records_batch(
+            log.append(&mut default_records_batch(
                 &[b"first", b"second"],
             ))
             .expect("append the batch under test");
@@ -954,7 +954,7 @@ mod tests {
         partition.replica_state.lock().await.hw = limit;
 
         let served = PartitionData {
-            error_code: crate::codes::NONE,
+            error_code: NONE,
             high_watermark: limit.0,
             last_stable_offset: limit.0,
             log_start_offset: 0,
@@ -1017,7 +1017,7 @@ mod tests {
     #[tokio::test]
     async fn read_committed_waits_for_the_high_watermark_to_pass_the_commit_marker() {
         let (partition, _dir) =
-            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+            test_partition(Arc::new(tokio::sync::Notify::new()));
         let transaction = {
             before_and_transaction!(log, partition, "append the transaction's data");
             let mut commit = abort_marker(ProducerId(PID));
@@ -1028,7 +1028,7 @@ mod tests {
                 .bytes
         };
         let held = |high_watermark: i64| PartitionData {
-            error_code: crate::codes::NONE,
+            error_code: NONE,
             high_watermark,
             last_stable_offset: 1,
             log_start_offset: 0,
@@ -1083,7 +1083,7 @@ mod tests {
 
         let refused = PartitionData {
             partition_index: 3,
-            ..super::refused_read(3, crate::codes::OFFSET_OUT_OF_RANGE)
+            ..super::refused_read(3, OFFSET_OUT_OF_RANGE)
         };
         let cases = [
             ("read_uncommitted consumer", consumer_request(0)),
@@ -1142,7 +1142,7 @@ mod tests {
     #[tokio::test]
     async fn live_offsets_report_the_bounds_a_local_read_reports() {
         let (partition, _dir) =
-            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+            test_partition(Arc::new(tokio::sync::Notify::new()));
         {
             before_and_transaction!(log, partition, "append the open transaction");
         }
@@ -1215,7 +1215,7 @@ mod tests {
             Case {
                 name: "an I/O failure",
                 error: BrokerError::Log(LogError::Io(std::io::Error::other("EIO"))),
-                error_code: crate::codes::KAFKA_STORAGE_ERROR,
+                error_code: KAFKA_STORAGE_ERROR,
                 dir_offline: true,
             },
             Case {
@@ -1224,7 +1224,7 @@ mod tests {
                     requested: Offset(0),
                     log_start: Offset(5),
                 }),
-                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                error_code: OFFSET_OUT_OF_RANGE,
                 dir_offline: false,
             },
             Case {
@@ -1233,24 +1233,24 @@ mod tests {
                     requested: Offset(0),
                     local_log_start: Offset(5),
                 }),
-                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                error_code: OFFSET_OUT_OF_RANGE,
                 dir_offline: false,
             },
             Case {
                 name: "a corrupt batch",
                 error: BrokerError::Log(LogError::Corrupt("record batch header".into())),
-                error_code: crate::codes::CORRUPT_MESSAGE,
+                error_code: CORRUPT_MESSAGE,
                 dir_offline: false,
             },
             Case {
                 name: "a panic in the read task",
                 error: read_task_panicked(&"boom"),
-                error_code: crate::codes::UNKNOWN_SERVER_ERROR,
+                error_code: UNKNOWN_SERVER_ERROR,
                 dir_offline: false,
             },
         ];
         for case in cases {
-            let (partition, dir) = crate::partition::test_support::test_partition(Arc::new(
+            let (partition, dir) = test_partition(Arc::new(
                 tokio::sync::Notify::new(),
             ));
             let log_dirs = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
@@ -1289,7 +1289,7 @@ mod tests {
 
     #[test]
     fn a_consumer_is_capped_at_the_delivery_watermark_and_a_follower_is_not() {
-        let now_ms = crate::time_util::now_ms();
+        let now_ms = now_ms();
         // Two batches of two records: [0, 1] is due, [2, 3] is an hour out.
         let (_dir, mut log) = scheduled_log(
             DeliveryPolicy::Scheduled,
@@ -1303,7 +1303,7 @@ mod tests {
 
     #[test]
     fn an_immediate_topic_is_capped_at_the_high_watermark_alone() {
-        let now_ms = crate::time_util::now_ms();
+        let now_ms = now_ms();
         let (_dir, mut log) = scheduled_log(
             DeliveryPolicy::Immediate,
             &[now_ms + 3_600_000, now_ms + 7_200_000],
@@ -1315,12 +1315,12 @@ mod tests {
         assert!(super::deliverable_offset(&mut log, Offset(4), false, now_ms) == Offset(4));
     }
     fn retained_partition() -> (
-        crate::partition::Partition,
+        Partition,
         tempfile::TempDir,
         krabka_log::Offset,
     ) {
         let (partition, dir) =
-            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+            test_partition(Arc::new(tokio::sync::Notify::new()));
         let limit = {
             let mut log = partition.log.lock().expect("log mutex poisoned");
             log.append(&mut RecordBatch {

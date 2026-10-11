@@ -20,10 +20,7 @@ use super::{
     topics::initialized_topics,
 };
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
-    broker::Broker,
-    codes,
-    coordinator::GroupCoordinator,
+    authorizer::{AuthorizationResult, authorize_topics}, broker::Broker, codes, coordinator::GroupCoordinator, handlers::{RequestContext, group_coordinator_error, group_describe_denied},
 };
 
 /// Resolve one requested group into its response row.
@@ -33,14 +30,14 @@ pub(super) async fn describe_group(
     broker: &Broker,
     ng: Option<&GroupCoordinator>,
     image: &krabka_metadata::MetadataImage,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     group: DescribeShareGroupOffsetsRequestGroup,
 ) -> DescribeShareGroupOffsetsResponseGroup {
     let gid = group.group_id;
 
     // ── ACL preamble ────────────────────────────────────
     // Per-group `Describe` check. On Deny → group `error_code = 30`.
-    if crate::handlers::group_describe_denied(
+    if group_describe_denied(
         broker.config.authorizer.as_ref(),
         image,
         ctx,
@@ -66,7 +63,7 @@ pub(super) async fn describe_group(
         };
     }
 
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
+    if let Some(error_code) = group_coordinator_error(broker, &gid) {
         return DescribeShareGroupOffsetsResponseGroup {
             group_id: gid,
             error_code,
@@ -138,7 +135,7 @@ pub(super) async fn describe_group(
 fn allowed_topics(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     topics: &[DescribeShareGroupOffsetsRequestTopic],
 ) -> std::collections::HashSet<String> {
     authorize_topics(
@@ -172,12 +169,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AuthorizationResult, Authorizer},
-        coordinator::unified::share::persistence::{
+        authorizer::{AuthorizationResult, Authorizer}, coordinator::unified::share::persistence::{
             ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
-        },
-        handlers::describe_share_group_offsets::test_support::{image_with_topic, register_topic},
-        test_support::peer,
+        }, handlers::{RequestContext, describe_share_group_offsets::test_support::{image_with_topic, register_topic}}, test_support::peer,
     };
 
     /// Denies topic `Describe` on one named topic, and allows every other
@@ -275,7 +269,7 @@ mod tests {
     async fn describe_initialized_group(
         broker: &Broker,
         image: &krabka_metadata::MetadataImage,
-        ctx: &crate::handlers::RequestContext<'_>,
+        ctx: &RequestContext<'_>,
         request: DescribeShareGroupOffsetsRequestGroup,
     ) -> DescribeShareGroupOffsetsResponseGroup {
         describe_group(

@@ -28,11 +28,7 @@ use super::{
     FIRST_TOPIC_ID_VERSION, test_support::expected_refused_partition as refused_partition,
 };
 use crate::{
-    authorizer::AllowAllAuthorizer,
-    broker::BrokerHandle,
-    codes,
-    fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID},
-    test_support::{DenyAll, start_broker_with_authorizer_no_audit as start},
+    authorizer::AllowAllAuthorizer, broker::BrokerHandle, codes, fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID}, handlers::test_support::{ClientTopicSetup, ReplicatedTopicSetup, check_cases, seed_partition_replicas}, test_support::{DenyAll, start_broker_with_authorizer_no_audit as start},
 };
 
 /// An id that no topic in these tests has.
@@ -95,7 +91,7 @@ fn fetch_topic(name: &str, topic_id: WireUuid) -> FetchTopic {
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
     crate::handlers::test_support::create_topic(
         broker,
-        crate::handlers::test_support::ClientTopicSetup {
+        ClientTopicSetup {
             client_id: "fetch-resolution-test",
             name,
             ..Default::default()
@@ -180,7 +176,7 @@ async fn topic_row_error_follows_version_and_topic_reference() {
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
     let known_id = create_topic(&broker, "resolution").await;
 
-    crate::handlers::test_support::check_cases(cases, async |case| {
+    check_cases(cases, async |case| {
         drive(&broker, Some(("resolution", known_id)), case).await
     })
     .await;
@@ -316,9 +312,9 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
     // Node 1, this broker, is not a replica: node 2 leads and node 3 follows.
     let topic_id = uuid::Uuid::from_u128(0x51);
-    crate::handlers::test_support::seed_partition_replicas(
+    seed_partition_replicas(
         &broker,
-        crate::handlers::test_support::ReplicatedTopicSetup {
+        ReplicatedTopicSetup {
             topic: "moved",
             topic_id,
             leader: krabka_audit::NodeId(2),

@@ -7,7 +7,7 @@ use krabka_protocol::{
 };
 
 use super::plan::PendingRead;
-use crate::broker::Broker;
+use crate::{broker::Broker, handlers::fetch_downconvert::down_convert_payload_for_fetch};
 
 /// Group the resolved `PendingRead`s back into per-topic response entries.
 ///
@@ -97,7 +97,7 @@ pub(super) fn downconvert_legacy_responses(
             let Some(payload) = partition.records.take() else {
                 continue;
             };
-            match crate::handlers::fetch_downconvert::down_convert_payload_for_fetch(
+            match down_convert_payload_for_fetch(
                 &payload, version,
             ) {
                 Ok(Some(converted)) => {
@@ -200,10 +200,10 @@ mod tests {
     };
 
     use super::{group_into_topic_responses, withhold_current_leader_before_kip_951};
-    use crate::handlers::fetch::{
+    use crate::{codes::{FENCED_LEADER_EPOCH, UNKNOWN_TOPIC_ID}, handlers::fetch::{
         PendingRead,
         plan::{refused_partition, refused_read},
-    };
+    }};
 
     fn row(topic: &str, topic_id: u8, out: PartitionData) -> PendingRead {
         PendingRead {
@@ -244,7 +244,7 @@ mod tests {
             partition_index: index,
             ..Default::default()
         };
-        let unknown = refused_partition(0, crate::codes::UNKNOWN_TOPIC_ID);
+        let unknown = refused_partition(0, UNKNOWN_TOPIC_ID);
         let denied = refused_partition(2, crate::codes::TOPIC_AUTHORIZATION_FAILED);
         let (responses, cpu_micros) = group_into_topic_responses(vec![
             row("t1", 1, read(0)),
@@ -276,7 +276,7 @@ mod tests {
         };
         let fenced = PartitionData {
             current_leader: leader.clone(),
-            ..refused_read(0, crate::codes::FENCED_LEADER_EPOCH)
+            ..refused_read(0, FENCED_LEADER_EPOCH)
         };
         for (version, expected_leader) in [
             (12, LeaderIdAndEpoch::default()),

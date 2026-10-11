@@ -6,13 +6,12 @@ use krabka_protocol::{
 use krabka_units::bytes;
 
 use crate::{
-    authorizer::AllowAllAuthorizer,
-    fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
+    authorizer::AllowAllAuthorizer, fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID}, handlers::test_support::{ClientTopicSetup, ProduceRecordsSetup, RecordCount, produce_records, start_broker_with},
 };
 
 #[tokio::test]
 async fn broker_fetch_cap_bounds_consumer_fetch_and_keeps_first_batch_progress() {
-    let (broker, _dir) = crate::handlers::test_support::start_broker_with(|config| {
+    let (broker, _dir) = start_broker_with(|config| {
         config.authorizer = std::sync::Arc::new(AllowAllAuthorizer);
         config.fetch_max_bytes = bytes(1);
     })
@@ -20,7 +19,7 @@ async fn broker_fetch_cap_bounds_consumer_fetch_and_keeps_first_batch_progress()
     let topic = "broker-fetch-cap";
     let topic_id = crate::handlers::test_support::create_topic(
         &broker,
-        crate::handlers::test_support::ClientTopicSetup {
+        ClientTopicSetup {
             client_id: "fetch-cap-test",
             name: topic,
             ..Default::default()
@@ -28,11 +27,11 @@ async fn broker_fetch_cap_bounds_consumer_fetch_and_keeps_first_batch_progress()
     )
     .await;
     for _ in 0..2 {
-        crate::handlers::test_support::produce_records(
+        produce_records(
             &broker,
-            crate::handlers::test_support::ProduceRecordsSetup {
+            ProduceRecordsSetup {
                 topic,
-                count: crate::handlers::test_support::RecordCount(2),
+                count: RecordCount(2),
                 ..Default::default()
             },
         )

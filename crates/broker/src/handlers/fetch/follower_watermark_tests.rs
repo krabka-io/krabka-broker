@@ -33,11 +33,7 @@ use krabka_units::prelude::mebibytes;
 
 use super::{encode_fetch_response, handle};
 use crate::{
-    broker::BrokerHandle,
-    codes,
-    fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-    partition::Partition,
-    test_support::{encode_request, peer, principal, start_broker_no_audit_with},
+    broker::BrokerHandle, codes, fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID}, handlers::test_support::ReplicatedTopicSetup, partition::Partition, test_support::{encode_request, peer, principal, start_broker_no_audit_with},
 };
 
 /// The node id of the follower.
@@ -102,7 +98,7 @@ use crate::test_support::single_value_batch as batch;
 async fn partition(broker: &BrokerHandle, topic: &str, topic_id: u128) -> Arc<Partition> {
     crate::handlers::test_support::seed_partition_replicas(
         broker,
-        crate::handlers::test_support::ReplicatedTopicSetup {
+        ReplicatedTopicSetup {
             topic,
             topic_id: uuid::Uuid::from_u128(topic_id),
             ..Default::default()

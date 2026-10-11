@@ -49,13 +49,13 @@ use krabka_protocol::owned::{
     },
 };
 
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{broker::Broker, codes, error::BrokerError, handlers::RequestContext};
 
 pub(crate) fn handle(
     broker: &Broker,
     req: &DescribeProducersRequest,
     _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
 ) -> Result<DescribeProducersResponse, BrokerError> {
     let image = broker.controller.current_image();
 
@@ -243,9 +243,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::AllowAllAuthorizer,
-        broker::Broker,
-        test_support::{DenyAll, peer, principal},
+        authorizer::{AllowAllAuthorizer, Authorizer}, broker::Broker, handlers::RequestContext, partition::Partition, test_support::{DenyAll, KafkaErrorCode, peer, principal}, txn::marker::MarkerType,
     };
 
     const VERSION: i16 = 0;
@@ -268,7 +266,7 @@ mod tests {
     fn drive(
         broker: &Broker,
         req: &DescribeProducersRequest,
-        ctx: &crate::handlers::RequestContext<'_>,
+        ctx: &RequestContext<'_>,
     ) -> DescribeProducersResponse {
         handle(broker, req, VERSION, ctx).expect("handle")
     }
@@ -284,7 +282,7 @@ mod tests {
     async fn handle_validates_topic_name_before_authorizing() {
         type Case<'a> = (
             &'a str,
-            Arc<dyn crate::authorizer::Authorizer>,
+            Arc<dyn Authorizer>,
             i16,
             Option<String>,
         );
@@ -353,7 +351,7 @@ mod tests {
             let expected = empty_producer_response(EmptyProducerResponseSetup {
                 topic: name,
                 partition: krabka_ids::PartitionIndex(0),
-                error_code: crate::test_support::KafkaErrorCode(expected_code),
+                error_code: KafkaErrorCode(expected_code),
                 message: expected_message.clone(),
             });
             assert!(resp == expected, "topic {name:?}");
@@ -366,7 +364,7 @@ mod tests {
         #[default("orders")]
         topic: &'a str,
         partition: krabka_ids::PartitionIndex,
-        error_code: crate::test_support::KafkaErrorCode,
+        error_code: KafkaErrorCode,
         message: Option<String>,
     }
 
@@ -433,7 +431,7 @@ mod tests {
             let expected = empty_producer_response(EmptyProducerResponseSetup {
                 topic: name,
                 partition: krabka_ids::PartitionIndex(5),
-                error_code: crate::test_support::KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
+                error_code: KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
                 message: error_message,
             });
             assert!(resp == expected, "topic {name:?}");
@@ -494,7 +492,7 @@ mod tests {
     async fn seed_partition(
         broker: &Broker,
         setup: HostedProducerPartitionSetup<'_>,
-    ) -> Option<Arc<crate::partition::Partition>> {
+    ) -> Option<Arc<Partition>> {
         let HostedProducerPartitionSetup {
             topic,
             leader,
@@ -716,7 +714,7 @@ mod tests {
             krabka_log::ProducerId(20),
             3,
             krabka_log::Offset(2),
-            crate::txn::marker::MarkerType::Commit,
+            MarkerType::Commit,
             9,
         );
         marker.base_timestamp = 3_000;

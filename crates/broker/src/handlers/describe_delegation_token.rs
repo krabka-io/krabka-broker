@@ -45,9 +45,7 @@ mod tests;
 
 use self::response::{describe_token, empty_response};
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
-    handlers::ErrorCodeResponse as _,
-    network::auth::ConnectionAuth,
+    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer}, codes::{DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED}, handlers::ErrorCodeResponse as _, network::auth::ConnectionAuth,
 };
 
 // `async` matches the call-site shape used by every other
@@ -73,17 +71,17 @@ pub(crate) fn handle(
     // HMAC.
     if auth.token_api_admission(TokenApi::Describe) == TokenApiAdmission::Reject {
         return DescribeDelegationTokenResponse::error(
-            crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+            DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
         );
     }
     let Some(secret_key) = secret_key else {
         return DescribeDelegationTokenResponse::error(
-            crate::codes::DELEGATION_TOKEN_AUTH_DISABLED,
+            DELEGATION_TOKEN_AUTH_DISABLED,
         );
     };
     let ConnectionAuth::Authenticated { principal, .. } = auth else {
         return DescribeDelegationTokenResponse::error(
-            crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+            DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
         );
     };
     let caller = principal.to_kafka();

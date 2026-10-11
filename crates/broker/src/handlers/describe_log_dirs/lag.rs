@@ -10,6 +10,8 @@
 //! partition registry and the future-log registry, which is why they live
 //! together and away from the directory scan.
 
+use crate::partition_registry::PartitionRegistry;
+
 /// `DescribeLogDirsResponse.INVALID_OFFSET_LAG`: the lag is not available
 /// because the replica is not created or is offline.
 pub(super) const INVALID_OFFSET_LAG: i64 = -1;
@@ -19,7 +21,7 @@ pub(super) const INVALID_OFFSET_LAG: i64 = -1;
 /// Returns [`INVALID_OFFSET_LAG`] when the partition is not materialized on
 /// this broker.
 pub(super) async fn offset_lag_for(
-    partitions: &crate::partition_registry::PartitionRegistry,
+    partitions: &PartitionRegistry,
     topic: &str,
     partition: i32,
 ) -> i64 {
@@ -40,7 +42,7 @@ pub(super) async fn offset_lag_for(
 /// entry. The registry has no entry when the broker has just started and the
 /// resume task has not opened the future log yet.
 pub(super) fn future_offset_lag(
-    partitions: &crate::partition_registry::PartitionRegistry,
+    partitions: &PartitionRegistry,
     future_logs: &dashmap::DashMap<
         (String, krabka_ids::PartitionIndex),
         std::sync::Arc<crate::future_log::FutureLogState>,
@@ -71,7 +73,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::test_support::RecordCount;
+    use crate::{future_log::FutureLogState, partition::Partition, test_support::{RecordCount, RepeatedRecordsSetup, UnixMillis, open_partition, repeated_records_batch}};
 
     /// Builds a `Partition` rooted at `<log_dir>/<topic>-<partition>`.
     ///
@@ -90,13 +92,13 @@ mod tests {
     fn partition_with_leo(
         log_dir: &std::path::Path,
         setup: PartitionLogSetup<'_>,
-    ) -> std::sync::Arc<crate::partition::Partition> {
+    ) -> std::sync::Arc<Partition> {
         let PartitionLogSetup {
             topic,
             partition,
             count,
         } = setup;
-        let part = crate::test_support::open_partition(
+        let part = open_partition(
             log_dir,
             crate::test_support::StandalonePartitionSetup {
                 topic,
@@ -114,10 +116,10 @@ mod tests {
     ///
     /// The LEO of the log advances by `count`.
     fn append_n(log: &std::sync::Mutex<krabka_log::Log>, count: RecordCount) {
-        let mut batch = crate::test_support::repeated_records_batch(
-            crate::test_support::RepeatedRecordsSetup {
+        let mut batch = repeated_records_batch(
+            RepeatedRecordsSetup {
                 count,
-                timestamp: crate::test_support::UnixMillis(1_700_000_000),
+                timestamp: UnixMillis(1_700_000_000),
             },
         );
         log.lock()
@@ -152,7 +154,7 @@ mod tests {
     fn future_state_with_leo(
         dir: &std::path::Path,
         future_count: RecordCount,
-    ) -> std::sync::Arc<crate::future_log::FutureLogState> {
+    ) -> std::sync::Arc<FutureLogState> {
         let future_path = dir.join("future");
         std::fs::create_dir_all(&future_path).unwrap();
         let flog = krabka_log::Log::open(&future_path, krabka_log::LogConfig::default()).unwrap();
@@ -160,7 +162,7 @@ mod tests {
         if future_count.0 > 0 {
             append_n(&future_log, future_count);
         }
-        std::sync::Arc::new(crate::future_log::FutureLogState {
+        std::sync::Arc::new(FutureLogState {
             target_log_dir: dir.to_path_buf(),
             future_path,
             future_log,

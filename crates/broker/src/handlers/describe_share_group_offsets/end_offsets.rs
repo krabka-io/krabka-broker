@@ -278,7 +278,9 @@ mod tests {
         ListOffsetsPartitionResponse, ListOffsetsTopicResponse,
     };
 
-    use super::*;
+    use crate::handlers::test_support::single_replica_partition;
+
+use super::*;
 
     fn tp(topic: &str, partition: i32) -> TopicPartition {
         (topic.to_owned(), partition)
@@ -360,7 +362,7 @@ mod tests {
         }));
         for (partition, leader) in [(0, 1), (1, 2), (2, 1)] {
             image.apply(&MetadataRecord::V1Partition(
-                crate::handlers::test_support::single_replica_partition(
+                single_replica_partition(
                     "a",
                     krabka_ids::PartitionIndex(partition),
                     NodeId(leader),

@@ -10,8 +10,7 @@ use krabka_protocol::owned::{
 use krabka_security::SaslMechanism;
 
 use crate::{
-    broker::Broker,
-    codes::{CLUSTER_AUTHORIZATION_FAILED, DUPLICATE_RESOURCE, RESOURCE_NOT_FOUND},
+    broker::Broker, codes::{CLUSTER_AUTHORIZATION_FAILED, DUPLICATE_RESOURCE, RESOURCE_NOT_FOUND}, handlers::cluster_describe_denied,
 };
 
 /// Kafka's `ScramImage.DESCRIBE_DUPLICATE_USER`; the row message appends the
@@ -32,7 +31,7 @@ pub(crate) fn handle(
 ) -> DescribeUserScramCredentialsResponse {
     let image = broker.controller.current_image();
 
-    if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+    if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return denied_response(req);
     }
 
