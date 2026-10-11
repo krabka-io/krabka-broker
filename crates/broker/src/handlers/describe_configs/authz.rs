@@ -14,8 +14,7 @@ use super::wire::{
     RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
 };
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
-    codes,
+    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer}, codes,
 };
 
 /// Per-resource `DescribeConfigs` ACL check.
@@ -31,7 +30,7 @@ use crate::{
 /// does not describe never reaches it: [`unexpected_resource_type_results`]
 /// refuses the whole request first.
 pub(super) fn resource_authz_failure(
-    authorizer: &dyn crate::authorizer::Authorizer,
+    authorizer: &dyn Authorizer,
     image: &krabka_metadata::MetadataImage,
     principal: &krabka_security::Principal,
     host: &std::net::SocketAddr,
@@ -147,10 +146,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::test_support::peer;
+    use crate::{authorizer::SimpleAclAuthorizer, codes::CLUSTER_AUTHORIZATION_FAILED, test_support::{AllowAclSetup, allow_acl, peer, principal}};
 
     fn anon() -> krabka_security::Principal {
-        crate::test_support::principal("ANONYMOUS")
+        principal("ANONYMOUS")
     }
 
     macro_rules! empty_acl_resource_check {
@@ -189,21 +188,21 @@ mod tests {
     #[test]
     fn a_client_metrics_resource_needs_describe_configs_on_the_cluster() {
         let cases = [
-            (None, Some(crate::codes::CLUSTER_AUTHORIZATION_FAILED)),
+            (None, Some(CLUSTER_AUTHORIZATION_FAILED)),
             (Some(AclOperation::DescribeConfigs), None),
             (Some(AclOperation::AlterConfigs), None),
             (
                 Some(AclOperation::Describe),
-                Some(crate::codes::CLUSTER_AUTHORIZATION_FAILED),
+                Some(CLUSTER_AUTHORIZATION_FAILED),
             ),
         ];
-        let authz = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let authz = SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let peer = peer();
         for (grant, want) in cases {
             let mut image = MetadataImage::new(Uuid::nil());
             if let Some(operation) = grant {
                 image.apply(&krabka_metadata::MetadataRecord::V1AccessControlEntry(
-                    crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+                    allow_acl(AllowAclSetup {
                         resource_type: ResourceType::Cluster,
                         resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
                         principal: "User:ANONYMOUS",
@@ -224,7 +223,7 @@ mod tests {
         let denied = super::denied_result(
             super::RESOURCE_TYPE_CLIENT_METRICS,
             "sub-a".into(),
-            crate::codes::CLUSTER_AUTHORIZATION_FAILED,
+            CLUSTER_AUTHORIZATION_FAILED,
         );
         assert!(
             denied

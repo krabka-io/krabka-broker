@@ -9,7 +9,7 @@
 use krabka_ids::PartitionIndex;
 use krabka_remote_storage::TopicIdPartition;
 
-use crate::{broker::Broker, partition_registry::PartitionRegistry};
+use crate::{broker::Broker, partition_registry::PartitionRegistry, remote_log_manager::cascade_remote_partition_delete};
 
 /// Snapshots the `(topic_id, partition_id)` of every tiered partition of
 /// `topic_name` BEFORE the controller commits the delete and the broker tears
@@ -64,7 +64,7 @@ pub(super) fn spawn_remote_cascades(broker: &Broker, tiered_to_cascade: Vec<Topi
             let rsm = reader.rsm.clone();
             let rlmm = reader.rlmm.clone();
             let index_cache = reader.index_cache.clone();
-            tokio::spawn(crate::remote_log_manager::cascade_remote_partition_delete(
+            tokio::spawn(cascade_remote_partition_delete(
                 tp,
                 broker_id,
                 archive,

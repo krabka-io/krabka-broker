@@ -84,10 +84,7 @@ use self::{
     response::{delete_records_response, error_partition_result, partition_result, topic_result},
 };
 use crate::{
-    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
-    broker::Broker,
-    codes,
-    handlers::RequestContext,
+    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition}, broker::Broker, codes, diskless::read::DisklessReadHandle, error::BrokerError, freeze::resolve::{FreezeMutationResolution, FreezeVerdict, resolve_freeze_mutation}, handlers::{RequestContext, submit_failure_code}, internal_topics::is_internal_topic, partition::Partition, partition_registry::PartitionRegistry,
 };
 
 context_handler! {
@@ -204,16 +201,16 @@ context_handler! {
 async fn publish_diskless_delete_floor(
     env: &TrimEnv<'_>,
     topic: &str,
-    part: &crate::partition::Partition,
+    part: &Partition,
     floor: Offset,
-) -> Result<(), crate::error::BrokerError> {
+) -> Result<(), BrokerError> {
     let Some((handle, topic_id)) = diskless_index(env, topic, part) else {
         return Ok(());
     };
     // A rebuilding projection is the one case that must not be mistaken for
     // "nothing to record": there is a floor to persist and nowhere to put it.
     let Some(index_log) = handle.index_log() else {
-        return Err(crate::error::BrokerError::Txn(
+        return Err(BrokerError::Txn(
             "diskless WAL index log is rebuilding; the delete floor cannot be recorded".into(),
         ));
     };
@@ -239,7 +236,7 @@ async fn publish_diskless_delete_floor(
 async fn diskless_logical_start(
     env: &TrimEnv<'_>,
     topic: &str,
-    part: &crate::partition::Partition,
+    part: &Partition,
 ) -> Option<i64> {
     let (handle, topic_id) = diskless_index(env, topic, part)?;
     let covered = handle
@@ -254,8 +251,8 @@ async fn diskless_logical_start(
 fn diskless_index<'a>(
     env: &'a TrimEnv<'_>,
     topic: &str,
-    part: &crate::partition::Partition,
-) -> Option<(&'a crate::diskless::read::DisklessReadHandle, Uuid)> {
+    part: &Partition,
+) -> Option<(&'a DisklessReadHandle, Uuid)> {
     if !part.diskless {
         return None;
     }
@@ -268,7 +265,7 @@ fn diskless_index<'a>(
 /// Whether the partition's `cleanup.policy` forbids a `DeleteRecords` trim:
 /// Kafka's `!config.delete && config.compact`, which is `compact` alone.
 /// `compact,delete` trims like `delete`.
-fn trim_forbidden_by_policy(part: &crate::partition::Partition) -> bool {
+fn trim_forbidden_by_policy(part: &Partition) -> bool {
     let policy = part
         .log
         .lock()
@@ -283,7 +280,7 @@ pub(super) struct TrimEnv<'a> {
     pub(super) broker: &'a Broker,
     pub(super) image: &'a MetadataImage,
     pub(super) ctx: &'a RequestContext<'a>,
-    pub(super) partitions: &'a crate::partition_registry::PartitionRegistry,
+    pub(super) partitions: &'a PartitionRegistry,
 }
 
 /// Trim one partition, and answer the row the response carries for it beside
@@ -315,7 +312,7 @@ async fn trim_one(
     // so both sets are refused.
     // The partition registry is updated apart from this image, so an internal
     // partition the image lacks never falls through to it.
-    if crate::internal_topics::is_internal_topic(&env.broker.config, topic) {
+    if is_internal_topic(&env.broker.config, topic) {
         return refused(if env.image.partition(topic, index).is_some() {
             codes::INVALID_TOPIC_EXCEPTION
         } else {
@@ -365,15 +362,15 @@ async fn trim_one(
     // produce gate, this refusal emits no privileged-action audit event: a
     // freeze is not a break-glass act, and the registry entry that caused it is
     // already in the metadata log.
-    if let crate::freeze::resolve::FreezeMutationResolution::Frozen(record) =
-        crate::freeze::resolve::resolve_freeze_mutation(
+    if let FreezeMutationResolution::Frozen(record) =
+        resolve_freeze_mutation(
             env.image,
             topic,
             true,
             FreezeMutationKind::DeleteRecords,
         )
     {
-        let verdict = crate::freeze::resolve::FreezeVerdict::from(record);
+        let verdict = FreezeVerdict::from(record);
         tracing::warn!(
             %topic,
             partition = index,
@@ -451,7 +448,7 @@ async fn trim_one(
                 %topic, partition = index, %error,
                 "DeleteRecords could not spend the break-glass approval"
             );
-            return refused(crate::handlers::submit_failure_code(
+            return refused(submit_failure_code(
                 &error,
                 codes::COORDINATOR_NOT_AVAILABLE,
             ));

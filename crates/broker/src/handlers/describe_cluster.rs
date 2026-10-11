@@ -187,8 +187,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        broker::{Broker, BrokerHandle},
-        test_support::{DenyAll, peer, principal},
+        authorizer::{AllowAllAuthorizer, Authorizer}, broker::{Broker, BrokerHandle}, test_support::{ControllerPeerAllowed, DenyAll, peer, principal},
     };
 
     const VERSION: i16 = 2;
@@ -235,7 +234,7 @@ mod tests {
     #[tokio::test]
     async fn a_principal_without_describe_still_gets_full_cluster_data() {
         let (broker_handle, _dir) = start_broker(Arc::new(
-            crate::test_support::ControllerPeerAllowed(DenyAll),
+            ControllerPeerAllowed(DenyAll),
         ))
         .await;
         seed_broker(&broker_handle).await;
@@ -258,7 +257,7 @@ mod tests {
     #[tokio::test]
     async fn broker_endpoint_response_preserves_non_default_fields() {
         let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+            start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "admin");
@@ -371,7 +370,7 @@ mod tests {
     /// singleton `Cluster` resource.
     #[tokio::test]
     async fn the_authorized_operations_bitfield_is_filled_only_on_opt_in() {
-        let authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        let authorizer = Arc::new(AllowAllAuthorizer);
         broker_fixture!(
             (broker_handle, _dir, broker),
             start_broker(Arc::clone(&authorizer) as _)
@@ -405,7 +404,7 @@ mod tests {
             std::collections::HashSet::new(),
         ));
         let (broker_handle, _dir) =
-            start_broker(Arc::clone(&authorizer) as Arc<dyn crate::authorizer::Authorizer>).await;
+            start_broker(Arc::clone(&authorizer) as Arc<dyn Authorizer>).await;
         broker_handle
             .broker_arc_for_test()
             .controller
@@ -441,7 +440,7 @@ mod tests {
     #[tokio::test]
     async fn fenced_brokers_require_explicit_opt_in() {
         let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+            start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         broker.liveness.record_fenced_heartbeat(42).await;
@@ -517,7 +516,7 @@ mod tests {
         ];
 
         let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+            start_broker(Arc::new(AllowAllAuthorizer)).await;
         broker_handle
             .broker_arc_for_test()
             .controller

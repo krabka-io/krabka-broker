@@ -17,9 +17,7 @@ use crate::{
     break_glass::{
         gate::{self, BreakGlassDenial},
         persistence::spend_before_local_action,
-    },
-    broker::Broker,
-    codes,
+    }, broker::Broker, codes, handlers::partition_transition::audit_refusal,
 };
 
 crate::handlers::partition_transition::authorizer! {
@@ -66,7 +64,7 @@ pub(super) fn refuse_trim(
 ) -> DeleteRecordsPartitionResult {
     let message = denial.to_string();
     tracing::warn!(%topic, partition, refusal = %message, "DeleteRecords refused");
-    crate::handlers::partition_transition::audit_refusal(
+    audit_refusal(
         env.broker,
         env.ctx,
         BreakGlassAction::DeleteRecords,

@@ -6,6 +6,8 @@
 use assert2::{assert, check};
 use krabka_protocol::owned::describe_configs_response::DescribeConfigsSynonym;
 
+use crate::{api_catalog::UnstableApiVersions, config::BrokerConfig};
+
 use super::{
     super::{
         super::wire::CONFIG_SOURCE_DEFAULT,
@@ -28,10 +30,10 @@ const NEITHER: EntryOptions = EntryOptions {
 
 #[test]
 fn trunk_only_streams_assignors_are_hidden_from_default_static_settings() {
-    let mut config = crate::config::BrokerConfig::default();
+    let mut config = BrokerConfig::default();
     check!(!static_settings(&config).contains_key("group.streams.assignors"));
 
-    config.features.unstable_api_versions = crate::api_catalog::UnstableApiVersions::Enabled;
+    config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     check!(
         static_settings(&config)
             .get("group.streams.assignors")
@@ -380,7 +382,7 @@ fn static_boolean_keys_report_their_provenance() {
 /// default value.
 #[test]
 fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
-    let base = static_settings(&crate::config::BrokerConfig::default());
+    let base = static_settings(&BrokerConfig::default());
     let with = |extra: &[(&'static str, &str)]| {
         let mut settings = base.clone();
         settings.extend(extra.iter().map(|(key, value)| (*key, (*value).to_owned())));
@@ -428,9 +430,9 @@ fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
     for (label, metadata_log_dir, source, expected) in cases {
         let file: crate::file_config::FileConfig =
             toml::from_str(source).expect("parse runtime config");
-        let mut config = crate::config::BrokerConfig {
+        let mut config = BrokerConfig {
             metadata_log_dir: metadata_log_dir.map(std::path::PathBuf::from),
-            ..crate::config::BrokerConfig::default()
+            ..BrokerConfig::default()
         };
         file.apply_to(&mut config).expect("apply runtime config");
 

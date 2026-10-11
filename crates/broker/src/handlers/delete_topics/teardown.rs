@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use krabka_ids::PartitionIndex;
 use uuid::Uuid;
 
-use crate::{broker::Broker, log_dir, partition_registry::PartitionRegistry};
+use crate::{broker::Broker, log_dir, partition_registry::PartitionRegistry, wal::quorum::ShardRemoval};
 
 /// Removes every local partition of a deleted topic from the registry, the WAL
 /// shard registry, and disk.
@@ -42,7 +42,7 @@ pub(super) fn remove_local_partitions(
                 name,
                 topic_id,
                 idx,
-                crate::wal::quorum::ShardRemoval::All,
+                ShardRemoval::All,
             )
         {
             tracing::warn!(

@@ -23,9 +23,7 @@ use krabka_protocol::{
 
 use super::{request::TopicNameRequest, wire::delete_topic_result};
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
-    broker::Broker,
-    codes,
+    authorizer::{AuthorizationResult, authorize_topics}, broker::Broker, codes, handlers::RequestContext,
 };
 
 /// The topics of one request that the principal may describe and may delete.
@@ -67,7 +65,7 @@ impl TopicAccess {
 pub(super) fn topic_access<'a>(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    context: &crate::handlers::RequestContext<'_>,
+    context: &RequestContext<'_>,
     names: impl IntoIterator<Item = &'a str> + Clone,
 ) -> TopicAccess {
     if !crate::handlers::cluster_shortcut_denied(broker, image, context, AclOperation::Delete) {
@@ -161,7 +159,7 @@ pub(super) fn admit_row(
 fn allowed<'a>(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    context: &crate::handlers::RequestContext<'_>,
+    context: &RequestContext<'_>,
     operation: AclOperation,
     names: impl IntoIterator<Item = &'a str>,
 ) -> HashSet<String> {

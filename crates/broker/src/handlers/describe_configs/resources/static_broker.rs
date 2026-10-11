@@ -72,10 +72,10 @@ use super::super::{
     entry::{DefaultLayer, EntryOptions, Layer, config_entry},
     wire::CONFIG_SOURCE_STATIC_BROKER,
 };
-use crate::config_keys::{
+use crate::{config::{BrokerConfig, KAFKA_STATIC_KEYS, NodeRole}, config_keys::{
     self,
     registry::{self, ConfigScope},
-};
+}};
 
 /// One static broker setting as this node holds it: the value it runs with,
 /// and whether its own configuration named the key.
@@ -166,7 +166,7 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
 /// A key absent here is reported at its Kafka default, which is what an
 /// operator who never wrote it gets from Kafka too.
 pub(crate) fn static_settings(
-    config: &crate::config::BrokerConfig,
+    config: &BrokerConfig,
 ) -> std::collections::BTreeMap<&'static str, String> {
     let join_paths = |dirs: Vec<std::path::PathBuf>| {
         dirs.iter()
@@ -178,8 +178,8 @@ pub(crate) fn static_settings(
         .roles
         .iter()
         .map(|role| match role {
-            crate::config::NodeRole::Controller => "controller",
-            crate::config::NodeRole::Broker | crate::config::NodeRole::Witness => "broker",
+            NodeRole::Controller => "controller",
+            NodeRole::Broker | NodeRole::Witness => "broker",
         })
         .collect();
     let mut settings = std::collections::BTreeMap::from([
@@ -249,7 +249,7 @@ pub(crate) fn static_settings(
         );
     }
     settings.extend(
-        crate::config::KAFKA_STATIC_KEYS
+        KAFKA_STATIC_KEYS
             .iter()
             .filter_map(|key| key.static_value(config).map(|value| (key.name, value))),
     );
@@ -282,7 +282,7 @@ pub(crate) fn static_settings(
 ///   operator gave no name, Kafka uses the listener of
 ///   `security.inter.broker.protocol` and reports the key as null at
 ///   `DEFAULT_CONFIG`, so the key is not here.
-fn listener_settings(config: &crate::config::BrokerConfig) -> Vec<(&'static str, String)> {
+fn listener_settings(config: &BrokerConfig) -> Vec<(&'static str, String)> {
     use crate::controller_endpoint::CONTROLLER_LISTENER_NAME;
 
     let data_plane = if config.is_broker() {

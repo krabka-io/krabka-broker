@@ -12,7 +12,7 @@ use super::{
     },
     *,
 };
-use crate::config_keys::registry::{self, ConfigScope, ConfigType, ValueCheck};
+use crate::config_keys::{BROKER_WITNESS, DISKLESS, WRITE_FREEZE, registry::{self, ConfigScope, ConfigType, ValueCheck}};
 
 const BOTH: EntryOptions = EntryOptions {
     include_synonyms: true,
@@ -297,12 +297,12 @@ fn a_key_with_no_registry_row_is_treated_as_one_the_broker_may_not_disclose() {
 #[test]
 fn the_read_only_flag_comes_from_the_registry_row() {
     for (scope, name, expected) in [
-        (ConfigScope::Topic, crate::config_keys::DISKLESS, true),
-        (ConfigScope::Topic, crate::config_keys::WRITE_FREEZE, true),
+        (ConfigScope::Topic, DISKLESS, true),
+        (ConfigScope::Topic, WRITE_FREEZE, true),
         (ConfigScope::Topic, crate::config_keys::RETENTION_MS, false),
         (
             ConfigScope::Broker,
-            crate::config_keys::BROKER_WITNESS,
+            BROKER_WITNESS,
             true,
         ),
         (
