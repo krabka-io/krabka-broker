@@ -16,7 +16,9 @@ use crate::{
         discovery::coordinator_lookup_request,
         topics::TopicPartitionCount,
         transaction_wire::{TransactionPartitionsSetup, partitions_request},
-        transactions::{InitProducerSetup, PartitionRegistration, init_producer_request},
+        transactions::{
+            InitProducerSetup, PartitionRegistration, ProducerIdentity, init_producer_request,
+        },
     },
     txnver_harness::{
         NONE, TRANSACTION_ABORTABLE, admin_client, boot_single, create_topic, expected_partitions,
@@ -105,7 +107,7 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
     let add = client
         .send(partitions_request(TransactionPartitionsSetup {
             transactional_id: VERIFY_TID,
-            producer: crate::support::transactions::ProducerIdentity::from_wire((pid, epoch)),
+            producer: ProducerIdentity::from_wire((pid, epoch)),
             topics: vec![added_topic],
             ..Default::default()
         }))
@@ -127,7 +129,7 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
     let verify = client
         .send(partitions_request(TransactionPartitionsSetup {
             transactional_id: VERIFY_TID,
-            producer: crate::support::transactions::ProducerIdentity::from_wire((pid, epoch)),
+            producer: ProducerIdentity::from_wire((pid, epoch)),
             registration: PartitionRegistration::VerifyOnly,
             topics: vec![verify_topic],
         }))

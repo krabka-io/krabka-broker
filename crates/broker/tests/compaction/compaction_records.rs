@@ -21,8 +21,8 @@ use crate::{
     kafka_wire::{self, ExchangeSetup as WireExchangeSetup},
     support::{
         fetch::{
-            FetchByteLimit, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
-            fetch_partition, single_partition_fetch,
+            FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
+            SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
         },
         wire::HeaderEncoding as RequestHeaderEncoding,
     },
@@ -59,7 +59,7 @@ pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> 
                     maximum: FetchByteLimit(1 << 22),
                     ..Default::default()
                 }),
-                limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
+                limits: FetchLimits::wait_for_data_with_maximum(
                     RequestWaitMillis(100),
                     FetchByteLimit(1 << 22),
                 ),

@@ -14,8 +14,8 @@ use crate::{
     support::{
         client::connect_client,
         fetch::{
-            FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup, fetch_partition,
-            single_partition_fetch,
+            FetchLimits, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
+            fetch_partition, single_partition_fetch,
         },
         produce::{SinglePartitionProduceSetup, batch_request},
     },
@@ -129,7 +129,7 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
                         ..Default::default()
                     })
                 },
-                limits: crate::support::fetch::FetchLimits::one_mebibyte(RequestWaitMillis(100)),
+                limits: FetchLimits::one_mebibyte(RequestWaitMillis(100)),
             })
         })
         .await

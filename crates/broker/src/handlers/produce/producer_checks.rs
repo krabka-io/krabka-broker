@@ -410,7 +410,8 @@ mod tests {
             test_support::{encode_batch, image_with_topic, pipeline_input},
         },
         test_support::{
-            RecordCount, RepeatedRecordsSetup, repeated_records_batch, spawn_standalone_partition,
+            RecordCount, RepeatedRecordsSetup, StandalonePartitionSetup, repeated_records_batch,
+            spawn_standalone_partition,
         },
     };
 
@@ -446,7 +447,7 @@ mod tests {
             directory.path(),
             krabka_log::Log::open(directory.path(), krabka_log::LogConfig::default())
                 .expect("open log"),
-            crate::test_support::StandalonePartitionSetup::default(),
+            StandalonePartitionSetup::default(),
         );
 
         for producer_id in [-1, i64::MIN] {

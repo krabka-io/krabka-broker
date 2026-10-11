@@ -2,7 +2,7 @@ use assert2::assert;
 use krabka_ids::PartitionIndex;
 
 use super::{Decision, ProducerState, RetainedBatch, SequenceContext};
-use crate::broker::spawn_partition;
+use crate::{broker::spawn_partition, log_dir_status::LogDirRegistry};
 
 #[tokio::test]
 async fn late_completions_merge_retries_without_regressing_the_latest_batch() {
@@ -137,7 +137,7 @@ async fn completions_after_real_markers_preserve_closed_state_and_restart_decisi
                 PartitionIndex(0),
                 directory.path().to_path_buf(),
                 log,
-                crate::log_dir_status::LogDirRegistry::default(),
+                LogDirRegistry::default(),
                 Arc::clone(&state),
                 false,
             );

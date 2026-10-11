@@ -22,8 +22,8 @@ pub use crate::support::topic_id_for;
 use crate::support::{
     client::connect_client,
     fetch::{
-        FetchByteLimit, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
-        fetch_partition, single_partition_fetch,
+        FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
+        SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
     },
     produce::{SinglePartitionProduceSetup, single_partition_produce},
     records::value_record,
@@ -164,7 +164,7 @@ pub async fn fetch_first_batch(
                     maximum: FetchByteLimit(8 << 20),
                     ..Default::default()
                 }),
-                limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
+                limits: FetchLimits::wait_for_data_with_maximum(
                     RequestWaitMillis(1_000),
                     FetchByteLimit(8 << 20),
                 ),

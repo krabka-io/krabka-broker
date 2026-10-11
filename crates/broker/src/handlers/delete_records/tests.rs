@@ -33,6 +33,7 @@ use crate::{
     },
     heartbeat::fencing::{RegistrationChange, registration_change},
     partition::Partition,
+    replica_state::ReplicaState,
     test_support::{
         DenyAll, KafkaErrorCode, append_partition_batch, broker_registration, encode_request, peer,
         principal, start_broker_no_audit_with,
@@ -1107,7 +1108,7 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
     {
         let mut state = partition.replica_state.lock().await;
         let high_watermark = state.hw;
-        *state = crate::replica_state::ReplicaState::new();
+        *state = ReplicaState::new();
         state.hw = high_watermark;
     }
     let not_installed = delete_to(

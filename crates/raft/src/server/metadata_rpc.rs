@@ -219,7 +219,7 @@ mod tests {
         test_support::single_partition_topic,
         wire::{
             API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
-            private_api_highest_version,
+            PRIVATE_UNSUPPORTED_VERSION, private_api_highest_version,
         },
     };
 
@@ -320,7 +320,7 @@ mod tests {
         check!(
             decode_submit_change_response(&submit)
                 == KrabkaSubmitChangeResponse {
-                    error_code: crate::wire::PRIVATE_UNSUPPORTED_VERSION,
+                    error_code: PRIVATE_UNSUPPORTED_VERSION,
                     leader_hint: -1,
                     result: Bytes::new(),
                 }
@@ -338,7 +338,7 @@ mod tests {
         check!(
             decode_metadata_fetch_response(&fetch)
                 == KrabkaMetadataFetchResponse {
-                    error_code: crate::wire::PRIVATE_UNSUPPORTED_VERSION,
+                    error_code: PRIVATE_UNSUPPORTED_VERSION,
                     leader_hint: -1,
                     leader_epoch: -1,
                     log_start_offset: -1,

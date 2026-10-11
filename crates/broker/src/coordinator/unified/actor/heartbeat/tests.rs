@@ -13,8 +13,8 @@ use crate::{
         actor::{
             member_state::build_member,
             test_support::{
-                StaticMetadata, coordinator_with_log, empty_metadata, make_coordinator,
-                make_coordinator_with_topic, make_coordinator_with_topic_policy,
+                ClassicMemberSetup, StaticMetadata, coordinator_with_log, empty_metadata,
+                make_coordinator, make_coordinator_with_topic, make_coordinator_with_topic_policy,
                 rpc::{self, consumer_request},
                 seed_classic_member, subscription_blob,
             },
@@ -963,10 +963,7 @@ async fn consumer_heartbeat_upgrades_a_classic_group() {
     // "t". Seeding (vs a JoinGroup round-trip) keeps the test deterministic
     // and timing-free; `classic_is_convertible` only inspects protocol_type
     // and each member's protocol_metadata, both set here.
-    let handle = seed_classic_member(
-        &coord,
-        crate::coordinator::unified::actor::test_support::ClassicMemberSetup::default(),
-    );
+    let handle = seed_classic_member(&coord, ClassicMemberSetup::default());
 
     // A native consumer-protocol heartbeat for the same group → upgrade.
     let resp = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
@@ -987,10 +984,7 @@ async fn consumer_heartbeat_upgrades_a_classic_group() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_upgrade_append_keeps_the_atomic_batch_unpublished() {
     let (coord, log) = make_coordinator_with_topic("t", 1);
-    let handle = seed_classic_member(
-        &coord,
-        crate::coordinator::unified::actor::test_support::ClassicMemberSetup::default(),
-    );
+    let handle = seed_classic_member(&coord, ClassicMemberSetup::default());
     log.fail_next
         .store(true, std::sync::atomic::Ordering::SeqCst);
 

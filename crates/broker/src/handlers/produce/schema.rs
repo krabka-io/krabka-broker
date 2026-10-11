@@ -289,7 +289,7 @@ mod tests {
         // No request reaches the registry: the record fails to decode before
         // any field is checked, so the address is never dialled.
         let validator = Arc::new(
-            crate::schema_validation::SchemaValidator::new(
+            SchemaValidator::new(
                 "http://127.0.0.1:1".to_owned(),
                 false,
                 100,
@@ -303,7 +303,7 @@ mod tests {
             value: true,
             mode: ValidationMode::Id,
         };
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
 
         let got = validate_batch_schemas(
             &prepared,

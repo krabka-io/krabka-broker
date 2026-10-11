@@ -24,6 +24,7 @@ use crate::{
         same_principal_reopens,
     },
     support::{
+        client::scrape_metrics as scrape_metrics_client,
         sasl::plain_authentication_body,
         wire::{CorrelationId, HeaderEncoding as RequestHeaderEncoding, SocketExchangeSetup},
     },
@@ -90,7 +91,7 @@ async fn sasl_plain_authentication_metrics_tick_for_success_and_failure() {
 ///
 /// The returned body holds no HTTP head.
 async fn scrape_metrics(addr: SocketAddr) -> String {
-    crate::support::client::scrape_metrics(addr).await
+    scrape_metrics_client(addr).await
 }
 
 /// Negative path: with a wrong password, `SaslAuthenticate` responds with

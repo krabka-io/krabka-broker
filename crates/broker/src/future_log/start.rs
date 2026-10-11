@@ -21,6 +21,8 @@ use super::{
     configured_log_dir, future_dir_name_too_long,
     replicator::{ReplicatorTask, replicator_loop},
 };
+#[cfg(test)]
+use crate::future_log::test_support::FutureSourceSetup;
 use crate::{
     error::BrokerError, log_dir, log_dir_status::LogDirRegistry, partition::Partition,
     partition_registry::PartitionRegistry,
@@ -367,7 +369,7 @@ mod tests {
         let future_logs = Arc::new(DashMap::new());
         let first = tempdir().unwrap();
         let offline = tempdir().unwrap();
-        let status = crate::log_dir_status::LogDirRegistry::default();
+        let status = LogDirRegistry::default();
         status.mark_offline(offline.path(), "test failure");
         partitions.set_preferred_log_dir(
             uuid::Uuid::from_u128(1),
@@ -477,10 +479,7 @@ mod tests {
             extra.path().to_path_buf(),
             third.path().to_path_buf(),
         ];
-        let source = registered_source_fixture(
-            primary.path(),
-            crate::future_log::test_support::FutureSourceSetup::default(),
-        );
+        let source = registered_source_fixture(primary.path(), FutureSourceSetup::default());
 
         // Plant a registry entry pointing at `extra`.
         let PlantedFutureLog {

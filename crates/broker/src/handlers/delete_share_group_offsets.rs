@@ -273,7 +273,7 @@ mod tests {
         share_coordinator::{
             handlers::test_support::lead_share_state_partitions, persister_client::SharePersister,
         },
-        test_support::{DenyAll, ShareApiSupport, start_share_broker, test_ctx},
+        test_support::{DenyAll, ShareApiSupport, ShareBrokerSetup, start_share_broker, test_ctx},
     };
 
     /// Denies `Read` on the named topics and allows everything else, so group
@@ -670,7 +670,7 @@ mod tests {
             let denied: HashSet<&'static str> = denied_names.iter().copied().collect();
             let (broker_handle, _dir) = start_share_broker(
                 Arc::new(DenyReadOnTopics(denied.clone())),
-                crate::test_support::ShareBrokerSetup::default(),
+                ShareBrokerSetup::default(),
             )
             .await;
             let broker = broker_handle.broker_arc_for_test();

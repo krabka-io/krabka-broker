@@ -9,7 +9,7 @@ use crate::{
         ProducerBatchSetup, ProducerCommitSetup, ProducerEpoch, ProducerSequence, SequenceDelta,
         commit_fixture, opened_log, producer_batch,
     },
-    test_support::{UnixMillis, default_records_batch},
+    test_support::{EmptyPayloadBatchSetup, UnixMillis, default_records_batch},
 };
 
 async fn mirror_marker(state: &ProducerState) {
@@ -634,10 +634,8 @@ async fn snapshot_reload_preserves_retry_frontiers_and_epoch_fencing() {
     for sequence in [0, 1, i32::MAX - 1, i32::MAX] {
         let (dir, config, mut log) = opened_log();
         for _ in 0..3 {
-            log.append(&mut default_records_batch(
-                crate::test_support::EmptyPayloadBatchSetup::default(),
-            ))
-            .unwrap();
+            log.append(&mut default_records_batch(EmptyPayloadBatchSetup::default()))
+                .unwrap();
         }
         log.append(&mut producer_batch(ProducerBatchSetup {
             sequence: ProducerSequence(sequence),

@@ -28,7 +28,8 @@ use crate::{
         topics::TopicPartitionCount,
         transaction_wire::{
             add_partition_request, coordinator_loading, initialize_producer, partition_added,
-            records_batch, retry_coordinator, settled_produce,
+            read_committed_through as read_wire_committed_through, records_batch,
+            retry_coordinator, settled_produce,
         },
         transactions::{
             EndTransactionSetup, InitProducerSetup, ProducerIdentity, TransactionOutcome,
@@ -164,7 +165,7 @@ async fn end_txn_until_answered(
 
 /// The values a `read_committed` consumer reads, up to and including `last`.
 async fn read_committed_through(bootstrap: &str, topic: &str, last: &str) -> Vec<String> {
-    crate::support::transaction_wire::read_committed_through(bootstrap, topic, last, SETTLE).await
+    read_wire_committed_through(bootstrap, topic, last, SETTLE).await
 }
 
 struct Started {

@@ -43,14 +43,12 @@ pub(crate) fn add_partition_request(
     topic: &str,
     (producer_id, epoch): (i64, i16),
 ) -> AddPartitionsToTxnRequest {
-    partitions_request(
-        crate::support::transaction_wire::TransactionPartitionsSetup {
-            transactional_id,
-            producer: ProducerIdentity::from_wire((producer_id, epoch)),
-            topics: vec![transaction_topic(topic, vec![0])],
-            ..Default::default()
-        },
-    )
+    partitions_request(TransactionPartitionsSetup {
+        transactional_id,
+        producer: ProducerIdentity::from_wire((producer_id, epoch)),
+        topics: vec![transaction_topic(topic, vec![0])],
+        ..Default::default()
+    })
 }
 
 pub(crate) fn transaction_topic(name: &str, partitions: Vec<i32>) -> AddPartitionsToTxnTopic {

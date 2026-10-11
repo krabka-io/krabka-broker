@@ -202,7 +202,7 @@ mod tests {
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert("t".into(), PartitionIndex(0), part);
         let controller: Arc<dyn MetadataSource> = Arc::new(fake_source(image, None));
-        let metrics = crate::metrics::BrokerMetrics::default();
+        let metrics = BrokerMetrics::default();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(Config {
             dialer: plaintext_controller_dialer(),

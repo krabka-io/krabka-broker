@@ -295,7 +295,7 @@ mod tests {
             coordinator::message::UNKNOWN_TOPIC_OR_PARTITION,
             handlers::test_support::lead_share_state_partitions,
         },
-        test_support::{DenyAll, ShareApiSupport, start_share_broker, test_ctx},
+        test_support::{DenyAll, ShareApiSupport, ShareBrokerSetup, start_share_broker, test_ctx},
     };
 
     macro_rules! joining_share_member {
@@ -528,8 +528,7 @@ mod tests {
                 },
             });
             let (broker_handle, _dir) =
-                start_share_broker(authorizer, crate::test_support::ShareBrokerSetup::default())
-                    .await;
+                start_share_broker(authorizer, ShareBrokerSetup::default()).await;
             let broker = broker_handle.broker_arc_for_test();
             test_ctx!(ctx, "alice");
             if topic_exists {

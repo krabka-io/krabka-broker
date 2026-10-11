@@ -28,7 +28,7 @@ use crate::{
         persistence::{Key, OffsetCommitValue, parse_key},
         test_support::{commit_request as make_commit_request, fetch_offset},
         unified::{
-            GroupType,
+            GroupSeed, GroupType,
             actor::{GroupActorMessage, GroupKindTag, test_support::classic_member},
             classic_state::{ClassicGroup, GroupState, OffsetEntry},
             group::{CoordinatorGroup, GroupKind},
@@ -518,10 +518,9 @@ async fn a_replacement_actor_keeps_its_type_and_seed_when_the_reaped_one_is_forg
     coordinator.groups.remove(GROUP);
     let replacement = coordinator.get_or_create_group(GROUP, GroupKindTag::Consumer);
     coordinator.mark_next_gen(GROUP);
-    coordinator.seeds.insert(
-        GROUP.to_string(),
-        crate::coordinator::unified::GroupSeed::default(),
-    );
+    coordinator
+        .seeds
+        .insert(GROUP.to_string(), GroupSeed::default());
 
     super::forget_group(coordinator, GROUP, &reaped);
 

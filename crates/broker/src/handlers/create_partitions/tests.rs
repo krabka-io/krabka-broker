@@ -674,11 +674,7 @@ async fn rows_follow_kafkas_duplicate_and_count_checks() {
     let mut expected = Vec::with_capacity(cases.len());
     for (label, topics, mutation, results) in cases {
         let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        seed_topic(
-            &broker_handle,
-            crate::handlers::create_partitions::test_support::SeedTopicSetup::default(),
-        )
-        .await;
+        seed_topic(&broker_handle, SeedTopicSetup::default()).await;
         let broker = broker_handle.broker_arc_for_test();
         request_identity!((p, peer), principal("admin"));
 

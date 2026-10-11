@@ -55,6 +55,8 @@ use krabka_protocol::owned::{
     },
 };
 
+#[cfg(test)]
+use crate::test_support::StandalonePartitionSetup;
 use crate::{
     broker::Broker,
     codes,
@@ -446,8 +448,7 @@ mod tests {
     async fn leader_check_needs_the_installed_role_and_the_image_to_name_this_node() {
         let image = image_with_topic("orders", &[1, 2]);
 
-        let (_dir, partition) =
-            temporary_partition(crate::test_support::StandalonePartitionSetup::default());
+        let (_dir, partition) = temporary_partition(StandalonePartitionSetup::default());
 
         // (this node, installed leader, refused)
         let cases = [

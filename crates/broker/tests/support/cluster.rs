@@ -159,7 +159,7 @@ pub async fn start_n_node_with(
                     client: client_addrs[i],
                     controller: controller_addrs[i],
                 },
-                voters: crate::support::controller_voters(&voters),
+                voters: controller_voters(&voters),
             },
         )
         .with_internal_topics_for(n_usize);

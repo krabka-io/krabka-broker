@@ -10,10 +10,11 @@ use crate::{
         actor::{
             GroupActorMessage, GroupKindTag,
             test_support::{
-                BidirectionalClassicSetup, bidirectional_coordinator, bidirectional_with_members,
-                decode_assignment, join_native_consumer, log_has_classic_group_metadata_write,
-                make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc,
-                seed_classic_member, seeded_bidirectional_coordinator, spawn_and_downgrade,
+                BidirectionalClassicSetup, ClassicMemberSetup, bidirectional_coordinator,
+                bidirectional_with_members, decode_assignment, join_native_consumer,
+                log_has_classic_group_metadata_write, make_coordinator_with_topic,
+                make_coordinator_with_topic_policy, rpc, seed_classic_member,
+                seeded_bidirectional_coordinator, spawn_and_downgrade,
                 upgrade_with_transient_native,
             },
         },
@@ -32,10 +33,7 @@ async fn last_consumer_member_leaving_downgrades_to_classic() {
     let (coord, log) = make_coordinator_with_topic("t", 2);
 
     // Seed a classic group with one classic member subscribed to "t".
-    let handle = seed_classic_member(
-        &coord,
-        crate::coordinator::unified::actor::test_support::ClassicMemberSetup::default(),
-    );
+    let handle = seed_classic_member(&coord, ClassicMemberSetup::default());
 
     // The only native consumer joins and leaves, driving both migration flips.
     upgrade_with_transient_native(&handle, "t").await;
@@ -178,10 +176,7 @@ async fn policy_disabled_keeps_group_classic() {
     use crate::coordinator::unified::config::ConsumerGroupMigrationPolicy;
     let (coord, _log) =
         make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Disabled);
-    let handle = seed_classic_member(
-        &coord,
-        crate::coordinator::unified::actor::test_support::ClassicMemberSetup::dynamic("m1"),
-    );
+    let handle = seed_classic_member(&coord, ClassicMemberSetup::dynamic("m1"));
 
     // A native consumer heartbeat must be rejected (no upgrade is allowed).
     let resp = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;

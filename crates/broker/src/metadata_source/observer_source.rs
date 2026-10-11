@@ -179,7 +179,7 @@ mod tests {
     async fn observer_source_uses_observer_writer_and_denies_controller_only_ops() {
         let cluster_id = Uuid::new_v4();
         let dir = TempDir::new().unwrap();
-        let observer = crate::metadata_observer::MetadataObserver::start(ObserverConfig {
+        let observer = MetadataObserver::start(ObserverConfig {
             client_id: "observer-source-test".into(),
             ..observer_config(cluster_id, dir.path().to_path_buf())
         });
@@ -236,7 +236,7 @@ mod tests {
         );
 
         let observer_dir = TempDir::new().unwrap();
-        let observer = crate::metadata_observer::MetadataObserver::start(ObserverConfig {
+        let observer = MetadataObserver::start(ObserverConfig {
             voters: vec![(NodeId(1), ctrl.controller_bound_addr().to_string())],
             client_id: "observer-source-offset-test".into(),
             poll_interval: krabka_units::millis(10),

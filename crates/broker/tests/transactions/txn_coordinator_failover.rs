@@ -21,7 +21,7 @@ use crate::{
         client::connect_owned,
         discovery::{coordinator_lookup_request, topic_metadata_request},
         shutdown_cluster,
-        topics::metadata_topic,
+        topics::{AssignedTopicSetup, metadata_topic},
         transaction_wire::{
             AssignedTransactionTopicSetup, TransactionProduceSetup, add_partition_request,
             coordinator_loading, create_assigned_topic, init_producer_request,
@@ -181,10 +181,7 @@ async fn a_transaction_commits_through_the_next_coordinator() {
     create_assigned_topic(
         &admin,
         AssignedTransactionTopicSetup {
-            topic: crate::support::topics::AssignedTopicSetup::leader_first(
-                TOPIC,
-                krabka_metadata::NodeId(coordinator),
-            ),
+            topic: AssignedTopicSetup::leader_first(TOPIC, krabka_metadata::NodeId(coordinator)),
             context: Some("CreateTopics"),
         },
     )

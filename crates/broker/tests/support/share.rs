@@ -26,7 +26,7 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    client::create_topic_with,
+    client::{connect as connect_client, create_topic_with},
     configs::{
         IncrementalConfigsSetup, incremental_config, incremental_request, incremental_resource,
     },
@@ -278,7 +278,7 @@ pub async fn permitted_topic_fixture(
 }
 
 pub async fn connect(bootstrap: &str) -> Arc<Client> {
-    crate::support::client::connect(bootstrap, "c1").await
+    connect_client(bootstrap, "c1").await
 }
 pub async fn create_topic(
     broker: &krabka_broker::BrokerHandle,

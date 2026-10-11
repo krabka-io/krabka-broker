@@ -21,7 +21,7 @@ use crate::{
     polling::retry_produce_until_allowed,
     sasl_cluster::{start_alice_topic_grant, start_denied_foo},
     support::{
-        fetch::{RequestWaitMillis, named_topic_fetch},
+        fetch::{FetchLimits, RequestWaitMillis, named_topic_fetch},
         produce::single_partition_response,
     },
 };
@@ -86,10 +86,7 @@ async fn fetch_denied_without_topic_read_acl() {
 
     // alice has NO Read-on-foo binding → Fetch must return 29 on the
     // partition row.
-    let req = named_topic_fetch(
-        "foo",
-        crate::support::fetch::FetchLimits::one_mebibyte(RequestWaitMillis(0)),
-    );
+    let req = named_topic_fetch("foo", FetchLimits::one_mebibyte(RequestWaitMillis(0)));
     let resp = drive_fetch_as_plain(
         addr,
         req,

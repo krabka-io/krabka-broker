@@ -7,6 +7,7 @@ use crate::{
     config::{KafkaRlmmConfig, RemoteStorageBackend},
     diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
     handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+    metrics::BrokerMetrics,
     test_support::replica_nodes,
 };
 
@@ -259,7 +260,7 @@ async fn cancelled_topic_rlmm_bootstrap_attempts_once_without_activating() {
         security: None,
         ..KafkaRlmmConfig::default()
     });
-    let metrics = crate::metrics::BrokerMetrics::new();
+    let metrics = BrokerMetrics::new();
     let (_image_tx, image_rx) = tokio::sync::watch::channel(Arc::new(
         krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
     ));

@@ -17,11 +17,11 @@ use crate::{
     handlers::{
         produce::{
             framing::PartitionPayload,
-            test_support::{encode_batch, image_with_topic, pipeline_input},
+            test_support::{PipelineFixture, encode_batch, image_with_topic, pipeline_input},
         },
         test_support::{ReplicatedPartitionSetup, replicated_partition},
     },
-    schema_validation::{SchemaGate, ValidationMode},
+    schema_validation::{SchemaGate, SchemaValidator, ValidationMode},
 };
 
 #[tokio::test]
@@ -33,7 +33,7 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
         .mount(&registry)
         .await;
     let schema_validator = Arc::new(
-        crate::schema_validation::SchemaValidator::new(
+        SchemaValidator::new(
             registry.uri(),
             false,
             100,
@@ -43,8 +43,7 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
         .expect("validator"),
     );
     let image = non_leader_image();
-    let fixture =
-        crate::handlers::produce::test_support::PipelineFixture::new(krabka_ids::NodeId(1));
+    let fixture = PipelineFixture::new(krabka_ids::NodeId(1));
     let payload = encode_batch(&RecordBatch {
         records: vec![Record {
             value: Some(Bytes::from_static(&[0, 0, 0, 0, 42, b'a'])),
@@ -84,8 +83,7 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
     // defaults a struct-field-deletion mutant would leave.
     let image = non_leader_image();
     // Empty registry → `fixture.partitions.get(..)` returns None.
-    let fixture =
-        crate::handlers::produce::test_support::PipelineFixture::new(krabka_ids::NodeId(2));
+    let fixture = PipelineFixture::new(krabka_ids::NodeId(2));
     let payload = encode_batch(&RecordBatch {
         records: vec![Record {
             value: Some(Bytes::from_static(b"hello")),

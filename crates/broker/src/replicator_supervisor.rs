@@ -31,6 +31,9 @@ use krabka_raft::NodeId;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+use crate::replicator_supervisor::test_support::{SupervisorPartitionSetup, SupervisorTopicSetup};
+
 mod desired_sets;
 mod dir_assignments;
 mod local_partitions;
@@ -386,8 +389,8 @@ mod tests {
     #[tokio::test]
     async fn run_reconciles_initial_image_before_shutdown() {
         let img = image_with(&[
-            topic_record(crate::replicator_supervisor::test_support::SupervisorTopicSetup::default()),
-            partition_record(crate::replicator_supervisor::test_support::SupervisorPartitionSetup::single_replica("t", NodeId(2))),
+            topic_record(SupervisorTopicSetup::default()),
+            partition_record(SupervisorPartitionSetup::single_replica("t", NodeId(2))),
         ]);
         let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(img);
         supervisor.shutdown.cancel();

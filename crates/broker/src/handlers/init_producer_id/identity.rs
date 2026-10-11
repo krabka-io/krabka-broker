@@ -61,7 +61,7 @@ mod tests {
     /// version.
     #[tokio::test]
     async fn the_epoch_bumps_until_it_is_exhausted_and_then_the_producer_id_rotates() {
-        let ids = crate::producer_id_manager::ProducerIdManager::new();
+        let ids = ProducerIdManager::new();
         // (entry epoch, the epoch handed back, whether the producer id rotates)
         let cases = [
             (3_i16, 4_i16, false),
@@ -84,7 +84,7 @@ mod tests {
 
     #[tokio::test]
     async fn recovery_identity_advances_through_max_then_rotates() {
-        let ids = crate::producer_id_manager::ProducerIdManager::new();
+        let ids = ProducerIdManager::new();
         let mut entry = TxnEntry::new_empty("tid-recover".into(), ProducerId(7), 3, i32::MAX, 0);
         entry.state = TxnState::Ongoing;
 

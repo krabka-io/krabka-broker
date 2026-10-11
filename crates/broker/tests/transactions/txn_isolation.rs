@@ -16,7 +16,9 @@ use crate::{
     support::{
         client::connect_client,
         discovery::topic_metadata_request,
-        fetch::{RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch},
+        fetch::{
+            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
+        },
         producer::{default_producer, enqueue_string_values, transactional_producer},
         topics::metadata_topic,
         transaction_wire::{committed_values, observed_values, read_committed_at_least},
@@ -101,7 +103,7 @@ async fn abort_then_read_committed_skips_records() {
             ..single_partition_fetch(SinglePartitionFetchSetup {
                 topic: "ta".into(),
                 topic_id,
-                limits: crate::support::fetch::FetchLimits::one_mebibyte(RequestWaitMillis(1_000)),
+                limits: FetchLimits::one_mebibyte(RequestWaitMillis(1_000)),
                 ..Default::default()
             })
         })

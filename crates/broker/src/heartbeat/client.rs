@@ -572,7 +572,7 @@ mod tests {
             interval: millis(20),
             controller: Arc::clone(&source) as Arc<dyn MetadataSource>,
             shutdown: shutdown.clone(),
-            outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
+            outbound_client: Arc::new(InterBrokerClient::new(None, None)),
             controller_listener_protocol: ListenerProtocol::Plaintext,
             controller_server_name: "localhost".into(),
             controller_quorum_voters: vec![

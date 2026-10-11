@@ -18,7 +18,10 @@ use crate::{
         persistence::parse_key,
         streams::{
             config::KEY_NUM_STANDBY_REPLICAS,
-            persistence::{LastAssignmentConfig, PendingStreamsRecords, StreamsGroupMetadataValue},
+            persistence::{
+                DescriptionEpochs, LastAssignmentConfig, PendingStreamsRecords,
+                StreamsGroupMetadataValue,
+            },
             state::{StreamsGroupState, StreamsMemberState},
         },
         test_support::{MemberEpoch, assert_single_member_limit, heartbeat_write_failures},
@@ -378,8 +381,7 @@ async fn leave_removes_member() {
                     })
                     .collect(),
             ),
-            description:
-                crate::coordinator::unified::streams::persistence::DescriptionEpochs::default(),
+            description: DescriptionEpochs::default(),
         }),
         ..Default::default()
     }

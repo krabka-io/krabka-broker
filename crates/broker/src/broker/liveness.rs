@@ -293,7 +293,7 @@ mod tests {
         let clock = TestClock::new();
         let liveness =
             ControllerLivenessState::with_test_clock(std::time::Duration::from_millis(10), &clock);
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
 
         // Broker 1 dies while this node leads.
         liveness.record_heartbeat(1).await;
@@ -354,7 +354,7 @@ mod tests {
         let mock = Arc::new(fake_source(image_with_registered_broker(1), None));
         let controller: Arc<dyn MetadataSource> = mock.clone();
         let liveness = Arc::new(ControllerLivenessState::new(krabka_units::secs(60)));
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
         let shutdown = CancellationToken::new();
         spawn_leadership_watcher(
             controller,

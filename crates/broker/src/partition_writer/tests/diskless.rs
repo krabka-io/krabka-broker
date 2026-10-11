@@ -13,11 +13,13 @@ use tokio::sync::oneshot;
 use super::*;
 use crate::{
     codes,
+    diskless::hot_tail::HotTailCache,
+    log_dir_status::LogDirRegistry,
     partition_writer::test_support::{
         GatedWal, observed_single_replica_writer, sample_batch, test_sequencer,
     },
     test_support::{EmptyPayloadBatchSetup, FakeMetadataSource, RecordCount},
-    wal::{ControllerSequencer, OffsetSequencer, SharedWal},
+    wal::{ControllerSequencer, LocalFsyncWal, OffsetSequencer, SharedWal},
 };
 
 fn seeded_log(path: &std::path::Path) -> Arc<Mutex<Log>> {
@@ -80,8 +82,8 @@ async fn a_reservation_refused_during_a_controller_election_answers_not_leader()
                 .build(),
         );
         let sequencer: Arc<dyn OffsetSequencer> = Arc::new(ControllerSequencer::new(controller));
-        let wal: SharedWal = Arc::new(crate::wal::LocalFsyncWal::new(log.clone()));
-        let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
+        let wal: SharedWal = Arc::new(LocalFsyncWal::new(log.clone()));
+        let log_dir_status = LogDirRegistry::default();
         let (tx, rx) = mpsc::channel(1);
         let writer = spawn_writer(
             dir.path(),
@@ -166,7 +168,7 @@ async fn diskless_acked_record_survives_reopen() {
     let dir = tempdir().expect("tempdir");
     {
         let log = open_default_log(dir.path());
-        let wal: Option<SharedWal> = Some(Arc::new(crate::wal::LocalFsyncWal::new(log.clone())));
+        let wal: Option<SharedWal> = Some(Arc::new(LocalFsyncWal::new(log.clone())));
         let (tx, rx) = mpsc::channel(1);
         let append_notify = Arc::new(Notify::new());
         let replica_state = replica_with_isr(&[1]).await;
@@ -296,7 +298,7 @@ async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
     let (_release_sync_tx, release_sync_rx) = oneshot::channel();
     let topic_id = uuid::Uuid::from_u128(13);
     let partition = PartitionIndex(0);
-    let cache = Arc::new(crate::diskless::hot_tail::HotTailCache::default());
+    let cache = Arc::new(HotTailCache::default());
     let mut encoded = BytesMut::new();
     sample_batch(EmptyPayloadBatchSetup {
         count: RecordCount(2),

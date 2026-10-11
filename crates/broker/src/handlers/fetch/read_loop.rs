@@ -672,6 +672,7 @@ mod tests {
         handlers::test_support::partition,
         metrics::RequestPhases,
         partition::{Partition, test_support::test_partition},
+        producer_state::ProducerState,
         test_support::{StandalonePartitionSetup, StorageMode},
     };
 
@@ -1392,7 +1393,7 @@ mod tests {
         .await
         .expect("append new-epoch record");
 
-        let phases = crate::metrics::RequestPhases::default();
+        let phases = RequestPhases::default();
         let mut state = state_for(&pending, PollStateSetup::default());
         super::long_poll_then_reread(&broker, &mut pending, Vec::new(), &mut state, &phases).await;
 
@@ -1554,7 +1555,7 @@ mod tests {
         }
         // Epoch 3 starts at offset 4, so epoch 2, which this log never saw,
         // ends there.
-        part.install_local_leadership(&crate::producer_state::ProducerState::new(), None, 1, 3)
+        part.install_local_leadership(&ProducerState::new(), None, 1, 3)
             .await
             .expect("promote");
         let mut pending = [super::PendingRead {

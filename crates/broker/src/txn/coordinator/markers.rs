@@ -20,6 +20,8 @@ use crate::{
         state::{TopicPartition, TxnEntry, TxnState},
     },
 };
+#[cfg(test)]
+use crate::{log_dir_status::LogDirRegistry, producer_state::ProducerState};
 
 const UNKNOWN_COORDINATOR_EPOCH: i32 = -1;
 
@@ -238,8 +240,8 @@ mod tests {
             PartitionIndex(0),
             dir.path().to_path_buf(),
             Log::open(&part_dir, LogConfig::default()).expect("open log"),
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
+            LogDirRegistry::default(),
+            Arc::new(ProducerState::new()),
             false,
         );
         // The metadata reconcile installs this broker as the leader.

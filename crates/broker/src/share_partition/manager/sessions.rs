@@ -104,6 +104,7 @@ mod tests {
     use crate::share_partition::{
         manager::test_support::{LOCK, SessionCapacity, manager, manager_with_unlimited_fallback},
         session::FetchPartitions,
+        state::AcquisitionState,
     };
 
     #[test]
@@ -157,12 +158,7 @@ mod tests {
     async fn disconnect_releases_the_sessions_acquired_records() {
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([27; 16]);
-        let cell = mgr.insert_for_test(
-            "g1",
-            tid,
-            0,
-            crate::share_partition::state::AcquisitionState::new(Offset(0)),
-        );
+        let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
         {
             let mut state = cell.lock().await;
             state.materialize(Offset(1), 100);

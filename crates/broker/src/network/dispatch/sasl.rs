@@ -18,6 +18,8 @@ use krabka_protocol::{
 use krabka_security::{AuthMethod, Principal, SaslMechanism};
 
 use super::response::encode_response;
+#[cfg(test)]
+use crate::BrokerConfig;
 use crate::{
     broker::Broker,
     codes,
@@ -841,7 +843,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn sasl_frames_are_intercepted_and_only_a_refusal_closes_the_connection() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut cfg = crate::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
         cfg.plain_credentials
             .insert("alice".to_string(), "wonderland".to_string());
         let handle = crate::Broker::start(cfg).await.expect("broker start");

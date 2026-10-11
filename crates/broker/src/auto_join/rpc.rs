@@ -177,7 +177,7 @@ mod tests {
     async fn send_add_raft_voter_errors_when_target_is_unreachable() {
         let target = unreachable_target().await;
 
-        let client = crate::network::client::InterBrokerClient::new(None, None);
+        let client = InterBrokerClient::new(None, None);
         let req = AddRaftVoterRequest::default();
         check_dial_refusal(
             send_add_raft_voter(
@@ -195,7 +195,7 @@ mod tests {
     async fn send_update_voter_errors_when_target_is_unreachable() {
         let target = unreachable_target().await;
 
-        let client = crate::network::client::InterBrokerClient::new(None, None);
+        let client = InterBrokerClient::new(None, None);
         let req = UpdateRaftVoterRequest::default();
         check_dial_refusal(
             send_update_voter(
@@ -213,7 +213,7 @@ mod tests {
     async fn send_remove_raft_voter_errors_when_target_is_unreachable() {
         let target = unreachable_target().await;
 
-        let client = crate::network::client::InterBrokerClient::new(None, None);
+        let client = InterBrokerClient::new(None, None);
         let req = RemoveRaftVoterRequest::default();
         check_dial_refusal(
             send_remove_raft_voter(

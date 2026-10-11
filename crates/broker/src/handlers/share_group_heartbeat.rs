@@ -7,6 +7,8 @@ use krabka_protocol::owned::{
     share_group_heartbeat_response::ShareGroupHeartbeatResponse,
 };
 
+#[cfg(test)]
+use crate::config::BrokerConfig;
 use crate::{
     broker::Broker,
     codes,
@@ -276,7 +278,7 @@ mod tests {
     async fn handle_disabled_feature_returns_unsupported_version() {
         let version = VERSION;
         let dir = tempfile::TempDir::new().expect("tempdir");
-        let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
         let broker_handle = Broker::start(cfg).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
         finalize_share_version(&broker, 0).await;

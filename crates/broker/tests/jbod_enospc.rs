@@ -32,8 +32,8 @@ use crate::support::{
     client::connect_with_context,
     discovery::named_topic_metadata,
     fetch::{
-        FetchByteLimit, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
-        fetch_partition, single_partition_fetch,
+        FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
+        SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
     },
     producer::{ProducerRecordSetup, no_retry_acks_all_producer, producer_record},
     remove_container_with_volumes,
@@ -658,7 +658,7 @@ async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<Stri
                         offset: krabka_ids::Offset(offset),
                         maximum: FetchByteLimit(1 << 24),
                     }),
-                    limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
+                    limits: FetchLimits::wait_for_data_with_maximum(
                         RequestWaitMillis(0),
                         FetchByteLimit(1 << 24),
                     ),

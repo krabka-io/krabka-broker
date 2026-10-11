@@ -18,7 +18,7 @@ use crate::{
     CLIENT_ID,
     kafka_wire::{self, ExchangeSetup as WireExchangeSetup},
     support::{
-        fetch::{RequestWaitMillis, named_topic_fetch},
+        fetch::{FetchLimits, RequestWaitMillis, named_topic_fetch},
         produce::{SinglePartitionProduceSetup, single_partition_produce},
         records::{batch_from_records, value_record},
         wire::{
@@ -111,10 +111,7 @@ pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: 
 
     let req = FetchRequest {
         replica_id,
-        ..named_topic_fetch(
-            topic,
-            crate::support::fetch::FetchLimits::one_mebibyte(RequestWaitMillis(0)),
-        )
+        ..named_topic_fetch(topic, FetchLimits::one_mebibyte(RequestWaitMillis(0)))
     };
 
     let mut stream = TcpStream::connect(addr).await.expect("connect");

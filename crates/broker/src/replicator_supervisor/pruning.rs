@@ -8,6 +8,8 @@ use krabka_metadata::MetadataImage;
 use tracing::warn;
 
 use super::{ReplicatorSupervisor, TopicPartition};
+#[cfg(test)]
+use crate::wal::quorum::engine::WalShardEngine;
 use crate::{
     log_dir::partition_dir,
     partition::Partition,
@@ -223,7 +225,7 @@ mod tests {
         };
         supervisor.wal_shards.insert(
             deleted_shard,
-            Arc::new(crate::wal::quorum::engine::WalShardEngine::for_logs(
+            Arc::new(WalShardEngine::for_logs(
                 maplit::btreemap! {NodeId(2) => original["deleted"].log.clone()},
             )),
         );
@@ -329,7 +331,7 @@ mod tests {
         };
         supervisor.wal_shards.insert(
             shard,
-            Arc::new(crate::wal::quorum::engine::WalShardEngine::for_logs(
+            Arc::new(WalShardEngine::for_logs(
                 maplit::btreemap! {NodeId(2) => original.log.clone()},
             )),
         );

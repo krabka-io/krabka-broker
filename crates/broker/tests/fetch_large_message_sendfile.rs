@@ -21,8 +21,8 @@ use assert2::assert;
 use crate::support::{
     client::create_topic,
     fetch::{
-        FetchByteLimit, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
-        fetch_partition, single_partition_fetch,
+        FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
+        SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
     },
     produce::{SinglePartitionProduceSetup, send_batch},
     records::value_record,
@@ -144,7 +144,7 @@ async fn large_message_fetch_round_trips_byte_exact() {
                     maximum: FetchByteLimit(8 * 1024 * 1024),
                     ..Default::default()
                 }),
-                limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
+                limits: FetchLimits::wait_for_data_with_maximum(
                     RequestWaitMillis(200),
                     FetchByteLimit(8 * 1024 * 1024),
                 ),

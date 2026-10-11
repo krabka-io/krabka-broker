@@ -220,7 +220,7 @@ mod tests {
         let (dir, partitions) = materialized_partition();
 
         // Resolve LogDirIds over the same temp dir.
-        let log_dir_ids = crate::log_dir_id::LogDirIds::resolve(&[dir.path().to_path_buf()]);
+        let log_dir_ids = LogDirIds::resolve(&[dir.path().to_path_buf()]);
 
         // Confirm the partition's log_dir equals the temp dir (the parent of
         // the placed partition sub-dir).

@@ -28,6 +28,8 @@ use super::{
     Config, connection::connection_options, replication_target_changed, response::RowAction,
     task_replication_target,
 };
+#[cfg(test)]
+use crate::config::ReplicationRuntimeConfig;
 use crate::{codes, network::client::InterBrokerError, partition::Partition};
 
 /// Where this follower truncates for a KIP-320 `diverging_epoch` row, as
@@ -862,9 +864,8 @@ mod tests {
     /// replica holding offsets 0..6 and a leader scripted per sentinel.
     #[tokio::test]
     async fn out_of_range_recovery_follows_kafka_fetch_offset_and_truncate() {
-        let backoff = RowAction::Backoff(
-            crate::config::ReplicationRuntimeConfig::default().unexpected_error_backoff,
-        );
+        let backoff =
+            RowAction::Backoff(ReplicationRuntimeConfig::default().unexpected_error_backoff);
         let lookup_failed = || Err::<i64, _>("scripted lookup failure".to_owned());
         let recovery = |action, asked: &[i64], log_start, log_end| Recovery {
             action,

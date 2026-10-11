@@ -13,7 +13,8 @@ use crate::{
     support::{
         client::connect_client,
         fetch::{
-            RequestWaitMillis, SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
+            FetchLimits, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
+            fetch_partition, single_partition_fetch,
         },
         produce::{SinglePartitionProduceSetup, batch_request},
     },
@@ -33,9 +34,9 @@ async fn fetch_with_epoch(
                 topic_id,
                 partition: FetchPartition {
                     current_leader_epoch: epoch,
-                    ..fetch_partition(crate::support::fetch::FetchPartitionSetup::default())
+                    ..fetch_partition(FetchPartitionSetup::default())
                 },
-                limits: crate::support::fetch::FetchLimits::one_mebibyte(RequestWaitMillis(100)),
+                limits: FetchLimits::one_mebibyte(RequestWaitMillis(100)),
             })
         })
         .await

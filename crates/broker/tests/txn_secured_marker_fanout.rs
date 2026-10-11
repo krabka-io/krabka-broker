@@ -67,7 +67,8 @@ use crate::support::{
     shutdown_cluster,
     topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
     transactions::{
-        EndTransactionSetup, InitProducerSetup, end_transaction_request, init_producer_request,
+        EndTransactionSetup, InitProducerSetup, ProducerIdentity, end_transaction_request,
+        init_producer_request,
     },
 };
 
@@ -426,7 +427,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
         .send(end_transaction_request(
             TID,
             EndTransactionSetup {
-                producer: crate::support::transactions::ProducerIdentity::from_wire((pid, epoch)),
+                producer: ProducerIdentity::from_wire((pid, epoch)),
                 ..Default::default()
             },
         ))
@@ -671,10 +672,7 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
             .send(end_transaction_request(
                 case.name,
                 EndTransactionSetup {
-                    producer: crate::support::transactions::ProducerIdentity::from_wire((
-                        init.producer_id,
-                        init.producer_epoch,
-                    )),
+                    producer: ProducerIdentity::from_wire((init.producer_id, init.producer_epoch)),
                     ..Default::default()
                 },
             ))

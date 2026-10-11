@@ -32,6 +32,8 @@ use krabka_protocol::{
     },
 };
 
+#[cfg(test)]
+use crate::producer_state::ProducerState;
 use crate::{
     broker::Broker,
     codes,
@@ -340,7 +342,7 @@ mod tests {
             krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
                 .expect("open log"),
             broker.log_dir_status.clone(),
-            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
+            std::sync::Arc::new(ProducerState::new()),
             false,
         );
         broker.partitions.insert(

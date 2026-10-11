@@ -18,6 +18,7 @@ use crate::{
         failover_with_alive, img_with_partition, liveness_with_alive, mark_witnesses_in_image,
         one_partition_change, set_cluster_default, set_topic_configs,
     },
+    metrics::BrokerMetrics,
 };
 
 fn unclean_single_isr_image() -> krabka_metadata::MetadataImage {
@@ -131,7 +132,7 @@ async fn failover_elects_unclean_when_topic_opts_in() {
     // (broker 2) as leader with singleton ISR.
     let img = unclean_single_isr_image();
     let l = liveness_with_alive(&[2u64, 3]).await;
-    let metrics = crate::metrics::BrokerMetrics::new();
+    let metrics = BrokerMetrics::new();
     let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
@@ -153,7 +154,7 @@ async fn failover_clean_does_not_bump_unclean_counter() {
         ..Default::default()
     });
     let l = liveness_with_alive(&[2u64, 3]).await;
-    let metrics = crate::metrics::BrokerMetrics::new();
+    let metrics = BrokerMetrics::new();
     let _ = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
     assert!(metrics.unclean_leader_elections_total.get() == 0);
 }
@@ -347,7 +348,7 @@ async fn failover_scan_leaves_a_witness_only_survivor_unavailable() {
     mark_witnesses_in_image(&mut img, &[2]);
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     l.record_heartbeat(2).await;
-    let metrics = crate::metrics::BrokerMetrics::new();
+    let metrics = BrokerMetrics::new();
     let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
     assert!(plan.changes.is_empty(), "got {:?}", plan.changes);
     assert!(plan.recoveries.is_empty());
@@ -413,7 +414,7 @@ async fn failover_elects_an_eligible_leader_replica_cleanly_under_every_policy()
         for n in [2u64, 3] {
             l.record_heartbeat(n).await;
         }
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
 
         let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
 
@@ -464,7 +465,7 @@ async fn a_dead_eligible_leader_replica_leaves_the_unclean_election_to_decide() 
     );
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     l.record_heartbeat(3).await;
-    let metrics = crate::metrics::BrokerMetrics::new();
+    let metrics = BrokerMetrics::new();
 
     let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
 

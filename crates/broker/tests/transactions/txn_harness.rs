@@ -24,7 +24,7 @@ use crate::support::{
     self,
     client::connect_client,
     sasl::sasl_plaintext_mechanisms,
-    transaction_wire::TransactionTopicSetup,
+    transaction_wire::{TransactionTopicSetup, create_topic as create_transaction_topic},
     transactions::{InitProducerSetup, new_producer_request},
 };
 
@@ -82,7 +82,7 @@ async fn create_topic_with_configs(
     configs: Vec<CreatableTopicConfig>,
 ) {
     let client = connect_client(bootstrap, None).await;
-    crate::support::transaction_wire::create_topic(
+    create_transaction_topic(
         &client,
         TransactionTopicSetup {
             name,
@@ -168,7 +168,7 @@ pub async fn create_topic_sasl(bootstrap: &str, name: &str, security: ClientSecu
         .build()
         .await
         .unwrap();
-    crate::support::transaction_wire::create_topic(
+    create_transaction_topic(
         &client,
         TransactionTopicSetup {
             name,

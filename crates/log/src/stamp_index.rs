@@ -522,11 +522,7 @@ mod tests {
 
         let idx2 = StampIndex::open(path).unwrap();
         assert2::assert!(
-            idx2.entries()
-                == &[
-                    crate::test_support::stamp_entry(5, 7, 1_000),
-                    crate::test_support::stamp_entry(10, 12, 2_000),
-                ]
+            idx2.entries() == &[stamp_entry(5, 7, 1_000), stamp_entry(10, 12, 2_000),]
         );
     }
 
@@ -564,20 +560,11 @@ mod tests {
         assert2::assert!(StampIndex::open(path).unwrap().entries() == [first, second]);
 
         for (name, entries) in [
-            ("inverted", vec![crate::test_support::stamp_entry(7, 6, 1)]),
-            (
-                "overlap",
-                vec![
-                    crate::test_support::stamp_entry(0, 4, 1),
-                    crate::test_support::stamp_entry(4, 8, 2),
-                ],
-            ),
+            ("inverted", vec![stamp_entry(7, 6, 1)]),
+            ("overlap", vec![stamp_entry(0, 4, 1), stamp_entry(4, 8, 2)]),
             (
                 "conflicting-retry",
-                vec![
-                    crate::test_support::stamp_entry(0, 4, 1),
-                    crate::test_support::stamp_entry(0, 4, 2),
-                ],
+                vec![stamp_entry(0, 4, 1), stamp_entry(0, 4, 2)],
             ),
         ] {
             let path = dir.path().join(format!("{name}.stampindex"));
@@ -619,7 +606,7 @@ mod tests {
         assert2::assert!(idx.entries() == [original]);
         assert2::assert!(
             let LogError::Io(_) = idx
-                .append(crate::test_support::stamp_entry(4, 5, 300))
+                .append(stamp_entry(4, 5, 300))
                 .unwrap_err()
         );
         assert2::assert!(idx.entries() == [original]);
@@ -681,10 +668,7 @@ mod tests {
         ]);
 
         idx.truncate_from(Offset(6)).unwrap();
-        assert2::assert!(
-            StampIndex::open(path).unwrap().entries()
-                == [crate::test_support::stamp_entry(0, 2, 100)]
-        );
+        assert2::assert!(StampIndex::open(path).unwrap().entries() == [stamp_entry(0, 2, 100)]);
     }
 
     #[test]
@@ -696,10 +680,7 @@ mod tests {
         assert2::assert!(idx.entries().len() == 2);
         idx.remove_ranges(&[(Offset(2), Offset(3))]).unwrap();
 
-        assert2::assert!(
-            StampIndex::open(path).unwrap().entries()
-                == [crate::test_support::stamp_entry(0, 1, 10)]
-        );
+        assert2::assert!(StampIndex::open(path).unwrap().entries() == [stamp_entry(0, 1, 10)]);
     }
 
     #[test]

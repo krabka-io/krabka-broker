@@ -9,6 +9,8 @@ use krabka_protocol::owned::{
 };
 
 use super::acl_wire::CLUSTER_RESOURCE_NAME;
+#[cfg(test)]
+use crate::authorizer::SimpleAclAuthorizer;
 use crate::{
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, INVALID_REQUEST, NONE, UNSUPPORTED_VERSION},
@@ -429,9 +431,9 @@ mod tests {
     /// A denial carries the default message, which Kafka sends as null.
     #[tokio::test]
     async fn cluster_describe_configs_gates_the_quota_read() {
-        let (broker_handle, _dir) = start_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
+        let (broker_handle, _dir) = start_broker(Arc::new(SimpleAclAuthorizer::new(
+            std::collections::HashSet::new(),
+        )))
         .await;
         seed_alice_quota(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();

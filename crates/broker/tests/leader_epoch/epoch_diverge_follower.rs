@@ -16,6 +16,7 @@ use crate::{
         client::connect_client,
         produce::{SinglePartitionProduceSetup, batch_request},
         registered_cluster, shutdown_cluster,
+        topics::AssignedTopicSetup,
     },
 };
 
@@ -53,7 +54,7 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
     let admin = connect_client(leader_addr.clone(), None).await;
     let topic_id = support::topics::create_assigned_partition(
         &admin,
-        crate::support::topics::AssignedTopicSetup::three_replicas("divtrunc"),
+        AssignedTopicSetup::three_replicas("divtrunc"),
         cluster.iter().map(|(broker, _, _)| broker),
     )
     .await;

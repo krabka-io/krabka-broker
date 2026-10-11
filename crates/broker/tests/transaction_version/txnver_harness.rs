@@ -14,7 +14,7 @@ use crate::support::{
     client::connect_client,
     discovery::{coordinator_lookup_request, topic_metadata_request},
     topics::TopicPartitionCount,
-    transaction_wire::TransactionTopicSetup,
+    transaction_wire::{TransactionTopicSetup, create_topic as create_transaction_topic},
 };
 
 // Kafka error codes asserted below.
@@ -28,7 +28,7 @@ pub async fn admin_client(bootstrap: &str) -> Client {
 }
 
 pub async fn create_topic(client: &Client, name: &str, partitions: TopicPartitionCount) {
-    crate::support::transaction_wire::create_topic(
+    create_transaction_topic(
         client,
         TransactionTopicSetup {
             name,

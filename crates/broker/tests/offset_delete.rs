@@ -10,6 +10,7 @@ use assert2::{assert, check};
 
 use crate::support::{
     classic::{ClassicJoinSetup, ClassicTimeouts, classic_join_request, join_protocol},
+    client::create_topic as create_support_topic,
     offsets::{
         offset_commit_partition, offset_commit_topic, offset_delete_partition,
         offset_delete_request, offset_delete_topic, offset_fetch_group, offset_fetch_request,
@@ -42,7 +43,7 @@ async fn start() -> support::InProcess {
 }
 
 async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
-    crate::support::client::create_topic(&p.client, name, num_partitions).await;
+    create_support_topic(&p.client, name, num_partitions).await;
 }
 
 async fn commit_offset(p: &support::InProcess, group: &str, topic: &str, partition: i32, off: i64) {

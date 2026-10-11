@@ -317,6 +317,7 @@ mod tests {
     use crate::{
         codes,
         coordinator::unified::streams::config::KEY_SHARE_AUTO_OFFSET_RESET,
+        partition_registry::PartitionRegistry,
         share_partition::{
             manager::test_support::{
                 DataPartitionSetup, manager, manager_with_image_and_partitions, open_data_partition,
@@ -343,7 +344,7 @@ mod tests {
         let tid = uuid::Uuid::from_bytes([41; 16]);
         let now = now_ms();
         let hour = 60 * 60 * 1_000;
-        let reg = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let reg = std::sync::Arc::new(PartitionRegistry::new());
         open_data_partition(
             &reg,
             dir.path(),
@@ -444,7 +445,7 @@ mod tests {
         let tid = uuid::Uuid::from_bytes([42; 16]);
         let now = now_ms();
         let hour = 60 * 60 * 1_000;
-        let reg = Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let reg = Arc::new(PartitionRegistry::new());
         open_data_partition(
             &reg,
             dir.path(),

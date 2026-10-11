@@ -138,6 +138,7 @@ mod tests {
             coordinator::test_support::{image_with_topic, share_write},
             handlers::test_support::lead_share_state_partitions,
         },
+        share_partition::state::AcquisitionState,
         test_support::start_broker_with,
     };
 
@@ -236,7 +237,7 @@ mod tests {
             acquired_group,
             acquired_topic_id,
             0,
-            crate::share_partition::state::AcquisitionState::new(krabka_log::Offset(0)),
+            AcquisitionState::new(krabka_log::Offset(0)),
         );
         assert2::assert!(
             tokio::time::timeout(

@@ -35,6 +35,8 @@ use krabka_protocol::owned::{
     list_groups_response::{ListGroupsResponse, ListedGroup},
 };
 
+#[cfg(test)]
+use crate::authorizer::SimpleAclAuthorizer;
 use crate::{
     broker::Broker,
     codes,
@@ -361,9 +363,9 @@ mod tests {
 
         for (user, acls, expected_groups) in rows {
             let (broker_handle, _dir) = start_broker_no_audit_with(|cfg| {
-                cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
-                    HashSet::from(["admin".to_string()]),
-                ));
+                cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(HashSet::from([
+                    "admin".to_string()
+                ])));
             })
             .await;
             let broker = broker_handle.broker_arc_for_test();

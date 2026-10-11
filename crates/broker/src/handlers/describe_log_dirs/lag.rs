@@ -139,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn offset_lag_matches_kafka() {
         let dir = tempfile::tempdir().unwrap();
-        let reg = crate::partition_registry::PartitionRegistry::new();
+        let reg = PartitionRegistry::new();
         let part = partition_with_leo(
             dir.path(),
             PartitionLogSetup {
@@ -182,7 +182,7 @@ mod tests {
     #[tokio::test]
     async fn future_offset_lag_matches_kafka() {
         let cur_dir = tempfile::tempdir().unwrap();
-        let reg = crate::partition_registry::PartitionRegistry::new();
+        let reg = PartitionRegistry::new();
         let part = partition_with_leo(
             cur_dir.path(),
             PartitionLogSetup {

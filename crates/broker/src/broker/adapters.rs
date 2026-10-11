@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
+use crate::test_support::FakeMetadataSource;
 use crate::{delegation_token_cleanup::DelegationTokenController, metadata_source::MetadataSource};
 
 /// Wraps a real [`krabka_raft::ControllerHandle`] so it can satisfy the
@@ -160,7 +162,7 @@ mod tests {
         // The only site that needs a rejecting write: each trait must
         // surface the controller's error rather than swallow it into `Ok`.
         let source: Arc<dyn MetadataSource> = Arc::new(
-            crate::test_support::FakeMetadataSource::builder()
+            FakeMetadataSource::builder()
                 .image(krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(
                     1,
                 )))

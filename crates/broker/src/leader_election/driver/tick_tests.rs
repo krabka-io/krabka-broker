@@ -8,7 +8,10 @@ use assert2::assert;
 
 use super::*;
 use crate::{
-    heartbeat::{controller_state::TestClock, fencing::registration_change},
+    heartbeat::{
+        controller_state::TestClock,
+        fencing::{RegistrationChange, registration_change},
+    },
     leader_election::test_support::{
         ElectionSetup, expected_clean_election, fake_source, fencing_updates, img_with_partition,
         one_partition_change, partition_batches, recovery_handle_for_tests, register_brokers,
@@ -176,12 +179,8 @@ async fn tick_leaves_the_unfence_of_a_returning_broker_to_its_heartbeat() {
         ..Default::default()
     });
     register_brokers(&mut img, &[1, 2, 3]);
-    let fence = registration_change(
-        &img,
-        NodeId(3),
-        crate::heartbeat::fencing::RegistrationChange::FENCE,
-    )
-    .expect("broker 3 is registered and unfenced");
+    let fence = registration_change(&img, NodeId(3), RegistrationChange::FENCE)
+        .expect("broker 3 is registered and unfenced");
     img.apply(&fence);
     let mut fixture = TickFixture::new(img, 2, true);
     for broker in [1, 2, 3] {

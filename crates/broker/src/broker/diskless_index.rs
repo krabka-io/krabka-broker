@@ -9,6 +9,8 @@ use krabka_remote_storage_topic::MetadataEventLog;
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+use crate::diskless::index_log::test_support::PacedReplayLog;
 use crate::{
     broker::rlmm::{KafkaSwapKickoff, metadata_log_config, rlmm_bootstrap_backoff},
     config::KafkaRlmmConfig,
@@ -264,12 +266,10 @@ mod tests {
                 .attempts
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if attempt == 0 {
-                return Ok(
-                    crate::diskless::index_log::test_support::PacedReplayLog::new(
-                        Arc::clone(&self.inner),
-                        ReplayPace::Never,
-                    ),
-                );
+                return Ok(PacedReplayLog::new(
+                    Arc::clone(&self.inner),
+                    ReplayPace::Never,
+                ));
             }
             Ok(Arc::clone(&self.inner))
         }
@@ -281,7 +281,7 @@ mod tests {
         // replay and its silent stream really does stall.
         let event_log: Arc<dyn MetadataEventLog> =
             krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
-        let seed = crate::diskless::index_log::DisklessIndexLog::start(Arc::clone(&event_log))
+        let seed = DisklessIndexLog::start(Arc::clone(&event_log))
             .await
             .unwrap();
         seed.publish_flush(&WalFlushRecord {
@@ -311,9 +311,7 @@ mod tests {
         let startup = test_startup(Arc::clone(&ready));
         let bootstrap = bootstrap_from_source(
             &source,
-            Arc::new(tokio::sync::Mutex::new(
-                crate::diskless::wal_index::WalIndexCache::default(),
-            )),
+            Arc::new(tokio::sync::Mutex::new(WalIndexCache::default())),
             &kickoff,
             &startup,
             &shutdown,
@@ -363,9 +361,7 @@ mod tests {
         };
         let shutdown = CancellationToken::new();
         let bootstrap = bootstrap_diskless_index_log(
-            Arc::new(tokio::sync::Mutex::new(
-                crate::diskless::wal_index::WalIndexCache::default(),
-            )),
+            Arc::new(tokio::sync::Mutex::new(WalIndexCache::default())),
             kickoff,
             flusher,
             shutdown.clone(),

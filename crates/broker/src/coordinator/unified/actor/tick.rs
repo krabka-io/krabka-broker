@@ -13,8 +13,13 @@ use super::{
     persistence::{flush_classic_metadata, flush_pending},
     waiters::settle_removed_classic_waiters,
 };
+#[cfg(test)]
+use crate::coordinator::unified::share::config::ShareGroupConfig;
+#[cfg(test)]
+use crate::coordinator::unified::streams::config::StreamsGroupConfig;
 use crate::{
     coordinator::unified::{classic_state::ClassicGroup as ClassicState, group::CoordinatorGroup},
+    error::BrokerError,
     metadata_epoch::next_i32,
 };
 
@@ -122,7 +127,7 @@ async fn settle_classic_removal(
 async fn handle_session_tick(
     group: &mut CoordinatorGroup,
     services: ActorServices<'_>,
-) -> Result<(), crate::error::BrokerError> {
+) -> Result<(), BrokerError> {
     let now = Instant::now();
     let Some(state) = group.as_consumer_mut() else {
         return Ok(());
@@ -462,7 +467,7 @@ mod tests {
                 session_expiry_tick: Duration::from_hours(1),
                 ..NextGenConfig::assigning_at_once()
             },
-            crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
+            ShareGroupConfig::assigning_at_once(),
             Arc::new(StaticMetadata {
                 input: ReconcileInput {
                     topic_id_by_name: [("t".to_string(), topic)].into(),
@@ -471,7 +476,7 @@ mod tests {
                 },
             }),
             Arc::new(InMemoryOffsetsLog::default()),
-            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+            StreamsGroupConfig::default(),
         ));
         let handle = coord.get_or_create_consumer("g");
         let heartbeat = |member_id: &'static str,
@@ -557,10 +562,10 @@ mod tests {
                 session_expiry_tick: tick_interval,
                 ..NextGenConfig::assigning_at_once()
             },
-            crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
+            ShareGroupConfig::assigning_at_once(),
             empty_metadata(),
             log.clone(),
-            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+            StreamsGroupConfig::default(),
         ));
 
         let handle = coord.get_or_create_group("g", GroupKindTag::Classic);

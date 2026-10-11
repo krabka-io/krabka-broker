@@ -312,7 +312,7 @@ mod tests {
     async fn marker_dispatch_skips_deleted_partition() {
         let image = MetadataImage::default();
         let client = plaintext_client();
-        let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let partitions = std::sync::Arc::new(PartitionRegistry::new());
         let mut entry = marker_entry();
         entry.partitions.insert(tps().remove(0));
 
@@ -335,7 +335,7 @@ mod tests {
 
         let image = MetadataImage::default();
         let client = plaintext_client();
-        let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let partitions = std::sync::Arc::new(PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
         let part = open_partition(
             dir.path(),
@@ -404,7 +404,7 @@ mod tests {
         ));
 
         let client = plaintext_client();
-        let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let partitions = std::sync::Arc::new(PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
         let local_partition = open_partition(
             dir.path(),
@@ -490,8 +490,7 @@ mod tests {
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for (case, catches_up, written, failure) in cases {
-            let partitions =
-                std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
+            let partitions = std::sync::Arc::new(PartitionRegistry::new());
             let dir = tempfile::tempdir().expect("tempdir");
             let part = open_partition(
                 dir.path(),

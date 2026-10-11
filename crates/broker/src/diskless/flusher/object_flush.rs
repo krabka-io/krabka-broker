@@ -301,7 +301,7 @@ mod tests {
         let record = flush_once(
             store.clone(),
             7,
-            &crate::metrics::BrokerMetrics::new(),
+            &BrokerMetrics::new(),
             &index,
             cache.clone(),
             &[FlushPartition {
@@ -328,7 +328,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let handle = orders_partition(dir.path());
         let index = test_index_log().await;
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
         let topic_id = Uuid::from_u128(11);
         let checks = AtomicUsize::new(0);
         metrics.initialize_diskless_wal_flusher_metrics(
@@ -377,7 +377,7 @@ mod tests {
         let store: Arc<dyn ObjectStore> = Arc::new(store);
         let handle = orders_partition(dir.path());
         let index = test_index_log().await;
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
 
         let error = flush_once(
             store,
@@ -421,7 +421,7 @@ mod tests {
         let record = flush_once(
             store,
             7,
-            &crate::metrics::BrokerMetrics::new(),
+            &BrokerMetrics::new(),
             &index,
             cache,
             &[FlushPartition {
@@ -500,7 +500,7 @@ mod tests {
         let record = flush_once(
             store,
             7,
-            &crate::metrics::BrokerMetrics::new(),
+            &BrokerMetrics::new(),
             &index,
             cache,
             &[

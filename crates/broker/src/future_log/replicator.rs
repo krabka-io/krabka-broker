@@ -23,6 +23,8 @@ use super::{
     catch_up::catch_up,
     truncation::{cut_future_log, truncate_to_current_epochs},
 };
+#[cfg(test)]
+use crate::test_support::PartitionRecordsSetup;
 use crate::{
     partition::{Partition, SwapOutcome, WriterMessage},
     partition_registry::PartitionRegistry,
@@ -304,10 +306,7 @@ mod tests {
                 == canonicalize_or_self(target.path())
         );
         assert!(source.partition.stamp_for_offset(Offset(0)) == Some(101));
-        append_records(
-            &source.partition,
-            crate::test_support::PartitionRecordsSetup::default(),
-        );
+        append_records(&source.partition, PartitionRecordsSetup::default());
         assert!(source.partition.stamp_for_offset(Offset(3)) == Some(102));
     }
 

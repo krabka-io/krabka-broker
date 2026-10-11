@@ -22,9 +22,12 @@ use crate::coordinator::unified::{
     share::{actor::test_support::TopicMetadataSetup, config::ShareGroupConfig},
     test_support::{check_group_session_timeout, fixed_source},
 };
-use crate::coordinator::unified::{
-    share::actor::test_support::InitializedTopicSetup,
-    test_support::{check_group_assignment_timing, group_config_image as group_image},
+use crate::{
+    coordinator::unified::{
+        share::actor::test_support::InitializedTopicSetup,
+        test_support::{check_group_assignment_timing, group_config_image as group_image},
+    },
+    test_support::FakeMetadataSource,
 };
 
 /// A coordinator over topic `t` with four partitions, whose metadata image
@@ -51,7 +54,7 @@ async fn a_heartbeat_runs_with_the_group_config_of_the_moment_it_arrives() {
         TopicMetadataSetup::four_partitions(),
         ShareGroupConfig::assigning_at_once(),
     );
-    let source = Arc::new(crate::test_support::FakeMetadataSource::builder().build());
+    let source = Arc::new(FakeMetadataSource::builder().build());
     coordinator.set_metadata_source(source.clone());
     let handle = coordinator.get_or_create_share("g");
     let joined = join(&handle, "m1", 0).await;

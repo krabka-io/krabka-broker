@@ -23,6 +23,10 @@ use krabka_protocol::owned::{
     describe_cluster_response::{DescribeClusterBroker, DescribeClusterResponse},
 };
 
+#[cfg(test)]
+use crate::authorizer::SimpleAclAuthorizer;
+#[cfg(test)]
+use crate::handlers::RequestContext;
 use crate::{
     codes,
     handlers::{
@@ -398,9 +402,7 @@ mod tests {
     /// does -- it never falls through to computing a partial mask.
     #[tokio::test]
     async fn cluster_authorized_operations_reads_zero_without_describe_even_with_other_acls() {
-        let authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
-            std::collections::HashSet::new(),
-        ));
+        let authorizer = Arc::new(SimpleAclAuthorizer::new(std::collections::HashSet::new()));
         let (broker_handle, _dir) =
             start_broker(Arc::clone(&authorizer) as Arc<dyn Authorizer>).await;
         broker_handle
@@ -526,7 +528,7 @@ mod tests {
         request_identity!((p, peer), principal("admin"));
 
         for (listener, expected_brokers, controllers) in cases {
-            let ctx = crate::handlers::RequestContext::new(
+            let ctx = RequestContext::new(
                 &p,
                 &peer,
                 "admin-client",

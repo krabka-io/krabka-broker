@@ -221,7 +221,7 @@ mod tests {
         clone.close();
         log.emit(life(NodeId(2)));
 
-        check!(rx.recv().await == Some(life(crate::NodeId(1))));
+        check!(rx.recv().await == Some(life(NodeId(1))));
         check!(rx.recv().await.is_none());
         check!(log.dropped() == 0);
     }

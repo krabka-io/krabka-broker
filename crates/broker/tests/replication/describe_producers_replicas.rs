@@ -41,7 +41,8 @@ use crate::{
         client::connect_with_context,
         produce::{SinglePartitionProduceSetup, batch_request},
         shutdown_cluster,
-        transactions::TransactionOutcome,
+        topics::CreateTopicRequestSetup,
+        transactions::{ProducerIdentity, TransactionOutcome},
     },
 };
 
@@ -179,10 +180,7 @@ async fn end_transaction(
         .send(WriteTxnMarkersRequest {
             markers: vec![crate::support::transactions::transaction_marker(
                 crate::support::transactions::TransactionMarkerSetup {
-                    producer: crate::support::transactions::ProducerIdentity::from_wire((
-                        producer_id,
-                        producer_epoch,
-                    )),
+                    producer: ProducerIdentity::from_wire((producer_id, producer_epoch)),
                     outcome: commit,
                     coordinator_epoch: crate::support::transactions::CoordinatorEpoch(
                         COORDINATOR_EPOCH,
@@ -263,7 +261,7 @@ async fn every_replica_describes_the_producers_of_its_log() {
     let topic_id = support::client::create_topic_spec(
         &admin,
         support::topic_on(TOPIC, &[&[1, 2, 3]]),
-        crate::support::topics::CreateTopicRequestSetup::default(),
+        CreateTopicRequestSetup::default(),
     )
     .await;
     for (handle, _, _) in &cluster {

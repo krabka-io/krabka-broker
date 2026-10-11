@@ -15,6 +15,8 @@ use super::{
     response::{build_assignment_resp, error_resp},
     share_state::{cleanup_deleted_topics, prepare_initialize, start_initialize},
 };
+#[cfg(test)]
+use crate::coordinator::unified::streams::config::StreamsGroupConfig;
 use crate::{
     codes,
     coordinator::unified::{
@@ -334,7 +336,7 @@ mod tests {
             },
             metadata,
             log,
-            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+            StreamsGroupConfig::default(),
         ));
         let handle = coord.get_or_create_share("g");
         assert_single_member_limit(

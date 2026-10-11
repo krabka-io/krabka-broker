@@ -470,7 +470,7 @@ mod tests {
         partition::{AppendedBatch, test_support::test_partition},
         partition_writer::storage_failure_error,
         producer_state::ProducerState,
-        test_support::spawn_standalone_partition,
+        test_support::{StandalonePartitionSetup, spawn_standalone_partition},
     };
 
     /// Kafka's `acks=all` completion: `DelayedProduce` leaves an expired wait
@@ -567,7 +567,7 @@ mod tests {
             let partition = spawn_standalone_partition(
                 dir.path(),
                 krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).expect("log"),
-                crate::test_support::StandalonePartitionSetup::default(),
+                StandalonePartitionSetup::default(),
             );
             let isr: Vec<NodeId> = case.isr.iter().copied().map(NodeId).collect();
             partition

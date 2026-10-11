@@ -8,7 +8,10 @@ use super::{
         producer_batch,
     },
 };
-use crate::{producer_state::test_support::opened_log, test_support::default_records_batch};
+use crate::{
+    producer_state::test_support::opened_log,
+    test_support::{EmptyPayloadBatchSetup, default_records_batch},
+};
 
 #[tokio::test]
 async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
@@ -22,10 +25,8 @@ async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
             }))
             .unwrap();
         }
-        log.append(&mut default_records_batch(
-            crate::test_support::EmptyPayloadBatchSetup::default(),
-        ))
-        .unwrap();
+        log.append(&mut default_records_batch(EmptyPayloadBatchSetup::default()))
+            .unwrap();
         log.truncate_to(krabka_log::Offset(cut)).unwrap();
         let end = log.log_end_offset().0;
         let expected_end = match cut {

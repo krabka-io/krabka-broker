@@ -23,6 +23,8 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
+#[cfg(test)]
+use crate::test_support::StandalonePartitionSetup;
 use crate::{
     codes,
     error::BrokerError,
@@ -192,11 +194,7 @@ mod tests {
         let part_dir = partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
-        let part = spawn_standalone_partition(
-            dir.path(),
-            log,
-            crate::test_support::StandalonePartitionSetup::default(),
-        );
+        let part = spawn_standalone_partition(dir.path(), log, StandalonePartitionSetup::default());
         part.current_leader_epoch.store(11, Ordering::Release);
         broker
             .partitions

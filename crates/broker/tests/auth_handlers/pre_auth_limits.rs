@@ -44,7 +44,7 @@ use crate::{
         topics::metadata_topic,
         wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-            SocketExchangeSetup, WireFrameSetup,
+            SocketExchangeSetup, WireFrameSetup, request_frame as support_request_frame,
         },
     },
 };
@@ -85,7 +85,7 @@ struct RequestFrameSetup<'a> {
 
 /// A sized request frame with the pre-authentication client's header.
 fn request_frame(setup: RequestFrameSetup<'_>) -> Vec<u8> {
-    let frame = crate::support::wire::request_frame(WireFrameSetup {
+    let frame = support_request_frame(WireFrameSetup {
         api_key: setup.api_key,
         version: setup.version,
         correlation: setup.correlation,

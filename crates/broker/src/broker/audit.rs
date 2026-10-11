@@ -243,7 +243,7 @@ mod tests {
         spawn_audit_metrics(
             stats,
             log.clone(),
-            crate::metrics::BrokerMetrics::new(),
+            BrokerMetrics::new(),
             minutes(1),
             shutdown.child_token(),
         );

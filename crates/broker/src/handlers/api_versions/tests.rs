@@ -16,12 +16,14 @@ use krabka_protocol::{
 
 use super::*;
 use crate::{
+    SslPrincipalMapper,
     api_catalog::{
         ClientMetricsReceiver, ListenerKind, UnstableApiVersions, VersionGates, supported_apis,
     },
     cluster_id::encode,
     codes,
     config::ListenerSpec,
+    handlers::RequestContext,
     test_support::{decode_response as decode_wire_response, peer, principal, start_broker_with},
 };
 
@@ -203,7 +205,7 @@ async fn api_versions_answers_every_version_on_every_listener_shape() {
                 protocol: krabka_security::ListenerProtocol::Plaintext,
                 tls_config: None,
                 sasl_mechanisms: None,
-                principal_mapper: crate::SslPrincipalMapper::default(),
+                principal_mapper: SslPrincipalMapper::default(),
             };
             let internal = ListenerSpec {
                 name: "INTERNAL".to_string(),
@@ -219,7 +221,7 @@ async fn api_versions_answers_every_version_on_every_listener_shape() {
         let broker = broker_handle.broker_arc_for_test();
         let principal = anonymous_principal();
         let peer = peer();
-        let context = crate::handlers::RequestContext::new(
+        let context = RequestContext::new(
             &principal,
             &peer,
             "krabka-test",

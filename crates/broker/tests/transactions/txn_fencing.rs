@@ -17,7 +17,8 @@ use crate::{
         consumer_groups::joining_consumer,
         producer::transactional_producer,
         transactions::{
-            InitProducerSetup, init_producer_request, txn_offset_partition, txn_offset_topic,
+            InitProducerSetup, ProducerIdentity, init_producer_request, txn_offset_partition,
+            txn_offset_topic,
         },
     },
     txn_harness::{boot_single, boot_single_trunk, create_topic, init_transaction, rec, send_ok},
@@ -147,10 +148,7 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
             let bump = client
                 .send(init_producer_request(InitProducerSetup {
                     transactional_id: Some(tid.clone()),
-                    producer: crate::support::transactions::ProducerIdentity::from_wire((
-                        producer_id,
-                        producer_epoch,
-                    )),
+                    producer: ProducerIdentity::from_wire((producer_id, producer_epoch)),
                     ..Default::default()
                 }))
                 .await
@@ -168,10 +166,7 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
         let response = client
             .send(init_producer_request(InitProducerSetup {
                 transactional_id: Some(tid.clone()),
-                producer: crate::support::transactions::ProducerIdentity::from_wire((
-                    request_id,
-                    request_epoch,
-                )),
+                producer: ProducerIdentity::from_wire((request_id, request_epoch)),
                 ..Default::default()
             }))
             .await

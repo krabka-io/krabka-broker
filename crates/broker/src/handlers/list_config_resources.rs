@@ -20,6 +20,8 @@ use krabka_protocol::owned::{
     list_config_resources_response::{ConfigResource, ListConfigResourcesResponse},
 };
 
+#[cfg(test)]
+use crate::authorizer::SimpleAclAuthorizer;
 use crate::{
     broker::Broker,
     codes,
@@ -453,9 +455,9 @@ mod tests {
     /// `CLUSTER_AUTHORIZATION_FAILED` and no resources.
     #[tokio::test]
     async fn cluster_describe_configs_gates_the_enumeration() {
-        let (broker_handle, _dir) = start_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
+        let (broker_handle, _dir) = start_broker(Arc::new(SimpleAclAuthorizer::new(
+            std::collections::HashSet::new(),
+        )))
         .await;
         seed_topic(&broker_handle, "orders").await;
         let broker = broker_handle.broker_arc_for_test();

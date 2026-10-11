@@ -7,6 +7,10 @@ use std::{path::PathBuf, sync::Arc};
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig};
 
+#[cfg(test)]
+use crate::diskless::hot_tail::HotTailCache;
+#[cfg(test)]
+use crate::wal::quorum::registry::WalShardRegistry;
 use crate::{
     broker::{
         PartitionSpawnConfig, try_spawn_partition_with_replication_target,
@@ -365,14 +369,12 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let partitions = Arc::new(PartitionRegistry::new());
         let topic_id = uuid::Uuid::from_u128(0xD15C);
-        let hot_tail = Arc::new(crate::diskless::hot_tail::HotTailCache::default());
-        let wal_shards = Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(
-            krabka_raft::NodeId(0),
-        ));
+        let hot_tail = Arc::new(HotTailCache::default());
+        let wal_shards = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(0)));
 
         materialize_partition(MaterializePartitionConfig {
             topic_id: Some(topic_id),
-            runtime: crate::partition::PartitionRuntimeConfig::new(
+            runtime: PartitionRuntimeConfig::new(
                 (1_024, 64, 3),
                 true,
                 (Some(hot_tail), Some(wal_shards.clone()), None),

@@ -17,9 +17,10 @@ use crate::{
         framing::PartitionPayload,
         pipeline::{PartitionInput, process_partition},
         test_support::{
-            PipelinePartitionSetup, encode_batch, image_with_overrides as image_with_delivery,
-            pipeline_input,
+            PipelineFixture, PipelinePartitionSetup, encode_batch,
+            image_with_overrides as image_with_delivery, pipeline_input,
         },
+        topic_settings::TimestampPolicy,
     },
 };
 
@@ -183,8 +184,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
         ],
     ));
     let delivery = resolve_delivery_gate(&image, "sched");
-    let fixture =
-        crate::handlers::produce::test_support::PipelineFixture::new(krabka_ids::NodeId(1));
+    let fixture = PipelineFixture::new(krabka_ids::NodeId(1));
 
     let part = fixture
         .partition_with_config(
@@ -257,7 +257,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
     for (delivery_ms, want, label) in cases {
         let resp = process_partition(
             PartitionInput {
-                timestamps: crate::handlers::produce::topic_settings::TimestampPolicy::default(),
+                timestamps: TimestampPolicy::default(),
                 delivery,
                 ..pipeline_input(
                     "sched",

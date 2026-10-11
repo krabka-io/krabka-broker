@@ -8,6 +8,7 @@
 use assert2::{assert, check};
 
 use crate::support::{
+    client::create_topic as create_support_topic,
     fetch::{
         FetchByteLimit, FetchLimits, FetchSessionEpoch, FetchSessionId, FetchSessionSetup,
         RequestWaitMillis, default_fetch_limits, empty_session_fetch, fetch_request_for,
@@ -43,7 +44,7 @@ async fn incremental_after_produce(
 }
 
 async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
-    crate::support::client::create_topic(&p.client, name, num_partitions).await;
+    create_support_topic(&p.client, name, num_partitions).await;
 }
 
 async fn produce(p: &support::InProcess, topic: &str, partition: i32, records: i32) {

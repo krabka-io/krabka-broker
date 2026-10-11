@@ -3,8 +3,14 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
+    config::BrokerConfig,
     log_dir::partition_dir,
-    wal::quorum::{registry::ShardId, wire::fetch_request},
+    log_dir_status::LogDirRegistry,
+    producer_state::ProducerState,
+    wal::quorum::{
+        registry::{ShardId, WalShardRegistry},
+        wire::{QuorumGroup, fetch_request},
+    },
 };
 
 #[tokio::test]
@@ -16,14 +22,10 @@ async fn nondefault_partition_writer_queue_depth_backpressures_at_bound() {
         partition_id: PartitionIndex(0),
         log_dir: dir.path().to_path_buf(),
         log: krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).expect("open log"),
-        log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
-        producer_state: Arc::new(crate::producer_state::ProducerState::new()),
+        log_dir_status: LogDirRegistry::default(),
+        producer_state: Arc::new(ProducerState::new()),
         runtime: PartitionRuntimeConfig::new(
-            (
-                crate::config::BrokerConfig::default().max_produce_group,
-                2,
-                3,
-            ),
+            (BrokerConfig::default().max_produce_group, 2, 3),
             false,
             (None, None, None),
         ),
@@ -112,9 +114,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         topic_id,
         partition: PartitionIndex(0),
     };
-    let registry = Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(
-        krabka_raft::NodeId(1),
-    ));
+    let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(1)));
     registry.replace_placements(
         &maplit::hashmap! {shard => crate::wal::quorum::registry::WalPlacement {
             voters: vec![
@@ -146,8 +146,8 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         partition_id: PartitionIndex(0),
         log_dir: dir.path().to_path_buf(),
         log,
-        log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
-        producer_state: Arc::new(crate::producer_state::ProducerState::new()),
+        log_dir_status: LogDirRegistry::default(),
+        producer_state: Arc::new(ProducerState::new()),
         runtime: PartitionRuntimeConfig::new(
             (1_024, 64, 3),
             true,
@@ -158,7 +158,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
     assert!(partition.high_watermark().await == krabka_log::Offset(0));
 
     let acknowledgement = fetch_request(
-        crate::wal::quorum::wire::QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
+        QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
         krabka_raft::NodeId(2),
         0,
         0,

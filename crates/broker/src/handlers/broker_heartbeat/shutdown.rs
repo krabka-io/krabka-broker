@@ -148,7 +148,7 @@ mod tests {
             mark_witnesses_in_image(&mut image, case.witnesses);
             let alive: Vec<NodeId> = case.alive.iter().map(node).collect();
             let liveness = liveness_with(&alive).await;
-            let metrics = crate::metrics::BrokerMetrics::new();
+            let metrics = BrokerMetrics::new();
 
             let left = leave_isrs(&image, NodeId(1), &liveness, &metrics).await;
 

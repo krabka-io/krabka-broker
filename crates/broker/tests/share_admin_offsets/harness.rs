@@ -14,7 +14,8 @@ use krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRe
 
 use crate::support::share::{
     ConsumptionFixture, ConsumptionSetup, ShareRecordSeedSetup, ShareRecordsSetup,
-    ShareSessionSetup, ShareTopicSetup, consumption_fixture, permitted_topic_fixture, start_topic,
+    ShareSessionSetup, ShareTopicSetup, consumption_fixture, join as join_share_group,
+    permitted_topic_fixture, start_topic,
 };
 pub use crate::support::share::{
     acquired_count, bootstrap_share_state, broker_config, broker_test_permit, connect,
@@ -45,7 +46,7 @@ pub async fn wait_for_share_init(
 /// initializes the share state of the subscribed partitions. It returns
 /// `(member_id, member_epoch)`, so the caller can leave with the live epoch.
 pub async fn join(client: &Client, group: &str, topic: &str) -> (String, i32) {
-    let (member_id, mut epoch) = crate::support::share::join(client, group, topic).await;
+    let (member_id, mut epoch) = join_share_group(client, group, topic).await;
 
     for _ in 0..3 {
         let hb = client

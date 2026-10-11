@@ -24,7 +24,7 @@ use crate::{
     handlers::{
         produce::{
             framing::PartitionPayload,
-            test_support::{encode_batch, image_with_topic, pipeline_input},
+            test_support::{PipelineFixture, encode_batch, image_with_topic, pipeline_input},
         },
         test_support::single_replica_partition,
     },
@@ -133,8 +133,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
     );
     let image = Arc::new(image);
 
-    let fixture =
-        crate::handlers::produce::test_support::PipelineFixture::new(krabka_ids::NodeId(1));
+    let fixture = PipelineFixture::new(krabka_ids::NodeId(1));
 
     for topic in ["frozen", "control"] {
         let part_dir = partition_dir(dir.path(), topic, 0);

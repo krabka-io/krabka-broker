@@ -21,7 +21,7 @@ use crate::{
     config::BrokerConfig,
     handlers::produce::{
         framing::PartitionPayload,
-        test_support::{encode_batch, image_with_topic, pipeline_input},
+        test_support::{PipelineFixture, encode_batch, image_with_topic, pipeline_input},
     },
     internal_topics::{is_internal_topic, produce_internal_topics_allowed},
 };
@@ -116,8 +116,7 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
     let config = BrokerConfig::for_tests(PathBuf::from("/nonexistent"));
     let image = Arc::new(image_with_topic("__consumer_offsets", &[1]));
 
-    let fixture =
-        crate::handlers::produce::test_support::PipelineFixture::new(krabka_ids::NodeId(1));
+    let fixture = PipelineFixture::new(krabka_ids::NodeId(1));
 
     let part = fixture
         .partition(dir.path(), "__consumer_offsets", &image)

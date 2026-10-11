@@ -896,10 +896,11 @@ mod tests {
     use crate::{
         broker::{Broker, spawn_partition},
         codes::{NONE, NOT_LEADER_OR_FOLLOWER, OFFSET_OUT_OF_RANGE},
-        config::NodeRole,
+        config::{BrokerConfig, NodeRole},
         config_keys::{BROKER_WITNESS, WITNESS_TRUE},
         handlers::produce::test_support::image_with_topic,
         partition::Partition,
+        producer_state::ProducerState,
         test_support::{
             StandalonePartitionSetup, broker_registration, spawn_standalone_partition,
             temporary_partition,
@@ -957,7 +958,7 @@ mod tests {
         const TOPIC: &str = "witness-fetch";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
         config.roles.push(NodeRole::Witness);
         let broker_handle = Broker::start(config).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
@@ -1477,12 +1478,7 @@ mod tests {
             }
             if promoted {
                 partition
-                    .install_local_leadership(
-                        &crate::producer_state::ProducerState::new(),
-                        None,
-                        1,
-                        3,
-                    )
+                    .install_local_leadership(&ProducerState::new(), None, 1, 3)
                     .await
                     .expect("promote");
             }

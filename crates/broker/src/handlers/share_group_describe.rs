@@ -11,6 +11,8 @@ use krabka_protocol::owned::{
     share_group_describe_response::{DescribedGroup, ShareGroupDescribeResponse},
 };
 
+#[cfg(test)]
+use crate::authorizer::SimpleAclAuthorizer;
 use crate::{
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
@@ -310,9 +312,7 @@ mod tests {
 
         let version = share_group_describe_response::MAX_VERSION;
         let (broker_handle, _dir) = start_share_broker(
-            Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
-                std::collections::HashSet::new(),
-            )),
+            Arc::new(SimpleAclAuthorizer::new(std::collections::HashSet::new())),
             ShareBrokerSetup::default(),
         )
         .await;

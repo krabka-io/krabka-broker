@@ -333,7 +333,7 @@ mod tests {
                 &mut config,
                 vec![supplied],
                 &Arc::new(PartitionRegistry::new()),
-                &Arc::new(crate::throttle::ThrottleState::new()),
+                &Arc::new(ThrottleState::new()),
             )
             .await
             .expect("bind the data plane");

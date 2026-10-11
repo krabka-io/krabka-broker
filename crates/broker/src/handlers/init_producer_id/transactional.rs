@@ -543,7 +543,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_abort_markers_appends_marker_to_local_partition() {
         let dir = tempfile::tempdir().unwrap();
-        let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let partitions = Arc::new(PartitionRegistry::new());
         let coord = TxnCoordinator::new(
             krabka_audit::NodeId(1),
             Arc::clone(&partitions),
@@ -586,7 +586,7 @@ mod tests {
     /// an open transaction in the data partition.
     #[tokio::test]
     async fn dispatch_abort_markers_rejects_missing_remote_transport() {
-        let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let partitions = Arc::new(PartitionRegistry::new());
         let coord = TxnCoordinator::new(
             krabka_audit::NodeId(1),
             partitions,

@@ -333,7 +333,7 @@ mod tests {
         check_required_failure(&log, "indeterminate").await;
         handle.await.unwrap();
         check!(
-            log.emit_required(life(crate::NodeId(2)))
+            log.emit_required(life(NodeId(2)))
                 .await
                 .unwrap_err()
                 .to_string()

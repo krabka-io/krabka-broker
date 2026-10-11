@@ -14,10 +14,11 @@ use super::{
     test_support::{controller_with_leader, test_coordinator},
 };
 use crate::{
-    auto_topic_creation::creatable_topic, config::BrokerConfig, coordinator::GroupCoordinator,
-    log_dir, log_dir_status::LogDirRegistry, metadata_source::MetadataSource,
-    partition_registry::PartitionRegistry, share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
-    txn::bootstrap::TOPIC as TXN_TOPIC,
+    auto_topic_creation::creatable_topic, broker::Broker, config::BrokerConfig,
+    coordinator::GroupCoordinator, log_dir, log_dir_status::LogDirRegistry,
+    metadata_source::MetadataSource, partition_registry::PartitionRegistry,
+    producer_state::ProducerState, share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
+    topic_creator::TopicCreator, txn::bootstrap::TOPIC as TXN_TOPIC,
 };
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
@@ -93,7 +94,7 @@ async fn bootstrap_creates_no_offsets_topic() {
         &partitions,
         &coordinator,
         &log_dir_status,
-        &Arc::new(crate::producer_state::ProducerState::new()),
+        &Arc::new(ProducerState::new()),
     )
     .await
     .unwrap();
@@ -119,7 +120,7 @@ async fn bootstrap_opens_the_local_partitions_of_an_existing_offsets_topic() {
             &partitions,
             &coordinator,
             &log_dir_status,
-            &Arc::new(crate::producer_state::ProducerState::new()),
+            &Arc::new(ProducerState::new()),
         )
         .await
         .unwrap();
@@ -146,9 +147,7 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
     // Kafka's default minimum ISR. The single-node fixture lowers it to 1.
     config.transaction_state_min_isr = 2;
     config.share_coordinator.state_topic_min_isr = 2;
-    let handle = crate::broker::Broker::start(config)
-        .await
-        .expect("start broker");
+    let handle = Broker::start(config).await.expect("start broker");
     let broker = handle.broker_arc_for_test();
     let request = CreateTopicsRequest {
         topics: [OFFSETS_TOPIC, TXN_TOPIC, SHARE_TOPIC]
@@ -157,7 +156,7 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
             .collect(),
         ..Default::default()
     };
-    let response = crate::topic_creator::TopicCreator::new(&broker)
+    let response = TopicCreator::new(&broker)
         .create_topic_without_principal(request)
         .await
         .expect("the controller answers CreateTopics");

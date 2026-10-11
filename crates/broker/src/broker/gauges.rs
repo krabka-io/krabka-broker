@@ -357,10 +357,10 @@ mod tests {
         spawn_broker_gauge_updater(
             (
                 Arc::new(PartitionRegistry::new()),
-                crate::log_dir_status::LogDirRegistry::default(),
+                LogDirRegistry::default(),
             ),
             Arc::new(fake_source(image, None)),
-            Arc::new(crate::heartbeat::controller_state::ControllerLivenessState::new(secs(10))),
+            Arc::new(ControllerLivenessState::new(secs(10))),
             node_id,
             (metrics.clone(), None),
             &config,
@@ -396,7 +396,7 @@ mod tests {
     #[tokio::test]
     async fn broker_gauge_publishes_the_offline_log_dir_count() {
         let dir = tempfile::tempdir().expect("log root");
-        let log_dirs = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
+        let log_dirs = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
         let (metrics, config) = gauge_fixture();
         let shutdown = CancellationToken::new();
         spawn_broker_gauge_updater(
@@ -405,7 +405,7 @@ mod tests {
                 krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
                 None,
             )),
-            Arc::new(crate::heartbeat::controller_state::ControllerLivenessState::new(secs(10))),
+            Arc::new(ControllerLivenessState::new(secs(10))),
             krabka_metadata::NodeId(1),
             (metrics.clone(), None),
             &config,

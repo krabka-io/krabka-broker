@@ -34,6 +34,7 @@ use crate::{
         produce::{SinglePartitionProduceSetup, send_batch},
         records::batch_from_records,
         registered_cluster, shutdown_cluster,
+        topics::CreateTopicRequestSetup,
     },
 };
 
@@ -164,12 +165,8 @@ async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
         ..Default::default()
     })
     .collect();
-    let topic_id = support::client::create_topic_spec(
-        &admin,
-        topic,
-        crate::support::topics::CreateTopicRequestSetup::default(),
-    )
-    .await;
+    let topic_id =
+        support::client::create_topic_spec(&admin, topic, CreateTopicRequestSetup::default()).await;
     for (handle, _, _) in &cluster {
         handle.wait_until_partition_present(TOPIC, 0).await;
         wait_for_the_topic_config(handle).await;

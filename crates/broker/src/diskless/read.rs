@@ -10,6 +10,8 @@ use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
 use super::wal_index::WalIndexCache;
+#[cfg(test)]
+use crate::config::BrokerConfig;
 use crate::{
     broker::Broker,
     codes,
@@ -461,7 +463,7 @@ mod tests {
     async fn max_bytes_and_store_failure_map_the_whole_fetch_partition() {
         let dir = tempfile::tempdir().unwrap();
         let object_dir = tempfile::tempdir().unwrap();
-        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
         config.remote_storage_backend = Some(RemoteStorageBackend::Local {
             dir: object_dir.path().to_path_buf(),
         });
