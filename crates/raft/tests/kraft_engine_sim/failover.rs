@@ -6,7 +6,7 @@
 use crate::{
     harness::{
         self as fixture, STAGGERED_TIMEOUTS, SimClusterSetup, await_single_leader, await_until,
-        metadata_log, start_engines, three_voter_network, topic_record, voter_set,
+        metadata_log, start_cluster, start_engines, three_voter_network, topic_record, voter_set,
     },
     sim_net::SimNet,
 };
@@ -133,18 +133,7 @@ async fn leader_failure_reelects() {
 async fn repeated_leader_restart_reelects() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(301);
-    let dirs: fixture::HashMap<_, _> = ids
-        .iter()
-        .copied()
-        .zip(start_engines(
-            &net,
-            SimClusterSetup {
-                ids: &ids,
-                cluster_id: cid,
-                ..Default::default()
-            },
-        ))
-        .collect();
+    let dirs = start_cluster(&net, &ids, cid);
 
     for _ in 0..5 {
         let (leader, _) = await_single_leader(&net, &ids, fixture::Duration::from_secs(10)).await;

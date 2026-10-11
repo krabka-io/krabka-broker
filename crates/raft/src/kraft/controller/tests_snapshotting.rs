@@ -7,21 +7,17 @@ use assert2::assert;
 
 use super::*;
 use crate::{
-    kraft::{
-        Activation, NullPeerSender,
-        controller::{
-            checkpoint::{
-                checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
-                load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
-                retain_recent_checkpoints, write_checkpoint,
-            },
-            records::decode_control_record,
-            test_support::{
-                ControllerSetup, EngineSetup, SnapshotRecordCount, TEST_ELECTION_TIMEOUT,
-                await_leader, build, build_engine_only, elect_single_voter_engine,
-                one_offset_batch, submit_change_with_timeout, test_metadata_log, topic_record,
-                voter_set,
-            },
+    kraft::controller::{
+        checkpoint::{
+            checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
+            load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
+            retain_recent_checkpoints, write_checkpoint,
+        },
+        records::decode_control_record,
+        test_support::{
+            ControllerOpenSetup, ControllerSetup, EngineSetup, SnapshotRecordCount, await_leader,
+            build, build_engine_only, elect_single_voter_engine, one_offset_batch,
+            open_test_controller_with, submit_change_with_timeout, topic_record, voter_set,
         },
     },
     snapshot::SnapshotWriter,
@@ -428,24 +424,13 @@ async fn a_restart_recovers_the_header_timestamp_from_the_checkpoint() {
     assert2::assert!(latest_header_timestamp(&cp_dir) == stamp);
     drop(engine);
 
-    let reopened = KraftController::open(
+    let reopened = open_test_controller_with(
         dir.path().to_path_buf(),
-        NodeId(1),
-        uuid::Uuid::nil(),
-        uuid::Uuid::nil(),
-        voter_set(&[NodeId(1)]),
-        TEST_ELECTION_TIMEOUT,
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        krabka_units::prelude::bytes(0),
-        krabka_units::prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        test_metadata_log(),
-        Activation::default(),
+        ControllerOpenSetup {
+            cluster_id: uuid::Uuid::nil(),
+            voters: voter_set(&[NodeId(1)]),
+            ..Default::default()
+        },
     )
     .expect("reopen over the same data dir");
     reopened.trigger_snapshot().await.expect("trigger snapshot");

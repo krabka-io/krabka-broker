@@ -15,7 +15,7 @@ use krabka_protocol::owned::assign_replicas_to_dirs_request::{
 };
 
 use crate::{
-    controller_endpoint::{ControllerDialer, leader_endpoint},
+    controller_endpoint::{ControllerDialer, current_leader_endpoint},
     metadata_source::MetadataSource,
 };
 
@@ -120,14 +120,8 @@ pub(crate) async fn send_assignments(
     client_id: &str,
     req: AssignReplicasToDirsRequest,
 ) -> Result<(), String> {
-    let leader_id = *controller.watch_leader().borrow();
-    let Some(leader_id) = leader_id else {
-        return Err("no controller leader".into());
-    };
-    let image = controller.current_image();
-    let Some((host, port)) = leader_endpoint(&image, &dialer.quorum_voters, leader_id) else {
-        return Err("controller leader has no known controller endpoint".into());
-    };
+    let (leader_id, _, host, port) =
+        current_leader_endpoint(controller.as_ref(), &dialer.quorum_voters)?;
 
     let connection = dialer
         .outbound_client

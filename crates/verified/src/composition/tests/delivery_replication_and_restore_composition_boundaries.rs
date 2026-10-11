@@ -202,18 +202,7 @@ fn restore_selection_matches_oracle(
             .checked_add(1)?;
         let mut selected = Vec::new();
         for (i, (record, exclusions)) in records.iter().enumerate() {
-            if record.offset_delta < 0 || record.offset_delta > frame.last_offset_delta {
-                return None;
-            }
-            let offset = frame
-                .base_offset
-                .checked_add(i64::from(record.offset_delta))?;
-            let timestamp = match frame.timestamp_type {
-                RestoreTimestampType::CreateTime => {
-                    frame.base_timestamp.checked_add(record.timestamp_delta)?
-                }
-                RestoreTimestampType::LogAppendTime => frame.max_timestamp,
-            };
+            let (offset, timestamp) = restore_record_coordinates(frame, *record)?;
             if offset_bound.is_none_or(|bound| offset <= bound)
                 && timestamp_bound.is_none_or(|bound| timestamp < bound)
                 && !(exclusions.producer

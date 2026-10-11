@@ -12,7 +12,9 @@
 //! quorum -- the same two-tier lookup `ControllerHandle::voter_addr` uses for
 //! the leader it forwards a rejected `submit_change` to.
 
-use crate::{host_port::parse_host_port, network::client::InterBrokerClient};
+use crate::{
+    host_port::parse_host_port, metadata_source::MetadataSource, network::client::InterBrokerClient,
+};
 
 /// The listener name a controller advertises for the RPCs its peers address
 /// to it.
@@ -67,6 +69,29 @@ pub(crate) fn leader_endpoint(
                 .find(|(node_id, _)| *node_id == leader)
                 .and_then(|(_, endpoint)| parse_host_port(endpoint))
         })
+}
+
+/// Resolve the current controller leader and the image used to build a request
+/// for it. Controller RPC senders share this lookup so they report missing
+/// leadership and missing endpoint information consistently.
+pub(crate) fn current_leader_endpoint(
+    controller: &dyn MetadataSource,
+    static_voters: &[(krabka_raft::NodeId, String)],
+) -> Result<
+    (
+        krabka_raft::NodeId,
+        std::sync::Arc<krabka_metadata::MetadataImage>,
+        String,
+        u16,
+    ),
+    String,
+> {
+    let leader = *controller.watch_leader().borrow();
+    let leader = leader.ok_or_else(|| "no controller leader".to_string())?;
+    let image = controller.current_image();
+    let (host, port) = leader_endpoint(&image, static_voters, leader)
+        .ok_or_else(|| "controller leader has no known controller endpoint".to_string())?;
+    Ok((leader, image, host, port))
 }
 
 /// The id that the `index`th bootstrap server stands under, counted down from

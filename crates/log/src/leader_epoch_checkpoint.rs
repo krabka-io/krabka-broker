@@ -16,7 +16,6 @@ use std::path::PathBuf;
 use krabka_ids::{LeaderEpoch, Offset};
 pub use krabka_verified::{EpochEntry, epoch_and_offset_for_entries};
 
-#[cfg(any(test, feature = "test-helpers"))]
 use crate::io::LogIo;
 
 mod file;

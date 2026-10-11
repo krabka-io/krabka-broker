@@ -81,6 +81,25 @@ pub(crate) fn start_engines(net: &SimNet, setup: SimClusterSetup<'_>) -> Vec<tem
     dirs
 }
 
+/// Starts the three-voter scenarios and retains each node's data directory by id.
+pub(crate) fn start_cluster(
+    net: &SimNet,
+    ids: &[NodeId],
+    cluster_id: uuid::Uuid,
+) -> HashMap<NodeId, tempfile::TempDir> {
+    ids.iter()
+        .copied()
+        .zip(start_engines(
+            net,
+            SimClusterSetup {
+                ids,
+                cluster_id,
+                ..Default::default()
+            },
+        ))
+        .collect()
+}
+
 /// The metadata log configuration of a simulated engine: Kafka's segment
 /// defaults, no KIP-835 no-op records, so the simulated logs hold only the
 /// records the scenario writes, and no size allowance, so every cleaning keeps
