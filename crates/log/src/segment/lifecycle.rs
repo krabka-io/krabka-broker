@@ -349,7 +349,7 @@ mod tests {
         for i in 0..3i64 {
             seg.append(
                 &sample_batch(SampleBatchSetup {
-                    offset: crate::Offset(100 + i * 2),
+                    offset: Offset(100 + i * 2),
                     records: RecordCount(2),
                     timestamp: RecordTimestamp(500 + i * 100),
                 }),
@@ -434,7 +434,7 @@ mod tests {
             for (base, timestamp, interval) in batches {
                 seg.append(
                     &sample_batch(SampleBatchSetup {
-                        offset: crate::Offset(base),
+                        offset: Offset(base),
                         timestamp: RecordTimestamp(timestamp),
                         ..Default::default()
                     }),
@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn truncate_to_relative_rejects_an_absolute_offset_overflow() {
-        let (_dir, mut seg) = segment_at(crate::Offset(i64::MAX));
+        let (_dir, mut seg) = segment_at(Offset(i64::MAX));
 
         let error = seg
             .truncate_to_relative(1)

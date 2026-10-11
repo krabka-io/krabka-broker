@@ -38,7 +38,9 @@ use crate::{
         delete_records::handle,
         test_support::{
             ClientTopicSetup, ProduceRecordsSetup, RecordCount, ShareWireSetup,
-            TopicPartitionCount, share_fetch_partition_rows, share_fetch_topics,
+            TopicPartitionCount, create_topic as create_topic_from_test_support,
+            produce_records as produce_records_from_test_support, share_fetch_partition_rows,
+            share_fetch_topics,
         },
     },
     test_support::{initialize_share_state, peer, principal, start_broker_no_audit_with},
@@ -56,7 +58,7 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) -> WireUuid {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "share-log-start-lockout-test",
@@ -69,7 +71,7 @@ async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) ->
 
 /// Appends `count` one-record batches to `partition_index` of `topic`.
 async fn produce_records(broker: &BrokerHandle, topic: &str, partition_index: i32, count: i32) {
-    crate::handlers::test_support::produce_records(
+    produce_records_from_test_support(
         broker,
         ProduceRecordsSetup {
             topic,

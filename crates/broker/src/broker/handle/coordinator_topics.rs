@@ -19,7 +19,10 @@
 use krabka_ids::PartitionIndex;
 use krabka_metadata::MetadataImage;
 
-use crate::broker::{BrokerHandle, TEST_AWAITER_TIMEOUT};
+use crate::{
+    broker::{BrokerHandle, TEST_AWAITER_TIMEOUT},
+    txn::bootstrap::TOPIC as TXN_BOOTSTRAP_TOPIC,
+};
 
 /// The partitions of `topic` that `node` leads, or `None` while `topic` is
 /// absent or one of its first `partitions` partitions has no leader.
@@ -106,7 +109,7 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_transaction_coordinator_ready(&self) {
-        let topic = crate::txn::bootstrap::TOPIC;
+        let topic = TXN_BOOTSTRAP_TOPIC;
         let partitions = self.broker.config.transaction_state_num_partitions;
         let ready = self
             .await_coordinator_ready(topic, partitions, |_image, led| async move {

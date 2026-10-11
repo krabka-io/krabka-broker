@@ -25,7 +25,7 @@ use crate::{
         self,
         registry::{self, ConfigScope, ConfigType},
     },
-    topic_policy::TopicPolicy,
+    topic_policy::{TopicPolicy, check as check_topic_policy},
 };
 
 /// Kafka's `ConfigurationControlManager` APPEND and SUBTRACT: a `LIST` key's
@@ -146,7 +146,7 @@ pub(super) fn topic_config_record(
     // factor, so neither is passed here. It runs after the built-in
     // validators, as `ConfigAdminManager` does: a config the broker itself
     // refuses never reaches the policy.
-    crate::topic_policy::check(policy, topic, None, None, &merged)
+    check_topic_policy(policy, topic, None, None, &merged)
         .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),

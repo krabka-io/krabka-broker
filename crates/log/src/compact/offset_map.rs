@@ -170,18 +170,18 @@ mod tests {
             dir.path(),
             &[
                 transactional_record(TransactionalRecordSetup {
-                    offset: crate::Offset(5),
+                    offset: Offset(5),
                     payload: (b"k", b"committed"),
                     ..Default::default()
                 }),
                 control_batch(6, 1000, 1 /* COMMIT */),
                 transactional_record(TransactionalRecordSetup {
-                    offset: crate::Offset(10),
+                    offset: Offset(10),
                     producer: ProducerId(2000),
                     payload: (b"k", b"aborted"),
                 }),
                 transactional_record(TransactionalRecordSetup {
-                    offset: crate::Offset(11),
+                    offset: Offset(11),
                     producer: ProducerId(2000),
                     payload: (b"only-aborted", b"v"),
                 }),
@@ -190,9 +190,9 @@ mod tests {
         );
         let aborted = vec![crate::test_support::aborted_txn(
             crate::test_support::AbortedTxnSetup {
-                producer: crate::ProducerId(2000),
-                bounds: crate::Offset(10)..=crate::Offset(12),
-                stable: crate::Offset(13),
+                producer: ProducerId(2000),
+                bounds: Offset(10)..=Offset(12),
+                stable: Offset(13),
             },
         )];
         let map = offset_map_for(&[&seg], aborted);

@@ -391,7 +391,7 @@ mod tests {
             (
                 "not the leader",
                 RaftError::NotLeader {
-                    current_leader: Some(crate::types::NodeId(3)),
+                    current_leader: Some(NodeId(3)),
                 },
                 SUBMIT_CHANGE_NOT_LEADER,
                 3,

@@ -296,7 +296,9 @@ mod tests {
     use crate::{
         authorizer::AllowAllAuthorizer,
         broker::BrokerHandle,
-        handlers::test_support::ClientTopicSetup,
+        handlers::test_support::{
+            ClientTopicSetup, create_topic as create_topic_from_test_support,
+        },
         share_partition::session::FetchPartitions,
         test_support::{
             ShareApiSupport, ShareBrokerSetup, dispatch_wire, peer, principal, start_share_broker,
@@ -357,7 +359,7 @@ mod tests {
     use crate::handlers::test_support::{DenyTopicRead, TopicIdRef as TopicRef};
 
     async fn create_topic(broker: &BrokerHandle, name: &str) -> ProtoUuid {
-        crate::handlers::test_support::create_topic(
+        create_topic_from_test_support(
             broker,
             ClientTopicSetup {
                 client_id: "share-acknowledge-resolution-test",

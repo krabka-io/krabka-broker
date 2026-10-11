@@ -341,9 +341,10 @@ mod tests {
         log::{
             AuditLog,
             test_support::{
-                AuditEventCount, CheckpointFrequency, CheckpointSetup, ROOMY_CAP, await_until,
-                failed_sink_stats, finish_lifecycle_writer, finish_writer, header, life, params,
-                quiet_params, roomy_spool, spawn_writer, test_signer,
+                AuditEventCount, CheckpointFrequency, CheckpointSetup,
+                FailableSink as TestFailableSink, ROOMY_CAP, await_until, failed_sink_stats,
+                finish_lifecycle_writer, finish_writer, header, life, params, quiet_params,
+                roomy_spool, spawn_writer, test_signer,
             },
         },
         sink::{AuditSink, MemorySink},
@@ -585,7 +586,7 @@ mod tests {
     #[tokio::test]
     async fn failed_checkpoint_increments_dropped() {
         let (_dir, spool) = roomy_spool();
-        let sink = Arc::new(crate::log::test_support::FailableSink::default());
+        let sink = Arc::new(TestFailableSink::default());
         sink.allow_n(1);
         let stats = Arc::new(AuditStats::new());
         let (log, rx) = AuditLog::new(4);

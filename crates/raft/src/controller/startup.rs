@@ -14,11 +14,12 @@ use super::{
     ControllerHandle, checkpoint::load_latest_checkpoint, feature_check::unsupported_feature_level,
 };
 use crate::{
-    config::{BootstrapMode, ControllerConfig, UnstableFeatureVersions},
+    config::{BootstrapMode, ControllerConfig, UnstableFeatureVersions, metadata_partition_dir},
     error::RaftError,
     kraft::{Activation, KraftController},
     network::{OutboundDialer, PlaintextDialer, RealPeerSender},
     server,
+    snapshot::SnapshotReader,
 };
 
 /// Zero-sized factory for [`ControllerHandle`]s.
@@ -65,10 +66,10 @@ impl Controller {
         // The metadata log, its checkpoints and the quorum-state file all live
         // in the `__cluster_metadata-0` directory under `log_dir`, as Kafka's
         // do under `metadata.log.dir`.
-        let data_dir = crate::config::metadata_partition_dir(&config.log_dir);
+        let data_dir = metadata_partition_dir(&config.log_dir);
         let log_exists = metadata_log_nonempty(&data_dir);
         let snapshot_voters = load_latest_checkpoint(&data_dir)
-            .and_then(|(_, bytes)| crate::snapshot::SnapshotReader::read(&bytes).ok())
+            .and_then(|(_, bytes)| SnapshotReader::read(&bytes).ok())
             .and_then(|snapshot| snapshot.control_state.map(|state| state.voters))
             .unwrap_or_default();
         let voters = if config.initial_voters.is_empty() {

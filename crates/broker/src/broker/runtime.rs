@@ -47,7 +47,7 @@ use crate::{
     quota::{QuotaBuckets, run as run_quota_refresh, run_expiry},
     remote_reader::RemoteReader,
     share_coordinator::coordinator::ShareCoordinator,
-    throttle::{ThrottleState, apply_image},
+    throttle::{ThrottleState, apply_image, run as run_throttle},
     time_util::now_ms,
     tls_reload::run as run_tls_reload,
     txn::{
@@ -108,7 +108,7 @@ fn start_runtime_watchers(
         ));
     }
     apply_image(&controller.current_image(), config.node_id, throttle_state);
-    tokio::spawn(crate::throttle::run(
+    tokio::spawn(run_throttle(
         controller.watch_image(),
         config.node_id,
         Arc::clone(throttle_state),

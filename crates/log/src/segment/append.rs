@@ -336,9 +336,9 @@ mod tests {
 
     #[test]
     fn append_rejects_offset_successor_overflow_before_writing() {
-        let (dir, mut seg) = segment_at(crate::Offset(i64::MAX));
+        let (dir, mut seg) = segment_at(Offset(i64::MAX));
         let batch = sample_batch(SampleBatchSetup {
-            offset: crate::Offset(i64::MAX),
+            offset: Offset(i64::MAX),
             timestamp: RecordTimestamp(100),
             ..Default::default()
         });
@@ -369,7 +369,7 @@ mod tests {
         let position = seg
             .append(
                 &sample_batch(SampleBatchSetup {
-                    offset: crate::Offset(1),
+                    offset: Offset(1),
                     timestamp: RecordTimestamp(300),
                     ..Default::default()
                 }),
@@ -384,7 +384,7 @@ mod tests {
             read == vec![
                 sample_batch(crate::segment::test_support::ONE_RECORD_BATCH),
                 sample_batch(crate::segment::test_support::SampleBatchSetup {
-                    offset: crate::Offset(1),
+                    offset: Offset(1),
                     timestamp: crate::segment::test_support::RecordTimestamp(300),
                     ..Default::default()
                 })
@@ -408,7 +408,7 @@ mod tests {
         let (dir, mut seg) = test_segment();
         // Build a batch as a "producer" would, with its own base_offset and
         // leader epoch, then encode to verbatim wire bytes.
-        let mut producer = test_batch_at(crate::Offset(0));
+        let mut producer = test_batch_at(Offset(0));
         producer.base_offset = 999; // producer-supplied (to be overwritten)
         producer.partition_leader_epoch = -1; // producer-supplied
         producer.last_offset_delta = 0;
@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn append_verbatim_updates_index_and_last_offset() {
         let (dir, mut seg) = test_segment();
-        let mut producer = test_batch_at(crate::Offset(0));
+        let mut producer = test_batch_at(Offset(0));
         producer.last_offset_delta = 2; // spans 3 offsets
         producer.max_timestamp = 5_000;
         let mut wire = bytes::BytesMut::new();
@@ -472,7 +472,7 @@ mod tests {
         let (dir, mut seg) = test_segment();
         seg.seal().unwrap();
         let mut wire = bytes::BytesMut::new();
-        test_batch_at(crate::Offset(0)).encode(&mut wire).unwrap();
+        test_batch_at(Offset(0)).encode(&mut wire).unwrap();
         let err = seg
             .append_verbatim(&wire.freeze(), Offset(0), 0, 0, LeaderEpoch(0), DENSE_INDEX)
             .unwrap_err();

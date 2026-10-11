@@ -60,19 +60,19 @@ fn rewrite_at(
 fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives() {
     let dir = tempfile::tempdir().unwrap();
     let committed = transactional_record(TransactionalRecordSetup {
-        offset: crate::Offset(5),
+        offset: Offset(5),
         payload: (b"k", b"committed"),
         ..Default::default()
     });
     let commit_marker = control_batch(6, 1000, 1 /* COMMIT */);
     let aborted_k = transactional_record(TransactionalRecordSetup {
-        offset: crate::Offset(10),
-        producer: crate::ProducerId(2000),
+        offset: Offset(10),
+        producer: ProducerId(2000),
         payload: (b"k", b"aborted"),
     });
     let aborted_j = transactional_record(TransactionalRecordSetup {
-        offset: crate::Offset(11),
-        producer: crate::ProducerId(2000),
+        offset: Offset(11),
+        producer: ProducerId(2000),
         payload: (b"j", b"aborted"),
     });
     let abort_marker = control_batch(12, 2000, 0 /* ABORT */);
@@ -122,7 +122,7 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
 fn an_aborted_transaction_spanning_two_groups_keeps_its_marker_and_index_entry() {
     let dir = tempfile::tempdir().unwrap();
     let aborted = transactional_record(TransactionalRecordSetup {
-        producer: crate::ProducerId(2000),
+        producer: ProducerId(2000),
         payload: (b"k", b"aborted"),
         ..Default::default()
     });
@@ -188,7 +188,7 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
             old_marker.attributes = old_marker.attributes.with_delete_horizon(true);
         }
         let live = transactional_record(TransactionalRecordSetup {
-            offset: crate::Offset(1),
+            offset: Offset(1),
             payload: (b"k1", b"v2"),
             ..Default::default()
         });

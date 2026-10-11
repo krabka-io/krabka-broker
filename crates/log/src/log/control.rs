@@ -706,7 +706,7 @@ mod tests {
                     epoch: BarrierEpoch(4),
                     ..Default::default()
                 },
-                producer: crate::ProducerId(3000),
+                producer: ProducerId(3000),
                 producer_epoch: ProducerEpoch(1),
             }))
             .unwrap(); // 9

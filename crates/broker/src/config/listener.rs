@@ -10,6 +10,7 @@ use crate::{
     BrokerError,
     api_catalog::{ClientMetricsReceiver, ListenerKind},
     config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE},
+    network::auth::SslPrincipalMapper,
 };
 
 /// A single named listener: the port the broker binds and the address it
@@ -34,7 +35,7 @@ pub struct ListenerSpec {
     /// rewrites the Subject DN of an mTLS peer certificate into the principal
     /// name ACLs are written against. The default is an empty rule list, which
     /// passes the DN through exactly as Kafka's `DEFAULT` rule does.
-    pub principal_mapper: crate::network::auth::SslPrincipalMapper,
+    pub principal_mapper: SslPrincipalMapper,
 }
 
 /// Credentials the broker uses to connect *to* other brokers.

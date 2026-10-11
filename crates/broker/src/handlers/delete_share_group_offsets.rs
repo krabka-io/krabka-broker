@@ -269,7 +269,7 @@ mod tests {
                 persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
             },
         },
-        handlers::RequestContext,
+        handlers::{RequestContext, create_topics::handle as create_topics_handle},
         share_coordinator::{
             handlers::test_support::lead_share_state_partitions, persister_client::SharePersister,
         },
@@ -336,7 +336,7 @@ mod tests {
             timeout_ms: 5_000,
             ..Default::default()
         };
-        let response = crate::handlers::create_topics::handle(&broker, request, version, ctx)
+        let response = create_topics_handle(&broker, request, version, ctx)
             .await
             .expect("create topics");
         assert!(

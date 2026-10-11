@@ -395,7 +395,7 @@ mod tests {
             for (base, timestamp) in [(0, 100), (1, 300), (2, 200)] {
                 seg.append(
                     &sample_batch(SampleBatchSetup {
-                        offset: crate::Offset(base),
+                        offset: Offset(base),
                         timestamp: RecordTimestamp(timestamp),
                         ..Default::default()
                     }),

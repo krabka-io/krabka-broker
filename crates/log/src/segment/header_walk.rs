@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn position_for_and_walk_batch_headers_semantics() {
         let (_dir, mut seg) = seeded_fixture(SeededSegmentSetup {
-            offset: crate::Offset(10),
+            offset: Offset(10),
             batches: &[FIRST_HEADER_WALK_BATCH],
             ..Default::default()
         });
@@ -196,14 +196,14 @@ mod tests {
     #[test]
     fn a_read_past_an_indexed_batch_starts_at_the_batch_after_it() {
         let (_dir, mut seg) = seeded_fixture(SeededSegmentSetup {
-            offset: crate::Offset(10),
+            offset: Offset(10),
             batches: &[FIRST_HEADER_WALK_BATCH, SECOND_HEADER_WALK_BATCH],
             ..Default::default()
         });
         let third = seg.log_size;
         seg.append(
             &sample_batch(SampleBatchSetup {
-                offset: crate::Offset(20),
+                offset: Offset(20),
                 records: RecordCount(5),
                 timestamp: RecordTimestamp(3_000),
             }),
@@ -222,7 +222,7 @@ mod tests {
 
         let window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize();
         let batch_size = sample_batch(SampleBatchSetup {
-            offset: crate::Offset(10),
+            offset: Offset(10),
             records: RecordCount(3),
             timestamp: RecordTimestamp(1_000),
         })
@@ -242,7 +242,7 @@ mod tests {
                 let base = 10 + 3 * i64::try_from(batch).unwrap();
                 seg.append(
                     &sample_batch(SampleBatchSetup {
-                        offset: crate::Offset(base),
+                        offset: Offset(base),
                         records: RecordCount(3),
                         timestamp: RecordTimestamp(1_000),
                     }),
@@ -281,7 +281,7 @@ mod tests {
         let window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize();
         let interval = bytes(u32::try_from(4 * window).unwrap());
         let mut first = sample_batch(SampleBatchSetup {
-            offset: crate::Offset(10),
+            offset: Offset(10),
             timestamp: RecordTimestamp(1_000),
             ..Default::default()
         });
@@ -294,7 +294,7 @@ mod tests {
         let split_header = seg.log_size;
         seg.append(
             &sample_batch(SampleBatchSetup {
-                offset: crate::Offset(11),
+                offset: Offset(11),
                 timestamp: RecordTimestamp(1_000),
                 ..Default::default()
             }),
@@ -303,7 +303,7 @@ mod tests {
         .unwrap();
         let large_position = seg.log_size;
         let mut large = sample_batch(SampleBatchSetup {
-            offset: crate::Offset(12),
+            offset: Offset(12),
             timestamp: RecordTimestamp(1_000),
             ..Default::default()
         });
@@ -312,7 +312,7 @@ mod tests {
         let tail = seg.log_size;
         seg.append(
             &sample_batch(SampleBatchSetup {
-                offset: crate::Offset(13),
+                offset: Offset(13),
                 timestamp: RecordTimestamp(1_000),
                 ..Default::default()
             }),

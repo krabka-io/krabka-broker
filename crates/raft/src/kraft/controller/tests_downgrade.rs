@@ -7,6 +7,7 @@ use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 
 use super::*;
 use crate::{
+    MetadataLogConfig,
     kraft::controller::{
         checkpoint::{load_latest_checkpoint, write_checkpoint},
         recovery::replay_committed,
@@ -188,8 +189,8 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
             .is_some()
     );
     drop(controller);
-    let recovered_log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default())
-        .expect("inspect recovered log");
+    let recovered_log =
+        KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("inspect recovered log");
     assert2::assert!(recovered_log.log_start_offset() == downgrade_end);
     let checkpoint = load_latest_checkpoint(dir.path())
         .expect("read checkpoint")
@@ -223,8 +224,8 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
         reopen_single_voter(data_dir).expect("restart finishes checkpoint-before-prune recovery");
     assert2::assert!(controller.current_image().finalized_metadata_version() == Some(16));
     drop(controller);
-    let recovered_log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default())
-        .expect("inspect recovered log");
+    let recovered_log =
+        KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("inspect recovered log");
     assert2::assert!(recovered_log.log_start_offset() == pending.end_offset);
 }
 

@@ -10,7 +10,7 @@ use crate::{
     coordinator::unified::{
         GroupCoordinator, OffsetRecordBatchBuilder,
         member_records::{MemberRecordFamilies, MemberRecordLists},
-        persistence::{Key, encode_key},
+        persistence::{GroupMetadataValue as ClassicGroupMetadataValue, Key, encode_key},
         persistence_next_gen::{
             CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
             RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
@@ -129,8 +129,7 @@ pub(crate) struct PendingRecords {
     /// `ConsumerGroup.createGroupTombstoneRecords` (downgrade flip).
     pub group_tombstone: Option<GroupTombstone>,
     /// Write the classic k2 `GroupMetadata` value (downgrade flip).
-    pub classic_group_metadata:
-        Option<crate::coordinator::unified::persistence::GroupMetadataValue>,
+    pub classic_group_metadata: Option<ClassicGroupMetadataValue>,
     /// The records that follow these in the same batch, such as a
     /// heartbeat's own records after the records of Kafka's `replaceMember`.
     pub then: Option<Box<PendingRecords>>,

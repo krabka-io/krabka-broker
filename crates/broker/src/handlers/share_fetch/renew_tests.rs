@@ -32,7 +32,8 @@ use crate::{
         AcknowledgementBatchSetup, AcknowledgementMode, AcknowledgementPartitionSetup,
         AcknowledgementSetup, ClientTopicSetup, ProduceRecordsSetup, RecordCount,
         ShareSessionEpoch, ShareWireSetup, acknowledge_batches_request, acquired_share_records,
-        produce_records, share_acknowledge_wire, share_fetch_wire,
+        create_topic as create_topic_from_test_support, produce_records, share_acknowledge_wire,
+        share_fetch_wire,
     },
     share_partition::state::RecordState::{self, Acknowledged, Acquired, Available},
     test_support::{KafkaErrorCode, initialize_share_state},
@@ -54,7 +55,7 @@ use crate::{
 };
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "share-renew-test",

@@ -22,6 +22,7 @@ use crate::{
     codes,
     config_keys::{CLEANUP_POLICY, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, parse_cleanup_policy},
     coordinator::bootstrap::OFFSETS_TOPIC,
+    delivery::test_support::batch_at as delivery_batch_at,
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     freeze::resolve::resolve_topic_freeze,
     handlers::{
@@ -34,6 +35,7 @@ use crate::{
     heartbeat::fencing::{RegistrationChange, registration_change},
     partition::Partition,
     replica_state::ReplicaState,
+    share_coordinator::bootstrap::TOPIC as SHARE_COORDINATOR_TOPIC,
     test_support::{
         DenyAll, KafkaErrorCode, append_partition_batch, broker_registration, encode_request, peer,
         principal, start_broker_no_audit_with,
@@ -275,7 +277,7 @@ const PENDING_MS: i64 = 4_100_000_000_000;
 fn batch_at(activation_ms: i64, leader_epoch: i32) -> krabka_protocol::records::RecordBatch {
     krabka_protocol::records::RecordBatch {
         partition_leader_epoch: leader_epoch,
-        ..crate::delivery::test_support::batch_at(activation_ms)
+        ..delivery_batch_at(activation_ms)
     }
 }
 
@@ -780,7 +782,7 @@ async fn an_internal_topic_refuses_a_trim() {
         (OFFSETS_TOPIC, -1_i64, codes::INVALID_TOPIC_EXCEPTION, 0_i64),
         (TOPIC, -1, codes::INVALID_TOPIC_EXCEPTION, 0),
         (
-            crate::share_coordinator::bootstrap::TOPIC,
+            SHARE_COORDINATOR_TOPIC,
             -1,
             codes::INVALID_TOPIC_EXCEPTION,
             0,

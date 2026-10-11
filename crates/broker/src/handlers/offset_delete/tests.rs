@@ -26,13 +26,13 @@ use crate::{
             group::{CoordinatorGroup, GroupKind},
         },
     },
-    handlers::test_support::ClientTopicSetup,
+    handlers::test_support::{ClientTopicSetup, create_topic as create_topic_from_test_support},
     test_support::{DenyAll, peer, start_group_broker_no_audit},
     time_util::now_ms,
 };
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "offset-delete-test",

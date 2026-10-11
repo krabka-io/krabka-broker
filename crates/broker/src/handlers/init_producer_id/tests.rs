@@ -20,7 +20,10 @@ use crate::{
     authorizer::SimpleAclAuthorizer,
     broker::{Broker, BrokerHandle},
     error::BrokerError,
-    handlers::{context::RequestContext, find_coordinator::handle as find_coordinator_handle},
+    handlers::{
+        RequestContext as HandlerRequestContext, context::RequestContext,
+        find_coordinator::handle as find_coordinator_handle,
+    },
     test_support::{
         ControllerPeerAllowed, peer, principal, start_broker_no_audit, start_broker_no_audit_with,
         start_broker_with_authorizer_no_audit, wait_for_controller_leader,
@@ -77,7 +80,7 @@ async fn wait_for_transaction_version_2(broker_handle: &BrokerHandle) {
 /// against a live broker whose `transaction.max.timeout.ms` is 8 s.
 async fn check_timeout_answers(
     broker: &std::sync::Arc<Broker>,
-    context: &crate::handlers::RequestContext<'_>,
+    context: &HandlerRequestContext<'_>,
     tids: [&str; 4],
 ) {
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;

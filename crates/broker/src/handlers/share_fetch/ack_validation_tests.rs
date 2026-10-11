@@ -33,8 +33,9 @@ use crate::{
     handlers::test_support::{
         AcknowledgementMode, AcknowledgementPartitionSetup, AcknowledgementSetup, ClientTopicSetup,
         ProduceRecordsSetup, ShareSessionEpoch, ShareWireSetup, acknowledge_batches_request,
-        acquired_share_records, initialize_earliest_share, produce_records, share_acknowledge_wire,
-        share_fetch_wire, share_record_states,
+        acquired_share_records, create_topic as create_topic_from_test_support,
+        initialize_earliest_share, produce_records, share_acknowledge_wire, share_fetch_wire,
+        share_record_states,
     },
     share_partition::state::RecordState::{self, Acquired},
     test_support::start_broker_no_audit_with,
@@ -77,7 +78,7 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 async fn create_topic(broker: &BrokerHandle) -> WireUuid {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "ack-order-test",

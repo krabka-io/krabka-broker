@@ -10,6 +10,8 @@ use super::{error::ObjectStoreError, object_store_api as object_store};
 use crate::config::ObjectStoreConfig;
 #[cfg(not(target_family = "wasm"))]
 use crate::config::{GcsConfig, S3Config};
+#[cfg(target_family = "wasm")]
+use crate::unavailable::unavailable;
 
 /// The retry budget `cfg` asks for.
 ///
@@ -83,11 +85,11 @@ pub fn build_object_store(
             Ok(Arc::new(store))
         }
         #[cfg(target_family = "wasm")]
-        ObjectStoreConfig::S3(_) => Err(crate::unavailable::unavailable("S3")),
+        ObjectStoreConfig::S3(_) => Err(unavailable("S3")),
         #[cfg(target_family = "wasm")]
-        ObjectStoreConfig::Gcs(_) => Err(crate::unavailable::unavailable("GCS")),
+        ObjectStoreConfig::Gcs(_) => Err(unavailable("GCS")),
         #[cfg(target_family = "wasm")]
-        ObjectStoreConfig::Local { .. } => Err(crate::unavailable::unavailable("local filesystem")),
+        ObjectStoreConfig::Local { .. } => Err(unavailable("local filesystem")),
         ObjectStoreConfig::InMemory => Ok(Arc::new(object_store::memory::InMemory::new())),
     }
 }

@@ -31,8 +31,9 @@ use crate::{
     codes,
     handlers::test_support::{
         ClientTopicSetup, ProduceRecordsSetup, ShareWireSetup, TopicPartitionCount,
-        acquired_share_records, initialize_earliest_share, produce_records, share_fetch_topics,
-        share_fetch_wire, share_record_states,
+        acquired_share_records, create_topic as create_topic_from_test_support,
+        initialize_earliest_share, produce_records, share_fetch_topics, share_fetch_wire,
+        share_record_states,
     },
     share_partition::state::RecordState::{self, Acquired, Available},
     test_support::{
@@ -54,7 +55,7 @@ async fn start(session_max: usize) -> (BrokerHandle, tempfile::TempDir) {
 
 /// Creates `topic` with `partitions` partitions and returns its id.
 async fn create_topic(broker: &BrokerHandle, topic: &str, partitions: i32) -> WireUuid {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "share-session-test",

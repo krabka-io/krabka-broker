@@ -34,7 +34,7 @@ use crate::{
     fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID},
     handlers::test_support::{
         ClientTopicSetup, ReplicatedTopicSetup, check_cases, check_denied_topic_cases,
-        seed_partition_replicas,
+        create_topic as create_topic_from_test_support, seed_partition_replicas,
     },
     test_support::{DenyAll, KafkaErrorCode, start_broker_with_authorizer_no_audit as start},
 };
@@ -97,7 +97,7 @@ fn fetch_topic(name: &str, topic_id: WireUuid) -> FetchTopic {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "fetch-resolution-test",

@@ -409,7 +409,7 @@ mod tests {
                 assert2::assert!(seg.first_record_timestamp() == Some(expected));
                 seg.append(
                     &sample_batch(SampleBatchSetup {
-                        offset: crate::Offset(2),
+                        offset: Offset(2),
                         timestamp: RecordTimestamp(100),
                         ..Default::default()
                     }),
@@ -472,7 +472,7 @@ mod tests {
         // Multiple batches: max timestamp is at last_offset
         seg.append(
             &sample_batch(SampleBatchSetup {
-                offset: crate::Offset(13),
+                offset: Offset(13),
                 timestamp: RecordTimestamp(600),
                 ..Default::default()
             }),
@@ -531,7 +531,7 @@ mod tests {
         stale.time_index.append(200, u32::MAX).unwrap();
         assert2::assert!(stale.offset_for_timestamp(200).is_none());
 
-        let (_dir2, mut overflowing) = segment_at(crate::Offset(i64::MAX));
+        let (_dir2, mut overflowing) = segment_at(Offset(i64::MAX));
         overflowing.last_offset = Offset(i64::MAX);
         overflowing.time_index.append(0, 1).unwrap();
         assert2::assert!(overflowing.offset_for_timestamp(0).is_none());
@@ -634,7 +634,7 @@ mod tests {
             .unwrap();
         seg.append(
             &sample_batch(SampleBatchSetup {
-                offset: crate::Offset(1),
+                offset: Offset(1),
                 records: RecordCount(3),
                 timestamp: RecordTimestamp(200),
             }),

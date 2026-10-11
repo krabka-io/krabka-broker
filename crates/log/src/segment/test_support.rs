@@ -196,7 +196,7 @@ pub(super) fn indexed_segment() -> (tempfile::TempDir, Segment) {
     let segment = seeded_segment(
         dir.path(),
         crate::segment::test_support::SeededSegmentSetup {
-            offset: crate::Offset(100),
+            offset: Offset(100),
             batches: INDEXED_READ_BATCHES,
             ..Default::default()
         },

@@ -137,7 +137,7 @@ const BATCHES: [(i64, i32, i64); 5] = [
 
 fn encoded(base_offset: i64, records: i32, timestamp: i64) -> (RecordBatch, bytes::Bytes) {
     let batch = sample_batch(SampleBatchSetup {
-        offset: crate::Offset(base_offset),
+        offset: Offset(base_offset),
         records: RecordCount(records),
         timestamp: RecordTimestamp(timestamp),
     });
@@ -151,7 +151,7 @@ fn write_all_encoded(segment: &mut Segment, interval: ByteSize) {
         segment
             .append(
                 &sample_batch(SampleBatchSetup {
-                    offset: crate::Offset(base),
+                    offset: Offset(base),
                     records: RecordCount(records),
                     timestamp: RecordTimestamp(timestamp),
                 }),
@@ -288,7 +288,7 @@ fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
                 segment
                     .append(
                         &sample_batch(SampleBatchSetup {
-                            offset: crate::Offset(offset),
+                            offset: Offset(offset),
                             timestamp: RecordTimestamp(100 + offset),
                             ..Default::default()
                         }),
@@ -330,7 +330,7 @@ fn appends_after_a_truncation_keep_the_indexes_verifying() {
     segment
         .append(
             &sample_batch(SampleBatchSetup {
-                offset: crate::Offset(6),
+                offset: Offset(6),
                 records: RecordCount(2),
                 timestamp: RecordTimestamp(150),
             }),
@@ -342,7 +342,7 @@ fn appends_after_a_truncation_keep_the_indexes_verifying() {
     segment
         .append(
             &sample_batch(SampleBatchSetup {
-                offset: crate::Offset(8),
+                offset: Offset(8),
                 records: RecordCount(2),
                 timestamp: RecordTimestamp(400),
             }),

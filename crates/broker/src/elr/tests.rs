@@ -23,7 +23,10 @@ use crate::{
     BrokerHandle,
     broker::Broker,
     codes,
-    handlers::broker_registration::handle,
+    handlers::{
+        broker_registration::handle,
+        describe_topic_partitions::handle as describe_topic_partitions_handle,
+    },
     heartbeat::controller_state::BrokerControlState,
     test_support::{
         IsrResponseCheck, LiveIsrSetup, WireBrokerId, accepted_isr_proposal, broker_registration,
@@ -149,10 +152,9 @@ async fn describe_partition(broker: &Arc<Broker>) -> DescribeTopicPartitionsResp
     let peer = peer();
     let ctx = request_context(&principal, &peer, "admin-client");
     let request = topic_partitions_request(TOPIC);
-    let response =
-        crate::handlers::describe_topic_partitions::handle(broker, request, DESCRIBE_VERSION, &ctx)
-            .await
-            .expect("DescribeTopicPartitions");
+    let response = describe_topic_partitions_handle(broker, request, DESCRIBE_VERSION, &ctx)
+        .await
+        .expect("DescribeTopicPartitions");
 
     response
         .topics

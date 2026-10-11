@@ -208,7 +208,7 @@ mod tests {
         for i in 0..count.0 {
             seg.append(
                 &sample_batch(SampleBatchSetup {
-                    offset: crate::Offset(i * 2),
+                    offset: Offset(i * 2),
                     records: RecordCount(2),
                     timestamp: RecordTimestamp(100 + i),
                 }),
@@ -309,7 +309,7 @@ mod tests {
             .unwrap();
         seg.append(
             &sample_batch(SampleBatchSetup {
-                offset: crate::Offset(6),
+                offset: Offset(6),
                 records: RecordCount(2),
                 timestamp: RecordTimestamp(400),
             }),
@@ -371,7 +371,7 @@ mod tests {
         let (dir, mut seg) = test_segment();
         let mut wire = bytes::BytesMut::new();
         for off in 0..3i64 {
-            let b = test_batch_at(crate::Offset(off));
+            let b = test_batch_at(Offset(off));
             seg.append(&b, DENSE_INDEX).unwrap();
             b.encode(&mut wire).unwrap();
         }
@@ -388,7 +388,7 @@ mod tests {
         let (dir, mut seg) = test_segment();
         let mut expected = bytes::BytesMut::new();
         for off in 0..3i64 {
-            let batch = test_batch_at(crate::Offset(off));
+            let batch = test_batch_at(Offset(off));
             seg.append(&batch, DENSE_INDEX).unwrap();
             if off < 2 {
                 batch.encode(&mut expected).unwrap();
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn read_raw_returns_at_least_one_batch_over_budget() {
         let (dir, mut seg) = test_segment();
-        let batch = test_batch_at(crate::Offset(0));
+        let batch = test_batch_at(Offset(0));
         let mut expected = bytes::BytesMut::new();
         batch.encode(&mut expected).unwrap();
         seg.append(&batch, DENSE_INDEX).unwrap();

@@ -134,7 +134,7 @@ mod tests {
     use super::*;
     use crate::{
         NodeId,
-        chain::GENESIS_HEAD,
+        chain::{ChainState, GENESIS_HEAD},
         event::AuditEventClass,
         log::{
             AuditLog, AuditMode,
@@ -346,7 +346,7 @@ mod tests {
     async fn indeterminate_replay_poison_survives_after_a_successful_prefix() {
         let dir = tempfile::tempdir().unwrap();
         let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let mut chain = crate::chain::ChainState::new();
+        let mut chain = ChainState::new();
         for event in [life(NodeId(1)), life(NodeId(2))] {
             let mut record = AuditRecord::from_event(&event, &product());
             let (seq, previous) = chain.extend(&record.value);

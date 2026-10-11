@@ -35,7 +35,8 @@ use crate::{
         test_support::{
             AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup,
             ClientTopicSetup, ShareSessionEpoch, ShareWireSetup, TopicPartitionCount,
-            acknowledge_batches_request, acquired_share_records, share_acknowledge_wire,
+            acknowledge_batches_request, acquired_share_records,
+            create_topic as create_topic_from_test_support, share_acknowledge_wire,
             share_fetch_wire,
         },
     },
@@ -83,7 +84,7 @@ async fn create_topic_with_partitions(
     name: &str,
     partitions: i32,
 ) -> WireUuid {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "share-fetch-byte-limit-test",

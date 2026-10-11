@@ -24,7 +24,10 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
-    handlers::test_support::{ClientTopicSetup, check_cases, check_denied_topic_cases},
+    handlers::test_support::{
+        ClientTopicSetup, check_cases, check_denied_topic_cases,
+        create_topic as create_topic_from_test_support,
+    },
     test_support::{
         DenyAll, decode_response, encode_request, peer, principal,
         start_broker_with_authorizer_no_audit as start,
@@ -80,7 +83,7 @@ fn appended_partition(version: i16) -> PartitionProduceResponse {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "produce-resolution-test",

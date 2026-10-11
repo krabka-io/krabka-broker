@@ -29,8 +29,9 @@ use crate::{
     error::BrokerError,
     handlers::test_support::{
         AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup, ClientTopicSetup,
-        ProduceRecordsSetup, RecordCount, ShareSessionEpoch, ShareWireSetup, produce_records,
-        send_acknowledgements, share_fetch_partition_rows, single_replica_partition,
+        ProduceRecordsSetup, RecordCount, ShareSessionEpoch, ShareWireSetup,
+        create_topic as create_topic_from_test_support, produce_records, send_acknowledgements,
+        share_fetch_partition_rows, single_replica_partition,
     },
     share_coordinator::bootstrap::TOPIC,
     test_support::initialize_share_state,
@@ -50,7 +51,7 @@ enum Api {
 use crate::handlers::test_support::start_allow_all_no_audit as start;
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "share-persister-error-test",

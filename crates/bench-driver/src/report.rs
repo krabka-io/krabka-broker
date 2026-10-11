@@ -11,7 +11,7 @@ use krabka_units::{fmt::Human as _, prelude::*};
 
 use crate::{
     aggregate::CellKey,
-    graph::render_html as render_graph_html,
+    graph::{render_html as render_graph_html, render_web_fragment as render_graph_web_fragment},
     ids::{MessageCount, TimeOffsetMs},
     numeric::{mebibytes_f64, millis_f64, to_f64},
     scenario::{Disturbance, LatencyPercentiles, RunOutput, Sample, Stack},
@@ -1108,7 +1108,7 @@ pub fn render_web_fragment(input_dir: &Path, strict: bool) -> Result<String> {
         .into_iter()
         .map(|(p, r)| (run_tag_from_path(&p), r))
         .collect();
-    Ok(crate::graph::render_web_fragment(&tagged))
+    Ok(render_graph_web_fragment(&tagged))
 }
 
 #[cfg(test)]

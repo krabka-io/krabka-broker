@@ -37,7 +37,7 @@ use crate::{
     authorizer::AuthorizationResult,
     broker::BrokerHandle,
     codes,
-    handlers::test_support::ClientTopicSetup,
+    handlers::test_support::{ClientTopicSetup, create_topic as create_topic_from_test_support},
     share_partition::session::FetchPartitions,
     test_support::{
         decode_response, encode_request, peer, principal, request_context,
@@ -116,7 +116,7 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    crate::handlers::test_support::create_topic(
+    create_topic_from_test_support(
         broker,
         ClientTopicSetup {
             client_id: "share-group-authorization-test",

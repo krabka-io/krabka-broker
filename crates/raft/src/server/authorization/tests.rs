@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{refusal, required_operation};
 use crate::{
-    ClusterGrants, ClusterOperation,
+    ClusterGrants, ClusterOperation, ListenerLimits,
     kraft::{KraftController, transport::api_key},
     server::{
         ConnectionContext, Unstable, handle_conn,
@@ -612,7 +612,7 @@ async fn a_denied_request_never_reaches_the_engine() {
                 expires_at_ms: None,
                 grants: Grants::of(grants),
                 unstable: Unstable::default(),
-                limits: crate::ListenerLimits::default(),
+                limits: ListenerLimits::default(),
             },
             KraftController::wall_clock_ms,
         ));
