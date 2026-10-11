@@ -17,7 +17,7 @@ use super::{
     io::{write_all, write_all_vectored},
     lifecycle::WriteSnapshot,
 };
-use crate::error::LogError;
+use crate::{VerbatimBatch, error::LogError};
 
 /// One batch's encoded bytes, as an append path has them.
 #[derive(Clone, Copy)]
@@ -244,7 +244,7 @@ impl Segment {
     /// Any failure restores the segment to the start of the group.
     pub(crate) fn append_verbatim_group(
         &mut self,
-        batches: &[(&crate::VerbatimBatch, Offset)],
+        batches: &[(&VerbatimBatch, Offset)],
         index_interval: ByteSize,
     ) -> Result<(), LogError> {
         self.ensure_writable()?;

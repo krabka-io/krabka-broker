@@ -26,6 +26,7 @@ use super::{
     test_support::{NO_LIMIT, append_samples, configured_test_log, sample_batch, verbatim_from},
 };
 use crate::{
+    DeliveryPolicy, LeaderEpoch, VerbatimBatch,
     config::{LogConfig, SegmentAllocation},
     io::{DirectFile, IoTarget, LogIo},
     name,
@@ -288,7 +289,7 @@ fn a_real_direct_log_round_trips_across_a_roll_and_a_restart() {
     assert2::assert!(batches(&log) == after);
 }
 
-fn producer_batches() -> Vec<crate::VerbatimBatch> {
+fn producer_batches() -> Vec<VerbatimBatch> {
     let mut sequence = 0;
     (0..64)
         .map(|index| {
@@ -299,7 +300,7 @@ fn producer_batches() -> Vec<crate::VerbatimBatch> {
             batch.base_sequence = sequence;
             batch.max_timestamp = i64::from(sequence);
             sequence += records;
-            verbatim_from(&batch, crate::LeaderEpoch(1)).1
+            verbatim_from(&batch, LeaderEpoch(1)).1
         })
         .collect()
 }
@@ -371,7 +372,7 @@ fn failed_direct_groups_restore_bytes_indexes_and_producer_state() {
         let epochs = log.epoch_checkpoint().entries().to_vec();
         let mut group = batches[1..4].to_vec();
         // A new epoch forces checkpoint I/O after producer state has advanced.
-        group[0].leader_epoch = crate::LeaderEpoch(2);
+        group[0].leader_epoch = LeaderEpoch(2);
         *disk.fail_target.lock().unwrap() = target;
         disk.partial_next.store(target.is_none(), Ordering::SeqCst);
         let error = log
@@ -413,7 +414,7 @@ fn direct_groups_leave_special_policies_and_rolls_to_individual_appends() {
             ..direct(mebibytes(1))
         },
         LogConfig {
-            delivery_policy: crate::DeliveryPolicy::Scheduled,
+            delivery_policy: DeliveryPolicy::Scheduled,
             ..direct(mebibytes(1))
         },
         LogConfig {
@@ -470,7 +471,7 @@ fn direct_groups_refuse_invalid_transactional_and_oversized_batches_without_writ
     invalid.last_offset_delta = -1;
     let mut transactional = sample_batch(3);
     transactional.attributes = transactional.attributes.with_transactional(true);
-    let mut transactional = verbatim_from(&transactional, crate::LeaderEpoch(1)).1;
+    let mut transactional = verbatim_from(&transactional, LeaderEpoch(1)).1;
     // The wire attribute also excludes a transaction if the supplied flag disagrees.
     transactional.is_transactional = false;
     let mut large = valid[0].clone();

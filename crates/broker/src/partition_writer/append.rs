@@ -195,7 +195,7 @@ fn try_append_direct_group(
     log: &mut Log,
     datas: &[ProduceData],
     checks: &[Option<ProducerAppendCheck>],
-) -> Option<Vec<Result<AppendedBatch, crate::error::BrokerError>>> {
+) -> Option<Vec<Result<AppendedBatch, BrokerError>>> {
     if checks.iter().any(Option::is_some)
         || log.config_snapshot().segment_allocation != krabka_log::SegmentAllocation::Preallocate
     {
@@ -246,7 +246,7 @@ fn direct_group_len(batches: &[&krabka_log::VerbatimBatch]) -> usize {
 fn direct_group_results(
     result: Result<Vec<Offset>, krabka_log::LogError>,
     count: usize,
-) -> Vec<Result<AppendedBatch, crate::error::BrokerError>> {
+) -> Vec<Result<AppendedBatch, BrokerError>> {
     match result {
         Ok(offsets) => offsets
             .into_iter()
@@ -446,10 +446,8 @@ mod tests {
             let dir = tempdir().unwrap();
             let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
             if seeded {
-                log.append(&mut sample_batch(
-                    crate::test_support::EmptyPayloadBatchSetup::default(),
-                ))
-                .unwrap();
+                log.append(&mut sample_batch(EmptyPayloadBatchSetup::default()))
+                    .unwrap();
             }
             let disk = Arc::new(FailNthWrite {
                 next: std::sync::atomic::AtomicUsize::new(0),
@@ -467,7 +465,7 @@ mod tests {
                 ..LogConfig::default()
             });
             let mut bytes = bytes::BytesMut::new();
-            let mut sample = sample_batch(crate::test_support::EmptyPayloadBatchSetup::default());
+            let mut sample = sample_batch(EmptyPayloadBatchSetup::default());
             sample.records[0].value = Some(bytes::Bytes::from(vec![7; payload]));
             sample.encode(&mut bytes).unwrap();
             let bytes = bytes.freeze();
@@ -540,7 +538,7 @@ mod tests {
             None,
             (
                 vec![ProduceData::Owned(sample_batch(
-                    crate::test_support::EmptyPayloadBatchSetup::default(),
+                    EmptyPayloadBatchSetup::default(),
                 ))],
                 Vec::new(),
             ),
