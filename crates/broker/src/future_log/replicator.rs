@@ -204,13 +204,10 @@ mod tests {
     use super::*;
     use crate::{
         future_log::{
-            canonicalize_or_self, resume_move,
-            test_support::{
-                TestStampSource, append_epoch_batch, append_records, append_value_batch,
-                fixture_partition, test_policy,
+            canonicalize_or_self, resume_move, test_support::{
+                FutureRecordSetup, FutureSourceSetup, RecordValueBytes, TestStampSource, append_epoch_batch, append_records, append_value_batch, fixture_partition, open_future_log, registered_source_fixture, test_policy,
             },
-        },
-        log_dir,
+        }, log_dir,
     };
 
     async fn resume_and_wait(
@@ -279,9 +276,9 @@ mod tests {
         let target = tempdir().unwrap();
         let stamp_source: Arc<dyn krabka_log::StampSource> =
             Arc::new(TestStampSource(AtomicU64::new(100)));
-        let source = crate::future_log::test_support::registered_source_fixture(
+        let source = registered_source_fixture(
             primary.path(),
-            crate::future_log::test_support::FutureSourceSetup {
+            FutureSourceSetup {
                 stamp_source: Some(stamp_source),
                 ..Default::default()
             },
@@ -320,8 +317,8 @@ mod tests {
         for _ in 0..4 {
             append_value_batch(
                 &part,
-                crate::future_log::test_support::FutureRecordSetup {
-                    value_size: crate::future_log::test_support::RecordValueBytes(400 * 1024),
+                FutureRecordSetup {
+                    value_size: RecordValueBytes(400 * 1024),
                     ..Default::default()
                 },
             );
@@ -351,13 +348,13 @@ mod tests {
         for _ in 0..5 {
             append_value_batch(
                 &part,
-                crate::future_log::test_support::FutureRecordSetup {
-                    value_size: crate::future_log::test_support::RecordValueBytes(10),
+                FutureRecordSetup {
+                    value_size: RecordValueBytes(10),
                     ..Default::default()
                 },
             );
         }
-        let (future_path, future_log) = crate::future_log::test_support::open_future_log(target);
+        let (future_path, future_log) = open_future_log(target);
         let policy = test_policy();
         while !catch_up(&part, &future_log, mebibytes(1), &policy.throttle)
             .unwrap()
@@ -425,7 +422,7 @@ mod tests {
         for _ in 0..2 {
             append_value_batch(
                 &part,
-                crate::future_log::test_support::FutureRecordSetup::default(),
+                FutureRecordSetup::default(),
             );
         }
         assert!(part.log_end_offset() == Offset(5));
@@ -455,7 +452,7 @@ mod tests {
         for _ in 0..2 {
             append_epoch_batch(
                 &part,
-                crate::future_log::test_support::FutureRecordSetup {
+                FutureRecordSetup {
                     leader_epoch: krabka_ids::LeaderEpoch(2),
                     ..Default::default()
                 },
@@ -486,7 +483,7 @@ mod tests {
         for _ in 0..3 {
             append_value_batch(
                 &part,
-                crate::future_log::test_support::FutureRecordSetup::default(),
+                FutureRecordSetup::default(),
             );
         }
         assert!(part.log_end_offset() == Offset(5));

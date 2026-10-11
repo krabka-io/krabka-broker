@@ -115,10 +115,10 @@ mod tests {
     use krabka_metadata::NodeId;
 
     use super::*;
-    use crate::handlers::{
+    use crate::{config_keys::{BROKER_WITNESS, UNCLEAN_RECOVERY_STRATEGY, WITNESS_TRUE}, handlers::{
         alter_configs::test_support::{broker_resource, image_with_broker},
         test_support::{BrokerConfigMutationSetup, broker_config_context},
-    };
+    }, test_support::{broker_registration, finalize_elr_version}, throttle::{FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY}};
 
     const SERVING: NodeId = NodeId(1);
 
@@ -147,14 +147,14 @@ mod tests {
     ) -> Vec<MetadataRecord> {
         image.apply(&record(
             SERVING,
-            crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
+            FOLLOWER_THROTTLED_RATE_KEY,
             Some("512"),
         ));
 
         replacement_records(
             image,
             "1",
-            &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")],
+            &[(LEADER_THROTTLED_RATE_KEY, "2048")],
         )
         .expect("valid broker replacement")
     }
@@ -164,7 +164,7 @@ mod tests {
         let mut image = image_with_broker(1);
         image.apply(&record(
             SERVING,
-            crate::throttle::LEADER_THROTTLED_RATE_KEY,
+            LEADER_THROTTLED_RATE_KEY,
             Some("1024"),
         ));
         let records = replace_follower_throttle_with_leader(&mut image);
@@ -197,11 +197,11 @@ mod tests {
         image.apply(&MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
                 port: 9093,
-                ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
+                ..broker_registration(krabka_raft::NodeId(2))
             },
         ));
         let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
-        let rate = crate::throttle::LEADER_THROTTLED_RATE_KEY;
+        let rate = LEADER_THROTTLED_RATE_KEY;
         let cases: Vec<Case<'_>> = vec![
             (
                 "2",
@@ -342,8 +342,8 @@ mod tests {
         let mut image = image_with_broker(1);
         image.apply(&record(
             SERVING,
-            crate::config_keys::BROKER_WITNESS,
-            Some(crate::config_keys::WITNESS_TRUE),
+            BROKER_WITNESS,
+            Some(WITNESS_TRUE),
         ));
         let records = replace_follower_throttle_with_leader(&mut image);
 
@@ -367,7 +367,7 @@ mod tests {
         let error = replacement_records(
             &image,
             "1",
-            &[(crate::config_keys::UNCLEAN_RECOVERY_STRATEGY, "Balanced")],
+            &[(UNCLEAN_RECOVERY_STRATEGY, "Balanced")],
         )
         .expect_err("per-broker recovery setting must be rejected");
 
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn elr_requires_the_cluster_min_isr_override_to_survive_replacement() {
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        crate::test_support::finalize_elr_version(&mut image);
+        finalize_elr_version(&mut image);
         image.apply(&record(
             krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
             config_keys::MIN_INSYNC_REPLICAS,

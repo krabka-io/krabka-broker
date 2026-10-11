@@ -6,6 +6,8 @@
 //! delegation-token lifetimes — the knobs that govern the broker as a whole
 //! rather than one subsystem.
 
+use crate::config::BrokerConfig;
+
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
@@ -18,7 +20,7 @@ use super::{
 impl RuntimeFileConfig {
     pub(super) fn apply_broker_policy(
         &mut self,
-        cfg: &mut crate::config::BrokerConfig,
+        cfg: &mut BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
         set_runtime! {

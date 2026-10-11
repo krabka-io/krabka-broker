@@ -15,17 +15,12 @@ use uuid::Uuid;
 use super::outcome::{Accepted, Refusal};
 pub(super) use crate::break_glass::gate::consumed_proposal_id;
 use crate::{
-    break_glass::{gate, handlers::principal_name},
-    codes,
-    config::BrokerConfig,
-    freeze::{
+    break_glass::{gate, handlers::principal_name}, cluster_id::encode, codes, config::BrokerConfig, freeze::{
         freeze_target,
         handlers::pattern_type_concrete,
         scope_covers_internal_topic,
         signing::{FreezeSignatureCheck, verify_freeze_signature},
-    },
-    handlers::{RequestContext, cluster_alter_denied},
-    time_util::now_ms,
+    }, handlers::{RequestContext, cluster_alter_denied}, time_util::now_ms,
 };
 
 /// Everything the checks read, and nothing they write.
@@ -150,7 +145,7 @@ pub(super) fn check_signature(
     // `krabka-guard` reads the cluster id from `DescribeCluster`, which
     // reports Kafka's base64 `Uuid` form (#1082), and signs that exact
     // string. The broker must build the same string to verify.
-    let cluster_id = crate::cluster_id::encode(env.image.cluster_id());
+    let cluster_id = encode(env.image.cluster_id());
     let check = FreezeSignatureCheck {
         keys: &env.config.operator_keys,
         cluster_id: &cluster_id,

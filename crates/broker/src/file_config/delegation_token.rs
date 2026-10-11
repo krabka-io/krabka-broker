@@ -7,6 +7,8 @@
 
 use krabka_units::{Time, convert::TimeExt as _};
 
+use crate::config::BrokerConfig;
+
 use super::{FileConfigError, validate::positive_i64};
 
 /// TOML shape of `[delegation_token]`. Maps to the three `delegation_token_*`
@@ -30,7 +32,7 @@ pub struct FileDelegationTokenConfig {
 
 pub(super) fn apply_delegation_tokens(
     delegation: Option<&FileDelegationTokenConfig>,
-    cfg: &mut crate::config::BrokerConfig,
+    cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     let Some(delegation) = delegation else {
         return Ok(());
@@ -68,7 +70,7 @@ mod tests {
     use assert2::{assert, check};
     use krabka_units::{days, hours};
 
-    use crate::file_config::FileConfig;
+    use crate::{config::BrokerConfig, file_config::{FileConfig, test_support::configured_unwrap_parse}};
 
     /// Serializes any test that mutates process-wide env vars. Tests in
     /// the same `cargo test` process run on multiple threads by default,
@@ -90,7 +92,7 @@ mod tests {
 [delegation_token]
 secret_key = "abcdef"
 "#;
-            let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
+            let cfg = configured_unwrap_parse(toml).unwrap();
 
             // KIP-48 defaults: 7 days max lifetime, 1 hour sweep cadence,
             // 24 hour default renew period.
@@ -117,7 +119,7 @@ secret_key = "abcdef"
 secret_key = "abcdef"
 "#;
             let file: FileConfig = toml::from_str(toml).unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
+            let mut cfg = BrokerConfig::default();
             file.apply_to(&mut cfg).unwrap();
             assert!(
                 cfg.delegation_token_default_renew_period == hours(24),
@@ -130,7 +132,7 @@ secret_key = "abcdef"
 secret_key = "abcdef"
 default_renew_period_ms = 7200000
 "#;
-            let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
+            let cfg = configured_unwrap_parse(toml).unwrap();
             assert!(
                 cfg.delegation_token_default_renew_period == hours(2),
                 "TOML default_renew_period_ms must override the default"
@@ -145,11 +147,11 @@ default_renew_period_ms = 7200000
 secret_key = "toml-loses"
 "#;
         let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig {
+        let mut cfg = BrokerConfig {
             delegation_token_secret_key: Some(krabka_security::SecretBytes::new(
                 b"runtime-wins".to_vec(),
             )),
-            ..crate::config::BrokerConfig::default()
+            ..BrokerConfig::default()
         };
         file.apply_to(&mut cfg).unwrap();
 
@@ -165,7 +167,7 @@ secret_key = "toml-loses"
     fn delegation_token_absent_when_unset_anywhere() {
         let _g = env_lock().lock().unwrap();
         temp_env::with_var_unset("KRABKA_DELEGATION_TOKEN_SECRET_KEY", || {
-            let cfg = crate::file_config::test_support::configured_unwrap_parse("").unwrap();
+            let cfg = configured_unwrap_parse("").unwrap();
 
             // No secret key anywhere; lifetime knobs stay at their defaults
             // when no section is present.

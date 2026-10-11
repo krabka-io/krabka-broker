@@ -21,7 +21,7 @@ use super::{
     configured_log_dir, future_dir_name_too_long,
     replicator::{ReplicatorTask, replicator_loop},
 };
-use crate::{log_dir, partition::Partition, partition_registry::PartitionRegistry};
+use crate::{error::BrokerError, log_dir, log_dir_status::LogDirRegistry, partition::Partition, partition_registry::PartitionRegistry};
 
 /// Start a move of `(topic, partition)` to `target_log_dir`, or confirm an
 /// identical move as a no-op. Returns immediately after it spawns the
@@ -35,7 +35,7 @@ pub(crate) async fn start_move(
     partitions: &Arc<PartitionRegistry>,
     future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
     all_log_dirs: &[PathBuf],
-    log_dir_status: &crate::log_dir_status::LogDirRegistry,
+    log_dir_status: &LogDirRegistry,
     log_config: &LogConfig,
     topic_partition: (&str, PartitionIndex),
     topic_id: Option<uuid::Uuid>,
@@ -54,7 +54,7 @@ pub(crate) async fn start_move(
         return Err(MoveError::LogDirNotFound);
     };
     if log_dir_status.is_offline(&target_log_dir) {
-        return Err(MoveError::Storage(crate::error::BrokerError::Io(
+        return Err(MoveError::Storage(BrokerError::Io(
             std::io::Error::other("target log directory is offline"),
         )));
     }
@@ -214,7 +214,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::future_log::test_support::{fixture_partition, test_policy};
+    use crate::future_log::test_support::{PlantedFutureLog, fixture_partition, plant_future_log, registered_source_fixture, test_policy};
 
     // Move t-0 using the common log config and policy, with caller-owned registries/status.
     macro_rules! move_with_defaults {
@@ -444,7 +444,7 @@ mod tests {
         // Plant a registry entry as if a prior ARLD already kicked off
         // a move — exercises the "already moving, same target" branch
         // without racing the replicator's swap-and-remove.
-        crate::future_log::test_support::plant_future_log(&future_logs, extra.path());
+        plant_future_log(&future_logs, extra.path());
 
         move_with_defaults!(
             &partitions,
@@ -471,16 +471,16 @@ mod tests {
             extra.path().to_path_buf(),
             third.path().to_path_buf(),
         ];
-        let source = crate::future_log::test_support::registered_source_fixture(
+        let source = registered_source_fixture(
             primary.path(),
             crate::future_log::test_support::FutureSourceSetup::default(),
         );
 
         // Plant a registry entry pointing at `extra`.
-        let crate::future_log::test_support::PlantedFutureLog {
+        let PlantedFutureLog {
             path: future_path,
             cancel: old_cancel,
-        } = crate::future_log::test_support::plant_future_log(&source.future_logs, extra.path());
+        } = plant_future_log(&source.future_logs, extra.path());
 
         move_with_defaults!(
             &source.partitions,

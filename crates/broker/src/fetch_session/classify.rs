@@ -201,16 +201,14 @@ mod tests {
 
     use super::*;
     use crate::fetch_session::test_support::{
-        ForgottenTopicSetup, NAME_FETCH_VERSION, SessionAllocationSetup, SessionKeySetup,
-        SessionRequestSetup, TopicAddressing, allocate_session, allocated_cache, error_code,
-        forgotten_topic, req, seed_resolved_partition, session_key, topic,
+        ForgottenTopicSetup, NAME_FETCH_VERSION, RequestSessionEpoch, RequestSessionId, SessionAllocationSetup, SessionKeySetup, SessionRequestSetup, TopicAddressing, allocate_session, allocated_cache, error_code, forgotten_topic, req, seed_resolved_partition, session_key, topic,
     };
 
     #[test]
     fn sessionless_request_is_classified_correctly() {
         let cache = FetchSessionCache::new(10);
         let r = req(SessionRequestSetup {
-            session_epoch: crate::fetch_session::test_support::RequestSessionEpoch(FINAL_EPOCH),
+            session_epoch: RequestSessionEpoch(FINAL_EPOCH),
             ..Default::default()
         });
         assert!(matches!(
@@ -223,7 +221,7 @@ mod tests {
     fn new_session_request_is_classified_correctly() {
         let cache = FetchSessionCache::new(10);
         let r = req(SessionRequestSetup {
-            session_epoch: crate::fetch_session::test_support::RequestSessionEpoch(INITIAL_EPOCH),
+            session_epoch: RequestSessionEpoch(INITIAL_EPOCH),
             topics: vec![topic("t", &[krabka_ids::PartitionIndex(0)])],
             ..Default::default()
         });
@@ -237,7 +235,7 @@ mod tests {
     fn unknown_session_id_returns_not_found() {
         let cache = FetchSessionCache::new(10);
         let r = req(SessionRequestSetup::incremental(
-            crate::fetch_session::test_support::RequestSessionId(12345),
+            RequestSessionId(12345),
         ));
         assert!(error_code(&cache, &r, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
     }
@@ -247,9 +245,9 @@ mod tests {
         let (cache, id) = allocated_cache(SessionAllocationSetup::default());
         // Session's expected next_epoch is 1; send epoch=99.
         let r = req(SessionRequestSetup {
-            session_epoch: crate::fetch_session::test_support::RequestSessionEpoch(99),
+            session_epoch: RequestSessionEpoch(99),
             ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
+                RequestSessionId(id),
             )
         });
         assert!(error_code(&cache, &r, NAME_FETCH_VERSION) == codes::INVALID_FETCH_SESSION_EPOCH);
@@ -323,11 +321,11 @@ mod tests {
             );
             let decision = cache.classify(
                 &req(SessionRequestSetup {
-                    session_epoch: crate::fetch_session::test_support::RequestSessionEpoch(
+                    session_epoch: RequestSessionEpoch(
                         case.epoch,
                     ),
                     ..SessionRequestSetup::incremental(
-                        crate::fetch_session::test_support::RequestSessionId(id),
+                        RequestSessionId(id),
                     )
                 }),
                 case.version,
@@ -346,9 +344,9 @@ mod tests {
     fn close_request_closes_the_session_inline() {
         let (cache, id) = allocated_cache(SessionAllocationSetup::default());
         let r = req(SessionRequestSetup {
-            session_epoch: crate::fetch_session::test_support::RequestSessionEpoch(FINAL_EPOCH),
+            session_epoch: RequestSessionEpoch(FINAL_EPOCH),
             ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
+                RequestSessionId(id),
             )
         });
         assert!(matches!(
@@ -359,7 +357,7 @@ mod tests {
         assert!(cache.len() == 0);
         // Subsequent classify with the same id is now NOT_FOUND.
         let r2 = req(SessionRequestSetup::incremental(
-            crate::fetch_session::test_support::RequestSessionId(id),
+            RequestSessionId(id),
         ));
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
     }
@@ -432,9 +430,9 @@ mod tests {
                 RequestId::Fixed(id) => id,
             };
             let r = req(SessionRequestSetup {
-                session_epoch: crate::fetch_session::test_support::RequestSessionEpoch(case.epoch),
+                session_epoch: RequestSessionEpoch(case.epoch),
                 ..SessionRequestSetup::incremental(
-                    crate::fetch_session::test_support::RequestSessionId(requested_id),
+                    RequestSessionId(requested_id),
                 )
             });
             match (cache.classify(&r, NAME_FETCH_VERSION), case.want) {
@@ -481,7 +479,7 @@ mod tests {
                 &[krabka_ids::PartitionIndex(0), krabka_ids::PartitionIndex(1)],
             )],
             ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
+                RequestSessionId(id),
             )
         });
         match cache.classify(&r, NAME_FETCH_VERSION) {
@@ -499,7 +497,7 @@ mod tests {
 
         // Re-sending with the old epoch fails — broker advanced to 2.
         let r2 = req(SessionRequestSetup::incremental(
-            crate::fetch_session::test_support::RequestSessionId(id),
+            RequestSessionId(id),
         ));
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::INVALID_FETCH_SESSION_EPOCH);
     }
@@ -611,7 +609,7 @@ mod tests {
                 partition_max_bytes: FetchByteLimit(2048),
             })],
             ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
+                RequestSessionId(id),
             )
         });
 
@@ -640,7 +638,7 @@ mod tests {
                 ..Default::default()
             })],
             ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
+                RequestSessionId(id),
             )
         });
 
@@ -694,7 +692,7 @@ mod tests {
             ..Default::default()
         })];
         let r = req(SessionRequestSetup::forgetting(
-            crate::fetch_session::test_support::RequestSessionId(id),
+            RequestSessionId(id),
             forgotten,
         ));
         match cache.classify(&r, NAME_FETCH_VERSION) {
@@ -725,7 +723,7 @@ mod tests {
 
         let forgotten = vec![forgotten_topic(ForgottenTopicSetup::default())];
         let r = req(SessionRequestSetup::forgetting(
-            crate::fetch_session::test_support::RequestSessionId(id),
+            RequestSessionId(id),
             forgotten,
         ));
         match cache.classify(&r, NAME_FETCH_VERSION) {

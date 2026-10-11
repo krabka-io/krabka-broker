@@ -14,6 +14,10 @@ use krabka_units::{
     convert::{ByteSizeExt as _, TimeExt as _},
 };
 
+use crate::{authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer}, config::{BrokerConfig, InterBrokerCredentials, NodeRole}, schema_validation::SchemaValidator};
+#[cfg(target_family = "wasm")]
+use crate::network::auth::GssapiConfig;
+
 use super::{
     AuthzType, FileAuditConfig, FileAuthorizationConfig, FileConfigError, FileGssapiConfig,
     FileInterBrokerCredentials, FileProcessConfig, FileSchemaRegistryConfig,
@@ -36,7 +40,7 @@ pub(super) struct FileConfigTail {
 /// Apply the `[authorization]` section: super users and the authorizer impl.
 fn apply_authorization_tail(
     authorization: &FileAuthorizationConfig,
-    cfg: &mut crate::config::BrokerConfig,
+    cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     let super_users = authorization
         .super_users
@@ -45,9 +49,9 @@ fn apply_authorization_tail(
         .collect();
     cfg.super_users.clone_from(&super_users);
     cfg.authorizer = match authorization.authz_type {
-        AuthzType::AllowAll => Arc::new(crate::authorizer::AllowAllAuthorizer),
+        AuthzType::AllowAll => Arc::new(AllowAllAuthorizer),
         AuthzType::Simple => Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(super_users)
+            SimpleAclAuthorizer::new(super_users)
                 .with_allow_everyone_if_no_acl_found(authorization.allow_everyone_if_no_acl_found),
         ),
         #[cfg(target_family = "wasm")]
@@ -58,12 +62,14 @@ fn apply_authorization_tail(
         }
         #[cfg(not(target_family = "wasm"))]
         AuthzType::Opa => {
+            use crate::authorizer::opa::OpaAuthorizer;
+
             let opa = authorization
                 .opa
                 .as_ref()
                 .ok_or_else(|| FileConfigError::MissingSection("[authorization.opa]".into()))?;
             Arc::new(
-                crate::authorizer::opa::OpaAuthorizer::new(
+                OpaAuthorizer::new(
                     super_users,
                     opa.url.clone(),
                     opa.allow_on_error,
@@ -80,7 +86,7 @@ fn apply_authorization_tail(
 
 pub(super) fn apply_config_tail(
     tail: FileConfigTail,
-    cfg: &mut crate::config::BrokerConfig,
+    cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     if let Some(authorization) = tail.authorization.as_ref() {
         apply_authorization_tail(authorization, cfg)?;
@@ -114,7 +120,7 @@ pub(super) fn apply_config_tail(
             basic_auth
                 .map_or_else(
                     || {
-                        crate::schema_validation::SchemaValidator::new(
+                        SchemaValidator::new(
                             sr.url.clone(),
                             sr.fail_open,
                             sr.maximum_cache_size,
@@ -123,7 +129,7 @@ pub(super) fn apply_config_tail(
                         )
                     },
                     |(username, password)| {
-                        crate::schema_validation::SchemaValidator::new_with_basic_auth(
+                        SchemaValidator::new_with_basic_auth(
                             sr.url.clone(),
                             sr.fail_open,
                             sr.maximum_cache_size,
@@ -144,9 +150,9 @@ pub(super) fn apply_config_tail(
             .roles
             .iter()
             .map(|role| match role.to_ascii_lowercase().as_str() {
-                "controller" => Ok(crate::config::NodeRole::Controller),
-                "broker" => Ok(crate::config::NodeRole::Broker),
-                "witness" => Ok(crate::config::NodeRole::Witness),
+                "controller" => Ok(NodeRole::Controller),
+                "broker" => Ok(NodeRole::Broker),
+                "witness" => Ok(NodeRole::Witness),
                 other => Err(FileConfigError::InvalidConfig(format!(
                     "unknown process.role `{other}`"
                 ))),
@@ -163,7 +169,7 @@ pub(super) fn apply_config_tail(
                 client_principal,
                 service_name,
                 kdc_url,
-            } => crate::config::InterBrokerCredentials::Gssapi {
+            } => InterBrokerCredentials::Gssapi {
                 keytab_path,
                 client_principal,
                 service_name: service_name
@@ -184,7 +190,7 @@ pub(super) fn apply_config_tail(
                             .into(),
                     ));
                 }
-                crate::config::InterBrokerCredentials::OAuthBearer { token_path }
+                InterBrokerCredentials::OAuthBearer { token_path }
             }
         });
     }
@@ -219,7 +225,7 @@ pub(super) fn apply_config_tail(
 /// Its keys replace the broker's audit settings. An absent `[audit.signing]`,
 /// `[audit.checkpoint]` or `[audit.spool]` subtable keeps the settings it
 /// covers, as an absent `[audit]` table keeps all of them.
-fn apply_audit(audit: FileAuditConfig, cfg: &mut crate::config::BrokerConfig) {
+fn apply_audit(audit: FileAuditConfig, cfg: &mut BrokerConfig) {
     cfg.audit_enabled = audit.enabled;
     cfg.audit_failure_mode = audit.failure_mode;
     cfg.audit_topic = audit.topic;
@@ -243,7 +249,7 @@ fn apply_audit(audit: FileAuditConfig, cfg: &mut crate::config::BrokerConfig) {
 #[cfg(not(target_family = "wasm"))]
 fn gssapi_config(
     gssapi: FileGssapiConfig,
-) -> Result<crate::network::auth::GssapiConfig, FileConfigError> {
+) -> Result<GssapiConfig, FileConfigError> {
     let max_time_skew = gssapi
         .max_time_skew
         .unwrap_or(krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
@@ -256,14 +262,16 @@ fn gssapi_config(
         .principal_to_local_rules
         .iter()
         .map(|spec| {
-            crate::network::auth::KerberosRule::parse(spec).map_err(|error| {
+            use crate::network::auth::KerberosRule;
+
+            KerberosRule::parse(spec).map_err(|error| {
                 FileConfigError::InvalidConfig(format!(
                     "invalid GSSAPI principal rule {spec:?}: {error}"
                 ))
             })
         })
         .collect::<Result<_, _>>()?;
-    Ok(crate::network::auth::GssapiConfig {
+    Ok(GssapiConfig {
         keytab_path: gssapi.keytab_path,
         service_name: gssapi
             .service_name
@@ -280,7 +288,7 @@ fn gssapi_config(
 #[cfg(target_family = "wasm")]
 fn gssapi_config(
     _gssapi: FileGssapiConfig,
-) -> Result<crate::network::auth::GssapiConfig, FileConfigError> {
+) -> Result<GssapiConfig, FileConfigError> {
     Err(FileConfigError::InvalidConfig(
         "SASL/GSSAPI is unavailable on this platform".to_owned(),
     ))
@@ -289,6 +297,8 @@ fn gssapi_config(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+
+use crate::file_config::test_support::configured;
 
     #[test]
     fn apply_to_absent_controller_server_name_leaves_default() {
@@ -299,7 +309,7 @@ cert_path = "/c"
 key_path = "/k"
 client_auth = "Required"
 "#;
-        let cfg = crate::file_config::test_support::configured(src, "parse").unwrap();
+        let cfg = configured(src, "parse").unwrap();
         assert!(cfg.controller_server_name.is_none());
         assert!(cfg.tls_config.expect("tls").trust_roots_path.is_none());
     }

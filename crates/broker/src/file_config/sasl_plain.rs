@@ -6,6 +6,8 @@
 //! credential file, kept out of the TOML so the secret can be a mounted
 //! `Secret` rather than a config-map value.
 
+use crate::config::{BrokerConfig, PlainCredentials};
+
 use super::FileConfigError;
 
 /// TOML shape of `[sasl_plain]`. Maps to
@@ -29,7 +31,7 @@ pub struct FileSaslPlainConfig {
 fn parse_credentials(
     path: &std::path::Path,
     body: &str,
-) -> Result<crate::config::PlainCredentials, FileConfigError> {
+) -> Result<PlainCredentials, FileConfigError> {
     body.lines()
         .enumerate()
         .filter(|(_, line)| {
@@ -66,7 +68,7 @@ fn parse_credentials(
 /// a non-comment line is not `user=password`.
 pub(super) fn apply_sasl_plain(
     sasl_plain: Option<&FileSaslPlainConfig>,
-    cfg: &mut crate::config::BrokerConfig,
+    cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     let Some(path) = sasl_plain.and_then(|section| section.credentials_path.as_deref()) else {
         return Ok(());
@@ -85,9 +87,9 @@ pub(super) fn apply_sasl_plain(
 mod tests {
     use assert2::assert;
 
-    use crate::file_config::FileConfig;
+    use crate::{config::{BrokerConfig, InterBrokerCredentials}, file_config::{FileConfig, test_support::configured_unwrap_parse}};
 
-    fn apply_credential_file(body: &str) -> Result<crate::config::BrokerConfig, String> {
+    fn apply_credential_file(body: &str) -> Result<BrokerConfig, String> {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plain-credentials");
         std::fs::write(&path, body).unwrap();
@@ -96,7 +98,7 @@ mod tests {
             path.display().to_string().replace('\\', "/")
         );
         let file: FileConfig = toml::from_str(&toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
+        let mut cfg = BrokerConfig::default();
         file.apply_to(&mut cfg)
             .map(|()| cfg)
             .map_err(|error| error.to_string())
@@ -158,7 +160,7 @@ mod tests {
 
     #[test]
     fn absent_section_leaves_the_table_empty() {
-        let cfg = crate::file_config::test_support::configured_unwrap_parse("").unwrap();
+        let cfg = configured_unwrap_parse("").unwrap();
 
         assert!(cfg.plain_credentials.is_empty());
     }
@@ -183,7 +185,7 @@ mod tests {
     fn rejects_an_unreadable_path() {
         let file: FileConfig =
             toml::from_str("[sasl_plain]\ncredentials_path = '/no/such/krabka/plain'\n").unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
+        let mut cfg = BrokerConfig::default();
 
         let error = file
             .apply_to(&mut cfg)
@@ -198,7 +200,7 @@ mod tests {
     #[test]
     fn debug_prints_usernames_but_no_passwords() {
         let mut cfg = apply_credential_file("admin=admin-secret\n").unwrap();
-        cfg.inter_broker_credentials = Some(crate::config::InterBrokerCredentials::Plain {
+        cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
             username: "broker".to_string(),
             password: "broker-secret".to_string(),
         });

@@ -12,8 +12,7 @@ use super::{
     validate::{invalid_runtime_value, positive_time},
 };
 use crate::{
-    config::BackgroundUncleanRecovery,
-    operator_keys::{OperatorKeyEntry, OperatorKeys},
+    break_glass::{ALL_ACTIONS, action_from_name, action_name}, config::{BackgroundUncleanRecovery, BrokerConfig, MIN_BREAK_GLASS_REQUIRED_APPROVALS}, operator_keys::{OperatorKeyEntry, OperatorKeys},
 };
 
 /// TOML shape of one `[[operator_keys]]` entry. Maps to
@@ -112,9 +111,9 @@ pub struct FileBreakGlassConfig {
 /// An operator who misspells one needs the list in front of them, because the
 /// names are not the wire spellings and not the CLI subcommands.
 fn known_break_glass_action_names() -> String {
-    crate::break_glass::ALL_ACTIONS
+    ALL_ACTIONS
         .into_iter()
-        .map(crate::break_glass::action_name)
+        .map(action_name)
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -129,7 +128,7 @@ pub(super) fn apply_privileged_action_policy(
     operator_keys: &[FileOperatorKey],
     freeze: Option<FileFreezeConfig>,
     break_glass: Option<FileBreakGlassConfig>,
-    cfg: &mut crate::config::BrokerConfig,
+    cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     if !operator_keys.is_empty() {
         let entries: Vec<OperatorKeyEntry> =
@@ -161,7 +160,7 @@ pub(super) fn apply_privileged_action_policy(
             cfg.break_glass.approvers = approvers;
         }
         if let Some(required) = break_glass.required_approvals {
-            if required < crate::config::MIN_BREAK_GLASS_REQUIRED_APPROVALS {
+            if required < MIN_BREAK_GLASS_REQUIRED_APPROVALS {
                 return Err(invalid_runtime_value(
                     "break_glass.required_approvals",
                     "must be at least 2; a two-person rule with one approval is one person",
@@ -179,7 +178,7 @@ pub(super) fn apply_privileged_action_policy(
                 .collect()
         });
         for action in &cfg.break_glass.signed_actions {
-            if crate::break_glass::action_from_name(action).is_none() {
+            if action_from_name(action).is_none() {
                 return Err(invalid_runtime_value(
                     "break_glass.signed_actions",
                     format!(

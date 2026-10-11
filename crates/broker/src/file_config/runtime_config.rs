@@ -9,6 +9,8 @@ use krabka_units::{ByteSize, Ratio, Time};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::config::BrokerConfig;
+
 use super::FileConfigError;
 
 /// Validated operational policy loaded from `[runtime]`.
@@ -426,7 +428,7 @@ impl RuntimeFileConfig {
     /// Returns [`FileConfigError::InvalidConfig`] for an invalid value.
     pub fn apply_to(
         mut self,
-        cfg: &mut crate::config::BrokerConfig,
+        cfg: &mut BrokerConfig,
     ) -> Result<(), FileConfigError> {
         self.record_supplied_kafka_keys(cfg);
         self.apply_core(cfg)?;
@@ -448,7 +450,7 @@ impl RuntimeFileConfig {
     ///
     /// The overlay of a command line or the environment applies through this
     /// too, after the file, so it adds to what the file recorded.
-    fn record_supplied_kafka_keys(&self, cfg: &mut crate::config::BrokerConfig) {
+    fn record_supplied_kafka_keys(&self, cfg: &mut BrokerConfig) {
         let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(self) else {
             return;
         };

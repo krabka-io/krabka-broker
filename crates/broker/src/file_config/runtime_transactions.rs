@@ -7,6 +7,8 @@
 
 use krabka_units::{ByteSize, Time, convert::TimeExt, kibibytes};
 
+use crate::config::BrokerConfig;
+
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
@@ -18,7 +20,7 @@ use super::{
 impl RuntimeFileConfig {
     pub(super) fn apply_transactions(
         &mut self,
-        cfg: &mut crate::config::BrokerConfig,
+        cfg: &mut BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
         set_runtime! {
@@ -145,7 +147,7 @@ impl RuntimeFileConfig {
     /// refuses one below this value.
     pub(super) fn apply_barrier(
         &mut self,
-        cfg: &mut crate::config::BrokerConfig,
+        cfg: &mut BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
         set_runtime! {
@@ -186,11 +188,11 @@ mod tests {
     use assert2::assert;
     use krabka_units::{mebibytes, secs};
 
-    use crate::file_config::FileConfig;
+    use crate::{config::BrokerConfig, file_config::{FileConfig, test_support::configured}};
 
     #[test]
     fn barrier_runtime_keys_land_in_the_broker_config() {
-        let cfg = crate::file_config::test_support::configured(
+        let cfg = configured(
             r#"
 [runtime]
 barrier_state_num_partitions = 12
@@ -235,7 +237,7 @@ barrier_max_topics_per_group = 16
         for case in cases {
             let file: FileConfig = toml::from_str(&format!("[runtime]\n{case}\n"))
                 .unwrap_or_else(|error| panic!("parse {case}: {error}"));
-            let mut cfg = crate::config::BrokerConfig::default();
+            let mut cfg = BrokerConfig::default();
 
             assert!(file.apply_to(&mut cfg).is_err(), "{case}");
         }
@@ -356,19 +358,19 @@ barrier_max_topics_per_group = 16
             ),
         ];
         for (row, body, expected) in rows {
-            let file: crate::file_config::FileConfig =
+            let file: FileConfig =
                 toml::from_str(&format!("[runtime]\n{body}\n")).expect("parse runtime config");
-            let mut cfg = crate::config::BrokerConfig::default();
+            let mut cfg = BrokerConfig::default();
             let applied = file
                 .apply_to(&mut cfg)
                 .ok()
                 .map(|()| *cfg.share_coordinator);
             assert!(applied == expected, "{row}");
         }
-        let file: crate::file_config::FileConfig =
+        let file: FileConfig =
             toml::from_str("[runtime]\nshare_coordinator_load_buffer_size = \"2MiB\"\n")
                 .expect("parse runtime config");
-        let mut cfg = crate::config::BrokerConfig::default();
+        let mut cfg = BrokerConfig::default();
         file.apply_to(&mut cfg).expect("apply");
         assert!(cfg.share_coordinator_load_buffer_size == krabka_units::mebibytes(2));
         assert!(
