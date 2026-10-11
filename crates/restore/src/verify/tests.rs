@@ -503,11 +503,11 @@ async fn a_batch_whose_exclusive_end_overflows_is_rejected() {
         ..Default::default()
     });
 
-    let segment = write_segment(dir.path(), &fixture, &[]);
-    let error = verify_segment(&store, &partition, &segment)
+    let target_segment = write_segment(dir.path(), &fixture, &[]);
+    let err = verify_segment(&store, &partition, &target_segment)
         .await
-        .expect_err("exclusive offset overflow");
-    check!(matches!(error, RestoreError::TruncatedSegment { .. }));
+        .unwrap_err();
+    check!(matches!(err, RestoreError::TruncatedSegment { .. }));
 }
 
 #[tokio::test]

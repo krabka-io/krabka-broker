@@ -66,9 +66,10 @@ impl BatchSender for krabka_client_core::Client {
 impl BatchSender for krabka_client_core::Connection {
     async fn send_produce_request(
         &self,
-        request: krabka_protocol::owned::produce_request::ProduceRequest,
+        req: krabka_protocol::owned::produce_request::ProduceRequest,
     ) -> krabka_protocol::owned::produce_response::ProduceResponse {
-        self.send(request).await.expect("Produce")
+        let resp = self.send(req).await;
+        resp.expect("Connection Produce")
     }
 }
 

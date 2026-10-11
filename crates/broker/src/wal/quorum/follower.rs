@@ -243,18 +243,16 @@ mod tests {
         shard: ShardId,
         follower: &FollowerLog,
     ) -> krabka_protocol::owned::fetch_response::PartitionData {
+        let req = fetch_request(
+            QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+            NodeId(2),
+            1,
+            follower.last_epoch(),
+            follower.end_offset().0,
+            krabka_units::mebibytes(1),
+        );
         let response = registry
-            .route_fetch_request(
-                &fetch_request(
-                    QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
-                    NodeId(2),
-                    1,
-                    follower.last_epoch(),
-                    follower.end_offset().0,
-                    krabka_units::mebibytes(1),
-                ),
-                NodeId(2),
-            )
+            .route_fetch_request(&req, NodeId(2))
             .unwrap()
             .unwrap();
         response_partition(response, shard).unwrap()

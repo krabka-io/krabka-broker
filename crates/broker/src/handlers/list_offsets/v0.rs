@@ -162,12 +162,11 @@ pub(super) async fn handle(
         ctx,
     );
 
-    let mut topics = concurrently(authorized_topics.into_iter().map(|(topic_index, topic)| {
-        let duplicates = &duplicates;
-        async move {
-            let name = topic.name;
-            let partitions = concurrently(topic.partitions.into_iter().map(|partition| {
-                let is_duplicate = duplicates.contains(&(topic_index, partition.index));
+    let dup_ref = &duplicates;
+    let mut topics = concurrently(authorized_topics.into_iter().map(|(topic_index, topic)| async move {
+        let name = topic.name;
+        let partitions = concurrently(topic.partitions.into_iter().map(|partition| {
+            let is_duplicate = dup_ref.contains(&(topic_index, partition.index));
                 let name = name.clone();
                 async move {
                     if is_duplicate {
@@ -179,8 +178,8 @@ pub(super) async fn handle(
             }))
             .await;
             TopicResponse { name, partitions }
-        }
-    }))
+        })
+    )
     .await;
 
     topics.extend(denied_topics.into_iter().map(|(_, topic)| {

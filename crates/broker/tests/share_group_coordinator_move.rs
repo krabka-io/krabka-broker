@@ -118,10 +118,12 @@ async fn heartbeat_once_loaded(
 }
 
 fn position_of(cluster: &Cluster, node_id: u64) -> usize {
-    cluster
-        .iter()
-        .position(|(handle, _, _)| handle.node_id() == node_id)
-        .expect("a cluster member")
+    for (idx, (handle, _, _)) in cluster.iter().enumerate() {
+        if handle.node_id() == node_id {
+            return idx;
+        }
+    }
+    panic!("a cluster member");
 }
 
 /// A join whose records cannot commit, because a follower of the group's

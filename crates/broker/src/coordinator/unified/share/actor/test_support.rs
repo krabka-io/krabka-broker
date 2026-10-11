@@ -23,7 +23,6 @@ use crate::{
         offsets_log::fake::InMemoryOffsetsLog,
         reconciler::ReconcileInput,
         share::config::ShareGroupConfig,
-        streams::config::StreamsGroupConfig,
         test_support::{MemberEpoch, fixed_source, make_share_persister},
     },
     test_support::PartitionCount,
@@ -126,7 +125,7 @@ pub(super) fn make_coordinator_with_config(
         share,
         metadata,
         log.clone(),
-        StreamsGroupConfig::default(),
+        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
     ));
     (coord, log)
 }

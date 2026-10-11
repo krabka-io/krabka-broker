@@ -155,7 +155,8 @@ fn remove_marked_partitions_from(entry: &mut TxnEntry, written: &[TopicPartition
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, sync::Arc};
+    use std::collections::HashSet;
+    use std::sync::Arc;
 
     use assert2::{assert, check};
     use krabka_ids::PartitionIndex;

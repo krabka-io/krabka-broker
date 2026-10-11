@@ -78,15 +78,15 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
         produced.responses[0].partition_responses[0].error_code == codes::NOT_LEADER_OR_FOLLOWER,
         "a client Produce to the witness is refused"
     );
+    let expected_endpoint = krabka_protocol::owned::produce_response::NodeEndpoint {
+        node_id: leader_id,
+        host: advertised.host.clone(),
+        port: i32::from(advertised.port),
+        rack: registration.rack.clone(),
+        ..Default::default()
+    };
     check!(
-        produced.node_endpoints
-            == vec![krabka_protocol::owned::produce_response::NodeEndpoint {
-                node_id: leader_id,
-                host: advertised.host.clone(),
-                port: i32::from(advertised.port),
-                rack: registration.rack.clone(),
-                ..Default::default()
-            }],
+        produced.node_endpoints == [expected_endpoint],
         "the refused Produce carries the leader's endpoint (KIP-951): {:?}",
         produced.node_endpoints
     );

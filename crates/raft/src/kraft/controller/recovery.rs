@@ -163,9 +163,12 @@ fn replay_control_records_until(
                 apply_control_record(state, record, offset)?;
             }
         }
-        match replay_cursor_decision(cursor.0, next.map(|offset| offset.0)) {
-            ReplayCursorDecision::Advance(next) => cursor = Offset(next),
-            ReplayCursorDecision::Stop => break,
+        if let ReplayCursorDecision::Advance(advanced) =
+            replay_cursor_decision(cursor.0, next.map(|offset| offset.0))
+        {
+            cursor = Offset(advanced);
+        } else {
+            break;
         }
     }
     Ok(())

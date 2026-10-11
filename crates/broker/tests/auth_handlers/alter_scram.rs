@@ -92,13 +92,14 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
         scram_admin_fixture(vec![SaslMechanism::Plain, SaslMechanism::ScramSha256]).await;
 
     let (salt, salted) = pbkdf2_salt_and_salted_sha256(alice_password().as_bytes(), 4096);
+    let upsert = scram_upsertion(ScramUpsertionSetup {
+        mechanism: ScramAlgorithm::Sha256,
+        salt: bytes::Bytes::from(salt),
+        salted_password: bytes::Bytes::from(salted.to_vec()),
+        ..Default::default()
+    });
     let req = AlterUserScramCredentialsRequest {
-        upsertions: vec![scram_upsertion(ScramUpsertionSetup {
-            mechanism: ScramAlgorithm::Sha256,
-            salt: bytes::Bytes::from(salt),
-            salted_password: bytes::Bytes::from(salted.to_vec()),
-            ..Default::default()
-        })],
+        upsertions: vec![upsert],
         ..Default::default()
     };
     let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion (SHA-256)").await;

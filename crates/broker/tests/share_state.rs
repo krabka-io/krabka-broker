@@ -341,21 +341,19 @@ async fn persister_round_trip() {
     );
 
     // Delete, then a fresh read is refused: the key has no state.
-    let del = client
-        .send(DeleteShareGroupStateRequest {
-            group_id: "g1".into(),
-            topics: vec![DeleteStateData {
-                topic_id: wire(tid),
-                partitions: vec![DeletePart {
-                    partition: 0,
-                    ..Default::default()
-                }],
+    let del_req = DeleteShareGroupStateRequest {
+        group_id: "g1".into(),
+        topics: vec![DeleteStateData {
+            topic_id: wire(tid),
+            partitions: vec![DeletePart {
+                partition: 0,
                 ..Default::default()
             }],
             ..Default::default()
-        })
-        .await
-        .expect("DeleteShareGroupState");
+        }],
+        ..Default::default()
+    };
+    let del = client.send(del_req).await.expect("DeleteShareGroupState");
     assert!(
         del.results[0].partitions[0].error_code == 0,
         "delete error: {}",

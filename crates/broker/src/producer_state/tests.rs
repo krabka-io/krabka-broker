@@ -104,16 +104,13 @@ async fn a_late_commit_at_an_older_epoch_does_not_undo_a_marker() {
 #[tokio::test]
 async fn only_an_exact_retry_of_the_last_batch_is_duplicate() {
     let s = ProducerState::new();
-    commit_fixture(
-        &s,
-        ProducerCommitSetup {
-            sequence: ProducerSequence(3),
-            delta: SequenceDelta(1),
-            offset: krabka_log::Offset(10),
-            ..Default::default()
-        },
-    )
-    .await;
+    let setup = ProducerCommitSetup {
+        sequence: ProducerSequence(3),
+        delta: SequenceDelta(1),
+        offset: krabka_log::Offset(10),
+        ..Default::default()
+    };
+    commit_fixture(&s, setup).await;
 
     check!(
         s.check("t", PartitionIndex(0), 1000, 0, 3, 1).await

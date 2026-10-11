@@ -185,7 +185,7 @@ async fn silent_plaintext_connection_is_closed_past_the_idle_window() {
     advance(Duration::from_secs(61)).await;
 
     assert!(is_closed(&mut stream).await);
-    assert!(fixture.idle_closes() == 1);
+    assert_eq!(fixture.idle_closes(), 1);
 
     fixture.handle.shutdown().await;
 }

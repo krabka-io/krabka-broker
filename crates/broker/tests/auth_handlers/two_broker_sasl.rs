@@ -45,10 +45,10 @@ async fn reserve_listeners(n: usize) -> (Vec<SocketAddr>, Vec<tokio::net::TcpLis
 /// `listen_addr`. The test clients use it, because they do not speak SASL
 /// yet. The second listener is a `SASL_PLAINTEXT` inter-broker listener.
 /// The replicator and the heartbeat use it against the peer broker.
-const DEFAULT_SASL_ENDPOINTS: [SocketAddr; 1] = [SocketAddr::V4(std::net::SocketAddrV4::new(
-    std::net::Ipv4Addr::LOCALHOST,
+const DEFAULT_SASL_ENDPOINTS: [SocketAddr; 1] = [SocketAddr::new(
+    std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
     0,
-))];
+)];
 
 #[derive(krabka_macros::FieldDefaults)]
 struct SaslNodeSetup<'a> {
