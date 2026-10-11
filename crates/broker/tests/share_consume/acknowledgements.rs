@@ -16,9 +16,9 @@ use crate::{
         share_fetch,
     },
     support::share::{
-        ConsumptionSetup, RefetchSetup, RetryEpochs, ShareRecordCount, ShareRecordSeedSetup,
-        ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup, acknowledge_success,
-        refetch_while_empty, rejoin_group, start_topic,
+        ConsumptionSetup, RefetchSetup, RetryEpochs, ShareAck, ShareRecordCount,
+        ShareRecordSeedSetup, ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup,
+        ShareTopicSetup, acknowledge_success, refetch_while_empty, rejoin_group, start_topic,
     },
 };
 
@@ -33,11 +33,8 @@ async fn consume_accept_restart() {
 
     let tid;
     {
-        let (broker, client, topic) = start_topic(
-            broker_config(log_dir.clone()),
-            crate::support::share::ShareTopicSetup::default(),
-        )
-        .await;
+        let (broker, client, topic) =
+            start_topic(broker_config(log_dir.clone()), ShareTopicSetup::default()).await;
         tid = topic;
         let (member, _) = initialize_consumption(
             &broker,
@@ -70,7 +67,7 @@ async fn consume_accept_restart() {
         // Accept offsets 0..2 (session epoch is now 1 after the open).
         acknowledge_success(
             &client,
-            crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)),
+            ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)),
         )
         .await;
 
@@ -114,12 +111,7 @@ async fn release_redelivers() {
     // Release offsets 0..1 (epoch 1).
     acknowledge_success(
         &fixture.client,
-        crate::support::share::ShareAck::prefix_for(
-            &fixture.member,
-            fixture.tid,
-            krabka_ids::Offset(1),
-        )
-        .release(),
+        ShareAck::prefix_for(&fixture.member, fixture.tid, krabka_ids::Offset(1)).release(),
     )
     .await;
 
@@ -148,12 +140,7 @@ async fn reject_archives() {
     // Reject offsets 0..1 (epoch 1) → archived.
     acknowledge_success(
         &fixture.client,
-        crate::support::share::ShareAck::prefix_for(
-            &fixture.member,
-            fixture.tid,
-            krabka_ids::Offset(1),
-        )
-        .reject(),
+        ShareAck::prefix_for(&fixture.member, fixture.tid, krabka_ids::Offset(1)).reject(),
     )
     .await;
 

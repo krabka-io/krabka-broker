@@ -26,7 +26,8 @@ use tokio::net::TcpStream;
 
 use crate::support::{
     configs::{
-        IncrementalConfigsSetup, incremental_config, incremental_request, incremental_resource,
+        ConfigOperation, IncrementalConfigsSetup, incremental_config, incremental_request,
+        incremental_resource,
     },
     wire::ApiRequestSetup,
 };
@@ -121,7 +122,7 @@ pub(crate) async fn set_broker_config(
             vec![incremental_config(
                 name.to_string(),
                 Some(value.to_string()),
-                crate::support::configs::ConfigOperation::Set,
+                ConfigOperation::Set,
             )],
         )],
         ..Default::default()

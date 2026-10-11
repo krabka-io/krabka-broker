@@ -13,8 +13,8 @@ use crate::{
     harness::{ConsumptionFixture, join, produce_n, single_record_consumption_fixture, wire},
     share_rpc::{acquired_count, fetch_until_acquired, share_fetch_req},
     support::share::{
-        EmptySessionSetup, FetchByteLimit, ShareRecordsSetup, ShareSessionEpoch,
-        acknowledge_success, empty_session_request,
+        EmptySessionSetup, FetchByteLimit, ShareAck, ShareFetchSetup, ShareRecordsSetup,
+        ShareSessionEpoch, ShareSessionSetup, acknowledge_success, empty_session_request,
     },
 };
 
@@ -32,11 +32,9 @@ async fn session_epoch_validation() {
 
     // Open (epoch 0) succeeds: top-level error_code 0.
     let opened: ShareFetchResponse = client
-        .send(share_fetch_req(
-            crate::support::share::ShareFetchSetup::from(
-                crate::support::share::ShareSessionSetup::opening(&member, tid),
-            ),
-        ))
+        .send(share_fetch_req(ShareFetchSetup::from(
+            ShareSessionSetup::opening(&member, tid),
+        )))
         .await
         .expect("ShareFetch open");
     assert!(
@@ -48,9 +46,11 @@ async fn session_epoch_validation() {
     // The stored epoch is now 1. A non-matching positive epoch (say 9) →
     // INVALID_SHARE_SESSION_EPOCH (123) at the top level.
     let stale: ShareFetchResponse = client
-        .send(share_fetch_req(
-            crate::support::share::ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(9)),
-        ))
+        .send(share_fetch_req(ShareFetchSetup::at_epoch(
+            &member,
+            tid,
+            ShareSessionEpoch(9),
+        )))
         .await
         .expect("ShareFetch stale");
     assert!(
@@ -63,9 +63,11 @@ async fn session_epoch_validation() {
     // SHARE_SESSION_NOT_FOUND (122).
     let (ghost, _) = join(&client, "g1", "t").await;
     let not_found: ShareFetchResponse = client
-        .send(share_fetch_req(
-            crate::support::share::ShareFetchSetup::at_epoch(&ghost, tid, ShareSessionEpoch(5)),
-        ))
+        .send(share_fetch_req(ShareFetchSetup::at_epoch(
+            &ghost,
+            tid,
+            ShareSessionEpoch(5),
+        )))
         .await
         .expect("ShareFetch unknown session");
     assert!(
@@ -89,15 +91,11 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
         member,
     } = single_record_consumption_fixture().await;
 
-    let first = fetch_until_acquired(
-        &client,
-        crate::support::share::ShareSessionSetup::opening(&member, tid),
-    )
-    .await;
+    let first = fetch_until_acquired(&client, ShareSessionSetup::opening(&member, tid)).await;
     assert!(acquired_count(&first) == 1);
     acknowledge_success(
         &client,
-        crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(0)),
+        ShareAck::prefix_for(&member, tid, krabka_ids::Offset(0)),
     )
     .await;
 
@@ -125,8 +123,8 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
     assert!(acquired_count(cached_partition) == 1);
     acknowledge_success(
         &client,
-        crate::support::share::ShareAck::prefix(
-            crate::support::share::ShareSessionSetup::at_epoch(&member, tid, ShareSessionEpoch(3)),
+        ShareAck::prefix(
+            ShareSessionSetup::at_epoch(&member, tid, ShareSessionEpoch(3)),
             krabka_ids::Offset(1),
         )
         .starting_at(krabka_ids::Offset(1)),

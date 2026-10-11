@@ -19,7 +19,8 @@ use crate::{
     admin_harness::{build_client, create_topic_helper},
     support::{
         configs::{
-            IncrementalConfigsSetup, incremental_config, incremental_request, incremental_resource,
+            ConfigOperation, IncrementalConfigsSetup, incremental_config, incremental_request,
+            incremental_resource,
         },
         start_n_node_with,
         topics::{
@@ -197,7 +198,7 @@ fn alter_request(topic: &str, value: &str) -> IncrementalAlterConfigsRequest {
             vec![incremental_config(
                 "unclean.leader.election.enable",
                 Some(value.into()),
-                crate::support::configs::ConfigOperation::Set,
+                ConfigOperation::Set,
             )],
         )],
         ..Default::default()

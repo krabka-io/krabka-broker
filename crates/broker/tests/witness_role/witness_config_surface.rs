@@ -17,8 +17,8 @@ use crate::{
     BROKER_WITNESS, CONFIG_SOURCE_DYNAMIC_BROKER, CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
     RESOURCE_TYPE_BROKER, SITE_A, STRETCH_PREFERRED_LEADER_SITE, WITNESS_ID, cluster_lock,
     support::configs::{
-        IncrementalConfigsSetup, describe_resource, incremental_config, incremental_request,
-        incremental_resource,
+        ConfigOperation, IncrementalConfigsSetup, describe_resource, incremental_config,
+        incremental_request, incremental_resource,
     },
     witness_cluster::{client_at, shutdown, start_stretch_cluster},
 };
@@ -106,7 +106,7 @@ async fn witness_role_is_a_read_only_broker_config() {
                 vec![incremental_config(
                     BROKER_WITNESS,
                     Some("false".into()),
-                    crate::support::configs::ConfigOperation::Set,
+                    ConfigOperation::Set,
                 )],
             )],
             ..Default::default()

@@ -17,7 +17,7 @@ use krabka_protocol::{
 use super::*;
 use crate::{
     api_catalog::UnstableApiVersions,
-    authorizer::AllowAllAuthorizer,
+    authorizer::{AllowAllAuthorizer, AuthorizationResult},
     broker::BrokerHandle,
     config::{BrokerConfig, RemoteStorageBackend},
     config_keys::{DISKLESS, serves_topic_key},
@@ -26,12 +26,14 @@ use crate::{
         describe_configs::effective_topic_configs,
         test_support::{
             AclSetup, TopicPartitionCount, TopicReplicationFactor, replica_availability,
+            seed_controller_quota as seed_controller_quota_helper,
         },
     },
     test_support::{
         AllowAclSetup, DenyAll, DescribedCreationSetup, KafkaErrorCode, allow_acl,
-        begin_controlled_shutdown, described_creation_configs, dispatch_wire, fence_remote_broker,
-        make_witness, peer, principal, seed_remote_broker, start_broker_no_audit_with,
+        begin_controlled_shutdown, broker_registration, described_creation_configs, dispatch_wire,
+        fence_remote_broker, make_witness, peer, principal, seed_remote_broker,
+        start_broker_no_audit_with,
     },
     throttle::LEADER_THROTTLED_REPLICAS_KEY,
 };
@@ -119,9 +121,9 @@ struct ExpectedTopicSetup<'a> {
     topic_id: ProtoUuid,
     error_code: KafkaErrorCode,
     error_message: Option<String>,
-    #[default(crate::handlers::test_support::TopicPartitionCount(-1))]
+    #[default(TopicPartitionCount(-1))]
     num_partitions: TopicPartitionCount,
-    #[default(crate::handlers::test_support::TopicReplicationFactor(-1))]
+    #[default(TopicReplicationFactor(-1))]
     replication_factor: TopicReplicationFactor,
     configs: Vec<CreatableTopicConfigs>,
     topic_config_error_code: KafkaErrorCode,
@@ -154,7 +156,7 @@ fn expected_topic(setup: ExpectedTopicSetup<'_>) -> CreatableTopicResult {
 struct CreatedTopicExpectation<'a> {
     #[default("retries")]
     name: &'a str,
-    #[default(crate::handlers::test_support::TopicPartitionCount(1))]
+    #[default(TopicPartitionCount(1))]
     partitions: TopicPartitionCount,
     configs: &'a [(&'a str, &'a str)],
 }
@@ -169,7 +171,7 @@ fn check_created_topic_response(
             name: setup.name,
             topic_id: response.topics[0].topic_id,
             num_partitions: setup.partitions,
-            replication_factor: crate::handlers::test_support::TopicReplicationFactor(1),
+            replication_factor: TopicReplicationFactor(1),
             configs: expected_configs(setup.configs),
             ..Default::default()
         })],
@@ -247,7 +249,7 @@ async fn drive(
 }
 
 async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
-    crate::handlers::test_support::seed_controller_quota(handle, rate).await;
+    seed_controller_quota_helper(handle, rate).await;
 }
 
 /// A denial on cluster `Create` is a shortcut only. `DenyAll` also denies the
@@ -357,7 +359,7 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(
                 krabka_metadata::BrokerRegistrationRecord {
                     broker_epoch: -1,
-                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
+                    ..broker_registration(krabka_raft::NodeId(node_id))
                 },
             )])
             .await
@@ -414,12 +416,10 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
                 topic_id: image.topic(&name).map_or(ProtoUuid([0; 16]), |topic| {
                     ProtoUuid(topic.topic_id.into_bytes())
                 }),
-                error_code: crate::test_support::KafkaErrorCode(error_code),
+                error_code: KafkaErrorCode(error_code),
                 error_message: error_message.map(str::to_owned),
-                num_partitions: crate::handlers::test_support::TopicPartitionCount(created),
-                replication_factor: crate::handlers::test_support::TopicReplicationFactor(
-                    created_rf
-                ),
+                num_partitions: TopicPartitionCount(created),
+                replication_factor: TopicReplicationFactor(created_rf),
                 configs: if created_ok {
                     expected_configs(&[])
                 } else {
@@ -457,8 +457,8 @@ async fn handle_success_persists_topic_config_and_success_fields() {
             expected_topic(ExpectedTopicSetup {
                 name: "configured",
                 topic_id: resp.topics[0].topic_id,
-                num_partitions: crate::handlers::test_support::TopicPartitionCount(2),
-                replication_factor: crate::handlers::test_support::TopicReplicationFactor(1),
+                num_partitions: TopicPartitionCount(2),
+                replication_factor: TopicReplicationFactor(1),
                 configs: expected_configs(&[("retention.ms", "60000")]),
                 ..Default::default()
             })
@@ -978,9 +978,9 @@ struct DenyDescribeConfigs;
 
 test_authorizer!(DenyDescribeConfigs, (self, _source, req), {
     if req.operation == krabka_metadata::AclOperation::DescribeConfigs {
-        crate::authorizer::AuthorizationResult::Deny
+        AuthorizationResult::Deny
     } else {
-        crate::authorizer::AuthorizationResult::Allow
+        AuthorizationResult::Allow
     }
 });
 
@@ -1069,9 +1069,7 @@ async fn create_without_describe_configs_withholds_the_configs_but_creates_the_t
         topics: vec![expected_topic(ExpectedTopicSetup {
             name: "undescribable",
             topic_id: resp.topics[0].topic_id,
-            topic_config_error_code: crate::test_support::KafkaErrorCode(
-                codes::TOPIC_AUTHORIZATION_FAILED
-            ),
+            topic_config_error_code: KafkaErrorCode(codes::TOPIC_AUTHORIZATION_FAILED),
             ..Default::default()
         })],
     });

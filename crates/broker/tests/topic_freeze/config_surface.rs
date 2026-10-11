@@ -26,7 +26,10 @@ use krabka_protocol::{
 
 use crate::{
     control_plane::freeze_scope,
-    support::{self, configs::topic_config},
+    support::{
+        self,
+        configs::{ConfigOperation, TopicConfigMutationSetup, alter_topic_config, topic_config},
+    },
     wire::{CONTROL, accepted, controlled_fixture, create_topic, refused},
 };
 
@@ -96,9 +99,9 @@ async fn neither_alter_path_can_set_or_clear_a_freeze() {
         "AlterConfigs set"
     );
     check!(
-        crate::support::configs::alter_topic_config(
+        alter_topic_config(
             &p.client,
-            crate::support::configs::TopicConfigMutationSetup {
+            TopicConfigMutationSetup {
                 topic: CONTROL,
                 name: WRITE_FREEZE,
                 value: Some("true"),
@@ -115,11 +118,11 @@ async fn neither_alter_path_can_set_or_clear_a_freeze() {
         "AlterConfigs clear"
     );
     check!(
-        crate::support::configs::alter_topic_config(
+        alter_topic_config(
             &p.client,
-            crate::support::configs::TopicConfigMutationSetup {
+            TopicConfigMutationSetup {
                 name: WRITE_FREEZE,
-                operation: crate::support::configs::ConfigOperation::Delete,
+                operation: ConfigOperation::Delete,
                 ..Default::default()
             }
         )

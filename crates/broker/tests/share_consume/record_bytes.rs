@@ -12,9 +12,10 @@ use crate::{
     harness::{ConsumptionFixture, bootstrap_share_state, consumption_fixture, produce_n},
     share_rpc::{acquire_three_and_acknowledge, acquired_count, share_fetch},
     support::share::{
-        RefetchSetup, ShareProduceSetup, ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup,
-        acknowledge_success, join_consume_member, permitted_topic_fixture, produce_values,
-        record_values, refetch_while_empty,
+        RefetchSetup, ShareAck, ShareProduceSetup, ShareRecordSeedSetup, ShareRecordsSetup,
+        ShareSessionEpoch, ShareSessionSetup, ShareTopicSetup, acknowledge_success,
+        join_consume_member, permitted_topic_fixture, produce_values, record_values,
+        refetch_while_empty,
     },
 };
 
@@ -37,10 +38,10 @@ async fn acquire_past_leading_batch_returns_bytes() {
         _dir,
         tid,
         member,
-    } = consumption_fixture(crate::support::share::ShareRecordSeedSetup::default()).await;
+    } = consumption_fixture(ShareRecordSeedSetup::default()).await;
     let session = acquire_three_and_acknowledge(
         &client,
-        crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)).reject(),
+        ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)).reject(),
     )
     .await;
 
@@ -129,7 +130,7 @@ async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fragmented_window_records_match_acquired_offsets() {
     let (_permit, broker, client, _dir, tid) =
-        permitted_topic_fixture(crate::support::share::ShareTopicSetup::default(), |_| {}).await;
+        permitted_topic_fixture(ShareTopicSetup::default(), |_| {}).await;
     bootstrap_share_state(&broker, &client, "g1").await;
     // Three separate single-record batches: offset 0=v0, 1=v1, 2=v2.
     produce_one(&client, "t", tid, 0, "v0").await;
@@ -138,12 +139,12 @@ async fn fragmented_window_records_match_acquired_offsets() {
     let (member, _member_epoch) = join_consume_member(&broker, &client, tid).await;
     let session = acquire_three_and_acknowledge(
         &client,
-        crate::support::share::ShareAck::single_for(&member, tid, krabka_ids::Offset(1)),
+        ShareAck::single_for(&member, tid, krabka_ids::Offset(1)),
     )
     .await;
     acknowledge_success(
         &client,
-        crate::support::share::ShareAck::prefix(
+        ShareAck::prefix(
             session.with_epoch(ShareSessionEpoch(2)),
             krabka_ids::Offset(0),
         )
@@ -152,7 +153,7 @@ async fn fragmented_window_records_match_acquired_offsets() {
     .await;
     acknowledge_success(
         &client,
-        crate::support::share::ShareAck::prefix(
+        ShareAck::prefix(
             session.with_epoch(ShareSessionEpoch(3)),
             krabka_ids::Offset(2),
         )

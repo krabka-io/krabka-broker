@@ -29,7 +29,10 @@ use crate::{
         NONE, UNSUPPORTED_VERSION, acquired_count, acquired_topic, bootstrap_share_state,
         broker_config, broker_test_permit, connect, create_topic,
     },
-    support::{configs::feature_update, share::acknowledge_success},
+    support::{
+        configs::feature_update,
+        share::{ShareAck, ShareTopicSetup, acknowledge_success},
+    },
 };
 
 /// `UpdateFeatures` `UpgradeType` 2, `SAFE_DOWNGRADE`.
@@ -124,7 +127,7 @@ async fn describe_reflects_spso_after_consume() {
     assert!(acquired_count(&row) == 3, "must acquire all 3 offsets");
     acknowledge_success(
         &client,
-        crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)),
+        ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)),
     )
     .await;
 
@@ -203,12 +206,7 @@ async fn admin_offsets_rejected_when_share_disabled() {
     let cfg = broker_config(dir.path().to_path_buf());
     let broker = Broker::start(cfg).await.unwrap();
     let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(
-        &broker,
-        &client,
-        crate::support::share::ShareTopicSetup::default(),
-    )
-    .await;
+    create_topic(&broker, &client, ShareTopicSetup::default()).await;
     let enabled = describe_offsets(&client, "g1", "t", vec![0]).await;
     assert!(
         enabled.error_code != UNSUPPORTED_VERSION,

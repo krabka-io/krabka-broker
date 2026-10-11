@@ -123,10 +123,10 @@ pub async fn streams_join_and_converge(
         tokio::time::sleep(Duration::from_millis(200)).await;
         let active = request_active_tasks(&resp);
         resp = client
-            .send(follow_up(crate::support::streams::StreamsFollowUpSetup {
+            .send(follow_up(StreamsFollowUpSetup {
                 group,
                 member_id: &member_id,
-                epoch: crate::support::streams::StreamsMemberEpoch(resp.member_epoch),
+                epoch: StreamsMemberEpoch(resp.member_epoch),
                 active,
             }))
             .await

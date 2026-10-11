@@ -21,6 +21,7 @@ use crate::{
         DenyAll, KafkaErrorCode, broker_registration, dispatch_wire, peer, principal,
         start_broker_no_audit, start_broker_no_audit_with,
     },
+    txn::bootstrap::TOPIC as TXN_TOPIC,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -90,12 +91,7 @@ test_authorizer!(DenyOneTransaction, (self, _source, request), {
 fn check_invalid_share_lookup(handle: &BrokerHandle, response: &FindCoordinatorResponse) {
     assert!(response.coordinators.len() == 1);
     assert!(response.coordinators[0].error_code == codes::INVALID_REQUEST);
-    assert!(
-        handle
-            .controller_image_for_test()
-            .topic(crate::share_coordinator::bootstrap::TOPIC)
-            .is_none()
-    );
+    assert!(handle.controller_image_for_test().topic(TOPIC).is_none());
 }
 
 #[tokio::test]
@@ -130,12 +126,10 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
         .expect("find transaction coordinator");
 
     let image = broker_handle.controller_image_for_test();
-    let topic = image
-        .topic(crate::txn::bootstrap::TOPIC)
-        .expect("transaction-state topic");
+    let topic = image.topic(TXN_TOPIC).expect("transaction-state topic");
     assert!(topic.partitions == 7);
     assert!(topic.replication_factor == 1);
-    assert!(image.partitions_of(crate::txn::bootstrap::TOPIC).count() == 7);
+    assert!(image.partitions_of(TXN_TOPIC).count() == 7);
     assert!(response.coordinators.len() == 1);
     assert!(response.coordinators[0].error_code == codes::NONE);
     assert!(response.coordinators[0].node_id == broker.config.broker_id);
@@ -190,7 +184,7 @@ async fn v4_empty_key_array_stays_empty_without_bootstrap() {
     assert!(
         broker_handle
             .controller_image_for_test()
-            .topic(crate::txn::bootstrap::TOPIC)
+            .topic(TXN_TOPIC)
             .is_none()
     );
     broker_handle.shutdown().await;
@@ -349,7 +343,7 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
     assert!(
         broker_handle
             .controller_image_for_test()
-            .topic(crate::share_coordinator::bootstrap::TOPIC)
+            .topic(TOPIC)
             .is_none()
     );
     broker_handle.shutdown().await;
@@ -374,7 +368,7 @@ async fn denied_group_key_answers_kafka_row_shape_per_version() {
         (
             krabka_ids::ApiVersion(3),
             legacy_coordinator_error(
-                crate::test_support::KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
+                KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
                 Some("Group authorization failed.".into()),
             ),
         ),
@@ -441,10 +435,7 @@ async fn unknown_key_type_fails_the_whole_request() {
         ),
         (
             krabka_ids::ApiVersion(3),
-            legacy_coordinator_error(
-                crate::test_support::KafkaErrorCode(codes::INVALID_REQUEST),
-                message.clone(),
-            ),
+            legacy_coordinator_error(KafkaErrorCode(codes::INVALID_REQUEST), message.clone()),
         ),
     ];
     check_lookup_versions(
@@ -458,12 +449,8 @@ async fn unknown_key_type_fails_the_whole_request() {
     )
     .await;
     let image = broker_handle.controller_image_for_test();
-    assert!(image.topic(crate::txn::bootstrap::TOPIC).is_none());
-    assert!(
-        image
-            .topic(crate::share_coordinator::bootstrap::TOPIC)
-            .is_none()
-    );
+    assert!(image.topic(TXN_TOPIC).is_none());
+    assert!(image.topic(TOPIC).is_none());
     broker_handle.shutdown().await;
 }
 
@@ -633,7 +620,7 @@ async fn the_first_lookup_creates_the_state_topic_once_and_a_later_one_names_the
     let share_key = format!("share-group:{KAFKA_TOPIC_ID}:0");
     let cases = [
         (KEY_TYPE_GROUP, "group", OFFSETS_TOPIC),
-        (KEY_TYPE_TRANSACTION, "tid", crate::txn::bootstrap::TOPIC),
+        (KEY_TYPE_TRANSACTION, "tid", TXN_TOPIC),
         (KEY_TYPE_SHARE, share_key.as_str(), TOPIC),
     ];
     for (key_type, key, topic) in cases {
@@ -738,7 +725,7 @@ async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
                 broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(2),
                 port: 9094,
-                ..crate::test_support::broker_registration(other)
+                ..broker_registration(other)
             },
         )])
         .await

@@ -14,7 +14,10 @@ use crate::{
         InitializedRestartFixture, acquired_count, fetch_until_acquired,
         initialized_restart_fixture,
     },
-    support::share::{ShareRecordCount, ShareRecordSeedSetup, acknowledge_success, rejoin_group},
+    support::share::{
+        ShareAck, ShareRecordCount, ShareRecordSeedSetup, ShareSessionSetup, acknowledge_success,
+        rejoin_group,
+    },
 };
 
 /// Lag restore: `delivery_complete_count` survives a broker restart.
@@ -44,15 +47,11 @@ async fn delivery_complete_count_restored_across_restart() {
 
         // Acquire 0..N-1 and Accept 1..N-1: the SPSO stays at 0 behind the
         // still-acquired offset 0, and the window holds N-1 terminal records.
-        let row = fetch_until_acquired(
-            &client,
-            crate::support::share::ShareSessionSetup::opening(&member, tid),
-        )
-        .await;
+        let row = fetch_until_acquired(&client, ShareSessionSetup::opening(&member, tid)).await;
         assert!(acquired_count(&row) == N, "must acquire all {N} offsets");
         acknowledge_success(
             &client,
-            crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(N - 1))
+            ShareAck::prefix_for(&member, tid, krabka_ids::Offset(N - 1))
                 .starting_at(krabka_ids::Offset(1)),
         )
         .await;

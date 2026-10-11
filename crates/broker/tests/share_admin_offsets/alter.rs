@@ -17,7 +17,7 @@ use crate::{
     harness::{
         NON_EMPTY_GROUP, NONE, fetch_until_acquired, join, seeded_empty_group, wait_for_share_init,
     },
-    support::share::{ShareRecordCount, ShareRecordSeedSetup},
+    support::share::{ShareRecordCount, ShareRecordSeedSetup, ShareSessionSetup},
 };
 
 /// Alter resets the SPSO of an empty group.
@@ -87,11 +87,7 @@ async fn alter_resets_empty_group() {
     // again, so the acquire reads the reset SPSO 5 via the invalidated leader
     // cache.
     let (member, _epoch) = join(&client, "g1", "t").await;
-    let row = fetch_until_acquired(
-        &client,
-        crate::support::share::ShareSessionSetup::opening(&member, tid),
-    )
-    .await;
+    let row = fetch_until_acquired(&client, ShareSessionSetup::opening(&member, tid)).await;
     assert!(
         row.acquired_records[0].first_offset == 5,
         "fetch after Alter must acquire from offset 5, got {:?}",

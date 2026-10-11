@@ -16,8 +16,8 @@ use crate::{
         share_fetch, share_renew,
     },
     support::share::{
-        ConsumptionSetup, ShareRecordCount, ShareSessionEpoch, ShareSessionSetup, ShareTopicSetup,
-        permitted_topic_fixture,
+        ConsumptionSetup, ShareFetchSetup, ShareRecordCount, ShareSessionEpoch, ShareSessionSetup,
+        ShareTopicSetup, permitted_topic_fixture,
     },
 };
 
@@ -39,11 +39,7 @@ async fn lock_timeout_redelivers() {
         .await;
 
     // Next fetch (epoch 1) re-acquires the same offset at delivery_count 2.
-    fetch_redelivered(
-        &client,
-        crate::support::share::ShareFetchSetup::from(session),
-    )
-    .await;
+    fetch_redelivered(&client, ShareFetchSetup::from(session)).await;
 }
 
 /// The broker archives a record that exhausts `max_delivery_attempts` without
@@ -65,11 +61,7 @@ async fn delivery_limit_archives() {
         .await;
 
     // Delivery 2 (no ack).
-    let row2 = share_fetch(
-        &client,
-        crate::support::share::ShareFetchSetup::from(session),
-    )
-    .await;
+    let row2 = share_fetch(&client, ShareFetchSetup::from(session)).await;
     assert!(
         acquired_count(&row2) == 1 && row2.acquired_records[0].delivery_count == 2,
         "second delivery must be count 2, got {:?}",
@@ -156,11 +148,7 @@ async fn no_renew_redelivers_after_lock_expiry() {
     // re-delivered. This sleep mirrors the renew test's timing to prove that
     // WITHOUT a renew the lock IS swept; it is NOT a flaky state-guess.
     tokio::time::sleep(Duration::from_millis(800)).await;
-    fetch_redelivered(
-        &client,
-        crate::support::share::ShareFetchSetup::from(session),
-    )
-    .await;
+    fetch_redelivered(&client, ShareFetchSetup::from(session)).await;
 }
 
 /// Hold the broker permit, materialize t, and join its single-record share group.

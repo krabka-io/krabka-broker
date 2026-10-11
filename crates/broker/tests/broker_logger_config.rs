@@ -12,8 +12,8 @@ use assert2::{assert, check};
 use crate::support::{
     client::connect_owned,
     configs::{
-        IncrementalConfigsSetup, describe_resource, incremental_config, incremental_request,
-        incremental_resource,
+        ConfigOperation, IncrementalConfigsSetup, describe_resource, incremental_config,
+        incremental_request, incremental_resource,
     },
 };
 mod support;
@@ -138,7 +138,7 @@ async fn broker_logger_alter_moves_the_live_filter_and_the_describe_agrees() {
                 vec![incremental_config(
                     "krabka_broker".to_owned(),
                     Some("DEBUG".to_owned()),
-                    crate::support::configs::ConfigOperation::Set,
+                    ConfigOperation::Set,
                 )],
             )],
             ..Default::default()

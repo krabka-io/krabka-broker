@@ -33,18 +33,18 @@ use crate::{
     share_rpc::{acquired_count, fetch_until_acquired, share_fetch},
     support::{
         configs::{
-            IncrementalConfigsSetup, feature_update, incremental_config, incremental_request,
-            incremental_resource,
+            ConfigOperation, IncrementalConfigsSetup, feature_update, incremental_config,
+            incremental_request, incremental_resource,
         },
         fetch::{
             FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
         },
         offsets::{list_offset_partition, single_partition_list_offsets},
         share::{
-            AcknowledgeRequestSetup, ShareAck, ShareProduceSetup, ShareRecordCount,
-            ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup, StartGroupTopicSetup,
-            acknowledge_partition, acknowledge_request, acknowledge_success, acknowledge_topic,
-            join_consume_member, start_group_topic,
+            AcknowledgeRequestSetup, ShareAck, ShareFetchSetup, ShareProduceSetup,
+            ShareRecordCount, ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup,
+            StartGroupTopicSetup, acknowledge_partition, acknowledge_request, acknowledge_success,
+            acknowledge_topic, join_consume_member, start_group_topic,
         },
         topics::topic_configs,
     },
@@ -140,11 +140,7 @@ async fn set_configs(client: &Client, setup: DeadLetterConfigSetup<'_>) {
                     .values
                     .iter()
                     .map(|(name, value)| {
-                        incremental_config(
-                            *name,
-                            Some((*value).into()),
-                            crate::support::configs::ConfigOperation::Set,
-                        )
+                        incremental_config(*name, Some((*value).into()), ConfigOperation::Set)
                     })
                     .collect(),
             )],
@@ -648,7 +644,7 @@ async fn a_record_that_uses_up_its_deliveries_is_dead_lettered() {
         .await;
     let second = share_fetch(
         client,
-        crate::support::share::ShareFetchSetup::from(ShareSessionSetup {
+        ShareFetchSetup::from(ShareSessionSetup {
             group: GROUP,
             ..ShareSessionSetup::joined(member, *tid)
         }),

@@ -467,11 +467,11 @@ pub async fn share_ack(
     ack: ShareAck<'_>,
 ) -> krabka_protocol::owned::share_acknowledge_response::PartitionData {
     let count = usize::try_from(ack.last.0 - ack.first.0 + 1).unwrap();
-    let req = acknowledge_request(crate::support::share::AcknowledgeRequestSetup {
+    let req = acknowledge_request(AcknowledgeRequestSetup {
         group_id: Some(ack.session.group.into()),
         member_id: Some(ack.session.member.into()),
-        epoch: crate::support::share::ShareSessionEpoch(ack.session.epoch.0),
-        mode: crate::support::share::RenewalMode::Settle,
+        epoch: ShareSessionEpoch(ack.session.epoch.0),
+        mode: RenewalMode::Settle,
         topics: vec![acknowledge_topic(
             wire(ack.session.topic_id),
             vec![acknowledge_partition(

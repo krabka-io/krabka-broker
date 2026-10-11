@@ -18,7 +18,7 @@ use crate::{
         InitializedRestartFixture, NONE, acquired_topic, fetch_until_acquired,
         initialized_restart_fixture, leave,
     },
-    support::share::rejoin_group,
+    support::share::{ShareRecordSeedSetup, ShareSessionSetup, rejoin_group},
 };
 
 fn delete_topic_request() -> DeleteShareGroupOffsetsRequest {
@@ -94,17 +94,13 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         _dir,
         log_dir,
         topic: initial,
-    } = initialized_restart_fixture(crate::support::share::ShareRecordSeedSetup::default()).await;
+    } = initialized_restart_fixture(ShareRecordSeedSetup::default()).await;
 
     let tid;
     {
         let (broker, client, topic, member) = initial;
         tid = topic;
-        let _ = fetch_until_acquired(
-            &client,
-            crate::support::share::ShareSessionSetup::opening(&member, tid),
-        )
-        .await;
+        let _ = fetch_until_acquired(&client, ShareSessionSetup::opening(&member, tid)).await;
 
         // Sanity: a describe with no topic list enumerates the initialized
         // partitions for "t" — partition [0] is present before the delete.

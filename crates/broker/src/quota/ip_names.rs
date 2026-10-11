@@ -325,28 +325,28 @@ mod tests {
     fn update_indexes_literals_and_resolved_hosts() {
         let names = IpNames::default();
         let image = image_with_quotas(vec![
-            quota_record(crate::quota::test_support::QuotaRecordSetup {
+            quota_record(QuotaRecordSetup {
                 entity: vec![("ip", Some("0:0:0:0:0:0:0:1"))],
                 key: "connection_creation_rate",
-                value: crate::quota::test_support::QuotaValue(1.0),
+                value: QuotaValue(1.0),
             }),
-            quota_record(crate::quota::test_support::QuotaRecordSetup {
+            quota_record(QuotaRecordSetup {
                 entity: vec![("ip", Some("::1"))],
                 key: "connection_creation_rate",
-                value: crate::quota::test_support::QuotaValue(2.0),
+                value: QuotaValue(2.0),
             }),
-            quota_record(crate::quota::test_support::QuotaRecordSetup {
+            quota_record(QuotaRecordSetup {
                 entity: vec![("ip", Some("db"))],
                 key: "connection_creation_rate",
-                value: crate::quota::test_support::QuotaValue(3.0),
+                value: QuotaValue(3.0),
             }),
-            quota_record(crate::quota::test_support::QuotaRecordSetup {
+            quota_record(QuotaRecordSetup {
                 entity: vec![("ip", None)],
                 key: "connection_creation_rate",
-                value: crate::quota::test_support::QuotaValue(4.0),
+                value: QuotaValue(4.0),
             }),
-            quota_record(crate::quota::test_support::QuotaRecordSetup {
-                value: crate::quota::test_support::QuotaValue(5.0),
+            quota_record(QuotaRecordSetup {
+                value: QuotaValue(5.0),
                 ..Default::default()
             }),
         ]);
@@ -551,15 +551,15 @@ mod tests {
     async fn the_next_retry_is_the_earliest_wait_of_a_name_in_the_image() {
         let names = IpNames::default();
         let both = image_with_quotas(vec![
-            quota_record(crate::quota::test_support::QuotaRecordSetup {
+            quota_record(QuotaRecordSetup {
                 entity: vec![("ip", Some("a"))],
                 key: "connection_creation_rate",
-                value: crate::quota::test_support::QuotaValue(1.0),
+                value: QuotaValue(1.0),
             }),
-            quota_record(crate::quota::test_support::QuotaRecordSetup {
+            quota_record(QuotaRecordSetup {
                 entity: vec![("ip", Some("b"))],
                 key: "connection_creation_rate",
-                value: crate::quota::test_support::QuotaValue(1.0),
+                value: QuotaValue(1.0),
             }),
         ]);
         let start = Instant::now();
