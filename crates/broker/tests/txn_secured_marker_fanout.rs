@@ -60,9 +60,15 @@ use tempfile::TempDir;
 
 use crate::support::{
     acl::AllowAclSetup,
+    controller_voters,
+    discovery::named_topic_metadata,
+    produce::SinglePartitionProduceSetup,
     records::{batch_from_records, value_record},
-    topics::{creatable_topic, create_topic_request},
-    transactions::{end_transaction_request, init_producer_request},
+    shutdown_cluster,
+    topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
+    transactions::{
+        EndTransactionSetup, InitProducerSetup, end_transaction_request, init_producer_request,
+    },
 };
 
 mod support;
@@ -160,7 +166,7 @@ async fn start_two_sasl(
     cfg0.directory_id = uuid::Uuid::from_u128(1);
     cfg0.bootstrap_mode = BootstrapMode::Bootstrap;
     cfg0.controller_listen_addr = controller_addrs[0];
-    cfg0.controller_quorum_voters = crate::support::controller_voters(&voters);
+    cfg0.controller_quorum_voters = controller_voters(&voters);
     cfg0.auto_join = false;
     cfg0.bootstrap_servers = vec![];
     apply_sasl(&mut cfg0, client_addrs[0]);
@@ -173,7 +179,7 @@ async fn start_two_sasl(
     cfg1.directory_id = uuid::Uuid::from_u128(2);
     cfg1.bootstrap_mode = BootstrapMode::Bootstrap;
     cfg1.controller_listen_addr = controller_addrs[1];
-    cfg1.controller_quorum_voters = crate::support::controller_voters(&voters);
+    cfg1.controller_quorum_voters = controller_voters(&voters);
     cfg1.auto_join = false;
     cfg1.bootstrap_servers = vec![];
     apply_sasl(&mut cfg1, client_addrs[1]);
@@ -275,9 +281,7 @@ async fn partition_leaders(client: &Client, handle: &BrokerHandle, topic: &str) 
         })
         .await;
     let resp = client
-        .send(crate::support::discovery::named_topic_metadata(
-            topic.to_string(),
-        ))
+        .send(named_topic_metadata(topic.to_string()))
         .await
         .expect("metadata");
     let topic = resp
@@ -339,9 +343,9 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     // node 2.
     let cr = admin
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: (TOPIC).into(),
-                partitions: crate::support::topics::TopicPartitionCount(2),
+                partitions: TopicPartitionCount(2),
                 ..Default::default()
             },
         )))
@@ -374,12 +378,10 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     let coord = sasl_client(&format!("{coord_host}:{coord_port}")).await;
 
     let init = coord
-        .send(init_producer_request(
-            crate::support::transactions::InitProducerSetup {
-                transactional_id: Some(TID.into()),
-                ..Default::default()
-            },
-        ))
+        .send(init_producer_request(InitProducerSetup {
+            transactional_id: Some(TID.into()),
+            ..Default::default()
+        }))
         .await
         .expect("init producer id");
     assert!(init.error_code == 0, "InitProducerId failed: {init:?}");
@@ -423,7 +425,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     let end = coord
         .send(end_transaction_request(
             TID,
-            crate::support::transactions::EndTransactionSetup {
+            EndTransactionSetup {
                 producer: crate::support::transactions::ProducerIdentity::from_wire((pid, epoch)),
                 ..Default::default()
             },
@@ -438,7 +440,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
 
     admin.close();
     coord.close();
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
 }
 
 const ADMIN_USER: &str = "admin";
@@ -582,9 +584,9 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
     for case in cases {
         let created = admin
             .send(create_topic_request(creatable_topic(
-                crate::support::topics::ConfiguredTopicSetup {
+                ConfiguredTopicSetup {
                     name: (case.name).into(),
-                    partitions: crate::support::topics::TopicPartitionCount(2),
+                    partitions: TopicPartitionCount(2),
                     ..Default::default()
                 },
             )))
@@ -651,10 +653,10 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
             transactional_id: Some(case.name.into()),
             ..crate::support::produce::batch_request(
                 batch,
-                crate::support::produce::SinglePartitionProduceSetup {
+                SinglePartitionProduceSetup {
                     topic: (case.name).into(),
                     partition: krabka_ids::PartitionIndex(partition),
-                    ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+                    ..SinglePartitionProduceSetup::replicated()
                 },
             )
         };
@@ -668,7 +670,7 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
         let ended = to_coordinator
             .send(end_transaction_request(
                 case.name,
-                crate::support::transactions::EndTransactionSetup {
+                EndTransactionSetup {
                     producer: crate::support::transactions::ProducerIdentity::from_wire((
                         init.producer_id,
                         init.producer_epoch,
@@ -702,7 +704,7 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
 
     admin.close();
     client_bootstrap.close();
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
     assert!(actual == expected);
 }
 
@@ -712,12 +714,10 @@ async fn init_producer(client: &Client, transactional_id: &str) -> InitProducerI
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let init = client
-            .send(init_producer_request(
-                crate::support::transactions::InitProducerSetup {
-                    transactional_id: Some(transactional_id.into()),
-                    ..Default::default()
-                },
-            ))
+            .send(init_producer_request(InitProducerSetup {
+                transactional_id: Some(transactional_id.into()),
+                ..Default::default()
+            }))
             .await
             .expect("init producer id");
         // COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR and

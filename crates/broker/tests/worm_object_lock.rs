@@ -20,6 +20,8 @@ use krabka_audit::signing::FileEd25519Signer;
 use krabka_log::LogConfig;
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 
+use crate::support::{JvmBrokerSetup, controller_voters};
+
 /// Object-Lock bucket for this suite. It is not [`MINIO_BUCKET`]: that bucket
 /// is the ordinary mutable tier, and a locked bucket behaves differently enough
 /// that sharing the name would mislead whoever reads a failure.
@@ -225,11 +227,11 @@ async fn start_worm_broker(
         remote_log_metadata: krabka_broker::RlmmKind::InMemory,
         ..support::jvm_broker_config(
             dir.path().to_path_buf(),
-            crate::support::JvmBrokerSetup {
+            JvmBrokerSetup {
                 listen: listen_addr,
                 controller: controller_addr,
                 advertised: (broker0_advertised()).to_owned(),
-                voters: crate::support::controller_voters(&[(1, controller_addr)]),
+                voters: controller_voters(&[(1, controller_addr)]),
                 ..Default::default()
             },
         )

@@ -8,12 +8,10 @@
 use assert2::{assert, check};
 use krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest;
 
-use crate::{
-    support,
-    support::{
-        discovery::{api_versions_request_for, topic_metadata_request},
-        topics::{creatable_topic, create_topic_request},
-    },
+use crate::support::{
+    self,
+    discovery::{api_versions_request_for, topic_metadata_request},
+    topics::{TopicPartitionCount, creatable_topic, create_topic_request},
 };
 
 #[tokio::test]
@@ -37,7 +35,7 @@ async fn metadata_returns_this_broker_and_listed_topics() {
     let create = create_topic_request(creatable_topic(
         crate::support::topics::ConfiguredTopicSetup {
             name: ("beta").into(),
-            partitions: crate::support::topics::TopicPartitionCount(3),
+            partitions: TopicPartitionCount(3),
             ..Default::default()
         },
     ));
