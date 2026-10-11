@@ -95,7 +95,7 @@ mod tests {
     use crate::{
         authorizer::AllowAllAuthorizer,
         broker::Broker,
-        handlers::{RequestContext, join_group::handle},
+        handlers::{RequestContext, join_group::handle as join_group_handle},
         test_support::{DenyAll, request_context, start_group_broker_no_audit},
     };
 
@@ -123,13 +123,13 @@ mod tests {
             ..Default::default()
         };
 
-        let r1 = handle(broker, join(String::new()), version, ctx)
+        let r1 = join_group_handle(broker, join(String::new()), version, ctx)
             .await
             .expect("JoinGroup bootstrap");
         assert!(r1.error_code == codes::MEMBER_ID_REQUIRED, "{r1:?}");
         assert!(!r1.member_id.is_empty());
 
-        let r2 = handle(broker, join(r1.member_id.clone()), version, ctx)
+        let r2 = join_group_handle(broker, join(r1.member_id.clone()), version, ctx)
             .await
             .expect("JoinGroup rejoin");
         assert!(

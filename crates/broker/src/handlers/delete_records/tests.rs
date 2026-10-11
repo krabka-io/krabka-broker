@@ -26,7 +26,7 @@ use crate::{
     handlers::{
         RequestContext,
         delete_records::test_support::gated_config,
-        fetch::handle,
+        fetch::handle as fetch_handle,
         test_support::{CreateTopicSetup, configured_topic_request},
     },
     heartbeat::fencing::RegistrationChange,
@@ -980,7 +980,7 @@ async fn follower_fetch(broker: &Broker, topic: &str, fetch_offset: i64, log_sta
         principal("replicator"),
         client_id = "replica-2"
     );
-    let (response, _) = handle(broker, VERSION, 1, &encode_request(&request, VERSION), &ctx)
+    let (response, _) = fetch_handle(broker, VERSION, 1, &encode_request(&request, VERSION), &ctx)
         .await
         .expect("follower fetch");
     assert!(

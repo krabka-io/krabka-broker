@@ -25,7 +25,7 @@ use crate::{
     handlers::{
         RequestContext,
         acl_wire::CLUSTER_RESOURCE_NAME,
-        create_topics::handle,
+        create_topics::handle as create_topics_handle,
         test_support::{AclSetup, CreateTopicSetup, configured_topic_request},
     },
     metrics::AuthorizationDeniedLabel,
@@ -319,7 +319,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, setup: CreateTopicSetup<'_>) {
     let name = setup.topic;
     let req = configured_topic_request(setup);
-    let resp = handle(broker, req, CREATE_VERSION, ctx)
+    let resp = create_topics_handle(broker, req, CREATE_VERSION, ctx)
         .await
         .expect("handle CreateTopics");
     assert!(

@@ -436,8 +436,6 @@ async fn a_record_at_the_delivery_limit_does_not_stall_the_partition() {
 }
 
 /// A `ShareFetch` of every partition of `topic_id`, with no wait.
-use crate::handlers::test_support::{ShareSessionEpoch, TopicPartitionCount};
-
 #[derive(Clone, Copy)]
 struct ShareResponseByteLimit(i32);
 

@@ -20,7 +20,7 @@ use crate::{
     authorizer::SimpleAclAuthorizer,
     broker::{Broker, BrokerHandle},
     error::BrokerError,
-    handlers::{context::RequestContext, find_coordinator::handle},
+    handlers::{context::RequestContext, find_coordinator::handle as find_coordinator_handle},
     test_support::{
         ControllerPeerAllowed, peer, principal, start_broker_no_audit, start_broker_no_audit_with,
         start_broker_with_authorizer_no_audit, wait_for_controller_leader,
@@ -167,7 +167,7 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         coordinator_keys: tids.iter().map(ToString::to_string).collect(),
         ..Default::default()
     };
-    let find_response = handle(&broker, find_request, find_version, &context)
+    let find_response = find_coordinator_handle(&broker, find_request, find_version, &context)
         .await
         .expect("find transaction coordinators");
     assert!(
@@ -954,7 +954,7 @@ async fn find_transaction_coordinator(
     tid: &str,
 ) -> Result<krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse, BrokerError>
 {
-    handle(
+    find_coordinator_handle(
         broker,
         krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
             key_type: 1,

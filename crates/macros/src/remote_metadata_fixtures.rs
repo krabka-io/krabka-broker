@@ -3,7 +3,7 @@
 use moxy::{ast::ParseError, token::TokenStream};
 
 use crate::{
-    fixtures::{name, named_arguments},
+    fixtures::{name as fixture_name, named_arguments},
     meta::mode,
 };
 
@@ -57,8 +57,8 @@ pub(crate) fn segment(input: TokenStream) -> Result<TokenStream, ParseError> {
     let [started, finish, root, timestamp]: [TokenStream; 4] = crate::meta::arguments(input, 4)?
         .try_into()
         .expect("four arguments");
-    let started = name(started)?;
-    let finish = name(finish)?;
+    let started = fixture_name(started)?;
+    let finish = fixture_name(finish)?;
     let timestamp = match mode(timestamp, ["end", "next_offset"])? {
         "end" => moxy::template! { end },
         "next_offset" => moxy::template! { end + 1 },
@@ -96,7 +96,7 @@ pub(crate) fn worm_segment(input: TokenStream) -> Result<TokenStream, ParseError
         crate::meta::arguments(input, 6)?
             .try_into()
             .expect("six arguments");
-    let name = name(name)?;
+    let name = fixture_name(name)?;
     let metadata = started_metadata(
         &root,
         &moxy::template! {

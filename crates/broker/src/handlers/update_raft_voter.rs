@@ -111,8 +111,11 @@ mod tests {
     };
 
     use crate::{
-        handlers::add_raft_voter::handle,
-        test_support::{DenyAll, decode_response, encode_request},
+        handlers::add_raft_voter::handle as add_raft_voter_handle,
+        test_support::{
+            DenyAll, decode_response as decode_other_response,
+            encode_request as encode_other_request,
+        },
     };
 
     fn request(voter_id: i32) -> UpdateRaftVoterRequest {
@@ -388,11 +391,11 @@ mod tests {
                         ack_when_committed: true,
                         ..Default::default()
                     };
-                    let req_bytes = encode_request(&req, version);
-                    let resp = handle(&broker, version, &req_bytes, &ctx)
+                    let req_bytes = encode_other_request(&req, version);
+                    let resp = add_raft_voter_handle(&broker, version, &req_bytes, &ctx)
                         .await
                         .expect("handle");
-                    decode_response::<AddRaftVoterResponse>(&resp, version).error_code
+                    decode_other_response::<AddRaftVoterResponse>(&resp, version).error_code
                 }
                 Api::Remove => {
                     let req = RemoveRaftVoterRequest {
@@ -401,13 +404,13 @@ mod tests {
                         voter_directory_id: ProtoUuid([3; 16]),
                         ..Default::default()
                     };
-                    let req_bytes = encode_request(&req, version);
+                    let req_bytes = encode_other_request(&req, version);
                     let resp = crate::handlers::remove_raft_voter::handle(
                         &broker, version, &req_bytes, &ctx,
                     )
                     .await
                     .expect("handle");
-                    decode_response::<RemoveRaftVoterResponse>(&resp, version).error_code
+                    decode_other_response::<RemoveRaftVoterResponse>(&resp, version).error_code
                 }
             };
 

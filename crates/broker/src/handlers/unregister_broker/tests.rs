@@ -10,7 +10,10 @@ use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use krabka_metadata::{BreakGlassProposalRecord, MetadataRecord, UnregisterBrokerRecord};
+use krabka_metadata::{
+    BreakGlassAction as GatedAction, BreakGlassProposalRecord, MetadataRecord,
+    UnregisterBrokerRecord,
+};
 use krabka_protocol::owned::unregister_broker_response::{self, UnregisterBrokerResponse};
 use krabka_security::Principal;
 use uuid::Uuid;
@@ -21,7 +24,7 @@ use crate::{
     broker::Broker,
     config::BreakGlassConfig,
     handlers::test_support::ReplicatedPartitionSetup,
-    metrics::{BreakGlassAction, BreakGlassActionLabel},
+    metrics::{BreakGlassAction as MetricBreakGlassAction, BreakGlassActionLabel},
     test_support::{
         DenyAll, PartitionCount, PartitionEpoch, broker_registration, peer, principal,
         request_context,
@@ -144,7 +147,7 @@ fn an_unregistration_with_no_proposal_appends_nothing() {
     let denial = unregister_records(&image, &gated_config(), DOOMED, DOOMED_EPOCH, NOW_MS)
         .expect_err("no proposal covers broker 7");
 
-    check!(denial.action == BreakGlassAction::UnregisterBroker);
+    check!(denial.action == GatedAction::UnregisterBroker);
     check!(denial.target == "7");
     check!(
         denial.to_string()
@@ -154,7 +157,7 @@ fn an_unregistration_with_no_proposal_appends_nothing() {
 
 #[test]
 fn an_approved_unregistration_appends_the_consume_beside_the_unregister() {
-    let proposal = approved_proposal(BreakGlassAction::UnregisterBroker, "7");
+    let proposal = approved_proposal(GatedAction::UnregisterBroker, "7");
     let image = image_of(std::slice::from_ref(&proposal));
 
     let records = unregister_records(&image, &gated_config(), DOOMED, DOOMED_EPOCH, NOW_MS)
@@ -175,7 +178,7 @@ fn an_approved_unregistration_appends_the_consume_beside_the_unregister() {
 
 #[test]
 fn a_proposal_for_another_broker_does_not_cover_this_one() {
-    let image = image_of(&[approved_proposal(BreakGlassAction::UnregisterBroker, "8")]);
+    let image = image_of(&[approved_proposal(GatedAction::UnregisterBroker, "8")]);
 
     let denial = unregister_records(&image, &gated_config(), DOOMED, DOOMED_EPOCH, NOW_MS)
         .expect_err("a proposal for broker 8 authorizes nothing about broker 7");
@@ -208,7 +211,7 @@ fn refusals(metrics: &crate::metrics::BrokerMetrics) -> u64 {
     metrics
         .break_glass_refusals
         .get_or_create(&BreakGlassActionLabel {
-            action: BreakGlassAction(BreakGlassAction::UnregisterBroker),
+            action: MetricBreakGlassAction(GatedAction::UnregisterBroker),
         })
         .get()
 }
@@ -471,10 +474,8 @@ async fn a_request_on_the_controller_listener_is_answered_in_place() {
 /// record: the approval commits first, and the registration goes last.
 #[test]
 fn the_isr_departures_sit_between_the_consume_and_the_unregister_record() {
-    let consumed = MetadataRecord::V1BreakGlassProposal(approved_proposal(
-        BreakGlassAction::UnregisterBroker,
-        "7",
-    ));
+    let consumed =
+        MetadataRecord::V1BreakGlassProposal(approved_proposal(GatedAction::UnregisterBroker, "7"));
     let unregister = MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
         node_id: DOOMED,
         broker_epoch: DOOMED_EPOCH,

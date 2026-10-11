@@ -21,7 +21,9 @@ use krabka_protocol::owned::{
 use crate::{
     broker::BrokerHandle,
     codes,
-    handlers::{RequestContext, describe_topic_partitions::handle},
+    handlers::{
+        RequestContext, describe_topic_partitions::handle as describe_topic_partitions_handle,
+    },
     test_support::{dispatch_wire, fence_remote_broker, peer, principal, start_broker_no_audit},
 };
 
@@ -305,7 +307,7 @@ async fn describe_topic_partitions_answers_no_leader_for_a_leader_without_the_li
     );
     let request = crate::test_support::topic_partitions_request(TOPIC);
 
-    let response = handle(&broker, request, 0, &ctx)
+    let response = describe_topic_partitions_handle(&broker, request, 0, &ctx)
         .await
         .expect("handle describe topic partitions");
 

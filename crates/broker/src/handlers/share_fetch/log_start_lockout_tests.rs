@@ -114,7 +114,7 @@ async fn delete_records(
 /// `max_records`, and returns each row's `PartitionData` in request order.
 use krabka_ids::PartitionIndex;
 
-use crate::handlers::test_support::{RecordCount, ShareSessionEpoch};
+use crate::handlers::test_support::ShareSessionEpoch;
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct ShareFetchRowsSetup<'a> {
