@@ -37,6 +37,14 @@ fn leaderless_image(published: &str) -> MetadataImage {
     })
 }
 
+async fn setup_liveness(alive: &[u64]) -> ControllerLivenessState {
+    let l = ControllerLivenessState::new(krabka_units::secs(10));
+    for &n in alive {
+        l.record_heartbeat(n).await;
+    }
+    l
+}
+
 /// The records an unfence election writes: broker `leader` takes the
 /// partition under a singleton ISR at the next leader epoch, with the ELR
 /// state it leaves behind and, for an unclean election, the `RECOVERING`
@@ -161,12 +169,10 @@ async fn an_unfence_elects_for_a_partition_with_no_leader() {
             unclean_elections: 0,
         },
     ];
+
     for case in cases {
         let img = leaderless_image(case.published);
-        let l = ControllerLivenessState::new(krabka_units::secs(10));
-        for &n in case.alive {
-            l.record_heartbeat(n).await;
-        }
+        let l = setup_liveness(case.alive).await;
         let metrics = BrokerMetrics::new();
 
         let changes = compute_unfence_changes(&img, NodeId(case.unfenced), &l, &metrics).await;
@@ -220,10 +226,7 @@ async fn an_unfence_leaves_alone_what_it_cannot_elect() {
     ];
     for case in cases {
         let img = leaderless_image(case.published);
-        let l = ControllerLivenessState::new(krabka_units::secs(10));
-        for &n in case.alive {
-            l.record_heartbeat(n).await;
-        }
+        let l = setup_liveness(case.alive).await;
 
         let changes =
             compute_unfence_changes(&img, NodeId(case.unfenced), &l, &BrokerMetrics::new()).await;

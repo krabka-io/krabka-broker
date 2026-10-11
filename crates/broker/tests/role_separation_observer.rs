@@ -780,10 +780,10 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
     let broker_data = broker_cfg.log_dir.clone();
     let broker_metadata = broker_cfg.metadata_dir().to_path_buf();
 
-    let topics: Vec<String> = (0..3).map(|i| format!("metadata-dir-topic-{i}")).collect();
+    let topic_names = ["metadata-dir-topic-0", "metadata-dir-topic-1", "metadata-dir-topic-2"];
     let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
-    create_topics(&client, &topics).await;
-    for topic in &topics {
+    create_topics(&client, &topic_names.map(String::from)).await;
+    for &topic in &topic_names {
         cluster.brokers[0]
             .wait_until_local_log_end_offset(topic, 0, 0)
             .await;

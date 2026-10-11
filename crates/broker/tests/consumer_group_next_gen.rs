@@ -367,10 +367,10 @@ async fn list_groups_includes_next_gen_consumer_group() {
         })
         .await
         .expect("ListGroups[share]");
+    let ids: Vec<_> = resp.groups.iter().map(|g| g.group_id.as_str()).collect();
     assert!(
-        !resp.groups.iter().any(|g| g.group_id == "glist"),
-        "consumer group glist must be excluded under types_filter=[share], got {:?}",
-        resp.groups.iter().map(|g| &g.group_id).collect::<Vec<_>>()
+        !ids.contains(&"glist"),
+        "consumer group glist must be excluded under types_filter=[share], got {ids:?}",
     );
 
     // No filter → glist appears exactly once, tagged "consumer".

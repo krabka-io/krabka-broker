@@ -363,15 +363,12 @@ async fn send_alter_partition_rejects_bad_controller_leader() {
         let metadata = source_of(cluster_image(brokers.addr(), None), leader);
         let dialer = plaintext_dialer(Vec::new());
 
-        let sent = send_alter_partition(
-            &ControllerLink {
-                controller: &metadata,
-                broker_id: 1,
-                dialer: &dialer,
-            },
-            &change(),
-        )
-        .await;
+        let link = ControllerLink {
+            controller: &metadata,
+            broker_id: 1,
+            dialer: &dialer,
+        };
+        let sent = send_alter_partition(&link, &change()).await;
 
         assert!(sent == Err(want.to_owned()), "leader={leader:?}");
         assert!(

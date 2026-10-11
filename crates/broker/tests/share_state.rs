@@ -418,8 +418,8 @@ async fn write_fences_stale_state_epoch() {
 /// `__share_group_state`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn state_survives_restart() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let log_dir = dir.path().to_path_buf();
+    let restart_dir = tempfile::tempdir().expect("restart tempdir");
+    let log_dir = restart_dir.path().to_path_buf();
 
     let tid = {
         let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
@@ -429,20 +429,17 @@ async fn state_survives_restart() {
         let tid = create_topic(&client, "survives-restart").await;
 
         initialize_partition(&client, "g1", tid, 0, (0, 0)).await;
-        let w = write_state(
-            &client,
-            StateWrite {
-                group: "g1",
-                topic_id: tid,
-                partition: 0,
-                state_epoch: 0,
-                leader_epoch: 0,
-                start_offset: 7,
-                delivery_complete_count: 3,
-                batches: vec![],
-            },
-        )
-        .await;
+        let state = StateWrite {
+            group: "g1",
+            topic_id: tid,
+            partition: 0,
+            state_epoch: 0,
+            leader_epoch: 0,
+            start_offset: 7,
+            delivery_complete_count: 3,
+            batches: Vec::new(),
+        };
+        let w = write_state(&client, state).await;
         assert!(w == 0, "write error: {w}");
 
         broker.wait_until_share_spso("g1", tid, 0, 7).await;

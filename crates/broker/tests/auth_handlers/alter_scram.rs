@@ -60,13 +60,7 @@ async fn alter_scram_creds_super_user_can_provision() {
 
     let req = alice_sha512_request();
     let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion").await;
-    assert!(resp.results.len() == 1, "one result row per upsertion");
-    check!(
-        resp.results[0].error_code == 0,
-        "expected error_code=0, got {:?}",
-        resp.results[0]
-    );
-    check!(resp.results[0].user == "alice");
+    check_single_successful_user(&resp, "alice");
 
     // Round-trip: now log in as `alice` over SCRAM, proving the upserted
     // credential actually reached the metadata image. Wait for the raft
@@ -74,6 +68,16 @@ async fn alter_scram_creds_super_user_can_provision() {
     let result = post_upsertion_auth(&handle, addr, SaslMechanism::ScramSha512).await;
     handle.shutdown().await;
     result.expect("post-upsertion SCRAM auth must succeed");
+}
+
+fn check_single_successful_user(resp: &AlterUserScramCredentialsResponse, expected_user: &str) {
+    assert!(resp.results.len() == 1);
+    check!(
+        resp.results[0].error_code == 0,
+        "expected error_code=0, got {:?}",
+        resp.results[0]
+    );
+    check!(resp.results[0].user == expected_user);
 }
 
 /// Wire-mapping proof: `AlterUserScramCredentials` accepts `mechanism=1`,
@@ -98,13 +102,7 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
         ..Default::default()
     };
     let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion (SHA-256)").await;
-    assert!(resp.results.len() == 1);
-    check!(
-        resp.results[0].error_code == 0,
-        "expected error_code=0, got {:?}",
-        resp.results[0]
-    );
-    check!(resp.results[0].user == "alice");
+    check_single_successful_user(&resp, "alice");
 
     // Wait for the upserted credential to reach the committed metadata
     // image, then authenticate as `alice` over SHA-256 SCRAM.

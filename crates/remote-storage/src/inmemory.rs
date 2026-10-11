@@ -65,13 +65,7 @@ impl InmemoryRemoteLogMetadataManager {
         // Within a partition, sort segments by (start_offset, id) so the
         // dump is canonical regardless of HashMap iteration order.
         for p in &mut partitions {
-            p.segments.sort_by(|a, b| {
-                a.start_offset().cmp(&b.start_offset()).then_with(|| {
-                    a.remote_log_segment_id()
-                        .id
-                        .cmp(&b.remote_log_segment_id().id)
-                })
-            });
+            crate::cache::sort_by_start_offset(&mut p.segments);
         }
         RlmmCacheDump { partitions }
     }

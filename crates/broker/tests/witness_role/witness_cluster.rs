@@ -23,9 +23,9 @@ use crate::{
 
 fn stretch_profile() -> StretchProfile {
     StretchProfile {
-        sites: SITES.iter().map(|site| (*site).to_string()).collect(),
-        witness_site: SITE_C.to_string(),
-        preferred_leader_site: SITE_A.to_string(),
+        sites: SITES.iter().copied().map(String::from).collect(),
+        witness_site: String::from(SITE_C),
+        preferred_leader_site: String::from(SITE_A),
     }
 }
 

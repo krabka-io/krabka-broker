@@ -408,13 +408,12 @@ const NO_TOPIC_READ: &str = "no-topic-read";
 struct DenyTopicReadToOne;
 
 test_authorizer!(DenyTopicReadToOne, (self, _source, request), {
-    if request.principal.name == NO_TOPIC_READ
+    let denied = request.principal.name == NO_TOPIC_READ
         && request.resource_type == krabka_metadata::ResourceType::Topic
-        && request.operation == krabka_metadata::AclOperation::Read
-    {
-        crate::authorizer::AuthorizationResult::Deny
-    } else {
-        crate::authorizer::AuthorizationResult::Allow
+        && request.operation == krabka_metadata::AclOperation::Read;
+    match denied {
+        true => crate::authorizer::AuthorizationResult::Deny,
+        false => crate::authorizer::AuthorizationResult::Allow,
     }
 });
 
