@@ -16,6 +16,7 @@ use crate::{
         },
         produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
     },
+    view::wait_for_leader_and_isr,
     within,
 };
 
@@ -75,7 +76,7 @@ pub async fn initialize_topic(addr: &str, handles: [&krabka_broker::BrokerHandle
         )
         .await;
     }
-    crate::view::wait_for_leader_and_isr(
+    wait_for_leader_and_isr(
         handles[0],
         "the initial three-replica ISR",
         1,

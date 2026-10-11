@@ -19,8 +19,8 @@ use crate::{
         docker_run_kafka_tool,
     },
     support::{
-        ContainerInput, JvmBrokerSetup, JvmDockerSetup, controller_voters, jvm_broker_config,
-        jvm_docker_command,
+        ContainerInput, JvmBrokerSetup, JvmDockerSetup, controller_voters, init_jvm_tracing,
+        jvm_broker_config, jvm_docker_command,
     },
 };
 
@@ -134,7 +134,7 @@ async fn transactional_console_producer_eos() {
     /// below two, so no batch can ever fit twice.
     const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(128);
 
-    crate::support::init_jvm_tracing("krabka_broker=debug,info");
+    init_jvm_tracing("krabka_broker=debug,info");
 
     let client_ports = [9792u16, 9892, 9992];
     let controller_ports = [9793u16, 9893, 9993];

@@ -6,7 +6,7 @@ use tempfile::TempDir;
 
 pub(crate) use crate::support::storage::PartitionReadiness;
 use crate::{
-    kafka_wire::AutomaticTopicSetup,
+    kafka_wire::{AutomaticTopicSetup, create_configured_topic_plaintext},
     support::{
         storage::start_two_dir_broker,
         topics::{ConfiguredTopicSetup, TopicPartitionCount},
@@ -25,7 +25,7 @@ pub(crate) struct Setup<'a> {
 }
 
 pub(crate) async fn create_and_wait(handle: &BrokerHandle, address: SocketAddr, setup: Setup<'_>) {
-    crate::kafka_wire::create_configured_topic_plaintext(
+    create_configured_topic_plaintext(
         address,
         AutomaticTopicSetup {
             client_id: setup.client_id,

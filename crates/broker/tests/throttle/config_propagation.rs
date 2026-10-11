@@ -14,6 +14,7 @@ use crate::{
         create_topic_as_admin, start_single_broker_sasl_plaintext_with_users, wait_partition_exists,
     },
     configs::drive_incremental_alter_configs,
+    kafka_wire::AutomaticTopicSetup,
     support::topics::ConfiguredTopicSetup,
 };
 
@@ -66,7 +67,7 @@ async fn topic_throttle_config_propagates() {
 
     create_topic_as_admin(
         addr,
-        crate::kafka_wire::AutomaticTopicSetup {
+        AutomaticTopicSetup {
             client_id: CLIENT_ID,
             topic: ConfiguredTopicSetup {
                 name: ("foo").into(),

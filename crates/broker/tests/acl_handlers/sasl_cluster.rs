@@ -10,7 +10,7 @@ use crate::{
     acl_admin::create_topic_as_admin,
     support::{
         acl::{TopicAclSetup, seed_dummy_acl, topic_acl_record},
-        sasl::start_broker,
+        sasl::{sasl_plaintext_mechanisms, start_broker},
     },
 };
 
@@ -37,10 +37,7 @@ pub fn sasl_plain_broker_config_multi_super(
     creds: &[(&str, &str)],
     super_users: &[&str],
 ) -> BrokerConfig {
-    let mut cfg = crate::support::sasl::sasl_plaintext_mechanisms(
-        log_dir.to_path_buf(),
-        vec![SaslMechanism::Plain],
-    );
+    let mut cfg = sasl_plaintext_mechanisms(log_dir.to_path_buf(), vec![SaslMechanism::Plain]);
     for (u, p) in creds {
         cfg.plain_credentials
             .insert((*u).to_string(), (*p).to_string());

@@ -16,7 +16,9 @@ use tokio::{
 };
 
 use crate::support::{
-    produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch},
+    produce::{
+        ProduceAcknowledgements, ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch,
+    },
     records::{batch_from_records, value_record},
     topics::{
         CreateTopicRequestSetup, CreateTopicSetup, CreateTopicsTimeoutMillis, TopicPartitionCount,
@@ -183,7 +185,7 @@ pub struct BatchProduceSetup<'a> {
     #[default("orders")]
     pub topic: &'a str,
     pub topic_id: WireUuid,
-    pub acknowledgements: crate::support::produce::ProduceAcknowledgements,
+    pub acknowledgements: ProduceAcknowledgements,
     pub timeout: ProduceTimeoutMillis,
 }
 

@@ -19,8 +19,12 @@ use crate::{
         drive_alter_user_scram_credentials_as_plain, pbkdf2_salt_and_salted, provision_as_admin,
     },
     harness::{alice_password, scram_admin_fixture, start_scram_admin},
-    support::sasl::{
-        ScramAlgorithm, ScramIterations, ScramMechanismCode, ScramUpsertionSetup, scram_upsertion,
+    support::{
+        sasl::{
+            ScramAlgorithm, ScramIterations, ScramMechanismCode, ScramUpsertionSetup,
+            scram_upsertion,
+        },
+        sasl_plaintext_config,
     },
 };
 
@@ -99,7 +103,7 @@ async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
+    let mut cfg = sasl_plaintext_config(log_dir.path().to_path_buf());
     let admin_password = format!(
         "test-pass-{}",
         std::time::SystemTime::now()

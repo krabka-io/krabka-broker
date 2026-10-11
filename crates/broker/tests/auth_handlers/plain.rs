@@ -23,7 +23,10 @@ use crate::{
         capped_session_closes, different_principal_closes, repeated_expired_reauth,
         same_principal_reopens,
     },
-    support::wire::{CorrelationId, HeaderEncoding as RequestHeaderEncoding, SocketExchangeSetup},
+    support::{
+        sasl::plain_authentication_body,
+        wire::{CorrelationId, HeaderEncoding as RequestHeaderEncoding, SocketExchangeSetup},
+    },
 };
 
 /// Happy-path drive of a SASL/PLAIN session: `ApiVersions` → `SaslHandshake`
@@ -191,8 +194,7 @@ async fn plain_authenticate_without_handshake_closes_the_connection() {
     let addr = handle.listen_addr();
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let auth_body =
-        crate::support::sasl::plain_authentication_body("alice", alice_password().as_bytes());
+    let auth_body = plain_authentication_body("alice", alice_password().as_bytes());
     check!(
         round_trip(
             &mut stream,

@@ -11,13 +11,13 @@ use krabka_broker::Broker;
 use crate::{
     harness::start_two_dir_broker,
     support::{acl::use_simple_acl_authorizer, storage::two_dir_config},
-    two_dir_topic::Setup,
+    two_dir_topic::{Setup, start},
     wire::{CLIENT_ID, alter_replica_log_dirs},
 };
 
 #[tokio::test]
 async fn alter_replica_log_dirs_rejects_unknown_target() {
-    let (handle, _primary, _extra, addr) = crate::two_dir_topic::start(Setup {
+    let (handle, _primary, _extra, addr) = start(Setup {
         client_id: CLIENT_ID,
         ..Default::default()
     })

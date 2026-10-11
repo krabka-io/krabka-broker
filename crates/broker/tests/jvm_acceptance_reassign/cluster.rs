@@ -5,8 +5,8 @@ use krabka_metadata::PartitionRecord;
 use crate::{
     jvm_acceptance::{
         ADMIN, ADMIN_PASS, ClientPropsFile, KAFKA_IMAGE_TXN, SaslClusterSetup, TempFileMount,
-        broker0_advertised, create_console_topic, plain_client_properties, write_plain_props,
-        write_temp_file,
+        broker0_advertised, create_console_topic, plain_client_properties,
+        start_registered_sasl_cluster, write_plain_props, write_temp_file,
     },
     support::{JvmDockerSetup, jvm_docker_command},
 };
@@ -117,10 +117,8 @@ pub(crate) struct RegisteredCluster {
 }
 
 async fn registered_admin() -> RegisteredCluster {
-    let (h1, h2, h3, cfg1, cfg2, cfg3, d1, d2, d3) = Box::pin(
-        crate::jvm_acceptance::start_registered_sasl_cluster(SaslClusterSetup::default()),
-    )
-    .await;
+    let (h1, h2, h3, cfg1, cfg2, cfg3, d1, d2, d3) =
+        Box::pin(start_registered_sasl_cluster(SaslClusterSetup::default())).await;
     RegisteredCluster {
         d3,
         d2,

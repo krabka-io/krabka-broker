@@ -33,7 +33,8 @@ use crate::{
     multi_workload::local_segment_bases,
     support::{client::connect_owned, storage::topic_remote_log_files, topics::AssignedTopicSetup},
     topic_fixture::{
-        TieredRecordCount, TieredRecordsSetup, await_tiered_replicas, create_assigned_topic,
+        AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup, await_tiered_replicas,
+        create_assigned_topic,
     },
 };
 
@@ -114,7 +115,7 @@ async fn create_misaligned_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerH
     );
     create_assigned_topic(
         admin,
-        crate::topic_fixture::AssignedTieredTopicSetup {
+        AssignedTieredTopicSetup {
             topic: assignment,
             segment_bytes: None,
         },

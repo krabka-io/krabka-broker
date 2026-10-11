@@ -21,7 +21,7 @@ use crate::{
     DEV_CERT, DEV_KEY,
     support::{
         client::connect_owned,
-        tls::{fixture_signature_schemes, ssl_config},
+        tls::{PinnedCertVerifier, fixture_signature_schemes, ssl_config},
     },
 };
 
@@ -65,7 +65,7 @@ async fn tls_listener_accepts_tls_handshake_only() {
     let expected_cert = certs.into_iter().next().expect("at least one cert").clone();
     let client_cfg = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(crate::support::tls::PinnedCertVerifier {
+        .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
             pinned: expected_cert,
             schemes: fixture_signature_schemes(),
             mismatch: "presented cert does not match pinned dev cert",

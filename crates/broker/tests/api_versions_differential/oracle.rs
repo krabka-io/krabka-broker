@@ -36,7 +36,8 @@ use crate::{
     probe::{retry_until, wait_bounded},
     support::{
         JvmBrokerSetup, JvmDockerSetup, JvmListeners, controller_voters, docker_logs, init_tracing,
-        jvm_broker_config, kafka_single_node_env_args, remove_container, unique_container_name,
+        jvm_broker_config, jvm_docker_command, kafka_single_node_env_args, remove_container,
+        unique_container_name,
     },
 };
 
@@ -125,7 +126,7 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
 /// Run the tool from a throwaway container against the krabka broker that
 /// `listeners` advertises, and return its stdout.
 pub(crate) fn krabka_api_versions(listeners: &JvmListeners) -> String {
-    let out = crate::support::jvm_docker_command(JvmDockerSetup {
+    let out = jvm_docker_command(JvmDockerSetup {
         image: ORACLE_IMAGE,
         args: &[TOOL, "--bootstrap-server", &listeners.advertised],
         ..Default::default()

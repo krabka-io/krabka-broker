@@ -20,7 +20,7 @@ use crate::{
         },
         topic_id_for,
     },
-    topic_fixture::create_configured_topic,
+    topic_fixture::{create_configured_topic, tiered_configs},
 };
 
 /// Shared copy→metadata→read body: create a tiered topic, wait for the
@@ -37,12 +37,7 @@ pub(crate) async fn copy_then_fetch_round_trip(
     // Tiny `internal.segment.bytes` so a modest produce seals several segments;
     // `local.retention.bytes=1` evicts every copied segment from local
     // disk so the read-back must consult the remote tier.
-    create_configured_topic(
-        client,
-        topic,
-        crate::topic_fixture::tiered_configs(Some("1024")),
-    )
-    .await;
+    create_configured_topic(client, topic, tiered_configs(Some("1024"))).await;
 
     // Wait for the tiered config to flow from the metadata image through
     // the supervisor's reconcile loop into the partition's `LogConfig`.

@@ -20,6 +20,7 @@ use crate::{
     dat_fixtures::{Mode, Visible, now_ms},
     support::{
         self,
+        client::create_configured_topic,
         fetch::{
             FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
         },
@@ -33,7 +34,7 @@ use crate::{
 const VISIBILITY_DEADLINE: Duration = Duration::from_secs(30);
 
 pub async fn create_topic(client: &Client, topic: &str, mode: Mode) {
-    crate::support::client::create_configured_topic(
+    create_configured_topic(
         client,
         CreateTopicSetup {
             topic,

@@ -25,7 +25,7 @@ use crate::support::{
     discovery::api_versions_request_for,
     wire::{
         CorrelationId, HeaderEncoding, WireFrameSetup, decode_response_frame, read_frame,
-        request_body_capacity, write_frame,
+        request_body_capacity, request_frame, write_frame,
     },
 };
 
@@ -70,7 +70,7 @@ async fn send_api_versions(
     // parse the error code on negotiated downgrade.
     let flexible = version >= 3;
 
-    let frame = crate::support::wire::request_frame(WireFrameSetup {
+    let frame = request_frame(WireFrameSetup {
         version: krabka_ids::ApiVersion(version),
         correlation: CorrelationId(99),
         header: HeaderEncoding::from_wire(flexible),

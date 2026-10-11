@@ -18,6 +18,7 @@ use crate::{
     support::{
         acl::{TopicAclSetup, topic_acl_record, use_simple_acl_authorizer},
         admin::ElectionSetup,
+        sasl::sasl_temp_config,
         topics::ConfiguredTopicSetup,
     },
     wait::wait_partition_exists,
@@ -36,7 +37,7 @@ async fn non_super_user_without_acl_denied() {
     // Build a single-broker SASL_PLAINTEXT config.
     // admin is the super-user so the compat shim stays off once an ACL
     // exists; alice has credentials but no ACLs.
-    let (_log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
+    let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("admin".to_string(), "admin-secret".to_string());
     cfg.plain_credentials

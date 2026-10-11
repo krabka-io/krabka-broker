@@ -15,7 +15,7 @@ use crate::{
     cluster::wait_alice_quota,
     kafka_wire::{
         PlainAuthenticationSetup,
-        quotas::{QuotaAlterSetup, QuotaDescribeSetup, UserQuotaSetup},
+        quotas::{QuotaAlterSetup, QuotaDescribeSetup, UserQuotaSetup, alter_user_quota},
     },
 };
 
@@ -32,7 +32,7 @@ async fn alter_then_describe_round_trip() {
     .await;
 
     // Alter: set producer_byte_rate=1024 for (user=alice).
-    let alter_resp = crate::kafka_wire::quotas::alter_user_quota(
+    let alter_resp = alter_user_quota(
         addr,
         UserQuotaSetup {
             authentication: PlainAuthenticationSetup::admin(CLIENT_ID),

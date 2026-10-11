@@ -105,6 +105,7 @@ use crate::support::{
     admin::{ElectionKind, ElectionSetup},
     partitions::{wait_partition_isr_only, wait_partition_leader},
     registered_cluster, shutdown_cluster,
+    topics::AssignedTopicSetup,
 };
 
 /// The recovery strategy that routes an UNCLEAN election through the URM.
@@ -172,7 +173,7 @@ async fn offline_partition_with_diverged_logs(
         addr,
         AssignedTopicExchangeSetup {
             client_id: CLIENT_ID,
-            topic: crate::support::topics::AssignedTopicSetup::three_replicas(topic),
+            topic: AssignedTopicSetup::three_replicas(topic),
         },
     )
     .await;

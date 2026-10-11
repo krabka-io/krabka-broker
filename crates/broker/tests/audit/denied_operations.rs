@@ -14,7 +14,7 @@ use crate::support::{
         FetchByteLimit, FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup,
         single_partition_fetch,
     },
-    topics::{creatable_topic, create_topic_request},
+    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
 /// Verifies that the authorizer-decorator path denies an unauthorized
@@ -55,7 +55,7 @@ async fn denied_operation_returns_topic_authorization_failed() {
     let resp = p
         .client
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: ("denied-topic").into(),
                 ..Default::default()
             },

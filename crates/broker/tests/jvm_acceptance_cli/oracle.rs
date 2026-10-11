@@ -43,7 +43,7 @@ use assert2::assert;
 
 use crate::{
     jvm_acceptance::{broker0_advertised, nc_check_connectivity, start_host_broker},
-    support::{self, docker_exec, remove_container},
+    support::{self, docker_exec, docker_logs, remove_container},
 };
 
 /// The release both halves of every differential run: the oracle broker is
@@ -514,7 +514,7 @@ impl Oracle {
 
     /// The container's own logs, for the panic message when it never came up.
     fn logs(&self) -> String {
-        crate::support::docker_logs(&self.name)
+        docker_logs(&self.name)
     }
 }
 

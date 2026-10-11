@@ -17,7 +17,10 @@ use crate::support::{
     client::http_get,
     produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},
-    topics::{TopicPartitionCount, TopicReplicationFactor, creatable_topic, create_topic_request},
+    topics::{
+        ConfiguredTopicSetup, TopicPartitionCount, TopicReplicationFactor, creatable_topic,
+        create_topic_request,
+    },
 };
 
 pub const TOPIC: &str = "backlog-itest";
@@ -36,7 +39,7 @@ pub async fn scrape(addr: SocketAddr) -> String {
 pub async fn create_topic(client: &Client, partitions: i32, replication_factor: i16) {
     let response = client
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: (TOPIC).into(),
                 partitions: TopicPartitionCount(partitions),
                 replicas: TopicReplicationFactor(replication_factor),

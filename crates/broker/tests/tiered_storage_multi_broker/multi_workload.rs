@@ -27,6 +27,7 @@ use crate::{
         produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
         records::batch_from_records,
         storage::remote_log_files,
+        topics::AssignedTopicSetup,
     },
     topic_fixture::{AssignedTieredTopicSetup, await_tiered_replicas, create_assigned_topic},
 };
@@ -114,7 +115,7 @@ pub(crate) async fn await_follower_local_eviction(log_dir: &std::path::Path) {
 }
 
 pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandle) {
-    let assignment = crate::support::topics::AssignedTopicSetup::on_replicas(
+    let assignment = AssignedTopicSetup::on_replicas(
         TOPIC,
         vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
     );

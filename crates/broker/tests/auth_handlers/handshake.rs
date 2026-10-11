@@ -30,7 +30,7 @@ use crate::{
         sasl::sasl_plaintext_mechanisms,
         wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-            SocketExchangeSetup, WireFrameSetup, write_frame,
+            SocketExchangeSetup, WireFrameSetup, request_frame, write_frame,
         },
     },
 };
@@ -93,7 +93,7 @@ async fn metadata_rejected_pre_auth_on_sasl_listener() {
     md_req.encode(&mut md_body, 12).unwrap();
 
     // Build the frame manually: header + body, then length-prefix.
-    let frame = crate::support::wire::request_frame(WireFrameSetup {
+    let frame = request_frame(WireFrameSetup {
         api_key: krabka_ids::ApiKey(3),
         version: krabka_ids::ApiVersion(12),
         header: RequestHeaderEncoding::Flexible,

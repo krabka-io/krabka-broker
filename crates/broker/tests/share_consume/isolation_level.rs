@@ -17,7 +17,7 @@ use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 
 use crate::{
     harness::{bootstrap_share_state, produce_n},
-    share_rpc::{acquired_count, share_fetch},
+    share_rpc::{acquired_count, fetch_empty, share_fetch},
     support::{
         producer::{ProducerRecordSetup, producer_record, transactional_producer},
         share::{
@@ -100,7 +100,7 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
     // A read_committed share fetch must acquire NOTHING: every record is past
     // the LSO (still 0). Poll a few times to be sure it never spuriously acquires.
     for epoch in 0..6 {
-        crate::share_rpc::fetch_empty(
+        fetch_empty(
             &client,
             ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(epoch)),
         )

@@ -21,6 +21,7 @@ use crate::{
         produce_committed_prefix,
     },
     support::{self, JvmBrokerSetup, JvmStaticVoterSetup, controller_voters},
+    topic_admin::create_and_wait_for_isr,
 };
 
 /// A running mixed cluster: two Krabka brokers (ids 1, 2) that hold the
@@ -373,7 +374,7 @@ pub async fn prepare_divergence(
         };
     let (container, cluster) = registered_mixed_cluster(container_prefix, join_context).await;
     let bootstrap = cluster.bootstrap_all.clone();
-    crate::topic_admin::create_and_wait_for_isr(&bootstrap, topic, required, isr_context).await;
+    create_and_wait_for_isr(&bootstrap, topic, required, isr_context).await;
     produce_committed_prefix(&bootstrap, topic, prefix, count);
     // Intentional: allow the external JVM producer/follower to settle; no broker image or metric expresses this.
     tokio::time::sleep(Duration::from_secs(2)).await;

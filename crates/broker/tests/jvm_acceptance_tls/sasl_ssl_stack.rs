@@ -7,8 +7,8 @@
 //! what they assert, replication rather than the client-side auth stack.
 
 use crate::jvm_acceptance::{
-    ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, nc_check_connectivity,
-    prepare_jks_truststore, provision_ssl_topic, start_sasl_ssl_broker,
+    ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, authenticated_console_round_trip,
+    nc_check_connectivity, prepare_jks_truststore, provision_ssl_topic, start_sasl_ssl_broker,
 };
 
 /// End-to-end `SASL_SSL` drive of the JVM tools. This is the
@@ -44,11 +44,7 @@ async fn jvm_sasl_ssl_full_stack() {
 
     // 2. Produce 10 records via stdin.
 
-    crate::jvm_acceptance::authenticated_console_round_trip(
-        KAFKA_IMAGE_TXN,
-        &[&alice_props_mount, &ts_mount],
-        TOPIC,
-    );
+    authenticated_console_round_trip(KAFKA_IMAGE_TXN, &[&alice_props_mount, &ts_mount], TOPIC);
 
     broker.shutdown().await;
 }

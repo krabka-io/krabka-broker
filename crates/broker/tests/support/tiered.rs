@@ -7,7 +7,7 @@ use crate::support::{
     records::batch_from_records,
     topics::{
         AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicRequestSetup,
-        CreateTopicsTimeoutMillis, assigned_topic, creatable_topic,
+        CreateTopicsTimeoutMillis, assigned_topic, creatable_topic, create_topic_request,
         create_topic_request_with_setup, topic_configs,
     },
 };
@@ -31,7 +31,7 @@ pub async fn create_configured_topic(
     configs: Vec<CreatableTopicConfig>,
 ) {
     let response = client
-        .send(crate::support::topics::create_topic_request(
+        .send(create_topic_request(
             krabka_protocol::owned::create_topics_request::CreatableTopic {
                 configs,
                 ..creatable_topic(ConfiguredTopicSetup {

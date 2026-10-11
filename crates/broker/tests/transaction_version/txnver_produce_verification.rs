@@ -32,8 +32,8 @@ use crate::{
         },
         topics::TopicPartitionCount,
         transaction_wire::{
-            TransactionPartitionsSetup, initialize_transactional, partitions_request,
-            transaction_topic,
+            TransactionPartitionsSetup, initialize_transactional, partition_error,
+            partitions_request, retry_coordinator, transaction_topic,
         },
         transactions::{
             EndTransactionSetup, ProducerEpoch, ProducerEpochOffset, ProducerIdentity,
@@ -164,7 +164,7 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = T>,
 {
-    crate::support::transaction_wire::retry_coordinator(
+    retry_coordinator(
         send,
         code,
         |code| {
@@ -218,7 +218,7 @@ async fn add_partition(client: &Client, producer: Producer, topic: &str) {
                 }))
                 .await
                 .expect("AddPartitionsToTxn");
-            crate::support::transaction_wire::partition_error(&response, true)
+            partition_error(&response, true)
         },
         |code| *code,
     )

@@ -43,6 +43,7 @@ use crate::{
         },
         relay::Relay,
         shutdown_cluster,
+        topics::AssignedTopicSetup,
         transaction_wire::{
             AssignedTransactionTopicSetup, TransactionProduceSetup, add_partition_request,
             coordinator_loading, create_assigned_topic, init_producer_request,
@@ -96,10 +97,7 @@ async fn leader_of(handle: &BrokerHandle, topic: &str) -> u64 {
     partition_leader(handle, topic, SETTLE).await
 }
 
-async fn create_topic(
-    client: &Client,
-    topic: crate::support::topics::AssignedTopicSetup,
-) -> WireUuid {
+async fn create_topic(client: &Client, topic: AssignedTopicSetup) -> WireUuid {
     create_assigned_topic(
         client,
         AssignedTransactionTopicSetup {
@@ -425,10 +423,7 @@ async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
         .expect("another broker");
     let topic_id = create_topic(
         &admin,
-        crate::support::topics::AssignedTopicSetup::on_replicas(
-            TOPIC,
-            vec![krabka_metadata::NodeId(data_node)],
-        ),
+        AssignedTopicSetup::on_replicas(TOPIC, vec![krabka_metadata::NodeId(data_node)]),
     )
     .await;
     admin.close();
@@ -530,7 +525,7 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
         .expect("another broker");
     let topic_id = create_topic(
         &admin,
-        crate::support::topics::AssignedTopicSetup::on_replicas(
+        AssignedTopicSetup::on_replicas(
             TOPIC,
             vec![
                 krabka_metadata::NodeId(coordinator),
@@ -633,10 +628,7 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
     .expect("a node id");
     let topic_id = create_topic(
         &admin,
-        crate::support::topics::AssignedTopicSetup::on_replicas(
-            TOPIC,
-            vec![krabka_metadata::NodeId(group_node)],
-        ),
+        AssignedTopicSetup::on_replicas(TOPIC, vec![krabka_metadata::NodeId(group_node)]),
     )
     .await;
     admin.close();

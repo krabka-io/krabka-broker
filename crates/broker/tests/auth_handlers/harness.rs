@@ -18,6 +18,7 @@ use crate::{
     kafka_wire::{self, ExchangeSetup as WireExchangeSetup},
     support::{
         sasl::{ScramCredentialSetup, provision_scram, sasl_plaintext_mechanisms, start_broker},
+        sasl_plaintext_config,
         wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
     },
 };
@@ -78,7 +79,7 @@ pub fn reauth_config(
     log_dir: &std::path::Path,
     max_reauth: krabka_units::Time,
 ) -> krabka_broker::BrokerConfig {
-    let mut config = crate::support::sasl_plaintext_config(log_dir.to_path_buf());
+    let mut config = sasl_plaintext_config(log_dir.to_path_buf());
     config.connections_max_idle = Some(krabka_units::millis(0));
     config.connections_max_reauth = Some(max_reauth);
     config

@@ -37,7 +37,7 @@ use crate::support::{
     consumer_groups::{collect_routing_values, routing_consumer},
     partitions::require_non_bootstrap_partitions,
     producer::{ProducerRecordSetup, producer_record},
-    shutdown_cluster,
+    registered_cluster, shutdown_cluster,
 };
 
 mod support;
@@ -56,7 +56,7 @@ use crate::support::partitions::wait_for_local_replica;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn producer_routes_to_non_bootstrap_leaders() {
     let _g = cluster_lock().lock().await;
-    let cluster = crate::support::registered_cluster(3).await;
+    let cluster = registered_cluster(3).await;
 
     // Bootstrap everything (admin, producer, consumer) at node 1.
     let bootstrap = cluster[0].1.listen_addr.to_string();

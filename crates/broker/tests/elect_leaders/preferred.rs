@@ -8,7 +8,9 @@ use crate::{
     cluster_lock,
     kafka_wire::ElectionExchangeSetup,
     support::{
-        admin::ElectionSetup, registered_cluster, shutdown_cluster, topics::AssignedTopicSetup,
+        admin::{ElectionKind, ElectionSetup},
+        registered_cluster, shutdown_cluster,
+        topics::AssignedTopicSetup,
     },
     wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
     wire::{CLIENT_ID, create_topic_plaintext, drive_elect_all_partitions, drive_elect_leaders},
@@ -174,9 +176,7 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
     .await;
     wait_partition_exists(&cluster[0].0, "foo-all-partitions", 0).await;
 
-    let rows =
-        drive_elect_all_partitions(broker1_addr, crate::support::admin::ElectionKind::Preferred)
-            .await;
+    let rows = drive_elect_all_partitions(broker1_addr, ElectionKind::Preferred).await;
 
     assert!(
         rows.is_empty(),
