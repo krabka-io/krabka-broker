@@ -13,8 +13,6 @@ use krabka_protocol::{
     owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::FetchResponse,
-        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-        list_offsets_response::ListOffsetsResponse,
     },
     primitives::uuid::Uuid as WireUuid,
 };
@@ -183,25 +181,30 @@ impl BacklogPoller {
             .topic(topic)
             .ok_or_else(|| format!("missing topic metadata for {topic}"))?
             .topic_id;
-        let latest = ListOffsetsRequest {
+        let latest = krabka_protocol::owned::list_offsets_request::ListOffsetsRequest {
             replica_id: -1,
             isolation_level: 1,
-            topics: vec![ListOffsetsTopic {
-                name: topic.to_owned(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: partition,
-                    current_leader_epoch: partition_metadata.leader_epoch.0,
-                    timestamp: -1,
+            topics: vec![
+                krabka_protocol::owned::list_offsets_request::ListOffsetsTopic {
+                    name: topic.to_owned(),
+                    partitions: vec![
+                        krabka_protocol::owned::list_offsets_request::ListOffsetsPartition {
+                            partition_index: partition,
+                            current_leader_epoch: partition_metadata.leader_epoch.0,
+                            timestamp: -1,
+                            ..Default::default()
+                        },
+                    ],
                     ..Default::default()
-                }],
-                ..Default::default()
-            }],
+                },
+            ],
             ..Default::default()
         };
-        let latest_response: ListOffsetsResponse = connection
-            .send(latest)
-            .await
-            .map_err(|error| error.to_string())?;
+        let latest_response: krabka_protocol::owned::list_offsets_response::ListOffsetsResponse =
+            connection
+                .send(latest)
+                .await
+                .map_err(|error| error.to_string())?;
         let fetch_offset = latest_fetch_offset(&latest_response, topic, partition)?;
         let request = FetchRequest {
             replica_id: -1,
@@ -236,7 +239,7 @@ impl BacklogPoller {
 }
 
 fn latest_fetch_offset(
-    response: &ListOffsetsResponse,
+    response: &krabka_protocol::owned::list_offsets_response::ListOffsetsResponse,
     topic: &str,
     partition: i32,
 ) -> Result<i64, String> {
