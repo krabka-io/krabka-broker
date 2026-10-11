@@ -24,11 +24,10 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drained_streams_group_downgrades_and_preserves_offsets() {
     let (broker, bootstrap, _dir) = boot().await;
-    let streams_client = connect(&bootstrap).await;
-    let classic_client = connect(&bootstrap).await;
+    let (streams_client, classic_client) = (connect(&bootstrap).await, connect(&bootstrap).await);
 
-    finalize_streams_version(&streams_client).await;
     create_topic(&streams_client, "in", 1).await;
+    finalize_streams_version(&streams_client).await;
     let topic_id = topic_id_for(&streams_client, "in").await;
 
     // ── Phase 1: form a streams group, commit offset 42, then leave. ──

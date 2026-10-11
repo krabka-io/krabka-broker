@@ -227,17 +227,13 @@ async fn list_transactions_returns_ongoing_txn() {
         .find(|r| r.transactional_id == "my-tid")
         .expect("my-tid not present");
     check!(row.producer_id >= 0);
-    assert!(
-        resp == ListTransactionsResponse {
-            transaction_states: vec![ListedTransactionState {
-                transactional_id: "my-tid".into(),
-                producer_id: row.producer_id,
-                transaction_state: "Ongoing".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }
-    );
+    let expected_state = ListedTransactionState {
+        transactional_id: "my-tid".into(),
+        producer_id: row.producer_id,
+        transaction_state: "Ongoing".into(),
+        ..Default::default()
+    };
+    assert!(resp.transaction_states == [expected_state]);
 
     teardown_test_txn(transaction, producer, broker).await;
 }

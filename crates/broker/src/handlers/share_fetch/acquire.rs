@@ -520,8 +520,9 @@ async fn acquire_pass(
                 // The log start moved again between the two attempts.
                 // Report the partition as caught up with no records
                 // rather than failing the whole request.
-                st.advance_past_log_start(part.log_start_offset());
-                fresh = PartitionData::default();
+                let new_start = part.log_start_offset();
+                st.advance_past_log_start(new_start);
+                fresh.records = None;
                 outcome = Ok(0);
             }
         }

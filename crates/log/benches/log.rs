@@ -56,9 +56,10 @@ fn make_verbatim_from_batch(batch: &RecordBatch) -> VerbatimBatch {
 // ---------------------------------------------------------------------------
 
 fn open_log(config: LogConfig) -> (tempfile::TempDir, Log) {
-    let dir = tempdir().unwrap();
-    let log = Log::open(dir.path(), config).unwrap();
-    (dir, log)
+    let scratch = tempdir().expect("tempdir");
+    let target_path = scratch.path();
+    let log = Log::open(target_path, config).expect("open log");
+    (scratch, log)
 }
 
 fn populated_log(

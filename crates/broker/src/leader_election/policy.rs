@@ -476,11 +476,13 @@ fn decide(pr: &PartitionRecord, gone: &Departure, ctx: &Ladder<'_>) -> FailoverD
 /// not elect anyway, so the two orders agree. Kafka's `uncleanShutdownReplicas`
 /// keeps `returning` out of the target ELR, so it is not what keeps that set
 /// from being empty, as a fenced broker is.
+type NodeSet = std::collections::HashSet<NodeId>;
+
 pub(crate) fn unclean_restart_one(
     pr: &PartitionRecord,
     returning: NodeId,
-    alive: &std::collections::HashSet<NodeId>,
-    witnesses: &std::collections::HashSet<NodeId>,
+    alive: &NodeSet,
+    witnesses: &NodeSet,
     elr: &PartitionElr,
     strategy: RecoveryStrategy,
     unclean_enabled: bool,

@@ -151,9 +151,10 @@ async fn unclean_no_alive_replicas() {
 
 #[tokio::test]
 async fn unclean_isr_member_alive_returns_election_not_needed() {
+    let isr_nodes: Vec<_> = [1, 2].into_iter().map(krabka_raft::NodeId).collect();
     let img = img_with_partition(ElectionSetup {
         topic: "foo",
-        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+        isr: &isr_nodes,
         ..Default::default()
     });
     let l = alive_set(&[1, 2]); // ISR has live member
