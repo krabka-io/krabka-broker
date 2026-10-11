@@ -27,18 +27,23 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 1.0.2 changes no on-disk format, so it upgrades from 1.0.1 in place and
 rolls back to it the same way. Before a rollback, remove `log_tail_cache_size`
-from a configuration that sets it, because 1.0.1 refuses a `[runtime]` key it
-does not know. If `preallocate=true` was active during an unclean shutdown,
-the tail recovery of 1.0.1 and 1.0.0 cuts the remaining zero padding as normal.
+and the `--log-tail-cache-size` flag from a configuration or service invocation
+that sets it, because 1.0.1 refuses a `[runtime]` key and argument it does
+not know. If `preallocate=true` was active during an unclean shutdown, the tail
+recovery of 1.0.1 and 1.0.0 cuts the remaining zero padding as normal.
 
 ### Added
 
 - The topic setting `preallocate` and the broker default `log.preallocate`
   reserve `segment.bytes` of disk blocks with `fallocate(FALLOC_FL_KEEP_SIZE)`
   when an active segment is opened, avoiding allocations during appends and
-  releasing unused reserved blocks when the segment is sealed.
-- Active segments under `preallocate=true` write through `O_DIRECT` to bypass
-  the page cache, keeping the newest appends in memory to serve reads.
+  releasing unused reserved blocks when the segment is sealed. On filesystems
+  or platforms without block reservation support, the segment grows as it is
+  written.
+- On Linux 6.1+ where the underlying filesystem reports direct-I/O alignment,
+  active segments under `preallocate=true` write through `O_DIRECT` to bypass
+  the page cache, keeping the newest appends in memory to serve reads. Where
+  unsupported, appends remain page-cache-backed.
 - The `[runtime]` key `log_tail_cache_size`, with the `--log-tail-cache-size`
   flag and the `KRABKA_LOG_TAIL_CACHE_SIZE` variable, sets how much of the
   newest data a partition with `preallocate=true` keeps in memory to serve
