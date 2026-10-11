@@ -22,10 +22,14 @@ pub trait SendfileSink {
     fn write_idle_is_enforced(&self) -> bool {
         false
     }
-    /// Maximum time a response write may make no progress. Direct streams
-    /// have no deadline; the connection loop supplies its listener policy.
-    fn write_idle_window(&self) -> Option<std::time::Duration> {
-        None
+    crate::sendfile_cfg! {
+        /// Maximum time a sendfile response write may make no progress.
+        /// Direct streams have no deadline; the connection loop supplies its
+        /// listener policy. Buffered writes enforce their deadline through
+        /// `AsyncWrite` instead.
+        fn write_idle_window(&self) -> Option<std::time::Duration> {
+            None
+        }
     }
 
     /// `true` when this stream can serve a records region with the kernel
@@ -68,8 +72,10 @@ impl<S: SendfileSink> SendfileSink for tokio_rustls::server::TlsStream<S> {
         self.get_ref().0.write_idle_is_enforced()
     }
 
-    fn write_idle_window(&self) -> Option<std::time::Duration> {
-        self.get_ref().0.write_idle_window()
+    crate::sendfile_cfg! {
+        fn write_idle_window(&self) -> Option<std::time::Duration> {
+            self.get_ref().0.write_idle_window()
+        }
     }
     // Userspace TLS: rustls encrypts in userspace, so file bytes must pass
     // through the rustls buffer — there is no kernel file→socket path. This is

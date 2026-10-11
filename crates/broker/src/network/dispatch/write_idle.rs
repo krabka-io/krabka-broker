@@ -119,11 +119,11 @@ impl<S: SendfileSink> SendfileSink for WriteIdle<S> {
         self.inner.is_sendfile_capable()
     }
 
-    fn write_idle_window(&self) -> Option<Duration> {
-        self.window.or_else(|| self.inner.write_idle_window())
-    }
-
     crate::sendfile_cfg! {
+        fn write_idle_window(&self) -> Option<Duration> {
+            self.window.or_else(|| self.inner.write_idle_window())
+        }
+
         fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> {
             self.inner.tcp_for_sendfile()
         }
