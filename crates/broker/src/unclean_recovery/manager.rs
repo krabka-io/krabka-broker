@@ -25,9 +25,9 @@ use super::{
     select_leader,
 };
 use crate::{
-    elr::TopicElr, heartbeat::controller_state::ControllerLivenessState,
-    metadata_epoch::next_partition_change, metadata_source::MetadataSource,
-    network::client::InterBrokerClient,
+    config_keys::witness_node_ids, elr::TopicElr,
+    heartbeat::controller_state::ControllerLivenessState, metadata_epoch::next_partition_change,
+    metadata_source::MetadataSource, metrics::BrokerMetrics, network::client::InterBrokerClient,
 };
 
 #[cfg(test)]
@@ -45,7 +45,7 @@ pub(crate) struct UncleanRecoveryManager {
     node_id: NodeId,
     inter_broker_client: Arc<InterBrokerClient>,
     listener_protocol: krabka_security::ListenerProtocol,
-    metrics: crate::metrics::BrokerMetrics,
+    metrics: BrokerMetrics,
     policy: RecoveryPolicy,
     in_flight: Arc<Mutex<HashSet<(String, i32)>>>,
 }
@@ -59,7 +59,7 @@ impl UncleanRecoveryManager {
         liveness: Arc<ControllerLivenessState>,
         node_id: NodeId,
         inter_broker_client: Arc<InterBrokerClient>,
-        metrics: crate::metrics::BrokerMetrics,
+        metrics: BrokerMetrics,
         policy: RecoveryPolicy,
         shutdown: tokio_util::sync::CancellationToken,
     ) -> UncleanRecoveryHandle {
@@ -275,12 +275,7 @@ impl UncleanRecoveryManager {
         eligible: &[i32],
         responses: &[ReplicaLogInfo],
     ) -> Option<Election> {
-        select_leader(
-            responses,
-            in_sync,
-            eligible,
-            &crate::config_keys::witness_node_ids(image),
-        )
+        select_leader(responses, in_sync, eligible, &witness_node_ids(image))
     }
 
     /// Builds and submits the `PartitionRecord` that elects `election.leader`

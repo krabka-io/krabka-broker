@@ -202,7 +202,7 @@ mod tests {
     use krabka_protocol::records::{Record, RecordBatch};
 
     use super::*;
-    use crate::test_support::RecordCount;
+    use crate::{test_support::RecordCount, wal::quorum::test_support::batch};
 
     /// The exact bytes a 1.x broker writes for the range `3..7`. A change
     /// here is a change to the 1.x on-disk contract.
@@ -217,7 +217,7 @@ mod tests {
 
     fn checkpoint_log(records: RecordCount) -> (tempfile::TempDir, std::path::PathBuf, Log) {
         let (dir, checkpoint, mut log) = empty_checkpoint_log();
-        let mut batch = crate::wal::quorum::test_support::batch(records.0);
+        let mut batch = batch(records.0);
         log.append(&mut batch).unwrap();
         (dir, checkpoint, log)
     }

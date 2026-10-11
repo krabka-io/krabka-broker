@@ -18,10 +18,13 @@ use crate::{
     config_keys::RecoveryStrategy,
     elr::TopicElr,
     heartbeat::controller_state::ControllerLivenessState,
-    leader_election::{compute_unclean_restart_changes, test_support::img_with_partition},
+    leader_election::{
+        compute_unclean_restart_changes,
+        test_support::{img_with_partition, mark_witnesses_in_image},
+    },
     metadata_source::MetadataSource,
     metrics::{BreakGlassActionLabel, BrokerMetrics},
-    test_support::{FakeMetadataSource, broker_registration, replica_nodes},
+    test_support::{FakeMetadataSource, broker_registration, finalize_elr_version, replica_nodes},
     unclean_recovery::{BackgroundRecovery, selection::ElectionBasis},
 };
 
@@ -68,7 +71,7 @@ fn set_isr(img: &mut MetadataImage, isr: &[u64]) {
 fn publish_elr(img: &mut MetadataImage, eligible: &[u64]) {
     // Publishing an ELR presupposes the KIP-966 feature is on: its release
     // default is 0, and the controller keeps no ELR below level 1.
-    crate::test_support::finalize_elr_version(img);
+    finalize_elr_version(img);
     img.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {
         topic: "t".into(),
         partition: 0,
@@ -757,7 +760,7 @@ async fn a_witness_never_wins_the_election_however_the_elr_reads() {
         set_isr(&mut img, &[1]);
         publish_elr(&mut img, &[3]);
         if let Some(id) = witness {
-            crate::leader_election::test_support::mark_witnesses_in_image(&mut img, &[id]);
+            mark_witnesses_in_image(&mut img, &[id]);
         }
         let mgr = manager(
             source_with(Some(NODE), img),

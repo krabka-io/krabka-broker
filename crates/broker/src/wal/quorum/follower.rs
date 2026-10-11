@@ -29,7 +29,7 @@ use super::{
     registry::ShardId,
     wire::{QuorumGroup, fetch_request},
 };
-use crate::codes;
+use crate::{codes, replicator::ReplicationConnectionConfig};
 
 pub(crate) struct Config {
     pub(crate) node_id: NodeId,
@@ -43,7 +43,7 @@ pub(crate) struct Config {
     pub(crate) storage: LogConfig,
     pub(crate) client_id: String,
     pub(crate) shutdown: CancellationToken,
-    pub(crate) connection: crate::replicator::ReplicationConnectionConfig,
+    pub(crate) connection: ReplicationConnectionConfig,
 }
 
 pub(crate) async fn run(config: Config) {

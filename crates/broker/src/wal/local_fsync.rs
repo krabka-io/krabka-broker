@@ -9,7 +9,7 @@ use krabka_ids::Offset;
 use krabka_log::Log;
 
 use super::WalStore;
-use crate::{blocking::run_blocking, error::BrokerError};
+use crate::{blocking::run_blocking, error::BrokerError, partition_writer::storage_failure_error};
 
 /// A [`WalStore`] backed by the partition's local `Log` plus an explicit
 /// `fsync` (`Log::sync`).
@@ -36,9 +36,7 @@ impl WalStore for LocalFsyncWal {
                 .sync()
         })
         .await
-        .map_err(|e| {
-            crate::partition_writer::storage_failure_error("wal fsync task panicked", &e)
-        })?;
+        .map_err(|e| storage_failure_error("wal fsync task panicked", &e))?;
         res.map_err(BrokerError::from)?;
         Ok(leo)
     }
@@ -51,9 +49,7 @@ impl WalStore for LocalFsyncWal {
                 .trim_to_offset(new_start)
         })
         .await
-        .map_err(|error| {
-            crate::partition_writer::storage_failure_error("wal trim task panicked", error)
-        })?;
+        .map_err(|error| storage_failure_error("wal trim task panicked", error))?;
         result.map_err(BrokerError::from)
     }
 }

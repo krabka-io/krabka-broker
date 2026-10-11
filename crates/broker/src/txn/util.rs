@@ -20,7 +20,7 @@ pub(crate) const PRODUCER_FENCED_MIN_VERSION: i16 = 2;
 /// `INVALID_PRODUCER_EPOCH`. Every other code passes through.
 pub(crate) fn producer_fenced_wire_code(version: i16, code: i16) -> i16 {
     if version < PRODUCER_FENCED_MIN_VERSION && code == PRODUCER_FENCED {
-        crate::codes::INVALID_PRODUCER_EPOCH
+        INVALID_PRODUCER_EPOCH
     } else {
         code
     }
@@ -46,7 +46,7 @@ macro_rules! reaper_task {
 }
 pub(super) use reaper_task;
 
-use crate::codes::PRODUCER_FENCED;
+use crate::codes::{INVALID_PRODUCER_EPOCH, PRODUCER_FENCED};
 
 /// Independent expected wire codes shared by the utility and response tests.
 #[cfg(test)]

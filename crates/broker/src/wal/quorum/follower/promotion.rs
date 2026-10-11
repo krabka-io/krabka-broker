@@ -137,7 +137,7 @@ mod tests {
     use crate::{
         log_dir::partition_dir,
         wal::quorum::{
-            engine::read_log_batches_exact,
+            engine::{read_log_batches_exact, split_batches},
             follower::checkpoint::{DURABLE_OFFSET_FILE, DurableRange, write_durable_offset},
         },
     };
@@ -327,7 +327,7 @@ mod tests {
                 assert!(destination.log_start_offset() == floor);
                 assert!(destination.log_end_offset() == Offset(6));
                 let expected = if destination_floor >= 3 {
-                    crate::wal::quorum::engine::split_batches(&full_bytes).unwrap()[1]
+                    split_batches(&full_bytes).unwrap()[1]
                         .verbatim
                         .bytes
                         .clone()
