@@ -14,7 +14,7 @@ use krabka_protocol::records::RecordBatch;
 use crate::{
     archive::build_archive,
     fixtures::{headered_record, keyed_record, plain_batch, value_record},
-    harness::{check_batches, reopen, restore_excluding_keys, run_restore},
+    harness::{check_batches, empty_first_batch, reopen, restore_excluding_keys, run_restore},
 };
 
 // ---------------------------------------------------------------------
@@ -63,7 +63,7 @@ async fn exclude_key_matching_every_record_of_one_batch_still_claims_its_offsets
     ];
     let (_archive, _target, target_dir) = restore_excluding_keys(&mut fixture).await;
 
-    let expected = crate::harness::empty_first_batch(&fixture);
+    let expected = empty_first_batch(&fixture);
     check_batches(&target_dir, 3, &expected);
 }
 

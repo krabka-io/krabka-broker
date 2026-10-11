@@ -78,8 +78,8 @@ mod tests {
     use super::*;
     use crate::segment::test_support::{
         FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, RecordCount, RecordTimestamp,
-        SECOND_SINGLE_RECORD_BATCH, SampleBatchSetup, SeededSegmentSetup,
-        THIRD_SINGLE_RECORD_BATCH, sample_batch, seeded_fixture, test_segment,
+        SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, SampleBatchSetup,
+        SeededSegmentSetup, THIRD_SINGLE_RECORD_BATCH, sample_batch, seeded_fixture, test_segment,
     };
 
     // `Segment::read` maps the absolute fetch offset to a relative index key
@@ -130,11 +130,8 @@ mod tests {
         let (_dir, mut seg) = test_segment();
         seg.append(&sample_batch(FIRST_LARGE_TIMESTAMP_BATCH), kibibytes(4))
             .unwrap();
-        seg.append(
-            &sample_batch(crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH),
-            kibibytes(4),
-        )
-        .unwrap();
+        seg.append(&sample_batch(SECOND_LARGE_TIMESTAMP_BATCH), kibibytes(4))
+            .unwrap();
         let read = seg.read(Offset(4), NO_LIMIT).unwrap();
         // Offset 4 falls inside the second batch (offsets 3..=4).
         assert2::assert!(

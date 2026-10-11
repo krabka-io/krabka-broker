@@ -15,7 +15,7 @@ use crate::{
             topic_record, voter_set,
         },
     },
-    reconfig::{AddVoter, ReconfigOutcome},
+    reconfig::{AddVoter, ReconfigOutcome, VoterChange},
 };
 
 fn wire_voter(id: i32, directory_byte: u8) -> krabka_protocol::owned::voters_record::Voter {
@@ -564,10 +564,7 @@ fn commit_add_voter(
     directory: u128,
 ) -> Result<ReconfigOutcome, RaftError> {
     let (reply, mut rx) = oneshot::channel();
-    leader.on_reconfigure(
-        crate::reconfig::VoterChange::Add(add_request(id, directory)),
-        reply,
-    );
+    leader.on_reconfigure(VoterChange::Add(add_request(id, directory)), reply);
     let appended = leader.log.log_end_offset();
     leader.advance_and_apply(appended);
     rx.try_recv().expect("the add was answered")

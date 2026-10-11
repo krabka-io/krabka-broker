@@ -351,7 +351,7 @@ async fn worm_copy_returns_a_receipt_with_the_new_head() {
     let prev_head = ChainHead([1u8; 32]);
     let md = stamped_metadata(StampedMetadataSetup {
         segment_id: uuid::Uuid::from_u128(53),
-        sequence: crate::worm::ManifestSeq(3),
+        sequence: ManifestSeq(3),
         previous_head: prev_head,
     });
     tokio::task::spawn_blocking(move || {

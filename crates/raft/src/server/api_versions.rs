@@ -18,7 +18,7 @@ pub use self::{
 };
 use crate::{
     ControllerAdminRouter, ControllerApiVersion, UnstableApiVersions, UnstableFeatureVersions,
-    error::RaftError, kafka_4_3_1_max,
+    error::RaftError, kafka_4_3_1_max, kraft::KraftController,
 };
 
 mod client_software;
@@ -77,7 +77,7 @@ pub(crate) struct ApiVersionsView<'a> {
 
 /// The offset of the last record `engine`'s image contains, or `-1` before
 /// the first: one below the engine's applied high watermark.
-pub(crate) fn applied_metadata_offset(engine: &crate::kraft::KraftController) -> i64 {
+pub(crate) fn applied_metadata_offset(engine: &KraftController) -> i64 {
     engine.quorum_snapshot().high_watermark.saturating_sub(1)
 }
 

@@ -209,6 +209,7 @@ mod tests {
     use crate::{
         NodeId,
         log::test_support::{emit_lifecycle, life},
+        spool::FILE_HEADER_LEN,
     };
 
     #[tokio::test]
@@ -250,7 +251,7 @@ mod tests {
         emit_lifecycle(&log, &[NodeId(1), NodeId(2)]);
 
         let state = std::fs::read(dir.path().join("audit.losses")).unwrap();
-        let count = &state[crate::spool::FILE_HEADER_LEN + 8..];
+        let count = &state[FILE_HEADER_LEN + 8..];
         check!(u64::from_be_bytes(count.try_into().unwrap()) == 0);
         check!(log.dropped() == 1);
     }

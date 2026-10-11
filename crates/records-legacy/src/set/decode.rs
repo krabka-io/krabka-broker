@@ -153,7 +153,7 @@ mod tests {
         message::attrs_with_compression,
         set::{
             encode_compressed_message_set, encode_flat_message_set,
-            test_support::{decode_bytes, sample_records_v1},
+            test_support::{compressed_bytes, decode_bytes, sample_records_v1},
         },
     };
 
@@ -293,8 +293,7 @@ mod tests {
             key: None,
             value: Some(Bytes::from(big.clone())),
         }];
-        let buf =
-            crate::set::test_support::compressed_bytes(&recs, Magic::V1, CompressionType::Gzip);
+        let buf = compressed_bytes(&recs, Magic::V1, CompressionType::Gzip);
         let decoded = decode_bytes(&buf);
         assert2::assert!(decoded == recs);
     }

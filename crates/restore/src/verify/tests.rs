@@ -13,14 +13,14 @@ use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::TempDir;
 
 use super::*;
-use crate::open_archive;
+use crate::{Cli, open_archive};
 
 fn test_partition() -> TopicIdPartition {
     TopicIdPartition::new(Uuid::from_u128(0xA5CD), "orders", 0)
 }
 
 fn archive_at(dir: &std::path::Path) -> ArchiveStore {
-    let cli = crate::Cli::parse_from([
+    let cli = Cli::parse_from([
         "krabka-restore",
         "--log-dir",
         "/target",

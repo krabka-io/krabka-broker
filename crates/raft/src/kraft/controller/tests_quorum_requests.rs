@@ -22,7 +22,7 @@ use super::*;
 use crate::kraft::{
     controller::test_support::{EngineSetup, build_engine_only, voter_set},
     transport::wire::{FETCH_SNAPSHOT_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION},
-    types::SimInstant,
+    types::{QuorumState, SimInstant},
 };
 
 const METADATA_TOPIC: &str = "__cluster_metadata";
@@ -184,7 +184,7 @@ fn engine_with_local_directory() -> (Engine, tempfile::TempDir) {
     );
     engine.core = QuorumStateMachine::new(
         NodeId(1),
-        crate::kraft::types::QuorumState::bootstrap(Uuid::nil(), voters),
+        QuorumState::bootstrap(Uuid::nil(), voters),
         engine.election_timeout,
     );
     (engine, dir)

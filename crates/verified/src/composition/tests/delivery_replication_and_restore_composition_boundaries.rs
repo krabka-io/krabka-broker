@@ -1,7 +1,7 @@
 use assert2::assert;
 
 use super::*;
-use crate::restore::RestoreTimestampType;
+use crate::restore::{RestoreContentExclusions, RestoreTimestampType};
 
 #[test]
 fn delivery_replication_and_restore_composition_boundaries() {
@@ -95,7 +95,7 @@ fn delivery_replication_and_restore_composition_boundaries() {
     let exclusions = RestoreExclusions {
         producer: false,
         offset: false,
-        content: crate::restore::RestoreContentExclusions {
+        content: RestoreContentExclusions {
             key: false,
             header: false,
         },

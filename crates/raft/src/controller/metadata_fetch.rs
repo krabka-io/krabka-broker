@@ -12,8 +12,8 @@ use crate::{
     kraft::MetadataFetchSlice,
     types::NodeId,
     wire::{
-        KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, PRIVATE_UNSUPPORTED_VERSION,
-        private_request_version,
+        API_KEY_METADATA_FETCH, KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse,
+        PRIVATE_UNSUPPORTED_VERSION, private_request_version,
     },
 };
 
@@ -80,11 +80,7 @@ impl ControllerHandle {
             .await
             .map_err(RaftError::Network)?;
         let resp_body = conn
-            .raw_request(
-                crate::wire::API_KEY_METADATA_FETCH,
-                version,
-                bytes::Bytes::from(body),
-            )
+            .raw_request(API_KEY_METADATA_FETCH, version, bytes::Bytes::from(body))
             .await
             .map_err(RaftError::Network)?;
         conn.close();
@@ -94,7 +90,7 @@ impl ControllerHandle {
             KrabkaMetadataFetchResponse::decode_v0(&mut cur).map_err(RaftError::Protocol)?;
         if response.error_code == PRIVATE_UNSUPPORTED_VERSION {
             return Err(RaftError::UnsupportedPrivateVersion {
-                api_key: crate::wire::API_KEY_METADATA_FETCH,
+                api_key: API_KEY_METADATA_FETCH,
                 version,
             });
         }

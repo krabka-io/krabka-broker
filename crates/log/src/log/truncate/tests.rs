@@ -12,7 +12,7 @@ use crate::{
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
         append_samples, check_stamps, rolling_test_log, sample_batch, sample_batch_with_epoch,
-        stamped_rolling_log, test_batch_at, test_log, tiny_segments,
+        stamped_rolling_log, stamped_test_log, test_batch_at, test_log, tiny_segments,
     },
     producer_snapshot::ProducerSnapshotEntry,
     stamp_index::{StampEntry, StampIndex},
@@ -282,7 +282,7 @@ fn truncate_to_active_segment_uses_relative_offset() {
 
 #[test]
 fn truncate_removes_stamps_for_discarded_tail() {
-    let (dir, mut log) = crate::log::test_support::stamped_test_log(10, 1);
+    let (dir, mut log) = stamped_test_log(10, 1);
     append_samples(&mut log, 2, 1);
     check!(log.stamp_for_offset(Offset(1)) == Some(11));
 

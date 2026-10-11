@@ -57,8 +57,8 @@ mod tests {
             wire::{FETCH_VERSION, PeerRequest},
         },
         server::test_support::{
-            activate_dynamic_membership, decoded, quorum_request, single_voter_engine, voter,
-            wait_for_leader,
+            activate_dynamic_membership, decoded, quorum_request, single_voter_engine,
+            test_engine_with_voters, voter, wait_for_leader,
         },
     };
 
@@ -107,10 +107,8 @@ mod tests {
         }
 
         // A voter of a two-voter quorum with no leader yet leads nothing.
-        let (follower, _follower_dir) = crate::server::test_support::test_engine_with_voters(
-            1,
-            [voter(1, vec![]), voter(2, vec![])],
-        );
+        let (follower, _follower_dir) =
+            test_engine_with_voters(1, [voter(1, vec![]), voter(2, vec![])]);
         let answered =
             describe_quorum_response(version, &body(version, "__cluster_metadata", 0), &follower)
                 .await

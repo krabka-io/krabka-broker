@@ -12,7 +12,7 @@ use crate::{
     metadata::RemoteLogSegmentMetadata,
     storage_manager::{
         ArtifactBody, IndexType, RemoteStorageManager, partition_dir_name, remote_operation,
-        segment_suffixes,
+        segment_file_name, segment_suffixes,
     },
 };
 
@@ -54,7 +54,7 @@ impl LocalTieredStorage {
 
     fn segment_path(&self, metadata: &RemoteLogSegmentMetadata, suffix: &str) -> PathBuf {
         self.partition_dir(metadata)
-            .join(crate::storage_manager::segment_file_name(metadata, suffix))
+            .join(segment_file_name(metadata, suffix))
     }
 
     fn log_path(&self, metadata: &RemoteLogSegmentMetadata) -> PathBuf {

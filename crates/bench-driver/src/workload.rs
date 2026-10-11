@@ -1376,7 +1376,10 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::scenario::{FailoverSpec, ModeTag, fixture::short_scenario};
+    use crate::{
+        prom::DEFAULT_PROMETHEUS_REQUEST_TIMEOUT,
+        scenario::{FailoverSpec, ModeTag, fixture::short_scenario},
+    };
 
     fn cfg(broker_count: u32) -> DriverConfig {
         DriverConfig {
@@ -1387,7 +1390,7 @@ mod tests {
             stack: Stack::Krabka,
             namespace: "default".into(),
             prometheus_url: None,
-            prometheus_request_timeout: crate::prom::DEFAULT_PROMETHEUS_REQUEST_TIMEOUT,
+            prometheus_request_timeout: DEFAULT_PROMETHEUS_REQUEST_TIMEOUT,
             producer_request_timeout: default_producer_request_timeout(),
             producer_final_drain_timeout: DEFAULT_PRODUCER_FINAL_DRAIN_TIMEOUT,
             sample_interval: DEFAULT_SAMPLE_INTERVAL,

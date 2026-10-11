@@ -6,21 +6,25 @@
 use assert2::assert;
 
 use super::*;
-use crate::kraft::{
-    NullPeerSender,
-    controller::{
-        checkpoint::{
-            checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
-            load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
-            retain_recent_checkpoints, write_checkpoint,
-        },
-        records::decode_control_record,
-        test_support::{
-            ControllerSetup, EngineSetup, SnapshotRecordCount, TEST_ELECTION_TIMEOUT, await_leader,
-            build, build_engine_only, elect_single_voter_engine, one_offset_batch,
-            submit_change_with_timeout, test_metadata_log, topic_record, voter_set,
+use crate::{
+    kraft::{
+        NullPeerSender,
+        controller::{
+            checkpoint::{
+                checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
+                load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
+                retain_recent_checkpoints, write_checkpoint,
+            },
+            records::decode_control_record,
+            test_support::{
+                ControllerSetup, EngineSetup, SnapshotRecordCount, TEST_ELECTION_TIMEOUT,
+                await_leader, build, build_engine_only, elect_single_voter_engine,
+                one_offset_batch, submit_change_with_timeout, test_metadata_log, topic_record,
+                voter_set,
+            },
         },
     },
+    snapshot::SnapshotWriter,
 };
 
 async fn assert_checkpoint_pruned(ctrl: &KraftController, dir: &std::path::Path) {
@@ -390,7 +394,7 @@ fn an_installed_snapshot_hands_its_header_timestamp_to_the_next_checkpoint() {
     image.apply(&MetadataRecord::V1Voters(VotersRecord {
         voters: voter_set(&[NodeId(1), NodeId(2)]),
     }));
-    let bytes = crate::snapshot::SnapshotWriter::serialize(&image, stamp).expect("serialize");
+    let bytes = SnapshotWriter::serialize(&image, stamp).expect("serialize");
 
     engine
         .install_fetched_snapshot((7, 0), &bytes)

@@ -336,7 +336,7 @@ mod tests {
     use super::*;
     use crate::{
         NodeId,
-        chain::{GENESIS_HEAD, chain_hash},
+        chain::{GENESIS_HEAD, chain_hash, to_hex},
         event::AuditEventClass,
         log::{
             AuditLog,
@@ -493,7 +493,7 @@ mod tests {
                 )
         );
         // record 1 prev_hash == chain_hash(genesis, 0, value0)
-        let expect = crate::chain::to_hex(&chain_hash(&GENESIS_HEAD, 0, &recs[0].value));
+        let expect = to_hex(&chain_hash(&GENESIS_HEAD, 0, &recs[0].value));
         check!(header(&recs[1], "prev_hash") == Some(expect));
     }
 

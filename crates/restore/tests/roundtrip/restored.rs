@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::args::{ControllerListener, restore_args};
+use crate::args::{ControllerListener, RestoreOptions, restore_args};
 
 /// Restore an archive into a fresh child directory with the requested cluster id.
 pub(crate) async fn restore_fixture(
@@ -13,7 +13,7 @@ pub(crate) async fn restore_fixture(
     let args = restore_args(
         archive_root,
         &target_parent.join("restored"),
-        crate::args::RestoreOptions {
+        RestoreOptions {
             extra: &["--cluster-id", &cluster_id.to_string()],
             ..Default::default()
         },

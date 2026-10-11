@@ -3,7 +3,10 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::{S3Config, object_store_api::ObjectStoreExt as _};
+use crate::{
+    S3Config,
+    object_store_api::{ObjectStoreExt as _, PutPayload, path::Path},
+};
 
 pub(crate) async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
     let mut request = Vec::new();
@@ -74,14 +77,11 @@ pub(crate) async fn serve_http_pages(
 
 pub(crate) async fn round_trip(
     store: &(impl crate::object_store_api::ObjectStore + ?Sized),
-    path: &crate::object_store_api::path::Path,
+    path: &Path,
     bytes: &[u8],
 ) -> bytes::Bytes {
     store
-        .put(
-            path,
-            crate::object_store_api::PutPayload::from(bytes.to_vec()),
-        )
+        .put(path, PutPayload::from(bytes.to_vec()))
         .await
         .unwrap();
     store.get(path).await.unwrap().bytes().await.unwrap()

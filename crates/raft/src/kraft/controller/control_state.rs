@@ -16,7 +16,7 @@ use super::{KraftControlState, records::decode_control_record};
 use crate::{
     error::{MetadataReplayError, RaftError},
     kraft::types::NodeId,
-    voter_wire::{from_wire, record},
+    voter_wire::{from_wire, record, to_wire},
 };
 
 fn history_value_before<T>(history: &BTreeMap<i64, T>, frontier: i64) -> Option<&T> {
@@ -111,7 +111,7 @@ pub fn voter_set_to_wire(voters: &VoterSet) -> WireVotersRecord {
     let voters = voters
         .iter()
         .map(|voter| {
-            crate::voter_wire::to_wire(
+            to_wire(
                 voter,
                 i32::try_from(voter.id.0).unwrap_or(i32::MAX),
                 i16::try_from(voter.kraft_version.min).unwrap_or(i16::MAX),

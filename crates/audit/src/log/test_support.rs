@@ -16,6 +16,7 @@ use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
 use super::{AuditLog, AuditReceiver, AuditWriter, AuditWriterParams};
 use crate::{
     FileEd25519Signer, NodeId,
+    chain::ChainState,
     event::{AuditEvent, LifecycleKind},
     ocsf::ProductInfo,
     sink::{AuditError, AuditRecord, AuditSink, MemorySink},
@@ -196,7 +197,7 @@ pub fn params(sink: Arc<dyn AuditSink>, spool: Spool, stats: Arc<AuditStats>) ->
         signer: None,
         checkpoint_every_n: 0,
         checkpoint_every: DORMANT,
-        chain: crate::chain::ChainState::new(),
+        chain: ChainState::new(),
         spool: Some(spool),
         stats,
         replay_every: REPLAY_EVERY,

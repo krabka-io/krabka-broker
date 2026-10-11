@@ -5,6 +5,7 @@ use moxy::{ast::ParseError, token::TokenStream};
 use crate::{
     fixtures::{name, named_items, named_root},
     meta::arguments,
+    sendfile_match::platform_cfg,
 };
 
 pub(crate) fn request_frame(input: TokenStream) -> Result<TokenStream, ParseError> {
@@ -177,7 +178,7 @@ pub(crate) fn export_segment_data(input: TokenStream) -> Result<TokenStream, Par
 
 /// Apply the shared file-region platform condition without rebuilding the caller's tokens.
 pub(crate) fn sendfile_platform(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let mut output: proc_macro::TokenStream = crate::sendfile_match::platform_cfg().into();
+    let mut output: proc_macro::TokenStream = platform_cfg().into();
     output.extend(input);
     output
 }

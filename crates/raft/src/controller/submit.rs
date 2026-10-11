@@ -13,8 +13,9 @@ use crate::{
     network::OutboundDialer,
     types::{NodeId, controller_endpoint_addr as endpoint_addr_from_endpoints},
     wire::{
-        API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_SUBMIT_CHANGE, KrabkaSubmitChangeResponse,
-        PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
+        API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_SUBMIT_CHANGE, KrabkaSubmitChangeRequest,
+        KrabkaSubmitChangeResponse, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
+        PRIVATE_UNSUPPORTED_VERSION, private_request_version,
     },
 };
 
@@ -97,7 +98,7 @@ impl ControllerHandle {
         mutations: &[DelegationTokenMutation],
     ) -> Result<SubmitChangeResult, RaftError> {
         let body = encode_delegation_token_mutation_body(mutations)?;
-        let version = crate::wire::private_request_version(
+        let version = private_request_version(
             krabka_metadata::PrivateRpc::DelegationTokenMutation,
             Some(&self.current_image()),
         );
@@ -218,7 +219,7 @@ impl ControllerHandle {
             client_dispatch_queue_capacity: self.client_dispatch_queue_capacity,
             client_frame_max: self.client_frame_max,
         };
-        let version = crate::wire::private_request_version(
+        let version = private_request_version(
             krabka_metadata::PrivateRpc::SubmitChange,
             Some(&self.current_image()),
         );
@@ -345,7 +346,7 @@ fn encode_delegation_token_mutation_body(
 }
 
 fn submit_change_frame(payload: Vec<u8>) -> Result<Vec<u8>, RaftError> {
-    let request = crate::wire::KrabkaSubmitChangeRequest {
+    let request = KrabkaSubmitChangeRequest {
         records: bytes::Bytes::from(payload),
     };
     let mut body = Vec::with_capacity(request.records.len() + 4);
@@ -389,7 +390,7 @@ fn translate_submit_change_response(
         )),
         crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL => Err(RaftError::UncommittedTail),
         PRIVATE_CLUSTER_AUTHORIZATION_FAILED => Err(RaftError::ClusterAuthorizationFailed),
-        crate::wire::PRIVATE_UNSUPPORTED_VERSION => {
+        PRIVATE_UNSUPPORTED_VERSION => {
             Err(RaftError::UnsupportedPrivateVersion { api_key, version })
         }
         _ => Err(RaftError::NotLeader {
@@ -412,7 +413,8 @@ mod tests {
         },
         wire::{
             API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
-            KrabkaSubmitChangeRequest, SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+            KrabkaSubmitChangeRequest, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
+            SUBMIT_CHANGE_UNCOMMITTED_TAIL,
         },
     };
 
@@ -669,7 +671,7 @@ mod tests {
 
         // Cluster auth failure maps directly to ClusterAuthorizationFailed
         let err = translate_submit_change_response(
-            &submit_change_response_bytes(crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED, -1),
+            &submit_change_response_bytes(PRIVATE_CLUSTER_AUTHORIZATION_FAILED, -1),
             NodeId(5),
             API_KEY_SUBMIT_CHANGE,
             0,

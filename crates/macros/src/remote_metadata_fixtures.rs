@@ -3,8 +3,8 @@
 use moxy::{ast::ParseError, token::TokenStream};
 
 use crate::{
-    fixtures::{name as fixture_name, named_arguments},
-    meta::mode,
+    fixtures::{name as fixture_name, named_arguments, named_root},
+    meta::{arguments, mode},
 };
 
 fn started_metadata(
@@ -54,9 +54,8 @@ pub(crate) fn remote_started_segment(input: TokenStream) -> Result<TokenStream, 
 
 /// `started_name, finish_name, metadata_crate, end | next_offset`.
 pub(crate) fn segment(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [started, finish, root, timestamp]: [TokenStream; 4] = crate::meta::arguments(input, 4)?
-        .try_into()
-        .expect("four arguments");
+    let [started, finish, root, timestamp]: [TokenStream; 4] =
+        arguments(input, 4)?.try_into().expect("four arguments");
     let started = fixture_name(started)?;
     let finish = fixture_name(finish)?;
     let timestamp = match mode(timestamp, ["end", "next_offset"])? {
@@ -93,9 +92,7 @@ pub(crate) fn segment(input: TokenStream) -> Result<TokenStream, ParseError> {
 /// Indexed, version-zero WORM metadata with the caller's segment-id namespace.
 pub(crate) fn worm_segment(input: TokenStream) -> Result<TokenStream, ParseError> {
     let [name, root, id_base, topic, partition, span]: [TokenStream; 6] =
-        crate::meta::arguments(input, 6)?
-            .try_into()
-            .expect("six arguments");
+        arguments(input, 6)?.try_into().expect("six arguments");
     let name = fixture_name(name)?;
     let metadata = started_metadata(
         &root,
@@ -121,7 +118,7 @@ pub(crate) fn worm_segment(input: TokenStream) -> Result<TokenStream, ParseError
 
 /// `check_name, metadata_crate`; callers retain the unknown partition identity.
 pub(crate) fn missing(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let (name, root) = crate::fixtures::named_root(input)?;
+    let (name, root) = named_root(input)?;
     Ok(moxy::template! {
         fn {{ name }}(
             manager: &impl {{ root }}::RemoteLogMetadataManager,

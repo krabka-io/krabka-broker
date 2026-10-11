@@ -17,7 +17,7 @@ use crate::{
         transport::PeerApi,
         types::{Epoch, NodeId, ReplicaKey},
     },
-    reconfig::ReconfigOutcome,
+    reconfig::{ReconfigOutcome, VoterChange},
 };
 
 /// An inbound KIP-595 RPC body, the request version its header carried, and a
@@ -174,7 +174,7 @@ pub enum Command {
     /// Handle op: append a KIP-853 control batch and optionally wait for it to
     /// commit under the new voter set.
     Reconfigure {
-        change: crate::reconfig::VoterChange,
+        change: VoterChange,
         reply: oneshot::Sender<Result<ReconfigOutcome, RaftError>>,
     },
     /// Handle op: snapshot the current image to a checkpoint.

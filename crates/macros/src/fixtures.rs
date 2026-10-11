@@ -5,7 +5,7 @@ use moxy::{
     token::{Ident, Span, TokenStream, TokenTree},
 };
 
-use crate::meta::{arguments, mode, required_tokens};
+use crate::meta::{arguments, item_body, mode, required_tokens};
 
 /// Top-level comma splitting that retains the input's diagnostic span.
 pub(crate) struct CommaArguments {
@@ -371,8 +371,7 @@ pub(crate) fn metadata_log_delegate(
     root: TokenStream,
     item: TokenStream,
 ) -> Result<TokenStream, ParseError> {
-    let (mut tokens, body) =
-        crate::meta::item_body(item, "metadata_log_delegate", TokenTree::is_keyword_impl)?;
+    let (mut tokens, body) = item_body(item, "metadata_log_delegate", TokenTree::is_keyword_impl)?;
     let mut root_tokens: Vec<_> = root.into_iter().collect();
     // Optional transport operations require explicit selectors.
     let mut keyed = false;

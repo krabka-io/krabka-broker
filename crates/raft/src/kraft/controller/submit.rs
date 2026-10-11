@@ -902,7 +902,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        kraft::controller::test_support::EngineSetup, test_support::single_replica_partition,
+        kraft::controller::test_support::EngineSetup,
+        test_support::{single_partition_topic, single_replica_partition},
         types::NodeId,
     };
 
@@ -987,9 +988,10 @@ mod tests {
     fn rebase_partition_directories_copies_image_directories() {
         let mut image = MetadataImage::default();
         let topic_id = Uuid::from_u128(42);
-        image.apply(&MetadataRecord::V1Topic(
-            crate::test_support::single_partition_topic("test-topic", topic_id),
-        ));
+        image.apply(&MetadataRecord::V1Topic(single_partition_topic(
+            "test-topic",
+            topic_id,
+        )));
         let dir_id = Uuid::from_u128(99);
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
             directories: vec![dir_id],
@@ -1013,10 +1015,7 @@ mod tests {
     #[test]
     fn created_topic_names_lists_only_names_absent_from_the_image() {
         let topic = |name: &str, id: u128| {
-            MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
-                name,
-                Uuid::from_u128(id),
-            ))
+            MetadataRecord::V1Topic(single_partition_topic(name, Uuid::from_u128(id)))
         };
         let mut image = MetadataImage::default();
         image.apply(&topic("existing", 1));

@@ -139,7 +139,7 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        SampleBatchSetup, SeededSegmentSetup, seeded_segment, test_segment,
+        RecordTimestamp, SampleBatchSetup, SeededSegmentSetup, seeded_segment, test_segment,
     };
 
     fn check_pending_ranges(seg: &Segment, expected: &[(Offset, Offset)]) {
@@ -166,7 +166,7 @@ mod tests {
             dir.path(),
             SeededSegmentSetup {
                 batches: &[SampleBatchSetup {
-                    timestamp: crate::segment::test_support::RecordTimestamp(9_000),
+                    timestamp: RecordTimestamp(9_000),
                     ..Default::default()
                 }],
                 ..Default::default()

@@ -10,7 +10,7 @@ use krabka_log::name;
 use krabka_restore::{EXIT_OK, run_from_args};
 
 use crate::{
-    args::RestoreOptions,
+    args::{RestoreOptions, restore_argv},
     fixture::{Fixture, build_fixture},
 };
 
@@ -24,7 +24,7 @@ async fn cli_restore(extra: &[&str]) -> CliRestore {
     let fixture = build_fixture();
     let target = tempfile::tempdir().expect("target parent");
     let log_dir = target.path().join("restored");
-    let code = run_from_args(crate::args::restore_argv(
+    let code = run_from_args(restore_argv(
         fixture.archive_root.path(),
         &log_dir,
         RestoreOptions {

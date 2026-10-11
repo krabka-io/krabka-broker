@@ -26,7 +26,7 @@ impl TopicBasedRemoteLogMetadataManager {
     /// highest committed offset written, for the "advanced since last"
     /// check.
     #[instrument(skip_all, err)]
-    pub(super) fn write_snapshot(&self) -> Result<i64, crate::error::SnapshotError> {
+    pub(super) fn write_snapshot(&self) -> Result<i64, SnapshotError> {
         // Benign-replay invariant: the pump updates `inner` BEFORE bumping
         // `applied`, so the captured cache may lead the captured committed
         // offset by at most one event (the in-flight one). On resume that

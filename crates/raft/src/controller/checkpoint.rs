@@ -9,6 +9,7 @@ use super::ControllerHandle;
 use crate::{
     error::RaftError,
     kraft::{controller::checkpoint::load_checkpoint_by_id, transport::Inbound},
+    snapshot::SnapshotReader,
 };
 
 /// A contiguous byte window of the latest metadata `.checkpoint`, returned by
@@ -53,7 +54,7 @@ impl ControllerHandle {
             return SnapshotRange::OutOfRange;
         };
         let max = usize::try_from(max_bytes.max(0)).unwrap_or(0);
-        let slice = crate::snapshot::SnapshotReader::byte_range(&bytes, pos, max);
+        let slice = SnapshotReader::byte_range(&bytes, pos, max);
         SnapshotRange::Slice(SnapshotSlice {
             end_offset: id.0,
             epoch: id.1,
@@ -116,7 +117,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::metadata_partition_dir;
+    use crate::{controller::test_support::joining_controller, metadata_partition_dir};
 
     #[test]
     fn load_latest_checkpoint_picks_highest_offset_then_epoch() {
@@ -152,7 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_snapshot_range_rejects_the_end_and_everything_past_it() {
-        let (dir, ctrl) = crate::controller::test_support::joining_controller("join start").await;
+        let (dir, ctrl) = joining_controller("join start").await;
         let checkpoint_dir = metadata_partition_dir(dir.path());
         std::fs::create_dir_all(&checkpoint_dir).unwrap();
         std::fs::write(

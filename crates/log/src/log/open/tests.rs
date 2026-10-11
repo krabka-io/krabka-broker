@@ -526,7 +526,7 @@ fn open_resolves_a_checkpoint_against_what_the_log_holds() {
             Case::BelowDerivedStart => Offset(1),
             Case::PastLogEnd => Offset(9),
         };
-        write(&crate::io::FileIo, dir.path(), checkpointed).unwrap();
+        write(&FileIo, dir.path(), checkpointed).unwrap();
 
         let log = open_log(dir.path());
 

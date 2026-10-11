@@ -1122,7 +1122,8 @@ mod tests {
         numeric::{event_rate, nonnegative_i64_to_u64},
         scenario::{
             Disturbance, FailoverSpec, LatencyPercentiles, ModeTag, Resource, Sample, Throughput,
-            Topology, fixture::scenario,
+            Topology,
+            fixture::{scenario, short_scenario},
         },
     };
 
@@ -1203,7 +1204,7 @@ mod tests {
     impl RunOutput {
         fn default_placeholder() -> Self {
             Self {
-                scenario: crate::scenario::fixture::short_scenario(1),
+                scenario: short_scenario(1),
                 stack: Stack::Krabka,
                 topology: Topology {
                     partitions: 1,

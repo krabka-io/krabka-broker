@@ -7,7 +7,10 @@ use std::time::Duration as StdDuration;
 use krabka_units::prelude::{TimeExt as _, secs};
 
 use super::*;
-use crate::kraft::{Activation, transport::NullPeerSender};
+use crate::{
+    MetadataLogConfig,
+    kraft::{Activation, transport::NullPeerSender},
+};
 
 /// Deadline every test-side channel receive is bounded by.
 pub const TEST_RECV_TIMEOUT: Time = secs(1);
@@ -180,7 +183,7 @@ fn spawn_test_controller(
     customize: impl FnOnce(&mut KraftConfig),
 ) -> (KraftController, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
+    let log = KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("open log");
     let state = QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids));
     let mut config = test_kraft_config(me, uuid::Uuid::nil(), state);
     customize(&mut config);

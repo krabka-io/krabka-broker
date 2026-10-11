@@ -6,7 +6,7 @@
 use super::ControllerHandle;
 use crate::{
     error::RaftError,
-    reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, VoterChange},
+    reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter, VoterChange},
     types::{Node, NodeId},
 };
 
@@ -123,10 +123,7 @@ impl ControllerHandle {
     ///
     /// # Errors
     /// Returns a validation, leadership, timeout, or storage error from Raft.
-    pub async fn update_voter(
-        &self,
-        req: crate::reconfig::UpdateVoter,
-    ) -> Result<ReconfigOutcome, RaftError> {
+    pub async fn update_voter(&self, req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
         self.engine.reconfigure(VoterChange::Update(req)).await
     }
 

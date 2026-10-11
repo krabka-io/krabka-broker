@@ -5,7 +5,7 @@ use moxy::{
     token::{Span, TokenStream, TokenTree},
 };
 
-use crate::meta::mode;
+use crate::meta::{mode, named_body};
 
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let (endpoint_doc, access_doc, secret_doc) = match mode(meta, ["file", "runtime"])? {
@@ -37,7 +37,7 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
         ),
         _ => unreachable!(),
     };
-    let (mut tokens, body) = crate::meta::named_body(item, "s3_fields")?;
+    let (mut tokens, body) = named_body(item, "s3_fields")?;
     let TokenTree::Group(group) = &mut tokens[body] else {
         unreachable!()
     };

@@ -135,7 +135,9 @@ pub fn check_stamps(log: &Log, expected: &[(i64, Option<u64>)]) {
 /// Read every aborted interval from the caller's explicit sidecar filename.
 #[cfg(test)]
 pub fn transaction_entries(dir: &std::path::Path, filename: &str) -> Vec<AbortedTxn> {
-    crate::txn_index::TxnIndex::open(dir.join(filename))
+    use crate::txn_index::TxnIndex;
+
+    TxnIndex::open(dir.join(filename))
         .unwrap()
         .entries()
         .to_vec()

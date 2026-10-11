@@ -27,7 +27,7 @@ use zerocopy::{
 
 use crate::{
     error::LogError,
-    index::{open_index, rewrite_retained_entries},
+    index::{open_index, rewrite_retained_entries, rewrite_sidecar_file},
     io::{IoTarget, LogIo, write_all},
 };
 
@@ -322,7 +322,7 @@ impl StampIndex {
     }
 
     fn rewrite(&self, entries: &[StampEntry]) -> Result<(), LogError> {
-        let file = crate::index::rewrite_sidecar_file(&self.path)?;
+        let file = rewrite_sidecar_file(&self.path)?;
         let mut bytes = Vec::with_capacity(HEADER_BYTES + entries.len() * ENTRY_BYTES);
         bytes.extend_from_slice(&STAMP_INDEX_VERSION.to_be_bytes());
         for &entry in entries {

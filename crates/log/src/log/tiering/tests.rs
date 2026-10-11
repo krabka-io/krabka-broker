@@ -10,8 +10,8 @@ use super::*;
 use crate::{
     config::LogConfig,
     log::test_support::{
-        append_samples, check_stamps, rolled_log, sample_batch, sample_batch_with_epoch,
-        sample_log, stamped_rolling_log, test_log,
+        append_samples, check_contiguous_exports, check_stamps, rolled_log, sample_batch,
+        sample_batch_with_epoch, sample_log, stamped_rolling_log, test_log,
     },
     test_support::{log_file_count, segmented_log},
 };
@@ -123,7 +123,7 @@ fn tierable_segments_last_offset_matches_next_base() {
     assert2::assert!(!exports.is_empty());
     // Each sealed segment's last_offset is exactly one below the next
     // segment's base — contiguous coverage with no gaps.
-    crate::log::test_support::check_contiguous_exports(&exports);
+    check_contiguous_exports(&exports);
 }
 
 #[test]

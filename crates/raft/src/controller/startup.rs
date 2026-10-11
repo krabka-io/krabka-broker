@@ -371,7 +371,7 @@ mod tests {
     use super::*;
     use crate::{
         controller::test_support::{
-            joining_controller, submit_change_with_timeout, wait_for_leader,
+            bootstrap_controller, joining_controller, submit_change_with_timeout, wait_for_leader,
         },
         metadata_partition_dir,
         types::NodeId,
@@ -502,8 +502,7 @@ mod tests {
 
     #[tokio::test]
     async fn bootstrap_on_non_empty_log_errors() {
-        let (dir, ctrl) =
-            crate::controller::test_support::bootstrap_controller("first bootstrap ok").await;
+        let (dir, ctrl) = bootstrap_controller("first bootstrap ok").await;
         // Drive a commit so the log is non-empty on the second boot.
         wait_for_leader(&ctrl).await;
         submit_change_with_timeout(
