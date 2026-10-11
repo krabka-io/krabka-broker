@@ -343,7 +343,7 @@ mod tests {
     use assert2::check;
     use krabka_metadata::{MetadataRecord, PartitionRecord};
 
-    use crate::{broker::Broker, codes::COORDINATOR_LOAD_IN_PROGRESS, coordinator::{test_support::default_coordinator, unified::{ImageMetadataProvider, offsets_log::fake::InMemoryOffsetsLog}}, handlers::{delete_groups::handle, join_group::handle, leave_group::handle, offset_fetch::handle}, metrics::{BrokerMetrics, ShareGroupIdLabel}, test_support::{FakeMetadataSource, peer, request_context, start_broker_no_audit_with}, txn::handlers::txn_offset_commit::handle};
+    use crate::{broker::Broker, codes::{COORDINATOR_LOAD_IN_PROGRESS, NONE}, coordinator::{test_support::default_coordinator, unified::{ImageMetadataProvider, offsets_log::fake::InMemoryOffsetsLog}}, handlers::{delete_groups::handle, join_group::handle, leave_group::handle, list_groups::handle, offset_commit::handle, offset_fetch::handle}, metrics::{BrokerMetrics, ShareGroupIdLabel}, test_support::{FakeMetadataSource, peer, principal, request_context, start_broker_no_audit_with}, txn::handlers::txn_offset_commit::handle};
 
 use super::*;
 
@@ -501,7 +501,7 @@ use super::*;
             },
         };
 
-        let principal = crate::test_support::principal("alice");
+        let principal = principal("alice");
         let peer = peer();
         let ctx = request_context(&principal, &peer, "load-client");
         match rpc {
@@ -564,7 +564,7 @@ use super::*;
                     }],
                     ..Default::default()
                 };
-                crate::handlers::offset_commit::handle(broker, request, 8, &ctx)
+                handle(broker, request, 8, &ctx)
                     .await
                     .unwrap()
                     .topics[0]
@@ -613,7 +613,7 @@ use super::*;
                     .error_code
             }
             GroupRpc::ListGroups => {
-                crate::handlers::list_groups::handle(broker, ListGroupsRequest::default(), 4, &ctx)
+                handle(broker, ListGroupsRequest::default(), 4, &ctx)
                     .await
                     .unwrap()
                     .error_code
@@ -669,7 +669,7 @@ use super::*;
                 GroupRpc::JoinGroup,
                 COORDINATOR_LOAD_IN_PROGRESS,
             ),
-            (GroupRpc::Heartbeat, crate::codes::NONE),
+            (GroupRpc::Heartbeat, NONE),
             (
                 GroupRpc::LeaveGroup,
                 COORDINATOR_LOAD_IN_PROGRESS,

@@ -176,11 +176,8 @@ mod tests {
 
     use super::*;
     use crate::fetch_session::{
-        SessionDecision,
-        test_support::{
-            ForgottenTopicSetup, NAME_FETCH_VERSION, SessionAllocationSetup, SessionKeySetup,
-            SessionRequestSetup, allocate_session, allocated_cache, forgotten_topic, req,
-            session_key, topic,
+        SessionDecision, test_support::{
+            ForgottenTopicSetup, NAME_FETCH_VERSION, RequestSessionId, SessionAllocationSetup, SessionKeySetup, SessionRequestSetup, allocate_session, allocated_cache, forgotten_topic, req, session_key, topic,
         },
     };
 
@@ -315,7 +312,7 @@ mod tests {
             )],
             forgotten,
             ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
+                RequestSessionId(id),
             )
         });
         check_incremental_count(&cache, &r, CachedPartitionCount(3));
@@ -342,7 +339,7 @@ mod tests {
                 ],
             )],
             ..SessionRequestSetup::incremental(
-                crate::fetch_session::test_support::RequestSessionId(id),
+                RequestSessionId(id),
             )
         });
         check_incremental_count(&cache, &r, CachedPartitionCount(5));
@@ -375,7 +372,7 @@ mod tests {
         })];
 
         let r = req(SessionRequestSetup::forgetting(
-            crate::fetch_session::test_support::RequestSessionId(id),
+            RequestSessionId(id),
             forgotten,
         ));
         check_incremental_count(&cache, &r, CachedPartitionCount(2));

@@ -13,11 +13,9 @@ use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
 use super::{FlushConfig, FlushPartition};
-use crate::diskless::{
-    index_log::DisklessIndexLog,
-    wal_index::{WalFlushRecord, WalIndexCache, WalIndexEntry},
-    wal_object::WalObjectBuilder,
-};
+use crate::{diskless::{
+    index_log::DisklessIndexLog, wal_index::{WalFlushRecord, WalIndexCache, WalIndexEntry}, wal_object::{WalObjectBuilder, parse_wal_object},
+}, error::BrokerError, time_util::now_ms};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn flush_once(
@@ -29,7 +27,7 @@ pub(crate) async fn flush_once(
     partitions: &[FlushPartition],
     config: &FlushConfig,
     is_current_leader: impl Fn(&FlushPartition) -> bool,
-) -> Result<Option<WalFlushRecord>, crate::error::BrokerError> {
+) -> Result<Option<WalFlushRecord>, BrokerError> {
     let mut builder = WalObjectBuilder::new();
     for partition in partitions {
         if !is_current_leader(partition) {
@@ -63,7 +61,7 @@ pub(crate) async fn flush_once(
                 partition.high_watermark,
                 ByteSize::from_bytes(u64::try_from(remaining).unwrap_or(u64::MAX)),
             )
-            .map_err(crate::error::BrokerError::from)?
+            .map_err(BrokerError::from)?
         };
         let Some(last_offset) = raw.last_offset else {
             continue;
@@ -91,7 +89,7 @@ pub(crate) async fn flush_once(
         .await
     {
         metrics.diskless_wal_flush_failures_total.inc();
-        return Err(crate::error::BrokerError::Txn(format!(
+        return Err(BrokerError::Txn(format!(
             "diskless wal put: {error}"
         )));
     }
@@ -99,7 +97,7 @@ pub(crate) async fn flush_once(
         .diskless_wal_flush_bytes_total
         .inc_by(u64::try_from(object.len()).unwrap_or(u64::MAX));
 
-    let entries = match batch_index_entries(&object, crate::time_util::now_ms()) {
+    let entries = match batch_index_entries(&object, now_ms()) {
         Ok(entries) => entries,
         Err(error) => {
             metrics.diskless_wal_flush_failures_total.inc();
@@ -187,23 +185,23 @@ pub(crate) async fn flush_once(
 fn batch_index_entries(
     object: &bytes::Bytes,
     flushed_at_ms: i64,
-) -> Result<Vec<WalIndexEntry>, crate::error::BrokerError> {
+) -> Result<Vec<WalIndexEntry>, BrokerError> {
     let mut entries = Vec::new();
-    for run in crate::diskless::wal_object::parse_wal_object(object)
-        .map_err(|error| crate::error::BrokerError::Txn(error.to_string()))?
+    for run in parse_wal_object(object)
+        .map_err(|error| BrokerError::Txn(error.to_string()))?
     {
         let mut byte_start = usize::try_from(run.byte_start).map_err(|_| {
-            crate::error::BrokerError::Txn("diskless WAL byte range overflow".into())
+            BrokerError::Txn("diskless WAL byte range overflow".into())
         })?;
         let run_end = byte_start
             .checked_add(usize::try_from(run.byte_len).unwrap_or(usize::MAX))
             .ok_or_else(|| {
-                crate::error::BrokerError::Txn("diskless WAL byte range overflow".into())
+                BrokerError::Txn("diskless WAL byte range overflow".into())
             })?;
         while byte_start < run_end {
             let mut cursor = &object[byte_start..run_end];
             let batch = RecordBatch::decode(&mut cursor).map_err(|error| {
-                crate::error::BrokerError::Txn(format!("diskless WAL batch: {error}"))
+                BrokerError::Txn(format!("diskless WAL batch: {error}"))
             })?;
             let byte_len = run_end - byte_start - cursor.len();
             entries.push(WalIndexEntry {
@@ -214,11 +212,11 @@ fn batch_index_entries(
                     .base_offset
                     .checked_add(i64::from(batch.last_offset_delta))
                     .ok_or_else(|| {
-                        crate::error::BrokerError::Txn("diskless WAL batch offset overflow".into())
+                        BrokerError::Txn("diskless WAL batch offset overflow".into())
                     })?,
                 byte_start: u64::try_from(byte_start).unwrap_or(u64::MAX),
                 byte_len: u32::try_from(byte_len).map_err(|_| {
-                    crate::error::BrokerError::Txn("diskless WAL batch exceeds 4 GiB".into())
+                    BrokerError::Txn("diskless WAL batch exceeds 4 GiB".into())
                 })?,
                 max_timestamp_ms: if batch.max_timestamp < 0 {
                     flushed_at_ms
@@ -227,7 +225,7 @@ fn batch_index_entries(
                 },
             });
             byte_start = byte_start.checked_add(byte_len).ok_or_else(|| {
-                crate::error::BrokerError::Txn("diskless WAL byte range overflow".into())
+                BrokerError::Txn("diskless WAL byte range overflow".into())
             })?;
         }
     }
@@ -238,13 +236,13 @@ async fn wait_for_committed_projection(
     index_log: &DisklessIndexLog,
     record: &WalFlushRecord,
     timeout: Duration,
-) -> Result<(), crate::error::BrokerError> {
+) -> Result<(), BrokerError> {
     index_log
         .wait_until_applied(record, timeout)
         .await
         .then_some(())
         .ok_or_else(|| {
-            crate::error::BrokerError::Txn("diskless wal index projection timed out".into())
+            BrokerError::Txn("diskless wal index projection timed out".into())
         })
 }
 
@@ -259,9 +257,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::diskless::flusher::test_support::{
-        orders_partition, test_index_log, test_partition,
-    };
+    use crate::diskless::{flusher::test_support::{
+        FlusherPartitionSetup, orders_partition, test_index_log, test_partition,
+    }, wal_object::WalObjectBuilder};
 
     #[test]
     fn flush_index_has_one_range_per_batch() {
@@ -282,7 +280,7 @@ mod tests {
         for batch in &batches {
             batch.encode(&mut run).unwrap();
         }
-        let object = crate::diskless::wal_object::WalObjectBuilder::new()
+        let object = WalObjectBuilder::new()
             .finish_with_run(topic_id, 0, 4, 5, &run);
 
         let entries = batch_index_entries(&object, 4_242).unwrap();
@@ -489,7 +487,7 @@ mod tests {
         let first = orders_partition(dir.path());
         let second = test_partition(
             dir.path(),
-            crate::diskless::flusher::test_support::FlusherPartitionSetup {
+            FlusherPartitionSetup {
                 partition: krabka_ids::PartitionIndex(1),
                 ..Default::default()
             },

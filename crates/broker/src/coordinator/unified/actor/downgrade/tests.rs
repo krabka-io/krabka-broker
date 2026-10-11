@@ -5,17 +5,12 @@ use assert2::{assert, check};
 use krabka_log::Offset;
 
 use crate::{
-    codes,
-    coordinator::unified::{
+    codes, coordinator::unified::{
         actor::{
-            GroupActorMessage, GroupKindTag,
-            test_support::{
-                BidirectionalClassicSetup, bidirectional_coordinator, decode_assignment,
-                log_has_classic_group_metadata_write, make_coordinator_with_topic,
-                make_coordinator_with_topic_policy, rpc, seed_classic_member,
+            GroupActorMessage, GroupKindTag, test_support::{
+                BidirectionalClassicSetup, bidirectional_coordinator, bidirectional_with_members, decode_assignment, join_native_consumer, log_has_classic_group_metadata_write, make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc, seed_classic_member, seeded_bidirectional_coordinator, spawn_and_downgrade,
             },
-        },
-        classic_state::OffsetEntry,
+        }, classic_state::OffsetEntry,
     },
 };
 
@@ -67,13 +62,13 @@ async fn last_consumer_member_leaving_downgrades_to_classic() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn upgrade_then_downgrade_round_trip() {
     let (coord, _log, handle) =
-        crate::coordinator::unified::actor::test_support::seeded_bidirectional_coordinator(
+        seeded_bidirectional_coordinator(
             BidirectionalClassicSetup::default(),
         );
 
     // A native consumer "c1" heartbeats → in-place UPGRADE; the group is now
     // consumer-kind and hosts both m1 (classic facade) and c1.
-    let c1 = crate::coordinator::unified::actor::test_support::join_native_consumer(&handle)
+    let c1 = join_native_consumer(&handle)
         .await
         .member_id;
     let describe = { rpc::describe(&handle).await };
@@ -128,7 +123,7 @@ async fn upgrade_then_downgrade_round_trip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_of_last_native_member_triggers_downgrade() {
     let (_coord, _log, handle, native) =
-        crate::coordinator::unified::actor::test_support::bidirectional_with_members().await;
+        bidirectional_with_members().await;
 
     let response = rpc::classic_leave(&handle, &native).await;
     check!(response.len() == 1);
@@ -148,7 +143,7 @@ async fn classic_leave_of_last_native_member_triggers_downgrade() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn static_member_identity_survives_both_flips() {
     let (_coord, _log, handle) =
-        crate::coordinator::unified::actor::test_support::seeded_bidirectional_coordinator(
+        seeded_bidirectional_coordinator(
             BidirectionalClassicSetup {
                 instance_id: Some("inst-a"),
                 ..Default::default()
@@ -157,7 +152,7 @@ async fn static_member_identity_survives_both_flips() {
 
     // Upgrade via a native consumer heartbeat, then downgrade by having that
     // native member leave.
-    let native = crate::coordinator::unified::actor::test_support::join_native_consumer(&handle)
+    let native = join_native_consumer(&handle)
         .await
         .member_id;
     let leave = rpc::consumer_heartbeat(&handle, &native, -1, None).await;
@@ -219,7 +214,7 @@ async fn policy_disabled_keeps_group_classic() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn committed_offsets_survive_a_flip() {
     let (_coord, _log, handle) =
-        crate::coordinator::unified::actor::test_support::seeded_bidirectional_coordinator(
+        seeded_bidirectional_coordinator(
             BidirectionalClassicSetup::default(),
         );
 
@@ -242,7 +237,7 @@ async fn committed_offsets_survive_a_flip() {
     rx.await.unwrap();
 
     // Upgrade → the offset must still be readable.
-    let native = crate::coordinator::unified::actor::test_support::join_native_consumer(&handle)
+    let native = join_native_consumer(&handle)
         .await
         .member_id;
     let after_upgrade = rpc::fetch_committed(&handle).await;
@@ -277,7 +272,7 @@ async fn downgraded_group_is_deletable_once_empty() {
     let (coord, _log) = bidirectional_coordinator();
 
     let (handle, view) =
-        crate::coordinator::unified::actor::test_support::spawn_and_downgrade(&coord).await;
+        spawn_and_downgrade(&coord).await;
     check!(view.members.iter().any(|m| m.member_id == "m-classic"));
 
     // The spawn-time kind is the stale `Consumer`; delete must not consult

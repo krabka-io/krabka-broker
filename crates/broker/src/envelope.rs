@@ -42,7 +42,7 @@ use krabka_protocol::{
 };
 
 use crate::{
-    api_catalog::UnstableApiVersions, codes, handlers::{ApiKeyCode, ApiVersion, CorrelationId}, network::response_header_v1,
+    api_catalog::UnstableApiVersions, codes, handlers::{ApiKeyCode, ApiVersion, CorrelationId}, network::{request::parse_request, response_header_v1},
 };
 
 /// A failure serving one `Envelope`, and the `EnvelopeResponse.error_code`
@@ -403,7 +403,7 @@ pub(crate) fn unwrap_request<F>(
 where
     F: Fn(ApiKeyCode, ApiVersion) -> bool,
 {
-    let parsed = crate::network::request::parse_request(request_data, flexible_for)
+    let parsed = parse_request(request_data, flexible_for)
         .map_err(|_| EnvelopeError::UnsupportedVersion)?;
     if !is_known_api_key(parsed.api_key, unstable) {
         return Err(EnvelopeError::UnsupportedVersion);

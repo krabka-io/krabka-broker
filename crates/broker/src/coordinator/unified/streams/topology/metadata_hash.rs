@@ -51,10 +51,10 @@ mod tests {
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
 
     use super::*;
-    use crate::coordinator::unified::streams::{
+    use crate::{coordinator::unified::streams::{
         persistence::StoredTopicInfo,
         topology::test_support::{image_with, sub},
-    };
+    }, test_support::broker_registration};
 
     fn topology() -> StreamsGroupTopologyValue {
         let mut s0 = sub("0");
@@ -88,7 +88,7 @@ mod tests {
                 image.apply(&MetadataRecord::V1BrokerRegistration(
                     BrokerRegistrationRecord {
                         rack: rack.map(str::to_owned),
-                        ..crate::test_support::broker_registration(krabka_raft::NodeId(
+                        ..broker_registration(krabka_raft::NodeId(
                             1 + u64::try_from(index).unwrap(),
                         ))
                     },

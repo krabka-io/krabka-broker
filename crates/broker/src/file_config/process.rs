@@ -5,6 +5,8 @@
 //! table is all-or-nothing: a half-written profile would let the broker start
 //! with a site layout no other node agrees on.
 
+use crate::config::StretchProfile;
+
 use super::FileConfigError;
 
 /// `[process]` TOML section — `KRaft` `process.roles`.
@@ -41,8 +43,8 @@ impl FileStretchConfig {
     /// Site names are not checked against each other here. That is
     /// [`crate::config::BrokerConfig::validate`]'s work, which also sees the
     /// node's rack and roles.
-    pub(super) fn into_profile(self) -> Result<crate::config::StretchProfile, FileConfigError> {
-        Ok(crate::config::StretchProfile {
+    pub(super) fn into_profile(self) -> Result<StretchProfile, FileConfigError> {
+        Ok(StretchProfile {
             sites: self.sites.ok_or_else(|| missing_stretch_field("sites"))?,
             witness_site: self
                 .witness_site
@@ -65,7 +67,7 @@ fn missing_stretch_field(name: &str) -> FileConfigError {
 mod tests {
     use assert2::assert;
 
-    use crate::file_config::FileConfigError;
+    use crate::file_config::{FileConfigError, test_support::configured};
 
     #[test]
     fn process_roles_controller_only_from_toml() {
@@ -73,7 +75,7 @@ mod tests {
             [process]
             roles = ["controller"]
         "#;
-        let cfg = crate::file_config::test_support::configured(toml, "parse").expect("apply");
+        let cfg = configured(toml, "parse").expect("apply");
         assert!(cfg.roles == vec![crate::config::NodeRole::Controller]);
     }
     #[test]
@@ -82,7 +84,7 @@ mod tests {
             [process]
             roles = ["broker", "controller"]
         "#;
-        let cfg = crate::file_config::test_support::configured(toml, "parse").expect("apply");
+        let cfg = configured(toml, "parse").expect("apply");
         assert!(
             cfg.roles
                 == vec![
@@ -98,7 +100,7 @@ mod tests {
             r#"["BROKER", "Controller", "WiTnEsS"]"#,
         ] {
             let toml = format!("[process]\nroles = {roles}");
-            let cfg = crate::file_config::test_support::configured(&toml, "parse").expect("apply");
+            let cfg = configured(&toml, "parse").expect("apply");
             assert!(
                 cfg.roles
                     == vec![
@@ -121,7 +123,7 @@ mod tests {
             witness_site = "dc-w"
             preferred_leader_site = "dc-a"
         "#;
-        let cfg = crate::file_config::test_support::configured(toml, "parse").expect("apply");
+        let cfg = configured(toml, "parse").expect("apply");
         assert!(
             cfg.stretch
                 == Some(crate::config::StretchProfile {
@@ -133,7 +135,7 @@ mod tests {
     }
     #[test]
     fn absent_stretch_table_leaves_no_profile() {
-        let cfg = crate::file_config::test_support::configured("", "parse").expect("apply");
+        let cfg = configured("", "parse").expect("apply");
         assert!(cfg.stretch == None);
     }
     #[test]
@@ -164,7 +166,7 @@ mod tests {
                 "stretch.preferred_leader_site",
             ),
         ] {
-            let error = crate::file_config::test_support::configured(toml, "parse")
+            let error = configured(toml, "parse")
                 .expect_err("a half-built stretch profile is rejected");
             assert!(matches!(error, FileConfigError::InvalidConfig(_)));
             assert!(
@@ -179,13 +181,13 @@ mod tests {
             [process]
             roles = ["wizard"]
         "#;
-        let err = crate::file_config::test_support::configured(toml, "parse")
+        let err = configured(toml, "parse")
             .expect_err("unknown role rejected");
         assert!(matches!(err, FileConfigError::InvalidConfig(_)));
     }
     #[test]
     fn process_section_absent_leaves_default_roles() {
-        let cfg = crate::file_config::test_support::configured("", "parse").expect("apply");
+        let cfg = configured("", "parse").expect("apply");
         assert!(
             cfg.roles
                 == vec![

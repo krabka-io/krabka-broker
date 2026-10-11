@@ -11,14 +11,14 @@ use super::{
     },
     *,
 };
-use crate::coordinator::unified::{
-    offsets_log::fake::InMemoryOffsetsLog, streams::config::KEY_NUM_STANDBY_REPLICAS,
-};
+use crate::{api_catalog::UnstableApiVersions, coordinator::unified::{
+    offsets_log::fake::InMemoryOffsetsLog, streams::{config::KEY_NUM_STANDBY_REPLICAS, persistence::{LastAssignmentConfig, PendingStreamsRecords, StreamsGroupMetadataValue}, state::{StreamsGroupState, StreamsMemberState}}, test_support::{MemberEpoch, assert_single_member_limit, heartbeat_write_failures},
+}, test_support::{StreamsJoinSetup, streams_join_request}};
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
 
-fn epoch_five_member() -> crate::coordinator::unified::streams::state::StreamsMemberState {
-    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
+fn epoch_five_member() -> StreamsMemberState {
+    let mut member = StreamsMemberState::joining(
         "m1",
         "client",
         "/127.0.0.1",
@@ -119,7 +119,7 @@ async fn member_limit_rejects_only_new_members() {
         log,
     );
     let handle = coord.get_or_create_streams("g");
-    crate::coordinator::unified::test_support::assert_single_member_limit(
+    assert_single_member_limit(
         &handle,
         member_request,
         heartbeat,
@@ -309,7 +309,7 @@ async fn fenced_epoch_is_rejected() {
 /// up again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
-    for case in crate::coordinator::unified::test_support::heartbeat_write_failures() {
+    for case in heartbeat_write_failures() {
         let fixture = case.coordinator(make_coordinator);
         let handle = fixture.coordinator.get_or_create_streams("g");
 
@@ -359,12 +359,12 @@ async fn leave_removes_member() {
     // target and member tombstones, and the group epoch bumped with the
     // group's metadata as it was, in one batch, and no target.
     let seed = coord.cached_streams_seed("g").expect("the group's records");
-    let expected = crate::coordinator::unified::streams::persistence::PendingStreamsRecords {
+    let expected = PendingStreamsRecords {
         member_metadata: vec![(join.member_id.clone(), None)],
         target_per_member: vec![(join.member_id.clone(), None)],
         current_per_member: vec![(join.member_id.clone(), None)],
         group_metadata: Some(
-            crate::coordinator::unified::streams::persistence::StreamsGroupMetadataValue {
+            StreamsGroupMetadataValue {
                 epoch: join.member_epoch + 1,
                 metadata_hash: seed.metadata_hash,
                 validated_topology_epoch: seed.validated_topology_epoch,
@@ -372,7 +372,7 @@ async fn leave_removes_member() {
                     seed.last_assignment_configs
                         .iter()
                         .map(|(key, value)| {
-                            crate::coordinator::unified::streams::persistence::LastAssignmentConfig {
+                            LastAssignmentConfig {
                                 key: key.clone(),
                                 value: value.clone(),
                             }
@@ -698,7 +698,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
 
         let expected = super::test_support::expected_active_response(
             super::test_support::ActiveResponseSetup {
-                epoch: crate::coordinator::unified::test_support::MemberEpoch(row.epoch),
+                epoch: MemberEpoch(row.epoch),
                 status: row.status,
                 active: row.active.map(|partitions| {
                     partitions
@@ -889,7 +889,7 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
     let expected = |member_id: &str, epoch, active: Option<Vec<i32>>| {
         super::test_support::expected_active_response(super::test_support::ActiveResponseSetup {
             member_id,
-            epoch: crate::coordinator::unified::test_support::MemberEpoch(epoch),
+            epoch: MemberEpoch(epoch),
             status: Some(vec![]),
             active: active.map(|partitions| {
                 partitions
@@ -1268,7 +1268,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
         let expected = super::test_support::expected_active_response(
             super::test_support::ActiveResponseSetup {
                 member_id: row.member,
-                epoch: crate::coordinator::unified::test_support::MemberEpoch(row.epoch),
+                epoch: MemberEpoch(row.epoch),
                 status: Some(
                     row.status
                         .iter()
@@ -1598,9 +1598,9 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
         let mut topology = one_subtopology(SingleSubtopologySetup::default());
         topology.epoch = epoch;
         topology.subtopologies[0].source_topics = vec![source.into()];
-        crate::test_support::streams_join_request(
+        streams_join_request(
             topology,
-            crate::test_support::StreamsJoinSetup {
+            StreamsJoinSetup {
                 member_id,
                 ..Default::default()
             },
@@ -1685,7 +1685,7 @@ async fn a_static_member_follows_kafka_static_membership() {
 
     let config = StreamsGroupConfig {
         max_size: 2,
-        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
+        unstable_api_versions: UnstableApiVersions::Enabled,
         ..undelayed()
     };
     let join = |member_id: &str, instance_id: &str| StreamsGroupHeartbeatRequest {
@@ -1838,10 +1838,10 @@ async fn a_static_member_follows_kafka_static_membership() {
 fn validate_offset_commit_follows_kafka_streams_group() {
     let offset = |api_version| CommitFence::Offset { api_version };
     let txn = CommitFence::Transactional;
-    let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
+    let mut group = StreamsGroupState::new("g");
     let member = epoch_five_member();
     group.members.insert("m1".into(), member);
-    let empty = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
+    let empty = StreamsGroupState::new("g");
 
     // (row, group, member id, member epoch, fence, expected)
     let rows = [
@@ -1969,7 +1969,7 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
             subtopology("1", "other", &[]),
         ],
     };
-    let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
+    let mut group = StreamsGroupState::new("g");
     let mut member = epoch_five_member();
     member.active = maplit::btreemap! {"0".to_string() => vec![0, 1, 3]};
     member.active_pending_revocation = maplit::btreemap! {"0".to_string() => vec![2]};

@@ -17,7 +17,7 @@ use krabka_protocol::{
 use super::{GroupActorHandle, test_support::StaticMetadata};
 use crate::{
     codes, coordinator::unified::{
-        GroupCoordinator, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig, test_support::{check_group_assignment_timing, check_group_session_timeout, fixed_source, group_config_image},
+        GroupCoordinator, actor::test_support::rpc::consumer_request_as_client, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig, test_support::{check_group_assignment_timing, check_group_session_timeout, fixed_source, group_config_image},
     },
 };
 
@@ -53,7 +53,7 @@ async fn heartbeat(
     member_id: &str,
     member_epoch: i32,
 ) -> ConsumerGroupHeartbeatResponse {
-    crate::coordinator::unified::actor::test_support::rpc::consumer_request_as_client(
+    consumer_request_as_client(
         handle,
         ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),

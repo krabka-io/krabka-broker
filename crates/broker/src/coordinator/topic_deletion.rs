@@ -36,7 +36,7 @@ use super::{
     partitioner::local_partition_for_group,
     unified::actor::GroupActorMessage,
 };
-use crate::{metadata_source::MetadataSource, task_util::ask};
+use crate::{metadata_source::{MetadataSource, next_image_until_shutdown}, task_util::ask};
 
 #[cfg(test)]
 mod tests;
@@ -58,7 +58,7 @@ pub(crate) fn spawn(
         // at its first heartbeat.
         coordinator.bump_regex_refresh_version(metadata.current_metadata_offset());
         while let Some(image) =
-            crate::metadata_source::next_image_until_shutdown(&mut images, &shutdown).await
+            next_image_until_shutdown(&mut images, &shutdown).await
         {
             let owned =
                 |group_id: &str| local_partition_for_group(&image, node_id, group_id).is_ok();

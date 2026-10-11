@@ -15,11 +15,9 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use super::{ShareGroupActorHandle, ShareGroupActorMessage};
-use crate::coordinator::unified::{
-    GroupCoordinator, actor::MetadataProvider, config::NextGenConfig,
-    offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-    share::config::ShareGroupConfig,
-};
+use crate::{coordinator::unified::{
+    GroupCoordinator, actor::MetadataProvider, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput, share::config::ShareGroupConfig, test_support::fixed_source,
+}, test_support::PartitionCount};
 
 #[derive(Debug)]
 struct StaticMetadata {
@@ -35,13 +33,13 @@ impl MetadataProvider for StaticMetadata {
 pub(super) struct TopicMetadataSetup<'a> {
     #[default("t")]
     pub name: &'a str,
-    pub partitions: crate::test_support::PartitionCount,
+    pub partitions: PartitionCount,
 }
 
 impl TopicMetadataSetup<'_> {
     pub(super) fn four_partitions() -> Self {
         Self {
-            partitions: crate::test_support::PartitionCount(4),
+            partitions: PartitionCount(4),
             ..Default::default()
         }
     }
@@ -79,7 +77,7 @@ pub(super) fn unavailable_persister_coordinator(
     let (coordinator, log) = make_coordinator(metadata);
     coordinator.set_share_persister(
         crate::coordinator::unified::test_support::make_share_persister(
-            crate::coordinator::unified::test_support::fixed_source(
+            fixed_source(
                 krabka_metadata::MetadataImage::default(),
             ),
         ),

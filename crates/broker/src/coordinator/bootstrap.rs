@@ -11,7 +11,7 @@ use krabka_metadata::PartitionRecord;
 use krabka_units::convert::ByteSizeExt as _;
 
 use crate::{
-    broker::spawn_partition, config::{BrokerConfig, DEFAULT_AUDIT_TOPIC}, coordinator::GroupCoordinator, error::BrokerError, log_dir, metadata_source::MetadataSource, partition_registry::PartitionRegistry, producer_state::ProducerState,
+    broker::spawn_partition, config::{BrokerConfig, DEFAULT_AUDIT_TOPIC}, coordinator::GroupCoordinator, error::BrokerError, log_dir, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, partition_registry::PartitionRegistry, producer_state::ProducerState,
 };
 
 mod apply;
@@ -96,7 +96,7 @@ pub async fn bootstrap(
     controller: &Arc<dyn MetadataSource>,
     partitions: &Arc<PartitionRegistry>,
     coordinator: &Arc<GroupCoordinator>,
-    log_dir_status: &crate::log_dir_status::LogDirRegistry,
+    log_dir_status: &LogDirRegistry,
     producer_state: &Arc<ProducerState>,
 ) -> Result<(), BrokerError> {
     // KIP-113 offline-dir handling: exclude dirs flagged offline by the

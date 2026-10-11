@@ -8,15 +8,12 @@ use krabka_protocol::records::RecordBatch;
 
 use crate::{
     coordinator::unified::{
-        GroupCoordinator, OffsetRecordBatchBuilder,
-        member_records::{MemberRecordFamilies, MemberRecordLists},
-        persistence_next_gen::{
+        GroupCoordinator, OffsetRecordBatchBuilder, member_records::{MemberRecordFamilies, MemberRecordLists}, persistence::{Key, encode_key}, persistence_next_gen::{
             CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
             RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
             encode_key,
         },
-    },
-    error::BrokerError,
+    }, error::BrokerError,
 };
 
 /// The key of the deprecated k4 `ConsumerGroupPartitionMetadata` record.
@@ -229,8 +226,8 @@ impl PendingRecords {
 
         if self.classic_group_metadata_tombstone {
             batch.push(
-                crate::coordinator::unified::persistence::encode_key(
-                    &crate::coordinator::unified::persistence::Key::GroupMetadata {
+                encode_key(
+                    &Key::GroupMetadata {
                         group_id: group(),
                     },
                 )?,
@@ -347,8 +344,8 @@ impl PendingRecords {
         }
         if let Some(v) = &self.classic_group_metadata {
             batch.push(
-                crate::coordinator::unified::persistence::encode_key(
-                    &crate::coordinator::unified::persistence::Key::GroupMetadata {
+                encode_key(
+                    &Key::GroupMetadata {
                         group_id: group(),
                     },
                 )?,
@@ -425,14 +422,10 @@ mod tests {
     use super::*;
     use crate::{
         coordinator::unified::{
-            actor::{
-                persistence::full_pending_records,
-                test_support::{make_coordinator, subscribed_member},
-            },
-            consumer_state::GroupState,
-            persistence_next_gen::MemberAssignmentState,
-        },
-        error::BrokerError,
+            ClientIdentity, GroupSeed, actor::{
+                persistence::full_pending_records, test_support::{ConsumerMemberSetup, make_coordinator, subscribed_member},
+            }, consumer_state::{ClassicMemberFacade, GroupState}, persistence_next_gen::MemberAssignmentState,
+        }, error::BrokerError,
     };
 
     #[test]
@@ -611,8 +604,8 @@ mod tests {
         state.target.epoch = 6;
 
         let mut m = subscribed_member(
-            crate::coordinator::unified::actor::test_support::ConsumerMemberSetup {
-                client: crate::coordinator::unified::ClientIdentity {
+            ConsumerMemberSetup {
+                client: ClientIdentity {
                     id: "client-a",
                     host: "h",
                 },
@@ -625,7 +618,7 @@ mod tests {
         m.assigned_partitions.insert(topic, vec![0, 1]);
         m.assignment_epochs.insert(topic, [(0, 4), (1, 7)].into());
         m.classic = Some(
-            crate::coordinator::unified::consumer_state::ClassicMemberFacade {
+            ClassicMemberFacade {
                 supported_protocols: vec![(
                     "range".to_string(),
                     bytes::Bytes::from_static(b"meta"),
@@ -650,7 +643,7 @@ mod tests {
         pending.apply_to_cache(&coordinator, "g");
         let seed = coordinator.cached_seed("g").expect("cached seed");
 
-        let expected = crate::coordinator::unified::GroupSeed {
+        let expected = GroupSeed {
             has_subscription_metadata_record: false,
             group_epoch: 7,
             metadata_hash: 0,

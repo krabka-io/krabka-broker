@@ -12,12 +12,11 @@ use super::{
     StreamsDescribeView, StreamsGroupActorHandle, StreamsGroupActorMessage, StreamsHeartbeatResult,
 };
 use crate::{
-    coordinator::unified::{
+    codes::NONE, coordinator::unified::{
         GroupCoordinator, actor::MetadataProvider, config::NextGenConfig,
         offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
         share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
-    },
-    task_util::ask,
+    }, task_util::ask,
 };
 
 pub(super) fn undelayed() -> StreamsGroupConfig {
@@ -131,6 +130,6 @@ pub(super) fn expected_active_response(
         active_tasks: active.map(|partitions| {
             response_tasks(partitions.into_iter().map(|index| index.0).collect())
         }),
-        ..super::response::base_resp(crate::codes::NONE, epoch.0, &undelayed())
+        ..super::response::base_resp(NONE, epoch.0, &undelayed())
     }
 }

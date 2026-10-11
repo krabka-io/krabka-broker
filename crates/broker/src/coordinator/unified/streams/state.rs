@@ -40,7 +40,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{codes::{FENCED_MEMBER_EPOCH, UNKNOWN_MEMBER_ID}, coordinator::unified::INITIAL_GROUP_EPOCH};
+use crate::{codes::{FENCED_MEMBER_EPOCH, UNKNOWN_MEMBER_ID}, coordinator::unified::INITIAL_GROUP_EPOCH, metadata_epoch::next_i32};
 
 use self::current_assignment::{TaskOwners, next_member_state};
 
@@ -187,7 +187,7 @@ impl StreamsGroupState {
         if !self.members.contains_key(member_id) {
             return false;
         }
-        let Some(group_epoch) = crate::metadata_epoch::next_i32(self.group_epoch) else {
+        let Some(group_epoch) = next_i32(self.group_epoch) else {
             return false;
         };
         self.members.remove(member_id);

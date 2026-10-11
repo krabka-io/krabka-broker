@@ -7,7 +7,7 @@
 //! keys fill only while the target still holds its default so an explicit CLI
 //! or environment value keeps precedence.
 
-use crate::config::{BrokerConfig, DEFAULT_BROKER_ID};
+use crate::{config::{BrokerConfig, DEFAULT_BROKER_ID}, replica_selector::ReplicaSelectorKind};
 
 use super::{
     FileConfig, FileConfigError,
@@ -104,7 +104,7 @@ impl FileConfig {
             cfg.stretch = Some(stretch.into_profile()?);
         }
         if let Some(sel) = self.replica_selector {
-            cfg.replica_selector = crate::replica_selector::ReplicaSelectorKind::from_config_str(
+            cfg.replica_selector = ReplicaSelectorKind::from_config_str(
                 &sel,
             )
             .map_err(|bad| {

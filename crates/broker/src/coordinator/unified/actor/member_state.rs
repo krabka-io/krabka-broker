@@ -350,7 +350,7 @@ mod tests {
     use crate::coordinator::unified::{
         ClientIdentity, actor::{
             heartbeat::step_heartbeat, regex_resolution::apply_regex_result, test_support::{StaticMetadata, coordinator_with_log, empty_metadata, rpc::consumer_request},
-        }, assignor::{Assignment, GroupSpec, TopicMetadata}, offsets_log::fake::InMemoryOffsetsLog, persistence_next_gen::MemberAssignmentState, reconciler::ReconcileInput, regex_resolver::FixedRegexResolver,
+        }, assignor::{Assignment, GroupSpec, TopicMetadata}, consumer_state::GroupState, offsets_log::fake::InMemoryOffsetsLog, persistence_next_gen::MemberAssignmentState, reconciler::ReconcileInput, regex_resolver::FixedRegexResolver,
     };
 
     /// Kafka's `consumerGroupHeartbeat` for a subscription change: the
@@ -930,7 +930,7 @@ mod tests {
     #[test]
     fn pick_assignor_skips_unregistered_member_preference() {
         let config = NextGenConfig::assigning_at_once();
-        let mut state = crate::coordinator::unified::consumer_state::GroupState::new("g");
+        let mut state = GroupState::new("g");
         let mut m = build_member(
             "m1",
             &ConsumerGroupHeartbeatRequest::default(),

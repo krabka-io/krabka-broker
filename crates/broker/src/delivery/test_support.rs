@@ -23,11 +23,9 @@ use qubit_clock::{ManualMonotonicClock, WallClock};
 use tokio::sync::{Notify, mpsc};
 
 use crate::{
-    delivery::{DeliveryHandles, PartitionDelivery, metrics::DeliveryMetrics},
-    partition::{
+    delivery::{DeliveryHandles, PartitionDelivery, metrics::DeliveryMetrics}, partition::{
         Partition, WriterMessage, empty_marker_materialization, initial_replication_target,
-    },
-    partition_registry::PartitionRegistry,
+    }, partition_registry::PartitionRegistry, replica_state::ReplicaState, test_support::UnixMillis,
 };
 
 /// A fixed clock reading, so a schedule in a test is exact rather than nearly
@@ -81,7 +79,7 @@ pub(crate) fn batch_at(activation_ms: i64) -> RecordBatch {
 pub(crate) struct ScheduleSetup<'a> {
     pub topic: &'a str,
     pub policy: DeliveryPolicy,
-    pub activations: Vec<crate::test_support::UnixMillis>,
+    pub activations: Vec<UnixMillis>,
     pub leader: krabka_ids::NodeId,
 }
 
@@ -170,7 +168,7 @@ pub(crate) fn partition_with_batches(
     // `ListOffsets` answer for a client is bounded by that watermark, and a
     // partition left at the zero `ReplicaState::new` gives would report an
     // empty log to every sentinel that reads record data.
-    let mut replica_state = crate::replica_state::ReplicaState::new();
+    let mut replica_state = ReplicaState::new();
     replica_state.hw = log.log_end_offset();
 
     let (tx, rx) = mpsc::channel::<WriterMessage>(1);

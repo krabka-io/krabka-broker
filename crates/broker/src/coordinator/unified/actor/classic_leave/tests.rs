@@ -8,7 +8,7 @@ use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeart
 use super::*;
 use crate::coordinator::unified::{
     ClientIdentity, actor::{
-        GroupActorHandle, GroupActorMessage, member_state::build_member, test_support::{bidirectional_coordinator, last_classic_metadata, make_coordinator, rpc, seed_completing_classic, seed_stable_classic},
+        GroupActorHandle, GroupActorMessage, member_state::build_member, test_support::{bidirectional_coordinator, bidirectional_with_members, last_classic_metadata, make_coordinator, rpc, seed_completing_classic, seed_stable_classic},
     }, classic_state::GroupState as ClassicGroupState,
 };
 
@@ -87,7 +87,7 @@ async fn classic_delete_append_failure_keeps_group_registered() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_removes_a_hosted_member_from_an_upgraded_group() {
     let (_coord, _log, handle, native) =
-        crate::coordinator::unified::actor::test_support::bidirectional_with_members().await;
+        bidirectional_with_members().await;
 
     let response = rpc::classic_leave(&handle, "m-classic").await;
     check!(response.len() == 1);

@@ -123,12 +123,10 @@ mod tests {
     use super::*;
     use crate::coordinator::unified::{
         actor::{
-            GroupKindTag,
-            test_support::{
-                BidirectionalClassicSetup, bidirectional_coordinator, make_coordinator, rpc,
+            GroupKindTag, test_support::{
+                BidirectionalClassicSetup, bidirectional_coordinator, join_native_consumer, make_coordinator, rpc, seeded_bidirectional_coordinator, spawn_and_downgrade,
             },
-        },
-        classic_state::OffsetEntry,
+        }, classic_state::OffsetEntry,
     };
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -217,7 +215,7 @@ mod tests {
         let (coord, _log) = bidirectional_coordinator();
 
         let (handle, view) =
-            crate::coordinator::unified::actor::test_support::spawn_and_downgrade(&coord).await;
+            spawn_and_downgrade(&coord).await;
         // The handle's spawn-time `kind` is unchanged (and stale) — validation
         // must NOT consult it.
         assert!(
@@ -265,12 +263,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn upgraded_group_fences_stale_native_consumer_commit() {
         let (_coord, _log, handle) =
-            crate::coordinator::unified::actor::test_support::seeded_bidirectional_coordinator(
+            seeded_bidirectional_coordinator(
                 BidirectionalClassicSetup::default(),
             );
         assert!(handle.kind == GroupKindTag::Classic);
         let joined =
-            crate::coordinator::unified::actor::test_support::join_native_consumer(&handle).await;
+            join_native_consumer(&handle).await;
         let native = joined.member_id;
         let current_epoch = joined.epoch.0;
 

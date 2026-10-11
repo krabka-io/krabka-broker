@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 
 use krabka_metadata::{MetadataImage, NodeId, PartitionRecord};
 
-use crate::features::ELR_VERSION;
+use crate::features::{ELR_VERSION, feature_enabled};
 
 const LEGACY_ELR_CONFIG: &str = "krabka.elr";
 
@@ -78,7 +78,7 @@ impl TopicElr {
     /// partitions in a single pass and each lookup here is a config-map hit
     /// plus a parse of the whole value.
     pub(crate) fn of_topic(image: &MetadataImage, topic: &str) -> Self {
-        let mut state = if crate::features::feature_enabled(image, ELR_VERSION, 1)
+        let mut state = if feature_enabled(image, ELR_VERSION, 1)
         {
             image
                 .topic_config(topic)

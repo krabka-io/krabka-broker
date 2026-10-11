@@ -348,8 +348,7 @@ mod tests {
 
     use super::{DeleteTopicOutcome, ResetPartition, delete_offsets, reset_offsets};
     use crate::{
-        codes,
-        coordinator::unified::{
+        codes, coordinator::unified::{
             offsets_log::fake::InMemoryOffsetsLog,
             share::{
                 actor::{
@@ -365,7 +364,7 @@ mod tests {
                 state::{ShareGroupState, ShareMemberState},
             },
             test_support::{fixed_source, make_share_persister},
-        },
+        }, test_support::PartitionCount,
     };
 
     /// `(key, value)` of every record appended to `__consumer_offsets`.
@@ -442,7 +441,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn alter_records_initializing_and_keeps_it_when_the_persister_fails() {
         let (coordinator, log, topic_id) = unavailable_persister_coordinator(TopicMetadataSetup {
-            partitions: crate::test_support::PartitionCount(2),
+            partitions: PartitionCount(2),
             ..Default::default()
         });
         let topic_uuid = uuid::Uuid::from_bytes(topic_id.0);
@@ -482,7 +481,7 @@ mod tests {
     #[tokio::test]
     async fn delete_without_state_answers_no_row() {
         let (metadata, _topic_id) = metadata_with_topic(TopicMetadataSetup {
-            partitions: crate::test_support::PartitionCount(2),
+            partitions: PartitionCount(2),
             ..Default::default()
         });
         let (coordinator, log) = make_coordinator(metadata);

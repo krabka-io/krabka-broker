@@ -12,6 +12,8 @@
 //! quorum -- the same two-tier lookup `ControllerHandle::voter_addr` uses for
 //! the leader it forwards a rejected `submit_change` to.
 
+use crate::host_port::parse_host_port;
+
 /// The listener name a controller advertises for the RPCs its peers address
 /// to it.
 pub(crate) const CONTROLLER_LISTENER_NAME: &str = "CONTROLLER";
@@ -63,7 +65,7 @@ pub(crate) fn leader_endpoint(
             static_voters
                 .iter()
                 .find(|(node_id, _)| *node_id == leader)
-                .and_then(|(_, endpoint)| crate::host_port::parse_host_port(endpoint))
+                .and_then(|(_, endpoint)| parse_host_port(endpoint))
         })
 }
 
@@ -138,7 +140,9 @@ pub(crate) struct ControllerDialer {
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use crate::test_support::{VoterImageSetup, voter_image};
+
+use super::*;
 
     fn endpoints(named: &[(&str, &str, u16)]) -> Vec<krabka_metadata::VoterEndpoint> {
         named
@@ -184,7 +188,7 @@ mod tests {
     }
 
     fn image_with_voter(node: u64, host: &str, port: u16) -> krabka_metadata::MetadataImage {
-        crate::test_support::voter_image(crate::test_support::VoterImageSetup {
+        voter_image(VoterImageSetup {
             node: krabka_ids::NodeId(node),
             endpoints: endpoints(&[("CONTROLLER", host, port)]),
         })

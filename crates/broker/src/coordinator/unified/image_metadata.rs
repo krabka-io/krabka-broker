@@ -65,7 +65,7 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::coordinator::unified::test_support::{fixed_source, real_uuid};
+    use crate::{coordinator::unified::test_support::{fixed_source, real_uuid}, test_support::{InSyncPartitionSetup, broker_registration, in_sync_partition}};
 
     #[test]
     fn image_metadata_provider_snapshot_projects_topics_partitions_and_racks() {
@@ -90,7 +90,7 @@ mod tests {
                     incarnation_id: real_uuid(u8::try_from(node_id).unwrap()),
                     host: format!("broker-{node_id}"),
                     rack,
-                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
+                    ..broker_registration(krabka_raft::NodeId(node_id))
                 },
             ));
         }
@@ -157,13 +157,13 @@ mod tests {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
                     rack: rack.map(str::to_owned),
-                    ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
+                    ..broker_registration(krabka_raft::NodeId(node_id))
                 },
             ));
         }
         for (partition, replicas) in [(0, vec![1, 2, 3]), (1, vec![3])] {
             image.apply(&MetadataRecord::V1Partition(
-                crate::test_support::in_sync_partition(crate::test_support::InSyncPartitionSetup {
+                in_sync_partition(InSyncPartitionSetup {
                     topic: "input",
                     partition: krabka_ids::PartitionIndex(partition),
                     directories: replicas.iter().map(|_| real_uuid(1)).collect(),

@@ -7,8 +7,7 @@ use std::time::Duration;
 use krabka_units::{ByteSize, convert::TimeExt as _};
 
 use crate::config::{
-    DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
-    DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
+    BrokerConfig, DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE, DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
 };
 
 #[derive(Debug, Clone, krabka_macros::FieldDefaults)]
@@ -28,7 +27,7 @@ pub(crate) struct FlushConfig {
 }
 
 impl FlushConfig {
-    pub(crate) fn from_broker(config: &crate::config::BrokerConfig) -> Self {
+    pub(crate) fn from_broker(config: &BrokerConfig) -> Self {
         Self {
             interval: config.diskless_wal_flush_interval.to_std(),
             max_size: config.diskless_wal_flush_max_size,

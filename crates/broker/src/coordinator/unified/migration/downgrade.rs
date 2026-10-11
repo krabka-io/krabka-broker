@@ -12,10 +12,7 @@ use krabka_verified::{
 
 use super::assignment::{consumer_assignment_blob, embedded_protocol_version};
 use crate::coordinator::unified::{
-    actor::{GroupTombstone, PendingRecords, classic_group_metadata_record},
-    classic_state::{ClassicGroup as ClassicState, Member as ClassicMember, select_protocol},
-    consumer_state::GroupState as ConsumerState,
-    reconciler::ReconcileInput,
+    actor::{GroupTombstone, PendingRecords, classic_group_metadata_record}, classic_state::{ClassicGroup as ClassicState, Member as ClassicMember, select_protocol}, consumer_state::{GroupState as ConsumerState, MemberState}, reconciler::ReconcileInput,
 };
 
 /// Converts a consumer group back into a classic group during a KIP-848
@@ -42,7 +39,7 @@ pub(crate) fn convert_consumer_to_classic(
     classic.protocol_type = Some("consumer".into());
     let mut members: Vec<(
         &String,
-        &crate::coordinator::unified::consumer_state::MemberState,
+        &MemberState,
     )> = state
         .members
         .iter()

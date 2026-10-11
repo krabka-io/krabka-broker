@@ -15,6 +15,8 @@ use krabka_remote_storage::diskless::{REPLAY_FENCE_KEY, wal_index_key_version};
 use krabka_remote_storage_topic::{MetadataEventLog, PartitionStart};
 use tokio::sync::{Mutex, watch};
 
+use crate::{error::BrokerError, metrics::BrokerMetrics};
+
 use super::wal_index::{
     WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexCache, WalIndexKey,
 };
@@ -49,9 +51,9 @@ impl DisklessIndexLog {
     #[cfg(test)]
     pub(crate) async fn start(
         log: Arc<dyn MetadataEventLog>,
-    ) -> Result<Self, crate::error::BrokerError> {
+    ) -> Result<Self, BrokerError> {
         let cache = Arc::new(Mutex::new(WalIndexCache::default()));
-        Self::start_with_cache(log, cache, crate::metrics::BrokerMetrics::new()).await
+        Self::start_with_cache(log, cache, BrokerMetrics::new()).await
     }
 
     /// Subscribe the projection to the index topic and replay it from the
@@ -74,8 +76,8 @@ impl DisklessIndexLog {
     pub(crate) async fn start_with_cache(
         log: Arc<dyn MetadataEventLog>,
         cache: Arc<Mutex<WalIndexCache>>,
-        metrics: crate::metrics::BrokerMetrics,
-    ) -> Result<Self, crate::error::BrokerError> {
+        metrics: BrokerMetrics,
+    ) -> Result<Self, BrokerError> {
         let starts = (0..log.partition_count())
             .map(|partition| PartitionStart {
                 partition,
@@ -85,7 +87,7 @@ impl DisklessIndexLog {
         let (mut stream, _assignment) = log.subscribe(starts);
 
         let high_water_marks = log.high_water_marks().await.map_err(|error| {
-            crate::error::BrokerError::Txn(format!("diskless index end offsets: {error}"))
+            BrokerError::Txn(format!("diskless index end offsets: {error}"))
         })?;
         let mut pending = HashMap::new();
         for partition in 0..log.partition_count() {
@@ -101,7 +103,7 @@ impl DisklessIndexLog {
                 )
                 .await
                 .map_err(|error| {
-                    crate::error::BrokerError::Txn(format!("diskless index replay fence: {error}"))
+                    BrokerError::Txn(format!("diskless index replay fence: {error}"))
                 })?;
             pending.insert(partition, offset);
         }
@@ -295,7 +297,7 @@ impl DisklessIndexLog {
     pub(crate) async fn publish_flush(
         &self,
         record: &WalFlushRecord,
-    ) -> Result<i64, crate::error::BrokerError> {
+    ) -> Result<i64, BrokerError> {
         let mut last_offset = -1;
         for entry in &record.entries {
             let key = WalIndexKey::from(entry).to_bytes();
@@ -305,7 +307,7 @@ impl DisklessIndexLog {
                 entries: vec![entry.clone()],
             }
             .to_bytes()
-            .map_err(crate::error::BrokerError::Txn)?;
+            .map_err(BrokerError::Txn)?;
             last_offset = self
                 .log
                 .publish_keyed(
@@ -315,7 +317,7 @@ impl DisklessIndexLog {
                 )
                 .await
                 .map_err(|error| {
-                    crate::error::BrokerError::Txn(format!("diskless index publish: {error}"))
+                    BrokerError::Txn(format!("diskless index publish: {error}"))
                 })?;
         }
         Ok(last_offset)
@@ -338,7 +340,7 @@ impl DisklessIndexLog {
         partition: i32,
         floor: i64,
         timeout: Duration,
-    ) -> Result<(), crate::error::BrokerError> {
+    ) -> Result<(), BrokerError> {
         let key = WalDeleteFloorKey {
             topic_id,
             partition,
@@ -349,7 +351,7 @@ impl DisklessIndexLog {
             floor,
         }
         .to_bytes()
-        .map_err(crate::error::BrokerError::Txn)?;
+        .map_err(BrokerError::Txn)?;
         let key_bytes = key.to_bytes();
         self.log
             .publish_keyed(
@@ -359,7 +361,7 @@ impl DisklessIndexLog {
             )
             .await
             .map_err(|error| {
-                crate::error::BrokerError::Txn(format!("diskless delete floor publish: {error}"))
+                BrokerError::Txn(format!("diskless delete floor publish: {error}"))
             })?;
 
         let mut applied = self.applied.clone();
@@ -377,7 +379,7 @@ impl DisklessIndexLog {
         .unwrap_or(false)
         .then_some(())
         .ok_or_else(|| {
-            crate::error::BrokerError::Txn("diskless delete floor projection timed out".into())
+            BrokerError::Txn("diskless delete floor projection timed out".into())
         })
     }
 
@@ -385,7 +387,7 @@ impl DisklessIndexLog {
         &self,
         bytes: Bytes,
         context: &str,
-    ) -> Result<(), crate::error::BrokerError> {
+    ) -> Result<(), BrokerError> {
         self.log
             .publish_keyed(
                 index_partition(&bytes, self.log.partition_count()),
@@ -394,7 +396,7 @@ impl DisklessIndexLog {
             )
             .await
             .map(|_| ())
-            .map_err(|error| crate::error::BrokerError::Txn(format!("{context}: {error}")))
+            .map_err(|error| BrokerError::Txn(format!("{context}: {error}")))
     }
 
     /// Tombstone one partition's floor, so a deleted topic leaves none behind.
@@ -402,7 +404,7 @@ impl DisklessIndexLog {
         &self,
         topic_id: uuid::Uuid,
         partition: i32,
-    ) -> Result<(), crate::error::BrokerError> {
+    ) -> Result<(), BrokerError> {
         let key = WalDeleteFloorKey {
             topic_id,
             partition,
@@ -417,7 +419,7 @@ impl DisklessIndexLog {
     pub(crate) async fn tombstone_topic(
         &self,
         topic_id: uuid::Uuid,
-    ) -> Result<(), crate::error::BrokerError> {
+    ) -> Result<(), BrokerError> {
         let keys = self.cache.lock().await.keys_for_topic(topic_id);
         self.tombstone_ranges(&keys).await
     }
@@ -432,7 +434,7 @@ impl DisklessIndexLog {
     pub(crate) async fn tombstone_ranges(
         &self,
         keys: &[WalIndexKey],
-    ) -> Result<(), crate::error::BrokerError> {
+    ) -> Result<(), BrokerError> {
         for key in keys {
             self.publish_tombstone(key.to_bytes(), "diskless index tombstone")
                 .await?;
@@ -443,7 +445,7 @@ impl DisklessIndexLog {
 }
 
 fn invalidate_projection(
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
     valid: &AtomicBool,
     progress: &watch::Sender<ReplayProgress>,
 ) {
@@ -477,7 +479,7 @@ mod tests {
         test_support::{PacedReplayLog, RacingAppendLog, ReplayPace},
         *,
     };
-    use crate::diskless::wal_index::WalIndexEntry;
+    use crate::{diskless::{index_log::test_support::RacingAppendSetup, wal_index::{WalFlushRecord, WalIndexEntry}}, test_support::UnixMillis};
 
     #[derive(Clone, Copy)]
     enum PublishOutcome {
@@ -553,7 +555,7 @@ mod tests {
                 topic_id,
                 first_offset: krabka_log::Offset(first),
                 last_offset: krabka_log::Offset(last),
-                max_timestamp: crate::test_support::UnixMillis(0),
+                max_timestamp: UnixMillis(0),
                 ..Default::default()
             }))
             .await
@@ -748,7 +750,7 @@ mod tests {
         let racing_key = WalIndexKey::from(&racing.entries[0]).to_bytes();
         let restarted = DisklessIndexLog::start(RacingAppendLog::new(
             PacedReplayLog::new(event_log, ReplayPace::OneEvery(Duration::from_millis(40))),
-            crate::diskless::index_log::test_support::RacingAppendSetup {
+            RacingAppendSetup {
                 key: racing_key,
                 event: racing.to_bytes().unwrap(),
                 ..Default::default()
@@ -883,7 +885,7 @@ mod tests {
     ) -> (
         DisklessIndexLog,
         Uuid,
-        crate::diskless::wal_index::WalFlushRecord,
+        WalFlushRecord,
     ) {
         let index = DisklessIndexLog::start(transport).await.unwrap();
         let topic_id = Uuid::from_u128(7);

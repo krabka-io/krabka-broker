@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 
-use crate::{metadata_source::MetadataSource, metrics::BrokerMetrics, share_coordinator::persister_client::SharePersister};
+use crate::{coordinator::leadership::ShardTerms, metadata_source::MetadataSource, metrics::BrokerMetrics, share_coordinator::persister_client::SharePersister};
 
 use super::{
     actor::{GroupActorHandle, MetadataProvider},
@@ -107,7 +107,7 @@ pub struct GroupCoordinator {
     /// The `__consumer_offsets` leadership terms the image watcher has taken
     /// up, and which of them are still replaying. See
     /// `coordinator::leadership`.
-    pub(crate) shard_terms: std::sync::Mutex<crate::coordinator::leadership::ShardTerms>,
+    pub(crate) shard_terms: std::sync::Mutex<ShardTerms>,
     /// Kafka's `GroupMetadataManager.lastMetadataImageWithNewTopics`: the
     /// metadata offset of the latest image that can change what a regular
     /// expression of a consumer group resolves to, or `-1` before the image

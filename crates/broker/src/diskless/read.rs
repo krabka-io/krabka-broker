@@ -237,7 +237,7 @@ mod tests {
     use object_store::{ObjectStoreExt, PutPayload, path::Path};
 
     use super::*;
-    use crate::{broker::spawn_partition, config::RlmmKind, diskless::wal_index::WalFlushRecord};
+    use crate::{broker::spawn_partition, config::{RemoteStorageBackend, RlmmKind}, diskless::wal_index::WalFlushRecord};
 
     fn batch(base_offset: i64, value: &'static [u8]) -> RecordBatch {
         RecordBatch {
@@ -454,7 +454,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let object_dir = tempfile::tempdir().unwrap();
         let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+        config.remote_storage_backend = Some(RemoteStorageBackend::Local {
             dir: object_dir.path().to_path_buf(),
         });
         config.remote_log_metadata = RlmmKind::InMemory;

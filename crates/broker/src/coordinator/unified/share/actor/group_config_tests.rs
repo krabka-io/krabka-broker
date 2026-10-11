@@ -17,7 +17,7 @@ use super::{
 };
 // A metadata image that holds each group config in `overrides`: a group id
 // and its `share.*` entries.
-use crate::coordinator::unified::test_support::group_config_image as group_image;
+use crate::coordinator::unified::{share::actor::test_support::InitializedTopicSetup, test_support::{check_group_assignment_timing, group_config_image as group_image}};
 use crate::coordinator::unified::{
     GroupCoordinator,
     share::{actor::test_support::TopicMetadataSetup, config::ShareGroupConfig},
@@ -149,12 +149,12 @@ async fn a_group_assigns_no_sooner_than_its_own_assignment_interval() {
             ("paced", &[("share.assignment.interval.ms", "300")]),
         ],
     );
-    crate::coordinator::unified::test_support::check_group_assignment_timing(
+    check_group_assignment_timing(
         async |id| {
             let handle = coordinator.get_or_create_share(id);
             seed_initialized(
                 &handle,
-                crate::coordinator::unified::share::actor::test_support::InitializedTopicSetup {
+                InitializedTopicSetup {
                     topic_id,
                     partitions: vec![
                         krabka_ids::PartitionIndex(0),

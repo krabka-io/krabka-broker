@@ -26,7 +26,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use krabka_log::Offset;
 use krabka_protocol::primitives::{fixed, string_bytes};
 
-use crate::{coordinator::unified::{classic_state::OffsetEntry, persistence_next_gen::{NextGenKey, parse_key}, share::persistence::{encode_share_key, parse_share_key}, streams::persistence::{StreamsGroupKey, encode_streams_key, parse_streams_key}}, error::BrokerError};
+use crate::{coordinator::unified::{classic_state::OffsetEntry, persistence_next_gen::{NextGenKey, encode_key, parse_key}, share::persistence::{encode_share_key, parse_share_key}, streams::persistence::{StreamsGroupKey, encode_streams_key, parse_streams_key}}, error::BrokerError};
 
 pub(crate) mod flex;
 
@@ -261,7 +261,7 @@ pub fn encode_key(key: &Key) -> Result<Bytes, BrokerError> {
             partition,
         } => OffsetCommitValue::encode_key(group_id, topic, *partition),
         Key::GroupMetadata { group_id } => GroupMetadataValue::encode_key(group_id),
-        Key::NextGen(k) => crate::coordinator::unified::persistence_next_gen::encode_key(k),
+        Key::NextGen(k) => encode_key(k),
         Key::Share(k) => encode_share_key(k),
         Key::Streams(k) => encode_streams_key(k),
     }
