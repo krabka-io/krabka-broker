@@ -131,9 +131,9 @@ async fn handle_low_metadata_version_authorized_request_deduplicates_unsupported
     .await;
 }
 
-async fn denied_invalid_rows(low_metadata_version: bool) {
+async fn denied_invalid_rows(use_low_metadata_version: bool) {
     broker_fixture!((broker_handle, _dir, broker), deny_all);
-    if low_metadata_version {
+    if use_low_metadata_version {
         wait_for_controller_leader(&broker).await;
         low_metadata_version(&broker).await;
     }

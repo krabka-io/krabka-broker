@@ -25,8 +25,8 @@ use crate::{
         KEY_NUM_STANDBY_REPLICAS, KEY_TASK_OFFSET_INTERVAL_MS,
     },
     handlers::alter_configs::test_support::{
-        client_metrics_resource, group_resource, image_with_client_metrics_config,
-        image_with_group_config, image_with_topic_config, topic_resource,
+        image_with_client_metrics_config, image_with_group_config, image_with_topic_config,
+        topic_resource,
     },
     test_support::DenyAll,
     throttle::LEADER_THROTTLED_RATE_KEY,

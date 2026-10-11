@@ -11,7 +11,7 @@ use krabka_units::Time;
 use crate::{
     broker::Broker,
     codes,
-    handlers::{audit_admin_success, audit_resource},
+    handlers::{RequestContext, audit_admin_success, audit_resource},
     metrics::QuotaType,
     quota::throttle_time_ms,
 };
@@ -99,7 +99,7 @@ pub(super) fn created_topic_resources(
 
 pub(super) fn finish_response(
     broker: &Broker,
-    context: &crate::handlers::RequestContext<'_>,
+    context: &RequestContext<'_>,
     results: Vec<CreatableTopicResult>,
     validate_only: bool,
     delay: Time,

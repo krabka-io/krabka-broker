@@ -3,7 +3,7 @@
 //! Both creation handlers open their local replicas through
 //! [`crate::handlers::partition_materialization`] before installing this role.
 
-use crate::producer_state::ProducerState;
+use crate::{partition::Partition, producer_state::ProducerState};
 
 fn is_local_leader(leader: krabka_raft::NodeId, node_id: krabka_raft::NodeId) -> bool {
     leader == node_id
@@ -55,7 +55,7 @@ impl super::InitialLeadership {
     /// promotion of its own that fails.
     pub(crate) async fn install(
         &self,
-        partition: &crate::partition::Partition,
+        partition: &Partition,
         producer_state: &ProducerState,
         topic_id: uuid::Uuid,
         node_id: krabka_raft::NodeId,

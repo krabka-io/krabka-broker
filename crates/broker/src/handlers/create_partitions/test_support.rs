@@ -12,8 +12,8 @@ use krabka_raft::NodeId;
 use crate::{
     broker::BrokerHandle,
     handlers::test_support::{
-        TopicPartitionCount, TopicReplicationFactor, seed_controller_quota,
-        single_replica_partition,
+        TopicPartitionCount, TopicReplicationFactor,
+        seed_controller_quota as seed_controller_quota_fixture, single_replica_partition,
     },
 };
 
@@ -111,7 +111,7 @@ pub async fn seed_topic(handle: &BrokerHandle, setup: SeedTopicSetup<'_>) {
 }
 
 pub async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
-    seed_controller_quota(handle, rate).await;
+    seed_controller_quota_fixture(handle, rate).await;
 }
 
 /// Independent complete wire rows expected by the handler tests.

@@ -26,7 +26,7 @@ use crate::{
             classic_state::OffsetEntry,
             config::NextGenConfig,
             offsets_log::OffsetsLog,
-            persistence::{Key, parse_key},
+            persistence::{Key as NextGenKey, parse_key},
             share::config::ShareGroupConfig,
             streams::config::StreamsGroupConfig,
         },
@@ -117,7 +117,7 @@ pub(crate) fn replay_offset_batch(producer_id: Option<i64>, records: Vec<Record>
 }
 
 /// Read the keys and values actually persisted in the test log, in record order.
-pub(crate) fn parsed_offset_records(batches: &[RecordBatch]) -> Vec<(Key, Option<Bytes>)> {
+pub(crate) fn parsed_offset_records(batches: &[RecordBatch]) -> Vec<(NextGenKey, Option<Bytes>)> {
     batches
         .iter()
         .flat_map(|batch| &batch.records)

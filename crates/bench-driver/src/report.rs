@@ -11,7 +11,7 @@ use krabka_units::{fmt::Human as _, prelude::*};
 
 use crate::{
     aggregate::CellKey,
-    graph::render_html,
+    graph::render_html as render_graph_html,
     ids::{MessageCount, TimeOffsetMs},
     numeric::{mebibytes_f64, millis_f64, to_f64},
     scenario::{Disturbance, LatencyPercentiles, RunOutput, Sample, Stack},
@@ -1094,7 +1094,7 @@ pub fn render_html(input_dir: &Path, strict: bool, title: &str) -> Result<String
         .into_iter()
         .map(|(_, r)| r)
         .collect();
-    Ok(render_html(&outputs, title))
+    Ok(render_graph_html(&outputs, title))
 }
 
 /// Renders the website HTML fragment from every run in `input_dir`. The

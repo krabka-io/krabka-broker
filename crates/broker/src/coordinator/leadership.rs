@@ -352,14 +352,16 @@ mod tests {
             unified::{ImageMetadataProvider, offsets_log::fake::InMemoryOffsetsLog},
         },
         handlers::{
-            delete_groups::handle, join_group::handle, leave_group::handle, list_groups::handle,
-            offset_commit::handle, offset_fetch::handle,
+            delete_groups::handle as delete_groups_handle, join_group::handle as join_group_handle,
+            leave_group::handle as leave_group_handle, list_groups::handle as list_groups_handle,
+            offset_commit::handle as offset_commit_handle,
+            offset_fetch::handle as offset_fetch_handle,
         },
         metrics::{BrokerMetrics, ShareGroupIdLabel},
         test_support::{
             FakeMetadataSource, peer, principal, request_context, start_broker_no_audit_with,
         },
-        txn::handlers::txn_offset_commit::handle,
+        txn::handlers::txn_offset_commit::handle as txn_offset_commit_handle,
     };
 
     #[test]
@@ -529,7 +531,10 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 9, &ctx).await.unwrap().error_code
+                join_group_handle(broker, request, 9, &ctx)
+                    .await
+                    .unwrap()
+                    .error_code
             }
             GroupRpc::Heartbeat => {
                 let request = HeartbeatRequest {
@@ -552,7 +557,10 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 5, &ctx).await.unwrap().error_code
+                leave_group_handle(broker, request, 5, &ctx)
+                    .await
+                    .unwrap()
+                    .error_code
             }
             GroupRpc::OffsetCommit => {
                 let request = OffsetCommitRequest {
@@ -570,7 +578,12 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 8, &ctx).await.unwrap().topics[0].partitions[0].error_code
+                offset_commit_handle(broker, request, 8, &ctx)
+                    .await
+                    .unwrap()
+                    .topics[0]
+                    .partitions[0]
+                    .error_code
             }
             GroupRpc::TxnOffsetCommit => {
                 let request = TxnOffsetCommitRequest {
@@ -591,7 +604,12 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 4, &ctx).await.unwrap().topics[0].partitions[0].error_code
+                txn_offset_commit_handle(broker, request, 4, &ctx)
+                    .await
+                    .unwrap()
+                    .topics[0]
+                    .partitions[0]
+                    .error_code
             }
             GroupRpc::OffsetFetch => {
                 let request = OffsetFetchRequest {
@@ -602,10 +620,14 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                handle(broker, request, 8, &ctx).await.unwrap().groups[0].error_code
+                offset_fetch_handle(broker, request, 8, &ctx)
+                    .await
+                    .unwrap()
+                    .groups[0]
+                    .error_code
             }
             GroupRpc::ListGroups => {
-                handle(broker, ListGroupsRequest::default(), 4, &ctx)
+                list_groups_handle(broker, ListGroupsRequest::default(), 4, &ctx)
                     .await
                     .unwrap()
                     .error_code
@@ -615,7 +637,11 @@ mod tests {
                     groups_names: vec!["g".into()],
                     ..Default::default()
                 };
-                handle(broker, request, 2, &ctx).await.unwrap().results[0].error_code
+                delete_groups_handle(broker, request, 2, &ctx)
+                    .await
+                    .unwrap()
+                    .results[0]
+                    .error_code
             }
         }
     }

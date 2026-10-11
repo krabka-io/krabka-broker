@@ -26,7 +26,7 @@ use crate::{
         bootstrap::OFFSETS_TOPIC,
         partitioner::partition_for_group,
         persistence::{Key, OffsetCommitValue, parse_key},
-        test_support::{commit_request, fetch_offset},
+        test_support::{commit_request as make_commit_request, fetch_offset},
         unified::{
             GroupType,
             actor::{GroupActorMessage, GroupKindTag, test_support::classic_member},
@@ -199,7 +199,7 @@ async fn commit_offset(broker: &Broker, offset: i64, retention_time_ms: i64) {
         generation_id_or_member_epoch: GENERATION,
         member_id: MEMBER.into(),
         retention_time_ms,
-        ..commit_request(GROUP, TOPIC, offset)
+        ..make_commit_request(GROUP, TOPIC, offset)
     };
     let response = commit_request(broker, request).await;
     let code = response.topics[0].partitions[0].error_code;
@@ -667,7 +667,7 @@ async fn an_acknowledged_commit_is_never_reaped_by_a_concurrent_sweep() {
 /// Commit one offset for `group` through the `OffsetCommit` handler as a
 /// simple consumer, and return the per-partition error code.
 async fn simple_commit(broker: &Broker, group: &str, offset: i64) -> i16 {
-    let request = commit_request(group, TOPIC, offset);
+    let request = make_commit_request(group, TOPIC, offset);
     let response = commit_request(broker, request).await;
     response.topics[0].partitions[0].error_code
 }

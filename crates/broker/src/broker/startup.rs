@@ -10,7 +10,7 @@ use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 
 use crate::{
     auto_topic_creation::AutoTopicCreation,
-    barrier::scheduler::run,
+    barrier::scheduler::run as run_barrier_scheduler,
     broker::{
         Broker, BrokerHandle, DisklessRuntime,
         coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators},
@@ -23,8 +23,13 @@ use crate::{
     },
     config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG},
     controller_admin::BrokerControllerAdminRouter,
-    coordinator::{retention::run, topic_deletion::spawn},
-    delivery::{config::DeliveryConfig, metrics::BrokerDeliveryMetrics, scheduler::run},
+    coordinator::{
+        retention::run as run_offset_retention, topic_deletion::spawn as spawn_topic_deletion,
+    },
+    delivery::{
+        config::DeliveryConfig, metrics::BrokerDeliveryMetrics,
+        scheduler::run as run_delivery_scheduler,
+    },
     error::BrokerError,
     health::{HealthState, metadata_progress},
     heartbeat::client::InitialUnfence,
@@ -32,7 +37,7 @@ use crate::{
     metadata_source::{MetadataSource, or_fatal_fault},
     metrics::BrokerMetrics,
     raft_handshake::AuditLogArc,
-    share_coordinator::coordinator::jobs::spawn,
+    share_coordinator::coordinator::jobs::spawn as spawn_share_coordinator_jobs,
     share_partition::backlog_poller::BacklogPoller,
 };
 
@@ -369,7 +374,7 @@ impl Broker {
         // Refresh the metadata of the groups that subscribe to a changed
         // topic, and tombstone the committed offsets of every deleted topic,
         // as Kafka's `GroupCoordinatorService.onMetadataUpdate` does.
-        spawn(
+        spawn_topic_deletion(
             config.node_id,
             Arc::clone(&controller),
             Arc::clone(&group_coordinator),
@@ -379,7 +384,7 @@ impl Broker {
         // Tombstone the share state of every deleted topic, and run the
         // cold-partition snapshot and the prune of `__share_group_state`, as
         // Kafka's `ShareCoordinatorService` does.
-        spawn(
+        spawn_share_coordinator_jobs(
             Arc::clone(&share_coordinator),
             controller.watch_image(),
             runtime.supervisor_shutdown.child_token(),
@@ -388,7 +393,7 @@ impl Broker {
         // KIP-211. Every broker sweeps the groups whose offsets partition it
         // leads, and the tombstones are idempotent, so the sweep needs no
         // config gate of its own.
-        tokio::spawn(run(
+        tokio::spawn(run_offset_retention(
             config.node_id,
             Arc::clone(&controller),
             Arc::clone(&group_coordinator),
@@ -397,7 +402,7 @@ impl Broker {
             runtime.supervisor_shutdown.child_token(),
         ));
 
-        tokio::spawn(run(
+        tokio::spawn(run_barrier_scheduler(
             Arc::clone(&barrier_coordinator),
             Arc::clone(&controller),
             runtime.supervisor_shutdown.child_token(),
@@ -416,7 +421,7 @@ impl Broker {
             .delivery_clock_uncertainty_seconds
             .set(config.log_config.delivery_clock_uncertainty.secs_f64());
 
-        tokio::spawn(run(
+        tokio::spawn(run_delivery_scheduler(
             Arc::clone(&partitions),
             config.node_id,
             DeliveryConfig::default(),

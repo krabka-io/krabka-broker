@@ -189,7 +189,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        broker::rlmm::test_kickoff,
+        broker::rlmm::test_kickoff as kickoff_with_config,
         config::KafkaRlmmConfig,
         diskless::{
             flusher::FlushConfig, index_log::test_support::ReplayPace, wal_index::WalFlushRecord,
@@ -349,7 +349,7 @@ mod tests {
         drop(listener);
 
         let snapshot_dir = tempdir().unwrap();
-        let kickoff = test_kickoff(KafkaRlmmConfig {
+        let kickoff = kickoff_with_config(KafkaRlmmConfig {
             bootstrap,
             num_partitions: 1,
             replication: 1,

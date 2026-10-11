@@ -17,8 +17,6 @@ use krabka_raft::ConnectionLimiter;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(test)]
-use crate::network::client::InterBrokerClient;
 use crate::{
     auto_topic_creation::AutoTopicCreation,
     barrier::coordinator::BarrierCoordinator,
@@ -31,7 +29,7 @@ use crate::{
     heartbeat::controller_state::ControllerLivenessState,
     metadata_source::MetadataSource,
     metrics::BrokerMetrics,
-    network::dispatch::RequestByteBudget,
+    network::{client::InterBrokerClient, dispatch::RequestByteBudget},
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
     producer_state::ProducerState,

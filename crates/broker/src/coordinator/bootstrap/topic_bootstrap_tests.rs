@@ -16,8 +16,8 @@ use super::{
 use crate::{
     auto_topic_creation::creatable_topic, config::BrokerConfig, coordinator::GroupCoordinator,
     log_dir, log_dir_status::LogDirRegistry, metadata_source::MetadataSource,
-    partition_registry::PartitionRegistry, share_coordinator::bootstrap::TOPIC,
-    txn::bootstrap::TOPIC,
+    partition_registry::PartitionRegistry, share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
+    txn::bootstrap::TOPIC as TXN_TOPIC,
 };
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
@@ -151,7 +151,7 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
         .expect("start broker");
     let broker = handle.broker_arc_for_test();
     let request = CreateTopicsRequest {
-        topics: [OFFSETS_TOPIC, TOPIC, TOPIC]
+        topics: [OFFSETS_TOPIC, TXN_TOPIC, SHARE_TOPIC]
             .into_iter()
             .map(|topic| creatable_topic(&broker.config, topic))
             .collect(),
@@ -176,7 +176,7 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
             ],
         ),
         (
-            TOPIC,
+            TXN_TOPIC,
             vec![
                 ("cleanup.policy", "compact"),
                 ("compression.type", "uncompressed"),
@@ -186,7 +186,7 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
             ],
         ),
         (
-            TOPIC,
+            SHARE_TOPIC,
             vec![
                 ("cleanup.policy", "delete"),
                 ("compression.type", "producer"),

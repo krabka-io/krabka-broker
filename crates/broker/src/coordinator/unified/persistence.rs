@@ -29,7 +29,9 @@ use krabka_protocol::primitives::{fixed, string_bytes};
 use crate::{
     coordinator::unified::{
         classic_state::OffsetEntry,
-        persistence_next_gen::{NextGenKey, encode_key, parse_key},
+        persistence_next_gen::{
+            NextGenKey, encode_key as encode_next_gen_key, parse_key as parse_next_gen_key,
+        },
         share::persistence::{encode_share_key, parse_share_key},
         streams::persistence::{StreamsGroupKey, encode_streams_key, parse_streams_key},
     },
@@ -238,7 +240,7 @@ pub fn parse_record_key(mut buf: &[u8]) -> Result<RecordKey, BrokerError> {
             let group_id = get_string(&mut buf)?;
             Key::GroupMetadata { group_id }
         }
-        3..=8 | 16 => Key::NextGen(parse_key(version, buf)?),
+        3..=8 | 16 => Key::NextGen(parse_next_gen_key(version, buf)?),
         10..=15 => Key::Share(parse_share_key(version, buf)?),
         17 | 19..=23 => Key::Streams(parse_streams_key(version, buf)?),
         unknown => return Ok(RecordKey::UnknownType(unknown)),
@@ -263,7 +265,7 @@ pub fn encode_key(key: &Key) -> Result<Bytes, BrokerError> {
             partition,
         } => OffsetCommitValue::encode_key(group_id, topic, *partition),
         Key::GroupMetadata { group_id } => GroupMetadataValue::encode_key(group_id),
-        Key::NextGen(k) => encode_key(k),
+        Key::NextGen(k) => encode_next_gen_key(k),
         Key::Share(k) => encode_share_key(k),
         Key::Streams(k) => encode_streams_key(k),
     }

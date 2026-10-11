@@ -19,11 +19,10 @@ use super::{
     FileInterBrokerCredentials, FileProcessConfig, FileSchemaRegistryConfig,
     gssapi::DEFAULT_KERBEROS_SERVICE_NAME, parse_bootstrap_server, parse_quorum_voter,
 };
-#[cfg(target_family = "wasm")]
-use crate::network::auth::GssapiConfig;
 use crate::{
     authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
     config::{BrokerConfig, InterBrokerCredentials, NodeRole},
+    network::auth::GssapiConfig,
     schema_validation::SchemaValidator,
 };
 

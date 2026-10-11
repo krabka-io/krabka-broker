@@ -11,14 +11,9 @@ use krabka_protocol::{
 };
 
 use crate::coordinator::unified::{
-    ClientIdentity,
-    actor::test_support::{ClassicMemberSetup, ConsumerMemberSetup},
-    classic_state::Member,
-    config::ConsumerGroupMigrationPolicy,
-    consumer_state::MemberState,
-    offsets_log::fake::ClassicMetadataRecord,
-    share::config::ShareGroupConfig,
-    streams::config::StreamsGroupConfig,
+    ClientIdentity, classic_state::Member, config::ConsumerGroupMigrationPolicy,
+    consumer_state::MemberState, offsets_log::fake::ClassicMetadataRecord,
+    share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
     test_support::MemberEpoch,
 };
 

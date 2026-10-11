@@ -18,7 +18,7 @@ use crate::{
             test_support::make_coord_with_log,
         },
     },
-    handlers::{offset_commit::handle, test_support::CreateTopicSetup},
+    handlers::{offset_commit::handle as offset_commit_handle, test_support::CreateTopicSetup},
 };
 
 krabka_macros::delete_topic_request!(delete_request);
@@ -188,7 +188,7 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         let broker = Arc::clone(&broker);
         let ctx = &ctx;
         async move {
-            let committed = handle(&broker, request, COMMIT_VERSION, ctx)
+            let committed = offset_commit_handle(&broker, request, COMMIT_VERSION, ctx)
                 .await
                 .expect("OffsetCommit");
             committed.topics[0].partitions[0].error_code

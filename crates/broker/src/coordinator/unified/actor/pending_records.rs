@@ -14,7 +14,7 @@ use crate::{
         persistence_next_gen::{
             CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
             RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
-            encode_key,
+            encode_key as encode_next_gen_key,
         },
     },
     error::BrokerError,
@@ -22,7 +22,7 @@ use crate::{
 
 /// The key of the deprecated k4 `ConsumerGroupPartitionMetadata` record.
 fn partition_metadata_key(group_id: &str) -> Result<bytes::Bytes, BrokerError> {
-    encode_key(&NextGenKey::PartitionMetadata {
+    encode_next_gen_key(&NextGenKey::PartitionMetadata {
         group_id: group_id.into(),
     })
 }
@@ -102,7 +102,7 @@ pub(crate) fn group_tombstone_keys(
     }
     keys.push(NextGenKey::PartitionMetadata { group_id: group() });
     keys.push(NextGenKey::GroupMetadata { group_id: group() });
-    keys.iter().map(encode_key).collect()
+    keys.iter().map(encode_next_gen_key).collect()
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -225,7 +225,7 @@ impl PendingRecords {
         group_id: &str,
         batch: &mut OffsetRecordBatchBuilder,
     ) -> Result<(), BrokerError> {
-        let key = |key: NextGenKey| encode_key(&key);
+        let key = |key: NextGenKey| encode_next_gen_key(&key);
         let group = || group_id.to_owned();
 
         if self.classic_group_metadata_tombstone {
@@ -742,7 +742,7 @@ mod tests {
     fn records_follow_kafkas_order() {
         use crate::coordinator::unified::persistence::{Key, encode_key as encode_classic_key};
 
-        let ng = |key: NextGenKey| encode_key(&key).unwrap();
+        let ng = |key: NextGenKey| encode_next_gen_key(&key).unwrap();
         let group = || "g".to_string();
         let member = |id: &str| id.to_string();
         let k3 = ng(NextGenKey::GroupMetadata { group_id: group() });

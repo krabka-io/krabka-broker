@@ -22,8 +22,8 @@ use crate::coordinator::unified::{
     persistence::{GroupMetadataValue, sorted_partitions},
     persistence_next_gen::{
         ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
-        GroupMetadataValue, MemberMetadataValue, TargetAssignmentMemberValue,
-        TargetAssignmentMetadataValue,
+        GroupMetadataValue as NextGenGroupMetadataValue, MemberMetadataValue,
+        TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
     },
 };
 
@@ -183,7 +183,7 @@ impl Recorder {
         self.members
             .record_changes(&mut pending, |member_id| member_values(state, member_id));
         if state.group_epoch != self.group_epoch {
-            pending.group_metadata = Some(GroupMetadataValue {
+            pending.group_metadata = Some(NextGenGroupMetadataValue {
                 epoch: state.group_epoch,
                 metadata_hash: state.metadata_hash(),
             });
@@ -221,7 +221,7 @@ pub(crate) fn full_pending_records(state: &GroupState) -> PendingRecords {
     let mut member_ids: Vec<&String> = state.members.keys().collect();
     member_ids.sort_unstable();
     let mut pending = PendingRecords {
-        group_metadata: Some(GroupMetadataValue {
+        group_metadata: Some(NextGenGroupMetadataValue {
             epoch: state.group_epoch,
             metadata_hash: state.metadata_hash(),
         }),
@@ -447,14 +447,14 @@ mod tests {
                     ..PendingRecords::default()
                 },
                 "the group epoch moves" => PendingRecords {
-                    group_metadata: Some(GroupMetadataValue {
+                    group_metadata: Some(NextGenGroupMetadataValue {
                         epoch: 3,
                         metadata_hash: 0,
                     }),
                     ..PendingRecords::default()
                 },
                 _ => PendingRecords {
-                    group_metadata: Some(GroupMetadataValue {
+                    group_metadata: Some(NextGenGroupMetadataValue {
                         epoch: 3,
                         metadata_hash: 0,
                     }),
@@ -546,7 +546,7 @@ mod tests {
 
         check!(
             pending.group_metadata
-                == Some(GroupMetadataValue {
+                == Some(NextGenGroupMetadataValue {
                     epoch: 4,
                     metadata_hash: 0
                 })
@@ -586,7 +586,7 @@ mod tests {
                     group_id: "g".into(),
                 }),
                 Some(
-                    GroupMetadataValue {
+                    NextGenGroupMetadataValue {
                         epoch,
                         metadata_hash: 0,
                     }

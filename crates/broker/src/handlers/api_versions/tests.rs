@@ -22,7 +22,7 @@ use crate::{
     cluster_id::encode,
     codes,
     config::ListenerSpec,
-    test_support::{decode_response, peer, principal, start_broker_with},
+    test_support::{decode_response as decode_wire_response, peer, principal, start_broker_with},
 };
 
 const API_VERSIONS_V3: i16 = 3;
@@ -55,7 +55,7 @@ fn routing_request(cluster_id: Option<String>, node_id: i32) -> Bytes {
 }
 
 fn decode_response(version: i16, bytes: &Bytes) -> ApiVersionsResponse {
-    decode_response(bytes, version)
+    decode_wire_response(bytes, version)
 }
 
 /// The anonymous, plaintext context the dispatch loop builds for a handshake

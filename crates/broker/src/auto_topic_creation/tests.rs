@@ -14,9 +14,9 @@ use super::*;
 use crate::{
     barrier::STATE_TOPIC,
     coordinator::bootstrap::OFFSETS_TOPIC,
-    share_coordinator::bootstrap::TOPIC,
+    share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
     test_support::{PartitionCount, ReplicationFactor, start_broker_no_audit},
-    txn::bootstrap::TOPIC,
+    txn::bootstrap::TOPIC as TXN_TOPIC,
 };
 
 fn configs(pairs: &[(&str, &str)]) -> Vec<CreatableTopicConfig> {
@@ -114,9 +114,9 @@ fn creatable_topic_follows_kafkas_creatable_topic() {
         (
             "__transaction_state",
             &config,
-            TOPIC,
+            TXN_TOPIC,
             topic(AutoTopicSetup {
-                name: TOPIC,
+                name: TXN_TOPIC,
                 num_partitions: PartitionCount(12),
                 replication_factor: ReplicationFactor(2),
                 configs: configs(&[
@@ -131,9 +131,9 @@ fn creatable_topic_follows_kafkas_creatable_topic() {
         (
             "__share_group_state",
             &config,
-            TOPIC,
+            SHARE_TOPIC,
             topic(AutoTopicSetup {
-                name: TOPIC,
+                name: SHARE_TOPIC,
                 num_partitions: PartitionCount(13),
                 replication_factor: ReplicationFactor(4),
                 configs: configs(&[

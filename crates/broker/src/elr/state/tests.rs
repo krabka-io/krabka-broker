@@ -18,16 +18,6 @@ fn orders_partition_image() -> MetadataImage {
     image
 }
 
-fn orders_partition_image() -> MetadataImage {
-    let mut image = MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "orders".into(),
-        partition: 0,
-        ..Default::default()
-    }));
-    image
-}
-
 /// The grammar, one row per shape the controller can publish, plus the
 /// malformed shapes that must degrade to "no ELR" rather than fail a request.
 #[test]

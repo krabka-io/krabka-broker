@@ -55,7 +55,11 @@ use crate::{
     broker::Broker,
     codes,
     config::BrokerConfig,
-    handlers::describe_configs::{effective_topic_configs, static_settings},
+    handlers::{
+        RequestContext,
+        describe_configs::{effective_topic_configs, static_settings},
+        request_names::duplicate_names as find_duplicate_names,
+    },
     metadata_source::MetadataSource,
     wal::quorum::placement::select_voters_from_sorted_racks,
 };
@@ -281,7 +285,7 @@ const THROTTLING_QUOTA_EXCEEDED_MESSAGE: &str = "The throttling quota has been e
 /// The names that more than one request row carries, in the order of their
 /// first row.
 fn duplicate_names(topics: &[CreatableTopic]) -> Vec<String> {
-    crate::handlers::request_names::duplicate_names(topics.iter().map(|topic| topic.name.as_str()))
+    find_duplicate_names(topics.iter().map(|topic| topic.name.as_str()))
 }
 
 /// The partitions a request asks for, as Kafka's
@@ -361,7 +365,7 @@ struct CreatedTopic<'a> {
 
 fn disclose_created_topic(
     broker: &Broker,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     image: &krabka_metadata::MetadataImage,
     version: i16,
     created: &CreatedTopic<'_>,

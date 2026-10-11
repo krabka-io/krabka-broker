@@ -57,7 +57,7 @@ use krabka_protocol::{
 };
 
 use crate::{
-    barrier::{STATE_TOPIC, bootstrap::topic_configs},
+    barrier::{STATE_TOPIC, bootstrap::topic_configs as barrier_topic_configs},
     broker::Broker,
     codes,
     config::BrokerConfig,
@@ -66,10 +66,10 @@ use crate::{
     },
     coordinator::bootstrap::{OFFSETS_TOPIC, offsets_topic_configs},
     internal_topics::is_internal_topic,
-    share_coordinator::bootstrap::{TOPIC, topic_configs},
+    share_coordinator::bootstrap::{TOPIC as SHARE_TOPIC, topic_configs as share_topic_configs},
     time_util::now_ms,
     topic_creator::{ForwardedIdentity, TopicCreator, TopicCreatorError},
-    txn::bootstrap::{TOPIC, topic_configs},
+    txn::bootstrap::{TOPIC as TRANSACTION_TOPIC, topic_configs as transaction_topic_configs},
 };
 
 /// The `timeout_ms` of each `CreateTopics` request. Kafka's
@@ -554,23 +554,23 @@ pub fn creatable_topic(config: &BrokerConfig, name: &str) -> CreatableTopic {
             config.offsets_topic_replication_factor,
             offsets_topic_configs(config),
         ),
-        TOPIC => (
+        TRANSACTION_TOPIC => (
             config.transaction_state_num_partitions,
             config.transaction_state_replication_factor,
-            topic_configs(
+            transaction_topic_configs(
                 config.transaction_state_segment_bytes,
                 config.transaction_state_min_isr,
             ),
         ),
-        TOPIC => (
+        SHARE_TOPIC => (
             config.share_coordinator.state_topic_num_partitions,
             config.share_coordinator.state_topic_replication_factor,
-            topic_configs(&config.share_coordinator),
+            share_topic_configs(&config.share_coordinator),
         ),
         STATE_TOPIC => (
             config.barrier_state_num_partitions,
             config.barrier_state_replication_factor,
-            topic_configs(),
+            barrier_topic_configs(),
         ),
         _ => {
             let supplied = config.static_config_origins.topic_creation;

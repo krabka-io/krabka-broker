@@ -13,20 +13,20 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     blocking::spawn_blocking,
     broker::adapters::ControllerAdapter,
-    cleaner::{CleanerConfig, run},
+    cleaner::{CleanerConfig, run as run_cleaner},
     config::BrokerConfig,
     controller_endpoint::ControllerDialer,
     disk_scanner::DiskScanner,
     heartbeat::controller_state::ControllerLivenessState,
-    isr_maintenance::{Config, run},
-    leader_rebalance::{AutoRebalanceConfig, ControllerLike, run},
-    log_retention::{LogRetentionConfig, run},
+    isr_maintenance::{Config, run as run_isr_maintenance},
+    leader_rebalance::{AutoRebalanceConfig, ControllerLike, run as run_leader_rebalance},
+    log_retention::{LogRetentionConfig, run as run_log_retention},
     metadata_source::MetadataSource,
     metrics::BrokerMetrics,
     network::client::InterBrokerClient,
     partition_registry::PartitionRegistry,
     producer_state::ProducerState,
-    reassignment::run,
+    reassignment::run as run_reassignment,
     time_util::now_ms,
 };
 
@@ -38,7 +38,7 @@ pub(super) fn spawn_storage_security_maintenance(
     metrics: &BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> Option<JoinHandle<()>> {
-    tokio::spawn(run(Config {
+    tokio::spawn(run_isr_maintenance(Config {
         // Kafka sends `AlterPartition` to the active controller on its
         // CONTROLLER listener, as it sends `BrokerHeartbeat`. An isolated
         // controller has no broker listener at all.
@@ -183,7 +183,7 @@ pub(super) fn spawn_cluster_data_maintenance(
             handle: Arc::clone(controller),
             node_id: config.node_id,
         });
-        tokio::spawn(run(
+        tokio::spawn(run_leader_rebalance(
             adapter,
             Arc::clone(liveness),
             AutoRebalanceConfig {
@@ -197,7 +197,7 @@ pub(super) fn spawn_cluster_data_maintenance(
             handle: Arc::clone(controller),
             node_id: config.node_id,
         });
-    tokio::spawn(run(
+    tokio::spawn(run_reassignment(
         reassignment,
         Arc::clone(liveness),
         shutdown.child_token(),
@@ -220,7 +220,7 @@ pub(super) fn spawn_cluster_data_maintenance(
     // log the broker hosts, so a follower replica of a compacted topic
     // compacts its own copy instead of accumulating segments until it is
     // elected.
-    tokio::spawn(run(
+    tokio::spawn(run_cleaner(
         Arc::clone(partitions),
         cleaner,
         shutdown.child_token(),
@@ -235,7 +235,7 @@ pub(super) fn spawn_cluster_data_maintenance(
     // it is elected.
     let mut retention = LogRetentionConfig::system(config.log_retention_check_interval);
     retention.metadata = Some(Arc::clone(controller));
-    tokio::spawn(run(
+    tokio::spawn(run_log_retention(
         Arc::clone(partitions),
         retention,
         shutdown.child_token(),

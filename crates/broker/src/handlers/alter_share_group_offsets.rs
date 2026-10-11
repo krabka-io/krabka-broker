@@ -280,7 +280,7 @@ mod tests {
         primitives::uuid::Uuid,
     };
 
-    use super::handle;
+    use super::handle as alter_share_group_offsets_handle;
     use crate::{
         authorizer::{AuthorizationResult, Authorizer},
         broker::BrokerHandle,
@@ -288,7 +288,7 @@ mod tests {
         coordinator::unified::{GroupType, ShareGroupSeed, share::actor::ShareGroupActorMessage},
         handlers::{
             RequestContext,
-            create_topics::handle,
+            create_topics::handle as create_topics_handle,
             test_support::{CreateTopicSetup, configured_topic_request},
         },
         share_coordinator::{
@@ -385,7 +385,7 @@ mod tests {
         let topic_name = setup.topic;
         let version = create_topics_response::MAX_VERSION;
         let request = configured_topic_request(setup);
-        let response = handle(&broker, request, version, ctx)
+        let response = create_topics_handle(&broker, request, version, ctx)
             .await
             .expect("create topic");
         assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
@@ -461,7 +461,7 @@ mod tests {
         share_refusal_cases!(
             (case, authorizer, share_enabled, [topic_name, partitions], expected) in cases;
             (broker_handle, _dir, broker, ctx, resp);
-            handle(request("g1", topic_name, &partitions), version)
+            alter_share_group_offsets_handle(request("g1", topic_name, &partitions), version)
         );
     }
 
@@ -562,7 +562,7 @@ mod tests {
                 None
             };
 
-            let resp = handle(
+            let resp = alter_share_group_offsets_handle(
                 &broker,
                 request("g-acl", topic_name, &[0]),
                 alter_share_group_offsets_response::MAX_VERSION,
@@ -611,7 +611,7 @@ mod tests {
             context(ctx, "alice")
         );
 
-        let empty_id_resp = handle(
+        let empty_id_resp = alter_share_group_offsets_handle(
             &broker,
             request("", "t", &[0]),
             alter_share_group_offsets_response::MAX_VERSION,
@@ -624,7 +624,7 @@ mod tests {
         let _ = broker.group_coordinator.get_or_create_classic("classic-g");
         broker.group_coordinator.mark_classic("classic-g");
         assert!(broker.group_coordinator.group_type("classic-g") == Some(GroupType::Classic));
-        let wrong_type_resp = handle(
+        let wrong_type_resp = alter_share_group_offsets_handle(
             &broker,
             request("classic-g", "t", &[0]),
             alter_share_group_offsets_response::MAX_VERSION,
@@ -671,7 +671,7 @@ mod tests {
 
         assert!(broker.group_coordinator.group_type("g-new").is_none());
 
-        let response = handle(
+        let response = alter_share_group_offsets_handle(
             &broker,
             request("g-new", "new-topic", &[0]),
             alter_share_group_offsets_response::MAX_VERSION,
@@ -746,7 +746,7 @@ mod tests {
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
         test_ctx!(ctx, "alice");
-        let response = handle(
+        let response = alter_share_group_offsets_handle(
             &broker,
             request("busy", "missing", &[0]),
             alter_share_group_offsets_response::MAX_VERSION,
@@ -817,7 +817,7 @@ mod tests {
 
         let reset_request = request("g-reset", "reset-topic", &[0, 9]);
         for _ in 0..2 {
-            let response = handle(
+            let response = alter_share_group_offsets_handle(
                 &broker,
                 reset_request.clone(),
                 alter_share_group_offsets_response::MAX_VERSION,

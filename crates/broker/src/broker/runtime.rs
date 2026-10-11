@@ -13,7 +13,9 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     break_glass::{
         metrics::record_proposal_states,
-        sweep::{BreakGlassController, PROPOSAL_RETENTION, SWEEP_INTERVAL, run},
+        sweep::{
+            BreakGlassController, PROPOSAL_RETENTION, SWEEP_INTERVAL, run as run_break_glass_sweep,
+        },
     },
     broker::{
         DisklessRuntime,
@@ -30,7 +32,7 @@ use crate::{
     client_metrics::ClientMetrics,
     config::BrokerConfig,
     cordoned_log_dirs::spawn_watcher,
-    delegation_token_cleanup::{DelegationTokenController, run},
+    delegation_token_cleanup::{DelegationTokenController, run as run_delegation_token_cleanup},
     diskless::read::DisklessReadHandle,
     error::BrokerError,
     fetch_session::FetchSessionCache,
@@ -42,13 +44,16 @@ use crate::{
     network::client::InterBrokerClient,
     partition_registry::PartitionRegistry,
     producer_state::ProducerState,
-    quota::{QuotaBuckets, run, run_expiry},
+    quota::{QuotaBuckets, run as run_quota_refresh, run_expiry},
     remote_reader::RemoteReader,
     share_coordinator::coordinator::ShareCoordinator,
     throttle::{ThrottleState, apply_image},
     time_util::now_ms,
-    tls_reload::run,
-    txn::{coordinator::TxnCoordinator, expiration::run, id_expiration::run},
+    tls_reload::run as run_tls_reload,
+    txn::{
+        coordinator::TxnCoordinator, expiration::run as run_txn_expiration,
+        id_expiration::run as run_txn_id_expiration,
+    },
 };
 
 struct RuntimeCaches {
@@ -95,7 +100,7 @@ fn start_runtime_watchers(
     shutdown: &CancellationToken,
 ) -> RuntimeCaches {
     if let (Some(dynamic), Some(tls_config)) = (tls_dynamic.cloned(), config.tls_config.clone()) {
-        tokio::spawn(run(
+        tokio::spawn(run_tls_reload(
             dynamic,
             tls_config,
             config.tls_reload_interval,
@@ -116,7 +121,7 @@ fn start_runtime_watchers(
     // client's byte rate is averaged over, which is also the burst a bucket
     // allows before it throttles (#418).
     let quota_buckets = Arc::new(QuotaBuckets::with_window(config.quota_window));
-    tokio::spawn(run(
+    tokio::spawn(run_quota_refresh(
         controller.watch_image(),
         Arc::clone(&quota_buckets),
         shutdown.child_token(),
@@ -136,7 +141,11 @@ fn start_runtime_watchers(
             handle: Arc::clone(controller),
             node_id: config.node_id,
         });
-        tokio::spawn(run(token_controller, interval, shutdown.child_token()));
+        tokio::spawn(run_delegation_token_cleanup(
+            token_controller,
+            interval,
+            shutdown.child_token(),
+        ));
     }
     // KFC-9. Every broker sweeps, the tombstone is idempotent, and a broker
     // that never sweeps is still safe, so the sweep needs no config gate.
@@ -144,7 +153,7 @@ fn start_runtime_watchers(
         handle: Arc::clone(controller),
         node_id: config.node_id,
     });
-    tokio::spawn(run(
+    tokio::spawn(run_break_glass_sweep(
         break_glass_controller,
         SWEEP_INTERVAL,
         PROPOSAL_RETENTION,
@@ -166,7 +175,7 @@ fn start_runtime_watchers(
         shutdown.child_token(),
     ));
     if config.txn_abort_cleanup_interval > <Time as TimeExt>::ZERO {
-        tokio::spawn(run(
+        tokio::spawn(run_txn_expiration(
             Arc::clone(txn_coordinator),
             Arc::clone(controller),
             config.txn_abort_cleanup_interval,
@@ -174,7 +183,7 @@ fn start_runtime_watchers(
         ));
     }
     if config.txn_id_expiration_cleanup_interval > <Time as TimeExt>::ZERO {
-        tokio::spawn(run(
+        tokio::spawn(run_txn_id_expiration(
             Arc::clone(txn_coordinator),
             Arc::clone(controller),
             config.txn_id_expiration_cleanup_interval,
