@@ -38,6 +38,10 @@ impl RawBatch {
             len: 12 + usize::try_from(header.batch_length.get().max(0)).unwrap_or(0),
         })
     }
+
+    pub(super) fn len(&self) -> usize {
+        self.len
+    }
 }
 
 /// A selected byte range relative to the first read position.
