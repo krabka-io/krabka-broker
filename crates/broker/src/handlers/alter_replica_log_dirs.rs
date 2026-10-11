@@ -151,7 +151,9 @@ mod tests {
         AlterReplicaLogDir, AlterReplicaLogDirTopic,
     };
 
-    use super::*;
+    use crate::{broker::spawn_partition, log_dir::partition_dir};
+
+use super::*;
 
     crate::test_support::codec_helpers!(AlterReplicaLogDirsRequest, AlterReplicaLogDirsResponse);
 
@@ -329,9 +331,9 @@ mod tests {
         let extra_dir = extra.path().to_path_buf();
         broker_fixture!((broker_handle, _dir, broker), extra_log_dir(extra_dir));
         let primary = broker.config.log_dir.clone();
-        let partition_dir = crate::log_dir::partition_dir(&primary, "orders", 0);
+        let partition_dir = partition_dir(&primary, "orders", 0);
         std::fs::create_dir_all(&partition_dir).expect("partition dir");
-        let hosted = crate::broker::spawn_partition(
+        let hosted = spawn_partition(
             "orders".into(),
             krabka_ids::PartitionIndex(0),
             primary.clone(),

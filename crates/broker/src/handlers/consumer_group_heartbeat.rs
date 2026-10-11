@@ -8,13 +8,9 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    codes,
-    coordinator::unified::{
-        actor::{GroupActorMessage, GroupKindTag},
-        regex_resolver::ImageTopicRegexResolver,
-    },
-    handlers::{ErrorResponse as _, group_version_disabled},
-    task_util::ask,
+    codes, coordinator::unified::{
+        actor::{GroupActorMessage, GroupKindTag}, config::NextGenConfig, regex_resolver::ImageTopicRegexResolver,
+    }, handlers::{ErrorResponse as _, group_version_disabled}, task_util::ask,
 };
 
 context_handler! {
@@ -141,7 +137,7 @@ const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
 fn validate_request(
     req: &ConsumerGroupHeartbeatRequest,
     version: i16,
-    config: &crate::coordinator::unified::config::NextGenConfig,
+    config: &NextGenConfig,
 ) -> Result<(), Box<ConsumerGroupHeartbeatResponse>> {
     let invalid = |message: &str| {
         Box::new(ConsumerGroupHeartbeatResponse::error(
@@ -228,14 +224,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        handlers::{
+        authorizer::AllowAllAuthorizer, broker::{Broker, BrokerHandle}, handlers::{
             group_heartbeat_test_support::{
-                acl_authorizer, alice, describe_acl, group_read_acl, image_with_group_version,
-                set_group_version, topic_with_partitions, versioned_group_broker,
-            },
-            group_read_denied,
-        },
-        test_support::{peer, principal, test_ctx},
+                GroupAclSetup, GroupFeatureLevel, GroupTopicSetup, acl_authorizer, alice, check_group_read_denied, describe_acl, grant_group_read, group_read_acl, image_with_group_version, set_group_version, subscribed_names_describe_denied_table, topic_with_partitions, versioned_group_broker,
+            }, group_read_denied,
+        }, task_util::ask, test_support::{KafkaErrorCode, peer, principal, request_context, start_group_broker, test_ctx},
     };
 
     const VERSION: i16 = krabka_protocol::owned::consumer_group_heartbeat_request::MAX_VERSION;
@@ -268,12 +261,12 @@ mod tests {
         assert!(group_version_disabled(&fresh));
 
         let enabled = image_with_group_version(
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(1),
+            GroupFeatureLevel(1),
         );
         assert!(!group_version_disabled(&enabled));
 
         let disabled = image_with_group_version(
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(0),
+            GroupFeatureLevel(0),
         );
         assert!(group_version_disabled(&disabled));
     }
@@ -457,8 +450,8 @@ mod tests {
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
-        crate::handlers::group_heartbeat_test_support::check_group_read_denied(
-            crate::handlers::group_heartbeat_test_support::GroupAclSetup::default(),
+        check_group_read_denied(
+            GroupAclSetup::default(),
         );
 
         let bytes = crate::handlers::encode_response(
@@ -489,8 +482,8 @@ mod tests {
     }
 
     async fn check_denied_group_response(
-        broker: &crate::broker::Broker,
-        expected: crate::test_support::KafkaErrorCode,
+        broker: &Broker,
+        expected: KafkaErrorCode,
     ) {
         test_ctx!(ctx, "ANONYMOUS");
         let resp = handle(broker, request("denied-group"), VERSION, &ctx)
@@ -504,12 +497,12 @@ mod tests {
         let authorizer = acl_authorizer();
         let (broker_handle, _dir, broker) = versioned_group_broker(
             Arc::new(authorizer),
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(1),
+            GroupFeatureLevel(1),
         )
         .await;
         check_denied_group_response(
             &broker,
-            crate::test_support::KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
+            KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
         )
         .await;
 
@@ -525,7 +518,7 @@ mod tests {
     async fn handle_protocol_gate_precedes_group_acl() {
         let authorizer = acl_authorizer();
         let (broker_handle, _dir) =
-            crate::test_support::start_group_broker(Arc::new(authorizer)).await;
+            start_group_broker(Arc::new(authorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         // `start_broker`'s bootstrap seeds every feature at its release
         // default for a modern metadata.version, which finalizes
@@ -533,12 +526,12 @@ mod tests {
         // 0 (unfinalized/disabled) so this test observes the protocol gate.
         set_group_version(
             &broker,
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(0),
+            GroupFeatureLevel(0),
         )
         .await;
         check_denied_group_response(
             &broker,
-            crate::test_support::KafkaErrorCode(codes::UNSUPPORTED_VERSION),
+            KafkaErrorCode(codes::UNSUPPORTED_VERSION),
         )
         .await;
 
@@ -548,8 +541,8 @@ mod tests {
     #[tokio::test]
     async fn handle_persists_request_client_identity() {
         let (broker_handle, _dir, broker) = versioned_group_broker(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(1),
+            Arc::new(AllowAllAuthorizer),
+            GroupFeatureLevel(1),
         )
         .await;
         request_identity!((principal, peer, ctx), principal("ANONYMOUS"), test_context);
@@ -562,7 +555,7 @@ mod tests {
         let actor = broker
             .group_coordinator
             .get_or_create_group("identity-group", GroupKindTag::Consumer);
-        let view = crate::task_util::ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
+        let view = ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
             .expect("consumer group view");
 
@@ -573,7 +566,7 @@ mod tests {
         let member_id = view.members[0].member_id.clone();
         let member_epoch = view.members[0].member_epoch;
         let peer = std::net::SocketAddr::from(([127, 0, 0, 2], 9093));
-        let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client-b");
+        let ctx = request_context(&principal, &peer, "consumer-client-b");
         let req = subscription_request("identity-group", &member_id, member_epoch);
 
         let resp = handle(&broker, req, VERSION, &ctx)
@@ -581,7 +574,7 @@ mod tests {
             .expect("ConsumerGroupHeartbeat identity refresh");
         assert!(resp.error_code == 0);
 
-        let view = crate::task_util::ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
+        let view = ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
             .expect("refreshed consumer group view");
         assert!(view.members[0].client_id == "consumer-client-b");
@@ -598,8 +591,8 @@ mod tests {
     #[tokio::test]
     async fn handle_creates_consumer_group_only_on_join_as_kafka_does() {
         let (broker_handle, _dir, broker) = versioned_group_broker(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(1),
+            Arc::new(AllowAllAuthorizer),
+            GroupFeatureLevel(1),
         )
         .await;
         let coordinator = &broker.group_coordinator;
@@ -689,7 +682,7 @@ mod tests {
 
     #[test]
     fn subscribed_names_describe_denied_table() {
-        crate::handlers::group_heartbeat_test_support::subscribed_names_describe_denied_table();
+        subscribed_names_describe_denied_table();
     }
 
     // ── Explicit-name and regex `Describe` checks (issue #716) ─────────
@@ -704,10 +697,10 @@ mod tests {
         // Deliberately no Describe grant for "topic-a".
         let (broker_handle, _dir, broker) = versioned_group_broker(
             Arc::new(acl_authorizer()),
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(1),
+            GroupFeatureLevel(1),
         )
         .await;
-        crate::handlers::group_heartbeat_test_support::grant_group_read(&broker, "g").await;
+        grant_group_read(&broker, "g").await;
         request_identity!(
             (principal, peer, ctx),
             alice(),
@@ -727,7 +720,7 @@ mod tests {
         let actor = broker
             .group_coordinator
             .get_or_create_group("g", GroupKindTag::Consumer);
-        let view = crate::task_util::ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
+        let view = ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
             .expect("consumer group view");
         assert!(view.members.is_empty(), "{view:?}");
@@ -745,7 +738,7 @@ mod tests {
     async fn handle_regex_subscription_assigns_only_describe_authorized_topics() {
         let (broker_handle, _dir, broker) = versioned_group_broker(
             Arc::new(acl_authorizer()),
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(1),
+            GroupFeatureLevel(1),
         )
         .await;
         let allowed_id = uuid::Uuid::from_u128(1);
@@ -753,7 +746,7 @@ mod tests {
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g"), describe_acl("orders-eu")];
         records.extend(topic_with_partitions(
-            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+            GroupTopicSetup {
                 name: "orders-eu",
                 topic_id: allowed_id,
                 node,
@@ -761,7 +754,7 @@ mod tests {
             },
         ));
         records.extend(topic_with_partitions(
-            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+            GroupTopicSetup {
                 name: "orders-us",
                 topic_id: denied_id,
                 node,
@@ -827,14 +820,14 @@ mod tests {
     /// The response carries the assignment only when it changed, so the set
     /// keeps the last one.
     struct RegexMember {
-        broker: Arc<crate::broker::Broker>,
+        broker: Arc<Broker>,
         member_id: &'static str,
         member_epoch: i32,
         assigned: std::collections::HashSet<uuid::Uuid>,
     }
 
     impl RegexMember {
-        fn new(broker: Arc<crate::broker::Broker>, member_id: &'static str) -> Self {
+        fn new(broker: Arc<Broker>, member_id: &'static str) -> Self {
             Self {
                 broker,
                 member_id,
@@ -899,10 +892,10 @@ mod tests {
     /// and a `Describe` grant for alice) exist, and the broker's handle.
     async fn broker_with_described_topics(
         topics: &[(&str, uuid::Uuid)],
-    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+    ) -> (BrokerHandle, tempfile::TempDir) {
         let (broker_handle, dir, broker) = versioned_group_broker(
             Arc::new(acl_authorizer()),
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(1),
+            GroupFeatureLevel(1),
         )
         .await;
         let node = krabka_raft::NodeId(broker_handle.node_id());
@@ -910,7 +903,7 @@ mod tests {
         for (name, id) in topics {
             records.push(describe_acl(name));
             records.extend(topic_with_partitions(
-                crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+                GroupTopicSetup {
                     name,
                     topic_id: *id,
                     node,
@@ -954,7 +947,7 @@ mod tests {
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![describe_acl("orders-us")];
         records.extend(topic_with_partitions(
-            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
+            GroupTopicSetup {
                 name: "orders-us",
                 topic_id: second,
                 node,

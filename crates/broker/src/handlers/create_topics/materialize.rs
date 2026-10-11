@@ -3,6 +3,8 @@
 //! Both creation handlers open their local replicas through
 //! [`crate::handlers::partition_materialization`] before installing this role.
 
+use crate::producer_state::ProducerState;
+
 fn is_local_leader(leader: krabka_raft::NodeId, node_id: krabka_raft::NodeId) -> bool {
     leader == node_id
 }
@@ -54,7 +56,7 @@ impl super::InitialLeadership {
     pub(crate) async fn install(
         &self,
         partition: &crate::partition::Partition,
-        producer_state: &crate::producer_state::ProducerState,
+        producer_state: &ProducerState,
         topic_id: uuid::Uuid,
         node_id: krabka_raft::NodeId,
         replicas: &[krabka_raft::NodeId],
@@ -92,8 +94,7 @@ mod tests {
     use crate::{
         handlers::{
             create_topics::InitialLeadership, partition_materialization::should_materialize_locally,
-        },
-        partition::Partition,
+        }, partition::{Partition, test_support::test_partition},
     };
 
     /// What an installed leadership left on a partition.
@@ -206,7 +207,7 @@ mod tests {
             ),
         ];
         for (name, leader, diskless, checkpoint_fails, installs, expected) in cases {
-            let (mut partition, _dir) = crate::partition::test_support::test_partition(Arc::new(
+            let (mut partition, _dir) = test_partition(Arc::new(
                 tokio::sync::Notify::new(),
             ));
             partition.diskless = diskless;

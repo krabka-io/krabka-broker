@@ -7,6 +7,8 @@
 use krabka_protocol::owned::create_delegation_token_response::CreateDelegationTokenResponse;
 use krabka_security::KafkaPrincipal;
 
+use crate::codes::NONE;
+
 use super::lifetime::TokenDeadlines;
 
 /// A refusal decided on the broker before Kafka forwards the request.
@@ -76,6 +78,6 @@ pub(super) fn minted_response(
         max_timestamp_ms: deadlines.max_timestamp_ms,
         token_id,
         hmac: bytes::Bytes::from(hmac),
-        ..principals(crate::codes::NONE, owner, requester)
+        ..principals(NONE, owner, requester)
     }
 }

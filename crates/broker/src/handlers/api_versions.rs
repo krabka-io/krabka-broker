@@ -45,7 +45,7 @@ mod tests;
 pub(crate) use krabka_raft::is_valid_client_info;
 
 use self::feature_keys::{finalized_feature_keys, supported_feature_keys};
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{api_catalog::supported_apis, broker::Broker, cluster_id::matches, codes, error::BrokerError, handlers::{RequestContext, decode_request, encode_response}, quota::throttle_time_ms};
 
 /// First `ApiVersions` request version that carries the KIP-511
 /// `client_software_name` and `client_software_version` fields.
@@ -66,7 +66,7 @@ pub(crate) fn unsupported_version_response(
     unstable: crate::api_catalog::UnstableApiVersions,
 ) -> Result<Bytes, BrokerError> {
     let response = krabka_raft::unsupported_version_response(unstable);
-    crate::handlers::encode_response(&response, 0)
+    encode_response(&response, 0)
 }
 
 /// Charges the KIP-124 request quota for the handler time this request has
@@ -79,7 +79,7 @@ pub(crate) fn unsupported_version_response(
 fn charge_request_quota(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    context: &crate::handlers::RequestContext<'_>,
+    context: &RequestContext<'_>,
     handler_start: std::time::Instant,
 ) -> i32 {
     let request_delay = context.charge_request_quota(broker, image, handler_start);
@@ -91,14 +91,14 @@ fn charge_request_quota(
     // window afterwards. Sleeping here would hold the handshake back past the
     // client's request timeout.
     context.record_throttle(delay);
-    crate::quota::throttle_time_ms(delay)
+    throttle_time_ms(delay)
 }
 
 pub(crate) fn handle<'a>(
     broker: &'a Broker,
     version: i16,
     req_bytes: &'a [u8],
-    context: &'a crate::handlers::RequestContext<'a>,
+    context: &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     let handler_start = std::time::Instant::now();
     let listener_kind = broker
@@ -112,7 +112,7 @@ pub(crate) fn handle<'a>(
     let expected_cluster_id = image.cluster_id();
     let expected_node_id = i32::try_from(broker.config.node_id.0).ok();
     Box::pin(async move {
-        let req = crate::handlers::decode_request::<ApiVersionsRequest>(req_bytes, version)?;
+        let req = decode_request::<ApiVersionsRequest>(req_bytes, version)?;
 
         // Kafka's `SaslServerAuthenticator` answers an `ApiVersions` that
         // arrives before authentication finishes. It checks only
@@ -125,7 +125,7 @@ pub(crate) fn handle<'a>(
         } else if version >= ROUTING_IDENTITY_MIN_VERSION
             && !pre_authentication
             && let Some(cluster_id) = &req.cluster_id
-            && (!crate::cluster_id::matches(cluster_id, expected_cluster_id)
+            && (!matches(cluster_id, expected_cluster_id)
                 || Some(req.node_id) != expected_node_id)
         {
             Some(codes::REBOOTSTRAP_REQUIRED)
@@ -149,7 +149,7 @@ pub(crate) fn handle<'a>(
                 throttle_time_ms: throttle_time_ms(),
                 ..Default::default()
             };
-            return crate::handlers::encode_response(&resp, version);
+            return encode_response(&resp, version);
         }
 
         // Accepted handshake. Bump the per-(name, version) counter on
@@ -163,7 +163,7 @@ pub(crate) fn handle<'a>(
             // scoped to the listener this request arrived on and to whether a
             // client-metrics receiver is configured, so a client reads back
             // what it reads back from a Kafka broker.
-            api_keys: crate::api_catalog::supported_apis(
+            api_keys: supported_apis(
                 listener_kind,
                 broker.config.client_metrics_receiver(),
                 broker.config.features.version_gates(),
@@ -185,7 +185,7 @@ pub(crate) fn handle<'a>(
             throttle_time_ms: throttle_time_ms(),
             ..Default::default()
         };
-        crate::handlers::encode_response(&resp, version)
+        encode_response(&resp, version)
     })
 }
 

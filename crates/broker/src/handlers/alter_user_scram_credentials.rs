@@ -53,7 +53,7 @@ use self::{
     response::{apply_submit_error, err_result},
     validation::{CLUSTER_ALTER_DENIED_MESSAGE, SCRAM_UNSUPPORTED_MESSAGE},
 };
-use crate::{broker::Broker, codes};
+use crate::{broker::Broker, codes, features::{METADATA_VERSION, require_feature}, handlers::{RequestContext, audit_resource, cluster_alter_denied}};
 
 context_handler! {
     /// The `typed` dispatch entry point: [`answer`] at any version, which the
@@ -76,7 +76,7 @@ context_handler! {
 async fn answer(
     broker: &Broker,
     req: AlterUserScramCredentialsRequest,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
 ) -> AlterUserScramCredentialsResponse {
     // ── ACL preamble ────────────────────────────────────────
     // Whole-request Cluster Alter gate. On Deny, every per-user row
@@ -85,7 +85,7 @@ async fn answer(
     // is configured.
     let image = broker.controller.current_image();
     let authorized =
-        !crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx);
+        !cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx);
     if !authorized {
         // Kafka's `AlterUserScramCredentialsRequest.getErrorResponse` gives
         // one row per distinct user, sorted by name.
@@ -108,9 +108,9 @@ async fn answer(
     }
 
     // KIP-554/KIP-778: KRaft SCRAM requires metadata.version >= 3.5-IV2.
-    if crate::features::require_feature(
+    if require_feature(
         &image,
-        crate::features::METADATA_VERSION,
+        METADATA_VERSION,
         krabka_metadata::metadata_version::SCRAM_MIN_LEVEL,
     )
     .is_err()
@@ -151,7 +151,7 @@ async fn answer(
         user_results
             .iter()
             .filter(|result| result.error_code == codes::NONE)
-            .map(|result| crate::handlers::audit_resource("User", result.user.clone()))
+            .map(|result| audit_resource("User", result.user.clone()))
             .collect(),
     );
 

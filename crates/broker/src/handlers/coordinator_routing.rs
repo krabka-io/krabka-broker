@@ -5,11 +5,13 @@
 //! partition, and `FindCoordinator` then reports the host and port of the
 //! broker that does.
 
+use crate::{broker::Broker, codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR, UNKNOWN_SERVER_ERROR}, coordinator::GroupCoordinator, features::STREAMS_VERSION, task_util::AskError};
+
 /// Return the Kafka routing error for a group RPC sent to the wrong broker,
 /// `COORDINATOR_LOAD_IN_PROGRESS` while this broker still replays the group's
 /// offsets partition, or `None` when this broker serves the group.
 pub(crate) fn group_coordinator_error(
-    broker: &crate::broker::Broker,
+    broker: &Broker,
     group_id: &str,
 ) -> Option<i16> {
     use crate::coordinator::partitioner::{GroupRoutingError, local_partition_for_group};
@@ -20,8 +22,8 @@ pub(crate) fn group_coordinator_error(
         group_id,
     ) {
         Ok(partition) => group_partition_loading(broker, partition),
-        Err(GroupRoutingError::Unavailable) => Some(crate::codes::COORDINATOR_NOT_AVAILABLE),
-        Err(GroupRoutingError::NotCoordinator) => Some(crate::codes::NOT_COORDINATOR),
+        Err(GroupRoutingError::Unavailable) => Some(COORDINATOR_NOT_AVAILABLE),
+        Err(GroupRoutingError::NotCoordinator) => Some(NOT_COORDINATOR),
     }
 }
 
@@ -30,7 +32,7 @@ pub(crate) fn group_coordinator_error(
 /// current image names, as Kafka's `CoordinatorRuntime` answers for a shard
 /// that is not `ACTIVE`.
 pub(crate) fn group_partition_loading(
-    broker: &crate::broker::Broker,
+    broker: &Broker,
     partition: i32,
 ) -> Option<i16> {
     let epoch = broker
@@ -40,7 +42,7 @@ pub(crate) fn group_partition_loading(
         .map(|record| record.leader_epoch);
     epoch
         .is_none_or(|epoch| broker.group_coordinator.is_loading(partition, epoch))
-        .then_some(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
+        .then_some(COORDINATOR_LOAD_IN_PROGRESS)
 }
 
 /// `true` while any `__consumer_offsets` partition this broker leads is not
@@ -50,7 +52,7 @@ pub(crate) fn group_partition_loading(
 /// `COORDINATOR_LOAD_IN_PROGRESS` for one that is still `LOADING`, so the
 /// whole answer is that error rather than the groups of the shards that are
 /// ready.
-pub(crate) fn any_group_partition_loading(broker: &crate::broker::Broker) -> bool {
+pub(crate) fn any_group_partition_loading(broker: &Broker) -> bool {
     let coordinator = &broker.group_coordinator;
     coordinator.is_any_loading()
         || broker
@@ -69,13 +71,13 @@ const STREAMS_VERSION_MIN_LEVEL: i16 = 1;
 /// config kill-switch allows it and `image` finalizes `streams.version >= 1`
 /// (early access, default-disabled).
 pub(crate) fn streams_protocol_enabled(
-    broker: &crate::broker::Broker,
+    broker: &Broker,
     image: &krabka_metadata::MetadataImage,
 ) -> bool {
     broker.config.streams_group.enable
         && crate::features::feature_enabled(
             image,
-            crate::features::STREAMS_VERSION,
+            STREAMS_VERSION,
             STREAMS_VERSION_MIN_LEVEL,
         )
 }
@@ -99,7 +101,7 @@ pub(crate) fn group_version_disabled(image: &krabka_metadata::MetadataImage) -> 
 /// not found. A classic or consumer group lives in the `groups` registry and a
 /// streams group keeps its offset home there too.
 pub(crate) fn share_group_not_found_message(
-    coordinator: &crate::coordinator::GroupCoordinator,
+    coordinator: &GroupCoordinator,
     group_id: &str,
 ) -> String {
     let other_type = coordinator.group_type(group_id).is_some()
@@ -112,9 +114,9 @@ pub(crate) fn share_group_not_found_message(
     }
 }
 
-pub(crate) fn group_actor_error_code(error: crate::task_util::AskError) -> i16 {
+pub(crate) fn group_actor_error_code(error: AskError) -> i16 {
     match error {
-        crate::task_util::AskError::Closed => crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
-        crate::task_util::AskError::Dropped => crate::codes::UNKNOWN_SERVER_ERROR,
+        AskError::Closed => COORDINATOR_LOAD_IN_PROGRESS,
+        AskError::Dropped => UNKNOWN_SERVER_ERROR,
     }
 }

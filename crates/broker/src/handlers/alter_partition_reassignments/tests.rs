@@ -16,13 +16,10 @@ use uuid::Uuid;
 
 use super::*;
 use crate::{
-    broker::Broker,
-    codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
-    handlers::alter_partition_reassignments::test_support::{
+    broker::Broker, codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION}, config_keys::MIN_INSYNC_REPLICAS, elr::state::test_records, handlers::{alter_partition_reassignments::test_support::{
         ReassignmentRequestSetup, ReassignmentTarget, ReplicationFactorPolicy, request,
         test_context,
-    },
-    test_support::{DenyAll, FreezeSetup, start_broker_with_authorizer as start_broker, test_ctx},
+    }, test_support::{ReplicatedPartitionSetup, replicated_partition}}, test_support::{DenyAll, FreezeSetup, broker_registration, finalize_elr_version_on, start_broker_with_authorizer as start_broker, test_ctx},
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -38,8 +35,8 @@ fn reassignable_seed_record(setup: ReassignableSeedSetup<'_>) -> PartitionRecord
     let mut record = PartitionRecord {
         leader_epoch: LeaderEpoch(3),
         partition_epoch: 11,
-        ..crate::handlers::test_support::replicated_partition(
-            crate::handlers::test_support::ReplicatedPartitionSetup {
+        ..replicated_partition(
+            ReplicatedPartitionSetup {
                 partition: krabka_ids::PartitionIndex(7),
                 replicas: setup.replicas,
                 ..Default::default()
@@ -91,7 +88,7 @@ async fn seed_cancellable_partition(broker: &Broker) {
                 broker_epoch: -1,
                 host: "localhost".into(),
                 port: 9092 + u16::try_from(node).expect("node id fits u16"),
-                ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
+                ..broker_registration(krabka_raft::NodeId(node))
             })
         })
         .collect();
@@ -112,14 +109,14 @@ async fn seed_cancellable_partition(broker: &Broker) {
         krabka_metadata::TopicConfigRecord {
             topic: "orders".into(),
             overrides: [(
-                crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                MIN_INSYNC_REPLICAS.to_string(),
                 "3".to_string(),
             )]
             .into_iter()
             .collect(),
         },
     ));
-    records.extend(crate::elr::state::test_records("orders", "7:2,3:"));
+    records.extend(test_records("orders", "7:2,3:"));
     broker
         .controller
         .submit_change(records)
@@ -137,7 +134,7 @@ async fn seed_cancellable_partition(broker: &Broker) {
 async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     let version = 1;
     broker_fixture!((broker_handle, _dir, broker), allow_all, controller_leader);
-    crate::test_support::finalize_elr_version_on(&broker).await;
+    finalize_elr_version_on(&broker).await;
     seed_cancellable_partition(&broker).await;
     test_ctx!(ctx, "admin");
 

@@ -39,14 +39,9 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::Authorizer,
-    codes,
-    coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage},
-    handlers::{
-        authorized_operations::{DescribedGroupRow, fill_group_authorized_operations},
-        group_version_disabled,
-    },
-    task_util::{AskError, ask},
+    authorizer::Authorizer, codes, coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage}, handlers::{
+        RequestContext, authorized_operations::{DescribedGroupRow, fill_group_authorized_operations}, denied_topics, group_version_disabled,
+    }, task_util::{AskError, ask},
 };
 
 /// `member_type` of a member that speaks the classic protocol inside a
@@ -184,12 +179,12 @@ impl DescribedTopics for DescribedGroup {
 pub(super) fn hide_undescribable_topics<G: DescribedTopics>(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     groups: &mut [G],
 ) {
     let named: HashSet<&str> = groups.iter().flat_map(DescribedTopics::topics).collect();
     let undescribable =
-        crate::handlers::denied_topics(authorizer, image, ctx, AclOperation::Describe, named);
+        denied_topics(authorizer, image, ctx, AclOperation::Describe, named);
     if undescribable.is_empty() {
         return;
     }
@@ -306,13 +301,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        broker::Broker,
-        handlers::{
-            authorized_operations::authorized_operations_bits,
-            group_heartbeat_test_support::{
-                acl_authorizer, image_with_group_version, set_group_version,
+        broker::Broker, handlers::{
+            RequestContext, authorized_operations::authorized_operations_bits, group_heartbeat_test_support::{
+                GroupFeatureLevel, acl_authorizer, image_with_group_version, set_group_version,
             },
-        },
+        }, test_support::{AllowAclSetup, allow_acl, start_group_broker_no_audit},
     };
 
     const VERSION: i16 = krabka_protocol::owned::consumer_group_describe_request::MAX_VERSION;
@@ -327,7 +320,7 @@ mod tests {
     async fn describe_groups(
         broker: &Broker,
         request: ConsumerGroupDescribeRequest,
-        context: &crate::handlers::RequestContext<'_>,
+        context: &RequestContext<'_>,
     ) -> ConsumerGroupDescribeResponse {
         handle(broker, request, VERSION, context)
             .await
@@ -350,7 +343,7 @@ mod tests {
             let image = match level {
                 None => MetadataImage::new(uuid::Uuid::nil()),
                 Some(level) => image_with_group_version(
-                    crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(level),
+                    GroupFeatureLevel(level),
                 ),
             };
             assert!(
@@ -569,7 +562,7 @@ mod tests {
     fn a_group_naming_an_undescribable_topic_is_replaced_by_an_error_row() {
         let mut image = image_with_topics();
         image.apply(&MetadataRecord::V1AccessControlEntry(
-            crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
+            allow_acl(AllowAclSetup {
                 operation: AclOperation::Describe,
                 ..Default::default()
             }),
@@ -746,7 +739,7 @@ mod tests {
         );
         set_group_version(
             &broker,
-            crate::handlers::group_heartbeat_test_support::GroupFeatureLevel(0),
+            GroupFeatureLevel(0),
         )
         .await;
         request_identity!(
@@ -826,7 +819,7 @@ mod tests {
     #[tokio::test]
     async fn handle_fills_authorized_operations_only_on_opt_in_for_clean_rows() {
         let authorizer = std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer);
-        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(
+        let (broker_handle, _dir) = start_group_broker_no_audit(
             std::sync::Arc::clone(&authorizer) as _,
         )
         .await;

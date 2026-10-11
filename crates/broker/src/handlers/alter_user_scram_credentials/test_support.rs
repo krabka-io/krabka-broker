@@ -20,7 +20,7 @@ use super::{
     response::{err_result, ok_result},
     validation::{validate_deletion, validate_upsertion},
 };
-use crate::{authorizer::Authorizer, broker::Broker};
+use crate::{authorizer::Authorizer, broker::Broker, test_support::start_broker_with};
 
 pub(super) const KAFKA_DUPLICATE_RESOURCE: i16 = 92;
 pub(super) const KAFKA_UNSUPPORTED_SASL_MECHANISM: i16 = 33;
@@ -107,7 +107,7 @@ crate::test_support::context_helper!(pub(super) client_id = "admin-client");
 pub(super) async fn start_broker(
     authorizer: Arc<dyn Authorizer>,
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|cfg| {
+    start_broker_with(|cfg| {
         cfg.authorizer = authorizer;
     })
     .await

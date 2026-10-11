@@ -36,16 +36,13 @@ use self::{
     assignment::resolve_new_partition_assignments, response::finish_response,
 };
 use crate::{
-    codes,
-    config_keys::resolve_preferred_leader_site,
-    handlers::{
+    codes, config_keys::resolve_preferred_leader_site, handlers::{
         create_topics::{
             automatic_leaderships, automatic_placement_exclusions, diskless_wal_placement_error,
             inactive_brokers, manual_leaderships, site_broker_views,
         },
         partition_materialization::PartitionMaterialization,
-    },
-    site_placement::PlacementRng,
+    }, quota::ControllerMutationQuota, site_placement::PlacementRng,
 };
 
 context_handler! {
@@ -279,7 +276,7 @@ context_handler! {
 fn admit_growth(
     topic: &krabka_protocol::owned::create_partitions_request::CreatePartitionsTopic,
     image: &krabka_metadata::MetadataImage,
-    quota: &mut crate::quota::ControllerMutationQuota,
+    quota: &mut ControllerMutationQuota,
 ) -> Result<krabka_metadata::TopicRecord, (i16, Option<String>)> {
     // Kafka's `UnknownTopicOrPartitionException()` carries no message.
     let topic_rec = image
