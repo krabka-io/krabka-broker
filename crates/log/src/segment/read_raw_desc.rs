@@ -107,7 +107,7 @@ impl Segment {
             }
             let start = pos - header_buf_start;
             let batch = RawBatch::decode(&header_buf[start..start + HEADER_LEN])?;
-            scan_window = if batch.len() <= INITIAL_HEADER_SCAN_WINDOW {
+            scan_window = if batch.len <= INITIAL_HEADER_SCAN_WINDOW {
                 HEADER_SCAN_WINDOW
             } else {
                 INITIAL_HEADER_SCAN_WINDOW

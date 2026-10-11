@@ -24,7 +24,7 @@ use crate::{
 pub(super) struct RawBatch {
     start_offset: Offset,
     last_offset: Offset,
-    len: usize,
+    pub(super) len: usize,
 }
 
 impl RawBatch {
@@ -37,10 +37,6 @@ impl RawBatch {
             last_offset: Offset(base + i64::from(header.last_offset_delta.get())),
             len: 12 + usize::try_from(header.batch_length.get().max(0)).unwrap_or(0),
         })
-    }
-
-    pub(super) fn len(&self) -> usize {
-        self.len
     }
 }
 
