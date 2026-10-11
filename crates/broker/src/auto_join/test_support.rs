@@ -81,13 +81,7 @@ pub(super) async fn negotiate_versions(
             .collect(),
         ..Default::default()
     };
-    write_response(
-        socket,
-        &request,
-        &response,
-        crate::auto_join::test_support::ResponseWireSetup::default(),
-    )
-    .await
+    write_response(socket, &request, &response, ResponseWireSetup::default()).await
 }
 
 pub(super) fn voter_update_params(addr: SocketAddr, leader: Option<NodeId>) -> AutoJoinParams {

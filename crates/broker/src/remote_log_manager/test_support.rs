@@ -317,7 +317,7 @@ pub fn rolled_log(dir: &std::path::Path) -> Log {
         },
     )
     .unwrap();
-    crate::remote_log_manager::test_support::append_fixture_batches(&mut log, 12);
+    append_fixture_batches(&mut log, 12);
     log.sync().unwrap();
     log
 }
@@ -339,8 +339,8 @@ pub fn rolled_tiered_partition_at(
     log_dir: &std::path::Path,
     config: LogConfig,
 ) -> Arc<Partition> {
-    let mut log = crate::remote_log_manager::test_support::partition_log(log_dir, index, config);
-    crate::remote_log_manager::test_support::append_fixture_batches(&mut log, 12);
+    let mut log = partition_log(log_dir, index, config);
+    append_fixture_batches(&mut log, 12);
     log.sync().unwrap();
     leading_partition_over(index, log_dir, log)
 }

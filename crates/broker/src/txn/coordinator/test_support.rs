@@ -126,7 +126,7 @@ pub(super) async fn live_coordinator(dir: &Path) -> (Arc<TxnCoordinator>, Arc<Pa
         partitions,
         PartitionCount(1),
     ));
-    let image = state_image(crate::txn::coordinator::test_support::StateImageSetup::default());
+    let image = state_image(StateImageSetup::default());
     coordinator
         .refresh_leader_partitions(&image)
         .await

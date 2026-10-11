@@ -257,9 +257,9 @@ pub(crate) mod test_support {
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for (rate, bytes, delay) in fractional_bandwidth_cases() {
-            let image = image_with_quota(crate::quota::test_support::QuotaRecordSetup {
+            let image = image_with_quota(QuotaRecordSetup {
                 key,
-                value: crate::quota::test_support::QuotaValue(rate),
+                value: QuotaValue(rate),
                 ..Default::default()
             });
             let buckets = super::QuotaBuckets::with_window(secs(1));
@@ -392,7 +392,10 @@ mod tests {
     use assert2::{assert, check};
     use krabka_units::secs;
 
-    use super::{test_support::image_with_quota, *};
+    use super::{
+        test_support::{QuotaRecordSetup, QuotaValue, image_with_quota},
+        *,
+    };
     use crate::throttle::MICROS_PER_TOKEN;
 
     /// `throttle_time_ms` rounds to the nearest millisecond, half up, as
@@ -469,9 +472,9 @@ mod tests {
 
     #[test]
     fn consume_configured_quota_returns_zero_without_mutating_bucket_for_zero_amount() {
-        let image = image_with_quota(crate::quota::test_support::QuotaRecordSetup {
+        let image = image_with_quota(QuotaRecordSetup {
             key: "request_percentage",
-            value: crate::quota::test_support::QuotaValue(100.0),
+            value: QuotaValue(100.0),
             ..Default::default()
         });
         let buckets = QuotaBuckets::new();
@@ -513,8 +516,8 @@ mod tests {
     #[test]
     fn consume_configured_quota_ignores_non_positive_rates() {
         for rate in [-1.0, 0.0] {
-            let image = image_with_quota(crate::quota::test_support::QuotaRecordSetup {
-                value: crate::quota::test_support::QuotaValue(rate),
+            let image = image_with_quota(QuotaRecordSetup {
+                value: QuotaValue(rate),
                 ..Default::default()
             });
             let buckets = QuotaBuckets::new();
@@ -548,8 +551,8 @@ mod tests {
 
     #[test]
     fn consume_configured_quota_leaves_the_overage_delay_uncapped() {
-        let image = image_with_quota(crate::quota::test_support::QuotaRecordSetup {
-            value: crate::quota::test_support::QuotaValue(1.0),
+        let image = image_with_quota(QuotaRecordSetup {
+            value: QuotaValue(1.0),
             ..Default::default()
         });
         // A one-second window: at 1 B/s the burst is one byte, so 10 bytes

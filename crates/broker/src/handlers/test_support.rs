@@ -466,7 +466,7 @@ pub(crate) async fn send_acknowledgements(
     share_acknowledge_wire(
         broker,
         &request,
-        crate::handlers::test_support::ShareWireSetup {
+        ShareWireSetup {
             version: krabka_ids::ApiVersion(
                 krabka_protocol::owned::share_acknowledge_request::MAX_VERSION,
             ),
@@ -565,7 +565,7 @@ pub(crate) async fn seed_partition_replicas(
         .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
             leader_epoch,
             directories: vec![uuid::Uuid::nil(); replicas.len()],
-            ..replicated_partition(crate::handlers::test_support::ReplicatedPartitionSetup {
+            ..replicated_partition(ReplicatedPartitionSetup {
                 topic,
                 leader,
                 replicas,
@@ -853,7 +853,7 @@ pub(crate) async fn create_topic(broker: &BrokerHandle, setup: ClientTopicSetup<
         (client, response),
         broker,
         client_id,
-        crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+        configured_topic_request(CreateTopicSetup {
             topic: name,
             num_partitions: partitions,
             ..Default::default()
@@ -959,7 +959,7 @@ pub(crate) fn partition(
     } = setup;
     spawn_partition(
         root,
-        crate::handlers::test_support::PartitionSpawnSetup {
+        PartitionSpawnSetup {
             topic,
             index,
             log_dir_status: broker.log_dir_status.clone(),

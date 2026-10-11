@@ -592,7 +592,7 @@ pub(crate) fn topic_thaw_record(
         ..topic_freeze_record(FreezeSetup {
             scope,
             pattern_type,
-            state: crate::test_support::FreezeState::Thawed,
+            state: FreezeState::Thawed,
             reason: "",
         })
     }
@@ -1491,7 +1491,7 @@ pub(crate) async fn grant_cluster_operation(
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1AccessControlEntry(allow_acl(
-            crate::test_support::AllowAclSetup {
+            AllowAclSetup {
                 resource_type: krabka_metadata::ResourceType::Cluster,
                 resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
                 principal: &format!("User:{user}"),
@@ -1519,7 +1519,7 @@ pub(crate) async fn grant_topic_operation(
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1AccessControlEntry(allow_acl(
-            crate::test_support::AllowAclSetup {
+            AllowAclSetup {
                 resource_name: topic,
                 principal: &format!("User:{user}"),
                 operation,
