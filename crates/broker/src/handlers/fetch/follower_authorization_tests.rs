@@ -33,9 +33,15 @@ use krabka_protocol::{
 
 use super::FIRST_TOPIC_ID_VERSION;
 use crate::{
-    authorizer::AuthorizationResult, broker::BrokerHandle, codes,
-    handlers::acl_wire::CLUSTER_RESOURCE_NAME, partition::Partition,
-    test_support::start_broker_no_audit_with,
+    authorizer::AuthorizationResult,
+    broker::BrokerHandle,
+    codes,
+    handlers::{
+        acl_wire::CLUSTER_RESOURCE_NAME,
+        test_support::{ReplicatedTopicSetup, seed_partition_replicas},
+    },
+    partition::Partition,
+    test_support::{append_partition_batch, start_broker_no_audit_with},
 };
 
 /// The node id of the follower that the fetches claim to be. The broker under
@@ -170,9 +176,9 @@ async fn replicated_partition(
     topic: &str,
     topic_id: uuid::Uuid,
 ) -> (Arc<Partition>, RecordBatch) {
-    crate::handlers::test_support::seed_partition_replicas(
+    seed_partition_replicas(
         broker,
-        crate::handlers::test_support::ReplicatedTopicSetup {
+        ReplicatedTopicSetup {
             topic,
             topic_id,
             ..Default::default()
@@ -191,7 +197,7 @@ async fn replicated_partition(
     );
 
     let mut batch = crate::handlers::test_support::default_records_batch(&RECORDS);
-    crate::test_support::append_partition_batch(&partition, &mut batch);
+    append_partition_batch(&partition, &mut batch);
     (partition, batch)
 }
 

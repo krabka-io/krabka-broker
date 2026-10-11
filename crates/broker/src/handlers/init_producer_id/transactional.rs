@@ -19,6 +19,8 @@ use crate::{
     error::BrokerError,
     txn::{
         coordinator::{TxnCoordinator, completion::completion_for},
+        handlers::end_txn::{client_producer_identity, prepare_server_abort_identities},
+        marker::MarkerType,
         state::{TxnEntry, TxnState},
         util::now_millis,
     },
@@ -169,8 +171,7 @@ pub(super) async fn handle_transactional(
                 }
                 if matches!(e.state, TxnState::Ongoing) {
                     // Transition to PrepareAbort; persist; dispatch markers.
-                    let (request_pid, fenced_from_epoch) =
-                        crate::txn::handlers::end_txn::client_producer_identity(&e);
+                    let (request_pid, fenced_from_epoch) = client_producer_identity(&e);
                     // Stage on a clone: until the PrepareAbort record is
                     // durable, other callers must still see Ongoing.
                     let mut prepared = e.clone();
@@ -185,12 +186,8 @@ pub(super) async fn handle_transactional(
                     // zombie could otherwise present as a retry of this fence.
                     // At `TV_2` the completion bump is the only bump, and the
                     // last epoch is the one the producer still holds.
-                    crate::txn::handlers::end_txn::prepare_server_abort_identities(
-                        &mut prepared,
-                        txnv,
-                        &coord.producer_ids,
-                    )
-                    .await?;
+                    prepare_server_abort_identities(&mut prepared, txnv, &coord.producer_ids)
+                        .await?;
                     prepared.last_update_ms = now_ms;
                     let persisted = coord
                         .put_under_state_partition_lock(prepared.clone(), txnv)
@@ -309,8 +306,7 @@ pub(super) async fn handle_transactional(
             if is_fenced(&e3, request_identity) {
                 return Ok(fenced_response());
             }
-            let (previous_pid, previous_epoch) =
-                crate::txn::handlers::end_txn::client_producer_identity(&e3);
+            let (previous_pid, previous_epoch) = client_producer_identity(&e3);
             let (new_pid, new_epoch) =
                 next_init_producer_identity(&e3, &coord.producer_ids).await?;
             let mut staged =
@@ -354,7 +350,7 @@ fn identity_decision(
     entry: &TxnEntry,
     request_identity: (i64, i16),
 ) -> InitProducerIdIdentityDecision {
-    let (entry_pid, entry_epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
+    let (entry_pid, entry_epoch) = client_producer_identity(entry);
     krabka_verified::transaction::init_producer_id_identity_decision(
         entry_pid.get(),
         entry_epoch,
@@ -389,7 +385,7 @@ fn retried_bump_response(
     if identity_decision(entry, request_identity) != InitProducerIdIdentityDecision::Retry {
         return None;
     }
-    let (pid, epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
+    let (pid, epoch) = client_producer_identity(entry);
     Some(InitProducerIdResponse {
         error_code: codes::NONE,
         producer_id: pid.get(),
@@ -451,7 +447,7 @@ async fn dispatch_abort_markers(
     entry: &mut TxnEntry,
 ) -> Result<(), BrokerError> {
     coord
-        .dispatch_transaction_markers(entry, crate::txn::marker::MarkerType::Abort)
+        .dispatch_transaction_markers(entry, MarkerType::Abort)
         .await
 }
 
@@ -464,8 +460,10 @@ mod tests {
 
     use super::*;
     use crate::{
+        log_dir::partition_dir,
         partition::Partition,
         partition_registry::PartitionRegistry,
+        test_support::{StandalonePartitionSetup, open_partition, spawn_standalone_partition},
         txn::{bootstrap, state::TopicPartition, version::TxnVersion},
     };
 
@@ -552,14 +550,10 @@ mod tests {
         );
 
         // Materialize a local partition for `__transaction_state`-style data.
-        let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
+        let part_dir = partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = Log::open(&part_dir, LogConfig::default()).unwrap();
-        let part = crate::test_support::spawn_standalone_partition(
-            dir.path(),
-            log,
-            crate::test_support::StandalonePartitionSetup::default(),
-        );
+        let part = spawn_standalone_partition(dir.path(), log, StandalonePartitionSetup::default());
         assert!(part.log_end_offset() == 0);
         // The metadata reconcile installs this broker, node 1, as the leader.
         part.install_leader_change(1, 0).await;
@@ -668,9 +662,9 @@ mod tests {
         }));
 
         let partitions = Arc::new(PartitionRegistry::new());
-        let part = crate::test_support::open_partition(
+        let part = open_partition(
             dir,
-            crate::test_support::StandalonePartitionSetup {
+            StandalonePartitionSetup {
                 topic: bootstrap::TOPIC,
                 ..Default::default()
             },
@@ -754,12 +748,12 @@ mod tests {
         tid: &str,
     ) -> (Arc<TxnCoordinator>, Arc<Partition>) {
         let (coordinator, _state) = coordinator_with_completed_transaction(dir, tid).await;
-        let data_dir = crate::log_dir::partition_dir(dir, "orders", 0);
+        let data_dir = partition_dir(dir, "orders", 0);
         std::fs::create_dir_all(&data_dir).expect("create the data partition directory");
-        let data = crate::test_support::spawn_standalone_partition(
+        let data = spawn_standalone_partition(
             dir,
             Log::open(&data_dir, LogConfig::default()).expect("open the data log"),
-            crate::test_support::StandalonePartitionSetup::default(),
+            StandalonePartitionSetup::default(),
         );
         // The metadata reconcile installs this broker, node 1, as the leader.
         data.install_leader_change(1, 0).await;
@@ -1252,12 +1246,12 @@ mod tests {
 
             // The partition appears, and the completion task finishes the
             // abort.
-            let ghost_dir = crate::log_dir::partition_dir(dir.path(), "ghost", 0);
+            let ghost_dir = partition_dir(dir.path(), "ghost", 0);
             std::fs::create_dir_all(&ghost_dir).expect("create ghost partition dir");
-            let ghost = crate::test_support::spawn_standalone_partition(
+            let ghost = spawn_standalone_partition(
                 dir.path(),
                 Log::open(&ghost_dir, LogConfig::default()).expect("open ghost log"),
-                crate::test_support::StandalonePartitionSetup {
+                StandalonePartitionSetup {
                     topic: "ghost",
                     ..Default::default()
                 },

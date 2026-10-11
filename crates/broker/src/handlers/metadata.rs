@@ -61,11 +61,12 @@ use crate::{
     broker::Broker,
     codes,
     handlers::{
+        RequestContext,
         acl_wire::CLUSTER_RESOURCE_NAME,
         authorized_operations::authorized_operations_bits,
         offline_replicas::{
             LeaderEndpointError, NO_LEADER_ID, PartitionAvailability, leader_endpoint_error,
-            listener_endpoint,
+            listener_endpoint, partition_availability,
         },
     },
 };
@@ -226,7 +227,7 @@ context_handler! {
 fn cluster_allows(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     operation: AclOperation,
     log_denied: bool,
 ) -> bool {
@@ -373,7 +374,7 @@ struct TopicRowInputs<'a> {
 fn build_topic_rows(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     inputs: &TopicRowInputs<'_>,
 ) -> Vec<MetadataResponseTopic> {
     let requested = inputs.requested;
@@ -540,12 +541,8 @@ fn partition_row(
     inputs: &TopicRowInputs<'_>,
     partition: &krabka_metadata::PartitionRecord,
 ) -> MetadataResponsePartition {
-    let availability = crate::handlers::offline_replicas::partition_availability(
-        image,
-        partition,
-        inputs.unavailable,
-        inputs.listener,
-    );
+    let availability =
+        partition_availability(image, partition, inputs.unavailable, inputs.listener);
     let PartitionAvailability {
         leader_id,
         mut isr_nodes,
@@ -661,6 +658,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::test_support::broker_registration;
 
     fn endpoint(name: &str, host: &str, port: u16) -> krabka_metadata::BrokerEndpoint {
         krabka_metadata::BrokerEndpoint {
@@ -679,7 +677,7 @@ mod tests {
             port: 1000,
             rack: Some("rack-a".to_string()),
             endpoints,
-            ..crate::test_support::broker_registration(krabka_raft::NodeId(7))
+            ..broker_registration(krabka_raft::NodeId(7))
         }
     }
 

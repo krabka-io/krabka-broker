@@ -451,7 +451,7 @@ pub(crate) fn compute_visibility_window(
 pub(crate) fn encode_fetch_response(
     mut resp: FetchResponse,
     version: i16,
-) -> Result<BytesMut, crate::error::BrokerError> {
+) -> Result<BytesMut, BrokerError> {
     serve_empty_rather_than_null_records(&mut resp);
     if version < 4 {
         let legacy: krabka_protocol::kafka_3_6_2::owned::fetch_response::FetchResponse =

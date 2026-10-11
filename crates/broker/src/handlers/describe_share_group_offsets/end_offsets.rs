@@ -17,7 +17,10 @@ use krabka_protocol::owned::{
     list_offsets_response::ListOffsetsResponse,
 };
 
-use crate::{broker::Broker, codes};
+use crate::{
+    broker::{Broker, registered_listener_endpoint},
+    codes,
+};
 
 /// A partition by topic name, as `ListOffsets` names it.
 pub(super) type TopicPartition = (String, i32);
@@ -99,10 +102,8 @@ impl NetworkLatestOffsets<'_> {
         let Some(registration) = image.broker(leader) else {
             return failed(codes::LEADER_NOT_AVAILABLE);
         };
-        let (host, port) = crate::broker::registered_listener_endpoint(
-            registration,
-            &config.inter_broker_listener_name,
-        );
+        let (host, port) =
+            registered_listener_endpoint(registration, &config.inter_broker_listener_name);
         let host = host.to_owned();
         let protocol = config
             .effective_listeners()

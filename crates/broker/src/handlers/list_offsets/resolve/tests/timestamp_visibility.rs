@@ -1,6 +1,7 @@
 use assert2::assert;
 
 use super::*;
+use crate::txn::marker::MarkerType;
 
 #[tokio::test]
 async fn timestamp_lookup_matches_the_first_record_in_the_isolation_prefix() {
@@ -45,7 +46,7 @@ async fn timestamp_lookup_matches_the_first_record_in_the_isolation_prefix() {
         krabka_log::ProducerId(77),
         0,
         partition.log_end_offset(),
-        crate::txn::marker::MarkerType::Commit,
+        MarkerType::Commit,
         0,
     );
     assert!(

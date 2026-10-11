@@ -16,18 +16,21 @@ use krabka_units::secs;
 
 use super::*;
 use crate::{
+    api_catalog::UnstableApiVersions,
     authorizer::SimpleAclAuthorizer,
-    broker::Broker,
+    broker::{Broker, BrokerHandle},
+    error::BrokerError,
+    handlers::{context::RequestContext, find_coordinator::handle},
     test_support::{
-        peer, principal, start_broker_no_audit, start_broker_no_audit_with,
-        start_broker_with_authorizer_no_audit,
+        ControllerPeerAllowed, peer, principal, start_broker_no_audit, start_broker_no_audit_with,
+        start_broker_with_authorizer_no_audit, wait_for_controller_leader,
     },
-    txn::state::TxnState,
+    txn::{coordinator::TxnCoordinator, state::TxnState, version::TxnVersion},
 };
 
 /// Persist the held transaction as ongoing after releasing its entry lock.
 async fn persist_ongoing(
-    coordinator: &crate::txn::coordinator::TxnCoordinator,
+    coordinator: &TxnCoordinator,
     cell: &Arc<tokio::sync::Mutex<crate::txn::state::TxnEntry>>,
     expectation: &str,
 ) -> (krabka_log::ProducerId, i16) {
@@ -37,7 +40,7 @@ async fn persist_ongoing(
         (entry.producer_id, entry.producer_epoch, entry.clone())
     };
     coordinator
-        .put(snapshot, crate::txn::version::TxnVersion::Verified)
+        .put(snapshot, TxnVersion::Verified)
         .await
         .expect(expectation);
     (producer_id, producer_epoch)
@@ -46,8 +49,8 @@ async fn persist_ongoing(
 /// Waits for the controller, and checks the cluster finalized `TV_2`, the
 /// highest `transaction.version` Kafka defines, which a self-bootstrapped
 /// broker finalizes. KIP-939 needs no higher level.
-async fn wait_for_transaction_version_2(broker_handle: &crate::broker::BrokerHandle) {
-    crate::test_support::wait_for_controller_leader(&broker_handle.broker_arc_for_test()).await;
+async fn wait_for_transaction_version_2(broker_handle: &BrokerHandle) {
+    wait_for_controller_leader(&broker_handle.broker_arc_for_test()).await;
     broker_handle
         .wait_for_image(|image| {
             image.finalized_feature(
@@ -164,10 +167,9 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         coordinator_keys: tids.iter().map(ToString::to_string).collect(),
         ..Default::default()
     };
-    let find_response =
-        crate::handlers::find_coordinator::handle(&broker, find_request, find_version, &context)
-            .await
-            .expect("find transaction coordinators");
+    let find_response = handle(&broker, find_request, find_version, &context)
+        .await
+        .expect("find transaction coordinators");
     assert!(
         find_response
             .coordinators
@@ -788,11 +790,10 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
             config.transaction_state_num_partitions = 7;
             config.transaction_max_timeout = secs(8);
             config.features.transaction_two_phase_commit_enable = true;
-            config.features.unstable_api_versions =
-                crate::api_catalog::UnstableApiVersions::Enabled;
-            config.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
-                SimpleAclAuthorizer::new(HashSet::new()),
-            ));
+            config.features.unstable_api_versions = UnstableApiVersions::Enabled;
+            config.authorizer = Arc::new(ControllerPeerAllowed(SimpleAclAuthorizer::new(
+                HashSet::new(),
+            )));
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
@@ -876,7 +877,7 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
 async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
     let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    wait_for_controller_leader(&broker).await;
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
@@ -949,13 +950,11 @@ async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
 /// Route one transaction id through the real coordinator handler at its latest version.
 async fn find_transaction_coordinator(
     broker: &crate::broker::Broker,
-    context: &crate::handlers::context::RequestContext<'_>,
+    context: &RequestContext<'_>,
     tid: &str,
-) -> Result<
-    krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse,
-    crate::error::BrokerError,
-> {
-    crate::handlers::find_coordinator::handle(
+) -> Result<krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse, BrokerError>
+{
+    handle(
         broker,
         krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
             key_type: 1,

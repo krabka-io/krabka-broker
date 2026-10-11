@@ -136,7 +136,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::test_support::peer;
+    use crate::test_support::{encode_request, peer, spawn_standalone_partition};
 
     /// A locally hosted partition answers with its cached
     /// `current_leader_epoch` and `last_written_leader_epoch`. A non-zero
@@ -189,7 +189,7 @@ mod tests {
         let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
-        let part = crate::test_support::spawn_standalone_partition(
+        let part = spawn_standalone_partition(
             dir.path(),
             log,
             crate::test_support::StandalonePartitionSetup::default(),
@@ -208,7 +208,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let req_buf = crate::test_support::encode_request(&req, version);
+        let req_buf = encode_request(&req, version);
 
         request_identity!(
             (p, peer, ctx),
@@ -259,7 +259,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let req_buf = crate::test_support::encode_request(&req, version);
+        let req_buf = encode_request(&req, version);
 
         let bytes =
             respond(version, &req_buf, |_, partition| denied_row(partition)).expect("encode resp");

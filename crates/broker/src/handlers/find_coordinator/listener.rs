@@ -35,9 +35,10 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::config::{BrokerConfig, ListenerSpec};
 
-    fn listener(name: &str, advertised: &str) -> crate::config::ListenerSpec {
-        crate::config::ListenerSpec {
+    fn listener(name: &str, advertised: &str) -> ListenerSpec {
+        ListenerSpec {
             name: name.to_string(),
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             advertised: advertised.to_string(),
@@ -53,7 +54,7 @@ mod tests {
     /// plain listener's address.
     #[test]
     fn local_advertised_tracks_connection_listener() {
-        let config = crate::config::BrokerConfig {
+        let config = BrokerConfig {
             advertised_listener: "legacy:1000".to_string(),
             listeners: vec![
                 listener("plain", "plain-host:9092"),
@@ -69,7 +70,7 @@ mod tests {
     /// to the legacy top-level `advertised_listener`.
     #[test]
     fn local_advertised_falls_back_to_legacy() {
-        let config = crate::config::BrokerConfig {
+        let config = BrokerConfig {
             advertised_listener: "legacy:1000".to_string(),
             listeners: vec![listener("plain", "plain-host:9092")],
             ..Default::default()

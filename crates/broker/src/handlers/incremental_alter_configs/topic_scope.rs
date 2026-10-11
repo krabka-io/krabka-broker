@@ -160,8 +160,14 @@ mod tests {
     use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
 
     use super::*;
-    use crate::handlers::incremental_alter_configs::test_support::{
-        image_with_topic_config, make_del_cfg, make_set_cfg, make_topic_resource,
+    use crate::{
+        handlers::{
+            incremental_alter_configs::test_support::{
+                image_with_topic_config, make_del_cfg, make_set_cfg, make_topic_resource,
+            },
+            test_support::check_config_result,
+        },
+        test_support::string_pairs,
     };
 
     /// The record builder under the empty policy, which is the state of a
@@ -369,12 +375,7 @@ mod tests {
 
             let result = topic_config_record(&make_topic_resource("orders", ops), &img);
 
-            crate::handlers::test_support::check_config_result(
-                result,
-                want_ok,
-                label,
-                config_keys::DISKLESS,
-            );
+            check_config_result(result, want_ok, label, config_keys::DISKLESS);
         }
     }
 
@@ -494,7 +495,7 @@ mod tests {
         let record = |pairs: &[(&str, &str)]| {
             Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: "orders".into(),
-                overrides: crate::test_support::string_pairs(pairs),
+                overrides: string_pairs(pairs),
             }))
         };
         let cases = [

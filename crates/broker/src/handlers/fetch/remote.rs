@@ -442,7 +442,8 @@ mod tests {
 
     use crate::{
         broker::{Broker, BrokerHandle},
-        config::{RemoteStorageBackend, RlmmKind},
+        codes::OFFSET_OUT_OF_RANGE,
+        config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
         delivery::test_support::batch_at,
         metrics::BrokerMetrics,
         partition::Partition,
@@ -582,7 +583,7 @@ mod tests {
     async fn tiered_broker() -> (BrokerHandle, tempfile::TempDir, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let remote_dir = tempfile::tempdir().expect("remote tempdir");
-        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
         config.remote_storage_backend = Some(RemoteStorageBackend::Local {
             dir: remote_dir.path().to_path_buf(),
         });
@@ -824,7 +825,7 @@ mod tests {
             follower_position: None,
             partition: None,
             out: krabka_protocol::owned::fetch_response::PartitionData {
-                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                error_code: OFFSET_OUT_OF_RANGE,
                 ..Default::default()
             },
             cpu_micros: 0,
@@ -861,7 +862,7 @@ mod tests {
                     read_committed,
                     out: krabka_protocol::owned::fetch_response::PartitionData {
                         partition_index: 0,
-                        error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                        error_code: OFFSET_OUT_OF_RANGE,
                         high_watermark: 900,
                         last_stable_offset: 900,
                         log_start_offset: 100,

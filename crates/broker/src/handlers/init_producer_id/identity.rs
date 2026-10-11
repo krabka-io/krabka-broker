@@ -8,31 +8,33 @@
 //! version, so the coordinator always keeps one epoch to fence the producer
 //! with.
 
-use crate::{error::BrokerError, txn::state::TxnEntry};
+use crate::{
+    error::BrokerError,
+    producer_id_manager::ProducerIdManager,
+    txn::{
+        handlers::end_txn::{client_producer_identity, next_producer_identity},
+        state::TxnEntry,
+        version::TxnVersion,
+    },
+};
 
 pub(super) async fn next_init_producer_identity(
     entry: &TxnEntry,
-    producer_ids: &crate::producer_id_manager::ProducerIdManager,
+    producer_ids: &ProducerIdManager,
 ) -> Result<(krabka_log::ProducerId, i16), BrokerError> {
-    let (pid, epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
+    let (pid, epoch) = client_producer_identity(entry);
     // `TransactionCoordinator.handleInitProducerId` rotates whenever
     // `isEpochExhausted` holds, whatever the transaction version, so the
     // rotation rule here is the verified one at every level.
-    crate::txn::handlers::end_txn::next_producer_identity(
-        crate::txn::version::TxnVersion::Verified,
-        pid,
-        epoch,
-        producer_ids,
-    )
-    .await
+    next_producer_identity(TxnVersion::Verified, pid, epoch, producer_ids).await
 }
 
 pub(super) async fn stage_recovery_identity(
     entry: &mut TxnEntry,
-    producer_ids: &crate::producer_id_manager::ProducerIdManager,
+    producer_ids: &ProducerIdManager,
 ) -> Result<(krabka_log::ProducerId, i16), BrokerError> {
     let already_staged = entry.has_staged_producer_identity();
-    let (client_pid, client_epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
+    let (client_pid, client_epoch) = client_producer_identity(entry);
     let (next_pid, next_epoch) = if already_staged {
         crate::txn::handlers::end_txn::next_recovery_producer_identity(
             client_pid,
@@ -41,13 +43,7 @@ pub(super) async fn stage_recovery_identity(
         )
         .await?
     } else {
-        crate::txn::handlers::end_txn::next_producer_identity(
-            crate::txn::version::TxnVersion::Verified,
-            client_pid,
-            client_epoch,
-            producer_ids,
-        )
-        .await?
+        next_producer_identity(TxnVersion::Verified, client_pid, client_epoch, producer_ids).await?
     };
     entry.next_producer_id = next_pid;
     entry.next_producer_epoch = next_epoch;

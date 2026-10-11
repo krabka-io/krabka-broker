@@ -199,7 +199,7 @@ mod tests {
 
     use super::{group_into_topic_responses, withhold_current_leader_before_kip_951};
     use crate::{
-        codes::{FENCED_LEADER_EPOCH, UNKNOWN_TOPIC_ID},
+        codes::{FENCED_LEADER_EPOCH, TOPIC_AUTHORIZATION_FAILED, UNKNOWN_TOPIC_ID},
         handlers::fetch::{
             PendingRead,
             plan::{refused_partition, refused_read},
@@ -246,7 +246,7 @@ mod tests {
             ..Default::default()
         };
         let unknown = refused_partition(0, UNKNOWN_TOPIC_ID);
-        let denied = refused_partition(2, crate::codes::TOPIC_AUTHORIZATION_FAILED);
+        let denied = refused_partition(2, TOPIC_AUTHORIZATION_FAILED);
         let (responses, cpu_micros) = group_into_topic_responses(vec![
             row("t1", 1, read(0)),
             row("t1", 1, read(1)),

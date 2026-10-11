@@ -43,6 +43,7 @@ use crate::{
         },
     },
     error::BrokerError,
+    handlers::group_coordinator_error,
     task_util::ask,
 };
 
@@ -210,7 +211,7 @@ async fn commit_rows(
     version: i16,
 ) -> Result<Vec<OffsetCommitResponseTopic>, i16> {
     let image = broker.controller.current_image();
-    if let Some(code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+    if let Some(code) = group_coordinator_error(broker, &req.group_id) {
         return Err(code);
     }
 
@@ -539,10 +540,13 @@ mod tests {
     use krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition;
 
     use super::*;
+    use crate::{
+        coordinator::unified::persistence::MAX_STRING_BYTES, test_support::segment_age_fixture,
+    };
 
     #[test]
     fn offset_commits_roll_only_after_the_segment_age_limit() {
-        let mut fixture = crate::test_support::segment_age_fixture();
+        let mut fixture = segment_age_fixture();
         let image = MetadataImage::new(uuid::Uuid::nil());
         let request = OffsetCommitRequest {
             group_id: "group".into(),
@@ -604,7 +608,7 @@ mod tests {
     #[test]
     fn a_commit_key_string_over_32767_bytes_does_not_encode() {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let limit = crate::coordinator::unified::persistence::MAX_STRING_BYTES;
+        let limit = MAX_STRING_BYTES;
         let rows = [
             ("group id", limit, 1, true),
             ("group id", limit + 1, 1, false),

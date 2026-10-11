@@ -21,8 +21,8 @@ use krabka_protocol::owned::{
 use crate::{
     broker::BrokerHandle,
     codes,
-    handlers::RequestContext,
-    test_support::{fence_remote_broker, peer, principal, start_broker_no_audit},
+    handlers::{RequestContext, describe_topic_partitions::handle},
+    test_support::{dispatch_wire, fence_remote_broker, peer, principal, start_broker_no_audit},
 };
 
 const TOPIC: &str = "led";
@@ -125,7 +125,7 @@ async fn metadata(
     let broker = handle.broker_arc_for_test();
     let (user, address) = (principal("describer"), peer());
     let ctx = RequestContext::new(&user, &address, "metadata-client", "conn", false, listener);
-    crate::test_support::dispatch_wire(
+    dispatch_wire(
         &broker,
         krabka_protocol::api_key::ApiKey::Metadata as i16,
         version,
@@ -305,7 +305,7 @@ async fn describe_topic_partitions_answers_no_leader_for_a_leader_without_the_li
     );
     let request = crate::test_support::topic_partitions_request(TOPIC);
 
-    let response = crate::handlers::describe_topic_partitions::handle(&broker, request, 0, &ctx)
+    let response = handle(&broker, request, 0, &ctx)
         .await
         .expect("handle describe topic partitions");
 
