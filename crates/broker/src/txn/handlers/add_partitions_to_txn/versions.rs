@@ -36,7 +36,7 @@ use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
     codes,
     config::BrokerConfig,
-    txn::version::TxnVersion,
+    txn::{coordinator::TxnCoordinator, version::TxnVersion},
 };
 
 /// The request-independent collaborators both version paths need: the
@@ -44,7 +44,7 @@ use crate::{
 /// negotiated transaction version, and the caller's identity.
 #[derive(Clone, Copy)]
 pub(super) struct HandlerDependencies<'a> {
-    pub(super) coord: &'a crate::txn::coordinator::TxnCoordinator,
+    pub(super) coord: &'a TxnCoordinator,
     pub(super) image: &'a MetadataImage,
     pub(super) txnv: TxnVersion,
     pub(super) authorizer: &'a dyn Authorizer,

@@ -54,6 +54,7 @@ use krabka_security::ListenerProtocol;
 
 use crate::{
     auto_topic_creation::AutoTopicCreation,
+    broker::registered_listener_endpoint,
     codes::{COORDINATOR_NOT_AVAILABLE, UNKNOWN_TOPIC_OR_PARTITION},
     error::BrokerError,
     metadata_source::MetadataSource,
@@ -544,10 +545,8 @@ impl SharePersister {
                 code: COORDINATOR_NOT_AVAILABLE,
                 message: format!("share-state leader node {leader} not in metadata image"),
             })?;
-        let (host, port) = crate::broker::registered_listener_endpoint(
-            broker_info,
-            &self.inter_broker_listener_name,
-        );
+        let (host, port) =
+            registered_listener_endpoint(broker_info, &self.inter_broker_listener_name);
         let host = host.to_owned();
 
         let opts = krabka_client_core::ConnectionOptions {

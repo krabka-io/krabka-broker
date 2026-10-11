@@ -9,7 +9,7 @@ use tokio::sync::Notify;
 use crate::{
     partition::{
         Partition,
-        test_support::{append_records, test_partition},
+        test_support::{append_records, install_three_replica_isr, test_partition},
     },
     test_support::{PartitionRecordsSetup, RecordCount},
 };
@@ -29,7 +29,7 @@ async fn high_watermark_reads_cached_value() {
 #[tokio::test]
 async fn install_isr_populates_replica_state() {
     let (p, _dir) = test_partition(Arc::new(Notify::new()));
-    crate::partition::test_support::install_three_replica_isr(&p).await;
+    install_three_replica_isr(&p).await;
     let st = p.replica_state.lock().await;
     check!(
         st.isr

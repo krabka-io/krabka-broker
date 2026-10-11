@@ -21,7 +21,7 @@ use crate::{
     error::BrokerError,
     log_dir::partition_dir,
     log_dir_status::LogDirRegistry,
-    metadata_source::MetadataSource as _,
+    metadata_source::MetadataSource,
     partition::Partition,
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
@@ -120,7 +120,7 @@ async fn coordinator(
         krabka_units::mebibytes(1),
     );
     if with_metadata {
-        let metadata: Arc<dyn crate::metadata_source::MetadataSource> = metadata.clone();
+        let metadata: Arc<dyn MetadataSource> = metadata.clone();
         coordinator.set_metadata_source_for_test(metadata);
     }
     let coordinator = Arc::new(coordinator);

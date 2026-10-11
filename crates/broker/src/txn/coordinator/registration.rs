@@ -19,7 +19,7 @@ use crate::{
         INVALID_PRODUCER_ID_MAPPING, INVALID_REQUEST, NONE, NOT_COORDINATOR, PRODUCER_FENCED,
     },
     txn::{
-        state::TxnState,
+        state::{TopicPartition, TxnState},
         util::{PRODUCER_FENCED_MIN_VERSION, now_millis},
         version::TxnVersion,
     },
@@ -40,7 +40,7 @@ impl TxnCoordinator {
         tid: &str,
         producer_id: ProducerId,
         producer_epoch: i16,
-        partitions: Vec<crate::txn::state::TopicPartition>,
+        partitions: Vec<TopicPartition>,
         format_txnv: TxnVersion,
         version: i16,
     ) -> i16 {

@@ -13,7 +13,7 @@ use crate::{
         try_spawn_partition_with_sequencer,
     },
     diskless::recovery::open_config,
-    log_dir::place_partition_dir_avoiding,
+    log_dir::{partition_dir, place_partition_dir_avoiding},
     log_dir_status::LogDirRegistry,
     partition::{PartitionRuntimeConfig, ReplicationTarget},
     partition_registry::PartitionRegistry,
@@ -92,7 +92,7 @@ pub(super) fn materialize_partition_with_replication_target(
                     partition,
                 )
             },
-            |log_dir| crate::log_dir::partition_dir(log_dir, topic, partition),
+            |log_dir| partition_dir(log_dir, topic, partition),
         );
         std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
         let open_config = open_config(log_config, runtime.diskless);

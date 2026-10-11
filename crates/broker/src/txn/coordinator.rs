@@ -19,7 +19,7 @@ use krabka_units::ByteSize;
 use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::{
-    codes::UNKNOWN_SERVER_ERROR,
+    codes::{INVALID_PRODUCER_ID_MAPPING, UNKNOWN_SERVER_ERROR},
     coordinator::GroupCoordinator,
     error::BrokerError,
     metadata_source::MetadataSource,
@@ -258,7 +258,7 @@ impl TxnCoordinator {
     pub(crate) async fn missing_entry_error(&self, tid: &str) -> i16 {
         self.coordinator_error(tid)
             .await
-            .unwrap_or(crate::codes::INVALID_PRODUCER_ID_MAPPING)
+            .unwrap_or(INVALID_PRODUCER_ID_MAPPING)
     }
 
     /// The load status of `partition`, or `None` when this broker does not

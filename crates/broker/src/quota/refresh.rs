@@ -172,7 +172,7 @@ mod tests {
     use crate::{
         quota::test_support::{
             QuotaRecordSetup, QuotaValue, UserBucketSetup, alice_app1_producer_quota, alice_bucket,
-            image_with_quota as quota_image,
+            app1_producer_quota, image_with_quota as quota_image,
         },
         throttle::TokenBucket,
     };
@@ -551,7 +551,7 @@ mod tests {
             ("user".into(), Some("alice".into())),
         ];
         let alice = || quota_record(QuotaRecordSetup::default());
-        let app1 = || crate::quota::test_support::app1_producer_quota();
+        let app1 = || app1_producer_quota();
         let alice_app1 = || alice_app1_producer_quota();
         // (label, bucket key, quotas the bucket was made under, quotas after
         // the alter, the rate the bucket keeps)

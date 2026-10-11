@@ -219,7 +219,10 @@ mod tests {
         config_keys::MIN_INSYNC_REPLICAS,
         elr::state::test_records,
         reassignment::test_support::{first_partition, img, liveness},
-        test_support::{FreezeSetup, ReassignmentSetup, broker_registration, topic_freeze_record},
+        test_support::{
+            FreezeSetup, ReassignmentSetup, broker_registration, finalize_elr_version,
+            topic_freeze_record,
+        },
     };
 
     #[test]
@@ -520,7 +523,7 @@ mod tests {
                 ..Default::default()
             }))
             .expect("the fixture holds the only reference");
-            crate::test_support::finalize_elr_version(&mut image);
+            finalize_elr_version(&mut image);
             image.apply(&MetadataRecord::V1TopicConfig(
                 krabka_metadata::TopicConfigRecord {
                     topic: "foo".into(),

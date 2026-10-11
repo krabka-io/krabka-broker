@@ -20,7 +20,7 @@ use crate::{
     heartbeat::controller_state::ControllerLivenessState,
     leader_election::{
         compute_unclean_restart_changes,
-        test_support::{img_with_partition, mark_witnesses_in_image},
+        test_support::{ElectionSetup, img_with_partition, mark_witnesses_in_image},
     },
     metadata_source::MetadataSource,
     metrics::{BreakGlassActionLabel, BrokerMetrics},
@@ -44,7 +44,7 @@ fn source_with(leader: Option<u64>, image: MetadataImage) -> Arc<FakeMetadataSou
 const NODE: u64 = 10;
 
 fn image_with_partition(leader: u64, replicas: &[u64]) -> MetadataImage {
-    img_with_partition(crate::leader_election::test_support::ElectionSetup {
+    img_with_partition(ElectionSetup {
         leader: krabka_raft::NodeId(leader),
         replicas: &replica_nodes(replicas),
         isr: &replica_nodes(replicas),

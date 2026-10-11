@@ -15,6 +15,7 @@ use super::{
 use crate::{
     config_keys::resolve_diskless,
     partition::{PartitionRuntimeConfig, ReplicationTarget},
+    partition_writer::flag_storage_failure,
     wal::{
         ControllerSequencer, OffsetSequencer,
         quorum::{follower::hydrate_on_promotion, registry::ShardId},
@@ -120,11 +121,7 @@ impl ReplicatorSupervisor {
                     )
                     .await
                 {
-                    crate::partition_writer::flag_storage_failure(
-                        &error,
-                        &part.log_dir,
-                        &self.log_dir_status,
-                    );
+                    flag_storage_failure(&error, &part.log_dir, &self.log_dir_status);
                     warn!(
                         topic = %key.0,
                         partition = key.1,

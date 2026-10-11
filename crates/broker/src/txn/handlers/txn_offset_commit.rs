@@ -101,7 +101,7 @@ use crate::{
         },
     },
     error::BrokerError,
-    handlers::group_partition_loading,
+    handlers::{RequestContext, group_partition_loading},
     txn::{util::now_millis, version::resolve_txn_version},
 };
 
@@ -109,7 +109,7 @@ pub(crate) async fn handle(
     broker: &Broker,
     mut req: TxnOffsetCommitRequest,
     version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
 ) -> Result<TxnOffsetCommitResponse, BrokerError> {
     let partitions = broker.partitions.clone();
 

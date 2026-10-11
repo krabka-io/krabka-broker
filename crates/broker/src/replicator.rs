@@ -71,9 +71,10 @@ use self::fetch_loop::run_fetcher_loop;
 pub(crate) use self::follower_throttle::ReplicaLag;
 use crate::{
     broker::spawn_partition_with_replication_target, config::ReplicationRuntimeConfig,
-    log_dir::place_partition_dir_avoiding, log_dir_status::LogDirRegistry, metrics::BrokerMetrics,
-    network::client::InterBrokerClient, partition::ReplicationTarget,
-    partition_registry::PartitionRegistry, producer_state::ProducerState, throttle::ThrottleState,
+    log_dir::place_partition_dir_avoiding, log_dir_status::LogDirRegistry,
+    metadata_source::MetadataSource, metrics::BrokerMetrics, network::client::InterBrokerClient,
+    partition::ReplicationTarget, partition_registry::PartitionRegistry,
+    producer_state::ProducerState, throttle::ThrottleState,
 };
 
 /// Outbound dialer and pacing policy shared by the two replication loops.
@@ -134,7 +135,7 @@ pub(crate) struct Config {
     ///
     /// The replicator uses the image to look up
     /// `follower.replication.throttled.replicas`.
-    pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
+    pub controller: Arc<dyn MetadataSource>,
     /// KIP-113 runtime offline-dir registry.
     ///
     /// The replicator forwards this registry into `spawn_partition`. The

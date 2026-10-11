@@ -34,6 +34,7 @@ use crate::{
     test_support::{
         FakeMetadataSource, KeyedBatchSetup, KeyedRecordCount, UnixMillis, keyed_records_batch,
     },
+    time_util::now_ms,
 };
 
 /// A `BrokerMetrics` shared by every tier a unit test builds.
@@ -765,7 +766,7 @@ pub async fn archived_local_retention(
         &exports,
         &config,
         &rlmm,
-        (unstable, crate::time_util::now_ms() + 1_000_000),
+        (unstable, now_ms() + 1_000_000),
     )
     .await;
     (exports, rsm, rlmm, removed)

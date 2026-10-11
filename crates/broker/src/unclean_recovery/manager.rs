@@ -25,9 +25,13 @@ use super::{
     select_leader,
 };
 use crate::{
-    config_keys::witness_node_ids, elr::TopicElr,
-    heartbeat::controller_state::ControllerLivenessState, metadata_epoch::next_partition_change,
-    metadata_source::MetadataSource, metrics::BrokerMetrics, network::client::InterBrokerClient,
+    config_keys::witness_node_ids,
+    elr::{ElrPublisher, TopicElr},
+    heartbeat::controller_state::ControllerLivenessState,
+    metadata_epoch::next_partition_change,
+    metadata_source::MetadataSource,
+    metrics::BrokerMetrics,
+    network::client::InterBrokerClient,
 };
 
 #[cfg(test)]
@@ -365,7 +369,7 @@ impl UncleanRecoveryManager {
                 },
             ));
         }
-        crate::elr::ElrPublisher::new(image).extend(&mut changes);
+        ElrPublisher::new(image).extend(&mut changes);
         if let Err(e) = self.controller.submit_change(changes).await {
             warn!(error = %e, "unclean recovery submit_change failed");
             return RecoveryOutcome::NoEligibleReplica;

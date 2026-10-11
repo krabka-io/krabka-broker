@@ -8,7 +8,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    handlers::test_support::ReplicatedPartitionSetup,
+    handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
     partition::Partition,
     partition_registry::PartitionRegistry,
     share_coordinator::{
@@ -339,7 +339,7 @@ fn state_partition_image(partition: i32, leader: u64, leader_epoch: i32) -> Meta
             krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
                 leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
                 partition_epoch: leader_epoch,
-                ..crate::handlers::test_support::replicated_partition(ReplicatedPartitionSetup {
+                ..replicated_partition(ReplicatedPartitionSetup {
                     topic: bootstrap::TOPIC,
                     partition: krabka_ids::PartitionIndex(partition),
                     leader: node,

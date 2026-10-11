@@ -14,7 +14,7 @@ use crate::{
     partition::Partition,
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
-    test_support::{StandalonePartitionSetup, open_partition},
+    test_support::{PartitionCount, StandalonePartitionSetup, open_partition},
     txn::{
         coordinator::test_support::StateImageSetup,
         log_record::{encode_key, encode_value},
@@ -66,7 +66,7 @@ fn coordinator_persisting_last_epoch(
     let mut coordinator = super::super::test_support::coordinator_with_registry(
         node,
         Arc::clone(partitions),
-        crate::test_support::PartitionCount(1),
+        PartitionCount(1),
     );
     coordinator.set_persist_last_producer_epoch(matches!(
         persist_last_epoch,

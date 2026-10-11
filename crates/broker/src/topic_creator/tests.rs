@@ -28,7 +28,7 @@ use krabka_raft::NodeId;
 use super::*;
 use crate::{
     api_catalog::UnstableApiVersions,
-    network::client::InterBrokerClient,
+    network::{client::InterBrokerClient, request::parse_request},
     test_support::{
         ControllerPeerAllowed, DescribedCreationSetup, FakeMetadataSource, GrantsInPrincipalName,
         described_creation_configs, principal, request_context, start_broker_no_audit,
@@ -463,8 +463,7 @@ impl FakeController {
                 frame.put_i16(version);
                 frame.put_i32(correlation_id);
                 frame.put_slice(body);
-                let parsed = crate::network::request::parse_request(&frame, flexible_for)
-                    .expect("a request header");
+                let parsed = parse_request(&frame, flexible_for).expect("a request header");
                 let client_id = parsed.client_id.map(ToOwned::to_owned);
                 if api_key == envelope_request::API_KEY {
                     let outer =

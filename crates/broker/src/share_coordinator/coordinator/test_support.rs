@@ -18,6 +18,7 @@ use qubit_clock::{ManualMonotonicClock, ManualWallClock};
 
 use super::ShareCoordinator;
 use crate::{
+    broker::spawn_partition_with_replication_target,
     coordinator::test_support::single_replica_partition,
     log_dir::partition_dir,
     log_dir_status::LogDirRegistry,
@@ -106,7 +107,7 @@ pub(crate) fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i
     let part_dir = partition_dir(log_dir, bootstrap::TOPIC, p);
     std::fs::create_dir_all(&part_dir).unwrap();
     let log = Log::open(&part_dir, LogConfig::default()).unwrap();
-    let part = crate::broker::spawn_partition_with_replication_target(
+    let part = spawn_partition_with_replication_target(
         bootstrap::TOPIC.to_string(),
         // The metadata reconcile installs the leader of the image before the
         // partition is visible: here this broker, node 1, at epoch 0.

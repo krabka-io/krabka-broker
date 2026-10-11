@@ -17,6 +17,7 @@ use crate::{
         ShardRemoval,
         follower::{Config, run},
         registry::{ShardId, WalPlacement},
+        remove_shard,
     },
 };
 
@@ -90,7 +91,7 @@ impl ReplicatorSupervisor {
                 && let Some(target) = target
             {
                 for log_dir in &self.log_dirs {
-                    if let Err(error) = crate::wal::quorum::remove_shard(
+                    if let Err(error) = remove_shard(
                         self.wal_shards.as_ref(),
                         log_dir,
                         &target.topic,
