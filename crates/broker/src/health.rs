@@ -63,7 +63,7 @@ mod tests;
 /// The two `__cluster_metadata` offsets the readiness probe compares.
 ///
 /// It is a trait rather than a direct
-/// [`MetadataSource`](crate::metadata_source::MetadataSource) reference so
+/// [`MetadataSource`] reference so
 /// that the readiness rule can be driven from a test with no quorum behind
 /// it. [`metadata_progress`] adapts the real source onto it.
 pub trait MetadataProgress: Send + Sync {
