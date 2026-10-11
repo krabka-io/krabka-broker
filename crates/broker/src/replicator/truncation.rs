@@ -28,7 +28,7 @@ use super::{
     Config, connection::connection_options, replication_target_changed, response::RowAction,
     task_replication_target,
 };
-use crate::{codes, network::client::InterBrokerError};
+use crate::{codes, network::client::InterBrokerError, partition::Partition};
 
 /// Where this follower truncates for a KIP-320 `diverging_epoch` row, as
 /// `AbstractFetcherThread.getOffsetTruncationState` computes it.
@@ -69,7 +69,7 @@ fn diverging_truncation_offset(
 /// Where the local log of `part` truncates for the leader's `diverging`
 /// epoch and end offset. See [`diverging_truncation_offset`].
 pub(super) fn diverging_epoch_truncation_target(
-    part: &crate::partition::Partition,
+    part: &Partition,
     diverging: &EpochEndOffset,
 ) -> Offset {
     let leader_epoch = LeaderEpoch(diverging.epoch);

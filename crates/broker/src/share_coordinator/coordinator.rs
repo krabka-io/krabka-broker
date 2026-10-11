@@ -65,8 +65,9 @@ use crate::{
     partition_registry::PartitionRegistry,
     share_coordinator::{
         bootstrap, config::ShareCoordinatorConfig, partitioner::partition_for_share_key,
-        state::SharePartitionState,
+        persistence::StateBatch, state::SharePartitionState,
     },
+    time_util::epoch_millis,
 };
 
 /// In-memory map key: `(group_id, topic_id, partition)`.
@@ -181,7 +182,7 @@ pub(crate) struct ShareWrite {
     pub(crate) start_offset: Offset,
     /// `-1` when the request version has no such field.
     pub(crate) delivery_complete_count: i32,
-    pub(crate) batches: Vec<crate::share_coordinator::persistence::StateBatch>,
+    pub(crate) batches: Vec<StateBatch>,
 }
 
 /// `start_offset` sentinel for "no persisted share state".
@@ -305,7 +306,7 @@ impl ShareCoordinator {
 
     /// The current time in milliseconds since the epoch.
     fn now_ms(&self) -> i64 {
-        crate::time_util::epoch_millis(self.wall_clock.now())
+        epoch_millis(self.wall_clock.now())
     }
 
     /// Applies the leadership of `image` to the led partitions.

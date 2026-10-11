@@ -19,7 +19,7 @@ pub(crate) mod write;
 #[cfg(test)]
 mod authorization_tests;
 
-use crate::{broker::Broker, handlers::RequestContext};
+use crate::{broker::Broker, codes::NONE, handlers::RequestContext};
 
 /// Whether a request has no topic rows or contains an empty partition row.
 macro_rules! empty_partition_data {
@@ -39,7 +39,7 @@ fn operation_result(
     operation: &str,
 ) -> (i16, Option<String>) {
     match result {
-        Ok(()) => (crate::codes::NONE, None),
+        Ok(()) => (NONE, None),
         Err(error) => (error.code(), Some(error.row_message(operation))),
     }
 }
@@ -155,13 +155,15 @@ pub(crate) mod test_support {
             bootstrap,
             config::ShareCoordinatorConfig,
             coordinator::{
-                ShareCoordinator,
+                LoadStatus, ShareCoordinator,
                 test_support::{
-                    DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, state_batch,
+                    DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, image_with_topic,
+                    manual_clock, open_state_partition, state_batch,
                 },
             },
             persistence::StateBatch,
         },
+        topic_creator::TopicCreator,
     };
 
     pub(crate) fn batch(bounds: std::ops::RangeInclusive<Offset>) -> StateBatch {
@@ -178,9 +180,7 @@ pub(crate) mod test_support {
         num_partitions: i32,
     ) {
         for partition in 0..num_partitions {
-            crate::share_coordinator::coordinator::test_support::open_state_partition(
-                registry, log_dir, partition,
-            );
+            open_state_partition(registry, log_dir, partition);
         }
     }
 
@@ -200,7 +200,7 @@ pub(crate) mod test_support {
             NodeId(1),
             registry,
             config,
-            crate::share_coordinator::coordinator::test_support::manual_clock(),
+            manual_clock(),
         ))
     }
 
@@ -226,10 +226,7 @@ pub(crate) mod test_support {
             partition,
         } = setup;
         let coordinator = coordinator(log_dir);
-        let image = crate::share_coordinator::coordinator::test_support::image_with_topic(
-            topic,
-            partitions.0,
-        );
+        let image = image_with_topic(topic, partitions.0);
         coordinator.lead_all_partitions_for_test().await;
         coordinator
             .initialize(&image, "share-group", topic, partition.0, 17, Offset(90))
@@ -405,7 +402,7 @@ pub(crate) mod test_support {
             )],
             ..Default::default()
         };
-        let response = crate::topic_creator::TopicCreator::new(broker)
+        let response = TopicCreator::new(broker)
             .create_topic_without_principal(request)
             .await
             .expect("the controller answers CreateTopics");
@@ -429,7 +426,7 @@ pub(crate) mod test_support {
                         .share_coordinator
                         .load_status(PartitionIndex(partition))
                         .await
-                        == Some(crate::share_coordinator::coordinator::LoadStatus::Active);
+                        == Some(LoadStatus::Active);
                 }
                 if active {
                     return;

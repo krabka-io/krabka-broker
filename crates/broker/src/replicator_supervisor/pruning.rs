@@ -8,6 +8,10 @@ use krabka_metadata::MetadataImage;
 use tracing::warn;
 
 use super::{ReplicatorSupervisor, TopicPartition};
+use crate::{
+    partition::Partition,
+    wal::quorum::{ShardRemoval, remove_shard},
+};
 
 impl ReplicatorSupervisor {
     pub(super) fn prune_deleted_topic_partitions(&self, image: &MetadataImage) {
@@ -59,7 +63,7 @@ impl ReplicatorSupervisor {
 
     fn prune_partition(
         &self,
-        partition: &crate::partition::Partition,
+        partition: &Partition,
         topic_id: uuid::Uuid,
         preserve_follower: bool,
     ) {
@@ -75,11 +79,11 @@ impl ReplicatorSupervisor {
         self.reported_dirs.remove(&(topic.clone(), index.get()));
         let owning_dir = removed.log_dir.load_full();
         let scope = if preserve_follower {
-            crate::wal::quorum::ShardRemoval::Leader
+            ShardRemoval::Leader
         } else {
-            crate::wal::quorum::ShardRemoval::All
+            ShardRemoval::All
         };
-        let remove = crate::wal::quorum::remove_shard(
+        let remove = remove_shard(
             self.wal_shards.as_ref(),
             &owning_dir,
             topic,
@@ -124,8 +128,12 @@ mod tests {
     use krabka_raft::NodeId;
 
     use super::*;
-    use crate::replicator_supervisor::test_support::{
-        image_with, partition_record, supervisor_fixture, topic_record,
+    use crate::{
+        replicator_supervisor::test_support::{
+            SupervisorPartitionSetup, SupervisorTopicSetup, image_with, partition_record,
+            supervisor_fixture, topic_partition_records, topic_record,
+        },
+        wal::quorum::{registry::ShardId, shard_dir},
     };
 
     #[derive(Debug, PartialEq, Eq)]
@@ -154,28 +162,24 @@ mod tests {
     fn image_with_recreated_topic(
         mut records: Vec<krabka_metadata::MetadataRecord>,
     ) -> MetadataImage {
-        records.extend(crate::replicator_supervisor::test_support::topic_partition_records(
-            crate::replicator_supervisor::test_support::SupervisorPartitionSetup::single_replica("recreated", NodeId(2)),
+        records.extend(topic_partition_records(
+            SupervisorPartitionSetup::single_replica("recreated", NodeId(2)),
         ));
         image_with(&records)
     }
 
     #[tokio::test]
     async fn reconcile_prunes_deleted_topic_partitions_but_keeps_live_topics() {
-        let live_topic = topic_record(
-            crate::replicator_supervisor::test_support::SupervisorTopicSetup {
-                topic: "live",
-                ..Default::default()
-            },
-        );
-        let live_partition = partition_record(
-            crate::replicator_supervisor::test_support::SupervisorPartitionSetup {
-                topic: "live",
-                leader: NodeId(2),
-                replicas: vec![NodeId(2)],
-                ..Default::default()
-            },
-        );
+        let live_topic = topic_record(SupervisorTopicSetup {
+            topic: "live",
+            ..Default::default()
+        });
+        let live_partition = partition_record(SupervisorPartitionSetup {
+            topic: "live",
+            leader: NodeId(2),
+            replicas: vec![NodeId(2)],
+            ..Default::default()
+        });
         let active = image_with_recreated_topic(vec![
             topic_record(
                 crate::replicator_supervisor::test_support::SupervisorTopicSetup {
@@ -212,7 +216,7 @@ mod tests {
             })
             .collect::<HashMap<_, _>>();
         let deleted_topic_id = active.topic("deleted").expect("deleted topic").topic_id;
-        let deleted_shard = crate::wal::quorum::registry::ShardId {
+        let deleted_shard = ShardId {
             topic_id: deleted_topic_id,
             partition: PartitionIndex(0),
         };
@@ -222,7 +226,7 @@ mod tests {
                 maplit::btreemap! {NodeId(2) => original["deleted"].log.clone()},
             )),
         );
-        let deleted_wal_dir = crate::wal::quorum::shard_dir(
+        let deleted_wal_dir = shard_dir(
             dir.path(),
             "deleted",
             Some(deleted_topic_id),
@@ -289,33 +293,27 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_prunes_partition_after_local_replica_is_reassigned() {
-        let topic = topic_record(
-            crate::replicator_supervisor::test_support::SupervisorTopicSetup {
-                topic: "moved",
-                ..Default::default()
-            },
-        );
+        let topic = topic_record(SupervisorTopicSetup {
+            topic: "moved",
+            ..Default::default()
+        });
         let assigned = image_with(&[
             topic.clone(),
-            partition_record(
-                crate::replicator_supervisor::test_support::SupervisorPartitionSetup {
-                    topic: "moved",
-                    leader: NodeId(2),
-                    replicas: vec![NodeId(2)],
-                    ..Default::default()
-                },
-            ),
+            partition_record(SupervisorPartitionSetup {
+                topic: "moved",
+                leader: NodeId(2),
+                replicas: vec![NodeId(2)],
+                ..Default::default()
+            }),
         ]);
         let reassigned = image_with(&[
             topic,
-            partition_record(
-                crate::replicator_supervisor::test_support::SupervisorPartitionSetup {
-                    topic: "moved",
-                    replicas: vec![NodeId(1)],
-                    epoch: krabka_metadata::LeaderEpoch(1),
-                    ..Default::default()
-                },
-            ),
+            partition_record(SupervisorPartitionSetup {
+                topic: "moved",
+                replicas: vec![NodeId(1)],
+                epoch: krabka_metadata::LeaderEpoch(1),
+                ..Default::default()
+            }),
         ]);
         let (supervisor, partitions, _reporter, dir) = supervisor_fixture(assigned.clone());
         supervisor.reconcile(&assigned).await;
@@ -324,7 +322,7 @@ mod tests {
             .get("moved", PartitionIndex(0))
             .expect("assigned partition");
         let topic_id = assigned.topic("moved").expect("topic").topic_id;
-        let shard = crate::wal::quorum::registry::ShardId {
+        let shard = ShardId {
             topic_id,
             partition: PartitionIndex(0),
         };
@@ -334,8 +332,7 @@ mod tests {
                 maplit::btreemap! {NodeId(2) => original.log.clone()},
             )),
         );
-        let wal_dir =
-            crate::wal::quorum::shard_dir(dir.path(), "moved", Some(topic_id), PartitionIndex(0));
+        let wal_dir = shard_dir(dir.path(), "moved", Some(topic_id), PartitionIndex(0));
         std::fs::create_dir_all(&wal_dir).expect("WAL shard directory");
 
         supervisor.reconcile(&reassigned).await;
@@ -349,12 +346,10 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_keeps_partition_until_its_metadata_record_arrives() {
-        let image = image_with(&[topic_record(
-            crate::replicator_supervisor::test_support::SupervisorTopicSetup {
-                topic: "pending",
-                ..Default::default()
-            },
-        )]);
+        let image = image_with(&[topic_record(SupervisorTopicSetup {
+            topic: "pending",
+            ..Default::default()
+        })]);
         let (supervisor, partitions, _reporter, dir) = supervisor_fixture(image.clone());
         supervisor
             .materialize_local_partition(&image, "pending", 0)

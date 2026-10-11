@@ -10,7 +10,13 @@ use krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDir
 use tracing::warn;
 
 use super::{ReplicatorSupervisor, TopicPartition};
-use crate::{metadata_source::MetadataSource, partition_registry::PartitionRegistry};
+use crate::{
+    assign_dirs::{build_request, send_assignments},
+    controller_endpoint::ControllerDialer,
+    log_dir_id::LogDirIds,
+    metadata_source::MetadataSource,
+    partition_registry::PartitionRegistry,
+};
 
 /// Compute the dir-assignment reports that changed since last reported.
 ///
@@ -30,7 +36,7 @@ type ChangedAssignments = (Vec<WireDirAssignment>, Vec<ReportedDirUpdate>);
 pub(crate) fn collect_changed_assignments(
     local_set: &HashSet<TopicPartition>,
     partitions: &PartitionRegistry,
-    log_dir_ids: &crate::log_dir_id::LogDirIds,
+    log_dir_ids: &LogDirIds,
     image: &MetadataImage,
     reported_dirs: &dashmap::DashMap<TopicPartition, uuid::Uuid>,
 ) -> ChangedAssignments {
@@ -71,7 +77,7 @@ pub(super) trait AssignDirsReporter: Send + Sync {
 /// endpoint KIP-919 puts api key 73 on, through the same authenticated dialer
 /// the raft transport reaches its peers with.
 pub(super) struct NetworkAssignDirsReporter {
-    pub(super) dialer: crate::controller_endpoint::ControllerDialer,
+    pub(super) dialer: ControllerDialer,
 }
 
 #[async_trait::async_trait]
@@ -82,7 +88,7 @@ impl AssignDirsReporter for NetworkAssignDirsReporter {
         client_id: &str,
         req: AssignReplicasToDirsRequest,
     ) -> Result<(), String> {
-        crate::assign_dirs::send_assignments(controller, &self.dialer, client_id, req).await
+        send_assignments(controller, &self.dialer, client_id, req).await
     }
 }
 
@@ -110,7 +116,7 @@ impl ReplicatorSupervisor {
                 u64::try_from(self.broker_id).unwrap_or(u64::MAX),
             ))
             .unwrap_or(crate::assign_dirs::UNKNOWN_BROKER_EPOCH);
-        let req = crate::assign_dirs::build_request(self.broker_id, broker_epoch, &wire);
+        let req = build_request(self.broker_id, broker_epoch, &wire);
         match self
             .assign_dirs_reporter
             .send(&self.controller, &self.client_id, req)
@@ -141,7 +147,7 @@ mod tests {
 
     use super::*;
     use crate::replicator_supervisor::test_support::{
-        single_partition_image, static_source, supervisor_fixture,
+        materialized_partition, single_partition_image, static_source, supervisor_fixture,
     };
 
     /// A reporter that dials a plaintext controller listener and knows no
@@ -208,8 +214,7 @@ mod tests {
         let img = single_partition_image("t", topic_id, krabka_raft::NodeId(1));
 
         // Materialize the partition under a temp dir.
-        let (dir, partitions) =
-            crate::replicator_supervisor::test_support::materialized_partition();
+        let (dir, partitions) = materialized_partition();
 
         // Resolve LogDirIds over the same temp dir.
         let log_dir_ids = crate::log_dir_id::LogDirIds::resolve(&[dir.path().to_path_buf()]);

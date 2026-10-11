@@ -5,11 +5,14 @@ use assert2::{assert, check};
 use tempfile::tempdir;
 
 use super::*;
-use crate::share_coordinator::{
-    config::ShareCoordinatorConfig,
-    coordinator::test_support::{
-        Logged, NOW_MS, batch, configured_coordinator, coordinator, image_with_topic,
-        initialize_led_group, lead_all, logged_records, share_write,
+use crate::{
+    coordinator::unified::persistence::MAX_STRING_BYTES,
+    share_coordinator::{
+        config::ShareCoordinatorConfig,
+        coordinator::test_support::{
+            Logged, NOW_MS, batch, configured_coordinator, coordinator, image_with_topic,
+            initialize_led_group, lead_all, logged_records, share_write,
+        },
     },
 };
 
@@ -103,7 +106,7 @@ async fn a_group_id_over_32767_bytes_is_not_initialized() {
     let (coord, _reg) = coordinator(dir.path());
     lead_all(&coord).await;
     let image = image_with_topic(TOPIC, 1);
-    let limit = crate::coordinator::unified::persistence::MAX_STRING_BYTES;
+    let limit = MAX_STRING_BYTES;
     let longest = "g".repeat(limit);
     let too_long = "g".repeat(limit + 1);
 

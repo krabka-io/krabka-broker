@@ -28,11 +28,19 @@ use super::{
 };
 pub(super) use crate::test_support::await_until;
 use crate::{
+    api_catalog::UnstableApiVersions,
     config::ReplicationRuntimeConfig,
+    diskless::hot_tail::HotTailCache,
+    log_dir_id::LogDirIds,
+    log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource,
+    network::client::InterBrokerClient,
+    partition::PartitionRuntimeConfig,
     partition_registry::PartitionRegistry,
-    test_support::{FakeMetadataSource, PartitionCount, ReplicationFactor},
+    producer_state::ProducerState,
+    test_support::{FakeMetadataSource, PartitionCount, ReplicationFactor, broker_registration},
     throttle::ThrottleState,
+    wal::quorum::registry::WalShardRegistry,
 };
 
 pub(super) fn image_with(records: &[MetadataRecord]) -> MetadataImage {
@@ -80,7 +88,7 @@ pub(super) fn single_partition_image(topic: &str, topic_id: Uuid, leader: NodeId
                     crate::replicator_supervisor::test_support::SupervisorTopicIdentity::Specified(
                         topic_id,
                     ),
-                replication_factor: crate::test_support::ReplicationFactor(1),
+                replication_factor: ReplicationFactor(1),
                 ..Default::default()
             },
         ),
@@ -150,8 +158,8 @@ pub(super) fn follower_promotion_images() -> (MetadataImage, MetadataImage) {
 
 #[derive(Default)]
 pub(super) struct MaterializeFixture {
-    log_dir_status: crate::log_dir_status::LogDirRegistry,
-    producer_state: Arc<crate::producer_state::ProducerState>,
+    log_dir_status: LogDirRegistry,
+    producer_state: Arc<ProducerState>,
 }
 
 #[derive(Clone, Copy)]
@@ -189,11 +197,7 @@ impl MaterializeFixture {
             log_config: setup.log_config,
             log_dir_status: &self.log_dir_status,
             producer_state: &self.producer_state,
-            runtime: crate::partition::PartitionRuntimeConfig::new(
-                (1_024, 64, 3),
-                false,
-                (None, None, None),
-            ),
+            runtime: PartitionRuntimeConfig::new((1_024, 64, 3), false, (None, None, None)),
         }
     }
 
@@ -273,7 +277,7 @@ pub(super) fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
             port: 19092,
             protocol: krabka_security::ListenerProtocol::Plaintext,
         }],
-        ..crate::test_support::broker_registration(node_id)
+        ..broker_registration(node_id)
     }
 }
 
@@ -341,12 +345,12 @@ pub(super) fn supervisor_fixture(image: MetadataImage) -> SupervisorFixture {
         partitions: partitions.clone(),
         log_dirs: vec![dir.path().to_path_buf()],
         log_config: LogConfig::default(),
-        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+        unstable_api_versions: UnstableApiVersions::Disabled,
         client_id: "supervisor-test".into(),
         shutdown: CancellationToken::new(),
         txn_coordinator: None,
         share_coordinator: None,
-        inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
+        inter_broker_client: Arc::new(InterBrokerClient::new(None, None)),
         inter_broker_listener_protocol: krabka_security::ListenerProtocol::Plaintext,
         inter_broker_server_name: "localhost".into(),
         inter_broker_listener_name: "INTERNAL".into(),
@@ -355,17 +359,15 @@ pub(super) fn supervisor_fixture(image: MetadataImage) -> SupervisorFixture {
         controller_quorum_voters: Vec::new(),
         replication: ReplicationRuntimeConfig::default(),
         throttle_state: Arc::new(ThrottleState::new()),
-        log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
-        producer_state: Arc::new(crate::producer_state::ProducerState::new()),
+        log_dir_status: LogDirRegistry::default(),
+        producer_state: Arc::new(ProducerState::new()),
         max_produce_group: 1_024,
         partition_writer_queue_depth: 64,
         diskless_wal_local_replica_count: 3,
         metrics: crate::metrics::BrokerMetrics::default(),
-        log_dir_ids: crate::log_dir_id::LogDirIds::resolve(&[dir.path().to_path_buf()]),
-        hot_tail: Arc::new(crate::diskless::hot_tail::HotTailCache::default()),
-        wal_shards: Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(
-            krabka_raft::NodeId(2),
-        )),
+        log_dir_ids: LogDirIds::resolve(&[dir.path().to_path_buf()]),
+        hot_tail: Arc::new(HotTailCache::default()),
+        wal_shards: Arc::new(WalShardRegistry::new(krabka_raft::NodeId(2))),
     });
     supervisor.assign_dirs_reporter = reporter.clone();
     (supervisor, partitions, reporter, dir)

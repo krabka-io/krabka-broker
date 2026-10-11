@@ -45,6 +45,7 @@ use krabka_protocol::{
 
 use crate::{
     codes,
+    coordinator::test_support::single_replica_partition,
     test_support::{
         GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
         request_context, start_broker_no_audit_with,
@@ -349,7 +350,7 @@ async fn share_state_rpcs_need_cluster_action() {
         ));
         for partition in PARTITIONS {
             data_topics.push(krabka_metadata::MetadataRecord::V1Partition(
-                crate::coordinator::test_support::single_replica_partition(
+                single_replica_partition(
                     &name,
                     krabka_ids::PartitionIndex(partition),
                     broker.config.node_id,
