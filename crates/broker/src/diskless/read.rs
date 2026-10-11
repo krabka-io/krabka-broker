@@ -10,7 +10,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
 use super::wal_index::WalIndexCache;
-use crate::{broker::Broker, codes, handlers::fetch::PendingRead, partition::Partition};
+use crate::{broker::Broker, codes, error::BrokerError, handlers::fetch::{LiveOffsets, PendingRead}, partition::Partition};
 
 /// Shared state that serves diskless offsets. The broker trimmed these offsets
 /// locally, but the committed WAL object index still covers them.
@@ -63,9 +63,9 @@ impl DisklessReadHandle {
         partition: i32,
         offset: i64,
         max_bytes: usize,
-    ) -> Result<Option<Bytes>, crate::error::BrokerError> {
+    ) -> Result<Option<Bytes>, BrokerError> {
         if self.index_log().is_some_and(|log| !log.is_valid()) {
-            return Err(crate::error::BrokerError::Txn(
+            return Err(BrokerError::Txn(
                 "diskless WAL index projection is unavailable or invalid".into(),
             ));
         }
@@ -78,7 +78,7 @@ impl DisklessReadHandle {
             return Ok(None);
         };
         let range_end = byte_start.checked_add(byte_len).ok_or_else(|| {
-            crate::error::BrokerError::Txn("diskless WAL byte range overflow".into())
+            BrokerError::Txn("diskless WAL byte range overflow".into())
         })?;
         self.store
             .get_opts(
@@ -89,10 +89,10 @@ impl DisklessReadHandle {
                 },
             )
             .await
-            .map_err(|error| crate::error::BrokerError::Txn(format!("diskless WAL get: {error}")))?
+            .map_err(|error| BrokerError::Txn(format!("diskless WAL get: {error}")))?
             .bytes()
             .await
-            .map_err(|error| crate::error::BrokerError::Txn(format!("diskless WAL body: {error}")))
+            .map_err(|error| BrokerError::Txn(format!("diskless WAL body: {error}")))
             .map(Some)
     }
 
@@ -102,7 +102,7 @@ impl DisklessReadHandle {
         partition: i32,
         offset: i64,
         max_bytes: usize,
-    ) -> Result<Option<Bytes>, crate::error::BrokerError> {
+    ) -> Result<Option<Bytes>, BrokerError> {
         let Some(run) = self
             .read_run(topic_id, partition, offset, max_bytes)
             .await?
@@ -110,7 +110,7 @@ impl DisklessReadHandle {
             return Ok(None);
         };
         let Some(records) = first_batch_bytes_at_or_after(&run, offset, max_bytes)? else {
-            return Err(crate::error::BrokerError::Txn(format!(
+            return Err(BrokerError::Txn(format!(
                 "diskless WAL indexed range contains no batch at offset {offset}"
             )));
         };
@@ -166,7 +166,7 @@ pub(crate) async fn try_diskless_read(
     let bytes_est = records.len();
     // The row may carry the refused out-of-range answer (all -1); a served read
     // reports the partition's live bounds, as a local read does.
-    crate::handlers::fetch::LiveOffsets::of(part)
+    LiveOffsets::of(part)
         .await
         .report(&mut p.out);
     p.out.error_code = codes::NONE;
@@ -181,14 +181,14 @@ fn first_batch_bytes_at_or_after(
     run: &Bytes,
     floor: i64,
     max_bytes: usize,
-) -> Result<Option<Bytes>, crate::error::BrokerError> {
+) -> Result<Option<Bytes>, BrokerError> {
     let mut offset = 0;
     let mut selected = None;
     while offset < run.len() {
         let slice = run.slice(offset..);
         let mut cur: &[u8] = &slice;
         let batch = RecordBatch::decode(&mut cur).map_err(|error| {
-            crate::error::BrokerError::Txn(format!(
+            BrokerError::Txn(format!(
                 "diskless WAL indexed range contains an invalid batch: {error}"
             ))
         })?;
@@ -203,7 +203,7 @@ fn first_batch_bytes_at_or_after(
             max_bytes,
         ) {
             DisklessBatchStep::Invalid => {
-                return Err(crate::error::BrokerError::Txn(
+                return Err(BrokerError::Txn(
                     "diskless WAL batch coordinates are invalid".into(),
                 ));
             }
@@ -237,7 +237,7 @@ mod tests {
     use object_store::{ObjectStoreExt, PutPayload, path::Path};
 
     use super::*;
-    use crate::diskless::wal_index::WalFlushRecord;
+    use crate::{broker::spawn_partition, config::RlmmKind, diskless::wal_index::WalFlushRecord};
 
     fn batch(base_offset: i64, value: &'static [u8]) -> RecordBatch {
         RecordBatch {
@@ -457,7 +457,7 @@ mod tests {
         config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
             dir: object_dir.path().to_path_buf(),
         });
-        config.remote_log_metadata = crate::config::RlmmKind::InMemory;
+        config.remote_log_metadata = RlmmKind::InMemory;
         let broker_handle = Broker::start(config).await.unwrap();
         let broker = broker_handle.broker_arc_for_test();
         let topic_id = Uuid::from_u128(9);
@@ -507,7 +507,7 @@ mod tests {
             });
         let part_dir = dir.path().join("orders-0");
         std::fs::create_dir_all(&part_dir).unwrap();
-        let part = crate::broker::spawn_partition(
+        let part = spawn_partition(
             "orders".into(),
             PartitionIndex(0),
             dir.path().to_path_buf(),

@@ -42,7 +42,9 @@ impl FlushConfig {
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use crate::config::BrokerConfig;
+
+use super::*;
 
     #[tokio::test]
     async fn default_config_enables_safe_trim_lag() {
@@ -56,12 +58,12 @@ mod tests {
 
     #[test]
     fn broker_config_controls_every_flusher_policy() {
-        let broker = crate::config::BrokerConfig {
+        let broker = BrokerConfig {
             diskless_wal_flush_interval: krabka_units::millis(125),
             diskless_wal_flush_max_size: krabka_units::mebibytes(4),
             diskless_wal_trim_safety_lag: 0,
             diskless_wal_index_projection_timeout: krabka_units::secs(3),
-            ..crate::config::BrokerConfig::default()
+            ..BrokerConfig::default()
         };
 
         let config = FlushConfig::from_broker(&broker);
