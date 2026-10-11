@@ -208,11 +208,7 @@ impl Segment {
         if chunk_ends.is_empty() {
             mode.cache.push(cached);
         } else {
-            let mut start = 0;
-            for &end in chunk_ends {
-                mode.cache.push(cached.slice(start..end));
-                start = end;
-            }
+            mode.cache.push_group(&cached, chunk_ends);
         }
         Ok(())
     }
