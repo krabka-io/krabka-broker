@@ -14,7 +14,8 @@ use super::*;
 use crate::{
     codes,
     delivery::test_support::{NOW_MS, batch_at},
-    partition_writer::test_support::ProduceAck,
+    error::BrokerError,
+    partition_writer::test_support::{ProduceAck, spawn_writer as spawn_test_writer},
 };
 
 /// A scheduled, monotonic log.
@@ -35,7 +36,7 @@ fn spawn_writer(
     log: &Arc<Mutex<Log>>,
     rx: mpsc::Receiver<WriterMessage>,
 ) -> tokio::task::JoinHandle<()> {
-    crate::partition_writer::test_support::spawn_writer(
+    spawn_test_writer(
         dir,
         log.clone(),
         rx,
@@ -81,7 +82,7 @@ async fn a_backwards_delivery_time_in_one_writer_group_is_refused() {
         .expect_err("a batch that runs the schedule backwards is refused");
     check!(matches!(
         &earlier,
-        crate::error::BrokerError::Log(krabka_log::LogError::ScheduleRunsBackwards {
+        BrokerError::Log(krabka_log::LogError::ScheduleRunsBackwards {
             delivery_ms
         }) if *delivery_ms == NOW_MS
     ));

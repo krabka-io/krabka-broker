@@ -180,14 +180,14 @@ mod tests {
         handlers::delegation_token_test_support::{
             DAY_MS, ExpiryExpectation, MutationSeedSetup, OwnershipRefusalSetup, TokenExpirySetup,
             TokenMutationIndex, TokenMutationRefusalSetup, TokenPeriodMillis, authed,
-            in_mutation_window, mutation_credential_refusals, ownership_refusal, test_controller,
+            in_mutation_window, mutation_credential_refusals, ownership_refusal,
+            stored_expiry as stored_expiry_fixture, test_controller,
         },
         test_support::{KafkaErrorCode, UnixMillis},
     };
 
     fn stored_expiry(controller: &ControllerHandle, token_id: &str) -> i64 {
-        crate::handlers::delegation_token_test_support::stored_expiry(controller, token_id)
-            .expect("token remains")
+        stored_expiry_fixture(controller, token_id).expect("token remains")
     }
 
     /// Refusals come in Kafka's order, carry Kafka's expiry, and leave the

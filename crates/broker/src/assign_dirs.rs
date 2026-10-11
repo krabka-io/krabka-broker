@@ -272,7 +272,8 @@ mod tests {
     }
 
     use crate::test_support::{
-        VoterImageSetup, plaintext_controller_dialer_with_voters as plaintext_dialer, voter_image,
+        VoterImageSetup, plaintext_controller_dialer_with_voters as plaintext_dialer,
+        start_controller as start_test_controller, voter_image,
     };
 
     /// What a broker-only node sees of a controller-only leader: a voter with a
@@ -293,7 +294,7 @@ mod tests {
     /// Boot a single-node broker that leads the metadata quorum, and hand back
     /// the address of the controller listener KIP-919 puts api key 73 on.
     async fn start_controller() -> (BrokerHandle, SocketAddr, tempfile::TempDir) {
-        crate::test_support::start_controller().await
+        start_test_controller().await
     }
 
     #[tokio::test]

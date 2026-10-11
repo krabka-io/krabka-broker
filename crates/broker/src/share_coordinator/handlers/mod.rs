@@ -19,7 +19,11 @@ pub(crate) mod write;
 #[cfg(test)]
 mod authorization_tests;
 
-use crate::{broker::Broker, codes::NONE, handlers::RequestContext};
+use crate::{
+    broker::Broker,
+    codes::NONE,
+    handlers::{RequestContext, cluster_action_denied as request_cluster_action_denied},
+};
 
 /// Whether a request has no topic rows or contains an empty partition row.
 macro_rules! empty_partition_data {
@@ -51,7 +55,7 @@ const CLUSTER_AUTHORIZATION_FAILED_MESSAGE: &str = "Cluster authorization failed
 /// Whether the authorizer denies `ClusterAction` on the cluster to the
 /// principal of `ctx`.
 fn cluster_action_denied(broker: &Broker, ctx: &RequestContext<'_>) -> bool {
-    crate::handlers::cluster_action_denied(
+    request_cluster_action_denied(
         broker.config.authorizer.as_ref(),
         &broker.controller.current_image(),
         ctx,
@@ -390,12 +394,14 @@ pub(crate) mod test_support {
     /// metadata reconcile loop applies the image again at any time, and an
     /// image without the topic drops every led partition.
     pub(crate) async fn lead_share_state_partitions(broker: &Broker) {
+        use crate::{
+            auto_topic_creation::creatable_topic,
+            codes::{NONE, TOPIC_ALREADY_EXISTS},
+        };
+
         let partitions = broker.config.share_coordinator.state_topic_num_partitions;
         let request = krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
-            topics: vec![crate::auto_topic_creation::creatable_topic(
-                &broker.config,
-                bootstrap::TOPIC,
-            )],
+            topics: vec![creatable_topic(&broker.config, bootstrap::TOPIC)],
             ..Default::default()
         };
         let response = TopicCreator::new(broker)
@@ -404,7 +410,7 @@ pub(crate) mod test_support {
             .expect("the controller answers CreateTopics");
         for row in &response.topics {
             assert2::assert!(
-                [crate::codes::NONE, crate::codes::TOPIC_ALREADY_EXISTS].contains(&row.error_code),
+                [NONE, TOPIC_ALREADY_EXISTS].contains(&row.error_code),
                 "create __share_group_state: {row:?}"
             );
         }

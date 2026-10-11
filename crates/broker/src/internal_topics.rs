@@ -48,6 +48,7 @@
 use crate::{
     BrokerError, barrier::STATE_TOPIC, config::BrokerConfig, coordinator::bootstrap::OFFSETS_TOPIC,
     diskless::index_log::DISKLESS_WAL_INDEX_TOPIC, share_coordinator::bootstrap::TOPIC,
+    txn::bootstrap::TOPIC as TXN_TOPIC,
 };
 
 /// The broker-owned topics whose names are fixed, each named by the constant
@@ -62,7 +63,7 @@ use crate::{
 /// against the whole set instead of against a copy of it.
 pub(crate) const INTERNAL_TOPICS: [&str; 5] = [
     OFFSETS_TOPIC,
-    crate::txn::bootstrap::TOPIC,
+    TXN_TOPIC,
     TOPIC,
     STATE_TOPIC,
     DISKLESS_WAL_INDEX_TOPIC,

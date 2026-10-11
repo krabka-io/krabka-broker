@@ -147,7 +147,9 @@ mod tests {
     use super::*;
     use crate::{
         broker::Broker,
-        handlers::group_heartbeat_test_support::{GroupTopicSetup, topic_with_partitions},
+        handlers::group_heartbeat_test_support::{
+            GroupTopicSetup, acl as group_acl, topic_with_partitions,
+        },
         test_support::{
             DenyAll, PartitionCount, ShareApiSupport, ShareBrokerSetup, peer, principal,
             start_share_broker, test_ctx,
@@ -222,11 +224,7 @@ mod tests {
     }
 
     fn acl(resource_type: ResourceType, name: &str) -> krabka_metadata::MetadataRecord {
-        crate::handlers::group_heartbeat_test_support::acl(
-            resource_type,
-            name,
-            AclOperation::Describe,
-        )
+        group_acl(resource_type, name, AclOperation::Describe)
     }
 
     fn topic(

@@ -209,7 +209,8 @@ mod tests {
             encode_response,
             group_heartbeat_test_support::{
                 GroupTopicSetup, acl_authorizer, alice, describe_acl, grant_group_read,
-                group_read_acl, topic_with_partitions,
+                group_read_acl, subscribed_names_describe_denied_table as denied_table_fixture,
+                topic_with_partitions,
             },
             group_read_denied,
         },
@@ -489,7 +490,7 @@ mod tests {
 
     #[test]
     fn subscribed_names_describe_denied_table() {
-        crate::handlers::group_heartbeat_test_support::subscribed_names_describe_denied_table();
+        denied_table_fixture();
     }
 
     // ── Explicit-name `Describe` checks (issue #720) ────────────────────

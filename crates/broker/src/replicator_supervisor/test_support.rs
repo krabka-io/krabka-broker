@@ -82,25 +82,18 @@ pub(super) fn topic_record(setup: SupervisorTopicSetup<'_>) -> MetadataRecord {
 
 pub(super) fn single_partition_image(topic: &str, topic_id: Uuid, leader: NodeId) -> MetadataImage {
     image_with(&[
-        topic_record(
-            crate::replicator_supervisor::test_support::SupervisorTopicSetup {
-                topic,
-                identity:
-                    crate::replicator_supervisor::test_support::SupervisorTopicIdentity::Specified(
-                        topic_id,
-                    ),
-                replication_factor: ReplicationFactor(1),
-                ..Default::default()
-            },
-        ),
-        partition_record(
-            crate::replicator_supervisor::test_support::SupervisorPartitionSetup {
-                topic,
-                leader,
-                replicas: vec![leader],
-                ..Default::default()
-            },
-        ),
+        topic_record(SupervisorTopicSetup {
+            topic,
+            identity: SupervisorTopicIdentity::Specified(topic_id),
+            replication_factor: ReplicationFactor(1),
+            ..Default::default()
+        }),
+        partition_record(SupervisorPartitionSetup {
+            topic,
+            leader,
+            replicas: vec![leader],
+            ..Default::default()
+        }),
     ])
 }
 
@@ -130,29 +123,24 @@ pub(super) fn three_replica_image(leader: NodeId, epoch: LeaderEpoch) -> Metadat
 
 pub(super) fn follower_promotion_images() -> (MetadataImage, MetadataImage) {
     let replicas = vec![NodeId(1), NodeId(2)];
-    let topic =
-        topic_record(crate::replicator_supervisor::test_support::SupervisorTopicSetup::default());
+    let topic = topic_record(SupervisorTopicSetup::default());
     (
         image_with(&[
             topic.clone(),
-            partition_record(
-                crate::replicator_supervisor::test_support::SupervisorPartitionSetup {
-                    replicas: replicas.clone(),
-                    epoch: krabka_metadata::LeaderEpoch(3),
-                    ..Default::default()
-                },
-            ),
+            partition_record(SupervisorPartitionSetup {
+                replicas: replicas.clone(),
+                epoch: krabka_metadata::LeaderEpoch(3),
+                ..Default::default()
+            }),
         ]),
         image_with(&[
             topic,
-            partition_record(
-                crate::replicator_supervisor::test_support::SupervisorPartitionSetup {
-                    leader: NodeId(2),
-                    replicas,
-                    epoch: krabka_metadata::LeaderEpoch(7),
-                    ..Default::default()
-                },
-            ),
+            partition_record(SupervisorPartitionSetup {
+                leader: NodeId(2),
+                replicas,
+                epoch: krabka_metadata::LeaderEpoch(7),
+                ..Default::default()
+            }),
         ]),
     )
 }
@@ -221,7 +209,7 @@ pub(super) fn materialized_partition_with_config(
     let partitions = Arc::new(PartitionRegistry::new());
     MaterializeFixture::default().materialize(
         &partitions,
-        crate::replicator_supervisor::test_support::MaterializeSetup {
+        MaterializeSetup {
             log_dirs: &[dir.path().to_path_buf()],
             log_config,
             ..Default::default()

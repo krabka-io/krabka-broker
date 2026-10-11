@@ -121,7 +121,7 @@ pub(super) async fn register_compactable(
 ) -> (Arc<Partition>, usize) {
     let partition = compactable_partition(
         root,
-        crate::cleaner::test_support::CompactionSetup {
+        CompactionSetup {
             topic,
             ..Default::default()
         },

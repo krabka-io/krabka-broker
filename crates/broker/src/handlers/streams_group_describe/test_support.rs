@@ -25,6 +25,7 @@ use super::handle;
 use crate::{
     authorizer::Authorizer,
     broker::{Broker, BrokerHandle},
+    codes::GROUP_ID_NOT_FOUND,
     coordinator::unified::{
         StreamsGroupSeed,
         streams::{
@@ -32,7 +33,9 @@ use crate::{
             persistence::{StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue},
         },
     },
-    handlers::test_support::single_replica_partition,
+    handlers::{
+        streams_group_heartbeat::handle as heartbeat_handle, test_support::single_replica_partition,
+    },
     test_support::{
         controller_peer_allowed, dispatch_wire, peer, principal, request_context,
         start_group_broker_with,
@@ -156,9 +159,9 @@ pub(super) async fn describe_at(
 ) -> StreamsGroupDescribeResponse {
     request_identity!(
         (principal, peer, ctx),
-        crate::test_support::principal("admin"),
+        principal("admin"),
         client_id = "admin-client",
-        address = crate::test_support::peer()
+        address = peer()
     );
     let req = StreamsGroupDescribeRequest {
         include_topology_description,
@@ -250,7 +253,7 @@ fn expected_key_value(key: &str, value: &str) -> KeyValue {
 pub(super) fn error_group(group_id: &str, error_code: i16) -> DescribedGroup {
     tagged_wire!(DescribedGroup {
         error_code,
-        error_message: (error_code == crate::codes::GROUP_ID_NOT_FOUND)
+        error_message: (error_code == GROUP_ID_NOT_FOUND)
             .then(|| format!("Streams group {group_id} not found.")),
         group_id: group_id.into(),
         group_state: String::new(),
@@ -302,11 +305,11 @@ pub(super) async fn heartbeat(
 
     request_identity!(
         (principal, peer, ctx),
-        crate::test_support::principal("admin"),
+        principal("admin"),
         client_id = "streams-client",
-        address = crate::test_support::peer()
+        address = peer()
     );
-    crate::handlers::streams_group_heartbeat::handle(broker, req.clone(), MAX_VERSION, &ctx)
+    heartbeat_handle(broker, req.clone(), MAX_VERSION, &ctx)
         .await
         .expect("handle heartbeat")
 }

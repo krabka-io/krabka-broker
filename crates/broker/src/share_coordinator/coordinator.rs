@@ -62,6 +62,7 @@ mod state_machine;
 pub(crate) mod test_support;
 
 use crate::{
+    codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR},
     partition_registry::PartitionRegistry,
     share_coordinator::{
         bootstrap, config::ShareCoordinatorConfig, partitioner::partition_for_share_key,
@@ -165,7 +166,7 @@ impl ShareStateError {
 
     /// The error of a status check that [`ShareCoordinator::active`] refused.
     fn inactive(code: ShareErrorCode) -> Self {
-        let message = if code == crate::codes::COORDINATOR_LOAD_IN_PROGRESS {
+        let message = if code == COORDINATOR_LOAD_IN_PROGRESS {
             message::COORDINATOR_LOAD_IN_PROGRESS
         } else {
             message::NOT_COORDINATOR
@@ -449,12 +450,12 @@ impl ShareCoordinator {
             Some(LedPartition {
                 status: LoadStatus::Pending | LoadStatus::Loading,
                 ..
-            }) => Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS),
+            }) => Err(COORDINATOR_LOAD_IN_PROGRESS),
             Some(LedPartition {
                 status: LoadStatus::Failed,
                 ..
             })
-            | None => Err(crate::codes::NOT_COORDINATOR),
+            | None => Err(NOT_COORDINATOR),
         }
     }
 

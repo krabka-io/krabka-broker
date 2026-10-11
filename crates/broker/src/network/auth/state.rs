@@ -435,7 +435,7 @@ mod tests {
     use crate::{
         codes::SASL_AUTHENTICATION_FAILED,
         network::auth::test_support::{authenticated, oauth_reauthenticating},
-        test_support::sasl_principal,
+        test_support::{principal, sasl_principal},
     };
 
     /// The request gate follows Kafka's `SaslServerAuthenticator`: before a
@@ -768,7 +768,7 @@ mod tests {
         };
         let reauthenticating = oauth_reauthenticating("alice", 2_000_000);
         let authenticated = ConnectionAuth::Authenticated {
-            principal: crate::test_support::principal("ANONYMOUS"),
+            principal: principal("ANONYMOUS"),
             mechanism: SaslMechanism::Plain,
             expires_at_ms: None,
             authenticated_via_token: false,
@@ -1049,7 +1049,7 @@ mod tests {
 
         check!(
             resp == SaslAuthenticateResponse {
-                error_code: crate::codes::SASL_AUTHENTICATION_FAILED,
+                error_code: SASL_AUTHENTICATION_FAILED,
                 error_message: Some(
                     "Cannot change principals during re-authentication from User.alice: \
                      User.mallory"

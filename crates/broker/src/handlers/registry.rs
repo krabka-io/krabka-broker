@@ -248,9 +248,9 @@ fn produce_adapter<'a>(
     body_bytes: Bytes,
     ctx: &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-    Box::pin(crate::handlers::produce::handle(
-        broker, version, body, body_bytes, ctx,
-    ))
+    use crate::handlers::produce::handle as produce_handle;
+
+    Box::pin(produce_handle(broker, version, body, body_bytes, ctx))
 }
 
 pub(crate) fn build_registry() -> DispatchRegistry {

@@ -11,7 +11,9 @@ use krabka_broker::{Broker, BrokerHandle};
 use krabka_security::SaslMechanism;
 use tempfile::TempDir;
 
-use crate::support::sasl::{delegation_token_defaults, sasl_temp_config};
+use crate::support::sasl::{
+    delegation_token_defaults, sasl_temp_config, start_broker as start_sasl_broker,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cluster bring-up.
@@ -97,7 +99,7 @@ pub(crate) fn start_broker_with_super_users(
     });
     delegation_token_defaults(&mut cfg, b"act-as-master-key");
 
-    Box::pin(crate::support::sasl::start_broker(cfg, log_dir))
+    Box::pin(start_sasl_broker(cfg, log_dir))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

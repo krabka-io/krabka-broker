@@ -32,8 +32,8 @@ use crate::{
     codes,
     handlers::test_support::{CreateTopicSetup, configured_topic_request},
     test_support::{
-        KafkaErrorCode, decode_response, dispatch_context, encode_request, peer, principal,
-        start_transaction_grant_broker,
+        KafkaErrorCode, RepeatedRecordsSetup, decode_response, dispatch_context, encode_request,
+        peer, principal, repeated_records_batch, start_transaction_grant_broker,
     },
 };
 
@@ -115,6 +115,8 @@ async fn create_topic(broker: &Broker, name: &str) {
 /// of the append (`FIRST_ADD_PARTITION_PRODUCE_VERSION` in
 /// `producer_checks.rs`), the same way a real v12+ client would.
 async fn open_transaction(broker: &Broker) -> TransactionalBatchSetup {
+    use crate::handlers::init_producer_id::handle as init_producer_id_handle;
+
     request_identity!(
         (grantee, address, ctx),
         principal("TransactionalId:Write"),
@@ -129,7 +131,7 @@ async fn open_transaction(broker: &Broker) -> TransactionalBatchSetup {
         ..Default::default()
     };
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
-    let init = crate::handlers::init_producer_id::handle(broker, init_request, version, &ctx)
+    let init = init_producer_id_handle(broker, init_request, version, &ctx)
         .await
         .expect("InitProducerId");
     assert!(init.error_code == codes::NONE, "InitProducerId: {init:?}");
@@ -141,9 +143,9 @@ async fn open_transaction(broker: &Broker) -> TransactionalBatchSetup {
 
 /// One v2 batch with one record, non-transactional.
 fn plain_batch() -> RecordsPayload {
-    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch(
-        crate::test_support::RepeatedRecordsSetup::default(),
-    )])
+    RecordsPayload::V2(vec![
+        repeated_records_batch(RepeatedRecordsSetup::default()),
+    ])
 }
 
 /// One v2 batch with one record, marked transactional (KIP-98) under

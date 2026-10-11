@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::{
     static_quorum_harness::{
-        docker_rm, jvm_controller_properties, kafka_cluster_id_string, start_jvm_controller,
+        MixedQuorum, docker_rm, jvm_controller_properties, kafka_cluster_id_string,
+        start_jvm_controller,
     },
     support,
 };
@@ -31,8 +32,7 @@ async fn static_mixed_jvm_krabka_quorum() {
     eprintln!("shared cluster_id uuid={cluster_id} kafka_str={cid_str}");
 
     // ── pre-bind 3 controller ports on the host ────────────────────────────
-    let ([p1, p2, p3], [c1, c2], [_dir1, _dir2]) =
-        crate::static_quorum_harness::MixedQuorum::start(cluster_id, None).await;
+    let ([p1, p2, p3], [c1, c2], [_dir1, _dir2]) = MixedQuorum::start(cluster_id, None).await;
 
     eprintln!("both Krabka controllers started (2/3 majority should self-elect)");
 

@@ -23,7 +23,9 @@ pub(crate) fn open_partition(
     log_dir: &Path,
     setup: StandalonePartitionSetup<'_>,
 ) -> Arc<Partition> {
-    let part = crate::test_support::open_partition(log_dir, setup);
+    use crate::test_support::open_partition as open_test_partition;
+
+    let part = open_test_partition(log_dir, setup);
     broker
         .partitions
         .insert(setup.topic.into(), setup.partition, Arc::clone(&part));

@@ -31,7 +31,7 @@ use crate::{
             handle_authenticate_oauthbearer_with_jwks_cache, handle_authenticate_plain,
             handle_authenticate_scram, handle_handshake,
         },
-        dispatch::sasl::audit_principal,
+        dispatch::sasl::{audit_principal, emit_authentication as emit_audit_authentication},
     },
     time_util::now_ms,
 };
@@ -86,7 +86,7 @@ fn emit_authentication(
         },
         audit_principal,
     );
-    crate::network::dispatch::sasl::emit_authentication(
+    emit_audit_authentication(
         audit_log,
         peer,
         mechanism.wire_name(),

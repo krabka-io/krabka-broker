@@ -93,7 +93,9 @@ mod tests {
     use super::*;
     use crate::{
         remote_log_manager::test_support::local_backends,
-        remote_reader::test_support::{not_ready_reader, tp},
+        remote_reader::test_support::{
+            not_ready_reader, reader_with_metadata as assigned_reader_with_metadata, tp,
+        },
     };
 
     fn reader_with_metadata() -> (RemoteReader, tempfile::TempDir) {
@@ -442,8 +444,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_remote_dir, reader) =
-            crate::remote_reader::test_support::reader_with_metadata(|| m.clone());
+        let (_remote_dir, reader) = assigned_reader_with_metadata(|| m.clone());
 
         // Unowned partition (never assigned) → the list path treats it as a
         // genuine miss: empty, not an error.

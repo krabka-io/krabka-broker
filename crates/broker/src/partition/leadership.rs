@@ -370,7 +370,9 @@ mod tests {
     use super::*;
     use crate::{
         codes::{FENCED_LEADER_EPOCH, UNKNOWN_LEADER_EPOCH},
-        partition::test_support::{EpochCheckpointFull, test_partition},
+        partition::test_support::{
+            EpochCheckpointFull, epoch_history as test_epoch_history, test_partition,
+        },
     };
 
     #[tokio::test]
@@ -496,7 +498,7 @@ mod tests {
     }
 
     fn epoch_history(partition: &Partition) -> Vec<(i32, i64)> {
-        crate::partition::test_support::epoch_history(&partition.log.lock().expect("log mutex"))
+        test_epoch_history(&partition.log.lock().expect("log mutex"))
     }
 
     /// One promotion step: an optional write at an epoch, or a

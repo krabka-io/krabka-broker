@@ -283,7 +283,9 @@ pub(super) fn voter_dir(root: &Path, topic: &str, shard: ShardId, node_id: NodeI
 async fn run_blocking<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T, BrokerError> + Send + 'static,
 ) -> Result<T, BrokerError> {
-    crate::blocking::run_blocking(operation)
+    use crate::blocking::run_blocking;
+
+    run_blocking(operation)
         .await
         .map_err(|error| storage_failure_error("WAL follower storage task panicked", error))?
 }

@@ -47,7 +47,7 @@ async fn set_controller_mutation_quota(addr: std::net::SocketAddr) -> Vec<(Quota
     alter_user_quota(
         addr,
         UserQuotaSetup {
-            authentication: PlainAuthenticationSetup::admin(crate::CLIENT_ID),
+            authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
             key: "controller_mutation_rate",
             value: QuotaValue(2.0),
             ..Default::default()

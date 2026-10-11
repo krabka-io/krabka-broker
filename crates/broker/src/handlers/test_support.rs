@@ -18,7 +18,7 @@ use krabka_protocol::{
 use crate::{
     api_catalog::UnstableApiVersions,
     authorizer::AllowAllAuthorizer,
-    broker::{Broker, BrokerHandle},
+    broker::{Broker, BrokerHandle, spawn_partition as spawn_broker_partition},
     codes,
     config::BrokerConfig,
     config_keys::broker_dynamic::BrokerConfigContext,
@@ -32,7 +32,8 @@ use crate::{
     test_support::{
         StandalonePartitionSetup, StorageMode, decode_response, encode_request,
         initialize_share_state, peer, principal, request_context, sasl_principal,
-        start_broker_no_audit_with, try_dispatch_context,
+        start_broker_no_audit_with, start_broker_with as start_test_broker_with,
+        try_dispatch_context,
     },
 };
 
@@ -432,7 +433,7 @@ pub(crate) async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
 pub(crate) async fn start_broker_with(
     configure: impl FnOnce(&mut BrokerConfig),
 ) -> (BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(configure).await
+    start_test_broker_with(configure).await
 }
 
 pub(crate) async fn produce_wire(
@@ -993,7 +994,7 @@ pub(crate) fn spawn_partition(root: &Path, setup: PartitionSpawnSetup<'_>) -> Ar
     } = setup;
     let partition_dir = partition_dir(root, topic, index.0);
     std::fs::create_dir_all(&partition_dir).expect("partition directory");
-    crate::broker::spawn_partition(
+    spawn_broker_partition(
         topic.to_string(),
         index,
         root.to_path_buf(),
@@ -1282,7 +1283,7 @@ pub(crate) struct BrokerConfigMutationSetup<'a> {
     pub serving: krabka_metadata::NodeId,
     #[default(&[])]
     pub log_dirs: &'a [std::path::PathBuf],
-    #[default(crate::api_catalog::UnstableApiVersions::Disabled)]
+    #[default(UnstableApiVersions::Disabled)]
     pub unstable: UnstableApiVersions,
 }
 

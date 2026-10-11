@@ -28,6 +28,7 @@ use crate::{
     isr_maintenance::test_support::{fake_source, reg_at, topic},
     metadata_source::MetadataSource,
     network::{client::InterBrokerClient, request::parse_request},
+    test_support::start_controller as start_test_support_controller,
 };
 
 /// The node that leads the metadata quorum. As node 3001 of the Kafka system
@@ -476,7 +477,7 @@ async fn send_alter_partition_to_reports_transport_error_for_closed_port() {
 /// Boots a single-node broker that leads the metadata quorum, and returns the
 /// address of its controller listener.
 async fn start_controller() -> (BrokerHandle, SocketAddr, tempfile::TempDir) {
-    crate::test_support::start_controller().await
+    start_test_support_controller().await
 }
 
 /// A krabka controller advertises `AlterPartition` on its controller listener

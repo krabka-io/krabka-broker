@@ -846,7 +846,7 @@ mod tests {
         let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
         cfg.plain_credentials
             .insert("alice".to_string(), "wonderland".to_string());
-        let handle = crate::Broker::start(cfg).await.expect("broker start");
+        let handle = Broker::start(cfg).await.expect("broker start");
         let broker = std::sync::Arc::clone(handle.broker_for_test());
         let peer: SocketAddr = "192.0.2.9:9092".parse().expect("peer addr");
         let mechanisms = [SaslMechanism::Plain];

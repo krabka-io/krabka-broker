@@ -75,18 +75,18 @@ use crate::{
     bootstrap::encode_bootstrap_records,
     broker::{Broker, BrokerHandle, spawn_partition},
     codes::{
-        COORDINATOR_NOT_AVAILABLE, KAFKA_STORAGE_ERROR, MESSAGE_TOO_LARGE, NOT_COORDINATOR,
+        COORDINATOR_NOT_AVAILABLE, KAFKA_STORAGE_ERROR, MESSAGE_TOO_LARGE, NONE, NOT_COORDINATOR,
         NOT_ENOUGH_REPLICAS, NOT_LEADER_OR_FOLLOWER, RECORD_LIST_TOO_LARGE, REQUEST_TIMED_OUT,
         UNKNOWN_SERVER_ERROR,
     },
     config::BrokerConfig,
-    config_keys::MIN_INSYNC_REPLICAS,
+    config_keys::{BROKER_WITNESS, MIN_INSYNC_REPLICAS, WITNESS_TRUE},
     controller_endpoint::ControllerDialer,
     elr::state::PartitionElr,
     error::BrokerError,
     features::ELR_VERSION,
     handlers::{
-        DispatchKind, RequestContext, alter_partition::handle,
+        DispatchKind, RequestContext, acl_wire::CLUSTER_RESOURCE_NAME, alter_partition::handle,
         describe_configs::effective_topic_configs, encode_response,
     },
     heartbeat::{
@@ -893,10 +893,10 @@ pub(crate) async fn accepted_isr_proposal(
 ) {
     let response = propose_isr(broker, setup).await;
     if response_check == IsrResponseCheck::EnvelopeAndPartition {
-        assert2::assert!(response.error_code == crate::codes::NONE);
+        assert2::assert!(response.error_code == NONE);
     }
     assert2::assert!(
-        response.topics[0].partitions[0].error_code == crate::codes::NONE,
+        response.topics[0].partitions[0].error_code == NONE,
         "AlterPartition refused the proposal: {response:?}"
     );
 }
@@ -1031,12 +1031,12 @@ pub(crate) fn finalize_elr_version(image: &mut MetadataImage) {
 /// broker: the level has to arrive as a committed record, the way an
 /// operator's `kafka-features upgrade --feature
 /// eligible.leader.replicas.version=1` delivers it.
-pub(crate) async fn finalize_elr_version_on(broker: &crate::Broker) {
+pub(crate) async fn finalize_elr_version_on(broker: &Broker) {
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: crate::features::ELR_VERSION.into(),
+                name: ELR_VERSION.into(),
                 level: 1,
             },
         )])
@@ -1116,7 +1116,7 @@ pub(crate) async fn initialize_share_state(
 /// It first waits for a liveness tick of the current controller term to
 /// finish. The first tick of a term seeds every registered broker with a
 /// session, so a session ended before that tick would be opened again.
-pub(crate) async fn end_heartbeat_session(broker: &crate::Broker, broker_id: u64) {
+pub(crate) async fn end_heartbeat_session(broker: &Broker, broker_id: u64) {
     let ticks = broker.metrics.controller_fencing_publications_total.get();
     tokio::time::timeout(Duration::from_secs(10), async {
         while broker.metrics.controller_fencing_publications_total.get() <= ticks {
@@ -1318,8 +1318,8 @@ pub(crate) async fn make_witness(handle: &BrokerHandle, node_id: u64) {
         .submit_change(vec![MetadataRecord::V1BrokerConfig(
             krabka_metadata::BrokerConfigRecord {
                 node_id: krabka_raft::NodeId(node_id),
-                config_name: crate::config_keys::BROKER_WITNESS.to_string(),
-                config_value: Some(crate::config_keys::WITNESS_TRUE.to_string()),
+                config_name: BROKER_WITNESS.to_string(),
+                config_value: Some(WITNESS_TRUE.to_string()),
             },
         )])
         .await
@@ -1493,7 +1493,7 @@ pub(crate) async fn grant_cluster_operation(
         .submit_change(vec![MetadataRecord::V1AccessControlEntry(allow_acl(
             AllowAclSetup {
                 resource_type: krabka_metadata::ResourceType::Cluster,
-                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+                resource_name: CLUSTER_RESOURCE_NAME,
                 principal: &format!("User:{user}"),
                 operation,
             },
@@ -2746,7 +2746,7 @@ pub(crate) fn elr_topic_records(
     let topic = partition.topic.clone();
     vec![
         MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-            name: crate::features::ELR_VERSION.into(),
+            name: ELR_VERSION.into(),
             level: 1,
         }),
         MetadataRecord::V1Topic(TopicRecord {
@@ -2758,12 +2758,9 @@ pub(crate) fn elr_topic_records(
         MetadataRecord::V1Partition(partition),
         MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic,
-            overrides: [(
-                crate::config_keys::MIN_INSYNC_REPLICAS.to_owned(),
-                min_isr.to_owned(),
-            )]
-            .into_iter()
-            .collect(),
+            overrides: [(MIN_INSYNC_REPLICAS.to_owned(), min_isr.to_owned())]
+                .into_iter()
+                .collect(),
         }),
     ]
 }

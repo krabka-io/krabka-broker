@@ -72,7 +72,7 @@ const MUTE_LIFT_TIMEOUT: Duration = Duration::from_secs(10);
 async fn broker_with_anonymous_quotas(
     throttle_max: Time,
     quotas: &[(&str, f64)],
-) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+) -> (BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = broker_with_throttle(throttle_max).await;
     seed_anonymous_quotas(&handle, quotas).await;
     (handle, dir)
@@ -91,7 +91,7 @@ async fn broker_with_anonymous_quotas(
 /// connection for `throttle_max` on the very next quota-charged request, so a
 /// topic created through the wire protocol afterwards would eat the mute
 /// window this function's caller is trying to test around.
-async fn seed_anonymous_quotas(handle: &crate::broker::BrokerHandle, quotas: &[(&str, f64)]) {
+async fn seed_anonymous_quotas(handle: &BrokerHandle, quotas: &[(&str, f64)]) {
     let records: Vec<MetadataRecord> = quotas
         .iter()
         .map(|(key, value)| {
@@ -128,7 +128,7 @@ async fn seed_anonymous_quotas(handle: &crate::broker::BrokerHandle, quotas: &[(
 /// loop. It returns the join handle for the loop and a client already framed
 /// against it.
 async fn connect_to_serve_loop(
-    handle: &crate::broker::BrokerHandle,
+    handle: &BrokerHandle,
 ) -> (tokio::task::JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
     plaintext_loop(handle.broker_arc_for_test()).await
 }
@@ -775,9 +775,7 @@ async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation(
 krabka_macros::consumer_fetch_fixture!(consumer_fetch_request);
 krabka_macros::create_topic_fixture!(configured_topic_request);
 
-async fn broker_with_throttle(
-    throttle_max: Time,
-) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+async fn broker_with_throttle(throttle_max: Time) -> (BrokerHandle, tempfile::TempDir) {
     start_broker_with(|cfg| cfg.quota_throttle_max = throttle_max).await
 }
 

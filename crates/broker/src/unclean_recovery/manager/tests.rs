@@ -23,7 +23,7 @@ use crate::{
         test_support::{ElectionSetup, img_with_partition, mark_witnesses_in_image},
     },
     metadata_source::MetadataSource,
-    metrics::{BreakGlassActionLabel, BrokerMetrics},
+    metrics::{BreakGlassAction as MetricBreakGlassAction, BreakGlassActionLabel, BrokerMetrics},
     test_support::{FakeMetadataSource, broker_registration, finalize_elr_version, replica_nodes},
     unclean_recovery::{BackgroundRecovery, selection::ElectionBasis},
 };
@@ -708,7 +708,7 @@ fn bypasses(metrics: &BrokerMetrics) -> u64 {
     metrics
         .break_glass_bypassed
         .get_or_create(&BreakGlassActionLabel {
-            action: crate::metrics::BreakGlassAction(BreakGlassAction::UncleanRecovery),
+            action: MetricBreakGlassAction(BreakGlassAction::UncleanRecovery),
         })
         .get()
 }

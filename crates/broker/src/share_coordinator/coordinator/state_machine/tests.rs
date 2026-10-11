@@ -8,6 +8,7 @@ use super::*;
 use crate::{
     coordinator::unified::persistence::MAX_STRING_BYTES,
     share_coordinator::{
+        bootstrap::TOPIC as SHARE_STATE_TOPIC,
         config::ShareCoordinatorConfig,
         coordinator::test_support::{
             Logged, NOW_MS, StateSeedSetup, batch, configured_coordinator, coordinator,
@@ -360,9 +361,7 @@ async fn write_matches_kafka_checks_and_record_rules() {
             let (coord, image) = seeded(dir.path(), trunk).await;
             if drop_log {
                 let state_partition = coord.state_partition_for("g", &TOPIC, partition);
-                coord
-                    .partitions
-                    .remove(crate::share_coordinator::bootstrap::TOPIC, state_partition);
+                coord.partitions.remove(SHARE_STATE_TOPIC, state_partition);
             }
             let result = coord
                 .write(
@@ -485,9 +484,7 @@ async fn failed_read_append_changes_no_state() {
     let dir = tempdir().unwrap();
     let (coord, image) = seeded(dir.path(), false).await;
     let state_partition = coord.state_partition_for("g", &TOPIC, 0);
-    coord
-        .partitions
-        .remove(crate::share_coordinator::bootstrap::TOPIC, state_partition);
+    coord.partitions.remove(SHARE_STATE_TOPIC, state_partition);
 
     let read = coord.read(&image, "g", TOPIC, 0, 8).await;
     assert!(
@@ -683,7 +680,7 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
             let image = initialize_led_group(&coord, StateSeedSetup::default()).await;
             let state_partition = coord.state_partition_for("g", &TOPIC, 0);
             let part = reg
-                .get(crate::share_coordinator::bootstrap::TOPIC, state_partition)
+                .get(SHARE_STATE_TOPIC, state_partition)
                 .expect("the state partition is open");
             let both = [krabka_raft::NodeId(1), krabka_raft::NodeId(2)];
             match fault {

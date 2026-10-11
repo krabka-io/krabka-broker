@@ -10,7 +10,8 @@ use tokio::net::TcpStream;
 
 use super::{test_support::DEFAULT_MAX_FRAME_BYTES, *};
 use crate::{
-    api_catalog::{INTER_BROKER_ONLY_APIS, dispatched_apis},
+    api_catalog::{INTER_BROKER_ONLY_APIS, UnstableApiVersions, dispatched_apis},
+    authorizer::AuthorizationResult,
     codes,
     config::BrokerConfig,
     handlers::registry::build_registry,
@@ -20,6 +21,7 @@ use crate::{
     },
     network::{
         dispatch::test_support::{plaintext_loop, serve_loop},
+        request::peek_api_key,
         response_header_len,
         test_support::RequestFrameSetup,
     },
@@ -37,13 +39,13 @@ fn peek_api_key_reads_first_two_bytes_big_endian() {
     buf.put_i16(18);
     buf.put_i16(3);
     buf.put_i32(1);
-    assert!(crate::network::request::peek_api_key(&buf).unwrap() == 18);
+    assert!(peek_api_key(&buf).unwrap() == 18);
 }
 
 #[test]
 fn peek_api_key_rejects_short_frame() {
     let buf = [0u8; 1];
-    assert!(crate::network::request::peek_api_key(&buf).is_err());
+    assert!(peek_api_key(&buf).is_err());
 }
 
 /// KIP-853 RPCs (80/81/82) route through the registry path and are
@@ -58,7 +60,7 @@ fn raft_voter_rpcs_peek_and_flex_routing() {
         buf.put_i16(api_key);
         buf.put_i16(0); // version 0
         buf.put_i32(1); // corr_id
-        assert!(crate::network::request::peek_api_key(&buf).unwrap() == api_key);
+        assert!(peek_api_key(&buf).unwrap() == api_key);
         assert!(
             registry.body_flexible(api_key, 0),
             "api_key {api_key} is flexible from v0"
@@ -84,13 +86,13 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         },
     };
 
-    use crate::test_support::DenyAll;
+    use crate::{network::codec::KafkaCodec, test_support::DenyAll};
 
     // Send a flexible (v2-header) request frame carrying `body` for
     // `api_key`/`version` and return the response body with its 5-byte
     // flexible header (corr_id + empty tagged-fields byte) stripped.
     async fn round_trip(
-        framed: &mut Framed<TcpStream, crate::network::codec::KafkaCodec>,
+        framed: &mut Framed<TcpStream, KafkaCodec>,
         api_key: i16,
         version: i16,
         body: &[u8],
@@ -301,9 +303,7 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
         api_keys: vec![ApiVersion {
             api_key: API_VERSIONS_KEY,
             min_version: 0,
-            max_version: krabka_raft::api_versions_max_version(
-                crate::api_catalog::UnstableApiVersions::Disabled,
-            ),
+            max_version: krabka_raft::api_versions_max_version(UnstableApiVersions::Disabled),
             ..Default::default()
         }],
         ..Default::default()
@@ -609,7 +609,7 @@ async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mecha
         check!(
             metrics
                 .api_requests
-                .get_or_create(&crate::metrics::ApiKeyLabel {
+                .get_or_create(&ApiKeyLabel {
                     api_key: "Produce".to_string(),
                 })
                 .get()
@@ -631,9 +631,9 @@ const DENIED_CERTIFICATE_PRINCIPAL: &str = "CN=bad";
 
 krabka_macros::test_authorizer!(DenyCertificatePrincipal, request; {
     if request.principal.name == DENIED_CERTIFICATE_PRINCIPAL {
-        crate::authorizer::AuthorizationResult::Deny
+        AuthorizationResult::Deny
     } else {
-        crate::authorizer::AuthorizationResult::Allow
+        AuthorizationResult::Allow
     }
 });
 
@@ -650,7 +650,7 @@ struct EncodedFrameSetup {
     #[default(krabka_ids::ApiKey(18))]
     api_key: krabka_ids::ApiKey,
     api_version: krabka_ids::ApiVersion,
-    #[default(crate::network::test_support::FrameCorrelationId(1))]
+    #[default(FrameCorrelationId(1))]
     correlation_id: FrameCorrelationId,
     header: RequestHeader,
 }
