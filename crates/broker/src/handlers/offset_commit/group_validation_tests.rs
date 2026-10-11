@@ -33,7 +33,7 @@ use crate::{
             TargetAssignmentMemberValue,
         },
     },
-    handlers::test_support::{CreateTopicSetup, configured_topic_request},
+    handlers::test_support::{CreateTopicSetup, TopicPartitionCount, configured_topic_request},
     test_support::{
         dispatch_context, dispatch_wire, encode_request, peer, principal,
         start_group_broker_no_audit,
@@ -82,7 +82,7 @@ async fn create_topic_with_partitions(broker: &Broker, num_partitions: i32) {
     );
     let request = configured_topic_request(CreateTopicSetup {
         topic: TOPIC,
-        num_partitions: crate::handlers::test_support::TopicPartitionCount(num_partitions),
+        num_partitions: TopicPartitionCount(num_partitions),
         ..Default::default()
     });
     dispatch_context(

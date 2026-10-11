@@ -17,17 +17,21 @@ use krabka_protocol::{
 use super::*;
 use crate::{
     api_catalog::UnstableApiVersions,
+    authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     config::{BrokerConfig, RemoteStorageBackend},
     config_keys::{DISKLESS, serves_topic_key},
     handlers::{
         RequestContext,
-        test_support::{AclSetup, TopicPartitionCount, replica_availability},
+        describe_configs::effective_topic_configs,
+        test_support::{
+            AclSetup, TopicPartitionCount, TopicReplicationFactor, replica_availability,
+        },
     },
     test_support::{
         AllowAclSetup, DenyAll, DescribedCreationSetup, KafkaErrorCode, allow_acl,
-        begin_controlled_shutdown, dispatch_wire, fence_remote_broker, make_witness, peer,
-        principal, seed_remote_broker, start_broker_no_audit_with,
+        begin_controlled_shutdown, described_creation_configs, dispatch_wire, fence_remote_broker,
+        make_witness, peer, principal, seed_remote_broker, start_broker_no_audit_with,
     },
     throttle::LEADER_THROTTLED_REPLICAS_KEY,
 };
@@ -118,7 +122,7 @@ struct ExpectedTopicSetup<'a> {
     #[default(crate::handlers::test_support::TopicPartitionCount(-1))]
     num_partitions: TopicPartitionCount,
     #[default(crate::handlers::test_support::TopicReplicationFactor(-1))]
-    replication_factor: crate::handlers::test_support::TopicReplicationFactor,
+    replication_factor: TopicReplicationFactor,
     configs: Vec<CreatableTopicConfigs>,
     topic_config_error_code: KafkaErrorCode,
 }
@@ -645,7 +649,7 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
     // trim. Configure the tier this test's topic depends on.
     let object_store = tempfile::TempDir::new().expect("object store dir");
     let (broker_handle, _dir) = start_broker_no_audit_with(|cfg| {
-        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.rack = Some("rack-a".into());
         cfg.diskless_wal_local_replica_count = 1;
         cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
@@ -880,16 +884,14 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
         // with. The dry run committed nothing, so that is the empty override map resolved
         // against the image.
         let configs = if expected_row.error_code == codes::NONE {
-            Some(creatable_topic_configs(
-                crate::handlers::describe_configs::effective_topic_configs(
-                    &broker_handle.controller_image_for_test(),
-                    broker.config.node_id,
-                    name,
-                    &std::collections::BTreeMap::new(),
-                    UnstableApiVersions::Disabled,
-                    &std::collections::BTreeMap::new(),
-                ),
-            ))
+            Some(creatable_topic_configs(effective_topic_configs(
+                &broker_handle.controller_image_for_test(),
+                broker.config.node_id,
+                name,
+                &std::collections::BTreeMap::new(),
+                UnstableApiVersions::Disabled,
+                &std::collections::BTreeMap::new(),
+            )))
         } else {
             expected_row.configs.clone()
         };
@@ -918,7 +920,7 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
 
 #[tokio::test]
 async fn strict_create_topics_rejects_after_quota_exhaustion() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
     seed_controller_quota(&broker_handle, 2.0).await;
     let broker = broker_handle.broker_arc_for_test();
     request_identity!((p, peer), principal("admin"));
@@ -1035,7 +1037,7 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
     let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
 
     let image = broker_handle.controller_image_for_test();
-    let described = crate::test_support::described_creation_configs(
+    let described = described_creation_configs(
         &image,
         DescribedCreationSetup {
             node: broker.config.node_id,

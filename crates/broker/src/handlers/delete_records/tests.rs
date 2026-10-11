@@ -20,16 +20,18 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::{Broker, BrokerHandle},
     codes,
-    config_keys::{CLEANUP_POLICY, DELIVERY_MODE_SCHEDULED, parse_cleanup_policy},
+    config_keys::{CLEANUP_POLICY, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, parse_cleanup_policy},
     coordinator::bootstrap::OFFSETS_TOPIC,
-    fetch_session::FINAL_EPOCH,
+    fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
+    freeze::resolve::resolve_topic_freeze,
     handlers::{
         RequestContext,
+        create_topics::handle as create_topics_handle,
         delete_records::test_support::gated_config,
         fetch::handle as fetch_handle,
         test_support::{CreateTopicSetup, configured_topic_request},
     },
-    heartbeat::fencing::RegistrationChange,
+    heartbeat::fencing::{RegistrationChange, registration_change},
     partition::Partition,
     test_support::{
         DenyAll, KafkaErrorCode, append_partition_batch, broker_registration, encode_request, peer,
@@ -303,7 +305,7 @@ async fn topic_holding_a_pending_batch(
         delivery_mode,
     } = setup;
     let configs: Vec<(&str, &str)> = delivery_mode
-        .map(|mode| (crate::config_keys::DELIVERY_MODE, mode))
+        .map(|mode| (DELIVERY_MODE, mode))
         .into_iter()
         .collect();
     topic_with_configs_holding_a_pending_batch(
@@ -336,7 +338,7 @@ async fn topic_with_configs_holding_a_pending_batch(
             .find(|(name, _)| *name == key)
             .map(|(_, value)| *value)
     };
-    let delivery_mode = config(crate::config_keys::DELIVERY_MODE);
+    let delivery_mode = config(DELIVERY_MODE);
     let expected_cleanup = config(CLEANUP_POLICY)
         .map_or_else(krabka_log::CleanupPolicy::default, |policy| {
             parse_cleanup_policy(policy).expect("a valid cleanup.policy")
@@ -347,7 +349,7 @@ async fn topic_with_configs_holding_a_pending_batch(
         configs,
         ..Default::default()
     });
-    let created = crate::handlers::create_topics::handle(&broker, create, version, ctx)
+    let created = create_topics_handle(&broker, create, version, ctx)
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == codes::NONE, "{created:?}");
@@ -578,9 +580,7 @@ async fn a_frozen_topic_refuses_a_trim() {
         .await
         .expect("the freeze record commits");
     broker_handle
-        .wait_for_image(|image| {
-            crate::freeze::resolve::resolve_topic_freeze(image, topic).is_some()
-        })
+        .wait_for_image(|image| resolve_topic_freeze(image, topic).is_some())
         .await;
 
     check_refused_trim(
@@ -937,7 +937,7 @@ async fn register_follower(broker_handle: &BrokerHandle) {
 async fn fence_follower(broker_handle: &BrokerHandle) {
     let broker = broker_handle.broker_arc_for_test();
     broker.liveness.apply_fencing(FOLLOWER, true, true).await;
-    let fence = crate::heartbeat::fencing::registration_change(
+    let fence = registration_change(
         &broker.controller.current_image(),
         krabka_raft::NodeId(FOLLOWER),
         RegistrationChange::FENCE,
@@ -960,7 +960,7 @@ async fn follower_fetch(broker: &Broker, topic: &str, fetch_offset: i64, log_sta
         max_wait_ms: 0,
         min_bytes: 0,
         max_bytes: 1_048_576,
-        session_id: crate::fetch_session::INVALID_SESSION_ID,
+        session_id: INVALID_SESSION_ID,
         session_epoch: FINAL_EPOCH,
         topics: vec![FetchTopic {
             topic: topic.to_owned(),

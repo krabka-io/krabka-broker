@@ -136,7 +136,10 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::test_support::{encode_request, peer, spawn_standalone_partition};
+    use crate::{
+        log_dir::partition_dir,
+        test_support::{encode_request, peer, spawn_standalone_partition},
+    };
 
     /// A locally hosted partition answers with its cached
     /// `current_leader_epoch` and `last_written_leader_epoch`. A non-zero
@@ -186,7 +189,7 @@ mod tests {
             .expect("seed topic");
 
         // Materialize a local replica and force a non-zero leader epoch.
-        let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
+        let part_dir = partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
         let part = spawn_standalone_partition(

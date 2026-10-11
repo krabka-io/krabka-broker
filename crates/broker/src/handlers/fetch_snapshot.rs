@@ -121,7 +121,10 @@ mod tests {
     use super::*;
     use crate::{
         authorizer::AllowAllAuthorizer,
-        test_support::{GrantsInPrincipalName, decode_response, peer, start_broker_no_audit_with},
+        test_support::{
+            GrantsInPrincipalName, decode_response, encode_request, peer,
+            start_broker_no_audit_with,
+        },
     };
 
     /// A request for partition 0 of the metadata topic, at the given id,
@@ -372,14 +375,9 @@ mod tests {
         {
             let mut req = request(snapshot, leader_epoch, 0);
             edit(&mut req);
-            let bytes = super::handle(
-                &broker,
-                version,
-                &crate::test_support::encode_request(&req, version),
-                &ctx,
-            )
-            .await
-            .expect("handle");
+            let bytes = super::handle(&broker, version, &encode_request(&req, version), &ctx)
+                .await
+                .expect("handle");
             let resp = decode_response::<FetchSnapshotResponse>(&bytes, version);
 
             check!(resp.error_code == top_level, "{what}: top-level code");

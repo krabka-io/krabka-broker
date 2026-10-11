@@ -150,9 +150,9 @@ mod tests {
     use super::*;
     use crate::{
         authorizer::SimpleAclAuthorizer,
-        codes::CLUSTER_AUTHORIZATION_FAILED,
+        codes::{CLUSTER_AUTHORIZATION_FAILED, TOPIC_AUTHORIZATION_FAILED},
         handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        test_support::{AllowAclSetup, peer, principal},
+        test_support::{AllowAclSetup, allow_acl, peer, principal},
     };
 
     fn anon() -> krabka_security::Principal {
@@ -177,7 +177,7 @@ mod tests {
         let res = super::denied_result(
             super::RESOURCE_TYPE_TOPIC,
             "t".into(),
-            crate::codes::TOPIC_AUTHORIZATION_FAILED,
+            TOPIC_AUTHORIZATION_FAILED,
         );
         let expected = tagged_wire!(DescribeConfigsResult {
             error_code: crate::codes::TOPIC_AUTHORIZATION_FAILED,
@@ -209,7 +209,7 @@ mod tests {
             let mut image = MetadataImage::new(Uuid::nil());
             if let Some(operation) = grant {
                 image.apply(&krabka_metadata::MetadataRecord::V1AccessControlEntry(
-                    crate::test_support::allow_acl(AllowAclSetup {
+                    allow_acl(AllowAclSetup {
                         resource_type: ResourceType::Cluster,
                         resource_name: CLUSTER_RESOURCE_NAME,
                         principal: "User:ANONYMOUS",

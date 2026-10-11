@@ -12,7 +12,9 @@ use crate::{
     error::BrokerError,
     producer_id_manager::ProducerIdManager,
     txn::{
-        handlers::end_txn::{client_producer_identity, next_producer_identity},
+        handlers::end_txn::{
+            client_producer_identity, next_producer_identity, next_recovery_producer_identity,
+        },
         state::TxnEntry,
         version::TxnVersion,
     },
@@ -36,12 +38,7 @@ pub(super) async fn stage_recovery_identity(
     let already_staged = entry.has_staged_producer_identity();
     let (client_pid, client_epoch) = client_producer_identity(entry);
     let (next_pid, next_epoch) = if already_staged {
-        crate::txn::handlers::end_txn::next_recovery_producer_identity(
-            client_pid,
-            client_epoch,
-            producer_ids,
-        )
-        .await?
+        next_recovery_producer_identity(client_pid, client_epoch, producer_ids).await?
     } else {
         next_producer_identity(TxnVersion::Verified, client_pid, client_epoch, producer_ids).await?
     };

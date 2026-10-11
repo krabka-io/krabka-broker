@@ -58,7 +58,7 @@ use krabka_protocol::owned::{
 use crate::{
     broker::Broker,
     codes,
-    handlers::{RequestContext, acl_denied},
+    handlers::{RequestContext, acl_denied, cluster_action_denied},
     partition::Partition,
 };
 
@@ -111,11 +111,8 @@ pub(crate) fn handle(
         // schema default for an unauthorized row), and authorized topics
         // proceed unchanged.
         let acl_image = broker.controller.current_image();
-        let cluster_action_allowed = !crate::handlers::cluster_action_denied(
-            broker.config.authorizer.as_ref(),
-            &acl_image,
-            ctx,
-        );
+        let cluster_action_allowed =
+            !cluster_action_denied(broker.config.authorizer.as_ref(), &acl_image, ctx);
 
         let mut authorized_out: Vec<OffsetForLeaderTopicResult> =
             Vec::with_capacity(req.topics.len());

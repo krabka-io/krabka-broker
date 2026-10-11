@@ -141,7 +141,7 @@ mod tests {
         handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
         log_dir::partition_dir,
         log_dir_status::LogDirRegistry,
-        test_support::StandalonePartitionSetup,
+        test_support::{StandalonePartitionSetup, spawn_standalone_partition},
     };
 
     fn image_with_topic(topic: &str, leader: u64) -> MetadataImage {
@@ -161,11 +161,7 @@ mod tests {
             krabka_log::LogConfig::default(),
         )
         .expect("open log");
-        crate::test_support::spawn_standalone_partition(
-            dir,
-            log,
-            StandalonePartitionSetup::default(),
-        )
+        spawn_standalone_partition(dir, log, StandalonePartitionSetup::default())
     }
 
     #[derive(Clone, Copy, Default)]

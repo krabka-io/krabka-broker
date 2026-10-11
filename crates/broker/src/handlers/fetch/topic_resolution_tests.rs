@@ -34,8 +34,9 @@ use crate::{
     fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID},
     handlers::test_support::{
         ClientTopicSetup, ReplicatedTopicSetup, check_cases, check_denied_topic_cases,
+        seed_partition_replicas,
     },
-    test_support::{DenyAll, start_broker_with_authorizer_no_audit as start},
+    test_support::{DenyAll, KafkaErrorCode, start_broker_with_authorizer_no_audit as start},
 };
 
 /// An id that no topic in these tests has.
@@ -152,7 +153,7 @@ async fn drive(
     } else {
         refused_partition(
             krabka_ids::PartitionIndex(0),
-            crate::test_support::KafkaErrorCode(case.error_code),
+            KafkaErrorCode(case.error_code),
         )
     };
     let representation =
@@ -317,7 +318,7 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
     // Node 1, this broker, is not a replica: node 2 leads and node 3 follows.
     let topic_id = uuid::Uuid::from_u128(0x51);
-    crate::handlers::test_support::seed_partition_replicas(
+    seed_partition_replicas(
         &broker,
         ReplicatedTopicSetup {
             topic: "moved",

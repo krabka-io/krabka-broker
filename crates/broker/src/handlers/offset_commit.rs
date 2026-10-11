@@ -45,6 +45,7 @@ use crate::{
     error::BrokerError,
     handlers::group_coordinator_error,
     task_util::ask,
+    time_util::now_ms,
 };
 
 mod response;
@@ -215,7 +216,7 @@ async fn commit_rows(
         return Err(code);
     }
 
-    let now_ms = crate::time_util::now_ms();
+    let now_ms = now_ms();
     let expire_timestamp_ms = expire_timestamp_ms(req.retention_time_ms, now_ms);
     // Kafka's `commitOffset` runs the per-partition validator only on the
     // partitions whose metadata fits, so split them out first.

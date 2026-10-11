@@ -32,7 +32,7 @@ use krabka_security::SecretBytes;
 use krabka_verified::{TokenExpireDecision, delegation_token::TokenApi, expire_token_deadline};
 
 use crate::{
-    codes::{DELEGATION_TOKEN_OWNER_MISMATCH, INVALID_REQUEST},
+    codes::{DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH, INVALID_REQUEST},
     handlers::{ErrorCodeResponse as _, renew_delegation_token::admit_token_request},
     metadata_source::MetadataSource,
     network::auth::ConnectionAuth,
@@ -81,7 +81,7 @@ pub(crate) async fn handle(
         token.max_timestamp_ms,
     ) {
         TokenExpireDecision::Expired => {
-            return ExpireDelegationTokenResponse::error(crate::codes::DELEGATION_TOKEN_EXPIRED);
+            return ExpireDelegationTokenResponse::error(DELEGATION_TOKEN_EXPIRED);
         }
         TokenExpireDecision::Delete => (DelegationTokenMutation::Delete { expected }, now),
         TokenExpireDecision::Update(new_expiry) => {
@@ -120,7 +120,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        codes::DELEGATION_TOKEN_EXPIRED,
+        codes::{DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH},
         handlers::delegation_token_test_support::{
             DAY_MS, MutationSeedSetup, OwnershipRefusalSetup, TokenExpiryRule, TokenExpirySetup,
             TokenMutationIndex, TokenMutationRefusalSetup, TokenPeriodMillis, TokenPersistence,
@@ -181,7 +181,7 @@ mod tests {
                 authentication: authed("eve"),
                 hmac: expired.0.clone(),
                 period: TokenPeriodMillis(0),
-                error: KafkaErrorCode(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH),
+                error: KafkaErrorCode(DELEGATION_TOKEN_OWNER_MISMATCH),
                 ..Default::default()
             },
             TokenMutationRefusalSetup {

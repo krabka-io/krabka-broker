@@ -35,7 +35,7 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    config_keys::{MIN_INSYNC_REPLICAS, clear_elr_records},
+    config_keys::{MIN_INSYNC_REPLICAS, clear_elr_records, group::GroupBounds},
     handlers::{RequestContext, audit_resource, response_encoding::ErrorRow as _},
 };
 
@@ -188,7 +188,7 @@ async fn process_resource(
             handle_group_scoped(
                 &resource,
                 image,
-                &crate::config_keys::group::GroupBounds::of(&broker.config),
+                &GroupBounds::of(&broker.config),
                 broker.config.features.unstable_api_versions,
                 &mut out,
                 &mut to_submit,

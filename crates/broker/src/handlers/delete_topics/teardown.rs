@@ -12,7 +12,10 @@ use krabka_ids::PartitionIndex;
 use uuid::Uuid;
 
 use crate::{
-    broker::Broker, log_dir, partition_registry::PartitionRegistry, wal::quorum::ShardRemoval,
+    broker::Broker,
+    log_dir,
+    partition_registry::PartitionRegistry,
+    wal::quorum::{ShardRemoval, remove_shard},
 };
 
 /// Removes every local partition of a deleted topic from the registry, the WAL
@@ -38,7 +41,7 @@ pub(super) fn remove_local_partitions(
         // its actual location (existing-location wins).
         let dir = log_dir::place_partition_dir(log_dirs, name, idx.get());
         if let (Some(topic_id), Some(owning_dir)) = (topic_id, dir.parent())
-            && let Err(error) = crate::wal::quorum::remove_shard(
+            && let Err(error) = remove_shard(
                 broker.wal_shards.as_ref(),
                 owning_dir,
                 name,

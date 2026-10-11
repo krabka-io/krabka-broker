@@ -8,7 +8,7 @@ use tempfile::TempDir;
 
 use super::{FileBreakGlassConfig, FileFreezeConfig, FileOperatorKey};
 use crate::{
-    break_glass::action_name,
+    break_glass::{ALL_ACTIONS, action_name},
     config::{BackgroundUncleanRecovery, BrokerConfig},
     file_config::{FileConfig, FileConfigError, test_support::configured},
 };
@@ -394,7 +394,7 @@ fn every_signed_action_spelling_the_broker_accepts_is_a_real_action() {
     // the check above: the validation must not refuse a correct spelling.
     let mut names = vec![crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS.join(",")];
     names.extend(
-        crate::break_glass::ALL_ACTIONS
+        ALL_ACTIONS
             .into_iter()
             .map(|action| action_name(action).to_owned()),
     );

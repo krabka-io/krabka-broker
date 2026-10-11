@@ -19,10 +19,13 @@ use crate::{
     error::BrokerError,
     txn::{
         coordinator::{TxnCoordinator, completion::completion_for},
-        handlers::end_txn::{client_producer_identity, prepare_server_abort_identities},
+        handlers::end_txn::{
+            client_producer_identity, completion_producer_identity, prepare_server_abort_identities,
+        },
         marker::MarkerType,
         state::{TxnEntry, TxnState},
         util::now_millis,
+        version::TxnVersion,
     },
 };
 
@@ -46,7 +49,7 @@ use crate::{
 pub(super) async fn handle_transactional(
     coord: &Arc<TxnCoordinator>,
     tid: &str,
-    txnv: crate::txn::version::TxnVersion,
+    txnv: TxnVersion,
     txn_timeout: i32,
     enable_2pc: bool,
     keep_prepared_txn: bool,
@@ -235,8 +238,7 @@ pub(super) async fn handle_transactional(
                     let mut completed = published.lock().await.clone();
                     completed.state = TxnState::CompleteAbort;
                     completed.last_update_ms = now_millis();
-                    let (completed_pid, completed_epoch) =
-                        crate::txn::handlers::end_txn::completion_producer_identity(&completed);
+                    let (completed_pid, completed_epoch) = completion_producer_identity(&completed);
                     if completed_pid != request_pid {
                         completed.prev_producer_id = request_pid;
                     }
@@ -463,6 +465,7 @@ mod tests {
         log_dir::partition_dir,
         partition::Partition,
         partition_registry::PartitionRegistry,
+        producer_id_manager::ProducerIdManager,
         test_support::{StandalonePartitionSetup, open_partition, spawn_standalone_partition},
         txn::{bootstrap, state::TopicPartition, version::TxnVersion},
     };
@@ -544,7 +547,7 @@ mod tests {
         let coord = TxnCoordinator::new(
             krabka_audit::NodeId(1),
             Arc::clone(&partitions),
-            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            Arc::new(ProducerIdManager::new()),
             50,
             krabka_units::mebibytes(1),
         );
@@ -587,7 +590,7 @@ mod tests {
         let coord = TxnCoordinator::new(
             krabka_audit::NodeId(1),
             partitions,
-            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            Arc::new(ProducerIdManager::new()),
             50,
             krabka_units::mebibytes(1),
         );
@@ -677,7 +680,7 @@ mod tests {
         let coordinator = Arc::new(TxnCoordinator::new(
             NodeId(1),
             partitions,
-            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            Arc::new(ProducerIdManager::new()),
             1,
             krabka_units::mebibytes(1),
         ));

@@ -11,7 +11,7 @@ use krabka_protocol::owned::{
 use crate::{
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
-    handlers::{RequestContext, metadata::wire_id},
+    handlers::{RequestContext, cluster_describe_denied, metadata::wire_id},
 };
 
 pub(crate) fn handle(
@@ -21,7 +21,7 @@ pub(crate) fn handle(
     ctx: &RequestContext<'_>,
 ) -> ListPartitionReassignmentsResponse {
     let image = broker.controller.current_image();
-    if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+    if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         let topics = match &req.topics {
             None => vec![],
             Some(filter) => filter

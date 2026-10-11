@@ -18,7 +18,7 @@ use crate::{
             expected_response, expected_result, request, seed_controller_quota, seed_topic,
             topic_req,
         },
-        test_support::replica_availability,
+        test_support::{TopicPartitionCount, replica_availability},
     },
     test_support::{
         DenyAll, begin_controlled_shutdown, fence_remote_broker, peer, principal,
@@ -593,7 +593,7 @@ async fn rows_follow_kafkas_duplicate_and_count_checks() {
     }
     let duplicate = || row("t", codes::INVALID_REQUEST, Some("Duplicate topic name."));
     let four_partition_growth = topic_req(PartitionTopicSetup {
-        count: crate::handlers::test_support::TopicPartitionCount(4),
+        count: TopicPartitionCount(4),
         ..Default::default()
     });
     let duplicate_growth = vec![four_partition_growth.clone(), four_partition_growth.clone()];

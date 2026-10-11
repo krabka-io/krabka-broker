@@ -18,8 +18,8 @@ use crate::{
     handlers::test_support::single_replica_partition,
     share_coordinator::bootstrap::TOPIC,
     test_support::{
-        DenyAll, KafkaErrorCode, dispatch_wire, peer, principal, start_broker_no_audit,
-        start_broker_no_audit_with,
+        DenyAll, KafkaErrorCode, broker_registration, dispatch_wire, peer, principal,
+        start_broker_no_audit, start_broker_no_audit_with,
     },
 };
 
@@ -524,7 +524,7 @@ fn resolve_image() -> krabka_metadata::MetadataImage {
                 host: "legacy".into(),
                 port: 1000,
                 endpoints,
-                ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
+                ..broker_registration(krabka_raft::NodeId(node))
             },
         ));
     }

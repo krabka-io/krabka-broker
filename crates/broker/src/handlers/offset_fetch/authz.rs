@@ -8,7 +8,7 @@
 //! identically.
 
 use crate::{
-    authorizer::AuthorizationResult,
+    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     handlers::{RequestContext, group_coordinator_error, group_describe_denied},
 };
@@ -39,7 +39,7 @@ pub(super) fn topic_decisions<'a>(
     context: &RequestContext<'_>,
     names: impl IntoIterator<Item = &'a str>,
 ) -> std::collections::HashMap<&'a str, AuthorizationResult> {
-    crate::authorizer::authorize_topics(
+    authorize_topics(
         broker.config.authorizer.as_ref(),
         image,
         context.principal,

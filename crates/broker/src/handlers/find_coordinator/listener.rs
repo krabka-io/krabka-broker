@@ -6,6 +6,8 @@
 //! plaintext one. That per-listener choice, and its fallback rules, live here
 //! rather than in the request handling that consumes the result.
 
+use crate::config::BrokerConfig;
+
 /// The local broker's advertised `host:port` string for the request's listener.
 ///
 /// Kafka returns the connection listener's advertised address, so a TLS client
@@ -20,7 +22,7 @@
 /// harnesses. In that case the function falls back to `advertised_listener`,
 /// which `Broker::start` rewrites to the real bound port after it binds.
 pub(super) fn local_advertised_for_listener(
-    config: &crate::config::BrokerConfig,
+    config: &BrokerConfig,
     connection_listener_name: &str,
 ) -> String {
     config
@@ -35,7 +37,10 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::config::{BrokerConfig, ListenerSpec};
+    use crate::{
+        SslPrincipalMapper,
+        config::{BrokerConfig, ListenerSpec},
+    };
 
     fn listener(name: &str, advertised: &str) -> ListenerSpec {
         ListenerSpec {
@@ -45,7 +50,7 @@ mod tests {
             protocol: krabka_security::ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
-            principal_mapper: crate::SslPrincipalMapper::default(),
+            principal_mapper: SslPrincipalMapper::default(),
         }
     }
 

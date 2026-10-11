@@ -16,6 +16,7 @@ use crate::{
     broker::BrokerHandle,
     codes,
     coordinator::{
+        bootstrap::OFFSETS_TOPIC,
         partitioner::local_partition_for_group,
         unified::{
             classic_state::{ClassicGroup, Member},
@@ -25,6 +26,7 @@ use crate::{
             group::{CoordinatorGroup, GroupKind},
         },
     },
+    handlers::test_support::ClientTopicSetup,
     test_support::{DenyAll, peer, start_group_broker_no_audit},
     time_util::now_ms,
 };
@@ -32,7 +34,7 @@ use crate::{
 async fn create_topic(broker: &BrokerHandle, name: &str) {
     crate::handlers::test_support::create_topic(
         broker,
-        crate::handlers::test_support::ClientTopicSetup {
+        ClientTopicSetup {
             client_id: "offset-delete-test",
             name,
             ..Default::default()
@@ -225,10 +227,7 @@ async fn offset_delete_matches_kafka_whole_responses() {
         .unwrap();
         let part = broker
             .partitions
-            .get(
-                crate::coordinator::bootstrap::OFFSETS_TOPIC,
-                krabka_ids::PartitionIndex(partition),
-            )
+            .get(OFFSETS_TOPIC, krabka_ids::PartitionIndex(partition))
             .unwrap();
         let log = part.log.lock().unwrap();
         let (offset, timestamp) = log

@@ -29,7 +29,7 @@ use crate::{
         acl_wire::CLUSTER_RESOURCE_NAME,
         test_support::{CreateTopicSetup, configured_topic_request},
     },
-    test_support::{peer, principal, start_broker_no_audit_with},
+    test_support::{dispatch_wire, peer, principal, start_broker_no_audit_with},
 };
 
 /// The principal whose grants each case sets.
@@ -135,7 +135,7 @@ impl Fixture {
             principal(TESTER),
             client_id = "metadata-client"
         );
-        crate::test_support::dispatch_wire(
+        dispatch_wire(
             &shared,
             krabka_protocol::api_key::ApiKey::Metadata as i16,
             version,

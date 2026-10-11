@@ -441,7 +441,7 @@ mod tests {
     use krabka_units::prelude::millis;
 
     use crate::{
-        broker::{Broker, BrokerHandle},
+        broker::{Broker, BrokerHandle, spawn_partition},
         codes::OFFSET_OUT_OF_RANGE,
         config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
         delivery::test_support::batch_at,
@@ -567,7 +567,7 @@ mod tests {
                 "the reopened log infers its floor from what survived"
             );
         }
-        crate::broker::spawn_partition(
+        spawn_partition(
             TIERED_TOPIC.to_string(),
             PartitionIndex(0),
             dir.to_path_buf(),

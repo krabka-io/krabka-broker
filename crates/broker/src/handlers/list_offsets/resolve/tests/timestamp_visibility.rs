@@ -1,7 +1,7 @@
 use assert2::assert;
 
 use super::*;
-use crate::txn::marker::MarkerType;
+use crate::txn::marker::{MarkerType, build_marker_batch};
 
 #[tokio::test]
 async fn timestamp_lookup_matches_the_first_record_in_the_isolation_prefix() {
@@ -42,7 +42,7 @@ async fn timestamp_lookup_matches_the_first_record_in_the_isolation_prefix() {
             }
         }
     }
-    let marker = crate::txn::marker::build_marker_batch(
+    let marker = build_marker_batch(
         krabka_log::ProducerId(77),
         0,
         partition.log_end_offset(),

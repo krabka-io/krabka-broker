@@ -28,13 +28,14 @@ use crate::{
         TokenSetup, anonymous, authed, kp, seed_token, test_controller, token_authed,
     },
     metadata_source::MetadataSource,
-    test_support::AllowAclSetup,
+    network::auth::ConnectionAuth,
+    test_support::{AllowAclSetup, allow_acl},
 };
 
 #[derive(Clone, Copy, Default)]
 struct DescribeTokenSetup<'a> {
     request: Option<&'a DescribeDelegationTokenRequest>,
-    authentication: Option<&'a crate::network::auth::ConnectionAuth>,
+    authentication: Option<&'a ConnectionAuth>,
     secret: Option<&'a SecretBytes>,
 }
 
@@ -124,7 +125,7 @@ async fn seed_acl(controller: &ControllerHandle, entry: AclEntry) {
 /// admin tooling use. A resource name of the owner's principal string
 /// instead would grant every token of that owner from one ACL.
 fn describe_token_acl(token_id: &str, principal: &str) -> AclEntry {
-    crate::test_support::allow_acl(AllowAclSetup {
+    allow_acl(AllowAclSetup {
         resource_type: ResourceType::DelegationToken,
         resource_name: token_id,
         principal: &format!("User:{principal}"),

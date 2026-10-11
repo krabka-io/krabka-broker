@@ -69,6 +69,7 @@ use crate::{
             listener_endpoint, partition_availability,
         },
     },
+    internal_topics::is_internal_topic,
 };
 
 mod missing_topics;
@@ -79,7 +80,7 @@ fn topic_error_row(broker: &Broker, name: &str, error_code: i16) -> MetadataResp
         error_code,
         name: Some(name.to_owned()),
         topic_id: WireUuid::ZERO,
-        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
+        is_internal: is_internal_topic(&broker.config, name),
         ..Default::default()
     }
 }
@@ -516,7 +517,7 @@ fn success_topic_row(
         name: Some(record.name.clone()),
         topic_id: WireUuid(record.topic_id.into_bytes()),
         partitions,
-        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
+        is_internal: is_internal_topic(&broker.config, name),
         ..Default::default()
     }
 }

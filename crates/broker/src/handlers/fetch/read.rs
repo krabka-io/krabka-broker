@@ -635,11 +635,13 @@ mod tests {
 
     use super::read_task_panicked;
     use crate::{
+        blocking::inline_blocking_on_this_thread,
         codes::{CORRUPT_MESSAGE, KAFKA_STORAGE_ERROR, NONE, OFFSET_OUT_OF_RANGE},
+        delivery::test_support::batch_at,
         error::BrokerError,
         handlers::test_support::default_records_batch,
         log_dir_status::LogDirRegistry,
-        partition::test_support::test_partition,
+        partition::{Partition, test_support::test_partition},
         time_util::now_ms,
     };
 
@@ -730,7 +732,7 @@ mod tests {
                 .expect("build a multi-threaded runtime"),
         );
         let inline = {
-            let _inline = crate::blocking::inline_blocking_on_this_thread();
+            let _inline = inline_blocking_on_this_thread();
             served(
                 tokio::runtime::Builder::new_current_thread()
                     .build()
@@ -1194,7 +1196,7 @@ mod tests {
         };
         let mut log = Log::open(dir.path(), config).expect("open log");
         for activation_ms in activations {
-            log.append(&mut crate::delivery::test_support::batch_at(*activation_ms))
+            log.append(&mut batch_at(*activation_ms))
                 .expect("append a batch");
         }
         (dir, log)
@@ -1315,11 +1317,7 @@ mod tests {
         assert!(super::deliverable_offset(&mut log, Offset(3), false, now_ms) == Offset(3));
         assert!(super::deliverable_offset(&mut log, Offset(4), false, now_ms) == Offset(4));
     }
-    fn retained_partition() -> (
-        crate::partition::Partition,
-        tempfile::TempDir,
-        krabka_log::Offset,
-    ) {
+    fn retained_partition() -> (Partition, tempfile::TempDir, krabka_log::Offset) {
         let (partition, dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
         let limit = {
             let mut log = partition.log.lock().expect("log mutex poisoned");

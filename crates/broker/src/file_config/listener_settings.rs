@@ -17,6 +17,7 @@ use crate::{
         AUTO_CREATE_TOPICS_ENABLE, DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE,
         INTER_BROKER_LISTENER_NAME, LOG_ROLL_MS, NUM_PARTITIONS,
     },
+    cordoned_log_dirs::CORDONED_LOG_DIRS,
     txn::coordinator::produce_verification::PARTITION_VERIFICATION_ENABLE,
 };
 
@@ -133,7 +134,7 @@ fn apply_cordoned_log_dirs(
     cfg: &mut BrokerConfig,
 ) {
     if cfg.cordoned_log_dirs.is_none()
-        && let Some(value) = properties.get(crate::cordoned_log_dirs::CORDONED_LOG_DIRS)
+        && let Some(value) = properties.get(CORDONED_LOG_DIRS)
     {
         cfg.cordoned_log_dirs = Some(value.clone());
     }

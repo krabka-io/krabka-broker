@@ -671,7 +671,7 @@ mod tests {
         diskless::wal_index::WalFlushRecord,
         handlers::test_support::partition,
         metrics::RequestPhases,
-        partition::Partition,
+        partition::{Partition, test_support::test_partition},
         test_support::{StandalonePartitionSetup, StorageMode},
     };
 
@@ -928,9 +928,7 @@ mod tests {
     async fn consumer_partition(
         mut batches: Vec<RecordBatch>,
     ) -> (std::sync::Arc<Partition>, tempfile::TempDir) {
-        let (part, dir) = crate::partition::test_support::test_partition(std::sync::Arc::new(
-            tokio::sync::Notify::new(),
-        ));
+        let (part, dir) = test_partition(std::sync::Arc::new(tokio::sync::Notify::new()));
         let end = {
             let mut log = part.log.lock().expect("log mutex poisoned");
             for batch in &mut batches {

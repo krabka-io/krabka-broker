@@ -205,9 +205,11 @@ mod tests {
     use crate::{
         authorizer::AllowAllAuthorizer,
         coordinator::unified::actor::ClassicMemberView,
-        handlers::authorized_operations::authorized_operations_bits,
+        handlers::{
+            acl_wire::operation_to_wire, authorized_operations::authorized_operations_bits,
+        },
         test_support::{
-            AllowAclSetup, DenyAll, KafkaErrorCode, peer, principal, request_context,
+            AllowAclSetup, DenyAll, KafkaErrorCode, allow_acl, peer, principal, request_context,
             start_group_broker_no_audit, test_ctx,
         },
     };
@@ -549,18 +551,16 @@ mod tests {
     }
 
     fn allow(group: &str, operation: AclOperation) -> krabka_metadata::MetadataRecord {
-        krabka_metadata::MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
-            AllowAclSetup {
-                resource_type: ResourceType::Group,
-                resource_name: group,
-                principal: "User:admin",
-                operation,
-            },
-        ))
+        krabka_metadata::MetadataRecord::V1AccessControlEntry(allow_acl(AllowAclSetup {
+            resource_type: ResourceType::Group,
+            resource_name: group,
+            principal: "User:admin",
+            operation,
+        }))
     }
 
     fn bit(op: AclOperation) -> i32 {
-        1_i32 << crate::handlers::acl_wire::operation_to_wire(op)
+        1_i32 << operation_to_wire(op)
     }
 
     /// `Empty` classic `allowed`, as `DescribeGroups` answers it with

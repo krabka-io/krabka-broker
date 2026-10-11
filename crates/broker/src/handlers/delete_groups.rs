@@ -14,7 +14,9 @@ use krabka_protocol::owned::{
     delete_groups_response::{DeletableGroupResult, DeleteGroupsResponse},
 };
 
-use crate::{broker::Broker, codes, coordinator::DeleteGroupError};
+use crate::{
+    broker::Broker, codes, coordinator::DeleteGroupError, handlers::group_coordinator_error,
+};
 
 context_handler! {
     // cargo-mutants: coordinator-backed request orchestration; integration-tested.
@@ -73,7 +75,7 @@ context_handler! {
 
 /// Deletes one authorized group and returns its result's error code.
 async fn delete_one(broker: &Broker, group_id: &str) -> i16 {
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, group_id) {
+    if let Some(error_code) = group_coordinator_error(broker, group_id) {
         return error_code;
     }
     match broker.group_coordinator.delete_group(group_id).await {

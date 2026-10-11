@@ -25,6 +25,7 @@ use crate::{
     codes,
     handlers::{
         RequestContext, acl_denied,
+        acl_wire::CLUSTER_RESOURCE_NAME,
         describe_configs::{
             RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
             RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
@@ -60,7 +61,7 @@ pub(crate) fn handle(
         &image,
         ctx,
         krabka_metadata::ResourceType::Cluster,
-        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+        CLUSTER_RESOURCE_NAME,
         AclOperation::DescribeConfigs,
     ) {
         return ListConfigResourcesResponse {
@@ -340,7 +341,7 @@ mod tests {
     crate::test_support::context_helper!(client_id = "admin-client");
 
     use crate::test_support::{
-        broker_registration, describe_configs_acl_cases,
+        broker_registration, describe_configs_acl_cases, grant_cluster_operation,
         start_broker_with_authorizer_no_audit as start_broker, test_ctx,
     };
 
@@ -482,7 +483,7 @@ mod tests {
         cases.insert(3, ("read", Some(AclOperation::Read), &denied));
         for (user, grant, expected) in cases {
             if let Some(operation) = grant {
-                crate::test_support::grant_cluster_operation(&broker_handle, user, operation).await;
+                grant_cluster_operation(&broker_handle, user, operation).await;
             }
             test_ctx!(ctx, user);
 

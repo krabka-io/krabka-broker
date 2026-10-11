@@ -412,6 +412,7 @@ mod tests {
     use crate::{
         authorizer::AllowAllAuthorizer,
         broker::BrokerHandle,
+        elr::state::test_records,
         handlers::{
             RequestContext,
             test_support::{
@@ -998,7 +999,7 @@ mod tests {
             partition(0),
             partition(1),
         ];
-        records.extend(crate::elr::state::test_records("orders", elr_config));
+        records.extend(test_records("orders", elr_config));
         handle
             .broker_arc_for_test()
             .controller

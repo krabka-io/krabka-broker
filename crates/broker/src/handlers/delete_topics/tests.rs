@@ -30,7 +30,7 @@ use crate::{
     },
     metrics::AuthorizationDeniedLabel,
     test_support::{
-        AllowAclSetup, DenyAll, peer, principal, start_broker_no_audit_with,
+        AllowAclSetup, DenyAll, dispatch_wire, peer, principal, start_broker_no_audit_with,
         start_broker_with_authorizer_no_audit as start_broker,
     },
 };
@@ -703,7 +703,7 @@ async fn delete_topic_enable_false_refuses_every_row() {
             request(vec![named_state(TOPIC)])
         };
         let ctx = test_context(&p, &peer);
-        let resp: DeleteTopicsResponse = crate::test_support::dispatch_wire(
+        let resp: DeleteTopicsResponse = dispatch_wire(
             &broker,
             krabka_protocol::owned::delete_topics_request::API_KEY,
             version,

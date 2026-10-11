@@ -13,7 +13,10 @@ use super::{
 };
 use crate::{
     break_glass::{ALL_ACTIONS, action_from_name, action_name},
-    config::{BackgroundUncleanRecovery, BrokerConfig, MIN_BREAK_GLASS_REQUIRED_APPROVALS},
+    config::{
+        BackgroundUncleanRecovery, BrokerConfig, DEFAULT_BREAK_GLASS_SIGNED_ACTIONS,
+        MIN_BREAK_GLASS_REQUIRED_APPROVALS,
+    },
     operator_keys::{OperatorKeyEntry, OperatorKeys},
 };
 
@@ -174,7 +177,7 @@ pub(super) fn apply_privileged_action_policy(
             cfg.break_glass.proposal_ttl = positive_time("break_glass.proposal_ttl", ttl)?;
         }
         cfg.break_glass.signed_actions = break_glass.signed_actions.unwrap_or_else(|| {
-            crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS
+            DEFAULT_BREAK_GLASS_SIGNED_ACTIONS
                 .iter()
                 .map(|action| (*action).to_owned())
                 .collect()

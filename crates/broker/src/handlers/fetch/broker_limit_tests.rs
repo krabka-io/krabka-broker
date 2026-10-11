@@ -10,12 +10,13 @@ use crate::{
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     handlers::test_support::{
         ClientTopicSetup, ProduceRecordsSetup, RecordCount, create_topic, produce_records,
+        start_broker_with,
     },
 };
 
 #[tokio::test]
 async fn broker_fetch_cap_bounds_consumer_fetch_and_keeps_first_batch_progress() {
-    let (broker, _dir) = crate::handlers::test_support::start_broker_with(|config| {
+    let (broker, _dir) = start_broker_with(|config| {
         config.authorizer = std::sync::Arc::new(AllowAllAuthorizer);
         config.fetch_max_bytes = bytes(1);
     })

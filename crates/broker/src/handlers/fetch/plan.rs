@@ -15,6 +15,7 @@ use super::request::{EffectivePartition, EffectiveTopic, FetchAuthorization};
 use crate::{
     broker::Broker,
     codes,
+    config_keys::resolve_broker_witness,
     partition::{Partition, ReplicationTarget},
     replica_selector::ReplicaView,
     topic_resolve::resolve,
@@ -216,7 +217,7 @@ async fn preferred_read_replica(
                     node_id: i32::try_from(node_id.0).unwrap_or(-1),
                     rack: image.broker(node_id).and_then(|broker| broker.rack.clone()),
                     in_isr: isr.contains(&node_id),
-                    is_witness: crate::config_keys::resolve_broker_witness(image, node_id),
+                    is_witness: resolve_broker_witness(image, node_id),
                     log_end_offset: log_end_offset.0,
                     time_since_caught_up: last_caught_up.map_or(std::time::Duration::MAX, |at| {
                         now.saturating_duration_since(at)
@@ -897,8 +898,12 @@ mod tests {
         codes::{NONE, NOT_LEADER_OR_FOLLOWER, OFFSET_OUT_OF_RANGE},
         config::NodeRole,
         config_keys::{BROKER_WITNESS, WITNESS_TRUE},
+        handlers::produce::test_support::image_with_topic,
         partition::Partition,
-        test_support::{broker_registration, spawn_standalone_partition, temporary_partition},
+        test_support::{
+            StandalonePartitionSetup, broker_registration, spawn_standalone_partition,
+            temporary_partition,
+        },
     };
 
     /// A three-site image: node 1 leads `orders` from `dc-a`, node 2 replicates
@@ -907,7 +912,7 @@ mod tests {
     fn stretch_image(witness_ids: &[u64]) -> krabka_metadata::MetadataImage {
         use krabka_metadata::{BrokerConfigRecord, BrokerRegistrationRecord, MetadataRecord};
 
-        let mut image = crate::handlers::produce::test_support::image_with_topic("orders", &[1, 2]);
+        let mut image = image_with_topic("orders", &[1, 2]);
         for (node_id, rack) in [(1u64, "dc-a"), (2u64, "dc-b")] {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
@@ -1159,8 +1164,7 @@ mod tests {
     #[tokio::test]
     async fn a_read_needs_the_installed_role_and_the_image_to_name_this_node() {
         let image = stretch_image(&[]);
-        let (_dir, partition) =
-            temporary_partition(crate::test_support::StandalonePartitionSetup::default());
+        let (_dir, partition) = temporary_partition(StandalonePartitionSetup::default());
         let refused = |leader_id| super::PartitionData {
             current_leader: super::LeaderIdAndEpoch {
                 leader_id,
@@ -1211,7 +1215,7 @@ mod tests {
         spawn_standalone_partition(
             dir,
             Log::open(dir, LogConfig::default()).expect("open partition log"),
-            crate::test_support::StandalonePartitionSetup {
+            StandalonePartitionSetup {
                 topic: "diverge",
                 ..Default::default()
             },

@@ -76,7 +76,10 @@ mod tests {
     use crate::{
         future_log::FutureLogState,
         partition::Partition,
-        test_support::{RecordCount, RepeatedRecordsSetup, StandalonePartitionSetup, UnixMillis},
+        test_support::{
+            RecordCount, RepeatedRecordsSetup, StandalonePartitionSetup, UnixMillis,
+            repeated_records_batch,
+        },
     };
 
     /// Builds a `Partition` rooted at `<log_dir>/<topic>-<partition>`.
@@ -120,7 +123,7 @@ mod tests {
     ///
     /// The LEO of the log advances by `count`.
     fn append_n(log: &std::sync::Mutex<krabka_log::Log>, count: RecordCount) {
-        let mut batch = crate::test_support::repeated_records_batch(RepeatedRecordsSetup {
+        let mut batch = repeated_records_batch(RepeatedRecordsSetup {
             count,
             timestamp: UnixMillis(1_700_000_000),
         });

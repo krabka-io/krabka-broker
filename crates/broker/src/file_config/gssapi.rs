@@ -79,7 +79,10 @@ mod tests {
 
     use crate::{
         config::{BrokerConfig, InterBrokerCredentials},
-        file_config::{FileConfig, FileConfigError, test_support::configured_unwrap_parse},
+        file_config::{
+            FileConfig, FileConfigError,
+            test_support::{configured, configured_unwrap_parse},
+        },
         network::auth::KerberosRule,
         test_support::{OAuthTokenContents, oauth_token_file},
     };
@@ -96,8 +99,7 @@ realm = "EXAMPLE.COM"
 kdc = "tcp://kdc:88"
 max_time_skew = "17s"
 "#;
-        let cfg = crate::file_config::test_support::configured(src, "parse [gssapi]")
-            .expect("apply [gssapi]");
+        let cfg = configured(src, "parse [gssapi]").expect("apply [gssapi]");
         let g = cfg.gssapi.expect("gssapi config present");
         check!(g.keytab_path == std::path::PathBuf::from("/etc/krabka/gssapi-keytab/keytab"));
         check!(g.service_name.as_str() == "kafka");

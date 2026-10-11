@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::FileConfigError;
-use crate::config::BrokerConfig;
+use crate::config::{BrokerConfig, KAFKA_STATIC_KEYS};
 
 /// Validated operational policy loaded from `[runtime]`.
 #[krabka_macros::runtime_policy_fields(toml)]
@@ -450,7 +450,7 @@ impl RuntimeFileConfig {
         let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(self) else {
             return;
         };
-        let supplied = crate::config::KAFKA_STATIC_KEYS.iter().filter(|key| {
+        let supplied = KAFKA_STATIC_KEYS.iter().filter(|key| {
             key.runtime_field
                 .and_then(|field| fields.get(field))
                 .is_some_and(|value| !value.is_null())

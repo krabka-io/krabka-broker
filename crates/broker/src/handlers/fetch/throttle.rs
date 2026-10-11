@@ -18,7 +18,7 @@ use crate::{
         QuotaBuckets, QuotaDelay, debt_tokens, entity_field, lookup_quota_with_key,
         throttle_time_ms,
     },
-    throttle::{REPLICATION_QUOTA_WINDOW, TokenBucket},
+    throttle::{REPLICATION_QUOTA_WINDOW, TokenBucket, TopicThrottle},
 };
 
 pub(super) fn throttle_follower_responses(
@@ -71,7 +71,7 @@ fn throttle_replica_traffic(
     let mut out_of_sync_bytes = 0_u64;
     let mut out_of_sync = Vec::new();
     for (topic_index, topic) in responses.iter().enumerate() {
-        let throttle = crate::throttle::TopicThrottle::for_topic(image, &topic.topic, leader);
+        let throttle = TopicThrottle::for_topic(image, &topic.topic, leader);
         for (partition_index, partition) in topic.partitions.iter().enumerate() {
             if !throttle.leader.contains(partition.partition_index) {
                 continue;
@@ -311,7 +311,8 @@ mod tests {
     use krabka_units::{Time, convert::TimeExt, millis, secs};
 
     use crate::{
-        handlers::test_support::replicated_partition,
+        handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+        metrics::BrokerMetrics,
         quota::{
             QuotaBuckets,
             test_support::{
@@ -412,7 +413,7 @@ mod tests {
                 } else {
                     vec![NodeId(1)]
                 },
-                ..replicated_partition(crate::handlers::test_support::ReplicatedPartitionSetup {
+                ..replicated_partition(ReplicatedPartitionSetup {
                     topic: "t",
                     partition: krabka_ids::PartitionIndex(partition),
                     leader: NodeId(1),
@@ -459,7 +460,7 @@ mod tests {
 
         super::throttle_replica_traffic(
             leader_out,
-            &crate::metrics::BrokerMetrics::new(),
+            &BrokerMetrics::new(),
             &image,
             (krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)),
             &mut responses,

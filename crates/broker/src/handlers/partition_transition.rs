@@ -5,7 +5,7 @@ use krabka_metadata::{BreakGlassAction, MetadataImage, MetadataRecord};
 use crate::{
     break_glass::{
         gate::{self, BreakGlassDenial},
-        handlers::audit::GatedTransition,
+        handlers::audit::{GatedTransition, audit_transition},
         metrics::record_refusal,
     },
     config::BreakGlassConfig,
@@ -63,7 +63,7 @@ pub(super) fn audit_refusal<T: AsRef<str>>(
     reason: &str,
 ) {
     record_refusal(&broker.metrics, denial.action);
-    crate::break_glass::handlers::audit::audit_transition(
+    audit_transition(
         &broker.audit_log,
         &broker.config.break_glass,
         context,

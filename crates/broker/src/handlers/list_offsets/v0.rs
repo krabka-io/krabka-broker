@@ -212,6 +212,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        authorizer::AllowAllAuthorizer,
         broker::BrokerHandle,
         handlers::list_offsets::test_support::{client_for, create_topic, test_context},
         test_support::{peer, principal, start_broker_with_authorizer_no_audit},
@@ -229,8 +230,7 @@ mod tests {
     async fn max_num_offsets_caps_legacy_segment_boundaries() {
         const TOPIC: &str = "list-offsets-v0-max";
         let (broker_handle, _dir) =
-            start_broker_with_authorizer_no_audit(Arc::new(crate::authorizer::AllowAllAuthorizer))
-                .await;
+            start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
         let client = client_for(&broker_handle).await;
         create_topic(
             &client,
@@ -344,8 +344,7 @@ mod tests {
     async fn duplicate_partition_gets_invalid_request_on_every_row() {
         const TOPIC: &str = "list-offsets-v0-duplicate";
         let (broker_handle, _dir) =
-            start_broker_with_authorizer_no_audit(Arc::new(crate::authorizer::AllowAllAuthorizer))
-                .await;
+            start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
         let client = client_for(&broker_handle).await;
         create_topic(&client, TOPIC, vec![]).await;
         broker_handle.wait_until_partition_present(TOPIC, 0).await;

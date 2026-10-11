@@ -24,7 +24,10 @@ use crate::{
     handlers::{
         RequestContext, describe_topic_partitions::handle as describe_topic_partitions_handle,
     },
-    test_support::{dispatch_wire, fence_remote_broker, peer, principal, start_broker_no_audit},
+    test_support::{
+        broker_registration, dispatch_wire, fence_remote_broker, peer, principal,
+        start_broker_no_audit, topic_partitions_request,
+    },
 };
 
 const TOPIC: &str = "led";
@@ -50,7 +53,7 @@ fn registration(
                 protocol: krabka_security::ListenerProtocol::Plaintext,
             })
             .collect(),
-        ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
+        ..broker_registration(krabka_raft::NodeId(node_id))
     })
 }
 
@@ -305,7 +308,7 @@ async fn describe_topic_partitions_answers_no_leader_for_a_leader_without_the_li
         false,
         "PLAINTEXT",
     );
-    let request = crate::test_support::topic_partitions_request(TOPIC);
+    let request = topic_partitions_request(TOPIC);
 
     let response = describe_topic_partitions_handle(&broker, request, 0, &ctx)
         .await

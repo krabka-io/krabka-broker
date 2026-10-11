@@ -48,6 +48,7 @@ use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
     codes::{DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED},
     handlers::ErrorCodeResponse as _,
+    metadata_source::MetadataSource,
     network::auth::ConnectionAuth,
 };
 
@@ -63,7 +64,7 @@ pub(crate) fn handle(
     req: &DescribeDelegationTokenRequest,
     auth: &ConnectionAuth,
     secret_key: Option<&SecretBytes>,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
     peer: &SocketAddr,
     authorizer: &dyn Authorizer,
 ) -> DescribeDelegationTokenResponse {

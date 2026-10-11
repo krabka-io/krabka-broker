@@ -9,7 +9,10 @@ use krabka_protocol::owned::{
 };
 
 use super::sentinels::UNKNOWN_EPOCH;
-use crate::{broker::BrokerHandle, codes, config::RemoteStorageBackend};
+use crate::{
+    broker::BrokerHandle, codes, config::RemoteStorageBackend,
+    test_support::start_broker_no_audit_with,
+};
 
 crate::test_support::wire_helpers!(
     pub(super) ListOffsetsRequest,
@@ -60,7 +63,7 @@ pub(super) async fn remote_topic(
 ) {
     let remote_dir = tempfile::tempdir().expect("remote tempdir");
     let remote_path = remote_dir.path().to_path_buf();
-    let (broker, directory) = crate::test_support::start_broker_no_audit_with(move |config| {
+    let (broker, directory) = start_broker_no_audit_with(move |config| {
         config.remote_storage_backend = Some(RemoteStorageBackend::Local { dir: remote_path });
     })
     .await;

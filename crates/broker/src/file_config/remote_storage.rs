@@ -387,7 +387,10 @@ mod tests {
     use krabka_units::{gibibytes, mebibytes, millis, secs};
 
     use crate::{
-        config::{BrokerConfig, DEFAULT_REMOTE_COPY_TIMEOUT, KafkaRlmmConfig, RlmmKind},
+        config::{
+            BrokerConfig, DEFAULT_REMOTE_COPY_TIMEOUT, KafkaRlmmConfig, RemoteStorageBackend,
+            RlmmKind,
+        },
         file_config::{FileConfig, test_support::configured_unwrap_parse},
     };
 
@@ -399,7 +402,7 @@ storage_dir = "/var/lib/krabka/tier"
 "#;
         let cfg = configured_unwrap_parse(toml).unwrap();
         match cfg.remote_storage_backend {
-            Some(crate::config::RemoteStorageBackend::Local { dir }) => {
+            Some(RemoteStorageBackend::Local { dir }) => {
                 assert!(dir == std::path::PathBuf::from("/var/lib/krabka/tier"));
             }
             other => panic!("expected Local backend, got {other:?}"),

@@ -80,14 +80,17 @@ mod tests {
 
     use super::*;
     use crate::{
-        handlers::delete_acls::test_support::{OPERATION_WRITE, PATTERN_TYPE_PREFIXED, acl},
+        handlers::{
+            acl_test_support::expected_deleted_orders_acl,
+            delete_acls::test_support::{OPERATION_WRITE, PATTERN_TYPE_PREFIXED, acl},
+        },
         test_support::AllowAclSetup,
     };
 
     #[test]
     fn helpers_preserve_matching_acl_and_submit_error_fields() {
         let matched = matching_acl_result(&acl(AllowAclSetup::default()));
-        let expected_matched = crate::handlers::acl_test_support::expected_deleted_orders_acl();
+        let expected_matched = expected_deleted_orders_acl();
         assert!(matched == expected_matched);
 
         let mut prefixed_acl = acl(AllowAclSetup {

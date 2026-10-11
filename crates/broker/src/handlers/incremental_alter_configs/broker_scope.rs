@@ -211,7 +211,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        features::METADATA_VERSION,
+        cordoned_log_dirs::CORDONED_LOG_DIRS,
+        features::{ELR_VERSION, METADATA_VERSION},
         handlers::{
             incremental_alter_configs::test_support::{
                 make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
@@ -255,7 +256,7 @@ mod tests {
         if elr {
             image.apply(&MetadataRecord::V1FeatureLevel(
                 krabka_metadata::FeatureLevelRecord {
-                    name: crate::features::ELR_VERSION.into(),
+                    name: ELR_VERSION.into(),
                     level: 1,
                 },
             ));
@@ -538,7 +539,7 @@ mod tests {
     /// write the controller refuses below `metadata.version` `4.3-IV0`.
     #[test]
     fn cordoned_log_dirs_follows_kafkas_dynamic_config_rules() {
-        const KEY: &str = crate::cordoned_log_dirs::CORDONED_LOG_DIRS;
+        const KEY: &str = CORDONED_LOG_DIRS;
         let log_dirs = [
             std::path::PathBuf::from("/tmp/d1"),
             std::path::PathBuf::from("/tmp/d2"),

@@ -52,7 +52,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        handlers::delete_acls::test_support::{acl, filter},
+        handlers::{
+            acl_test_support::expected_empty_match_filter,
+            delete_acls::test_support::{acl, filter},
+        },
         test_support::AllowAclSetup,
     };
 
@@ -62,7 +65,7 @@ mod tests {
 
         let built = build_filter(&f).expect("filter");
 
-        let expected = crate::handlers::acl_test_support::expected_empty_match_filter();
+        let expected = expected_empty_match_filter();
         assert!(built == expected);
     }
 

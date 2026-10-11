@@ -25,7 +25,7 @@ use super::{
 };
 use crate::{
     api_catalog::UnstableApiVersions,
-    client_metrics::config::{KEY_INTERVAL_MS, KEY_METRICS},
+    client_metrics::config::{KEY_INTERVAL_MS, KEY_MATCH, KEY_METRICS},
     codes::{INVALID_REQUEST, INVALID_TOPIC_EXCEPTION, UNKNOWN_TOPIC_OR_PARTITION},
     config::BrokerConfig,
     config_keys::{
@@ -1178,7 +1178,7 @@ fn a_client_metrics_subscription_reports_all_three_keys_typed() {
     );
     let metrics = entry_named(&result, KEY_METRICS);
     let interval = entry_named(&result, KEY_INTERVAL_MS);
-    let matcher = entry_named(&result, crate::client_metrics::config::KEY_MATCH);
+    let matcher = entry_named(&result, KEY_MATCH);
 
     check!(metrics.value == Some("org.apache.kafka".to_owned()));
     check!(metrics.config_source == CONFIG_SOURCE_CLIENT_METRICS);

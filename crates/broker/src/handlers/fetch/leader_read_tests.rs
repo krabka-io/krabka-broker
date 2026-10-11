@@ -35,7 +35,9 @@ use crate::{
     broker::BrokerHandle,
     codes,
     fetch_session::INVALID_SESSION_ID,
-    handlers::test_support::{ReplicatedTopicSetup, seed_partition_replicas},
+    handlers::test_support::{
+        ReplicatedTopicSetup, default_records_batch, seed_partition_replicas,
+    },
     partition::Partition,
     test_support::{KafkaErrorCode, append_partition_batch, start_broker_no_audit_with},
 };
@@ -124,7 +126,7 @@ async fn partition(broker: &BrokerHandle, setup: ReplicatedTopicSetup<'_>) -> Ar
         "the broker holds the partition in its role"
     );
 
-    let mut batch = crate::handlers::test_support::default_records_batch(&[b"first", b"second"]);
+    let mut batch = default_records_batch(&[b"first", b"second"]);
     append_partition_batch(&partition, &mut batch);
     partition
 }

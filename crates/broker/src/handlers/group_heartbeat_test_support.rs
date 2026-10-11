@@ -124,7 +124,7 @@ use crate::{
     handlers::test_support::single_replica_partition,
     test_support::{
         PartitionCount, StreamsJoinSetup, allow_acl, peer, principal, request_context,
-        start_group_broker, streams_join_request,
+        sasl_principal, start_group_broker, streams_join_request,
     },
 };
 
@@ -165,7 +165,7 @@ pub(super) fn topic_with_partitions(setup: GroupTopicSetup<'_>) -> Vec<MetadataR
 
 /// The SASL/PLAIN principal `User:alice` that the ACLs above name.
 pub(super) fn alice() -> krabka_security::Principal {
-    crate::test_support::sasl_principal("alice")
+    sasl_principal("alice")
 }
 
 /// Kafka's explicit-name Describe check, shared by consumer and share heartbeats.

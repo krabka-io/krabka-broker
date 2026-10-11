@@ -9,7 +9,8 @@ use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
 
 use crate::{
     codes::{
-        DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_NOT_FOUND, DELEGATION_TOKEN_OWNER_MISMATCH,
+        DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_NOT_FOUND,
+        DELEGATION_TOKEN_OWNER_MISMATCH, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
     },
     network::auth::ConnectionAuth,
     test_support::{KafkaErrorCode, UnixMillis, principal},
@@ -187,7 +188,7 @@ pub(super) fn mutation_credential_refusals(live_hmac: &[u8]) -> Vec<TokenMutatio
         authentication: authed_with_token("alice", CredentialSource::DelegationToken),
         secret,
         hmac: live_hmac.to_vec(),
-        error: KafkaErrorCode(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED),
+        error: KafkaErrorCode(DELEGATION_TOKEN_REQUEST_NOT_ALLOWED),
         expiry: UnixMillis(-1),
         ..Default::default()
     });
