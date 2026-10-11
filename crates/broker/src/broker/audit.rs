@@ -13,7 +13,7 @@ use krabka_units::{
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::{audit_sink::KafkaTopicAuditSink, broker::Broker, config::BrokerConfig, metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry, time_util::system_timer};
+use crate::{audit_recovery::recover_from_partition_tail, audit_sink::KafkaTopicAuditSink, broker::Broker, config::BrokerConfig, metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry, time_util::system_timer};
 
 fn audit_signer(config: &BrokerConfig) -> Option<Arc<krabka_audit::FileEd25519Signer>> {
     let (Some(path), Some(key_id)) = (&config.audit_signing_key_path, &config.audit_signing_key_id)
@@ -179,7 +179,7 @@ pub(super) fn start_audit_pipeline(
             partitions
                 .get(&config.audit_topic, partition_index)
                 .and_then(|partition| {
-                    crate::audit_recovery::recover_from_partition_tail(
+                    recover_from_partition_tail(
                         &partition,
                         config.audit_tail_window_offsets,
                         config.audit_tail_read_max,

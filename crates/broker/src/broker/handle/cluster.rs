@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::broker::{Broker, BrokerHandle, TEST_AWAITER_TIMEOUT};
 #[cfg(any(test, feature = "test-helpers"))]
-use crate::metrics::BrokerMetrics;
+use crate::{error::BrokerError, metrics::BrokerMetrics};
 
 impl BrokerHandle {
     /// Test-only: the controller's current quorum state (leader epoch, HWM,
@@ -34,7 +34,7 @@ impl BrokerHandle {
     pub async fn submit_metadata_record_for_test(
         &self,
         rec: krabka_metadata::MetadataRecord,
-    ) -> Result<(), crate::error::BrokerError> {
+    ) -> Result<(), BrokerError> {
         use crate::error::BrokerError;
 
         self.broker
@@ -65,7 +65,9 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
     pub fn fenced_broker_ids_for_test(&self) -> std::collections::BTreeSet<u64> {
-        crate::heartbeat::fencing::fenced_node_ids(&self.broker.controller.current_image())
+        use crate::heartbeat::fencing::fenced_node_ids;
+
+        fenced_node_ids(&self.broker.controller.current_image())
             .into_iter()
             .collect()
     }

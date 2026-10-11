@@ -78,7 +78,9 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_group_coordinator_ready(&self) {
-        let topic = crate::coordinator::bootstrap::OFFSETS_TOPIC;
+        use crate::coordinator::bootstrap::OFFSETS_TOPIC;
+
+        let topic = OFFSETS_TOPIC;
         let partitions = self.broker.config.offsets_topic_num_partitions;
         let ready = self
             .await_coordinator_ready(topic, partitions, |image, led| async move {
@@ -110,12 +112,14 @@ impl BrokerHandle {
             .await_coordinator_ready(topic, partitions, |_image, led| async move {
                 let mut loaded = true;
                 for partition in led {
+                    use crate::txn::coordinator::leadership::LoadStatus;
+
                     loaded &= self
                         .broker
                         .txn_coordinator
                         .load_status(PartitionIndex(partition))
                         .await
-                        == Some(crate::txn::coordinator::leadership::LoadStatus::Loaded);
+                        == Some(LoadStatus::Loaded);
                 }
                 loaded
             })
@@ -152,12 +156,14 @@ impl BrokerHandle {
                     .await;
                 let mut active = true;
                 for partition in led {
+                    use crate::share_coordinator::coordinator::LoadStatus;
+
                     active &= self
                         .broker
                         .share_coordinator
                         .load_status(PartitionIndex(partition))
                         .await
-                        == Some(crate::share_coordinator::coordinator::LoadStatus::Active);
+                        == Some(LoadStatus::Active);
                 }
                 active
             })

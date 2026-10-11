@@ -6,8 +6,7 @@ use std::sync::Arc;
 use krabka_audit::{AuditEndpoint, AuditEvent, AuditLog, AuditPrincipal};
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
-    metrics::BrokerMetrics,
+    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer}, metrics::BrokerMetrics, time_util::now_ms,
 };
 
 /// Wraps an [`Authorizer`]. It forwards decisions, bumps
@@ -62,7 +61,7 @@ impl Authorizer for AuditingAuthorizer {
                 resource_type: format!("{:?}", req.resource_type),
                 resource_name: req.resource_name.to_string(),
                 operation: format!("{:?}", req.operation),
-                time_ms: crate::time_util::now_ms(),
+                time_ms: now_ms(),
             });
         }
         result
@@ -123,8 +122,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
-        test_support::{DenyAll, principal},
+        authorizer::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer}, metrics::{AuthorizationDeniedLabel, BrokerMetrics}, test_support::{DenyAll, principal},
     };
 
     // Expand the setup in the caller so receiver and metrics keep their scopes.
@@ -157,8 +155,8 @@ mod tests {
         )
     }
 
-    fn denied_label() -> crate::metrics::AuthorizationDeniedLabel {
-        crate::metrics::AuthorizationDeniedLabel {
+    fn denied_label() -> AuthorizationDeniedLabel {
+        AuthorizationDeniedLabel {
             operation: "Write".to_string(),
             resource_type: "Topic".to_string(),
         }
@@ -194,7 +192,7 @@ mod tests {
     /// Deny leaves behind.
     #[tokio::test]
     async fn deny_decision_counts_with_audit_disabled() {
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
         let authz = AuditingAuthorizer::new(
             Arc::new(DenyAll),
             krabka_audit::AuditLog::disabled(),
@@ -218,9 +216,9 @@ mod tests {
     /// the ACL RPCs must still see a broker with no authorizer as one.
     #[test]
     fn is_configured_follows_the_wrapped_authorizer() {
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
         let over_allow_all = AuditingAuthorizer::new(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            Arc::new(AllowAllAuthorizer),
             krabka_audit::AuditLog::disabled(),
             metrics.clone(),
         );
@@ -258,7 +256,7 @@ mod tests {
     /// way it forwards `is_configured`.
     #[test]
     fn decision_ttl_follows_the_wrapped_authorizer() {
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
         let ttl = std::time::Duration::from_secs(42);
         let over_fixed_ttl = AuditingAuthorizer::new(
             Arc::new(FixedTtl(ttl)),

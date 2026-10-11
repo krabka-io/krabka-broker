@@ -215,7 +215,7 @@ impl AuditEvent {
 mod tests {
     use assert2::check;
 
-    use crate::test_support::{admin, authentication, privileged_freeze};
+    use crate::test_support::{admin, authentication, denied, privileged_freeze};
 
 use super::*;
 
@@ -243,7 +243,7 @@ use super::*;
             Some("authentication failed"),
             1_700_000_000_000,
         );
-        let denied = crate::test_support::denied(1);
+        let denied = denied(1);
         let admin = admin(2);
         let privileged = privileged_freeze(vec![0xde, 0xad], 3, 4);
         let life = AuditEvent::Lifecycle {

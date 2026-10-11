@@ -8,7 +8,7 @@ use std::sync::Arc;
 use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
-use crate::{client_metrics::{ClientMetrics, ClientMetricsManager, prometheus_sink::SharedClientMetricsCollector}, config::BrokerConfig, error::BrokerError, metrics_server::run};
+use crate::{client_metrics::{ClientMetrics, ClientMetricsManager, prometheus_sink::SharedClientMetricsCollector}, config::BrokerConfig, error::BrokerError, metrics::BrokerMetrics, metrics_server::run};
 
 pub(super) struct ObservabilityStartup {
     pub(super) metrics_bound_addr: Option<std::net::SocketAddr>,
@@ -17,7 +17,7 @@ pub(super) struct ObservabilityStartup {
 
 pub(super) async fn start_observability(
     config: &BrokerConfig,
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> Result<ObservabilityStartup, BrokerError> {
     let metrics_bound_addr = if let Some(address) = config.metrics_listen_addr {

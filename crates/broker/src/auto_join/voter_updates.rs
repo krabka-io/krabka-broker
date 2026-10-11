@@ -177,7 +177,7 @@ mod tests {
     use krabka_raft::{Node, NodeId};
 
     use super::*;
-    use crate::test_support::FakeMetadataSource;
+    use crate::{auto_join::test_support::{ResponseHeaderMode, ResponseWireSetup, voter_update_params}, test_support::FakeMetadataSource};
 
     #[test]
     fn build_update_raft_voter_request_carries_identity_and_endpoints() {
@@ -390,9 +390,9 @@ mod tests {
                         &mut socket,
                         &frame,
                         &response,
-                        crate::auto_join::test_support::ResponseWireSetup {
+                        ResponseWireSetup {
                             version: krabka_ids::ApiVersion(req::MAX_VERSION),
-                            header: crate::auto_join::test_support::ResponseHeaderMode::Flexible,
+                            header: ResponseHeaderMode::Flexible,
                         },
                     )
                     .await;
@@ -407,7 +407,7 @@ mod tests {
     async fn run_voter_updates_advertises_to_leader_and_records_success() {
         let (addr, count) = spawn_mock_update_server(codes::NONE).await;
 
-        let params = crate::auto_join::test_support::voter_update_params(addr, Some(NodeId(1)));
+        let params = voter_update_params(addr, Some(NodeId(1)));
 
         let _ = tokio::time::timeout(Duration::from_millis(200), run_voter_updates(params)).await;
 
@@ -418,7 +418,7 @@ mod tests {
     async fn run_voter_updates_retries_on_error_response() {
         let (addr, count) = spawn_mock_update_server(codes::UNKNOWN_SERVER_ERROR).await;
 
-        let params = crate::auto_join::test_support::voter_update_params(addr, Some(NodeId(1)));
+        let params = voter_update_params(addr, Some(NodeId(1)));
 
         let _ = tokio::time::timeout(Duration::from_millis(150), run_voter_updates(params)).await;
 
@@ -429,7 +429,7 @@ mod tests {
     async fn run_voter_updates_does_not_advertise_when_leader_is_none() {
         let (addr, count) = spawn_mock_update_server(codes::NONE).await;
 
-        let params = crate::auto_join::test_support::voter_update_params(addr, None);
+        let params = voter_update_params(addr, None);
 
         let _ = tokio::time::timeout(Duration::from_millis(50), run_voter_updates(params)).await;
 

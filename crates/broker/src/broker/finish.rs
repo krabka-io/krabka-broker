@@ -18,7 +18,7 @@ use crate::{
         listeners::{ListenerStartup, bind_listeners_and_recover_moves, spawn_listener_tasks},
         rlmm::{KafkaSwapKickoff, bootstrap_topic_rlmm},
         runtime::BrokerRuntimeStartup,
-    }, config::BrokerConfig, controller_admin::BrokerControllerAdminRouter, coordinator::GroupCoordinator, diskless::{flusher::FlushConfig, read::DisklessReadHandle}, error::BrokerError, handlers::registry::build_registry, log_dir_status::LogDirRegistry, network::dispatch::RequestByteBudget, partition_registry::PartitionRegistry, producer_id_manager::ProducerIdManager, share_coordinator::coordinator::ShareCoordinator, share_partition::manager::SharePartitionLeaderManager, txn::coordinator::TxnCoordinator,
+    }, config::BrokerConfig, controller_admin::BrokerControllerAdminRouter, coordinator::GroupCoordinator, diskless::{flusher::FlushConfig, read::DisklessReadHandle}, error::BrokerError, handlers::registry::build_registry, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, network::dispatch::RequestByteBudget, partition_registry::PartitionRegistry, producer_id_manager::ProducerIdManager, share_coordinator::coordinator::ShareCoordinator, share_partition::manager::SharePartitionLeaderManager, time_util::now_ms, txn::coordinator::TxnCoordinator,
 };
 
 pub(super) type BrokerCoordinatorSet = (
@@ -41,7 +41,7 @@ pub(super) async fn finish_broker_startup(
     mut config: BrokerConfig,
     data_listeners: Vec<TcpListener>,
     metadata: (
-        Arc<dyn crate::metadata_source::MetadataSource>,
+        Arc<dyn MetadataSource>,
         Arc<PartitionRegistry>,
         Option<Arc<BrokerControllerAdminRouter>>,
     ),
@@ -184,7 +184,7 @@ async fn emit_broker_started(broker: &Broker, audit_partition: Option<PartitionI
     broker.audit_log.emit(krabka_audit::AuditEvent::Lifecycle {
         kind: krabka_audit::LifecycleKind::BrokerStarted,
         node_id: i64::from(broker.config.broker_id),
-        time_ms: crate::time_util::now_ms(),
+        time_ms: now_ms(),
     });
 }
 

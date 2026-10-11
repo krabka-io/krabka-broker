@@ -59,7 +59,7 @@ use krabka_protocol::{
 use crate::{
     barrier::{STATE_TOPIC, bootstrap::topic_configs}, broker::Broker, codes, config::BrokerConfig, config_keys::{
         ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_CREATE,
-    }, coordinator::bootstrap::{OFFSETS_TOPIC, offsets_topic_configs}, internal_topics::is_internal_topic, share_coordinator::bootstrap::TOPIC, time_util::now_ms, topic_creator::{ForwardedIdentity, TopicCreator, TopicCreatorError}, txn::bootstrap::{TOPIC, topic_configs},
+    }, coordinator::bootstrap::{OFFSETS_TOPIC, offsets_topic_configs}, internal_topics::is_internal_topic, share_coordinator::bootstrap::{TOPIC, topic_configs}, time_util::now_ms, topic_creator::{ForwardedIdentity, TopicCreator, TopicCreatorError}, txn::bootstrap::{TOPIC, topic_configs},
 };
 
 /// The `timeout_ms` of each `CreateTopics` request. Kafka's
@@ -555,7 +555,7 @@ pub fn creatable_topic(config: &BrokerConfig, name: &str) -> CreatableTopic {
         TOPIC => (
             config.share_coordinator.state_topic_num_partitions,
             config.share_coordinator.state_topic_replication_factor,
-            crate::share_coordinator::bootstrap::topic_configs(&config.share_coordinator),
+            topic_configs(&config.share_coordinator),
         ),
         STATE_TOPIC => (
             config.barrier_state_num_partitions,

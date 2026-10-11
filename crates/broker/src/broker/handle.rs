@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 
 #[cfg(test)]
 use crate::broker::Broker;
-use crate::{broker::BrokerHandle, clean_shutdown::write, error::BrokerError, future_log::shutdown_moves, partition_registry::PartitionRegistry, time_util::now_ms};
+use crate::{broker::BrokerHandle, clean_shutdown::write, error::BrokerError, future_log::{abort_moves, shutdown_moves}, partition_registry::PartitionRegistry, time_util::now_ms};
 
 #[cfg(any(test, feature = "test-helpers"))]
 mod cluster;
@@ -575,7 +575,7 @@ impl Drop for BrokerHandle {
         if let Some(task) = self.diskless_task.take() {
             task.abort();
         }
-        crate::future_log::abort_moves(&self.broker.future_logs);
+        abort_moves(&self.broker.future_logs);
         abort_partition_writers(&self.broker.partitions);
     }
 }

@@ -16,7 +16,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    broker::{Broker, accept::accept_loop}, config::{BrokerConfig, ListenerSpec}, error::BrokerError, future_log::{FutureLogState, MovePolicy}, log_dir, partition_registry::PartitionRegistry, platform::Sockets, throttle::ThrottleState,
+    broker::{Broker, accept::accept_loop}, config::{BrokerConfig, ListenerSpec}, error::BrokerError, future_log::{FutureLogState, MovePolicy}, log_dir, partition_registry::PartitionRegistry, platform::{Sockets, bind_listener}, throttle::ThrottleState,
 };
 
 pub(super) struct ListenerStartup {
@@ -59,7 +59,7 @@ pub(super) async fn bind_ephemeral_data_plane_listener(
     {
         return Ok(());
     }
-    let listener = crate::platform::bind_listener(config.listen_addr).await?;
+    let listener = bind_listener(config.listen_addr).await?;
     let bound = Sockets::TARGET.listener_address(&listener, config.listen_addr)?;
     config.listen_addr = bound;
     if let Some((host, _)) = config.advertised_listener.rsplit_once(':') {
@@ -167,7 +167,7 @@ async fn adopt_or_bind_listeners(
         };
         let listener = match serving {
             Some(index) => supplied.remove(index),
-            None => crate::platform::bind_listener(spec.bind_addr).await?,
+            None => bind_listener(spec.bind_addr).await?,
         };
         let address = sockets.listener_address(&listener, spec.bind_addr)?;
         bound.push((spec, listener, address));

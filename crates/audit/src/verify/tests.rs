@@ -8,7 +8,7 @@ use krabka_protocol::records::{Record, RecordBatch, RecordHeader};
 
 use super::*;
 use crate::{
-    FileEd25519Signer, chain::{ChainState, GENESIS_HEAD}, checkpoint::Checkpoint, ids::EpochMs, sink::AuditRecord, test_support::shared_signer as signer,
+    FileEd25519Signer, chain::{ChainState, GENESIS_HEAD}, checkpoint::Checkpoint, event::AuditEventClass, ids::EpochMs, sink::AuditRecord, test_support::shared_signer as signer,
 };
 
 fn audit_record_to_batch(rec: &AuditRecord, base_offset: i64) -> RecordBatch {
@@ -61,7 +61,7 @@ fn record_at_delta(rec: &AuditRecord, offset_delta: i32) -> Record {
 
 fn lifecycle_record(value: Vec<u8>) -> AuditRecord {
     AuditRecord {
-        class: crate::event::AuditEventClass::ApplicationLifecycle,
+        class: AuditEventClass::ApplicationLifecycle,
         value,
         headers: vec![("event_class".into(), b"application_lifecycle".to_vec())],
     }

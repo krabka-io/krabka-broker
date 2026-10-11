@@ -287,18 +287,13 @@ mod tests {
 
     use crate::{
         barrier::{
-            STATE_TOPIC,
-            coordinator::{
-                GroupDescription, RetainedCut,
-                test_support::{Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec},
-            },
-            error::BarrierError,
-            persistence::{
+            STATE_TOPIC, coordinator::{
+                BarrierCoordinator, GroupDescription, RetainedCut, test_support::{Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec},
+            }, error::BarrierError, persistence::{
                 CutStatus, GroupValue, InjectionStartValue, MissingPartition, RecordKey,
                 encode_injection_start,
             },
-        },
-        metadata_source::MetadataSource,
+        }, metadata_source::MetadataSource,
     };
 
     #[tokio::test]
@@ -363,7 +358,7 @@ mod tests {
     async fn recover_one_cut(
         fixture: &Fixture,
         epoch: InjectionEpoch,
-    ) -> (crate::barrier::coordinator::BarrierCoordinator, RetainedCut) {
+    ) -> (BarrierCoordinator, RetainedCut) {
         let replayed = fixture.recovered().await;
         let mut cuts = replayed.list_cuts(GROUP).await.expect("the group is live");
         assert!(cuts.len() == 1);
@@ -379,7 +374,7 @@ mod tests {
     struct BarrierPartitionCount(i32);
 
     async fn append_interrupted_start(
-        coordinator: &crate::barrier::coordinator::BarrierCoordinator,
+        coordinator: &BarrierCoordinator,
         epoch: InjectionEpoch,
         start: &InjectionStartValue,
         context: &str,

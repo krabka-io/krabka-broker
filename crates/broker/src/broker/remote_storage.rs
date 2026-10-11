@@ -8,7 +8,7 @@ use std::sync::Arc;
 use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use tokio_util::sync::CancellationToken;
 
-use crate::{config::{BrokerConfig, RemoteStorageBackend, RlmmKind}, diskless::read::DisklessReadHandle, error::BrokerError, metadata_source::MetadataSource, metrics::{BrokerMetrics, RemoteReaderLevels, RemoteReaderTotals}, partition_registry::PartitionRegistry, remote_log_manager::{RemoteLogManagerContext, SweepConcurrency, run}, remote_reader::{RemoteReader, RemoteReaderLimits}};
+use crate::{config::{BrokerConfig, RemoteStorageBackend, RlmmKind}, diskless::read::DisklessReadHandle, error::BrokerError, metadata_source::MetadataSource, metrics::{BrokerMetrics, RemoteReaderLevels, RemoteReaderTotals}, partition_registry::PartitionRegistry, remote_log_manager::{ArchiveMode, RemoteLogManagerConfig, RemoteLogManagerContext, SweepConcurrency, run}, remote_reader::{RemoteReader, RemoteReaderLimits}};
 
 #[derive(Default)]
 pub(super) struct RemoteStorageStartup {
@@ -57,7 +57,7 @@ pub(super) fn start_remote_storage(
     // backend of its own. `BrokerConfig::validate` already rejects the
     // local pairing, so the arm below only fires for a config built in code.
     let worm = config.remote_storage_worm.as_ref();
-    let archive = crate::remote_log_manager::ArchiveMode::from_worm(worm);
+    let archive = ArchiveMode::from_worm(worm);
     let with_worm = |store: krabka_remote_storage::S3RemoteStorage| match worm {
         Some(worm) => store.with_worm(worm).map_err(|error| {
             BrokerError::Startup(format!("remote_storage.worm setup failed: {error}"))
@@ -135,7 +135,7 @@ pub(super) fn start_remote_storage(
             node_id: config.node_id,
             broker_id: config.broker_id,
         },
-        crate::remote_log_manager::RemoteLogManagerConfig {
+        RemoteLogManagerConfig {
             interval: config.remote_log_manager_interval,
             copy_timeout: config.remote_copy_timeout,
             concurrency: SweepConcurrency {

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::delegation_token_cleanup::DelegationTokenController;
+use crate::{delegation_token_cleanup::DelegationTokenController, metadata_source::MetadataSource};
 
 /// Wraps a real [`krabka_raft::ControllerHandle`] so it can satisfy the
 /// controller traits of the broker's background tasks:
@@ -21,7 +21,7 @@ use crate::delegation_token_cleanup::DelegationTokenController;
 /// Every broker runs both expiry sweeps. Raft serializes duplicate
 /// tombstones, so each one after the first is a no-op on the apply path.
 pub(super) struct ControllerAdapter {
-    pub(super) handle: Arc<dyn crate::metadata_source::MetadataSource>,
+    pub(super) handle: Arc<dyn MetadataSource>,
     pub(super) node_id: krabka_raft::NodeId,
 }
 
@@ -96,7 +96,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::{break_glass::sweep::BreakGlassController, broker::test_support::{fake_source, metadata_topic_record}, leader_rebalance::ControllerLike, metadata_source::MetadataSource, reassignment::ReassignmentController};
+    use crate::{break_glass::sweep::BreakGlassController, broker::test_support::{fake_source, metadata_topic_record}, delegation_token_cleanup::DelegationTokenController, leader_rebalance::ControllerLike, metadata_source::MetadataSource, reassignment::ReassignmentController};
 
     fn adapter(
         source: &Arc<dyn MetadataSource>,
@@ -141,7 +141,7 @@ mod tests {
         let images = [
             ControllerLike::current_image(&adapter),
             ReassignmentController::current_image(&adapter),
-            crate::delegation_token_cleanup::DelegationTokenController::current_image(&adapter),
+            DelegationTokenController::current_image(&adapter),
             BreakGlassController::current_image(&adapter),
         ];
         for image in images {
@@ -178,7 +178,7 @@ mod tests {
             .await,
             BreakGlassController::submit_change(&adapter, vec![record])
                 .await,
-            crate::delegation_token_cleanup::DelegationTokenController::submit_mutations(
+            DelegationTokenController::submit_mutations(
                 &adapter,
                 Vec::new(),
             )

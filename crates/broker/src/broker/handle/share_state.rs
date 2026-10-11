@@ -133,6 +133,8 @@ impl BrokerHandle {
 mod tests {
     use assert2::check;
 
+use crate::share_coordinator::{coordinator::test_support::share_write, handlers::test_support::lead_share_state_partitions};
+
     #[tokio::test]
     async fn single_broker_handle_share_and_raft_helpers_observe_real_state() {
         let (handle, dir) = crate::test_support::start_broker_with(|_| {}).await;
@@ -147,7 +149,7 @@ mod tests {
                 .await
                 .is_none()
         );
-        crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
+        lead_share_state_partitions(&broker)
             .await;
         let share_image = crate::share_coordinator::coordinator::test_support::image_with_topic(
             share_topic_id,
@@ -183,7 +185,7 @@ mod tests {
                 share_group,
                 share_topic_id,
                 share_partition,
-                crate::share_coordinator::coordinator::test_support::share_write(
+                share_write(
                     (11, 2),
                     (95, 7),
                     vec![crate::share_coordinator::persistence::StateBatch {

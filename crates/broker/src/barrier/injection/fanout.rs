@@ -203,22 +203,16 @@ mod tests {
     use super::{MarkerFanout, RemoteMarkerWriter};
     use crate::{
         barrier::{
-            config::BarrierConfig,
-            injection::{
+            config::BarrierConfig, injection::{
                 MarkerPlacement, MockRemoteMarkerWriter,
                 test_support::{at, fast_config, marker, source},
-            },
-            metrics::BrokerBarrierMetrics,
-            test_support::{open_partition, topic_records},
-        },
-        error::BrokerError,
-        metrics::BrokerMetrics,
-        partition_registry::PartitionRegistry,
+            }, metrics::BrokerBarrierMetrics, state::TargetPartition, test_support::{check_control_marker, open_partition, topic_records},
+        }, error::BrokerError, metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry, test_support::StandalonePartitionSetup,
     };
 
     fn test_fanout<'a>(
         partitions: &'a PartitionRegistry,
-        controller: &'a Arc<dyn crate::metadata_source::MetadataSource>,
+        controller: &'a Arc<dyn MetadataSource>,
         remote: Option<&'a Arc<dyn RemoteMarkerWriter>>,
         metrics: &'a BrokerBarrierMetrics,
         config: &'a BarrierConfig,
@@ -235,7 +229,7 @@ mod tests {
 
     async fn place_local(
         registry: &PartitionRegistry,
-    ) -> BTreeMap<crate::barrier::state::TargetPartition, Offset> {
+    ) -> BTreeMap<TargetPartition, Offset> {
         let controller = source(&topic_records("orders", 2, NodeId(1)));
         let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
         let config = fast_config();
@@ -250,7 +244,7 @@ mod tests {
 
     async fn place_one(
         fanout: MarkerFanout<'_>,
-    ) -> BTreeMap<crate::barrier::state::TargetPartition, Offset> {
+    ) -> BTreeMap<TargetPartition, Offset> {
         fanout
             .run(
                 &marker(),
@@ -262,7 +256,7 @@ mod tests {
 
     async fn check_remote_placement(
         registry: &PartitionRegistry,
-        controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+        controller: &Arc<dyn MetadataSource>,
         remote: MockRemoteMarkerWriter,
         metrics: &BrokerBarrierMetrics,
         config: &BarrierConfig,
@@ -284,7 +278,7 @@ mod tests {
     }
 
     fn placements(
-        targets: &[crate::barrier::state::TargetPartition],
+        targets: &[TargetPartition],
         offset: Offset,
     ) -> Vec<MarkerPlacement> {
         targets
@@ -304,7 +298,7 @@ mod tests {
             open_partition(
                 &registry,
                 dir.path(),
-                crate::test_support::StandalonePartitionSetup {
+                StandalonePartitionSetup {
                     partition: krabka_ids::PartitionIndex(p),
                     ..Default::default()
                 },
@@ -330,7 +324,7 @@ mod tests {
                 .read_log(Offset(0), krabka_units::mebibytes(1))
                 .expect("read the log back");
             let batch = &read.batches[0];
-            crate::barrier::test_support::check_control_marker(batch, &marker());
+            check_control_marker(batch, &marker());
         }
     }
 
@@ -341,7 +335,7 @@ mod tests {
         open_partition(
             &registry,
             dir.path(),
-            crate::test_support::StandalonePartitionSetup::default(),
+            StandalonePartitionSetup::default(),
         );
         registry
             .get("orders", PartitionIndex(0))

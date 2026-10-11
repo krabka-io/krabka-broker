@@ -11,7 +11,7 @@ use std::sync::{
 use krabka_ids::PartitionIndex;
 
 use crate::{
-    config::BrokerConfig, delivery::DeliveryHandles, error::BrokerError, partition::{Partition, PartitionRuntimeConfig, ReplicationTarget, WriterMessage, empty_marker_materialization, initial_replication_target}, partition_writer::run_with_sequencer, producer_state::ProducerState, replica_state::ReplicaState, wal::{SharedWal, quorum::{QuorumWalStore, engine::WalShardEngine, registry::WalShardRegistry}},
+    config::BrokerConfig, delivery::DeliveryHandles, diskless::hot_tail::HotTailCache, error::BrokerError, log_dir_status::LogDirRegistry, partition::{Partition, PartitionRuntimeConfig, ReplicationTarget, WriterMessage, empty_marker_materialization, initial_replication_target}, partition_writer::run_with_sequencer, producer_state::ProducerState, replica_state::ReplicaState, wal::{SharedWal, quorum::{QuorumWalStore, engine::WalShardEngine, registry::WalShardRegistry}},
 };
 
 type PartitionWal = (
@@ -24,7 +24,7 @@ fn partition_wal(
     identity: (&str, Option<uuid::Uuid>, PartitionIndex),
     log: Arc<Mutex<krabka_log::Log>>,
     diskless: bool,
-    hot_tail: Option<Arc<crate::diskless::hot_tail::HotTailCache>>,
+    hot_tail: Option<Arc<HotTailCache>>,
     wal_shards: Option<Arc<WalShardRegistry>>,
     replica_count: usize,
 ) -> Result<PartitionWal, BrokerError> {
@@ -104,13 +104,13 @@ pub(crate) fn spawn_partition_with_replication_target() -> Arc<Partition> {
     let broker_config = BrokerConfig::default();
     #[cfg(test)]
     let wal_shards = replication_target.topic_id.map(|topic_id| {
-        use crate::wal::quorum::registry::WalPlacement;
+        use crate::wal::quorum::registry::{ShardId, WalPlacement};
 
         let registry = Arc::new(WalShardRegistry::new(
             krabka_raft::NodeId(0),
         ));
         registry.replace_placements(&std::collections::HashMap::from([(
-            crate::wal::quorum::registry::ShardId {
+            ShardId {
                 topic_id,
                 partition: partition_id,
             },
@@ -161,7 +161,7 @@ pub(crate) struct PartitionSpawnConfig {
     pub partition_id: PartitionIndex,
     pub log_dir: std::path::PathBuf,
     pub log: krabka_log::Log,
-    pub log_dir_status: crate::log_dir_status::LogDirRegistry,
+    pub log_dir_status: LogDirRegistry,
     pub producer_state: Arc<ProducerState>,
     pub runtime: PartitionRuntimeConfig,
 }

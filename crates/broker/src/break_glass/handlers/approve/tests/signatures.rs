@@ -16,10 +16,7 @@ use crate::{
         gate::tests::config,
         handlers::approve::{Attempt, decide},
         signing::approval_signing_bytes,
-    },
-    codes,
-    config::BreakGlassConfig,
-    operator_keys::{OperatorKeyEntry, OperatorKeys},
+    }, codes, config::BreakGlassConfig, operator_keys::{OperatorKeyEntry, OperatorKeys}, test_support::OperatorKeyFileSetup,
 };
 
 // An operator key bound to `principal`, plus the signer for it.
@@ -30,7 +27,7 @@ fn operator_key(
 ) -> (Ed25519KeyPair, OperatorKeyEntry) {
     let (pair, path) = crate::test_support::ed25519_public_key_file(
         dir.path(),
-        crate::test_support::OperatorKeyFileSetup {
+        OperatorKeyFileSetup {
             name: &format!("{key_id}.pub"),
             context: "write key file",
         },
