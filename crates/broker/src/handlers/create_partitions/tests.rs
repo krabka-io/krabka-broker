@@ -694,3 +694,42 @@ async fn rows_follow_kafkas_duplicate_and_count_checks() {
     }
     assert!(actual == expected);
 }
+
+/// Both operations initially observe the same count. Only one may create the
+/// new indices; the other must see the committed count on its next attempt.
+#[tokio::test]
+async fn concurrent_growth_revalidates_partition_count_before_append() {
+    seeded_partition_topic!(
+        (handle, _dir, broker),
+        SeedTopicSetup::single_partition("t")
+    );
+    let p = principal("admin");
+    let h = peer();
+    let ctx = test_context(&p, &h);
+    let req = request(
+        vec![topic_req(PartitionTopicSetup::default())],
+        PartitionMutation::Apply,
+    );
+    let (first, second) = tokio::join!(drive(&broker, &req, &ctx), drive(&broker, &req, &ctx));
+    let mut got = [first, second];
+    got.sort_unstable_by_key(|response| response.results[0].error_code);
+    let expected = [
+        expected_response(vec![expected_result("t", codes::NONE, None)]),
+        expected_response(vec![expected_result(
+            "t",
+            codes::INVALID_PARTITIONS,
+            Some("Topic already has 3 partition(s).".into()),
+        )]),
+    ];
+    assert!(got == expected);
+    assert!(
+        broker
+            .controller
+            .current_image()
+            .topic("t")
+            .expect("topic")
+            .partitions
+            == 3
+    );
+    handle.shutdown().await;
+}

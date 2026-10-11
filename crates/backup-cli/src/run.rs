@@ -33,6 +33,19 @@ use crate::{
     offsets::{GroupOffsetsFile, commit_refusals, commit_request, group_offsets},
 };
 
+const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_GROUP_OFFSETS_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_DISKLESS_INDEX_BYTES: u64 = 256 * 1024 * 1024;
+
+fn artifact_byte_limit(name: &str) -> u64 {
+    match name {
+        GROUP_OFFSETS => MAX_GROUP_OFFSETS_BYTES,
+        METADATA_CHECKPOINT | RLMM_SNAPSHOT => MAX_SNAPSHOT_BYTES,
+        _ => MAX_DISKLESS_INDEX_BYTES,
+    }
+}
+
 /// Milliseconds since the Unix epoch, saturating at zero on a clock set before
 /// it. The value names a capture directory and nothing branches on it, so a
 /// nonsensical clock produces an odd name rather than a failure.
@@ -94,8 +107,27 @@ async fn capture_secured(
     signing: &CaptureSigningArgs,
     archive: &ArchiveArgs,
 ) -> Result<String, BackupError> {
+    capture_secured_at(
+        log_dir,
+        bootstrap_server,
+        security,
+        signing,
+        archive,
+        now_ms(),
+    )
+    .await
+}
+
+async fn capture_secured_at(
+    log_dir: Option<&std::path::Path>,
+    bootstrap_server: Option<&str>,
+    security: Option<ClientSecurity>,
+    signing: &CaptureSigningArgs,
+    archive: &ArchiveArgs,
+    captured_at_ms: u64,
+) -> Result<String, BackupError> {
     let store = Archive::open(archive)?;
-    let id = capture_id(now_ms());
+    let id = capture_id(captured_at_ms);
     let mut artifacts: Vec<Artifact> = Vec::new();
     let mut absent: Vec<String> = Vec::new();
     let mut metadata_snapshot_sha256 = None;
@@ -185,7 +217,7 @@ async fn capture_secured(
     let manifest = Manifest {
         version: MANIFEST_VERSION,
         capture_id: id.clone(),
-        captured_at_ms: now_ms(),
+        captured_at_ms,
         log_dir: log_dir.map(|dir| dir.display().to_string()),
         bootstrap_server: bootstrap_server.map(ToOwned::to_owned),
         artifacts,
@@ -194,7 +226,7 @@ async fn capture_secured(
         context: MANIFEST.to_owned(),
         source,
     })?;
-    store.put(&capture_key(&id, MANIFEST), encoded).await?;
+    store.put_new(&capture_key(&id, MANIFEST), encoded).await?;
 
     println!("capture {id}");
     for artifact in &manifest.artifacts {
@@ -480,7 +512,7 @@ async fn upload(
         size_bytes: bytes.len() as u64,
         sha256: sha256_hex(&bytes),
     };
-    store.put(&capture_key(id, name), bytes).await?;
+    store.put_new(&capture_key(id, name), bytes).await?;
     Ok(artifact)
 }
 
@@ -523,7 +555,12 @@ pub async fn verify(capture: &str, archive: &ArchiveArgs) -> Result<(), BackupEr
 
     let mut problems: Vec<String> = Vec::new();
     for artifact in &manifest.artifacts {
-        let bytes = store.get(&capture_key(&id, &artifact.name)).await?;
+        let bytes = store
+            .get_capped(
+                &capture_key(&id, &artifact.name),
+                artifact_byte_limit(&artifact.name),
+            )
+            .await?;
         match artifact_problem(artifact, &bytes) {
             Some(problem) => problems.push(problem),
             None => println!("  {} ok ({} bytes)", artifact.name, artifact.size_bytes),
@@ -603,7 +640,9 @@ async fn restore_offsets_secured(
     let recorded = manifest.artifact(GROUP_OFFSETS).ok_or_else(|| {
         BackupError::NoSuchCapture(format!("capture {id} holds no {GROUP_OFFSETS}"))
     })?;
-    let bytes = store.get(&capture_key(&id, GROUP_OFFSETS)).await?;
+    let bytes = store
+        .get_capped(&capture_key(&id, GROUP_OFFSETS), MAX_GROUP_OFFSETS_BYTES)
+        .await?;
     if let Some(problem) = artifact_problem(recorded, &bytes) {
         return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
     }
@@ -689,7 +728,12 @@ async fn verify_offsets_boundary(
         }
         return Ok(());
     };
-    let bytes = store.get(&capture_key(id, DISKLESS_WAL_INDEX)).await?;
+    let bytes = store
+        .get_capped(
+            &capture_key(id, DISKLESS_WAL_INDEX),
+            MAX_DISKLESS_INDEX_BYTES,
+        )
+        .await?;
     if let Some(problem) = artifact_problem(recorded, &bytes) {
         return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
     }
@@ -805,13 +849,24 @@ async fn open_capture(
     Ok((store, id, manifest))
 }
 
-/// Turn `latest` into the newest capture id, and check that a named one exists.
+/// Select the newest committed capture for `latest`, or check that a named directory exists.
 async fn resolve_capture(store: &Archive, capture: &str) -> Result<String, BackupError> {
     let ids = store.child_directories(CAPTURE_ROOT).await?;
     if capture == LATEST {
-        return ids.into_iter().next_back().ok_or_else(|| {
-            BackupError::NoSuchCapture(format!("the archive holds no capture under {CAPTURE_ROOT}"))
-        });
+        for id in ids.into_iter().rev() {
+            match read_manifest(store, &id).await {
+                Ok(_) => return Ok(id),
+                // Artifacts can outlive an interrupted capture; its manifest
+                // is published last and commits the completed capture.
+                Err(BackupError::ObjectStore(krabka_object_store::ObjectStoreError::NotFound(
+                    _,
+                ))) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        return Err(BackupError::NoSuchCapture(format!(
+            "the archive holds no completed capture under {CAPTURE_ROOT}"
+        )));
     }
     if ids.contains(capture) {
         return Ok(capture.to_owned());
@@ -823,7 +878,7 @@ async fn resolve_capture(store: &Archive, capture: &str) -> Result<String, Backu
 
 async fn read_manifest(store: &Archive, id: &str) -> Result<Manifest, BackupError> {
     let key = capture_key(id, MANIFEST);
-    let bytes = store.get(&key).await?;
+    let bytes = store.get_capped(&key, MAX_MANIFEST_BYTES).await?;
     Manifest::from_slice(&bytes, &key)
 }
 
@@ -859,6 +914,84 @@ mod tests {
     }
 
     krabka_macros::snapshot_node_fixture!(node_with_rlmm);
+
+    #[tokio::test]
+    async fn concurrent_captures_at_the_same_timestamp_keep_both_nodes_bytes() {
+        let first = node_with_rlmm();
+        let second = node_with_rlmm();
+        let snapshot = second.path().join(super::RLMM_SNAPSHOT_RELATIVE);
+        std::fs::write(snapshot, b"second node snapshot").unwrap();
+        let (_root, archive, store) = archive_fixture();
+        let signing = super::CaptureSigningArgs::default();
+        let (left, right) = tokio::join!(
+            super::capture_secured_at(Some(first.path()), None, None, &signing, &archive, 42),
+            super::capture_secured_at(Some(second.path()), None, None, &signing, &archive, 42),
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        check!(left != right);
+        check!(list(&archive).await.unwrap().len() == 2);
+        for (id, expected) in [
+            (&left, RLMM_BYTES),
+            (&right, b"second node snapshot".as_slice()),
+        ] {
+            verify(id, &archive).await.unwrap();
+            check!(store.get(&capture_key(id, RLMM_SNAPSHOT)).await.unwrap() == expected);
+            check!(capture_manifest(&store, id).await.captured_at_ms == 42);
+        }
+    }
+
+    #[tokio::test]
+    async fn latest_ignores_newer_capture_artifacts_without_a_committed_manifest() {
+        let (_root, args, store) = archive_fixture();
+        let complete = "0000000000000001";
+        let orphan = "0000000000000002-0123456789abcdef0123456789abcdef";
+        write_offsets_capture(&store, complete, b"offsets", b"offsets").await;
+        store
+            .put(&capture_key(orphan, GROUP_OFFSETS), b"orphan".to_vec())
+            .await
+            .unwrap();
+        check!(super::resolve_capture(&store, "latest").await.unwrap() == complete);
+        check!(verify("latest", &args).await.is_ok());
+        check!(super::resolve_capture(&store, orphan).await.unwrap() == orphan);
+        check!(matches!(
+            verify(orphan, &args).await,
+            Err(BackupError::ObjectStore(
+                krabka_object_store::ObjectStoreError::NotFound(_)
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn document_reads_reject_independent_limits_before_buffering() {
+        let (root, archive, store) = archive_fixture();
+        let id = "0000000000000001";
+        let key = capture_key(id, MANIFEST);
+        store.put(&key, b"{}".to_vec()).await.unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(root.path().join(&key))
+            .unwrap()
+            .set_len(super::MAX_MANIFEST_BYTES + 1)
+            .unwrap();
+        let error = super::read_manifest(&store, id).await.unwrap_err();
+        check!(
+            matches!(error, BackupError::ObjectStore(krabka_object_store::ObjectStoreError::TooLarge { max_bytes, .. }) if max_bytes == super::MAX_MANIFEST_BYTES)
+        );
+
+        write_offsets_capture(&store, id, b"offsets", b"offsets").await;
+        let key = capture_key(id, GROUP_OFFSETS);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(root.path().join(&key))
+            .unwrap()
+            .set_len(super::MAX_GROUP_OFFSETS_BYTES + 1)
+            .unwrap();
+        let error = verify(id, &archive).await.unwrap_err();
+        check!(
+            matches!(error, BackupError::ObjectStore(krabka_object_store::ObjectStoreError::TooLarge { max_bytes, .. }) if max_bytes == super::MAX_GROUP_OFFSETS_BYTES)
+        );
+    }
 
     fn archive_fixture() -> (tempfile::TempDir, ArchiveArgs, Archive) {
         let archive_root = tempfile::tempdir().expect("archive root");
