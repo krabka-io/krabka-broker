@@ -102,15 +102,13 @@ mod tests {
     use krabka_log::Offset;
 
     use crate::share_partition::{
-        manager::test_support::{LOCK, manager, manager_with_unlimited_fallback},
+        manager::test_support::{LOCK, SessionCapacity, manager, manager_with_unlimited_fallback},
         session::FetchPartitions,
     };
 
     #[test]
     fn nondefault_unlimited_fallback_bounds_sessions() {
-        let manager = manager_with_unlimited_fallback(
-            crate::share_partition::manager::test_support::SessionCapacity(2),
-        );
+        let manager = manager_with_unlimited_fallback(SessionCapacity(2));
         let partitions = HashSet::new();
 
         assert!(

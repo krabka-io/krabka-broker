@@ -14,12 +14,18 @@ use krabka_metadata::{
 
 use super::coordinator_append_error;
 use crate::{
+    broker::spawn_partition,
     codes,
+    config_keys::MIN_INSYNC_REPLICAS,
+    coordinator::test_support::read_batch_epochs,
     error::BrokerError,
+    log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource as _,
     partition::Partition,
     partition_registry::PartitionRegistry,
-    test_support::FakeMetadataSource,
+    producer_id_manager::ProducerIdManager,
+    producer_state::ProducerState,
+    test_support::{COORDINATOR_WRITE_ERROR_CASES, FakeMetadataSource},
     txn::{bootstrap, coordinator::TxnCoordinator, state::TxnEntry, version::TxnVersion},
 };
 
@@ -46,10 +52,7 @@ fn append_errors_map_as_kafka_append_transaction_to_log() {
         ),
         (codes::CORRUPT_MESSAGE, codes::CORRUPT_MESSAGE),
     ];
-    for (append, expected) in cases
-        .into_iter()
-        .chain(crate::test_support::COORDINATOR_WRITE_ERROR_CASES)
-    {
+    for (append, expected) in cases.into_iter().chain(COORDINATOR_WRITE_ERROR_CASES) {
         assert!(coordinator_append_error(append) == expected, "{append}");
     }
 }
@@ -67,12 +70,9 @@ fn state_image(leader: u64, epoch: i32, isr: &[u64]) -> MetadataImage {
     }));
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: bootstrap::TOPIC.into(),
-        overrides: [(
-            crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
-            "2".to_string(),
-        )]
-        .into_iter()
-        .collect(),
+        overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
+            .into_iter()
+            .collect(),
     }));
     image.apply(&MetadataRecord::V1Partition(PartitionRecord {
         topic: bootstrap::TOPIC.into(),
@@ -97,13 +97,13 @@ async fn coordinator(
 ) -> (Arc<TxnCoordinator>, Arc<Partition>) {
     let part_dir = crate::log_dir::partition_dir(dir, bootstrap::TOPIC, 0);
     std::fs::create_dir_all(&part_dir).expect("create the partition dir");
-    let partition = crate::broker::spawn_partition(
+    let partition = spawn_partition(
         bootstrap::TOPIC.to_owned(),
         P0,
         dir.to_path_buf(),
         Log::open(&part_dir, LogConfig::default()).expect("open the log"),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
+        LogDirRegistry::default(),
+        Arc::new(ProducerState::new()),
         false,
     );
     partition
@@ -114,7 +114,7 @@ async fn coordinator(
     let mut coordinator = TxnCoordinator::new(
         NODE,
         partitions,
-        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+        Arc::new(ProducerIdManager::new()),
         1,
         krabka_units::mebibytes(1),
     );
@@ -170,7 +170,7 @@ fn logged_epochs(partition: &Partition) -> Vec<i32> {
     if end == Offset(0) {
         return Vec::new();
     }
-    crate::coordinator::test_support::read_batch_epochs(&log, end)
+    read_batch_epochs(&log, end)
 }
 
 /// Kafka's `appendTransactionToLog` appends with `acks=-1` and changes the

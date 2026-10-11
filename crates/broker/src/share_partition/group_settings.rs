@@ -126,7 +126,7 @@ mod tests {
     use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 
     use super::*;
-    use crate::test_support::string_pairs;
+    use crate::{features::SHARE_VERSION, test_support::string_pairs};
 
     fn image(configs: &[(&str, &str)]) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
@@ -292,7 +292,7 @@ mod tests {
                 .collect();
             let mut image = image(&configs);
             image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crate::features::SHARE_VERSION.into(),
+                name: SHARE_VERSION.into(),
                 level,
             }));
             actual.push(GroupShareSettings::resolve(&image, "g", &defaults).dlq_enabled);

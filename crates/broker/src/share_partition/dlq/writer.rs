@@ -65,6 +65,7 @@ use crate::{
     metrics::BrokerMetrics,
     network::client::InterBrokerClient,
     partition_registry::PartitionRegistry,
+    remote_reader::RemoteReader,
     topic_creator::TopicCreatorError,
 };
 
@@ -377,7 +378,7 @@ pub struct DlqWriter {
     /// The remote tier, which a copy reads for a source offset that only the
     /// tier holds (KIP-405). Empty on a broker with no tiered storage, and
     /// until the broker has built its reader.
-    remote_reader: std::sync::OnceLock<Arc<crate::remote_reader::RemoteReader>>,
+    remote_reader: std::sync::OnceLock<Arc<RemoteReader>>,
 }
 
 impl DlqWriter {
@@ -419,7 +420,7 @@ impl DlqWriter {
     /// The broker builds its remote reader after its coordinators, so it hands
     /// the reader to the writer here once the reader exists. A second call
     /// changes nothing.
-    pub(crate) fn set_remote_reader(&self, reader: Arc<crate::remote_reader::RemoteReader>) {
+    pub(crate) fn set_remote_reader(&self, reader: Arc<RemoteReader>) {
         let _ = self.remote_reader.set(reader);
     }
 
@@ -627,6 +628,7 @@ mod tests {
     };
 
     use super::{super::coalesce::test_support::FakeBroker, *};
+    use crate::test_support::{KafkaErrorCode, broker_registration};
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum BrokerRegistration {
@@ -671,7 +673,7 @@ mod tests {
                 image.apply(&MetadataRecord::V1BrokerRegistration(
                     BrokerRegistrationRecord {
                         host: "h".into(),
-                        ..crate::test_support::broker_registration(*leader)
+                        ..broker_registration(*leader)
                     },
                 ));
             }
@@ -724,10 +726,7 @@ mod tests {
         );
     }
 
-    fn produce_response(
-        index: PartitionIndex,
-        error_code: crate::test_support::KafkaErrorCode,
-    ) -> ProduceResponse {
+    fn produce_response(index: PartitionIndex, error_code: KafkaErrorCode) -> ProduceResponse {
         ProduceResponse {
             responses: vec![TopicProduceResponse {
                 topic_id: WireUuid([7; 16]),
@@ -758,38 +757,29 @@ mod tests {
         let target = target(PartitionIndex(1), NodeId(2));
         let cases = [
             (
-                produce_response(
-                    PartitionIndex(1),
-                    crate::test_support::KafkaErrorCode(codes::NONE),
-                ),
+                produce_response(PartitionIndex(1), KafkaErrorCode(codes::NONE)),
                 "done",
             ),
             (
                 produce_response(
                     PartitionIndex(1),
-                    crate::test_support::KafkaErrorCode(codes::NOT_LEADER_OR_FOLLOWER),
+                    KafkaErrorCode(codes::NOT_LEADER_OR_FOLLOWER),
                 ),
                 "retry",
             ),
             (
-                produce_response(
-                    PartitionIndex(1),
-                    crate::test_support::KafkaErrorCode(codes::MESSAGE_TOO_LARGE),
-                ),
+                produce_response(PartitionIndex(1), KafkaErrorCode(codes::MESSAGE_TOO_LARGE)),
                 "fatal",
             ),
             (
                 produce_response(
                     PartitionIndex(1),
-                    crate::test_support::KafkaErrorCode(codes::TOPIC_AUTHORIZATION_FAILED),
+                    KafkaErrorCode(codes::TOPIC_AUTHORIZATION_FAILED),
                 ),
                 "fatal",
             ),
             (
-                produce_response(
-                    PartitionIndex(0),
-                    crate::test_support::KafkaErrorCode(codes::NONE),
-                ),
+                produce_response(PartitionIndex(0), KafkaErrorCode(codes::NONE)),
                 "fatal",
             ),
             (ProduceResponse::default(), "fatal"),
@@ -825,7 +815,7 @@ mod tests {
             responses: [other_topic.responses.clone(), {
                 produce_response(
                     PartitionIndex(1),
-                    crate::test_support::KafkaErrorCode(codes::NOT_LEADER_OR_FOLLOWER),
+                    KafkaErrorCode(codes::NOT_LEADER_OR_FOLLOWER),
                 )
                 .responses
             }]
