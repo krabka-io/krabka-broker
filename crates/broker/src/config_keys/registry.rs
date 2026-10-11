@@ -19,7 +19,7 @@
 //! `unclean.leader.election.enable` is both a topic config and a
 //! cluster-default broker config, and the two rows differ.
 
-use crate::{client_metrics::config::{KEY_INTERVAL_MS, KEY_MATCH, KEY_METRICS}, coordinator::unified::streams::config::{KEY_HEARTBEAT_INTERVAL_MS, KEY_NUM_STANDBY_REPLICAS, KEY_NUM_WARMUP_REPLICAS, KEY_RACK_AWARE_ASSIGNMENT_TAGS, KEY_SHARE_AUTO_OFFSET_RESET, KEY_TASK_OFFSET_INTERVAL_MS}, cordoned_log_dirs::CORDONED_LOG_DIRS, throttle::{ALTER_LOG_DIRS_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY, LEADER_THROTTLED_REPLICAS_KEY}};
+use crate::{client_metrics::config::{KEY_INTERVAL_MS, KEY_MATCH, KEY_METRICS}, coordinator::unified::streams::config::{KEY_ASSIGNOR_NAME, KEY_HEARTBEAT_INTERVAL_MS, KEY_NUM_STANDBY_REPLICAS, KEY_NUM_WARMUP_REPLICAS, KEY_RACK_AWARE_ASSIGNMENT_TAGS, KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET, KEY_TASK_OFFSET_INTERVAL_MS}, cordoned_log_dirs::{CORDONED_LOG_DIRS, CORDONED_LOG_DIRS_DOC}, throttle::{ALTER_LOG_DIRS_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_REPLICAS_KEY, LEADER_THROTTLED_RATE_KEY, LEADER_THROTTLED_REPLICAS_KEY}};
 
 use super::{
     CLEANUP_POLICY, COMPRESSION_GZIP_LEVEL, COMPRESSION_LZ4_LEVEL, COMPRESSION_TYPE,
@@ -804,7 +804,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     ConfigKey {
         kip: Some("KIP-73"),
         ..key(
-            crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY,
+            FOLLOWER_THROTTLED_REPLICAS_KEY,
             ConfigScope::Topic,
             ConfigType::List,
             Some(""),
@@ -879,7 +879,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Broker,
             ConfigType::List,
             Some(""),
-            crate::cordoned_log_dirs::CORDONED_LOG_DIRS_DOC,
+            CORDONED_LOG_DIRS_DOC,
             ValueCheck::Parsed,
         )
     },
@@ -1102,7 +1102,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         type_note: Some("ms"),
         kip: Some("KIP-1071"),
         ..key(
-            crate::coordinator::unified::streams::config::KEY_SESSION_TIMEOUT_MS,
+            KEY_SESSION_TIMEOUT_MS,
             ConfigScope::Group,
             ConfigType::Int,
             None,
@@ -1171,7 +1171,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     ConfigKey {
         kip: Some("KIP-1071"),
         ..key(
-            crate::coordinator::unified::streams::config::KEY_ASSIGNOR_NAME,
+            KEY_ASSIGNOR_NAME,
             ConfigScope::Group,
             ConfigType::String,
             None,

@@ -22,7 +22,7 @@ use crate::{
         remote_storage::{RemoteStorageStartup, start_remote_storage},
         replication::{ReplicatorStorage, spawn_replicator_supervisor},
         rlmm::{KafkaSwapKickoff, kafka_swap_kickoff},
-    }, client_metrics::ClientMetrics, config::BrokerConfig, cordoned_log_dirs::spawn_watcher, delegation_token_cleanup::DelegationTokenController, diskless::read::DisklessReadHandle, error::BrokerError, fetch_session::FetchSessionCache, health::HealthState, log_dir_id::LogDirIds, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, metrics::{BrokerMetrics, spawn_metric_series_evictor}, network::client::InterBrokerClient, partition_registry::PartitionRegistry, producer_state::ProducerState, quota::{QuotaBuckets, run}, remote_reader::RemoteReader, share_coordinator::coordinator::ShareCoordinator, throttle::{ThrottleState, apply_image}, time_util::now_ms, tls_reload::run, txn::{coordinator::TxnCoordinator, expiration::run},
+    }, client_metrics::ClientMetrics, config::BrokerConfig, cordoned_log_dirs::spawn_watcher, delegation_token_cleanup::{DelegationTokenController, run}, diskless::read::DisklessReadHandle, error::BrokerError, fetch_session::FetchSessionCache, health::HealthState, log_dir_id::LogDirIds, log_dir_status::LogDirRegistry, metadata_source::{MetadataSource, watch_image_loop}, metrics::{BrokerMetrics, spawn_metric_series_evictor}, network::client::InterBrokerClient, partition_registry::PartitionRegistry, producer_state::ProducerState, quota::{QuotaBuckets, run, run_expiry}, remote_reader::RemoteReader, share_coordinator::coordinator::ShareCoordinator, throttle::{ThrottleState, apply_image}, time_util::now_ms, tls_reload::run, txn::{coordinator::TxnCoordinator, expiration::run, id_expiration::run},
 };
 
 struct RuntimeCaches {
@@ -46,7 +46,7 @@ fn spawn_break_glass_gauges(
     let images = controller.watch_image();
     let metrics = metrics.clone();
     let break_glass = config.break_glass.clone();
-    tokio::spawn(crate::metadata_source::watch_image_loop(
+    tokio::spawn(watch_image_loop(
         images,
         "break-glass and freeze gauges",
         shutdown,
@@ -104,7 +104,7 @@ fn start_runtime_watchers(
     // publishes, live only as long as the client behind them keeps arriving
     // (#396). Without this a cluster's `/metrics` body grows by one label set
     // per client id it has ever seen.
-    tokio::spawn(crate::quota::run_expiry(
+    tokio::spawn(run_expiry(
         Arc::clone(&quota_buckets),
         metrics.clone(),
         shutdown.child_token(),
@@ -116,7 +116,7 @@ fn start_runtime_watchers(
                 handle: Arc::clone(controller),
                 node_id: config.node_id,
             });
-        tokio::spawn(crate::delegation_token_cleanup::run(
+        tokio::spawn(run(
             token_controller,
             interval,
             shutdown.child_token(),
@@ -159,7 +159,7 @@ fn start_runtime_watchers(
         ));
     }
     if config.txn_id_expiration_cleanup_interval > <Time as TimeExt>::ZERO {
-        tokio::spawn(crate::txn::id_expiration::run(
+        tokio::spawn(run(
             Arc::clone(txn_coordinator),
             Arc::clone(controller),
             config.txn_id_expiration_cleanup_interval,

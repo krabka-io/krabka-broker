@@ -10,7 +10,7 @@ use krabka_metadata::NodeId;
 use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::TempDir;
 
-use crate::partition::Partition;
+use crate::{log_dir::partition_dir, log_dir_status::LogDirRegistry, partition::Partition, partition_registry::PartitionRegistry, test_support::CommittedPartitionSetup};
 
 fn keyed_batch(base: i64, key: &[u8], value: &[u8]) -> RecordBatch {
     RecordBatch {
@@ -48,7 +48,7 @@ pub(super) struct CompactionSetup<'a> {
     pub partition_id: PartitionIndex,
     pub leader: NodeId,
     pub cfg: krabka_log::LogConfig,
-    pub log_dir_status: crate::log_dir_status::LogDirRegistry,
+    pub log_dir_status: LogDirRegistry,
 }
 
 impl Default for CompactionSetup<'_> {
@@ -62,7 +62,7 @@ impl Default for CompactionSetup<'_> {
                 segment_size: krabka_units::bytes(256),
                 ..Default::default()
             },
-            log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
+            log_dir_status: LogDirRegistry::default(),
         }
     }
 }
@@ -79,7 +79,7 @@ pub(super) async fn compactable_partition(
         cfg,
         log_dir_status,
     } = setup;
-    let part_dir = crate::log_dir::partition_dir(root.path(), topic, partition_id.0);
+    let part_dir = partition_dir(root.path(), topic, partition_id.0);
     std::fs::create_dir_all(&part_dir).expect("create partition dir");
     let mut log = krabka_log::Log::open(&part_dir, cfg).expect("open compactable log");
     for idx in 0..12 {
@@ -92,7 +92,7 @@ pub(super) async fn compactable_partition(
     crate::test_support::committed_partition(
         root.path(),
         log,
-        crate::test_support::CommittedPartitionSetup {
+        CommittedPartitionSetup {
             topic,
             partition: partition_id,
             leader,
@@ -115,7 +115,7 @@ pub(super) fn record_count(partition: &Partition) -> usize {
 /// Register a compactable partition and capture its original record count.
 pub(super) async fn register_compactable(
     root: &TempDir,
-    registry: &crate::partition_registry::PartitionRegistry,
+    registry: &PartitionRegistry,
     topic: &str,
 ) -> (Arc<Partition>, usize) {
     let partition = compactable_partition(

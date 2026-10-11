@@ -12,7 +12,7 @@ use crate::{
     broker::{
         DisklessRuntime,
         partition_spawn::{PartitionSpawnConfig, try_spawn_partition_with_replication_target},
-    }, config::BrokerConfig, config_keys::resolve_diskless, coordinator::{GroupCoordinator, bootstrap::{bootstrap, bootstrap_audit_topic}, unified::offsets_log::ProductionOffsetsLog}, diskless::recovery::open_config, error::BrokerError, log_dir, log_dir_id::LogDirIds, log_dir_status::LogDirRegistry, partition::{PartitionRuntimeConfig, ReplicationTarget}, partition_registry::PartitionRegistry, producer_id_manager::ProducerIdManager, producer_state::ProducerState, wal::{OffsetSequencer, quorum::{follower::hydrate_on_promotion, registry::ShardId}},
+    }, config::BrokerConfig, config_keys::resolve_diskless, coordinator::{GroupCoordinator, bootstrap::{bootstrap, bootstrap_audit_topic}, unified::{ImageMetadataProvider, offsets_log::ProductionOffsetsLog}}, diskless::recovery::{open_config, recover_open_log}, error::BrokerError, log_dir, log_dir_id::LogDirIds, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, partition::{PartitionRuntimeConfig, ReplicationTarget}, partition_registry::PartitionRegistry, producer_id_manager::ProducerIdManager, producer_state::ProducerState, replicator_supervisor::desired_wal_placements, wal::{OffsetSequencer, quorum::{follower::hydrate_on_promotion, registry::ShardId}},
 };
 
 pub(super) struct StorageStartup {
@@ -26,7 +26,7 @@ pub(super) struct StorageStartup {
 
 pub(super) async fn recover_storage_and_groups(
     config: &BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    controller: &Arc<dyn MetadataSource>,
     diskless_runtime: &DisklessRuntime,
 ) -> Result<StorageStartup, BrokerError> {
     let log_dirs = config.all_log_dirs();
@@ -48,7 +48,7 @@ pub(super) async fn recover_storage_and_groups(
     if config.is_broker() {
         let startup_image = controller.current_image();
         let scan_dirs = log_dir_status.online_subset(&log_dirs);
-        let wal_placements = crate::replicator_supervisor::desired_wal_placements(
+        let wal_placements = desired_wal_placements(
             &startup_image,
             config.diskless_wal_local_replica_count,
         );
@@ -87,7 +87,7 @@ pub(super) async fn recover_storage_and_groups(
                         )?;
                     }
                 }
-                crate::diskless::recovery::recover_open_log(
+                recover_open_log(
                     &topic,
                     PartitionIndex(partition_id),
                     &mut log,
@@ -171,7 +171,7 @@ pub(super) async fn recover_storage_and_groups(
     let group_coordinator = Arc::new(GroupCoordinator::new(
         consumer_group,
         share_group,
-        Arc::new(crate::coordinator::unified::ImageMetadataProvider {
+        Arc::new(ImageMetadataProvider {
             controller: Arc::clone(controller),
         }),
         offsets_log,

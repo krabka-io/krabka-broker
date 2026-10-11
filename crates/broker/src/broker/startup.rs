@@ -10,14 +10,8 @@ use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 
 use crate::{
     auto_topic_creation::AutoTopicCreation, barrier::scheduler::run, broker::{
-        Broker, BrokerHandle, DisklessRuntime,
-        coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators},
-        finish::{BrokerStorageStartup, finish_broker_startup},
-        metadata_phase::{MetadataControlPlane, MetadataPhase, start_metadata_phase},
-        runtime::start_broker_runtime,
-        storage::{StorageStartup, recover_storage_and_groups},
-        transport::{StartupTransport, prepare_startup_transport},
-    }, config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG}, controller_admin::BrokerControllerAdminRouter, coordinator::topic_deletion::spawn, delivery::{metrics::BrokerDeliveryMetrics, scheduler::run}, error::BrokerError, health::{HealthState, metadata_progress}, heartbeat::client::InitialUnfence, lag::LAG_POLL_INTERVAL, metadata_source::{MetadataSource, or_fatal_fault}, metrics::BrokerMetrics, share_coordinator::coordinator::jobs::spawn, share_partition::backlog_poller::BacklogPoller,
+        Broker, BrokerHandle, DisklessRuntime, coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators}, finish::{BrokerStorageStartup, finish_broker_startup}, listeners::bind_ephemeral_data_plane_listener, metadata_phase::{MetadataControlPlane, MetadataPhase, start_metadata_phase}, runtime::start_broker_runtime, storage::{StorageStartup, recover_storage_and_groups}, transport::{StartupTransport, prepare_startup_transport},
+    }, config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG}, controller_admin::BrokerControllerAdminRouter, coordinator::{retention::run, topic_deletion::spawn}, delivery::{config::DeliveryConfig, metrics::BrokerDeliveryMetrics, scheduler::run}, error::BrokerError, health::{HealthState, metadata_progress}, heartbeat::client::InitialUnfence, lag::{LAG_POLL_INTERVAL, LagPoller}, metadata_source::{MetadataSource, or_fatal_fault}, metrics::BrokerMetrics, raft_handshake::AuditLogArc, share_coordinator::coordinator::jobs::spawn, share_partition::backlog_poller::BacklogPoller,
 };
 
 impl Broker {
@@ -143,7 +137,7 @@ impl Broker {
         // supplied none. `start_metadata_phase` below registers this node
         // with the controller, and that registration must carry the bound
         // port, not a `:0` that names nothing a peer can dial.
-        crate::broker::listeners::bind_ephemeral_data_plane_listener(
+        bind_ephemeral_data_plane_listener(
             &mut config,
             &mut data_plane_listeners,
         )
@@ -377,7 +371,7 @@ impl Broker {
         // KIP-211. Every broker sweeps the groups whose offsets partition it
         // leads, and the tombstones are idempotent, so the sweep needs no
         // config gate of its own.
-        tokio::spawn(crate::coordinator::retention::run(
+        tokio::spawn(run(
             config.node_id,
             Arc::clone(&controller),
             Arc::clone(&group_coordinator),
@@ -408,7 +402,7 @@ impl Broker {
         tokio::spawn(run(
             Arc::clone(&partitions),
             config.node_id,
-            crate::delivery::config::DeliveryConfig::default(),
+            DeliveryConfig::default(),
             Arc::new(BrokerDeliveryMetrics::new(
                 runtime.metrics.clone(),
             )),
@@ -436,7 +430,7 @@ impl Broker {
         // image recording anything the series evictor could act on, so the
         // removal has to release the series itself.
         group_coordinator.set_metrics(runtime.metrics.clone());
-        crate::lag::LagPoller {
+        LagPoller {
             node_id: config.node_id,
             coordinator: Arc::clone(&group_coordinator),
             metadata: Arc::clone(&controller),
@@ -500,7 +494,7 @@ struct JoinedQuorum {
     diskless_runtime: DisklessRuntime,
     controller: Arc<dyn MetadataSource>,
     controller_admin_router: Option<Arc<BrokerControllerAdminRouter>>,
-    raft_handshake_audit: crate::raft_handshake::AuditLogArc,
+    raft_handshake_audit: AuditLogArc,
 }
 
 /// Wait for the first heartbeat answer that says this broker is unfenced, as

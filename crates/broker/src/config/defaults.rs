@@ -12,9 +12,9 @@ use krabka_raft::{
 use krabka_units::{bytes, hours, kibibytes, mebibytes, millis, minutes, secs};
 
 use crate::{
-    clean_shutdown::UNPROVEN, client_metrics::config::INTERVAL_MS_DEFAULT, config::{
-        BreakGlassConfig, BrokerConfig, DEFAULT_AUDIT_CHECKPOINT_EVERY, DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_DIR, DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N, DEFAULT_AUDIT_TOPIC, DEFAULT_BROKER_ID, DEFAULT_CONTROLLER_ELECTION_TIMEOUT, DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL, DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL, DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME, DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD, DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE, DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE, DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG, DEFAULT_HEARTBEAT_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE, DEFAULT_JWKS_REFRESH_INTERVAL, DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL, DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS, DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL, DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS, DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_QUOTA_WINDOW, DEFAULT_REMOTE_COPIER_THREADS, DEFAULT_REMOTE_COPY_TIMEOUT, DEFAULT_REMOTE_EXPIRATION_THREADS, DEFAULT_REMOTE_INDEX_CACHE_SIZE, DEFAULT_REMOTE_LOG_MANAGER_INTERVAL, DEFAULT_REMOTE_READER_MAX_PENDING_TASKS, DEFAULT_REMOTE_READER_THREADS, DEFAULT_REPLICA_LAG_TIME_MAX, DEFAULT_TLS_RELOAD_INTERVAL, DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, DEFAULT_TXN_ID_EXPIRATION, DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole, PlainCredentials, ReplicationRuntimeConfig, RlmmKind, StaticConfigOrigins, feature_flags::default_feature_flags, shared_epoch_ms,
-    }, coordinator::unified::{config::NextGenConfig, streams::config::StreamsGroupConfig}, operator_keys::OperatorKeys, replica_selector::ReplicaSelectorKind, share_coordinator::config::ShareCoordinatorConfig, topic_policy::TopicPolicy,
+    authorizer::AllowAllAuthorizer, clean_shutdown::UNPROVEN, client_metrics::config::INTERVAL_MS_DEFAULT, config::{
+        BreakGlassConfig, BrokerConfig, DEFAULT_AUDIT_CHECKPOINT_EVERY, DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_DIR, DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N, DEFAULT_AUDIT_TOPIC, DEFAULT_BROKER_ID, DEFAULT_CONTROLLER_ELECTION_TIMEOUT, DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL, DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL, DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME, DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD, DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE, DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE, DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG, DEFAULT_HEARTBEAT_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE, DEFAULT_JWKS_REFRESH_INTERVAL, DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL, DEFAULT_LOG_FILTER, DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS, DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL, DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS, DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_QUOTA_WINDOW, DEFAULT_REMOTE_COPIER_THREADS, DEFAULT_REMOTE_COPY_TIMEOUT, DEFAULT_REMOTE_EXPIRATION_THREADS, DEFAULT_REMOTE_INDEX_CACHE_SIZE, DEFAULT_REMOTE_LOG_MANAGER_INTERVAL, DEFAULT_REMOTE_READER_MAX_PENDING_TASKS, DEFAULT_REMOTE_READER_THREADS, DEFAULT_REPLICA_LAG_TIME_MAX, DEFAULT_TLS_RELOAD_INTERVAL, DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, DEFAULT_TXN_ID_EXPIRATION, DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole, PlainCredentials, ReplicationRuntimeConfig, RlmmKind, StaticConfigOrigins, feature_flags::default_feature_flags, shared_epoch_ms,
+    }, coordinator::unified::{config::NextGenConfig, streams::config::StreamsGroupConfig}, network::auth::SslPrincipalMapper, operator_keys::OperatorKeys, replica_selector::ReplicaSelectorKind, share_coordinator::config::ShareCoordinatorConfig, topic_policy::TopicPolicy,
 };
 
 impl Default for BrokerConfig {
@@ -182,14 +182,14 @@ impl Default for BrokerConfig {
             inter_broker_principal_node_ids: HashMap::new(),
             plain_credentials: PlainCredentials::default(),
             super_users: std::collections::HashSet::new(),
-            authorizer: std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
+            authorizer: std::sync::Arc::new(AllowAllAuthorizer),
             schema_validator: None,
             operator_keys: OperatorKeys::default(),
             freeze: FreezeConfig::default(),
             break_glass: BreakGlassConfig::default(),
             topic_policy: TopicPolicy::default(),
             tls_config: None,
-            tls_principal_mapper: crate::network::auth::SslPrincipalMapper::default(),
+            tls_principal_mapper: SslPrincipalMapper::default(),
             enabled_sasl_mechanisms: vec![],
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
             gssapi: None,
@@ -246,7 +246,7 @@ impl Default for BrokerConfig {
             // `DEFAULT_LOG_FILTER`, so a `BROKER_LOGGER` describe lists the
             // krabka targets before anything has logged through them.
             log_levels: krabka_telemetry::LogLevelController::new(
-                crate::config::DEFAULT_LOG_FILTER,
+                DEFAULT_LOG_FILTER,
             )
             .0,
             partition_disk_scan_interval: secs(60),

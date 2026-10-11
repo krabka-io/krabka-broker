@@ -9,7 +9,7 @@ use krabka_raft::{
 };
 
 use crate::{
-    authorizer::AuthorizationRequest, broker::Broker, envelope::{self, EnvelopeError, ForwardedRequest}, error::BrokerError, handlers::{ApiKeyCode, ApiVersion, CorrelationId, DispatchKind, RequestContext, acl_wire::CLUSTER_RESOURCE_NAME}, network::auth::ConnectionAuth,
+    api_catalog::is_disabled_version, authorizer::{AuthorizationRequest, AuthorizationResult}, broker::Broker, envelope::{self, EnvelopeError, ForwardedRequest}, error::BrokerError, handlers::{ApiKeyCode, ApiVersion, CorrelationId, DispatchKind, RequestContext, acl_wire::CLUSTER_RESOURCE_NAME}, network::auth::ConnectionAuth,
 };
 
 /// `Envelope`'s api key. KIP-590 forwarding is the one controller-listener API
@@ -371,7 +371,7 @@ fn unwrap_envelope(
     // `ApiKeys.ENVELOPE.clusterAction` is true: only a peer that holds
     // `ClusterAction` on the cluster resource may speak for another identity.
     let image = broker.controller.current_image();
-    if crate::authorizer::AuthorizationResult::Deny
+    if AuthorizationResult::Deny
         == broker.config.authorizer.authorize(
             image.as_ref(),
             &AuthorizationRequest {
@@ -409,7 +409,7 @@ fn unwrap_envelope(
     // `RequestHeader.parse` on a 4.3.1 controller, and `EnvelopeUtils` reports
     // an unparseable embedded header as UNSUPPORTED_VERSION. The same
     // answer covers a version the listener's gates disable.
-    if crate::api_catalog::is_disabled_version(
+    if is_disabled_version(
         forwarded.api_key,
         forwarded.api_version,
         broker.config.features.version_gates(),

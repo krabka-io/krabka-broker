@@ -6,7 +6,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
 
-use crate::{BrokerError, config::BrokerConfig};
+use crate::{BrokerError, api_catalog::ClientMetricsReceiver, config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE}};
 
 /// A single named listener: the port the broker binds and the address it
 /// gives to clients.
@@ -114,7 +114,7 @@ impl BrokerConfig {
     #[must_use]
     pub fn effective_connections_max_idle(&self) -> krabka_units::Time {
         self.connections_max_idle
-            .unwrap_or(crate::config::DEFAULT_CONNECTIONS_MAX_IDLE)
+            .unwrap_or(DEFAULT_CONNECTIONS_MAX_IDLE)
     }
 
     /// The idle window a connection accepted on `listener_name` is held to.
@@ -205,7 +205,7 @@ impl BrokerConfig {
     /// counts as a receiver. Both are off by default, which is what a Kafka
     /// broker with no `ClientTelemetry` metric reporter advertises.
     #[must_use]
-    pub fn client_metrics_receiver(&self) -> crate::api_catalog::ClientMetricsReceiver {
+    pub fn client_metrics_receiver(&self) -> ClientMetricsReceiver {
         use crate::api_catalog::ClientMetricsReceiver;
 
         if self.client_metrics_enable || self.client_metrics_otlp_endpoint.is_some() {
@@ -287,7 +287,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::{BrokerError as BrokerStartError, config::test_support::base};
+    use crate::{BrokerError as BrokerStartError, SslPrincipalMapper, config::test_support::base, test_support::{OAuthTokenContents, oauth_token_file}};
 
     #[test]
     fn accepts_distinct_listener_bind_addresses() {
@@ -405,8 +405,8 @@ mod tests {
 
     #[test]
     fn outbound_oauthbearer_credentials_validate_for_data_and_controller_listeners() {
-        let (_dir, token_path) = crate::test_support::oauth_token_file(
-            crate::test_support::OAuthTokenContents::Nonempty,
+        let (_dir, token_path) = oauth_token_file(
+            OAuthTokenContents::Nonempty,
         );
         let credentials = Some(InterBrokerCredentials::OAuthBearer { token_path });
         let data_listener = ListenerSpec {
@@ -416,7 +416,7 @@ mod tests {
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: Some(vec![SaslMechanism::OAuthBearer]),
-            principal_mapper: crate::SslPrincipalMapper::default(),
+            principal_mapper: SslPrincipalMapper::default(),
         };
         let data = BrokerConfig {
             listeners: vec![data_listener],
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn rejects_empty_outbound_oauthbearer_token() {
         let (_dir, token_path) =
-            crate::test_support::oauth_token_file(crate::test_support::OAuthTokenContents::Empty);
+            oauth_token_file(OAuthTokenContents::Empty);
         let c = BrokerConfig {
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer { token_path }),
             ..BrokerConfig::default()
@@ -523,7 +523,7 @@ mod tests {
             protocol: ListenerProtocol::SaslSsl,
             tls_config: Some(tls.clone()),
             sasl_mechanisms: Some(vec![SaslMechanism::ScramSha512]),
-            principal_mapper: crate::SslPrincipalMapper::default(),
+            principal_mapper: SslPrincipalMapper::default(),
         };
         let c = BrokerConfig {
             listeners: vec![listener],
@@ -705,13 +705,13 @@ mod connections_max_idle_tests {
     use assert2::assert;
     use krabka_units::{Time, convert::TimeExt as _, millis, secs};
 
-    use crate::config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE};
+    use crate::{config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE}, test_support::listener_time_overrides};
 
     /// A broker-wide window of `idle` with the named per-listener overrides.
     fn config(idle: Time, overrides: &[(&str, Time)]) -> BrokerConfig {
         BrokerConfig {
             connections_max_idle: Some(idle),
-            connections_max_idle_overrides: crate::test_support::listener_time_overrides(overrides),
+            connections_max_idle_overrides: listener_time_overrides(overrides),
             ..BrokerConfig::default()
         }
     }

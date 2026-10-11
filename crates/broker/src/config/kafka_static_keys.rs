@@ -24,7 +24,7 @@ use krabka_units::{
     convert::{ByteSizeExt as _, TimeExt as _},
 };
 
-use crate::{api_catalog::UnstableApiVersions, config_keys::{broker_dynamic::{TOPIC_DEFAULT_SYNONYMS, topic_broker_synonyms}, kafka_broker::lookup}};
+use crate::{api_catalog::UnstableApiVersions, config_keys::{broker_dynamic::{TOPIC_DEFAULT_SYNONYMS, topic_broker_synonyms}, in_topic_unit, kafka_broker::lookup}};
 
 use super::BrokerConfig;
 
@@ -323,7 +323,7 @@ impl KafkaStaticKey {
                 topic_broker_synonyms(topic)
                     .iter()
                     .find_map(|synonym| {
-                        crate::config_keys::in_topic_unit(topic, synonym.name, synonym.default?)
+                        in_topic_unit(topic, synonym.name, synonym.default?)
                     })
             })
     }
@@ -354,7 +354,7 @@ impl KafkaStaticKey {
 mod tests {
     use assert2::check;
 
-    use crate::api_catalog::UnstableApiVersions;
+    use crate::{api_catalog::UnstableApiVersions, file_config::RuntimeFileConfig};
 
 use super::*;
 
@@ -398,7 +398,7 @@ use super::*;
     #[test]
     fn every_runtime_field_is_one_the_table_has() {
         let serde_json::Value::Object(fields) =
-            serde_json::to_value(crate::file_config::RuntimeFileConfig::default())
+            serde_json::to_value(RuntimeFileConfig::default())
                 .expect("serialize the runtime table")
         else {
             panic!("the runtime table serializes as an object");

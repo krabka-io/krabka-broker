@@ -228,7 +228,9 @@ mod tests {
 
     use assert2::assert;
 
-    use super::{
+    use crate::test_support::broker_registration;
+
+use super::{
         super::validation::{is_recognized, validate_topic_config},
         *,
     };
@@ -243,7 +245,7 @@ mod tests {
     ) {
         use krabka_metadata::{BrokerConfigRecord, MetadataRecord, NodeId};
         img.apply(&MetadataRecord::V1BrokerRegistration(
-            crate::test_support::broker_registration(krabka_raft::NodeId(node_id)),
+            broker_registration(krabka_raft::NodeId(node_id)),
         ));
         if let Some(value) = witness {
             img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {

@@ -25,7 +25,7 @@ use super::{
     kafka_broker::roster,
     parse::{check_one_of, check_range, int_value, java_trim, parse_bool, parse_int, parse_long},
 };
-use crate::{api_catalog::UnstableApiVersions, coordinator::unified::{
+use crate::{api_catalog::UnstableApiVersions, config::BrokerConfig, coordinator::unified::{
     config::NextGenConfig,
     share::config::ShareGroupConfig,
     streams::config::{
@@ -235,7 +235,7 @@ pub(crate) struct GroupBounds {
 impl GroupBounds {
     /// The bounds `config` runs its coordinators with.
     #[must_use]
-    pub(crate) fn of(config: &crate::config::BrokerConfig) -> Self {
+    pub(crate) fn of(config: &BrokerConfig) -> Self {
         Self {
             consumer: (*config.next_gen_consumer_group).clone(),
             share: (*config.share_group).clone(),
