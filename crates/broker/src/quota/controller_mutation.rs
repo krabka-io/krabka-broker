@@ -430,16 +430,17 @@ mod tests {
     /// A principal with no `controller_mutation_rate` is never throttled.
     #[test]
     fn no_quota_never_refuses() {
-        let img = img_with_quota(vec![("user", Some("bob"))], 1.0);
+        let image = img_with_quota(vec![("user", Some("bob"))], 1.0);
         let buckets = QuotaBuckets::new();
-        let mut quota = ControllerMutationQuota::new(&QuotaRequest {
-            image: &img,
+        let req = QuotaRequest {
+            image: &image,
             buckets: &buckets,
             principal: "alice",
             client_id: Some(""),
             window: secs(11),
             strict: true,
-        });
+        };
+        let mut quota = ControllerMutationQuota::new(&req);
 
         let outcomes = [1_000, 1_000].map(|charge| quota.record(charge));
 

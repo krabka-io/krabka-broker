@@ -2646,10 +2646,8 @@ impl krabka_raft::OutboundDialer for RecordingDialer {
         addr: &str,
         options: krabka_client_core::ConnectionOptions,
     ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
-        self.client_ids
-            .lock()
-            .unwrap()
-            .push(options.client_id.clone());
+        let recorded_id = options.client_id.clone();
+        self.client_ids.lock().unwrap().push(recorded_id);
         krabka_raft::PlaintextDialer
             .dial(target, addr, options)
             .await

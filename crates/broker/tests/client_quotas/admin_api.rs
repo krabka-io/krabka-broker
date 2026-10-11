@@ -92,11 +92,9 @@ async fn alter_then_describe_round_trip() {
 /// which allows every operation while the image holds no ACLs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_super_user_denied() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
-    )
-    .await;
+    let credentials = [("admin", "admin-secret"), ("alice", "alice-secret")];
+    let (handle, _dir, addr) =
+        start_single_broker_sasl_plaintext_with_users("admin", &credentials).await;
 
     // Seed dummy ACL to disable compat shim.
     seed_compat_shim_disable_acl(&handle).await;

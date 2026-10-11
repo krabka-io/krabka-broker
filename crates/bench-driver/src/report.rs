@@ -1203,7 +1203,7 @@ mod tests {
     // Spare default impl scoped to tests.
     impl RunOutput {
         fn default_placeholder() -> Self {
-            Self {
+            let output = Self {
                 scenario: short_scenario(1),
                 stack: Stack::Krabka,
                 topology: Topology {
@@ -1214,17 +1214,18 @@ mod tests {
                 wallclock_start_unix_ms: WallclockMs(0),
                 wallclock_end_unix_ms: WallclockMs(0),
                 throughput: Throughput::default(),
-                producer_latency: LatencyPercentiles::default(),
-                consumer_e2e_latency: LatencyPercentiles::default(),
                 resource: Resource::default(),
                 disturbance: None,
                 startup: None,
                 first_ack: Time::ZERO,
-                errors: vec![],
-                notes: vec![],
-                samples: vec![],
-                broker_samples: vec![],
-            }
+                producer_latency: LatencyPercentiles::default(),
+                consumer_e2e_latency: LatencyPercentiles::default(),
+                errors: Vec::new(),
+                notes: Vec::new(),
+                samples: Vec::new(),
+                broker_samples: Vec::new(),
+            };
+            output
         }
     }
 

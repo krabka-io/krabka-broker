@@ -177,15 +177,16 @@ impl ScriptedListener {
                         max_version,
                     )
                 }));
+                let mut api_keys = Vec::new();
+                for (k, min_v, max_v) in advertised {
+                    let mut entry = ApiVersion::default();
+                    entry.api_key = k;
+                    entry.min_version = min_v;
+                    entry.max_version = max_v;
+                    api_keys.push(entry);
+                }
                 let api_versions = ApiVersionsResponse {
-                    api_keys: advertised
-                        .map(|(api_key, min_version, max_version)| ApiVersion {
-                            api_key,
-                            min_version,
-                            max_version,
-                            ..Default::default()
-                        })
-                        .collect(),
+                    api_keys,
                     ..Default::default()
                 };
                 // `ApiVersions` always answers with a v0 response header.

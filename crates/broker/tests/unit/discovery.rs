@@ -52,10 +52,9 @@ async fn metadata_returns_this_broker_and_listed_topics() {
         .find(|t| t.name.as_deref() == Some("beta"))
         .unwrap();
     assert!(topic.partitions.len() == 3);
-    for (i, part) in topic.partitions.iter().enumerate() {
-        check!(part.error_code == 0);
-        check!(part.partition_index == i32::try_from(i).unwrap());
-        check!(part.leader_id == 1);
+    for idx in 0..3 {
+        let part = &topic.partitions[idx];
+        check!(part.error_code == 0 && part.partition_index == idx as i32 && part.leader_id == 1);
     }
     p.broker.shutdown().await;
 }

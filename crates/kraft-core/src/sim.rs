@@ -205,8 +205,7 @@ impl Sim {
     pub fn leaders(&self) -> Vec<NodeId> {
         self.nodes
             .values()
-            .filter(|n| n.machine.role().is_leader())
-            .map(|n| n.id)
+            .filter_map(|node| node.machine.role().is_leader().then_some(node.id))
             .collect()
     }
 }

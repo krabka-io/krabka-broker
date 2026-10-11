@@ -224,16 +224,13 @@ async fn topic_row_error_follows_version_and_topic_reference() {
 /// resolve, and 29 for a name.
 #[tokio::test]
 async fn unresolved_id_answers_before_topic_authorization() {
-    run_table(
-        Arc::new(DenyTopics),
-        &[
-            Case::new(9, TopicRef::UnknownName, codes::TOPIC_AUTHORIZATION_FAILED),
-            Case::new(10, TopicRef::KnownId, codes::TOPIC_AUTHORIZATION_FAILED),
-            Case::new(10, TopicRef::UnknownId, codes::UNKNOWN_TOPIC_ID),
-            Case::new(10, TopicRef::ZeroId, codes::UNKNOWN_TOPIC_ID),
-        ],
-    )
-    .await;
+    let cases = vec![
+        Case::new(10, TopicRef::UnknownId, codes::UNKNOWN_TOPIC_ID),
+        Case::new(10, TopicRef::ZeroId, codes::UNKNOWN_TOPIC_ID),
+        Case::new(9, TopicRef::UnknownName, codes::TOPIC_AUTHORIZATION_FAILED),
+        Case::new(10, TopicRef::KnownId, codes::TOPIC_AUTHORIZATION_FAILED),
+    ];
+    run_table(Arc::new(DenyTopics), &cases).await;
 }
 
 /// Kafka authorizes the group before it resolves any topic id, so a group

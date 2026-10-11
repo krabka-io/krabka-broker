@@ -292,11 +292,9 @@ mod tests {
 
         overwrite_log_body(&archive).await;
 
-        let request = VerifyRequest {
-            depth: VerifyDepth::Deep,
-            ..VerifyRequest::default()
-        };
-        let report = archive.verify_with(&request).await;
+        let mut deep_req = VerifyRequest::default();
+        deep_req.depth = VerifyDepth::Deep;
+        let report = archive.verify_with(&deep_req).await;
 
         check!(!report.ok());
         let reason = first_break_reason(&report);

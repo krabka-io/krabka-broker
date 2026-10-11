@@ -110,8 +110,8 @@ use std::{
 use assert2::{assert, check};
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
 use krabka_client_core::Client;
-use krabka_client_producer::{Acks, Producer, ProducerRecord};
 use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+use krabka_client_producer::{Acks, Producer, ProducerRecord};
 use tokio::sync::Mutex;
 
 // Cargo compiles this file as its own test binary, so the crate root's module
