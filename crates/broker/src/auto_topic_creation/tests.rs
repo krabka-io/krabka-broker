@@ -16,6 +16,7 @@ use crate::{
     coordinator::bootstrap::OFFSETS_TOPIC,
     share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
     test_support::{PartitionCount, ReplicationFactor, start_broker_no_audit},
+    time_util::now_ms,
     txn::bootstrap::TOPIC as TXN_TOPIC,
 };
 
@@ -407,12 +408,9 @@ async fn a_streams_creation_skips_a_backed_off_or_in_flight_topic() {
         client_id: "streams-client".to_owned(),
         correlation_id: 1,
     };
-    creation.errors.put(
-        "backed-off",
-        "no brokers".into(),
-        60_000,
-        crate::time_util::now_ms(),
-    );
+    creation
+        .errors
+        .put("backed-off", "no brokers".into(), 60_000, now_ms());
     assert!(creation.hold_for_test("in-flight"));
 
     creation.create_streams_internal_topics(

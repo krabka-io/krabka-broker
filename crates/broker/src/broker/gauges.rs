@@ -9,9 +9,16 @@ use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config::BrokerConfig, config_keys::resolve_broker_witness, health::HealthState,
-    heartbeat::controller_state::ControllerLivenessState, log_dir_status::LogDirRegistry,
-    metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry,
+    config::BrokerConfig,
+    config_keys::{
+        node_min_insync_replicas, resolve_broker_witness, resolve_preferred_leader_site,
+    },
+    health::HealthState,
+    heartbeat::controller_state::ControllerLivenessState,
+    log_dir_status::LogDirRegistry,
+    metadata_source::MetadataSource,
+    metrics::{BrokerMetrics, DirectoryLabel},
+    partition_registry::PartitionRegistry,
 };
 
 /// Epoch milliseconds for the KIP-835 time-since-last-applied-record gauge.
@@ -42,7 +49,7 @@ fn leader_site_drift_partitions(
     image: &krabka_metadata::MetadataImage,
     node_id: krabka_metadata::NodeId,
 ) -> usize {
-    let Some(preferred) = crate::config_keys::resolve_preferred_leader_site(image) else {
+    let Some(preferred) = resolve_preferred_leader_site(image) else {
         return 0;
     };
     let leader_site = image
@@ -161,9 +168,8 @@ pub(super) fn spawn_broker_gauge_updater(
             let minimum_isr: std::collections::HashMap<&str, i32> = image
                 .topics()
                 .map(|topic| {
-                    let minimum =
-                        crate::config_keys::node_min_insync_replicas(&image, node_id, &topic.name)
-                            .unwrap_or(default_min_insync_replicas);
+                    let minimum = node_min_insync_replicas(&image, node_id, &topic.name)
+                        .unwrap_or(default_min_insync_replicas);
                     (topic.name.as_str(), minimum)
                 })
                 .collect();
@@ -286,7 +292,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 if let Some(directory_id) = previous_voted_directory {
                     metrics
                         .voted_directory
-                        .get_or_create(&crate::metrics::DirectoryLabel {
+                        .get_or_create(&DirectoryLabel {
                             directory_id: directory_id.to_string(),
                         })
                         .set(0);
@@ -294,7 +300,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 if let Some(directory_id) = voted_directory {
                     metrics
                         .voted_directory
-                        .get_or_create(&crate::metrics::DirectoryLabel {
+                        .get_or_create(&DirectoryLabel {
                             directory_id: directory_id.to_string(),
                         })
                         .set(1);

@@ -14,17 +14,20 @@ use super::{
     FALLBACK_REBALANCE_TIMEOUT_MS_I32, FALLBACK_SESSION_TIMEOUT_MS_I32, chrono_now_ms,
     pending_records::{PartitionMetadataWrite, PendingRecords},
 };
-use crate::coordinator::unified::{
-    classic_state::ClassicGroup,
-    consumer_state::{GroupState, MemberState},
-    member_records::{MemberValues, append_target_records},
-    offsets_log::OffsetsLog,
-    persistence::{GroupMetadataValue, sorted_partitions},
-    persistence_next_gen::{
-        ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
-        GroupMetadataValue as NextGenGroupMetadataValue, MemberMetadataValue,
-        TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
+use crate::{
+    coordinator::unified::{
+        classic_state::ClassicGroup,
+        consumer_state::{GroupState, MemberState},
+        member_records::{MemberValues, append_target_records},
+        offsets_log::OffsetsLog,
+        persistence::{GroupMetadataValue, sorted_partitions},
+        persistence_next_gen::{
+            ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
+            GroupMetadataValue as NextGenGroupMetadataValue, MemberMetadataValue,
+            TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
+        },
     },
+    error::BrokerError,
 };
 
 /// Maps a member's in-memory classic facade, if there is one, into the
@@ -299,7 +302,7 @@ pub(crate) fn classic_group_metadata_record(
 pub(super) async fn flush_classic_metadata(
     state: &ClassicGroup,
     offsets_log: &dyn OffsetsLog,
-) -> Result<(), crate::error::BrokerError> {
+) -> Result<(), BrokerError> {
     let now_ms = chrono_now_ms();
     let pending = PendingRecords {
         classic_group_metadata: Some(classic_group_metadata_record(state, now_ms)),

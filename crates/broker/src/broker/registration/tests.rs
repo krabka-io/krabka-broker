@@ -5,6 +5,7 @@ use super::*;
 use crate::{
     config::{NodeRole, StretchProfile},
     file_config::FileConfig,
+    host_port::local_host_name,
 };
 
 /// The gap `wait_for_self_registration_published` closes: a `submit_change`
@@ -398,7 +399,7 @@ fn self_controller_registration_uses_quorum_endpoint_and_feature_ranges() {
 /// dial.
 #[test]
 fn a_dynamic_controller_registers_its_listener_with_the_host_name_for_a_wildcard() {
-    let host_name = crate::host_port::local_host_name().unwrap_or_else(|| "127.0.0.1".into());
+    let host_name = local_host_name().unwrap_or_else(|| "127.0.0.1".into());
     let cases = [
         ("192.0.2.10:9592", "192.0.2.10".to_owned()),
         ("0.0.0.0:9592", host_name.clone()),

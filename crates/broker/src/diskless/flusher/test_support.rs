@@ -16,7 +16,10 @@ use crate::{
     diskless::index_log::DisklessIndexLog,
     log_dir_status::LogDirRegistry,
     partition::Partition,
-    test_support::{RecordCount, StorageMode, UnixMillis, repeated_records_batch},
+    producer_state::ProducerState,
+    test_support::{
+        RecordCount, RepeatedRecordsSetup, StorageMode, UnixMillis, repeated_records_batch,
+    },
     time_util::now_ms,
 };
 
@@ -27,7 +30,7 @@ use crate::{
 fn batch(count: i32) -> RecordBatch {
     RecordBatch {
         partition_leader_epoch: 0,
-        ..repeated_records_batch(crate::test_support::RepeatedRecordsSetup {
+        ..repeated_records_batch(RepeatedRecordsSetup {
             count: RecordCount(count),
             timestamp: UnixMillis(now_ms()),
         })
@@ -74,7 +77,7 @@ pub(super) fn test_partition(root: &Path, setup: FlusherPartitionSetup<'_>) -> A
         root.to_path_buf(),
         log,
         LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
+        Arc::new(ProducerState::new()),
         storage == StorageMode::Diskless,
     );
     handle.current_leader.store(leader.0, Ordering::Relaxed);

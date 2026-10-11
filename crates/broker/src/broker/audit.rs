@@ -14,9 +14,10 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    audit_recovery::recover_from_partition_tail, audit_sink::KafkaTopicAuditSink, broker::Broker,
-    config::BrokerConfig, metadata_source::MetadataSource, metrics::BrokerMetrics,
-    partition_registry::PartitionRegistry, time_util::system_timer,
+    audit_authorizer::AuditingAuthorizer, audit_recovery::recover_from_partition_tail,
+    audit_sink::KafkaTopicAuditSink, broker::Broker, config::BrokerConfig,
+    metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry,
+    time_util::system_timer,
 };
 
 fn audit_signer(config: &BrokerConfig) -> Option<Arc<krabka_audit::FileEd25519Signer>> {
@@ -105,7 +106,7 @@ pub(super) fn start_audit_pipeline(
     // emit, leaving `authorization_denied_total` as the only denial record.
     let install_auditing_authorizer =
         |config: &mut BrokerConfig, log: &Arc<krabka_audit::AuditLog>| {
-            config.authorizer = Arc::new(crate::audit_authorizer::AuditingAuthorizer::new(
+            config.authorizer = Arc::new(AuditingAuthorizer::new(
                 Arc::clone(&config.authorizer),
                 Arc::clone(log),
                 metrics.clone(),

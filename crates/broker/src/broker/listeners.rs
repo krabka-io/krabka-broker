@@ -19,7 +19,7 @@ use crate::{
     broker::{Broker, accept::accept_loop},
     config::{BrokerConfig, ListenerSpec},
     error::BrokerError,
-    future_log::{FutureLogState, MovePolicy},
+    future_log::{FutureLogState, MovePolicy, resume_move},
     log_dir,
     partition_registry::PartitionRegistry,
     platform::{Sockets, bind_listener},
@@ -124,7 +124,7 @@ pub(super) async fn bind_listeners_and_recover_moves(
                 }
                 continue;
             }
-            if let Err(error) = crate::future_log::resume_move(
+            if let Err(error) = resume_move(
                 partitions,
                 &future_logs,
                 &log_dir,

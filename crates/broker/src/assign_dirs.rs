@@ -269,7 +269,7 @@ mod tests {
     }
 
     use crate::test_support::{
-        VoterImageSetup, plaintext_controller_dialer_with_voters as plaintext_dialer,
+        VoterImageSetup, plaintext_controller_dialer_with_voters as plaintext_dialer, voter_image,
     };
 
     /// What a broker-only node sees of a controller-only leader: a voter with a
@@ -277,7 +277,7 @@ mod tests {
     /// `register_broker` skips a node whose `process.roles` exclude `broker`,
     /// so `image.broker(leader)` stays empty however long the cluster runs.
     fn voter_only_image(leader: NodeId, controller_addr: SocketAddr) -> MetadataImage {
-        crate::test_support::voter_image(VoterImageSetup {
+        voter_image(VoterImageSetup {
             node: leader,
             endpoints: vec![krabka_metadata::VoterEndpoint {
                 name: "CONTROLLER".to_owned(),

@@ -22,7 +22,10 @@ use crate::{
     metadata_source::MetadataSource,
     network::client::InterBrokerClient,
     partition_registry::PartitionRegistry,
-    share_coordinator::{config::ShareCoordinatorConfig, persister_client::SharePersister},
+    share_coordinator::{
+        config::ShareCoordinatorConfig, coordinator::ShareCoordinator,
+        persister_client::SharePersister,
+    },
     test_support::{FakeMetadataSource, KafkaErrorCode, UnixMillis, string_pairs},
 };
 
@@ -138,13 +141,11 @@ pub(super) fn fixed_source(image: krabka_metadata::MetadataImage) -> Arc<dyn Met
 }
 
 pub(super) fn make_share_persister(source: Arc<dyn MetadataSource>) -> Arc<SharePersister> {
-    let share_coordinator = Arc::new(
-        crate::share_coordinator::coordinator::ShareCoordinator::new(
-            krabka_metadata::NodeId(1),
-            Arc::new(PartitionRegistry::new()),
-            ShareCoordinatorConfig::default(),
-        ),
-    );
+    let share_coordinator = Arc::new(ShareCoordinator::new(
+        krabka_metadata::NodeId(1),
+        Arc::new(PartitionRegistry::new()),
+        ShareCoordinatorConfig::default(),
+    ));
     Arc::new(SharePersister::new(
         krabka_metadata::NodeId(1),
         share_coordinator,

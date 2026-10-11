@@ -16,21 +16,22 @@ use crate::{
         CompactionSetup, block_compaction_swap, compactable_partition, record_count,
         register_compactable,
     },
+    log_dir_status::LogDirRegistry,
     metrics::{CleanerFailureLabel, CleanerFailureReason},
     partition::Partition,
-    test_support::{append_partition_batch, topic_thaw_record},
+    test_support::{FrozenTopicsImageSetup, append_partition_batch, topic_thaw_record},
 };
 
 struct HostedCompactPartition {
     dir: TempDir,
-    status: crate::log_dir_status::LogDirRegistry,
+    status: LogDirRegistry,
     registry: PartitionRegistry,
     partition: Arc<Partition>,
 }
 
 async fn hosted_compact_partition() -> HostedCompactPartition {
     let dir = tempfile::tempdir().expect("log root");
-    let status = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
+    let status = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
     let registry = PartitionRegistry::new();
     let partition = compactable_partition(
         &dir,
@@ -262,7 +263,7 @@ async fn tick_all_skips_a_frozen_partition_and_compacts_an_unfrozen_control() {
             ("frozen-literal", PatternType::Literal),
             ("tenant-a.", PatternType::Prefixed),
         ],
-        crate::test_support::FrozenTopicsImageSetup::default(),
+        FrozenTopicsImageSetup::default(),
     );
 
     tick_all(
@@ -296,7 +297,7 @@ async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
     let (_, partition, before) = &cases[0];
     let mut image = image_with_freezes(
         &[("orders", PatternType::Literal)],
-        crate::test_support::FrozenTopicsImageSetup::default(),
+        FrozenTopicsImageSetup::default(),
     );
     let metrics = BrokerMetrics::new();
 
@@ -334,7 +335,7 @@ fn freeze_stops_compaction_reads_the_registry_the_produce_path_reads() {
             ("orders", PatternType::Literal),
             ("tenant-a.", PatternType::Prefixed),
         ],
-        crate::test_support::FrozenTopicsImageSetup::default(),
+        FrozenTopicsImageSetup::default(),
     );
 
     for (label, topic, want) in [

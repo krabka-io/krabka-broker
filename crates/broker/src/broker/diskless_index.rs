@@ -18,6 +18,7 @@ use crate::{
         wal_index::WalIndexCache,
     },
     error::BrokerError,
+    metrics::BrokerMetrics,
     partition_registry::PartitionRegistry,
 };
 
@@ -57,7 +58,7 @@ pub(super) struct DisklessFlusherStartup {
     pub(super) object_store: Arc<dyn object_store::ObjectStore>,
     pub(super) node_id: krabka_metadata::NodeId,
     pub(super) broker_id: i32,
-    pub(super) metrics: crate::metrics::BrokerMetrics,
+    pub(super) metrics: BrokerMetrics,
     pub(super) flush_config: FlushConfig,
     pub(super) ready: Arc<AtomicBool>,
 }

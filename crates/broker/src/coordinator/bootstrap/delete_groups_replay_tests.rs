@@ -20,8 +20,8 @@ use crate::{
         persistence::{GroupMetadataValue, Key},
         test_support::{
             DeletionTarget, DeletionTombstonesSetup, OffsetRecordSetup,
-            TopicDeletionTombstonesSetup, deletion_tombstones, parsed_offset_records,
-            replay_offset_batch as batch,
+            TopicDeletionTombstonesSetup, default_coordinator, deletion_tombstones, offset_record,
+            parsed_offset_records, replay_offset_batch as batch, temp_log,
         },
         unified::{
             GroupCoordinator, actor::test_support::empty_metadata,
@@ -32,11 +32,11 @@ use crate::{
 };
 
 fn coordinator(log: Arc<InMemoryOffsetsLog>) -> Arc<GroupCoordinator> {
-    crate::coordinator::test_support::default_coordinator(empty_metadata(), log)
+    default_coordinator(empty_metadata(), log)
 }
 
 fn commit(topic: &str, partition: i32, offset: i64) -> Record {
-    crate::coordinator::test_support::offset_record(OffsetRecordSetup {
+    offset_record(OffsetRecordSetup {
         topic,
         partition: krabka_ids::PartitionIndex(partition),
         offset: krabka_log::Offset(offset),
@@ -111,7 +111,7 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
     ];
 
     for row in rows {
-        let (_dir, mut log) = crate::coordinator::test_support::temp_log();
+        let (_dir, mut log) = temp_log();
         // A classic GroupMetadata record makes the group exist even when it has
         // no offsets.
         let (group_key, group_value) = super::test_support::classic_group_record("g", "m1");

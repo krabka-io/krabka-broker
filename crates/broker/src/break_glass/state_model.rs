@@ -39,6 +39,7 @@ use crate::{
         },
     },
     config::BreakGlassConfig,
+    model_check::check_model,
     operator_keys::OperatorKeys,
 };
 
@@ -266,7 +267,7 @@ pub(super) fn config(
 }
 
 fn run(model: BreakGlassModel, label: &str, pinned_unique_states: usize) {
-    crate::model_check::check_model(
+    check_model(
         model,
         label,
         (MAX_DEPTH, TARGET_STATE_COUNT, MAX_UNIQUE_STATES),

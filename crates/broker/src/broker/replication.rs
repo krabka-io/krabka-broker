@@ -19,6 +19,7 @@ use crate::{
     producer_state::ProducerState,
     replicator_supervisor::{ReplicatorSupervisor, ReplicatorSupervisorConfig},
     share_coordinator::coordinator::ShareCoordinator,
+    throttle::ThrottleState,
     txn::coordinator::TxnCoordinator,
 };
 
@@ -36,11 +37,7 @@ pub(super) fn spawn_replicator_supervisor(
     partitions: &Arc<PartitionRegistry>,
     coordinators: (&Arc<TxnCoordinator>, &Arc<ShareCoordinator>),
     inter_broker_client: &Arc<InterBrokerClient>,
-    runtime: (
-        &CancellationToken,
-        &Arc<crate::throttle::ThrottleState>,
-        &BrokerMetrics,
-    ),
+    runtime: (&CancellationToken, &Arc<ThrottleState>, &BrokerMetrics),
     storage: ReplicatorStorage<'_>,
 ) -> JoinHandle<()> {
     let protocol = config

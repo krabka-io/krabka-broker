@@ -44,11 +44,12 @@ use crate::{
         reconciler::ReconcileInput,
         regex_resolver::TopicRegexResolver,
     },
+    error::BrokerError,
 };
 
 /// Kafka's `appendGroupMetadataErrorToResponseError`: the `JoinGroup` error
 /// for a group metadata write that failed.
-pub(crate) fn append_error_code(error: &crate::error::BrokerError) -> i16 {
+pub(crate) fn append_error_code(error: &BrokerError) -> i16 {
     codes::coordinator_append_error(codes::from_broker_error(error))
 }
 
@@ -388,7 +389,7 @@ async fn classic_join_hosted(
     group: &mut CoordinatorGroup,
     services: ActorServices<'_>,
     hosted: HostedJoin<'_>,
-) -> Result<(), crate::error::BrokerError> {
+) -> Result<(), BrokerError> {
     let HostedJoin {
         request: req,
         version,
@@ -558,7 +559,7 @@ async fn downgrade_joining(
     services: ActorServices<'_>,
     join: DowngradeJoin<'_>,
     reply: oneshot::Sender<JoinResult>,
-) -> Result<(), crate::error::BrokerError> {
+) -> Result<(), BrokerError> {
     let DowngradeJoin {
         change,
         regexes,

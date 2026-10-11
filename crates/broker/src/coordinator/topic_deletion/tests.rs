@@ -18,7 +18,10 @@ use crate::{
             test_support::make_coord_with_log,
         },
     },
-    handlers::{offset_commit::handle as offset_commit_handle, test_support::CreateTopicSetup},
+    handlers::{
+        offset_commit::handle as offset_commit_handle,
+        test_support::{CreateTopicSetup, configured_topic_request},
+    },
 };
 
 krabka_macros::delete_topic_request!(delete_request);
@@ -155,7 +158,7 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         .await
         .expect("client build");
     let create = || {
-        crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+        configured_topic_request(CreateTopicSetup {
             topic: TOPIC,
             ..Default::default()
         })

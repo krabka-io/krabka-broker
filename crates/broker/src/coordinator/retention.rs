@@ -51,8 +51,10 @@ use super::{
     },
 };
 use crate::{
-    coordinator::unified::actor::GroupActorHandle, metadata_source::MetadataSource,
-    task_util::run_every, time_util::now_ms,
+    coordinator::unified::actor::GroupActorHandle,
+    metadata_source::MetadataSource,
+    task_util::{ask, run_every},
+    time_util::now_ms,
 };
 
 #[cfg(test)]
@@ -110,14 +112,13 @@ pub(crate) async fn sweep(
         let Some(handle) = coordinator.find(&group_id) else {
             continue;
         };
-        let Ok(outcome) =
-            crate::task_util::ask(&handle.tx, |reply| GroupActorMessage::ReapExpiredOffsets {
-                now_ms,
-                retention_ms,
-                empty_grace_ms,
-                reply,
-            })
-            .await
+        let Ok(outcome) = ask(&handle.tx, |reply| GroupActorMessage::ReapExpiredOffsets {
+            now_ms,
+            retention_ms,
+            empty_grace_ms,
+            reply,
+        })
+        .await
         else {
             continue;
         };

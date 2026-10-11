@@ -12,7 +12,7 @@
 //! quorum -- the same two-tier lookup `ControllerHandle::voter_addr` uses for
 //! the leader it forwards a rejected `submit_change` to.
 
-use crate::host_port::parse_host_port;
+use crate::{host_port::parse_host_port, network::client::InterBrokerClient};
 
 /// The listener name a controller advertises for the RPCs its peers address
 /// to it.
@@ -125,7 +125,7 @@ pub(crate) fn quorum_targets(
 /// Kafka frames at a secured controller port and fail every attempt.
 pub(crate) struct ControllerDialer {
     /// Shared outbound dialer that runs the controller listener's TLS / SASL.
-    pub outbound_client: std::sync::Arc<crate::network::client::InterBrokerClient>,
+    pub outbound_client: std::sync::Arc<InterBrokerClient>,
     pub listener_protocol: krabka_security::ListenerProtocol,
     /// SNI and SASL server name for the controller listener, matching the one
     /// the raft dialer presents.

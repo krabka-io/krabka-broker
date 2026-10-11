@@ -20,7 +20,7 @@ use super::{
 use crate::coordinator::unified::{
     GroupCoordinator,
     share::{actor::test_support::TopicMetadataSetup, config::ShareGroupConfig},
-    test_support::fixed_source,
+    test_support::{check_group_session_timeout, fixed_source},
 };
 use crate::coordinator::unified::{
     share::actor::test_support::InitializedTopicSetup,
@@ -128,11 +128,7 @@ async fn a_group_expires_a_member_by_its_own_session_timeout() {
             ],
         )],
     );
-    crate::coordinator::unified::test_support::check_group_session_timeout(
-        |id| coordinator.get_or_create_share(id),
-        join,
-    )
-    .await;
+    check_group_session_timeout(|id| coordinator.get_or_create_share(id), join).await;
 }
 
 /// Kafka's `canComputeNextTargetAssignment`: a second member that joins

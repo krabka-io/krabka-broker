@@ -134,7 +134,8 @@ mod tests {
     use assert2::check;
 
     use crate::share_coordinator::{
-        coordinator::test_support::share_write, handlers::test_support::lead_share_state_partitions,
+        coordinator::test_support::{image_with_topic, share_write},
+        handlers::test_support::lead_share_state_partitions,
     };
 
     #[tokio::test]
@@ -152,10 +153,7 @@ mod tests {
                 .is_none()
         );
         lead_share_state_partitions(&broker).await;
-        let share_image = crate::share_coordinator::coordinator::test_support::image_with_topic(
-            share_topic_id,
-            share_partition + 1,
-        );
+        let share_image = image_with_topic(share_topic_id, share_partition + 1);
         broker
             .share_coordinator
             .initialize(

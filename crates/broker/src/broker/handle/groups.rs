@@ -4,7 +4,9 @@
 
 #[cfg(any(test, feature = "test-helpers"))]
 use crate::coordinator::unified::{
-    GroupType, actor::ClassicView, streams::actor::StreamsDescribeView,
+    GroupType,
+    actor::{ClassicView, DescribeView},
+    streams::actor::StreamsDescribeView,
 };
 use crate::{
     broker::{BrokerHandle, TEST_AWAITER_TIMEOUT},
@@ -35,10 +37,7 @@ impl BrokerHandle {
     /// `None` if the group has no live actor.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn group_describe_for_test(
-        &self,
-        group_id: &str,
-    ) -> Option<crate::coordinator::unified::actor::DescribeView> {
+    pub async fn group_describe_for_test(&self, group_id: &str) -> Option<DescribeView> {
         self.inspect_group_actor(group_id, |reply| {
             use crate::coordinator::unified::actor::GroupActorMessage;
 

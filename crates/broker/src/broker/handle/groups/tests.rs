@@ -7,13 +7,15 @@ use crate::{
     broker::Broker,
     coordinator::unified::{
         GroupSeed, StreamsGroupSeed,
-        actor::GroupKindTag,
+        actor::{GroupActorMessage, GroupKindTag},
         classic_state::{ClassicGroup, Member},
-        group::CoordinatorGroup,
+        group::{CoordinatorGroup, GroupKind},
+        persistence_next_gen::MemberMetadataValue,
         streams::{
             actor::StreamsGroupActorMessage,
             persistence::{
-                StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
+                DescriptionEpochs, StreamsGroupCurrentMemberAssignmentValue,
+                StreamsGroupMemberMetadataValue, StreamsGroupTargetAssignmentMemberValue,
             },
         },
     },
@@ -28,7 +30,7 @@ fn consumer_group_seed(member_id: &str) -> GroupSeed {
     };
     seed.members.insert(
         member_id.to_string(),
-        crate::coordinator::unified::persistence_next_gen::MemberMetadataValue {
+        MemberMetadataValue {
             instance_id: None,
             rack_id: None,
             client_id: "client".to_string(),
@@ -58,7 +60,7 @@ fn classic_group_with_member(group_id: &str, member_id: &str) -> Box<Coordinator
     let _ = classic.add_member(member);
     Box::new(CoordinatorGroup::seeded(
         group_id,
-        crate::coordinator::unified::group::GroupKind::Classic(classic),
+        GroupKind::Classic(classic),
         std::collections::HashMap::new(),
     ))
 }
@@ -86,7 +88,7 @@ fn streams_group_seed(member_id: &str) -> StreamsGroupSeed {
     let mut target_per_member = std::collections::HashMap::new();
     target_per_member.insert(
         member_id.to_string(),
-        crate::coordinator::unified::streams::persistence::StreamsGroupTargetAssignmentMemberValue {
+        StreamsGroupTargetAssignmentMemberValue {
             active: active.clone(),
             standby: std::collections::BTreeMap::new(),
             warmup: std::collections::BTreeMap::new(),
@@ -117,8 +119,7 @@ fn streams_group_seed(member_id: &str) -> StreamsGroupSeed {
         metadata_hash: 0,
         validated_topology_epoch: 0,
         last_assignment_configs: std::collections::BTreeMap::new(),
-        description_epochs:
-            crate::coordinator::unified::streams::persistence::DescriptionEpochs::default(),
+        description_epochs: DescriptionEpochs::default(),
         assignment_epoch: 6,
         assignment_timestamp_ms: 0,
         topology: None,
@@ -200,9 +201,7 @@ async fn group_handle_helpers_observe_live_actor_views() {
         .get_or_create_group(group_id, GroupKindTag::Consumer);
     actor
         .tx
-        .send(crate::coordinator::unified::actor::GroupActorMessage::Seed(
-            consumer_group_seed(member_id),
-        ))
+        .send(GroupActorMessage::Seed(consumer_group_seed(member_id)))
         .await
         .expect("seed next-gen group");
     assert!(

@@ -13,8 +13,8 @@ use krabka_protocol::{
 use crate::coordinator::unified::{
     ClientIdentity, classic_state::Member, config::ConsumerGroupMigrationPolicy,
     consumer_state::MemberState, offsets_log::fake::ClassicMetadataRecord,
-    share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
-    test_support::MemberEpoch,
+    persistence::GroupMetadataValue, share::config::ShareGroupConfig,
+    streams::config::StreamsGroupConfig, test_support::MemberEpoch,
 };
 
 pub(crate) mod rpc;
@@ -190,9 +190,7 @@ pub(super) fn seed_completing_classic(
     seed_classic_group(coordinator, completing_classic_group(members))
 }
 
-pub(super) async fn last_classic_metadata(
-    log: &InMemoryOffsetsLog,
-) -> crate::coordinator::unified::persistence::GroupMetadataValue {
+pub(super) async fn last_classic_metadata(log: &InMemoryOffsetsLog) -> GroupMetadataValue {
     use crate::coordinator::unified::persistence::{GroupMetadataValue, Key, parse_key};
 
     for batch in log.batches().await.iter().rev() {

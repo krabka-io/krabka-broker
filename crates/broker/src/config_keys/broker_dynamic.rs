@@ -29,7 +29,9 @@ use crate::{
     codes,
     cordoned_log_dirs::{CORDONED_LOG_DIRS, resolve, validate_value_type},
     features::ELR_VERSION,
-    throttle::{FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY},
+    throttle::{
+        ALTER_LOG_DIRS_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY,
+    },
 };
 
 /// The live facts used by either broker-configuration mutation API.
@@ -198,7 +200,7 @@ pub(crate) fn broker_key_row(
 const THROTTLE_RATES: [&str; 3] = [
     LEADER_THROTTLED_RATE_KEY,
     FOLLOWER_THROTTLED_RATE_KEY,
-    crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY,
+    ALTER_LOG_DIRS_THROTTLED_RATE_KEY,
 ];
 
 /// Kafka's `SslConfigs.RECONFIGURABLE_CONFIGS`: dynamic only per listener,

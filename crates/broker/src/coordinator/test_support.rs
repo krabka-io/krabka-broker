@@ -16,7 +16,7 @@ use krabka_protocol::{
 
 use crate::{
     broker::Broker,
-    codes::COORDINATOR_NOT_AVAILABLE,
+    codes::{COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
     coordinator::{
         bootstrap::OFFSETS_TOPIC,
         persistence::{Key, OffsetCommitValue},
@@ -370,7 +370,7 @@ impl CommitWaitOutcome {
     pub(crate) fn kafka_error(self) -> Option<KafkaErrorCode> {
         match self {
             Self::Committed => None,
-            Self::NotLeader => Some(KafkaErrorCode(crate::codes::NOT_COORDINATOR)),
+            Self::NotLeader => Some(KafkaErrorCode(NOT_COORDINATOR)),
             Self::TimedOut => Some(KafkaErrorCode(COORDINATOR_NOT_AVAILABLE)),
         }
     }

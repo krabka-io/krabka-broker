@@ -8,7 +8,8 @@ use crate::{
     broker::{
         Broker,
         test_support::{
-            LocalPartitionSetup, local_partition_with_records, submit_metadata_topic_partition,
+            LocalPartitionSetup, MetadataPartitionSetup, local_partition_with_records,
+            submit_metadata_topic_partition,
         },
     },
     config::BrokerConfig,
@@ -138,7 +139,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     let partition_isr = [partition_leader, handle.node_id()];
     submit_metadata_topic_partition(
         &handle,
-        crate::broker::test_support::MetadataPartitionSetup {
+        MetadataPartitionSetup {
             topic,
             topic_id: uuid::Uuid::from_u128(0xCAFE),
             leader: krabka_ids::NodeId(partition_leader),

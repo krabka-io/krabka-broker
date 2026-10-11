@@ -13,8 +13,8 @@ use crate::{
         actor::{
             member_state::build_member,
             test_support::{
-                StaticMetadata, empty_metadata, make_coordinator, make_coordinator_with_topic,
-                make_coordinator_with_topic_policy,
+                StaticMetadata, coordinator_with_log, empty_metadata, make_coordinator,
+                make_coordinator_with_topic, make_coordinator_with_topic_policy,
                 rpc::{self, consumer_request},
                 seed_classic_member, subscription_blob,
             },
@@ -22,7 +22,9 @@ use crate::{
         offsets_log::fake::InMemoryOffsetsLog,
         persistence_next_gen::GroupMetadataValue,
         reconciler::{ReconcileInput, metadata_hash},
-        test_support::{ConsumerJoinSetup, MemberEpoch, consumer_join_request},
+        test_support::{
+            ConsumerJoinSetup, MemberEpoch, assert_next_tombstone_batch, consumer_join_request,
+        },
     },
     test_support::KafkaErrorCode,
 };
@@ -70,7 +72,7 @@ async fn first_join_adopts_client_member_id() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn member_limit_rejects_only_new_members() {
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = crate::coordinator::unified::actor::test_support::coordinator_with_log(
+    let coord = coordinator_with_log(
         NextGenConfig {
             max_size: 1,
             ..NextGenConfig::assigning_at_once()
@@ -849,7 +851,7 @@ async fn leave_emits_tombstone_batch() {
         },
     )
     .await;
-    crate::coordinator::unified::test_support::assert_next_tombstone_batch(&log, pre_leave).await;
+    assert_next_tombstone_batch(&log, pre_leave).await;
 }
 
 /// Kafka's `consumerGroupFenceMembers`: a leave writes the leaver's

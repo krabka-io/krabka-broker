@@ -17,6 +17,7 @@ use crate::{
         GroupCoordinator, actor::MetadataProvider, config::NextGenConfig,
         offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
         share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
+        test_support::MemberEpoch,
     },
     task_util::ask,
 };
@@ -110,7 +111,7 @@ pub(super) struct ActiveResponseSetup<'a> {
     #[default("m1")]
     pub member_id: &'a str,
     #[default(crate::coordinator::unified::test_support::MemberEpoch(1))]
-    pub epoch: crate::coordinator::unified::test_support::MemberEpoch,
+    pub epoch: MemberEpoch,
     pub status: Option<Vec<Status>>,
     pub active: Option<Vec<PartitionIndex>>,
 }

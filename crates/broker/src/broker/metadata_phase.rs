@@ -18,6 +18,7 @@ use crate::{
             submit_stretch_defaults,
         },
     },
+    clean_shutdown::take,
     config::BrokerConfig,
     controller_admin::BrokerControllerAdminRouter,
     controller_endpoint::CONTROLLER_LISTENER_NAME,
@@ -30,6 +31,7 @@ use crate::{
     network::client::{InterBrokerClient, InterBrokerDialer},
     platform::{Sockets, bind_listener},
     raft_handshake::{AuditLogArc, BrokerRaftHandshake},
+    time_util::system_timer,
     wal::quorum::registry::{WalShardRegistry, WalShardRouter},
 };
 
@@ -287,7 +289,7 @@ async fn start_metadata_source(
         snapshot_fetch_max: observer_snapshot_fetch_max(config)?,
         max_bytes: config.observer_fetch_max,
         poll_interval: config.observer_poll_interval,
-        timer: crate::time_util::system_timer(),
+        timer: system_timer(),
     });
     let forwarder = QuorumForwarder {
         client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
@@ -497,7 +499,7 @@ async fn join_metadata_quorum(
         // Spend the clean-shutdown proof the last stop left, if it left one.
         // Reading it here -- before this node registers -- is what lets
         // `register_broker` tell a graceful restart from a crash.
-        config.previous_broker_epoch = crate::clean_shutdown::take(&config.log_dir);
+        config.previous_broker_epoch = take(&config.log_dir);
     }
     submit_stretch_defaults(config, &**controller).await?;
     register_controller(config, &**controller).await?;

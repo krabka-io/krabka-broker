@@ -27,7 +27,7 @@ use crate::{
         retention::run as run_offset_retention, topic_deletion::spawn as spawn_topic_deletion,
     },
     delivery::{
-        config::DeliveryConfig, metrics::BrokerDeliveryMetrics,
+        DeliveryWaker, config::DeliveryConfig, metrics::BrokerDeliveryMetrics,
         scheduler::run as run_delivery_scheduler,
     },
     error::BrokerError,
@@ -426,7 +426,7 @@ impl Broker {
             config.node_id,
             DeliveryConfig::default(),
             Arc::new(BrokerDeliveryMetrics::new(runtime.metrics.clone())),
-            Arc::new(crate::delivery::DeliveryWaker::new()),
+            Arc::new(DeliveryWaker::new()),
             runtime.supervisor_shutdown.child_token(),
         ));
 

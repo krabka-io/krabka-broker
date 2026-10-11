@@ -20,8 +20,8 @@ use uuid::Uuid;
 
 use super::{index_log::DisklessIndexLog, wal_index::WalFlushRecord};
 use crate::{
-    error::BrokerError, partition::Partition, partition_registry::PartitionRegistry,
-    time_util::now_ms,
+    error::BrokerError, metrics::BrokerMetrics, partition::Partition,
+    partition_registry::PartitionRegistry, time_util::now_ms,
 };
 
 mod config;
@@ -51,7 +51,7 @@ pub(crate) struct FlusherContext {
     pub(crate) index_log: DisklessIndexLog,
     pub(crate) node_id: NodeId,
     pub(crate) broker_id: i32,
-    pub(crate) metrics: crate::metrics::BrokerMetrics,
+    pub(crate) metrics: BrokerMetrics,
     /// Set once the first tick is allowed to fire, which is after the index
     /// projection has replayed the index topic.
     pub(crate) ready: Arc<AtomicBool>,

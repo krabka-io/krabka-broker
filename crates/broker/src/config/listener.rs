@@ -783,15 +783,13 @@ mod connections_max_reauth_tests {
     use assert2::assert;
     use krabka_units::{Time, convert::TimeExt as _, millis, secs};
 
-    use crate::config::BrokerConfig;
+    use crate::{config::BrokerConfig, test_support::listener_time_overrides};
 
     /// A broker-wide KIP-368 window with the named per-listener overrides.
     fn config(broker_wide: Option<Time>, overrides: &[(&str, Time)]) -> BrokerConfig {
         BrokerConfig {
             connections_max_reauth: broker_wide,
-            connections_max_reauth_overrides: crate::test_support::listener_time_overrides(
-                overrides,
-            ),
+            connections_max_reauth_overrides: listener_time_overrides(overrides),
             ..BrokerConfig::default()
         }
     }

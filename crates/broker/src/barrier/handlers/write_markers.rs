@@ -268,6 +268,7 @@ mod tests {
         codes,
         coordinator::unified::persistence::MAX_STRING_BYTES,
         partition_registry::PartitionRegistry,
+        test_support::StandalonePartitionSetup,
     };
 
     const LOCAL: NodeId = NodeId(1);
@@ -309,11 +310,7 @@ mod tests {
         leader_epoch: i32,
     ) -> PartitionRegistry {
         let registry = PartitionRegistry::new();
-        open_partition(
-            &registry,
-            dir,
-            crate::test_support::StandalonePartitionSetup::default(),
-        );
+        open_partition(&registry, dir, StandalonePartitionSetup::default());
         let partition = registry
             .get("orders", PartitionIndex(0))
             .expect("the partition is open");

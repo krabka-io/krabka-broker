@@ -14,6 +14,7 @@ use crate::{
                 decode_assignment, join_native_consumer, log_has_classic_group_metadata_write,
                 make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc,
                 seed_classic_member, seeded_bidirectional_coordinator, spawn_and_downgrade,
+                upgrade_with_transient_native,
             },
         },
         classic_state::OffsetEntry,
@@ -37,8 +38,7 @@ async fn last_consumer_member_leaving_downgrades_to_classic() {
     );
 
     // The only native consumer joins and leaves, driving both migration flips.
-    crate::coordinator::unified::actor::test_support::upgrade_with_transient_native(&handle, "t")
-        .await;
+    upgrade_with_transient_native(&handle, "t").await;
 
     // The group is now classic again. `describe_group` only returns
     // classic groups; it must surface "g" with the hosted classic member

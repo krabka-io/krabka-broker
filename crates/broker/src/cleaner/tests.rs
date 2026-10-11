@@ -9,7 +9,7 @@ use qubit_clock::Timer;
 
 use super::*;
 use crate::{
-    cleaner::test_support::{compactable_partition, record_count},
+    cleaner::test_support::{CompactionSetup, compactable_partition, record_count},
     partition::Partition,
     test_support::{BrokenTimer, TimerFailure, park_manual_timer, sweep_registry_fixture},
 };
@@ -21,7 +21,7 @@ async fn run_ticks_until_shutdown() {
     let (dir, registry) = sweep_registry_fixture();
     let partition = compactable_partition(
         &dir,
-        crate::cleaner::test_support::CompactionSetup {
+        CompactionSetup {
             topic: "run-compact",
             ..Default::default()
         },

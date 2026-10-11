@@ -15,6 +15,7 @@ use crate::{
     api_catalog::UnstableApiVersions,
     coordinator::unified::{
         offsets_log::fake::InMemoryOffsetsLog,
+        persistence::parse_key,
         streams::{
             config::KEY_NUM_STANDBY_REPLICAS,
             persistence::{LastAssignmentConfig, PendingStreamsRecords, StreamsGroupMetadataValue},
@@ -754,7 +755,7 @@ async fn a_new_target_persists_the_target_of_every_member() {
         .iter()
         .filter_map(|record| {
             let key = record.key.as_deref()?;
-            match crate::coordinator::unified::persistence::parse_key(key) {
+            match parse_key(key) {
                 Ok(Key::Streams(StreamsGroupKey::TargetAssignmentMember { member_id, .. })) => {
                     Some(member_id)
                 }

@@ -32,7 +32,7 @@ use crate::{
     producer_state::ProducerState,
     replicator_supervisor::desired_wal_placements,
     wal::{
-        OffsetSequencer,
+        ControllerSequencer, OffsetSequencer,
         quorum::{follower::hydrate_on_promotion, registry::ShardId},
     },
 };
@@ -156,9 +156,8 @@ pub(super) async fn recover_storage_and_groups(
                             Some(Arc::clone(&diskless_runtime.hot_tail)),
                             Some(Arc::clone(&diskless_runtime.wal_shards)),
                             diskless.then(|| {
-                                Arc::new(crate::wal::ControllerSequencer::new(Arc::clone(
-                                    controller,
-                                ))) as Arc<dyn OffsetSequencer>
+                                Arc::new(ControllerSequencer::new(Arc::clone(controller)))
+                                    as Arc<dyn OffsetSequencer>
                             }),
                         ),
                     ),

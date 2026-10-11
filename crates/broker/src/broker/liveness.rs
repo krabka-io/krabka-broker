@@ -16,10 +16,12 @@ use crate::{
         controller_state::ControllerLivenessState,
     },
     leader_election::{LivenessTickState, run_liveness_tick},
+    log_dir_id::LogDirIds,
     log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource,
     metrics::BrokerMetrics,
-    unclean_recovery::{RecoveryPolicy, UncleanRecoveryHandle},
+    network::client::InterBrokerClient,
+    unclean_recovery::{BackgroundRecovery, RecoveryPolicy, UncleanRecoveryHandle},
 };
 
 /// Drives broker-death failover from the liveness registry. Every
@@ -168,18 +170,14 @@ pub(super) struct LivenessStartup {
 pub(super) fn start_liveness_services(
     config: &BrokerConfig,
     controller: &Arc<dyn MetadataSource>,
-    inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
+    inter_broker_client: &Arc<InterBrokerClient>,
     listener_protocol: krabka_security::ListenerProtocol,
     // The two places this subsystem reports to, paired the way `log_dirs`
     // pairs the two log-dir registries: the metric families, and the audit log
     // that a bypassed background unclean recovery writes its evidence to.
     observability: (&BrokerMetrics, &Arc<krabka_audit::AuditLog>),
     shutdown: &CancellationToken,
-    log_dirs: (
-        &LogDirRegistry,
-        &crate::log_dir_id::LogDirIds,
-        &CordonedLogDirs,
-    ),
+    log_dirs: (&LogDirRegistry, &LogDirIds, &CordonedLogDirs),
 ) -> LivenessStartup {
     let (metrics, audit_log) = observability;
     let liveness = Arc::new(ControllerLivenessState::new(config.heartbeat_timeout));
@@ -222,10 +220,7 @@ pub(super) fn start_liveness_services(
             queue_capacity: config.unclean_recovery_queue_capacity,
             listener_protocol,
             inter_broker_server_name: config.inter_broker_server_name.clone(),
-            background: crate::unclean_recovery::BackgroundRecovery::new(
-                &config.break_glass,
-                Arc::clone(audit_log),
-            ),
+            background: BackgroundRecovery::new(&config.break_glass, Arc::clone(audit_log)),
         },
         shutdown.child_token(),
     );

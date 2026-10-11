@@ -33,6 +33,7 @@ use crate::{
     share_coordinator::{
         coordinator::UNINITIALIZED_START_OFFSET, persister_client::SharePersister,
     },
+    time_util::duration_millis,
 };
 
 /// The share partitions that a heartbeat initializes, and the group epoch
@@ -63,7 +64,7 @@ pub(super) fn prepare_initialize(
 ) -> Option<(ShareGroupStatePartitionMetadataValue, Initialize)> {
     coordinator.share_persister()?;
     let input = coordinator.metadata.snapshot();
-    let retry_ms = crate::time_util::duration_millis(config.initialize_retry_interval);
+    let retry_ms = duration_millis(config.initialize_retry_interval);
     let to_init = partitions_to_initialize(state, &input, now_ms, retry_ms);
     if to_init.is_empty() {
         return None;

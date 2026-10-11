@@ -8,7 +8,11 @@ use krabka_units::{ByteSize, Time, convert::TimeExt as _};
 use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 
-use crate::{broker::Broker, network::client::tune_socket, quota::lookup_ip_quota_with_key};
+use crate::{
+    broker::Broker,
+    network::client::tune_socket,
+    quota::{lookup_ip_quota_with_key, positive_f64_to_u64},
+};
 
 /// KIP-612 quota key for accept-rate throttling; matches the
 /// `connection_creation_rate` config name Kafka's `AlterClientQuotas` uses
@@ -16,7 +20,7 @@ use crate::{broker::Broker, network::client::tune_socket, quota::lookup_ip_quota
 const CONNECTION_CREATION_RATE_QUOTA_KEY: &str = "connection_creation_rate";
 
 fn connection_creation_delay(rate: f64, maximum: Time) -> Time {
-    let delay_micros = crate::quota::positive_f64_to_u64((1.0_f64 / rate) * 1_000_000.0);
+    let delay_micros = positive_f64_to_u64((1.0_f64 / rate) * 1_000_000.0);
     Time::from_micros(i64::try_from(delay_micros).unwrap_or(i64::MAX)).min(maximum)
 }
 
@@ -208,11 +212,14 @@ mod tests {
     use krabka_units::{kibibytes, millis};
 
     use super::*;
-    use crate::{network::test_support::check_socket_tuning, test_support::wait_tasks_started};
+    use crate::{
+        network::test_support::{check_socket_tuning, tcp_pair},
+        test_support::wait_tasks_started,
+    };
 
     #[tokio::test]
     async fn accepted_socket_tuning_sets_nodelay_and_large_buffers() {
-        let (server, client) = crate::network::test_support::tcp_pair().await;
+        let (server, client) = tcp_pair().await;
         check_socket_tuning(&server, |socket| {
             tune_accepted_socket(socket, kibibytes(64), kibibytes(128));
         });

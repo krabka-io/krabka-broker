@@ -8,12 +8,13 @@
 use std::sync::Arc;
 
 use super::{actor::MetadataProvider, reconciler};
+use crate::metadata_source::MetadataSource;
 
 /// `MetadataProvider` backed by `krabka_raft::ControllerHandle::current_image()`.
 #[derive(derive_more::Debug)]
 pub struct ImageMetadataProvider {
     #[debug(skip)]
-    pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
+    pub controller: Arc<dyn MetadataSource>,
 }
 
 impl MetadataProvider for ImageMetadataProvider {

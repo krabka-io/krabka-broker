@@ -140,7 +140,9 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_share_coordinator_ready(&self) {
-        let topic = crate::share_coordinator::bootstrap::TOPIC;
+        use crate::share_coordinator::bootstrap::TOPIC;
+
+        let topic = TOPIC;
         let partitions = self
             .broker
             .config

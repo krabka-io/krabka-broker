@@ -18,7 +18,7 @@ use crate::{
     remote_log_manager::{
         ArchiveMode, RemoteLogManagerConfig, RemoteLogManagerContext, SweepConcurrency, run,
     },
-    remote_reader::{RemoteReader, RemoteReaderLimits},
+    remote_reader::{ReaderPool, RemoteReader, RemoteReaderLimits},
 };
 
 #[derive(Default)]
@@ -162,7 +162,7 @@ pub(super) fn start_remote_storage(
         metadata,
         RemoteReaderLimits {
             index_cache,
-            pool: crate::remote_reader::ReaderPool::new(
+            pool: ReaderPool::new(
                 config.remote_reader_threads,
                 config.remote_reader_max_pending_tasks,
             ),

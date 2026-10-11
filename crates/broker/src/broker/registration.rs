@@ -14,7 +14,7 @@ use krabka_units::convert::TimeExt as _;
 use crate::{
     clean_shutdown::restart_was_clean,
     config::BrokerConfig,
-    config_keys::{BROKER_WITNESS, STRETCH_PREFERRED_LEADER_SITE},
+    config_keys::{BROKER_WITNESS, STRETCH_PREFERRED_LEADER_SITE, WITNESS_TRUE},
     elr::withdraw_elr_membership,
     error::BrokerError,
     host_port::{advertised_host, local_host_name, parse_advertised_host_port, parse_host_port},
@@ -76,9 +76,7 @@ fn self_witness_record(config: &BrokerConfig) -> krabka_metadata::MetadataRecord
     krabka_metadata::MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
         node_id: config.node_id,
         config_name: BROKER_WITNESS.to_string(),
-        config_value: config
-            .is_witness()
-            .then(|| crate::config_keys::WITNESS_TRUE.to_string()),
+        config_value: config.is_witness().then(|| WITNESS_TRUE.to_string()),
     })
 }
 

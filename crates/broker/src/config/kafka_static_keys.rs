@@ -29,6 +29,7 @@ use crate::{
     api_catalog::UnstableApiVersions,
     config_keys::{
         broker_dynamic::{TOPIC_DEFAULT_SYNONYMS, topic_broker_synonyms},
+        group::KAFKA_GROUP_KEYS,
         in_topic_unit,
         kafka_broker::lookup,
     },
@@ -316,7 +317,7 @@ impl KafkaStaticKey {
         lookup(self.name)
             .and_then(|row| row.default)
             .or_else(|| {
-                crate::config_keys::group::KAFKA_GROUP_KEYS
+                KAFKA_GROUP_KEYS
                     .iter()
                     .find(|group_key| group_key.broker_synonym == Some(self.name))
                     .and_then(|group_key| group_key.default)

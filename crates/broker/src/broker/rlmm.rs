@@ -12,6 +12,7 @@ use crate::{
     config::{BrokerConfig, KafkaRlmmConfig, RlmmKind},
     host_port::parse_advertised_host_port,
     metrics::BrokerMetrics,
+    network::client::to_client_creds,
 };
 
 #[derive(Debug, Clone)]
@@ -75,7 +76,7 @@ pub(super) fn kafka_swap_kickoff(config: &BrokerConfig) -> Option<KafkaSwapKicko
             sasl: config
                 .inter_broker_credentials
                 .as_ref()
-                .map(crate::network::client::to_client_creds),
+                .map(to_client_creds),
             sasl_host: protocol.requires_sasl().then(|| advertised_host.clone()),
         })
     });

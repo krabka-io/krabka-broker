@@ -251,7 +251,7 @@ mod tests {
     use super::*;
     use crate::{
         authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
-        test_support::{AllowAclSetup, peer, sasl_principal},
+        test_support::{AllowAclSetup, allow_acl, peer, sasl_principal},
         time_util::now_ms,
     };
 
@@ -273,7 +273,7 @@ mod tests {
     }
 
     fn describe_acl(topic: &str) -> MetadataRecord {
-        MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(AllowAclSetup {
+        MetadataRecord::V1AccessControlEntry(allow_acl(AllowAclSetup {
             resource_name: topic,
             operation: AclOperation::Describe,
             ..Default::default()

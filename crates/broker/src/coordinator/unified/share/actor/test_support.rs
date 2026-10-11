@@ -17,9 +17,14 @@ use tokio::sync::oneshot;
 use super::{ShareGroupActorHandle, ShareGroupActorMessage};
 use crate::{
     coordinator::unified::{
-        GroupCoordinator, actor::MetadataProvider, config::NextGenConfig,
-        offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-        share::config::ShareGroupConfig, test_support::fixed_source,
+        GroupCoordinator,
+        actor::MetadataProvider,
+        config::NextGenConfig,
+        offsets_log::fake::InMemoryOffsetsLog,
+        reconciler::ReconcileInput,
+        share::config::ShareGroupConfig,
+        streams::config::StreamsGroupConfig,
+        test_support::{MemberEpoch, fixed_source},
     },
     test_support::PartitionCount,
 };
@@ -123,7 +128,7 @@ pub(super) fn make_coordinator_with_config(
         share,
         metadata,
         log.clone(),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        StreamsGroupConfig::default(),
     ));
     (coord, log)
 }
@@ -132,7 +137,7 @@ pub(super) fn make_coordinator_with_config(
 pub(super) struct ShareSubscriptionSetup<'a> {
     #[default("m1")]
     pub member_id: &'a str,
-    pub epoch: crate::coordinator::unified::test_support::MemberEpoch,
+    pub epoch: MemberEpoch,
 }
 
 /// Ordinary share heartbeat for the test topic, with every other wire field defaulted.

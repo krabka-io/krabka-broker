@@ -352,12 +352,13 @@ mod tests {
             unified::{ImageMetadataProvider, offsets_log::fake::InMemoryOffsetsLog},
         },
         handlers::{
-            delete_groups::handle as delete_groups_handle, join_group::handle as join_group_handle,
-            leave_group::handle as leave_group_handle, list_groups::handle as list_groups_handle,
+            delete_groups::handle as delete_groups_handle, heartbeat::handle,
+            join_group::handle as join_group_handle, leave_group::handle as leave_group_handle,
+            list_groups::handle as list_groups_handle,
             offset_commit::handle as offset_commit_handle,
             offset_fetch::handle as offset_fetch_handle,
         },
-        metrics::{BrokerMetrics, ShareGroupIdLabel},
+        metrics::{BrokerMetrics, ConsumerGroupLabel, ShareGroupIdLabel},
         test_support::{
             FakeMetadataSource, peer, principal, request_context, start_broker_no_audit_with,
         },
@@ -433,7 +434,7 @@ mod tests {
         let (coordinator, image, metrics) = coordinator_of_the_offsets_partition();
         // The group has to be live for the unload to find it.
         let _actor = coordinator.get_or_create_classic("billing");
-        let label = crate::metrics::ConsumerGroupLabel {
+        let label = ConsumerGroupLabel {
             group_id: "billing".into(),
             topic: "orders".into(),
             partition: 0,
@@ -543,10 +544,7 @@ mod tests {
                     generation_id: 1,
                     ..Default::default()
                 };
-                crate::handlers::heartbeat::handle(broker, request, 4, &ctx)
-                    .await
-                    .unwrap()
-                    .error_code
+                handle(broker, request, 4, &ctx).await.unwrap().error_code
             }
             GroupRpc::LeaveGroup => {
                 let request = LeaveGroupRequest {

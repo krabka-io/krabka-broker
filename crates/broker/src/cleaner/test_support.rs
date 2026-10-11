@@ -11,8 +11,11 @@ use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::TempDir;
 
 use crate::{
-    log_dir::partition_dir, log_dir_status::LogDirRegistry, partition::Partition,
-    partition_registry::PartitionRegistry, test_support::CommittedPartitionSetup,
+    log_dir::partition_dir,
+    log_dir_status::LogDirRegistry,
+    partition::Partition,
+    partition_registry::PartitionRegistry,
+    test_support::{CommittedPartitionSetup, block_log_artifact_paths, committed_partition},
 };
 
 fn keyed_batch(base: i64, key: &[u8], value: &[u8]) -> RecordBatch {
@@ -38,12 +41,7 @@ fn keyed_batch(base: i64, key: &[u8], value: &[u8]) -> RecordBatch {
 /// through `.swap`. Returns the blocked paths so a test can unblock them and
 /// watch the cleaner recover.
 pub(super) fn block_compaction_swap(root: &TempDir, topic: &str) -> Vec<std::path::PathBuf> {
-    crate::test_support::block_log_artifact_paths(
-        root.path(),
-        topic,
-        "log.cleaned",
-        "block the rewrite path",
-    )
+    block_log_artifact_paths(root.path(), topic, "log.cleaned", "block the rewrite path")
 }
 
 pub(super) struct CompactionSetup<'a> {
@@ -92,7 +90,7 @@ pub(super) async fn compactable_partition(
     let mut active = keyed_batch(12, b"active-key", b"active");
     log.append(&mut active).expect("append active batch");
 
-    crate::test_support::committed_partition(
+    committed_partition(
         root.path(),
         log,
         CommittedPartitionSetup {

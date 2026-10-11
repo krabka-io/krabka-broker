@@ -26,6 +26,7 @@ use crate::{
             },
         },
     },
+    error::BrokerError,
     metadata_source::MetadataSource,
 };
 
@@ -263,7 +264,7 @@ pub(super) async fn reconcile_and_flush(
     metadata_source: Option<&std::sync::Arc<dyn MetadataSource>>,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
-) -> Result<(), crate::error::BrokerError> {
+) -> Result<(), BrokerError> {
     let recorder = StreamsRecorder::start(actor, &[]);
     super::reconciliation::reconcile(actor, config, metadata_source);
     let pending = recorder.finish(actor);

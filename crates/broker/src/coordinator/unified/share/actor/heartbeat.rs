@@ -20,6 +20,7 @@ use crate::{
     coordinator::unified::{
         ClientIdentity, GroupCoordinator,
         actor::MetadataProvider,
+        member_helpers::update_present,
         offsets_log::OffsetsLog,
         share::{
             config::ShareGroupConfig,
@@ -143,10 +144,7 @@ fn update_member(
     client.update_metadata(&mut m.client_id, &mut m.client_host);
     // Kafka's `ShareGroupMember.Builder.maybeUpdateRackId`: a heartbeat that
     // carries a rack id replaces the stored one, a rejoin included.
-    crate::coordinator::unified::member_helpers::update_present(
-        &mut m.rack_id,
-        req.rack_id.as_ref(),
-    );
+    update_present(&mut m.rack_id, req.rack_id.as_ref());
     if let Some(ref names) = req.subscribed_topic_names {
         let set: HashSet<String> = names.iter().cloned().collect();
         if set != m.subscribed_topic_names {
@@ -231,7 +229,10 @@ mod tests {
             make_coordinator, metadata_with_topic, seed_initialized, subscribed_group,
             subscribed_request,
         },
-        test_support::{MemberEpoch, assignment_interval_fixture, heartbeat_write_failures},
+        test_support::{
+            MemberEpoch, assert_single_member_limit, assignment_interval_fixture,
+            heartbeat_write_failures,
+        },
     };
 
     /// Kafka's `shareGroupHeartbeat`: only initialized partitions are
@@ -336,7 +337,7 @@ mod tests {
             crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         ));
         let handle = coord.get_or_create_share("g");
-        crate::coordinator::unified::test_support::assert_single_member_limit(
+        assert_single_member_limit(
             &handle,
             |member_id, epoch| {
                 subscribed_request(ShareSubscriptionSetup {

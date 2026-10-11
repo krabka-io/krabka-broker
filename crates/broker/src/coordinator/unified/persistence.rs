@@ -32,7 +32,7 @@ use crate::{
         persistence_next_gen::{
             NextGenKey, encode_key as encode_next_gen_key, parse_key as parse_next_gen_key,
         },
-        share::persistence::{encode_share_key, parse_share_key},
+        share::persistence::{ShareGroupKey, encode_share_key, parse_share_key},
         streams::persistence::{StreamsGroupKey, encode_streams_key, parse_streams_key},
     },
     error::BrokerError,
@@ -168,7 +168,7 @@ pub enum Key {
     /// KIP-848 next-gen consumer group record types, versions 3–8 and 16.
     NextGen(NextGenKey),
     /// KIP-932 share-group record types, versions 10–15.
-    Share(crate::coordinator::unified::share::persistence::ShareGroupKey),
+    Share(ShareGroupKey),
     /// KIP-1071 streams-group record types, versions 17 and 19–23. Kafka 4.3.1
     /// defines no type 18.
     Streams(StreamsGroupKey),

@@ -20,6 +20,7 @@ use crate::{
         wal_object::{WalObjectBuilder, parse_wal_object},
     },
     error::BrokerError,
+    metrics::BrokerMetrics,
     time_util::now_ms,
 };
 
@@ -27,7 +28,7 @@ use crate::{
 pub(crate) async fn flush_once(
     object_store: Arc<dyn ObjectStore>,
     broker_id: i32,
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
     index_log: &DisklessIndexLog,
     cache: Arc<AsyncMutex<WalIndexCache>>,
     partitions: &[FlushPartition],

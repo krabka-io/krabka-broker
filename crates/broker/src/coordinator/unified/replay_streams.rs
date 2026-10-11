@@ -353,8 +353,8 @@ mod tests {
             StreamsMemberWireState,
         },
         test_support::{
-            AssignmentDeletionProtocol, check_replay_cases, replay_fixtures,
-            replay_tombstone_constructor, streams_member,
+            AssignmentDeletionProtocol, AssignmentDeletionSetup, check_replay_cases,
+            replay_fixtures, replay_tombstone_constructor, streams_member,
         },
     };
 
@@ -481,7 +481,7 @@ mod tests {
         let (group, kafka_deletion) = replay_fixtures(
             StreamsGroupSeed::new_group,
             tombstone,
-            crate::coordinator::unified::test_support::AssignmentDeletionSetup {
+            AssignmentDeletionSetup {
                 protocol: AssignmentDeletionProtocol::Streams,
                 ..Default::default()
             },

@@ -421,6 +421,7 @@ mod tests {
                 test_support::{ConsumerMemberSetup, make_coordinator, subscribed_member},
             },
             consumer_state::{ClassicMemberFacade, GroupState},
+            persistence::MAX_STRING_BYTES,
             persistence_next_gen::MemberAssignmentState,
         },
         error::BrokerError,
@@ -566,7 +567,7 @@ mod tests {
                 p.classic_group_metadata.as_mut().unwrap().members[0].client_host = s;
             }),
         ];
-        let limit = crate::coordinator::unified::persistence::MAX_STRING_BYTES;
+        let limit = MAX_STRING_BYTES;
         for (name, set) in fields {
             for (length, encodes) in [(limit, true), (limit + 1, false)] {
                 let mut pending = every_record();

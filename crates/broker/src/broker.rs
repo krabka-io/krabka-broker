@@ -25,6 +25,7 @@ use crate::{
     coordinator::GroupCoordinator,
     diskless::{hot_tail::HotTailCache, read::DisklessReadHandle},
     fetch_session::FetchSessionCache,
+    future_log::FutureLogState,
     handlers::DispatchRegistry,
     heartbeat::controller_state::ControllerLivenessState,
     metadata_source::MetadataSource,
@@ -33,10 +34,12 @@ use crate::{
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
     producer_state::ProducerState,
+    remote_reader::RemoteReader,
     share_coordinator::coordinator::ShareCoordinator,
     share_partition::manager::SharePartitionLeaderManager,
     throttle::ThrottleState,
     txn::coordinator::TxnCoordinator,
+    unclean_recovery::UncleanRecoveryHandle,
     wal::quorum::registry::WalShardRegistry,
 };
 
@@ -103,8 +106,7 @@ pub struct Broker {
     /// The `AlterReplicaLogDirs` handler reads it to make a second
     /// request for the same partition idempotent, or to reject a
     /// conflicting target.
-    pub(crate) future_logs:
-        Arc<DashMap<(String, PartitionIndex), Arc<crate::future_log::FutureLogState>>>,
+    pub(crate) future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
     pub(crate) group_coordinator: Arc<GroupCoordinator>,
     /// The auto topic creation: Kafka's `DefaultAutoTopicCreationManager`.
     pub(crate) auto_topic_creation: Arc<AutoTopicCreation>,
@@ -148,7 +150,7 @@ pub struct Broker {
     /// enqueues recovery jobs onto the Unclean Recovery Manager task.
     /// Used by the `ElectLeaders UNCLEAN` handler (which awaits the
     /// outcome) and the automatic failover path (fire-and-forget).
-    pub(crate) unclean_recovery: crate::unclean_recovery::UncleanRecoveryHandle,
+    pub(crate) unclean_recovery: UncleanRecoveryHandle,
     /// KIP-73 throttle buckets. Updated by the throttle refresh task and
     /// consulted by the Fetch handler and replicator.
     pub throttle_state: Arc<ThrottleState>,
@@ -204,7 +206,7 @@ pub struct Broker {
     /// reader. `Some` when `BrokerConfig::remote_log_storage_dir` is set;
     /// the remote-log-manager copy task and the Fetch/ListOffsets
     /// handlers share the same instance through this handle.
-    pub(crate) remote_reader: Option<Arc<crate::remote_reader::RemoteReader>>,
+    pub(crate) remote_reader: Option<Arc<RemoteReader>>,
     /// Diskless WAL cold-read handle. `Some` once object-store + committed
     /// index-log wiring is active; fetch/list-offset handlers are fail-closed
     /// when this is absent.

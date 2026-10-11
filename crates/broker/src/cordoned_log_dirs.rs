@@ -39,7 +39,7 @@ use krabka_metadata::{
     BrokerRegistrationChangeRecord, BrokerRegistrationRecord, MetadataImage, NodeId,
 };
 
-use crate::metadata_source::MetadataSource;
+use crate::metadata_source::{MetadataSource, watch_image_loop};
 
 /// Kafka's `ServerLogConfigs.CORDONED_LOG_DIRS_CONFIG`.
 pub(crate) const CORDONED_LOG_DIRS: &str = "cordoned.log.dirs";
@@ -307,7 +307,7 @@ pub(crate) fn spawn_watcher(
     cordoned: CordonedLogDirs,
     shutdown: tokio_util::sync::CancellationToken,
 ) {
-    tokio::spawn(crate::metadata_source::watch_image_loop(
+    tokio::spawn(watch_image_loop(
         controller.watch_image(),
         "cordoned log dirs",
         shutdown,

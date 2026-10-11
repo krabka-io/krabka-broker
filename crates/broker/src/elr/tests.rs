@@ -20,14 +20,15 @@ use krabka_protocol::owned::{
 
 use super::{ElrPublisher, TopicElr, state::PartitionElr};
 use crate::{
+    BrokerHandle,
     broker::Broker,
     codes,
     handlers::broker_registration::handle,
     heartbeat::controller_state::BrokerControlState,
     test_support::{
         IsrResponseCheck, LiveIsrSetup, WireBrokerId, accepted_isr_proposal, broker_registration,
-        end_heartbeat_session, finalized_broker_features, peer, principal, request_context,
-        started_controller_broker, topic_partitions_request,
+        elr_topic_records, end_heartbeat_session, finalized_broker_features, peer, principal,
+        request_context, started_controller_broker, topic_partitions_request,
     },
 };
 
@@ -64,7 +65,7 @@ fn seed_records() -> Vec<MetadataRecord> {
 /// equal to the replication factor is what makes the ISR shrink of a single
 /// replica cross the threshold on its own.
 fn seed_records_with_min_isr(min_isr: &str) -> Vec<MetadataRecord> {
-    crate::test_support::elr_topic_records(
+    elr_topic_records(
         partition_record(&[NodeId(1), NodeId(2), NodeId(3)]),
         uuid::Uuid::from_bytes(TOPIC_ID_BYTES),
         min_isr,
@@ -267,7 +268,7 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) {
     assert!(response.error_code == codes::NONE, "{response:?}");
 }
 
-async fn start_orders() -> (crate::BrokerHandle, tempfile::TempDir, Arc<Broker>) {
+async fn start_orders() -> (BrokerHandle, tempfile::TempDir, Arc<Broker>) {
     let (handle, dir, broker) = started_controller_broker().await;
     broker
         .controller
@@ -335,9 +336,7 @@ async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
     handle.shutdown().await;
 }
 
-async fn seed_returning_broker(
-    min_isr: &str,
-) -> (crate::BrokerHandle, Arc<Broker>, tempfile::TempDir) {
+async fn seed_returning_broker(min_isr: &str) -> (BrokerHandle, Arc<Broker>, tempfile::TempDir) {
     let (handle, dir, broker) = started_controller_broker().await;
     let mut seed = seed_records_with_min_isr(min_isr);
     seed.push(registration_record(1));

@@ -25,7 +25,11 @@ use crate::{
     replica_state::ReplicaState,
     wal::{
         SharedWal,
-        quorum::{QuorumWalStore, engine::WalShardEngine, registry::WalShardRegistry},
+        quorum::{
+            QuorumWalStore,
+            engine::WalShardEngine,
+            registry::{ShardId, WalShardRegistry},
+        },
     },
 };
 
@@ -67,7 +71,7 @@ fn partition_wal(
         replica_count,
     )?;
     registry.insert(
-        crate::wal::quorum::registry::ShardId {
+        ShardId {
             topic_id,
             partition: partition_id,
         },

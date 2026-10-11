@@ -40,7 +40,9 @@ use crate::{
         PlainCredentials, ReplicationRuntimeConfig, RlmmKind, StaticConfigOrigins,
         feature_flags::default_feature_flags, shared_epoch_ms,
     },
-    coordinator::unified::{config::NextGenConfig, streams::config::StreamsGroupConfig},
+    coordinator::unified::{
+        config::NextGenConfig, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
+    },
     network::auth::SslPrincipalMapper,
     operator_keys::OperatorKeys,
     replica_selector::ReplicaSelectorKind,
@@ -243,9 +245,7 @@ impl Default for BrokerConfig {
             txn_id_expiration_cleanup_interval: DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL,
             static_config_origins: StaticConfigOrigins::default(),
             next_gen_consumer_group: Box::new(NextGenConfig::default()),
-            share_group: Box::new(
-                crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-            ),
+            share_group: Box::new(ShareGroupConfig::default()),
             streams_group: Box::new(StreamsGroupConfig::default()),
             share_coordinator: Box::new(ShareCoordinatorConfig::default()),
             leader_imbalance_check_interval: DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL,

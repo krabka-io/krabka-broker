@@ -14,12 +14,14 @@ use crate::{
     coordinator::{
         GroupCoordinator,
         persistence::{GroupMetadataValue, parse_key},
-        test_support::{default_coordinator, offset_record},
+        test_support::{
+            OffsetRecordSetup, coordinator_with_config, default_coordinator, offset_record,
+        },
         unified::{
             ImageMetadataProvider,
             actor::test_support::empty_metadata,
             config::NextGenConfig,
-            offsets_log::{OffsetsLog, fake::InMemoryOffsetsLog},
+            offsets_log::{OffsetsLog, ProductionOffsetsLog, fake::InMemoryOffsetsLog},
         },
     },
     error::BrokerError,
@@ -50,13 +52,11 @@ pub(super) fn test_coordinator(
     controller: &Arc<dyn MetadataSource>,
     partitions: &Arc<PartitionRegistry>,
 ) -> Arc<GroupCoordinator> {
-    let offsets_log: Arc<dyn OffsetsLog> = Arc::new(
-        crate::coordinator::unified::offsets_log::ProductionOffsetsLog::new(
-            partitions.clone(),
-            controller.clone(),
-            krabka_raft::NodeId(1),
-        ),
-    );
+    let offsets_log: Arc<dyn OffsetsLog> = Arc::new(ProductionOffsetsLog::new(
+        partitions.clone(),
+        controller.clone(),
+        krabka_raft::NodeId(1),
+    ));
     default_coordinator(
         Arc::new(ImageMetadataProvider {
             controller: controller.clone(),
@@ -81,7 +81,7 @@ pub(super) fn bare_coordinator() -> Arc<GroupCoordinator> {
 pub(super) fn bare_coordinator_with_mailbox(
     actor_mailbox_capacity: usize,
 ) -> Arc<GroupCoordinator> {
-    crate::coordinator::test_support::coordinator_with_config(
+    coordinator_with_config(
         NextGenConfig {
             actor_mailbox_capacity,
             ..NextGenConfig::default()
@@ -242,7 +242,7 @@ pub(super) fn commit_record_for_group(
     partition: i32,
     offset: i64,
 ) -> krabka_protocol::records::Record {
-    offset_record(crate::coordinator::test_support::OffsetRecordSetup {
+    offset_record(OffsetRecordSetup {
         group,
         partition: krabka_ids::PartitionIndex(partition),
         offset: krabka_log::Offset(offset),

@@ -60,7 +60,7 @@ mod tests {
     use super::*;
     use crate::{
         producer_state::Decision,
-        test_support::{RepeatedRecordsSetup, repeated_records_batch},
+        test_support::{RecordCount, RepeatedRecordsSetup, repeated_records_batch},
         txn::marker::{MarkerType, build_marker_batch},
     };
 
@@ -73,7 +73,7 @@ mod tests {
             producer_epoch: 3,
             base_sequence,
             ..repeated_records_batch(RepeatedRecordsSetup {
-                count: crate::test_support::RecordCount(count),
+                count: RecordCount(count),
                 ..Default::default()
             })
         }

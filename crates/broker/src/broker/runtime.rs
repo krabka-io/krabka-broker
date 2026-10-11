@@ -51,7 +51,7 @@ use crate::{
     time_util::now_ms,
     tls_reload::run as run_tls_reload,
     txn::{
-        coordinator::TxnCoordinator, expiration::run as run_txn_expiration,
+        completion::run, coordinator::TxnCoordinator, expiration::run as run_txn_expiration,
         id_expiration::run as run_txn_id_expiration,
     },
 };
@@ -169,7 +169,7 @@ fn start_runtime_watchers(
         metrics.clone(),
         shutdown.child_token(),
     );
-    tokio::spawn(crate::txn::completion::run(
+    tokio::spawn(run(
         Arc::clone(txn_coordinator),
         Arc::clone(controller),
         shutdown.child_token(),

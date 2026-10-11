@@ -13,7 +13,7 @@ use krabka_protocol::primitives::uuid::Uuid;
 
 use super::super::INITIAL_GROUP_EPOCH;
 use crate::{
-    codes::FENCED_MEMBER_EPOCH,
+    codes::{FENCED_MEMBER_EPOCH, UNKNOWN_MEMBER_ID},
     coordinator::unified::{actor::MetadataProvider, member_helpers::new_target_assignment},
 };
 
@@ -386,7 +386,7 @@ impl ShareGroupState {
     /// Returns the wire error code of a refused heartbeat.
     pub fn validate_member_epoch(&self, member_id: &str, requested_epoch: i32) -> Result<i32, i16> {
         let Some(member) = self.members.get(member_id) else {
-            return Err(crate::codes::UNKNOWN_MEMBER_ID);
+            return Err(UNKNOWN_MEMBER_ID);
         };
         if requested_epoch == 0
             || requested_epoch == member.member_epoch

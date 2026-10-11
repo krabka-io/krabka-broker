@@ -53,9 +53,9 @@ use super::{
 use crate::{
     client_metrics::config::{KEY_INTERVAL_MS, KEY_MATCH, KEY_METRICS},
     coordinator::unified::streams::config::{
-        KEY_ASSIGNOR_NAME, KEY_HEARTBEAT_INTERVAL_MS, KEY_NUM_STANDBY_REPLICAS,
-        KEY_NUM_WARMUP_REPLICAS, KEY_RACK_AWARE_ASSIGNMENT_TAGS, KEY_SESSION_TIMEOUT_MS,
-        KEY_SHARE_AUTO_OFFSET_RESET, KEY_TASK_OFFSET_INTERVAL_MS,
+        KEY_ACCEPTABLE_RECOVERY_LAG, KEY_ASSIGNOR_NAME, KEY_HEARTBEAT_INTERVAL_MS,
+        KEY_NUM_STANDBY_REPLICAS, KEY_NUM_WARMUP_REPLICAS, KEY_RACK_AWARE_ASSIGNMENT_TAGS,
+        KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET, KEY_TASK_OFFSET_INTERVAL_MS,
     },
     cordoned_log_dirs::{CORDONED_LOG_DIRS, CORDONED_LOG_DIRS_DOC},
     throttle::{
@@ -1137,7 +1137,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         type_note: Some("records"),
         kip: Some("KIP-1071"),
         ..key(
-            crate::coordinator::unified::streams::config::KEY_ACCEPTABLE_RECOVERY_LAG,
+            KEY_ACCEPTABLE_RECOVERY_LAG,
             ConfigScope::Group,
             ConfigType::Long,
             None,

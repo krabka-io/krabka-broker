@@ -114,11 +114,12 @@ mod tests {
     use krabka_units::mebibytes;
 
     use super::*;
-    use crate::test_support::{StandalonePartitionSetup, open_partition as fixture_partition};
+    use crate::{
+        partition::Partition,
+        test_support::{StandalonePartitionSetup, open_partition as fixture_partition},
+    };
 
-    fn audit_partition(
-        path: &std::path::Path,
-    ) -> (Arc<crate::partition::Partition>, Arc<PartitionRegistry>) {
+    fn audit_partition(path: &std::path::Path) -> (Arc<Partition>, Arc<PartitionRegistry>) {
         let partitions = Arc::new(PartitionRegistry::new());
         let partition = fixture_partition(
             path,

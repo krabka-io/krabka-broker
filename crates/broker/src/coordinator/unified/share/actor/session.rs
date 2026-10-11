@@ -74,7 +74,7 @@ mod tests {
                 persistence::ShareGroupMetadataValue,
                 state::ShareMemberState,
             },
-            test_support::check_two_members_expired,
+            test_support::{check_two_members_expired, expired_session_last_seen},
         },
         test_support::PartitionCount,
     };
@@ -98,7 +98,7 @@ mod tests {
         let mut state = ShareGroupState::new("g");
         for member_id in ["m1", "m2"] {
             let mut m = ShareMemberState::joining(member_id, "c", "h", ["t".to_owned()].into());
-            m.last_seen = crate::coordinator::unified::test_support::expired_session_last_seen();
+            m.last_seen = expired_session_last_seen();
             state.add_or_update_member(m);
         }
         state.group_epoch = 2;

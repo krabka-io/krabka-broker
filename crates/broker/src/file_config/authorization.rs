@@ -127,6 +127,7 @@ mod tests {
     use super::*;
     use crate::{
         authorizer::opa::OpaAuthorizer,
+        config::BrokerConfig,
         file_config::test_support::configured_unwrap_parse,
         test_support::{peer, sasl_principal},
     };
@@ -356,7 +357,7 @@ expire_after_ms = 60000
                 opa.allow_on_error,
                 opa.maximum_cache_size,
                 Time::from_millis(opa.expire_after_ms),
-                crate::config::BrokerConfig::default().opa_http_timeout,
+                BrokerConfig::default().opa_http_timeout,
             )
             .unwrap();
             let img = MetadataImage::new(uuid::Uuid::nil());

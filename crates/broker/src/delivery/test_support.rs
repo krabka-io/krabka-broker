@@ -24,6 +24,7 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::{
     delivery::{DeliveryHandles, PartitionDelivery, metrics::DeliveryMetrics},
+    log_dir::partition_dir,
     partition::{
         Partition, WriterMessage, empty_marker_materialization, initial_replication_target,
     },
@@ -160,7 +161,7 @@ pub(crate) fn partition_with_batches(
         batches,
         leader,
     } = setup;
-    let partition_dir = crate::log_dir::partition_dir(dir.path(), topic, 0);
+    let partition_dir = partition_dir(dir.path(), topic, 0);
     std::fs::create_dir_all(&partition_dir).expect("create the partition directory");
     let mut log = Log::open(&partition_dir, config).expect("open the log");
     for mut batch in batches {

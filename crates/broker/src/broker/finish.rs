@@ -29,7 +29,7 @@ use crate::{
     handlers::registry::build_registry,
     log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource,
-    network::dispatch::RequestByteBudget,
+    network::{client::InterBrokerClient, dispatch::RequestByteBudget},
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
     share_coordinator::coordinator::ShareCoordinator,
@@ -66,7 +66,7 @@ pub(super) async fn finish_broker_startup(
     transport: (
         Option<Arc<krabka_security::DynamicServerConfig>>,
         bool,
-        Arc<crate::network::client::InterBrokerClient>,
+        Arc<InterBrokerClient>,
     ),
     runtime: BrokerRuntimeStartup,
     storage: BrokerStorageStartup,

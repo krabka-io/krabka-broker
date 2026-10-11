@@ -13,7 +13,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::config::{
-    DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_TOPIC,
+    DEFAULT_AUDIT_CHECKPOINT_EVERY, DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_DIR,
+    DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_TOPIC,
 };
 
 /// `[audit]` section of `broker.toml` (`FedRAMP` 20x MLA).
@@ -84,7 +85,7 @@ impl Default for FileAuditSpoolConfig {
 }
 
 fn default_spool_dir() -> String {
-    crate::config::DEFAULT_AUDIT_SPOOL_DIR.to_string()
+    DEFAULT_AUDIT_SPOOL_DIR.to_string()
 }
 
 fn default_spool_max_bytes() -> u64 {
@@ -132,9 +133,7 @@ fn default_checkpoint_every_n() -> u64 {
 }
 
 fn default_checkpoint_every_secs() -> u64 {
-    crate::config::DEFAULT_AUDIT_CHECKPOINT_EVERY
-        .secs_i64()
-        .cast_unsigned()
+    DEFAULT_AUDIT_CHECKPOINT_EVERY.secs_i64().cast_unsigned()
 }
 
 fn default_audit_enabled() -> bool {

@@ -27,6 +27,7 @@ use crate::{
     partition_registry::PartitionRegistry,
     producer_state::ProducerState,
     reassignment::run as run_reassignment,
+    task_util::run_every,
     time_util::now_ms,
 };
 
@@ -121,7 +122,7 @@ fn spawn_producer_expiry(
         let period = scan_interval.to_std();
         let tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         let (producer_state, partitions) = (&producer_state, &partitions);
-        crate::task_util::run_every(tick, &shutdown, move || async move {
+        run_every(tick, &shutdown, move || async move {
             let now_ms = now_ms();
             producer_state.expire_older_than(now_ms, expiration).await;
             expire_log_producers(partitions, now_ms, expiration).await;

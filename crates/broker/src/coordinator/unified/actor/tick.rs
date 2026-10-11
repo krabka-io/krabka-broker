@@ -195,7 +195,7 @@ mod tests {
             persistence_next_gen::GroupMetadataValue,
             reconciler::ReconcileInput,
             regex_resolver::no_topic_regex_resolver,
-            test_support::check_two_members_expired,
+            test_support::{check_two_members_expired, expired_session_last_seen},
         },
     };
 
@@ -246,7 +246,7 @@ mod tests {
                 now: Instant::now(),
                 ..Default::default()
             });
-            m.last_seen = crate::coordinator::unified::test_support::expired_session_last_seen();
+            m.last_seen = expired_session_last_seen();
             state.add_or_update_member(m);
         }
         state.group_epoch = 2;

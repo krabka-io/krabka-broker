@@ -13,6 +13,7 @@ use crate::{
     codes,
     coordinator::unified::{GroupCoordinator, share::state::ShareGroupState},
     error::BrokerError,
+    share_coordinator::persister_client::SharePersister,
 };
 
 /// One partition of an `AlterShareGroupOffsets` request whose topic and
@@ -89,7 +90,7 @@ struct MetadataSnapshot {
 fn empty_group_persister<'a>(
     state: &ShareGroupState,
     coordinator: &'a GroupCoordinator,
-) -> Result<&'a std::sync::Arc<crate::share_coordinator::persister_client::SharePersister>, i16> {
+) -> Result<&'a std::sync::Arc<SharePersister>, i16> {
     if !state.members.is_empty() {
         return Err(codes::NON_EMPTY_GROUP);
     }

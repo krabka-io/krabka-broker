@@ -178,7 +178,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        auto_join::test_support::{ResponseHeaderMode, ResponseWireSetup, voter_update_params},
+        auto_join::test_support::{
+            ResponseHeaderMode, ResponseWireSetup, params, voter_update_params,
+        },
         test_support::FakeMetadataSource,
     };
 
@@ -345,7 +347,7 @@ mod tests {
         let params = AutoJoinParams {
             node_id: NodeId(u64::MAX),
             directory_id: uuid::Uuid::from_u128(1),
-            ..crate::auto_join::test_support::params(source, vec![])
+            ..params(source, vec![])
         };
 
         tokio::time::timeout(Duration::from_millis(100), run_voter_updates(params))
