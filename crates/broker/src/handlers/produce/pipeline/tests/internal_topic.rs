@@ -17,10 +17,11 @@ use krabka_protocol::{
 
 use super::super::{PartitionInput, process_partition};
 use crate::{
+    codes::INVALID_TOPIC_EXCEPTION,
     config::BrokerConfig,
     handlers::produce::{
         framing::PartitionPayload,
-        test_support::{encode_batch, image_with_topic},
+        test_support::{encode_batch, image_with_topic, pipeline_input},
     },
     internal_topics::{is_internal_topic, produce_internal_topics_allowed},
 };
@@ -138,7 +139,7 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
             "my-app",
             PartitionProduceResponse {
                 index: 0,
-                error_code: crate::codes::INVALID_TOPIC_EXCEPTION,
+                error_code: INVALID_TOPIC_EXCEPTION,
                 base_offset: -1,
                 ..Default::default()
             },
@@ -164,7 +165,7 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
                     "__consumer_offsets",
                     client_id,
                 ),
-                ..crate::handlers::produce::test_support::pipeline_input(
+                ..pipeline_input(
                     "__consumer_offsets",
                     PartitionPayload::Slice(encode_batch(&seed_batch())),
                 )

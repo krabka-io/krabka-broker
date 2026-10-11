@@ -23,7 +23,7 @@ use krabka_protocol::{
 use super::handle;
 use crate::{
     codes,
-    handlers::test_support::CreateTopicSetup,
+    handlers::test_support::{CreateTopicSetup, TopicPartitionCount, configured_topic_request},
     test_support::{
         decode_response, dispatch_context, encode_request, peer, principal,
         start_broker_no_audit_with,
@@ -52,9 +52,9 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
         principal("client"),
         client_id = "one-check"
     );
-    let create = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+    let create = configured_topic_request(CreateTopicSetup {
         topic: TOPIC,
-        num_partitions: crate::handlers::test_support::TopicPartitionCount(PARTITIONS),
+        num_partitions: TopicPartitionCount(PARTITIONS),
         ..Default::default()
     });
     dispatch_context(

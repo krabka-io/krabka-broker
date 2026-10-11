@@ -36,7 +36,17 @@ use krabka_verified::{
     renew_token_expiry,
 };
 
-use crate::{handlers::ErrorCodeResponse as _, network::auth::ConnectionAuth, time_util::now_ms};
+use crate::{
+    codes::{
+        DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_NOT_FOUND,
+        DELEGATION_TOKEN_OWNER_MISMATCH, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, INVALID_REQUEST,
+    },
+    features::METADATA_VERSION,
+    handlers::ErrorCodeResponse as _,
+    metadata_source::MetadataSource,
+    network::auth::ConnectionAuth,
+    time_util::now_ms,
+};
 
 /// Kafka's `DelegationTokenManager.ERROR_TIMESTAMP`, the expiry the broker
 /// answers with when it refuses the request before forwarding it.
@@ -53,7 +63,7 @@ pub(crate) async fn handle(
     auth: &ConnectionAuth,
     secret_key: Option<&SecretBytes>,
     default_renew_period_ms: i64,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
 ) -> RenewDelegationTokenResponse {
     let (principal, token) = match admit_token_request(
         TokenApi::Renew,
@@ -80,13 +90,13 @@ pub(crate) async fn handle(
         token.max_timestamp_ms,
     );
     if decision == TokenRenewDecision::Expired {
-        return RenewDelegationTokenResponse::error(crate::codes::DELEGATION_TOKEN_EXPIRED);
+        return RenewDelegationTokenResponse::error(DELEGATION_TOKEN_EXPIRED);
     }
     if token.owner != caller && !token.renewers.contains(&caller) {
-        return RenewDelegationTokenResponse::error(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
+        return RenewDelegationTokenResponse::error(DELEGATION_TOKEN_OWNER_MISMATCH);
     }
     let TokenRenewDecision::Renew(new_expiry) = decision else {
-        return RenewDelegationTokenResponse::error(crate::codes::INVALID_REQUEST);
+        return RenewDelegationTokenResponse::error(INVALID_REQUEST);
     };
 
     let expected = token.to_record();
@@ -102,7 +112,7 @@ pub(crate) async fn handle(
         .await
     {
         tracing::warn!(error = %e, "RenewDelegationToken: submit_change failed");
-        return RenewDelegationTokenResponse::error(crate::codes::INVALID_REQUEST);
+        return RenewDelegationTokenResponse::error(INVALID_REQUEST);
     }
 
     RenewDelegationTokenResponse {
@@ -124,30 +134,24 @@ pub(crate) fn admit_token_request<'a>(
     auth: &'a ConnectionAuth,
     secret_key: Option<&SecretBytes>,
     hmac: &[u8],
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
 ) -> Result<(&'a Principal, DelegationToken), (i16, i64)> {
     let refuse = |code| Err((code, 0));
     if auth.token_api_admission(api) == TokenApiAdmission::Reject {
-        return Err((
-            crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-            ERROR_TIMESTAMP,
-        ));
+        return Err((DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, ERROR_TIMESTAMP));
     }
     let ConnectionAuth::Authenticated { principal, .. } = auth else {
-        return Err((
-            crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-            ERROR_TIMESTAMP,
-        ));
+        return Err((DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, ERROR_TIMESTAMP));
     };
     let Some(secret_key) = secret_key else {
-        return refuse(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
+        return refuse(DELEGATION_TOKEN_AUTH_DISABLED);
     };
 
     let image = controller.current_image();
     // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
     if crate::features::require_feature(
         &image,
-        crate::features::METADATA_VERSION,
+        METADATA_VERSION,
         krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
     )
     .is_err()
@@ -158,7 +162,7 @@ pub(crate) fn admit_token_request<'a>(
         .delegation_token_by_hmac(secret_key.as_bytes(), hmac)
         .cloned()
     else {
-        return refuse(crate::codes::DELEGATION_TOKEN_NOT_FOUND);
+        return refuse(DELEGATION_TOKEN_NOT_FOUND);
     };
     Ok((principal, token))
 }
@@ -171,12 +175,13 @@ mod tests {
 
     use super::*;
     use crate::{
+        codes::DELEGATION_TOKEN_EXPIRED,
         handlers::delegation_token_test_support::{
             DAY_MS, ExpiryExpectation, MutationSeedSetup, OwnershipRefusalSetup, TokenExpirySetup,
             TokenMutationIndex, TokenMutationRefusalSetup, TokenPeriodMillis, authed,
             in_mutation_window, mutation_credential_refusals, ownership_refusal, test_controller,
         },
-        test_support::UnixMillis,
+        test_support::{KafkaErrorCode, UnixMillis},
     };
 
     fn stored_expiry(controller: &ControllerHandle, token_id: &str) -> i64 {
@@ -198,13 +203,13 @@ mod tests {
                 name: "expired token, foreign caller",
                 authentication: authed("eve"),
                 hmac: expired.0.clone(),
-                error: crate::test_support::KafkaErrorCode(crate::codes::DELEGATION_TOKEN_EXPIRED),
+                error: KafkaErrorCode(DELEGATION_TOKEN_EXPIRED),
                 ..Default::default()
             },
             TokenMutationRefusalSetup {
                 name: "expired token, owner",
                 hmac: expired.0.clone(),
-                error: crate::test_support::KafkaErrorCode(crate::codes::DELEGATION_TOKEN_EXPIRED),
+                error: KafkaErrorCode(DELEGATION_TOKEN_EXPIRED),
                 ..Default::default()
             },
             ownership_refusal(&live.0, OwnershipRefusalSetup::default()),

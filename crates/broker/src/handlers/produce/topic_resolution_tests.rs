@@ -24,6 +24,7 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
+    handlers::test_support::{ClientTopicSetup, check_cases, check_denied_topic_cases},
     test_support::{
         DenyAll, decode_response, encode_request, peer, principal,
         start_broker_with_authorizer_no_audit as start,
@@ -81,7 +82,7 @@ fn appended_partition(version: i16) -> PartitionProduceResponse {
 async fn create_topic(broker: &BrokerHandle, name: &str) {
     crate::handlers::test_support::create_topic(
         broker,
-        crate::handlers::test_support::ClientTopicSetup {
+        ClientTopicSetup {
             client_id: "produce-resolution-test",
             name,
             ..Default::default()
@@ -180,15 +181,12 @@ async fn topic_row_error_follows_version_and_topic_reference() {
     ];
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
 
-    crate::handlers::test_support::check_cases(
-        cases.into_iter().enumerate(),
-        async |(row, case)| {
-            // Each row retains its own topic so an appended row starts at offset 0.
-            let known = format!("resolution-{row}");
-            create_topic(&broker, &known).await;
-            drive(&broker, Some(&known), case).await
-        },
-    )
+    check_cases(cases.into_iter().enumerate(), async |(row, case)| {
+        // Each row retains its own topic so an appended row starts at offset 0.
+        let known = format!("resolution-{row}");
+        create_topic(&broker, &known).await;
+        drive(&broker, Some(&known), case).await
+    })
     .await;
     broker.shutdown().await;
 }
@@ -199,10 +197,8 @@ async fn topic_row_error_follows_version_and_topic_reference() {
 #[tokio::test]
 async fn unresolved_id_answers_before_topic_authorization() {
     let cases = unauthorized_topic_cases(12, 13);
-    crate::handlers::test_support::check_denied_topic_cases(
-        cases,
-        start(Arc::new(DenyAll)),
-        async |broker, case| drive(broker, None, case).await,
-    )
+    check_denied_topic_cases(cases, start(Arc::new(DenyAll)), async |broker, case| {
+        drive(broker, None, case).await
+    })
     .await;
 }

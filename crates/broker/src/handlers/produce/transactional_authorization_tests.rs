@@ -30,9 +30,10 @@ use super::{FIRST_TOPIC_ID_VERSION, handle};
 use crate::{
     broker::Broker,
     codes,
-    handlers::test_support::CreateTopicSetup,
+    handlers::test_support::{CreateTopicSetup, configured_topic_request},
     test_support::{
         KafkaErrorCode, decode_response, dispatch_context, encode_request, peer, principal,
+        start_transaction_grant_broker,
     },
 };
 
@@ -74,7 +75,7 @@ const TXN_ID: &str = "t1";
 const ADMIN_GRANTS: &str = "Cluster:Create";
 
 async fn boot() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = crate::test_support::start_transaction_grant_broker().await;
+    let (handle, dir) = start_transaction_grant_broker().await;
     handle.wait_until_controller_leader().await;
     handle.wait_until_brokers_registered(1).await;
     let broker = handle.broker_arc_for_test();
@@ -92,7 +93,7 @@ async fn create_topic(broker: &Broker, name: &str) {
         principal(ADMIN_GRANTS),
         client_id = "produce-txn-authz-admin"
     );
-    let request = crate::handlers::test_support::configured_topic_request(CreateTopicSetup {
+    let request = configured_topic_request(CreateTopicSetup {
         topic: name,
         ..Default::default()
     });

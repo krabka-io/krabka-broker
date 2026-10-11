@@ -40,6 +40,10 @@ use crate::{
     config_keys::{BrokerLogDefaults, resolve_max_message_bytes, resolve_schema_validation},
     error::BrokerError,
     freeze::resolve::resolve_freeze_mutation,
+    handlers::{ApiKeyCode, RequestContext},
+    internal_topics::{is_internal_topic, produce_internal_topics_allowed},
+    metrics::RequestPhases,
+    partition::Partition,
 };
 
 mod append;
@@ -115,7 +119,7 @@ struct AcksRequest<'a> {
 fn invalid_required_acks_response(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     request: AcksRequest<'_>,
 ) -> Option<Result<Bytes, BrokerError>> {
     let AcksRequest {
@@ -144,8 +148,7 @@ fn invalid_required_acks_response(
 /// This handler's own wire api key, for the `api_key` label the request-phase
 /// and throttle histograms carry. The dispatcher labels the total latency from
 /// the frame it parsed; the handler labels its phases from the same number.
-pub(super) const PRODUCE_API_KEY: crate::handlers::ApiKeyCode =
-    krabka_protocol::api_key::ApiKey::Produce as i16;
+pub(super) const PRODUCE_API_KEY: ApiKeyCode = krabka_protocol::api_key::ApiKey::Produce as i16;
 
 /// The first `Produce` version that names each topic by `topic_id` only
 /// (KIP-516). The request schema carries `name` at versions 0-12 and
@@ -179,7 +182,7 @@ pub(crate) async fn handle(
     version: i16,
     req_bytes: &[u8],
     body_bytes: Bytes,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     // KIP-124 request_percentage meters server-side handler time; capture the
     // start so the request throttle can be combined with the byte-rate throttle
@@ -190,7 +193,7 @@ pub(crate) async fn handle(
     // partition loop below: `dispatch_prepared` charges each writer round-trip
     // to it. The remote phase is a single interval, because the `acks=all`
     // high-watermark waits of every appended partition run as one wait.
-    let phases = crate::metrics::RequestPhases::default();
+    let phases = RequestPhases::default();
     let record_decompression_policy = broker.config.record_decompression_policy()?;
     let partitions = broker.partitions.clone();
     let controller = broker.controller.clone();
@@ -448,11 +451,8 @@ pub(crate) async fn handle(
         // take to `__consumer_offsets`, `__transaction_state` or
         // `__share_group_state`, and the one Kafka refuses unless `client_id`
         // is its own admin tooling's `"__admin_client"`.
-        let internal_topic_denied =
-            crate::internal_topics::is_internal_topic(&broker.config, &topic_name)
-                && !crate::internal_topics::produce_internal_topics_allowed(
-                    ctx.client_id.unwrap_or_default(),
-                );
+        let internal_topic_denied = is_internal_topic(&broker.config, &topic_name)
+            && !produce_internal_topics_allowed(ctx.client_id.unwrap_or_default());
 
         for part_data in topic.partition_data {
             let idx = part_data.index;
@@ -675,7 +675,7 @@ async fn await_durability(
     awaiting: Vec<PendingPartition>,
     topic_results: &mut [TopicProduceResponse],
     timeout: Duration,
-    phases: &crate::metrics::RequestPhases,
+    phases: &RequestPhases,
 ) {
     if awaiting.is_empty() {
         return;
@@ -686,7 +686,7 @@ async fn await_durability(
         broker.config.node_id,
         broker.config.default_min_insync_replicas,
     );
-    let current_min_isr = |partition: &crate::partition::Partition, admitted_topic_id| {
+    let current_min_isr = |partition: &Partition, admitted_topic_id| {
         current_effective_min_isr(
             &broker.controller.current_image(),
             (&partition.topic, partition.index.0),

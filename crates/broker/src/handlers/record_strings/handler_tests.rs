@@ -41,7 +41,11 @@ use crate::{
     broker::{Broker, BrokerHandle},
     codes,
     error::BrokerError,
-    test_support::{decode_response, encode_request, peer},
+    features::STREAMS_VERSION,
+    handlers::RequestContext,
+    test_support::{
+        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+    },
 };
 
 /// The longest string a coordinator record carries.
@@ -121,7 +125,7 @@ struct Env {
 
 impl Env {
     async fn start() -> Self {
-        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
+        let (handle, dir) = start_broker_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
             cfg.streams_group.enable = true;
             cfg.classic_group_initial_rebalance_delay = krabka_units::secs(0);
@@ -132,7 +136,7 @@ impl Env {
         for feature in [
             krabka_metadata::group_version::GROUP_VERSION_FEATURE,
             krabka_metadata::metadata_version::SHARE_VERSION_FEATURE,
-            crate::features::STREAMS_VERSION,
+            STREAMS_VERSION,
         ] {
             finalize(&broker, feature).await;
         }
@@ -141,13 +145,13 @@ impl Env {
             handle,
             broker,
             _dir: dir,
-            principal: crate::test_support::principal("ANONYMOUS"),
+            principal: principal("ANONYMOUS"),
             peer: peer(),
         }
     }
 
-    fn ctx<'a>(&'a self, client_id: &'a str) -> crate::handlers::RequestContext<'a> {
-        crate::test_support::request_context(&self.principal, &self.peer, client_id)
+    fn ctx<'a>(&'a self, client_id: &'a str) -> RequestContext<'a> {
+        request_context(&self.principal, &self.peer, client_id)
     }
 
     async fn stop(self) {

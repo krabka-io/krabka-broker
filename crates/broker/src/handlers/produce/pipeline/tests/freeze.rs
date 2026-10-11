@@ -18,18 +18,23 @@ use uuid::Uuid;
 
 use super::super::{PartitionInput, process_partition};
 use crate::{
+    broker::spawn_partition,
+    codes::NONE,
     freeze::resolve::{FreezeVerdict, resolve_freeze_mutation, resolve_topic_freeze},
-    handlers::produce::{
-        framing::PartitionPayload,
-        test_support::{encode_batch, image_with_topic},
+    handlers::{
+        produce::{
+            framing::PartitionPayload,
+            test_support::{encode_batch, image_with_topic},
+        },
+        test_support::single_replica_partition,
     },
+    metrics::TopicLabel,
+    test_support::{FreezeSetup, topic_freeze_record},
 };
 
 // Put one live entry in the registry for the resolve below to find.
-fn frozen(image: &mut MetadataImage, setup: crate::test_support::FreezeSetup<'_>) {
-    image.apply(&MetadataRecord::V1TopicFreeze(
-        crate::test_support::topic_freeze_record(setup),
-    ));
+fn frozen(image: &mut MetadataImage, setup: FreezeSetup<'_>) {
+    image.apply(&MetadataRecord::V1TopicFreeze(topic_freeze_record(setup)));
 }
 
 fn verdict(scope: &str, pattern_type: PatternType, reason: &str) -> FreezeVerdict {
@@ -49,22 +54,20 @@ fn add_topic(image: &mut MetadataImage, topic: &str, topic_id: Uuid) {
         partitions: 1,
         replication_factor: 1,
     }));
-    image.apply(&MetadataRecord::V1Partition(
-        crate::handlers::test_support::single_replica_partition(
-            topic,
-            krabka_ids::PartitionIndex(0),
-            krabka_audit::NodeId(1),
-        ),
-    ));
+    image.apply(&MetadataRecord::V1Partition(single_replica_partition(
+        topic,
+        krabka_ids::PartitionIndex(0),
+        krabka_audit::NodeId(1),
+    )));
 }
 
 #[test]
 fn the_produce_path_resolves_one_freeze_per_topic() {
     let mut image = image_with_topic("orders", &[1]);
-    frozen(&mut image, crate::test_support::FreezeSetup::default());
+    frozen(&mut image, FreezeSetup::default());
     frozen(
         &mut image,
-        crate::test_support::FreezeSetup {
+        FreezeSetup {
             scope: "tenant-a.",
             pattern_type: PatternType::Prefixed,
             reason: "offboarding",
@@ -122,7 +125,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
     add_topic(&mut image, "control", Uuid::from_u128(2));
     frozen(
         &mut image,
-        crate::test_support::FreezeSetup {
+        FreezeSetup {
             scope: "frozen",
             ..Default::default()
         },
@@ -137,7 +140,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
         std::fs::create_dir_all(&part_dir).expect("partition directory");
         let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default())
             .expect("open the log");
-        let part = crate::broker::spawn_partition(
+        let part = spawn_partition(
             topic.to_string(),
             krabka_ids::PartitionIndex(0),
             dir.path().to_path_buf(),
@@ -190,7 +193,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
             PartitionPayload::Slice(encode_batch(&seed_batch())),
             PartitionProduceResponse {
                 index: 0,
-                error_code: crate::codes::NONE,
+                error_code: NONE,
                 base_offset: 1,
                 // The one accepted row in the table, so the one row that
                 // carries the partition's real log start offset. Nothing has
@@ -244,7 +247,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
         fixture
             .metrics
             .topic_freeze_rejections
-            .get_or_create(&crate::metrics::TopicLabel {
+            .get_or_create(&TopicLabel {
                 topic: topic.into(),
             })
             .get()

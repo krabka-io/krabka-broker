@@ -34,6 +34,9 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
+    handlers::test_support::{
+        ClientTopicSetup, RecordCount, TopicPartitionCount, share_fetch_topics,
+    },
     test_support::{initialize_share_state, peer, principal, start_broker_no_audit_with},
 };
 
@@ -51,10 +54,10 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) -> WireUuid {
     crate::handlers::test_support::create_topic(
         broker,
-        crate::handlers::test_support::ClientTopicSetup {
+        ClientTopicSetup {
             client_id: "share-log-start-lockout-test",
             name,
-            partitions: crate::handlers::test_support::TopicPartitionCount(num_partitions),
+            partitions: TopicPartitionCount(num_partitions),
         },
     )
     .await
@@ -67,7 +70,7 @@ async fn produce_records(broker: &BrokerHandle, topic: &str, partition_index: i3
         crate::handlers::test_support::ProduceRecordsSetup {
             topic,
             partition_index: krabka_ids::PartitionIndex(partition_index),
-            count: crate::handlers::test_support::RecordCount(count),
+            count: RecordCount(count),
         },
     )
     .await;
@@ -153,7 +156,7 @@ async fn share_fetch_rows(
         batch_size: setup.max_records.0.max(1),
         // Record-limit acquisition keeps the priming fetch at exactly the selected count.
         share_acquire_mode: 1,
-        topics: crate::handlers::test_support::share_fetch_topics(
+        topics: share_fetch_topics(
             setup.topic_id,
             &setup
                 .partitions

@@ -28,8 +28,10 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
+    partition::Partition,
     share_partition::{
         group_settings::GroupShareSettings, manager::persistence::fences_the_partition,
+        state::AcquisitionState,
     },
 };
 
@@ -153,7 +155,7 @@ fn uniform_share(budget: i64, partitions: usize, index: usize) -> i32 {
 /// count means something here and would read zero after `promote_deferred`. It
 /// is one pass out of date, and that only makes the bound conservative.
 fn materialize_within_deferral_bound(
-    state: &mut crate::share_partition::state::AcquisitionState,
+    state: &mut AcquisitionState,
     upper: Offset,
     max_record_locks: i32,
 ) {
@@ -178,8 +180,8 @@ fn materialize_within_deferral_bound(
 /// covers the whole window, and each later scan covers only the offsets that
 /// the last materialization added.
 async fn grow_readable_window(
-    state: &mut crate::share_partition::state::AcquisitionState,
-    partition: &crate::partition::Partition,
+    state: &mut AcquisitionState,
+    partition: &Partition,
     upper: Offset,
     max_record_locks: i32,
     read_committed: bool,
@@ -225,7 +227,7 @@ fn remaining_record_budget(max_records: i32, acquired: i64) -> i32 {
 /// The read-only inputs [`grow_and_acquire`] needs, gathered into one value so
 /// the function itself takes few enough arguments for `clippy::pedantic`.
 struct GrowAndAcquireArgs<'a> {
-    part: &'a Arc<crate::partition::Partition>,
+    part: &'a Arc<Partition>,
     upper: Offset,
     settings: &'a GroupShareSettings,
     member: &'a str,
@@ -246,7 +248,7 @@ struct GrowAndAcquireArgs<'a> {
 /// whole sequence: any of these steps can read at the share-partition start
 /// offset, and that offset can sit below the log's start offset.
 async fn grow_and_acquire(
-    st: &mut crate::share_partition::state::AcquisitionState,
+    st: &mut AcquisitionState,
     out: &mut PartitionData,
     args: GrowAndAcquireArgs<'_>,
 ) -> Result<i64, BrokerError> {
@@ -630,6 +632,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
+    use crate::delivery::test_support::DeliveryPartitionSetup;
 
     #[test]
     fn materialization_stops_at_the_deferred_record_bound() {
@@ -719,7 +722,7 @@ mod tests {
             let partition = partition_with_batches(
                 &dir,
                 &clock,
-                crate::delivery::test_support::DeliveryPartitionSetup {
+                DeliveryPartitionSetup {
                     topic: "txn",
                     batches: transaction_then_record(commit),
                     leader: krabka_ids::NodeId(0),

@@ -21,8 +21,12 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::AllowAllAuthorizer, broker::BrokerHandle, codes,
-    test_support::start_broker_with_authorizer_no_audit,
+    api_catalog::UnstableApiVersions,
+    authorizer::AllowAllAuthorizer,
+    broker::BrokerHandle,
+    codes,
+    handlers::test_support::produce_wire,
+    test_support::{start_broker_no_audit_with, start_broker_with_authorizer_no_audit},
 };
 
 /// The `Produce` version these tests speak.
@@ -102,7 +106,7 @@ async fn produce_error_code_compressed(
         }],
         ..Default::default()
     };
-    let response = crate::handlers::test_support::produce_wire(broker, VERSION, &request).await;
+    let response = produce_wire(broker, VERSION, &request).await;
     response.responses[0].partition_responses[0].error_code
 }
 
@@ -146,9 +150,9 @@ async fn a_dynamic_message_max_bytes_governs_a_topic_that_sets_no_cap() {
 /// beats the cluster's.
 #[tokio::test]
 async fn a_dynamic_max_decompressed_message_bytes_refuses_an_oversized_compressed_record() {
-    let (broker, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
+    let (broker, _dir) = start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
-        config.features.unstable_api_versions = crate::api_catalog::UnstableApiVersions::Enabled;
+        config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     })
     .await;
     create_topic(&broker, "orders").await;

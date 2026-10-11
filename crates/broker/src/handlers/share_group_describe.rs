@@ -145,7 +145,11 @@ mod tests {
     use super::*;
     use crate::{
         broker::Broker,
-        test_support::{DenyAll, peer, principal, test_ctx},
+        handlers::group_heartbeat_test_support::topic_with_partitions,
+        test_support::{
+            DenyAll, PartitionCount, ShareApiSupport, ShareBrokerSetup, peer, principal,
+            start_share_broker, test_ctx,
+        },
     };
 
     fn request(group_ids: &[&str]) -> ShareGroupDescribeRequest {
@@ -161,11 +165,8 @@ mod tests {
     #[tokio::test]
     async fn handle_denied_groups_preserve_group_ids_and_error_codes() {
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
-            Arc::new(DenyAll),
-            crate::test_support::ShareBrokerSetup::default(),
-        )
-        .await;
+        let (broker_handle, _dir) =
+            start_share_broker(Arc::new(DenyAll), ShareBrokerSetup::default()).await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "alice");
         let resp = handle(&broker, request(&["g1", "g2"]), version, &ctx)
@@ -191,10 +192,10 @@ mod tests {
     #[tokio::test]
     async fn handle_disabled_feature_wins_even_when_share_actor_exists() {
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+        let (broker_handle, _dir) = start_share_broker(
             Arc::new(DenyAll),
-            crate::test_support::ShareBrokerSetup {
-                support: crate::test_support::ShareApiSupport::Disabled,
+            ShareBrokerSetup {
+                support: ShareApiSupport::Disabled,
             },
         )
         .await;
@@ -231,11 +232,11 @@ mod tests {
         topic_id: uuid::Uuid,
         node: krabka_raft::NodeId,
     ) -> Vec<krabka_metadata::MetadataRecord> {
-        crate::handlers::group_heartbeat_test_support::topic_with_partitions(
+        topic_with_partitions(
             crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
                 name,
                 topic_id,
-                partitions: crate::test_support::PartitionCount(1),
+                partitions: PartitionCount(1),
                 node,
             },
         )
@@ -310,11 +311,11 @@ mod tests {
         };
 
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+        let (broker_handle, _dir) = start_share_broker(
             Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
                 std::collections::HashSet::new(),
             )),
-            crate::test_support::ShareBrokerSetup::default(),
+            ShareBrokerSetup::default(),
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();

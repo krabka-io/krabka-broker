@@ -23,7 +23,17 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use crate::{broker::BrokerHandle, codes, test_support::initialize_share_state};
+use crate::{
+    broker::BrokerHandle,
+    codes,
+    handlers::test_support::{
+        AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup,
+        ProduceRecordsSetup, RecordCount, ShareSessionEpoch, produce_records,
+        send_acknowledgements, share_fetch_partition_rows,
+    },
+    share_coordinator::bootstrap::TOPIC,
+    test_support::initialize_share_state,
+};
 
 /// The acknowledge type `Accept`.
 const ACCEPT: i8 = 1;
@@ -52,11 +62,11 @@ async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
 
 /// Appends one batch of two records to partition 0 of `topic`.
 async fn produce_two_records(broker: &BrokerHandle, topic: &str) {
-    crate::handlers::test_support::produce_records(
+    produce_records(
         broker,
-        crate::handlers::test_support::ProduceRecordsSetup {
+        ProduceRecordsSetup {
             topic,
-            count: crate::handlers::test_support::RecordCount(2),
+            count: RecordCount(2),
             ..Default::default()
         },
     )
@@ -99,7 +109,7 @@ async fn share_fetch(
         }],
         ..Default::default()
     };
-    let rows = crate::handlers::test_support::share_fetch_partition_rows(
+    let rows = share_fetch_partition_rows(
         broker,
         &request,
         crate::handlers::test_support::ShareWireSetup::default(),
@@ -117,18 +127,14 @@ async fn share_acknowledge(
     topic_id: WireUuid,
     (first_offset, last_offset): (i64, i64),
 ) -> i16 {
-    let response = crate::handlers::test_support::send_acknowledgements(
+    let response = send_acknowledgements(
         broker,
-        crate::handlers::test_support::AcknowledgementSetup {
-            partition: crate::handlers::test_support::AcknowledgementPartitionSetup::single_batch(
+        AcknowledgementSetup {
+            partition: AcknowledgementPartitionSetup::single_batch(
                 krabka_log::Offset(first_offset)..=krabka_log::Offset(last_offset),
-                crate::handlers::test_support::AcknowledgementCode(ACCEPT),
+                AcknowledgementCode(ACCEPT),
             ),
-            ..crate::handlers::test_support::AcknowledgementSetup::for_topic_session(
-                group,
-                crate::handlers::test_support::ShareSessionEpoch(epoch),
-                topic_id,
-            )
+            ..AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
         },
     )
     .await;
@@ -269,7 +275,7 @@ async fn state_topic_led_by_an_unknown_broker(broker: &BrokerHandle) {
     })];
     records.extend((0..partitions).map(|partition| {
         MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
-            crate::share_coordinator::bootstrap::TOPIC,
+            TOPIC,
             krabka_ids::PartitionIndex(partition),
             NodeId(99),
         ))

@@ -33,7 +33,7 @@ use crate::{
     broker::Broker,
     codes,
     handlers::{
-        ErrorResponse as _,
+        ErrorResponse as _, RequestContext, acl_denied, leader_endpoints,
         share_fetch::{
             AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
             current_leader, names_the_leader, share_request_identity,
@@ -98,7 +98,7 @@ context_handler! {
 /// each such leader on the request's listener.
 fn hint_current_leaders(
     broker: &Broker,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     responses: &mut [ShareAcknowledgeTopicResponse],
 ) -> Vec<NodeEndpoint> {
     let mgr = &broker.share_partition_leaders;
@@ -118,7 +118,7 @@ fn hint_current_leaders(
             }
         }
     }
-    crate::handlers::leader_endpoints(
+    leader_endpoints(
         &broker.controller.current_image(),
         ctx.connection_listener_name,
         &broker.config.inter_broker_listener_name,
@@ -131,7 +131,7 @@ struct AcknowledgeContext<'a> {
     broker: &'a Broker,
     version: i16,
     req: &'a ShareAcknowledgeRequest,
-    ctx: &'a crate::handlers::RequestContext<'a>,
+    ctx: &'a RequestContext<'a>,
     settings: GroupShareSettings,
     group: &'a str,
     member: &'a str,
@@ -176,7 +176,7 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
             continue;
         };
 
-        let denied = crate::handlers::acl_denied(
+        let denied = acl_denied(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
@@ -293,7 +293,13 @@ mod tests {
     };
 
     use super::*;
-    use crate::test_support::{peer, principal, test_ctx};
+    use crate::{
+        broker::BrokerHandle,
+        share_partition::session::FetchPartitions,
+        test_support::{
+            ShareApiSupport, ShareBrokerSetup, peer, principal, start_share_broker, test_ctx,
+        },
+    };
 
     crate::test_support::context_helper!(client_id = "client-a");
 
@@ -320,10 +326,10 @@ mod tests {
     #[tokio::test]
     async fn handle_disabled_feature_returns_top_level_unsupported_version() {
         let version = share_acknowledge_response::MAX_VERSION;
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+        let (broker_handle, _dir) = start_share_broker(
             std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
-            crate::test_support::ShareBrokerSetup {
-                support: crate::test_support::ShareApiSupport::Disabled,
+            ShareBrokerSetup {
+                support: ShareApiSupport::Disabled,
             },
         )
         .await;
@@ -347,7 +353,7 @@ mod tests {
 
     use crate::handlers::test_support::{DenyTopicRead, TopicIdRef as TopicRef};
 
-    async fn create_topic(broker: &crate::broker::BrokerHandle, name: &str) -> ProtoUuid {
+    async fn create_topic(broker: &BrokerHandle, name: &str) -> ProtoUuid {
         crate::handlers::test_support::create_topic(
             broker,
             crate::handlers::test_support::ClientTopicSetup {
@@ -364,7 +370,7 @@ mod tests {
     /// response. Kafka answers `NONE` for a partition that it may acknowledge
     /// and that carries no batch.
     async fn acknowledge(
-        broker: &crate::broker::BrokerHandle,
+        broker: &BrokerHandle,
         version: i16,
         member: &str,
         topic_id: ProtoUuid,
@@ -382,7 +388,7 @@ mod tests {
                 ("g1", member),
                 ctx.connection_id,
                 0,
-                crate::share_partition::session::FetchPartitions {
+                FetchPartitions {
                     requested: &[(id, 0)],
                     forgotten: &std::collections::HashSet::new(),
                 },
@@ -406,7 +412,7 @@ mod tests {
     /// Run one case per (version, topic reference) on `broker`, each in its
     /// own share session. `known_error` is the code for a topic that exists.
     async fn drive(
-        broker: &crate::broker::BrokerHandle,
+        broker: &BrokerHandle,
         known: ProtoUuid,
         known_error: i16,
     ) -> (
