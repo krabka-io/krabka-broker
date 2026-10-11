@@ -13,9 +13,10 @@ use crate::{
         UNCLEAN_RECOVERY_STRATEGY,
     },
     leader_election::test_support::{
-        ElectionSetup, ExpectedPartitionSetup, elected_partition, expected_clean_election,
-        expected_partition, failover, failover_with_alive, img_with_partition, liveness_with_alive,
-        mark_witnesses_in_image, one_partition_change, set_cluster_default, set_topic_configs,
+        ElectionSetup, ElrFinalization, ExpectedPartitionSetup, TopicConfigSetup,
+        elected_partition, expected_clean_election, expected_partition, failover,
+        failover_with_alive, img_with_partition, liveness_with_alive, mark_witnesses_in_image,
+        one_partition_change, set_cluster_default, set_topic_configs,
     },
 };
 
@@ -288,7 +289,7 @@ async fn topic_none_overrides_cluster_strategy_and_uses_cluster_legacy_flag() {
     set_cluster_default(&mut img, UNCLEAN_LEADER_ELECTION_ENABLE, "true");
     set_topic_configs(
         &mut img,
-        crate::leader_election::test_support::TopicConfigSetup {
+        TopicConfigSetup {
             entries: &[(UNCLEAN_RECOVERY_STRATEGY, "None")],
             ..Default::default()
         },
@@ -403,7 +404,7 @@ async fn failover_elects_an_eligible_leader_replica_cleanly_under_every_policy()
         overrides.extend_from_slice(case.policy);
         set_topic_configs(
             &mut img,
-            crate::leader_election::test_support::TopicConfigSetup {
+            TopicConfigSetup {
                 entries: &overrides,
                 ..Default::default()
             },
@@ -452,7 +453,7 @@ async fn a_dead_eligible_leader_replica_leaves_the_unclean_election_to_decide() 
     let mut img = preferred_replica_alone_in_isr();
     set_topic_configs(
         &mut img,
-        crate::leader_election::test_support::TopicConfigSetup {
+        TopicConfigSetup {
             entries: &[
                 (ELIGIBLE_LEADER_REPLICAS, "0:2:"),
                 (MIN_INSYNC_REPLICAS, "2"),
@@ -526,7 +527,7 @@ async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_kno
     {
         let mut img = img_with_partition(ElectionSetup {
             isr: &[krabka_raft::NodeId(1)],
-            elr: crate::leader_election::test_support::ElrFinalization::Enabled,
+            elr: ElrFinalization::Enabled,
             configs: overrides,
             ..Default::default()
         });
@@ -587,7 +588,7 @@ async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_kno
 #[tokio::test]
 async fn a_failover_that_keeps_a_leader_leaves_the_last_known_elr_empty() {
     let img = img_with_partition(ElectionSetup {
-        elr: crate::leader_election::test_support::ElrFinalization::Enabled,
+        elr: ElrFinalization::Enabled,
         configs: &[(MIN_INSYNC_REPLICAS, "3")],
         ..Default::default()
     });

@@ -26,6 +26,8 @@ use crate::{
     },
     elr::{ElrPublisher, TopicElr, state::PartitionElr},
     heartbeat::controller_state::ControllerLivenessState,
+    metadata_epoch::next_partition_change,
+    metrics::BrokerMetrics,
 };
 
 #[cfg(test)]
@@ -121,12 +123,7 @@ fn checked_epochs(
     leader_changes: bool,
     exhausted_message: &str,
 ) -> Option<(i32, krabka_metadata::LeaderEpoch)> {
-    crate::metadata_epoch::next_partition_change(
-        pr.partition_epoch,
-        pr.leader_epoch,
-        leader_changes,
-    )
-    .or_else(|| {
+    next_partition_change(pr.partition_epoch, pr.leader_epoch, leader_changes).or_else(|| {
         warn!(topic = %pr.topic, partition = pr.partition, "{exhausted_message}");
         None
     })
@@ -164,7 +161,7 @@ pub(crate) async fn compute_failover_changes(
     image: &MetadataImage,
     dead: NodeId,
     liveness: &ControllerLivenessState,
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
 ) -> FailoverPlan {
     let FailoverPlan {
         mut changes,
@@ -282,7 +279,7 @@ pub(crate) async fn compute_offline_dir_failover_changes(
     broker: NodeId,
     offline_uuids: &std::collections::HashSet<uuid::Uuid>,
     liveness: &ControllerLivenessState,
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
 ) -> FailoverPlan {
     let mut changes: Vec<MetadataRecord> = Vec::new();
     let mut recoveries: Vec<(String, i32, RecoveryStrategy)> = Vec::new();
@@ -394,7 +391,7 @@ pub(crate) async fn compute_unclean_restart_changes(
     image: &MetadataImage,
     returning: NodeId,
     liveness: &ControllerLivenessState,
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
 ) -> FailoverPlan {
     let FailoverPlan {
         mut changes,
@@ -522,7 +519,7 @@ pub(crate) async fn compute_unfence_changes(
     image: &MetadataImage,
     unfenced: NodeId,
     liveness: &ControllerLivenessState,
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
 ) -> Vec<MetadataRecord> {
     let mut alive = liveness.alive_node_ids().await;
     // The registry still holds the unfencing broker fenced.

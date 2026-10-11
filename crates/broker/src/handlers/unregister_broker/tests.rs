@@ -20,7 +20,12 @@ use crate::{
     break_glass::gate::tests::{approved_proposal, image_of},
     broker::Broker,
     config::BreakGlassConfig,
-    test_support::{DenyAll, peer, principal},
+    handlers::test_support::ReplicatedPartitionSetup,
+    metrics::{BreakGlassAction, BreakGlassActionLabel},
+    test_support::{
+        DenyAll, PartitionCount, PartitionEpoch, broker_registration, peer, principal,
+        request_context,
+    },
 };
 
 fn encode_request(req: &UnregisterBrokerRequest, version: i16) -> Bytes {
@@ -35,7 +40,7 @@ fn context<'a>(
     principal: &'a Principal,
     peer: &'a SocketAddr,
 ) -> crate::handlers::RequestContext<'a> {
-    crate::test_support::request_context(principal, peer, "unregister-client")
+    request_context(principal, peer, "unregister-client")
 }
 
 #[test]
@@ -202,8 +207,8 @@ fn a_broker_with_no_approver_set_gates_nothing() {
 fn refusals(metrics: &crate::metrics::BrokerMetrics) -> u64 {
     metrics
         .break_glass_refusals
-        .get_or_create(&crate::metrics::BreakGlassActionLabel {
-            action: crate::metrics::BreakGlassAction(BreakGlassAction::UnregisterBroker),
+        .get_or_create(&BreakGlassActionLabel {
+            action: BreakGlassAction(BreakGlassAction::UnregisterBroker),
         })
         .get()
 }
@@ -258,7 +263,7 @@ fn registration(setup: RegistrationSetup) -> MetadataRecord {
         broker_epoch: -1,
         incarnation_id: Uuid::from_u128(u128::from(node_id.0)),
         host: format!("broker-{}", node_id.0),
-        ..crate::test_support::broker_registration(node_id)
+        ..broker_registration(node_id)
     })
 }
 
@@ -272,7 +277,7 @@ struct UnregisterPartitionSetup<'a> {
     isr: &'a [NodeId],
     #[default(krabka_metadata::LeaderEpoch(5))]
     leader_epoch: krabka_metadata::LeaderEpoch,
-    partition_epoch: crate::test_support::PartitionEpoch,
+    partition_epoch: PartitionEpoch,
 }
 
 fn replicated_partition(setup: UnregisterPartitionSetup<'_>) -> krabka_metadata::PartitionRecord {
@@ -287,19 +292,17 @@ fn replicated_partition(setup: UnregisterPartitionSetup<'_>) -> krabka_metadata:
         isr: isr.to_vec(),
         leader_epoch,
         partition_epoch: partition_epoch.0,
-        ..crate::handlers::test_support::replicated_partition(
-            crate::handlers::test_support::ReplicatedPartitionSetup {
-                topic: "t",
-                partition: index,
-                leader,
-                replicas: &[NodeId(1), NodeId(2)],
-            },
-        )
+        ..crate::handlers::test_support::replicated_partition(ReplicatedPartitionSetup {
+            topic: "t",
+            partition: index,
+            leader,
+            replicas: &[NodeId(1), NodeId(2)],
+        })
     }
 }
 
 /// Topic `t`, with `partitions` partitions and a replication factor of 2.
-fn topic(partitions: crate::test_support::PartitionCount) -> MetadataRecord {
+fn topic(partitions: PartitionCount) -> MetadataRecord {
     MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
         name: "t".into(),
         topic_id: Uuid::from_u128(0x7),
@@ -360,14 +363,14 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
             leader: NodeId(2),
             isr: &[NodeId(2)],
             leader_epoch: krabka_metadata::LeaderEpoch(6),
-            partition_epoch: crate::test_support::PartitionEpoch(1),
+            partition_epoch: PartitionEpoch(1),
             ..Default::default()
         }),
         replicated_partition(UnregisterPartitionSetup {
             index: krabka_ids::PartitionIndex(1),
             leader: NodeId(2),
             isr: &[NodeId(2)],
-            partition_epoch: crate::test_support::PartitionEpoch(1),
+            partition_epoch: PartitionEpoch(1),
             ..Default::default()
         }),
         replicated_partition(UnregisterPartitionSetup {
@@ -480,7 +483,7 @@ fn the_isr_departures_sit_between_the_consume_and_the_unregister_record() {
         leader: NodeId(2),
         isr: &[NodeId(2)],
         leader_epoch: krabka_metadata::LeaderEpoch(6),
-        partition_epoch: crate::test_support::PartitionEpoch(1),
+        partition_epoch: PartitionEpoch(1),
         ..Default::default()
     }));
 

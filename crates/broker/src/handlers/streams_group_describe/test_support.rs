@@ -24,7 +24,7 @@ use krabka_security::Principal;
 use super::handle;
 use crate::{
     authorizer::Authorizer,
-    broker::Broker,
+    broker::{Broker, BrokerHandle},
     coordinator::unified::{
         StreamsGroupSeed,
         streams::{
@@ -32,6 +32,8 @@ use crate::{
             persistence::{StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue},
         },
     },
+    handlers::test_support::single_replica_partition,
+    test_support::{controller_peer_allowed, peer, request_context, start_group_broker_with},
 };
 
 fn request(group_ids: &[&str]) -> StreamsGroupDescribeRequest {
@@ -41,10 +43,8 @@ fn request(group_ids: &[&str]) -> StreamsGroupDescribeRequest {
     }
 }
 
-pub(super) async fn start_broker(
-    streams_enabled: bool,
-) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_group_broker_with(|cfg| {
+pub(super) async fn start_broker(streams_enabled: bool) -> (BrokerHandle, tempfile::TempDir) {
+    start_group_broker_with(|cfg| {
         cfg.streams_group.enable = streams_enabled;
     })
     .await
@@ -55,10 +55,10 @@ pub(super) async fn start_broker(
 /// rather than allow everything.
 pub(super) async fn start_broker_with_authorizer(
     authorizer: Arc<dyn Authorizer>,
-) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_group_broker_with(|cfg| {
+) -> (BrokerHandle, tempfile::TempDir) {
+    start_group_broker_with(|cfg| {
         cfg.streams_group.enable = true;
-        cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
+        cfg.authorizer = controller_peer_allowed(authorizer);
     })
     .await
 }
@@ -136,8 +136,8 @@ pub(super) async fn describe_as(
         include_authorized_operations,
         ..request(group_ids)
     };
-    let peer = crate::test_support::peer();
-    let ctx = crate::test_support::request_context(principal, &peer, "admin-client");
+    let peer = peer();
+    let ctx = request_context(principal, &peer, "admin-client");
     handle(broker, req, response_mod::MAX_VERSION, &ctx)
         .await
         .expect("handle describe")
@@ -276,7 +276,7 @@ pub(super) async fn create_topic(broker: &Broker, name: &str, partitions: i32) {
         replication_factor: 1,
     })];
     records.extend((0..partitions).map(|partition| {
-        MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
+        MetadataRecord::V1Partition(single_replica_partition(
             name,
             krabka_ids::PartitionIndex(partition),
             node_id,

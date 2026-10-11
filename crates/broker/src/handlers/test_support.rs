@@ -15,7 +15,25 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use crate::{broker::BrokerHandle, codes};
+use crate::{
+    api_catalog::UnstableApiVersions,
+    authorizer::AllowAllAuthorizer,
+    broker::{Broker, BrokerHandle},
+    codes,
+    config::BrokerConfig,
+    config_keys::broker_dynamic::BrokerConfigContext,
+    features::{METADATA_VERSION, STREAMS_VERSION},
+    handlers::{acl_wire::CLUSTER_RESOURCE_NAME, produce::handle},
+    log_dir::partition_dir,
+    log_dir_status::LogDirRegistry,
+    partition::Partition,
+    producer_state::ProducerState,
+    share_partition::state::RecordState,
+    test_support::{
+        StandalonePartitionSetup, StorageMode, decode_response, encode_request, peer, principal,
+        request_context, sasl_principal, try_dispatch_context,
+    },
+};
 
 /// Retains a broker's handle, directory, and shared runtime in their original order.
 /// The calling test supplies its own start expression, including authorizer and config.
@@ -374,7 +392,7 @@ impl AclSetup<'_> {
     pub fn cluster(operation: krabka_metadata::AclOperation) -> Self {
         Self {
             resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+            resource_name: CLUSTER_RESOURCE_NAME,
             operation,
             ..Default::default()
         }
@@ -401,7 +419,7 @@ pub(crate) fn acl(setup: AclSetup<'_>) -> krabka_metadata::AclEntry {
 
 pub(crate) async fn start_allow_all_no_audit() -> (BrokerHandle, tempfile::TempDir) {
     crate::test_support::start_broker_no_audit_with(|config| {
-        config.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        config.authorizer = Arc::new(AllowAllAuthorizer);
     })
     .await
 }
@@ -411,7 +429,7 @@ pub(crate) async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 pub(crate) async fn start_broker_with(
-    configure: impl FnOnce(&mut crate::config::BrokerConfig),
+    configure: impl FnOnce(&mut BrokerConfig),
 ) -> (BrokerHandle, tempfile::TempDir) {
     crate::test_support::start_broker_with(configure).await
 }
@@ -422,11 +440,11 @@ pub(crate) async fn produce_wire(
     request: &ProduceRequest,
 ) -> ProduceResponse {
     let shared = broker.broker_arc_for_test();
-    let user = crate::test_support::principal("producer");
-    let peer = crate::test_support::peer();
-    let context = crate::test_support::request_context(&user, &peer, "producer-client");
-    let request_bytes = crate::test_support::encode_request(request, version);
-    let response_bytes = crate::handlers::produce::handle(
+    let user = principal("producer");
+    let peer = peer();
+    let context = request_context(&user, &peer, "producer-client");
+    let request_bytes = encode_request(request, version);
+    let response_bytes = handle(
         &shared,
         version,
         &request_bytes,
@@ -435,7 +453,7 @@ pub(crate) async fn produce_wire(
     )
     .await
     .expect("handle produce");
-    crate::test_support::decode_response(&response_bytes, version)
+    decode_response(&response_bytes, version)
 }
 
 /// Send a fixture acknowledgement using the current wire version and default principal.
@@ -761,11 +779,11 @@ async fn context_wire<R: Decode<'static>>(
         ),
     };
     let shared = broker.broker_arc_for_test();
-    let user = crate::test_support::principal(setup.wire.user);
-    let peer = crate::test_support::peer();
-    let context = crate::test_support::request_context(&user, &peer, "share-client");
-    let request_bytes = crate::test_support::encode_request(request, setup.wire.version.0);
-    let response = crate::test_support::try_dispatch_context(
+    let user = principal(setup.wire.user);
+    let peer = peer();
+    let context = request_context(&user, &peer, "share-client");
+    let request_bytes = encode_request(request, setup.wire.version.0);
+    let response = try_dispatch_context(
         &shared,
         api_key,
         setup.wire.version.0,
@@ -774,7 +792,7 @@ async fn context_wire<R: Decode<'static>>(
     )
     .await
     .expect(expectation);
-    crate::test_support::decode_response(&response, setup.wire.version.0)
+    decode_response(&response, setup.wire.version.0)
 }
 
 /// Reads the ordered record states of partition zero without changing its locks.
@@ -782,7 +800,7 @@ pub(crate) async fn share_record_states(
     broker: &BrokerHandle,
     group: &str,
     topic_id: WireUuid,
-) -> Vec<crate::share_partition::state::RecordState> {
+) -> Vec<RecordState> {
     let cell = broker
         .broker_arc_for_test()
         .share_partition_leaders
@@ -917,15 +935,11 @@ pub(crate) fn record_batch(count: i32) -> RecordBatch {
     }
 }
 
-pub(crate) fn local_partition(
-    broker: &crate::broker::Broker,
-    root: &Path,
-    topic: &str,
-) -> Arc<crate::partition::Partition> {
+pub(crate) fn local_partition(broker: &Broker, root: &Path, topic: &str) -> Arc<Partition> {
     partition(
         broker,
         root,
-        crate::test_support::StandalonePartitionSetup {
+        StandalonePartitionSetup {
             topic,
             ..Default::default()
         },
@@ -933,11 +947,11 @@ pub(crate) fn local_partition(
 }
 
 pub(crate) fn partition(
-    broker: &crate::broker::Broker,
+    broker: &Broker,
     root: &Path,
-    setup: crate::test_support::StandalonePartitionSetup<'_>,
-) -> Arc<crate::partition::Partition> {
-    let crate::test_support::StandalonePartitionSetup {
+    setup: StandalonePartitionSetup<'_>,
+) -> Arc<Partition> {
+    let StandalonePartitionSetup {
         topic,
         partition: index,
         storage,
@@ -960,17 +974,14 @@ pub(crate) struct PartitionSpawnSetup<'a> {
     #[default("orders")]
     pub topic: &'a str,
     pub index: krabka_ids::PartitionIndex,
-    pub log_dir_status: crate::log_dir_status::LogDirRegistry,
+    pub log_dir_status: LogDirRegistry,
     #[default(Arc::new(crate::producer_state::ProducerState::new()))]
-    pub producer_state: Arc<crate::producer_state::ProducerState>,
-    pub storage: crate::test_support::StorageMode,
+    pub producer_state: Arc<ProducerState>,
+    pub storage: StorageMode,
     pub log_config: krabka_log::LogConfig,
 }
 
-pub(crate) fn spawn_partition(
-    root: &Path,
-    setup: PartitionSpawnSetup<'_>,
-) -> Arc<crate::partition::Partition> {
+pub(crate) fn spawn_partition(root: &Path, setup: PartitionSpawnSetup<'_>) -> Arc<Partition> {
     let PartitionSpawnSetup {
         topic,
         index,
@@ -979,7 +990,7 @@ pub(crate) fn spawn_partition(
         storage,
         log_config,
     } = setup;
-    let partition_dir = crate::log_dir::partition_dir(root, topic, index.0);
+    let partition_dir = partition_dir(root, topic, index.0);
     std::fs::create_dir_all(&partition_dir).expect("partition directory");
     crate::broker::spawn_partition(
         topic.to_string(),
@@ -988,7 +999,7 @@ pub(crate) fn spawn_partition(
         krabka_log::Log::open(&partition_dir, log_config).expect("open partition log"),
         log_dir_status,
         producer_state,
-        storage == crate::test_support::StorageMode::Diskless,
+        storage == StorageMode::Diskless,
     )
 }
 
@@ -1016,7 +1027,7 @@ pub(crate) async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
         .expect("seed quota");
 }
 
-pub(crate) async fn set_streams_version(broker: &crate::broker::Broker, level: i16) {
+pub(crate) async fn set_streams_version(broker: &Broker, level: i16) {
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(
@@ -1033,7 +1044,7 @@ pub(crate) async fn set_streams_version(broker: &crate::broker::Broker, level: i
             if broker
                 .controller
                 .current_image()
-                .finalized_feature(crate::features::STREAMS_VERSION)
+                .finalized_feature(STREAMS_VERSION)
                 == want
             {
                 break;
@@ -1045,7 +1056,7 @@ pub(crate) async fn set_streams_version(broker: &crate::broker::Broker, level: i
     .expect("streams.version visible");
 }
 
-pub(crate) async fn wait_until_creation_ends(broker: &crate::broker::Broker, topic: &str) {
+pub(crate) async fn wait_until_creation_ends(broker: &Broker, topic: &str) {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while broker.auto_topic_creation.is_in_flight(topic) {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1069,12 +1080,12 @@ pub(crate) fn metadata_version_gated(level: Option<i16>, minimum: i16) -> bool {
     if let Some(level) = level {
         image.apply(&MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: crate::features::METADATA_VERSION.to_string(),
+                name: METADATA_VERSION.to_string(),
                 level,
             },
         ));
     }
-    crate::features::require_feature(&image, crate::features::METADATA_VERSION, minimum).is_err()
+    crate::features::require_feature(&image, METADATA_VERSION, minimum).is_err()
 }
 
 /// The independent placement model: preserve replica order and exclude fenced ISR members.
@@ -1098,7 +1109,7 @@ pub(crate) fn replica_availability(
 pub(crate) fn operators_principal() -> krabka_security::Principal {
     krabka_security::Principal {
         groups: vec!["operators".to_string()],
-        ..crate::test_support::sasl_principal("alice")
+        ..sasl_principal("alice")
     }
 }
 
@@ -1277,14 +1288,14 @@ pub(crate) struct BrokerConfigMutationSetup<'a> {
     #[default(&[])]
     pub log_dirs: &'a [std::path::PathBuf],
     #[default(crate::api_catalog::UnstableApiVersions::Disabled)]
-    pub unstable: crate::api_catalog::UnstableApiVersions,
+    pub unstable: UnstableApiVersions,
 }
 
 pub(crate) fn broker_config_context<'a>(
     image: &'a krabka_metadata::MetadataImage,
     setup: BrokerConfigMutationSetup<'a>,
-) -> crate::config_keys::broker_dynamic::BrokerConfigContext<'a> {
-    crate::config_keys::broker_dynamic::BrokerConfigContext {
+) -> BrokerConfigContext<'a> {
+    BrokerConfigContext {
         image,
         serving: setup.serving,
         log_dirs: setup.log_dirs,

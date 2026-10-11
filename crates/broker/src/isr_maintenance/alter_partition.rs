@@ -12,11 +12,15 @@ use krabka_protocol::owned::{
 use tracing::{debug, warn};
 
 use super::request_builder::{IsrChange, build_alter_partition_request};
-use crate::controller_endpoint::{ControllerDialer, leader_endpoint};
+use crate::{
+    codes::NOT_CONTROLLER,
+    controller_endpoint::{ControllerDialer, leader_endpoint},
+    metadata_source::MetadataSource,
+};
 
 /// Who sends an ISR proposal, and how it reaches the active controller.
 pub(super) struct ControllerLink<'a> {
-    pub(super) controller: &'a Arc<dyn crate::metadata_source::MetadataSource>,
+    pub(super) controller: &'a Arc<dyn MetadataSource>,
     pub(super) broker_id: i32,
     pub(super) dialer: &'a ControllerDialer,
 }
@@ -168,7 +172,7 @@ fn classify_alter_partition_response(
 }
 
 fn is_not_controller_response(global_err: i16, part_err: i16) -> bool {
-    global_err == crate::codes::NOT_CONTROLLER || part_err == crate::codes::NOT_CONTROLLER
+    global_err == NOT_CONTROLLER || part_err == NOT_CONTROLLER
 }
 
 #[cfg(test)]

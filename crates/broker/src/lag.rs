@@ -43,7 +43,10 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     codes,
     coordinator::{
-        GroupCoordinator, bootstrap::OFFSETS_TOPIC, partitioner, unified::actor::GroupActorMessage,
+        GroupCoordinator,
+        bootstrap::OFFSETS_TOPIC,
+        partitioner,
+        unified::{actor::GroupActorMessage, classic_state::OffsetEntry},
     },
     metadata_source::MetadataSource,
     metrics::{BrokerMetrics, ConsumerGroupLabel, ReplicaLagLabel},
@@ -410,7 +413,7 @@ fn coordinates_group(image: &MetadataImage, node_id: NodeId, group_id: &str) -> 
 /// group stands.
 async fn committed_offsets(
     actor: &tokio::sync::mpsc::Sender<GroupActorMessage>,
-) -> HashMap<TopicPartition, crate::coordinator::unified::classic_state::OffsetEntry> {
+) -> HashMap<TopicPartition, OffsetEntry> {
     let (reply, response) = oneshot::channel();
     let exchange = async {
         actor

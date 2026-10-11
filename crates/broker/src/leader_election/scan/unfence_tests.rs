@@ -17,7 +17,8 @@ use super::*;
 use crate::{
     config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
     leader_election::test_support::{
-        ElectionSetup, ExpectedPartitionSetup, expected_partition, img_with_partition,
+        ElectionSetup, ElrFinalization, ExpectedPartitionSetup, expected_partition,
+        img_with_partition,
     },
 };
 
@@ -26,7 +27,7 @@ use crate::{
 fn leaderless_image(published: &str) -> MetadataImage {
     img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
-        elr: crate::leader_election::test_support::ElrFinalization::Enabled,
+        elr: ElrFinalization::Enabled,
         configs: &[
             (MIN_INSYNC_REPLICAS, "2"),
             (ELIGIBLE_LEADER_REPLICAS, published),

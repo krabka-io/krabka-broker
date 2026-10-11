@@ -25,8 +25,11 @@ use krabka_protocol::owned::{
 
 use crate::{
     broker::Broker,
-    coordinator::unified::streams::topology::{InternalTopicSpec, status as topo_status},
-    handlers::{acl_denied, acl_wire::CLUSTER_RESOURCE_NAME},
+    coordinator::unified::streams::{
+        actor::resolve_group_config_from_image,
+        topology::{InternalTopicSpec, status as topo_status},
+    },
+    handlers::{RequestContext, acl_denied, acl_wire::CLUSTER_RESOURCE_NAME},
     topic_creator::ForwardedIdentity,
 };
 
@@ -37,7 +40,7 @@ const MAX_ERRORS_TO_INCLUDE: usize = 3;
 /// The heartbeat that asks for the internal topics.
 pub(super) struct Heartbeat<'a> {
     /// The context of the request.
-    pub(super) ctx: &'a crate::handlers::RequestContext<'a>,
+    pub(super) ctx: &'a RequestContext<'a>,
     /// The group that the heartbeat is for.
     pub(super) group_id: &'a str,
 }
@@ -114,7 +117,7 @@ pub(super) fn create_internal_topics(
 /// `streams.heartbeat.interval.ms` of the group config, else the broker
 /// default.
 fn heartbeat_interval_ms(broker: &Broker, group_id: &str) -> i64 {
-    let config = crate::coordinator::unified::streams::actor::resolve_group_config_from_image(
+    let config = resolve_group_config_from_image(
         &broker.config.streams_group,
         &broker.controller.current_image(),
         group_id,
@@ -129,7 +132,7 @@ fn heartbeat_interval_ms(broker: &Broker, group_id: &str) -> i64 {
 /// `Cluster` grant covers them or because each one has its own.
 fn create_unauthorized(
     broker: &Broker,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     specs: &[InternalTopicSpec],
 ) -> Vec<String> {
     let image = broker.controller.current_image();
