@@ -41,7 +41,9 @@ use crate::{
     multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes},
     multi_workload::local_segment_bases,
     support::{client::connect_owned, storage::topic_remote_log_files, topics::AssignedTopicSetup},
-    topic_fixture::{AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup},
+    topic_fixture::{
+        AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup, create_assigned_topic,
+    },
 };
 
 /// The topic this suite produces into.
@@ -100,7 +102,7 @@ async fn produce_records(client: &Client, topic_id: WireUuid, count: usize) {
 /// tight that every sealed segment is evicted as soon as it is archived.
 async fn create_single_replica_tiered_topic(admin: &Client, leader: &BrokerHandle) {
     let assignment = AssignedTopicSetup::on_replicas(TOPIC, vec![krabka_metadata::NodeId(1)]);
-    crate::topic_fixture::create_assigned_topic(
+    create_assigned_topic(
         admin,
         AssignedTieredTopicSetup {
             topic: assignment,
