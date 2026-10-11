@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use crate::config::{
     DEFAULT_AUDIT_CHECKPOINT_EVERY, DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_DIR,
-    DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_TOPIC,
+    DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N, DEFAULT_AUDIT_TOPIC,
 };
 
 /// `[audit]` section of `broker.toml` (`FedRAMP` 20x MLA).
@@ -93,7 +93,7 @@ fn default_spool_max_bytes() -> u64 {
 }
 
 fn default_spool_sync_every_n() -> NonZeroU64 {
-    crate::config::DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N
+    DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N
 }
 
 /// `[audit.signing]` — Ed25519 checkpoint signing key.

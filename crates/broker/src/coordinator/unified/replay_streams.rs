@@ -354,7 +354,7 @@ mod tests {
         },
         test_support::{
             AssignmentDeletionProtocol, AssignmentDeletionSetup, check_replay_cases,
-            replay_fixtures, replay_tombstone_constructor, streams_member,
+            deletion_replay_cases, replay_fixtures, replay_tombstone_constructor, streams_member,
         },
     };
 
@@ -594,10 +594,7 @@ mod tests {
         ];
         rows.splice(
             3..3,
-            crate::coordinator::unified::test_support::deletion_replay_cases(
-                every_record(),
-                kafka_deletion(),
-            ),
+            deletion_replay_cases(every_record(), kafka_deletion()),
         );
         check_replay_cases(
             &rows,

@@ -8,6 +8,7 @@ use krabka_protocol::{
 };
 
 use crate::{
+    broker::BrokerHandle,
     codes::NONE,
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     test_support::{KafkaErrorCode, encode_request},
@@ -82,7 +83,7 @@ pub(super) fn sessionless_request(setup: SessionlessFetchSetup) -> FetchRequest 
 }
 
 pub(super) async fn fetch_wire(
-    broker: &crate::broker::BrokerHandle,
+    broker: &BrokerHandle,
     request: &FetchRequest,
     setup: FetchWireSetup<'_>,
 ) -> FetchResponse {

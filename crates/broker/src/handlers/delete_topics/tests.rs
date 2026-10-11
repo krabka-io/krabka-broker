@@ -30,8 +30,8 @@ use crate::{
     },
     metrics::AuthorizationDeniedLabel,
     test_support::{
-        AllowAclSetup, DenyAll, dispatch_wire, peer, principal, start_broker_no_audit_with,
-        start_broker_with_authorizer_no_audit as start_broker,
+        AllowAclSetup, DenyAll, allow_acl, dispatch_wire, peer, principal,
+        start_broker_no_audit_with, start_broker_with_authorizer_no_audit as start_broker,
     },
 };
 
@@ -519,7 +519,7 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
 
 /// One `alice` Allow ACL on a literal resource.
 fn alice_acl(resource_type: ResourceType, name: &str, operation: AclOperation) -> AclEntry {
-    crate::test_support::allow_acl(AllowAclSetup {
+    allow_acl(AllowAclSetup {
         resource_type,
         resource_name: name,
         operation,

@@ -28,12 +28,14 @@ use crate::{
     future_log::FutureLogState,
     handlers::DispatchRegistry,
     heartbeat::controller_state::ControllerLivenessState,
+    log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource,
     metrics::BrokerMetrics,
     network::{client::InterBrokerClient, dispatch::RequestByteBudget},
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
     producer_state::ProducerState,
+    quota::QuotaBuckets,
     remote_reader::RemoteReader,
     share_coordinator::coordinator::ShareCoordinator,
     share_partition::manager::SharePartitionLeaderManager,
@@ -156,7 +158,7 @@ pub struct Broker {
     pub throttle_state: Arc<ThrottleState>,
     /// KIP-13/KIP-124 quota buckets. Updated by the quota refresh task and
     /// consulted by the Produce/Fetch handlers and request-rate enforcement.
-    pub quota_buckets: Arc<crate::quota::QuotaBuckets>,
+    pub quota_buckets: Arc<QuotaBuckets>,
     /// Live connection accounting for the `max.connections` /
     /// `max.connections.per.ip` caps. `accept_loop` consults these before it
     /// spawns a per-connection task. An RAII [`ConnectionGuard`]
@@ -220,7 +222,7 @@ pub struct Broker {
     /// (today: `DescribeLogDirs`; future: produce/fetch) read this through
     /// [`crate::log_dir_status::LogDirRegistry::is_offline`] before they
     /// touch the dir.
-    pub(crate) log_dir_status: crate::log_dir_status::LogDirRegistry,
+    pub(crate) log_dir_status: LogDirRegistry,
     /// KIP-714 client-metrics receiver: subscription manager + Prometheus
     /// collector + OTLP forwarder. Shared so the push handler
     /// and the scrape path both touch the same instance.

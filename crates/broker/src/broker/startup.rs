@@ -24,7 +24,8 @@ use crate::{
     config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG},
     controller_admin::BrokerControllerAdminRouter,
     coordinator::{
-        retention::run as run_offset_retention, topic_deletion::spawn as spawn_topic_deletion,
+        leadership::spawn, retention::run as run_offset_retention,
+        topic_deletion::spawn as spawn_topic_deletion,
     },
     delivery::{
         DeliveryWaker, config::DeliveryConfig, metrics::BrokerDeliveryMetrics,
@@ -363,7 +364,7 @@ impl Broker {
         // from here on write their `Authentication` rows.
         let _ = raft_handshake_audit.set(Arc::clone(&runtime.audit_log));
 
-        crate::coordinator::leadership::spawn(
+        spawn(
             config.node_id,
             Arc::clone(&controller),
             Arc::clone(&partitions),

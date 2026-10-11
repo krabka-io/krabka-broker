@@ -13,7 +13,7 @@ use futures_util::future::BoxFuture;
 use krabka_units::convert::TimeExt as _;
 
 use crate::{
-    authorizer::AuthorizationResult,
+    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
     error::BrokerError,
@@ -59,7 +59,7 @@ pub(super) fn alter_replica_log_dirs_adapter<'a>(
         let image = broker.controller.current_image();
         let authorized = broker.config.authorizer.authorize(
             &*image,
-            &crate::authorizer::AuthorizationRequest {
+            &AuthorizationRequest {
                 principal,
                 host: peer,
                 resource_type: krabka_metadata::ResourceType::Cluster,

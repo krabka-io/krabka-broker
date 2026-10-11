@@ -28,9 +28,9 @@ use crate::{
     codes,
     error::BrokerError,
     handlers::test_support::{
-        AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup,
+        AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup, ClientTopicSetup,
         ProduceRecordsSetup, RecordCount, ShareSessionEpoch, ShareWireSetup, produce_records,
-        send_acknowledgements, share_fetch_partition_rows,
+        send_acknowledgements, share_fetch_partition_rows, single_replica_partition,
     },
     share_coordinator::bootstrap::TOPIC,
     test_support::initialize_share_state,
@@ -52,7 +52,7 @@ use crate::handlers::test_support::start_allow_all_no_audit as start;
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
     crate::handlers::test_support::create_topic(
         broker,
-        crate::handlers::test_support::ClientTopicSetup {
+        ClientTopicSetup {
             client_id: "share-persister-error-test",
             name,
             ..Default::default()
@@ -270,7 +270,7 @@ async fn state_topic_led_by_an_unknown_broker(broker: &BrokerHandle) {
         replication_factor: 1,
     })];
     records.extend((0..partitions).map(|partition| {
-        MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
+        MetadataRecord::V1Partition(single_replica_partition(
             TOPIC,
             krabka_ids::PartitionIndex(partition),
             NodeId(99),

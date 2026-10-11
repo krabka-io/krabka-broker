@@ -22,6 +22,7 @@ use krabka_security::Principal;
 use super::consumer_state::ResolvedRegularExpression;
 use crate::{
     authorizer::{AuthorizationResult, Authorizer, authorize_topics_logged},
+    re2j::compile_full_match,
     time_util::now_ms,
 };
 
@@ -84,7 +85,7 @@ impl TopicRegexResolver for ImageTopicRegexResolver {
                 // Kafka's `TopicRegexResolver` selects a topic with
                 // `Matcher.matches()`, so the pattern must match the whole
                 // name.
-                match crate::re2j::compile_full_match(pattern) {
+                match compile_full_match(pattern) {
                     Ok(regex) => Some((pattern, regex)),
                     Err(error) => {
                         tracing::error!(%pattern, %error,

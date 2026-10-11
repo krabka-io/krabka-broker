@@ -111,7 +111,10 @@ mod tests {
     };
 
     use crate::{
-        handlers::{add_raft_voter::handle as add_raft_voter_handle, remove_raft_voter::handle},
+        handlers::{
+            add_raft_voter::handle as add_raft_voter_handle, encode_response,
+            remove_raft_voter::handle,
+        },
         test_support::{
             DenyAll, decode_response as decode_other_response,
             encode_request as encode_other_request,
@@ -165,7 +168,7 @@ mod tests {
                 error_code: codes::INVALID_REQUEST,
                 ..Default::default()
             };
-            let bytes = crate::handlers::encode_response(&resp, version).expect("encode");
+            let bytes = encode_response(&resp, version).expect("encode");
             let mut cur: &[u8] = &bytes;
             let decoded = UpdateRaftVoterResponse::decode(&mut cur, version).expect("decode");
             assert!(decoded.error_code == codes::INVALID_REQUEST);

@@ -23,7 +23,7 @@ use crate::{
     break_glass::gate::tests::{approved_proposal, image_of},
     broker::Broker,
     config::BreakGlassConfig,
-    handlers::test_support::ReplicatedPartitionSetup,
+    handlers::{RequestContext, test_support::ReplicatedPartitionSetup},
     metrics::{BreakGlassAction as MetricBreakGlassAction, BreakGlassActionLabel, BrokerMetrics},
     test_support::{
         DenyAll, PartitionCount, PartitionEpoch, broker_registration, peer, principal,
@@ -39,10 +39,7 @@ fn decode_response(bytes: &Bytes) -> UnregisterBrokerResponse {
     crate::test_support::decode_response(bytes, unregister_broker_response::MAX_VERSION)
 }
 
-fn context<'a>(
-    principal: &'a Principal,
-    peer: &'a SocketAddr,
-) -> crate::handlers::RequestContext<'a> {
+fn context<'a>(principal: &'a Principal, peer: &'a SocketAddr) -> RequestContext<'a> {
     request_context(principal, peer, "unregister-client")
 }
 
@@ -442,7 +439,7 @@ async fn a_request_on_the_controller_listener_is_answered_in_place() {
     );
     let principal = principal("admin");
     let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
-    let ctx = crate::handlers::RequestContext::new(
+    let ctx = RequestContext::new(
         &principal,
         &peer,
         "unregister-client",

@@ -168,6 +168,7 @@ mod tests {
             test_support::check_config_result,
         },
         test_support::string_pairs,
+        throttle::LEADER_THROTTLED_REPLICAS_KEY,
     };
 
     /// The record builder under the empty policy, which is the state of a
@@ -491,7 +492,7 @@ mod tests {
             value: Some(value.into()),
             ..Default::default()
         };
-        let leader = crate::throttle::LEADER_THROTTLED_REPLICAS_KEY;
+        let leader = LEADER_THROTTLED_REPLICAS_KEY;
         let record = |pairs: &[(&str, &str)]| {
             Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: "orders".into(),

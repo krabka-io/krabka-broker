@@ -27,6 +27,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
 use crate::{
+    config::BrokerConfig,
     metrics::BrokerMetrics,
     network::{
         auth::ConnectionAuth,
@@ -116,7 +117,7 @@ pub(super) struct RequestLimits {
 }
 
 impl RequestLimits {
-    pub(super) fn of(config: &crate::config::BrokerConfig) -> Self {
+    pub(super) fn of(config: &BrokerConfig) -> Self {
         use krabka_units::convert::ByteSizeExt as _;
 
         Self {

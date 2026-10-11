@@ -10,7 +10,7 @@ use krabka_protocol::owned::unregister_controller_response::MAX_VERSION;
 use super::*;
 use crate::{
     handlers::{RequestContext, update_features::answer},
-    test_support::{GrantsInPrincipalName, start_broker_with},
+    test_support::{ControllerPeerAllowed, GrantsInPrincipalName, start_broker_with},
 };
 
 crate::test_support::codec_helpers!(
@@ -203,9 +203,7 @@ async fn handle_unregisters_a_registered_controller_as_trunk_does() {
         // Trunk's 4.4-IV2 is past 4.3.1's latest production level, so the
         // node has to support unstable feature levels to finalize it.
         cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
-        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
-            GrantsInPrincipalName,
-        ));
+        cfg.authorizer = Arc::new(ControllerPeerAllowed(GrantsInPrincipalName));
     })
     .await;
     let broker = handle.broker_arc_for_test();

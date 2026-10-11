@@ -469,6 +469,7 @@ mod tests {
         metrics::{BrokerMetrics, RequestPhases},
         partition::{AppendedBatch, test_support::test_partition},
         partition_writer::storage_failure_error,
+        producer_state::ProducerState,
         test_support::spawn_standalone_partition,
     };
 
@@ -668,7 +669,7 @@ mod tests {
             prepared,
             super::AppendContext {
                 partition: &partition,
-                producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
+                producer_state: &Arc::new(ProducerState::new()),
                 partition_index: 0,
                 acks: 1,
                 leader_epoch: 0,

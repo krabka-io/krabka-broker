@@ -209,6 +209,7 @@ mod tests {
         log_dir::partition_dir,
         log_dir_status::LogDirRegistry,
         partition::ReplicationTarget,
+        partition_registry::PartitionRegistry,
         replica_state::ReplicaState,
         test_support::{StandalonePartitionSetup, StorageMode, spawn_standalone_partition},
     };
@@ -399,7 +400,7 @@ mod tests {
             krabka_log::LogConfig::default(),
         )
         .expect("open log");
-        let partitions = crate::partition_registry::PartitionRegistry::new();
+        let partitions = PartitionRegistry::new();
         partitions.insert(
             "orders".into(),
             krabka_ids::PartitionIndex(0),

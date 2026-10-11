@@ -14,7 +14,10 @@ use krabka_protocol::owned::assign_replicas_to_dirs_request::{
     AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
 };
 
-use crate::{controller_endpoint::leader_endpoint, metadata_source::MetadataSource};
+use crate::{
+    controller_endpoint::{ControllerDialer, leader_endpoint},
+    metadata_source::MetadataSource,
+};
 
 /// Kafka sentinel for "broker epoch unknown" in `AssignReplicasToDirs`, sent
 /// only when this broker's own epoch is not yet known (for example, before
@@ -113,7 +116,7 @@ pub(crate) fn build_request(
 /// - the response carries a non-zero `error_code`
 pub(crate) async fn send_assignments(
     controller: &Arc<dyn MetadataSource>,
-    dialer: &crate::controller_endpoint::ControllerDialer,
+    dialer: &ControllerDialer,
     client_id: &str,
     req: AssignReplicasToDirsRequest,
 ) -> Result<(), String> {

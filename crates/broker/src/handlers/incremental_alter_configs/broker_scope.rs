@@ -189,7 +189,7 @@ pub(super) fn handle_broker_scoped(
 ) {
     match broker_records(
         resource,
-        crate::config_keys::broker_dynamic::BrokerConfigContext {
+        BrokerConfigContext {
             image,
             serving,
             log_dirs,

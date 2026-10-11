@@ -8,7 +8,7 @@ use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
 
 use crate::{
     BrokerError,
-    api_catalog::ClientMetricsReceiver,
+    api_catalog::{ClientMetricsReceiver, ListenerKind},
     config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE},
 };
 
@@ -186,7 +186,7 @@ impl BrokerConfig {
     /// that keeps advertising them, because nothing else negotiates the RPC
     /// version against that table.
     #[must_use]
-    pub fn listener_kind(&self, listener_name: &str) -> crate::api_catalog::ListenerKind {
+    pub fn listener_kind(&self, listener_name: &str) -> ListenerKind {
         use crate::api_catalog::ListenerKind;
 
         if !listener_name.eq_ignore_ascii_case(&self.inter_broker_listener_name) {

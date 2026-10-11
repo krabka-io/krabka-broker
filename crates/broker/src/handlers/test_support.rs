@@ -22,7 +22,7 @@ use crate::{
     codes,
     config::BrokerConfig,
     config_keys::broker_dynamic::BrokerConfigContext,
-    features::{METADATA_VERSION, STREAMS_VERSION},
+    features::{METADATA_VERSION, STREAMS_VERSION, require_feature},
     handlers::{acl_wire::CLUSTER_RESOURCE_NAME, produce::handle},
     log_dir::partition_dir,
     log_dir_status::LogDirRegistry,
@@ -1086,7 +1086,7 @@ pub(crate) fn metadata_version_gated(level: Option<i16>, minimum: i16) -> bool {
             },
         ));
     }
-    crate::features::require_feature(&image, METADATA_VERSION, minimum).is_err()
+    require_feature(&image, METADATA_VERSION, minimum).is_err()
 }
 
 /// The independent placement model: preserve replica order and exclude fenced ISR members.

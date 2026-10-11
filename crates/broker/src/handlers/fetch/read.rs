@@ -636,7 +636,9 @@ mod tests {
     use super::read_task_panicked;
     use crate::{
         blocking::inline_blocking_on_this_thread,
-        codes::{CORRUPT_MESSAGE, KAFKA_STORAGE_ERROR, NONE, OFFSET_OUT_OF_RANGE},
+        codes::{
+            CORRUPT_MESSAGE, KAFKA_STORAGE_ERROR, NONE, OFFSET_OUT_OF_RANGE, UNKNOWN_SERVER_ERROR,
+        },
         delivery::test_support::batch_at,
         error::BrokerError,
         handlers::test_support::default_records_batch,
@@ -1250,7 +1252,7 @@ mod tests {
             Case {
                 name: "a panic in the read task",
                 error: read_task_panicked(&"boom"),
-                error_code: crate::codes::UNKNOWN_SERVER_ERROR,
+                error_code: UNKNOWN_SERVER_ERROR,
                 dir_offline: false,
             },
         ];

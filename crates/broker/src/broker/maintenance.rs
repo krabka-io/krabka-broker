@@ -26,7 +26,7 @@ use crate::{
     network::client::InterBrokerClient,
     partition_registry::PartitionRegistry,
     producer_state::ProducerState,
-    reassignment::run as run_reassignment,
+    reassignment::{ReassignmentController, run as run_reassignment},
     task_util::run_every,
     time_util::now_ms,
 };
@@ -193,11 +193,10 @@ pub(super) fn spawn_cluster_data_maintenance(
             shutdown.child_token(),
         ));
     }
-    let reassignment: Arc<dyn crate::reassignment::ReassignmentController> =
-        Arc::new(ControllerAdapter {
-            handle: Arc::clone(controller),
-            node_id: config.node_id,
-        });
+    let reassignment: Arc<dyn ReassignmentController> = Arc::new(ControllerAdapter {
+        handle: Arc::clone(controller),
+        node_id: config.node_id,
+    });
     tokio::spawn(run_reassignment(
         reassignment,
         Arc::clone(liveness),

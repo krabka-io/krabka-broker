@@ -16,6 +16,7 @@ use crate::{
             persistence::{
                 DescriptionEpochs, StreamsGroupCurrentMemberAssignmentValue,
                 StreamsGroupMemberMetadataValue, StreamsGroupTargetAssignmentMemberValue,
+                StreamsMemberWireState,
             },
         },
     },
@@ -101,8 +102,7 @@ fn streams_group_seed(member_id: &str) -> StreamsGroupSeed {
         StreamsGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
-            state:
-                crate::coordinator::unified::streams::persistence::StreamsMemberWireState::Stable,
+            state: StreamsMemberWireState::Stable,
             active,
             standby: std::collections::BTreeMap::new(),
             warmup: std::collections::BTreeMap::new(),

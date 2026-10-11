@@ -21,7 +21,7 @@ use tracing::warn;
 
 use crate::{
     controller_endpoint::ControllerDialer, metadata_source::MetadataSource, metrics::BrokerMetrics,
-    partition::Partition, partition_registry::PartitionRegistry,
+    partition::Partition, partition_registry::PartitionRegistry, replica_state::LeaderPolicy,
 };
 
 mod alter_partition;
@@ -81,7 +81,7 @@ pub(crate) async fn run(cfg: Config) {
             let Some(record) = image.partition(&part.topic, part.index.get()) else {
                 continue;
             };
-            let policy = crate::replica_state::LeaderPolicy::from_image(
+            let policy = LeaderPolicy::from_image(
                 &image,
                 cfg.node_id,
                 record,

@@ -390,7 +390,7 @@ mod tests {
     use super::*;
     use crate::coordinator::unified::{
         streams::persistence::{StreamsGroupTopologyValue, StreamsMemberWireState},
-        test_support::stable_streams_assignment,
+        test_support::{plain_streams_member, stable_streams_assignment},
     };
 
     #[test]
@@ -518,11 +518,7 @@ mod tests {
         for (case, epochs, expected) in rows {
             let mut actor = ActorState::new("g".into());
             let seed = StreamsGroupSeed {
-                members: [(
-                    "m1".to_string(),
-                    crate::coordinator::unified::test_support::plain_streams_member(0),
-                )]
-                .into(),
+                members: [("m1".to_string(), plain_streams_member(0))].into(),
                 current_per_member: [(
                     "m1".to_string(),
                     StreamsGroupCurrentMemberAssignmentValue {

@@ -32,6 +32,7 @@ use crate::{
     network::{client::InterBrokerClient, dispatch::RequestByteBudget},
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
+    producer_state::ProducerState,
     share_coordinator::coordinator::ShareCoordinator,
     share_partition::manager::SharePartitionLeaderManager,
     time_util::now_ms,
@@ -41,7 +42,7 @@ use crate::{
 pub(super) type BrokerCoordinatorSet = (
     Arc<GroupCoordinator>,
     Arc<ProducerIdManager>,
-    Arc<crate::producer_state::ProducerState>,
+    Arc<ProducerState>,
     Arc<TxnCoordinator>,
     Arc<ShareCoordinator>,
     Arc<SharePartitionLeaderManager>,

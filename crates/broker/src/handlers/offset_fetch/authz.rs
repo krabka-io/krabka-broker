@@ -10,6 +10,7 @@
 use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
+    codes::GROUP_AUTHORIZATION_FAILED,
     handlers::{RequestContext, group_coordinator_error, group_describe_denied},
 };
 
@@ -26,7 +27,7 @@ pub(super) fn group_error(
         context,
         group_id,
     ) {
-        Some(crate::codes::GROUP_AUTHORIZATION_FAILED)
+        Some(GROUP_AUTHORIZATION_FAILED)
     } else {
         group_coordinator_error(broker, group_id)
     }

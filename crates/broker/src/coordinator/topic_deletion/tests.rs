@@ -22,6 +22,7 @@ use crate::{
         offset_commit::handle as offset_commit_handle,
         test_support::{CreateTopicSetup, configured_topic_request},
     },
+    test_support::start_broker_with_authorizer_no_audit,
 };
 
 krabka_macros::delete_topic_request!(delete_request);
@@ -146,9 +147,7 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         fetch_offset(broker, GROUP, TOPIC, FETCH_VERSION).await
     }
 
-    let (handle, _dir) =
-        crate::test_support::start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer))
-            .await;
+    let (handle, _dir) = start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
     handle.wait_until_group_coordinator_ready().await;
     let broker = handle.broker_arc_for_test();
     let client = krabka_client_core::Client::builder()

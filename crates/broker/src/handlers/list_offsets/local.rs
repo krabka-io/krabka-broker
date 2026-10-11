@@ -108,7 +108,9 @@ mod tests {
             },
             test_support::{ReplicatedPartitionSetup, replicated_partition},
         },
-        test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx},
+        test_support::{
+            UnixMillis, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
+        },
     };
 
     // Activation time of a batch that has long since come due.
@@ -142,11 +144,7 @@ mod tests {
             ScheduleSetup {
                 topic,
                 policy,
-                activations: ACTIVATIONS
-                    .iter()
-                    .copied()
-                    .map(crate::test_support::UnixMillis)
-                    .collect(),
+                activations: ACTIVATIONS.iter().copied().map(UnixMillis).collect(),
                 leader: krabka_ids::NodeId(broker.config.node_id.get()),
             },
         );

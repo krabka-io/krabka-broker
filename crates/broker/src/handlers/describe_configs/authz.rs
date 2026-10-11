@@ -14,7 +14,7 @@ use super::wire::{
     RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
 };
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
+    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
     codes,
     handlers::acl_wire::CLUSTER_RESOURCE_NAME,
 };
@@ -32,7 +32,7 @@ use crate::{
 /// does not describe never reaches it: [`unexpected_resource_type_results`]
 /// refuses the whole request first.
 pub(super) fn resource_authz_failure(
-    authorizer: &dyn crate::authorizer::Authorizer,
+    authorizer: &dyn Authorizer,
     image: &krabka_metadata::MetadataImage,
     principal: &krabka_security::Principal,
     host: &std::net::SocketAddr,

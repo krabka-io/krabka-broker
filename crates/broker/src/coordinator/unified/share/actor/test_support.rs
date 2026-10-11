@@ -24,7 +24,7 @@ use crate::{
         reconciler::ReconcileInput,
         share::config::ShareGroupConfig,
         streams::config::StreamsGroupConfig,
-        test_support::{MemberEpoch, fixed_source},
+        test_support::{MemberEpoch, fixed_source, make_share_persister},
     },
     test_support::PartitionCount,
 };
@@ -85,11 +85,9 @@ pub(super) fn unavailable_persister_coordinator(
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>, Uuid) {
     let (metadata, topic_id) = metadata_with_topic(setup);
     let (coordinator, log) = make_coordinator(metadata);
-    coordinator.set_share_persister(
-        crate::coordinator::unified::test_support::make_share_persister(fixed_source(
-            krabka_metadata::MetadataImage::default(),
-        )),
-    );
+    coordinator.set_share_persister(make_share_persister(fixed_source(
+        krabka_metadata::MetadataImage::default(),
+    )));
     (coordinator, log, topic_id)
 }
 

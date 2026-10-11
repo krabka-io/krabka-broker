@@ -133,14 +133,17 @@ impl BrokerHandle {
 mod tests {
     use assert2::check;
 
-    use crate::share_coordinator::{
-        coordinator::test_support::{image_with_topic, share_write},
-        handlers::test_support::lead_share_state_partitions,
+    use crate::{
+        share_coordinator::{
+            coordinator::test_support::{image_with_topic, share_write},
+            handlers::test_support::lead_share_state_partitions,
+        },
+        test_support::start_broker_with,
     };
 
     #[tokio::test]
     async fn single_broker_handle_share_and_raft_helpers_observe_real_state() {
-        let (handle, dir) = crate::test_support::start_broker_with(|_| {}).await;
+        let (handle, dir) = start_broker_with(|_| {}).await;
         let broker = handle.broker_arc_for_test();
 
         let share_group = "handle-share-summary-mutant-group";

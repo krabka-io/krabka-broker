@@ -78,7 +78,7 @@ mod tests {
         partition::Partition,
         test_support::{
             RecordCount, RepeatedRecordsSetup, StandalonePartitionSetup, UnixMillis,
-            repeated_records_batch,
+            open_partition, repeated_records_batch,
         },
     };
 
@@ -105,7 +105,7 @@ mod tests {
             partition,
             count,
         } = setup;
-        let part = crate::test_support::open_partition(
+        let part = open_partition(
             log_dir,
             StandalonePartitionSetup {
                 topic,

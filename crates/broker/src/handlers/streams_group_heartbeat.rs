@@ -159,7 +159,8 @@ mod tests {
         handlers::{
             RequestContext, encode_response,
             group_heartbeat_test_support::{
-                GroupAclSetup, GroupTopicSetup, check_group_read_denied, topic_with_partitions,
+                GroupAclSetup, GroupTopicSetup, check_group_read_denied, streams_request,
+                topic_with_partitions,
             },
         },
         task_util::ask,
@@ -188,7 +189,7 @@ mod tests {
 
     /// A valid join of member `m1` with a one-subtopology topology.
     fn request(group_id: &str) -> StreamsGroupHeartbeatRequest {
-        crate::handlers::group_heartbeat_test_support::streams_request(group_id, "m1")
+        streams_request(group_id, "m1")
     }
 
     /// Creates a one-partition topic on the test broker, so that a streams

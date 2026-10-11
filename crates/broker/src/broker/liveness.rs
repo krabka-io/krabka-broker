@@ -21,7 +21,9 @@ use crate::{
     metadata_source::MetadataSource,
     metrics::BrokerMetrics,
     network::client::InterBrokerClient,
-    unclean_recovery::{BackgroundRecovery, RecoveryPolicy, UncleanRecoveryHandle},
+    unclean_recovery::{
+        BackgroundRecovery, RecoveryPolicy, UncleanRecoveryHandle, UncleanRecoveryManager,
+    },
 };
 
 /// Drives broker-death failover from the liveness registry. Every
@@ -208,7 +210,7 @@ pub(super) fn start_liveness_services(
         supervisor_shutdown: shutdown.clone(),
         cordoned_log_dirs: log_dirs.2.clone(),
     }));
-    let unclean_recovery = crate::unclean_recovery::UncleanRecoveryManager::spawn(
+    let unclean_recovery = UncleanRecoveryManager::spawn(
         Arc::clone(controller),
         Arc::clone(&liveness),
         config.node_id,

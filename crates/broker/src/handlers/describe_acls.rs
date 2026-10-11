@@ -25,7 +25,7 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{ErrorResponse as _, RequestContext},
+    handlers::{ErrorResponse as _, RequestContext, cluster_describe_denied},
 };
 
 /// The message of a cluster-describe refusal. Kafka's `AuthHelper` writes
@@ -86,7 +86,7 @@ pub(crate) fn handle(
     })?;
 
     let image = broker.controller.current_image();
-    if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+    if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return Ok(DescribeAclsResponse::error(
             codes::CLUSTER_AUTHORIZATION_FAILED,
             Some(CLUSTER_DESCRIBE_DENIED_MESSAGE.into()),

@@ -26,7 +26,7 @@ use crate::{
     features::LATEST_PRODUCTION_METADATA_VERSION,
     host_port::parse_host_port,
     incarnation::load_or_generate,
-    metadata_observer::ObserverConfig,
+    metadata_observer::{MetadataObserver, ObserverConfig},
     metadata_source::{MetadataSource, ObserverSource, QuorumForwarder, or_fatal_fault},
     network::client::{InterBrokerClient, InterBrokerDialer},
     platform::{Sockets, bind_listener},
@@ -269,7 +269,7 @@ async fn start_metadata_source(
 
     drop(controller_listener);
     let dialer = dialer.expect("broker-only node requires a raft dialer");
-    let observer = crate::metadata_observer::MetadataObserver::start(ObserverConfig {
+    let observer = MetadataObserver::start(ObserverConfig {
         client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
         client_frame_max: config.client_frame_max,
         voters: config.controller_quorum_voters.clone(),

@@ -55,7 +55,10 @@ use self::{
 };
 use super::{config::ShareGroupConfig, state::ShareGroupState};
 use crate::{
-    coordinator::unified::{actor::MetadataProvider, offsets_log::write_failure_code},
+    coordinator::{
+        DeleteGroupError,
+        unified::{actor::MetadataProvider, offsets_log::write_failure_code},
+    },
     task_util::spawn_mailbox,
 };
 
@@ -83,7 +86,7 @@ pub enum ShareGroupActorMessage {
     /// `DeleteGroups`. On success the actor stops, and the coordinator drops
     /// its registry entries.
     Delete {
-        reply: oneshot::Sender<Result<(), crate::coordinator::DeleteGroupError>>,
+        reply: oneshot::Sender<Result<(), DeleteGroupError>>,
     },
     Seed(super::super::ShareGroupSeed),
     /// The outcome of the share-state `Initialize` calls that a heartbeat

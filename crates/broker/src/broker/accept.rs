@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     broker::Broker,
+    config::ListenerSpec,
     network::client::tune_socket,
     quota::{lookup_ip_quota_with_key, positive_f64_to_u64},
 };
@@ -65,7 +66,7 @@ async fn shutdown_connection_tasks(connections: &mut JoinSet<()>) {
 pub(super) async fn accept_loop(
     broker: Arc<Broker>,
     listener: TcpListener,
-    spec: crate::config::ListenerSpec,
+    spec: ListenerSpec,
     shutdown: CancellationToken,
 ) {
     let mut connections = JoinSet::new();

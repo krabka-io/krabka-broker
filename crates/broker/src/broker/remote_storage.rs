@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
-    diskless::read::DisklessReadHandle,
+    diskless::{read::DisklessReadHandle, wal_index::WalIndexCache},
     error::BrokerError,
     metadata_source::MetadataSource,
     metrics::{BrokerMetrics, RemoteReaderLevels, RemoteReaderTotals},
@@ -46,9 +46,7 @@ fn build_diskless_read_handle(
         BrokerError::Startup(format!("diskless object store builder failed: {error}"))
     })?;
     Ok(Arc::new(DisklessReadHandle::new(
-        Arc::new(tokio::sync::Mutex::new(
-            crate::diskless::wal_index::WalIndexCache::default(),
-        )),
+        Arc::new(tokio::sync::Mutex::new(WalIndexCache::default())),
         store,
     )))
 }

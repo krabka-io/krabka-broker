@@ -21,7 +21,7 @@ use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
     broker::Broker,
     codes,
-    handlers::RequestContext,
+    handlers::{RequestContext, acl_wire::CLUSTER_RESOURCE_NAME},
 };
 
 pub(super) enum KeySlot {
@@ -42,7 +42,7 @@ pub(super) fn cluster_action_allowed(
             principal: context.principal,
             host: context.peer,
             resource_type: ResourceType::Cluster,
-            resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+            resource_name: CLUSTER_RESOURCE_NAME,
             operation: AclOperation::ClusterAction,
         },
     ) == AuthorizationResult::Allow

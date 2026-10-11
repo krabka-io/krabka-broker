@@ -38,7 +38,7 @@ use crate::{
     codes,
     handlers::{
         acl_wire::CLUSTER_RESOURCE_NAME,
-        test_support::{ReplicatedTopicSetup, seed_partition_replicas},
+        test_support::{ReplicatedTopicSetup, default_records_batch, seed_partition_replicas},
     },
     partition::Partition,
     test_support::{append_partition_batch, start_broker_no_audit_with},
@@ -196,7 +196,7 @@ async fn replicated_partition(
         "the broker leads the partition with node 2 in the ISR"
     );
 
-    let mut batch = crate::handlers::test_support::default_records_batch(&RECORDS);
+    let mut batch = default_records_batch(&RECORDS);
     append_partition_batch(&partition, &mut batch);
     (partition, batch)
 }

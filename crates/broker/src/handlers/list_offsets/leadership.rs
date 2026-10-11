@@ -141,11 +141,13 @@ mod tests {
         handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
         log_dir::partition_dir,
         log_dir_status::LogDirRegistry,
-        test_support::{StandalonePartitionSetup, spawn_standalone_partition},
+        test_support::{
+            StandalonePartitionSetup, spawn_standalone_partition, topic_partition_image,
+        },
     };
 
     fn image_with_topic(topic: &str, leader: u64) -> MetadataImage {
-        crate::test_support::topic_partition_image(topic, 2, || {
+        topic_partition_image(topic, 2, || {
             replicated_partition(ReplicatedPartitionSetup {
                 topic,
                 leader: krabka_audit::NodeId(leader),

@@ -30,7 +30,7 @@ use crate::{
     config::BrokerConfig,
     config_keys::{
         KAFKA_TRUNK_TOPIC_KEYS, broker_dynamic::TOPIC_DEFAULT_SYNONYMS, group::KAFKA_GROUP_KEYS,
-        registry::ConfigType,
+        kafka_broker::KAFKA_BROKER_CONFIGS, registry::ConfigType,
     },
     coordinator::unified::streams::config::StreamsGroupConfig,
     file_config::FileConfig,
@@ -1960,7 +1960,7 @@ fn a_named_broker_reports_every_kafka_config_key() {
     let image = MetadataImage::new(Uuid::nil());
     let result = describe(&image, RESOURCE_TYPE_BROKER, "1", None, EVERYTHING);
 
-    for row in crate::config_keys::kafka_broker::KAFKA_BROKER_CONFIGS {
+    for row in KAFKA_BROKER_CONFIGS {
         let count = result
             .configs
             .iter()

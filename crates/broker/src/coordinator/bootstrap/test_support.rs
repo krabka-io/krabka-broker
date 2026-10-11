@@ -22,6 +22,7 @@ use crate::{
             actor::test_support::empty_metadata,
             config::NextGenConfig,
             offsets_log::{OffsetsLog, ProductionOffsetsLog, fake::InMemoryOffsetsLog},
+            persistence_next_gen::ClassicMemberMetadata,
         },
     },
     error::BrokerError,
@@ -124,7 +125,7 @@ pub(super) fn classic_group_record(
 /// Group and member metadata written by an upgrade, in log order.
 pub(super) fn consumer_group_records(
     epoch: i32,
-    classic: Option<crate::coordinator::unified::persistence_next_gen::ClassicMemberMetadata>,
+    classic: Option<ClassicMemberMetadata>,
 ) -> [(bytes::Bytes, bytes::Bytes); 2] {
     use crate::coordinator::unified::persistence_next_gen as ng;
     [

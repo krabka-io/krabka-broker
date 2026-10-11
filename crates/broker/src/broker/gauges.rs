@@ -17,7 +17,7 @@ use crate::{
     heartbeat::controller_state::ControllerLivenessState,
     log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource,
-    metrics::{BrokerMetrics, DirectoryLabel},
+    metrics::{BrokerMetrics, DirectoryLabel, RaftStateLabel},
     partition_registry::PartitionRegistry,
 };
 
@@ -67,7 +67,7 @@ fn leader_site_drift_partitions(
 fn update_metadata_health_metrics(metrics: &BrokerMetrics, controller: &dyn MetadataSource) {
     let quorum_snapshot = controller.quorum_snapshot();
     if let Some(snap) = &quorum_snapshot {
-        for state_label in crate::metrics::RaftStateLabel::ALL {
+        for state_label in RaftStateLabel::ALL {
             let is_active = i64::from(state_label.state == snap.current_state);
             metrics
                 .raft_current_state

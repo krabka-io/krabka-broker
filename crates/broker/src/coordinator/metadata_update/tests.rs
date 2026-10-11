@@ -22,7 +22,8 @@ use crate::{
         unified::{
             actor::test_support::rpc::consumer_request_as_client as heartbeat,
             test_support::{
-                SwitchableMetadata, consumer_join_request, make_coord_with_metadata, snapshot_of,
+                ConsumerJoinSetup, SwitchableMetadata, consumer_join_request,
+                make_coord_with_metadata, snapshot_of,
             },
         },
     },
@@ -222,13 +223,11 @@ async fn a_metadata_update_refreshes_the_groups_this_broker_coordinates() {
         let handle = coordinator.get_or_create_consumer(group_id);
         let joined = heartbeat(
             &handle,
-            consumer_join_request(
-                crate::coordinator::unified::test_support::ConsumerJoinSetup {
-                    group_id,
-                    topics: &["orders"],
-                    ..Default::default()
-                },
-            ),
+            consumer_join_request(ConsumerJoinSetup {
+                group_id,
+                topics: &["orders"],
+                ..Default::default()
+            }),
         )
         .await;
         check!(joined.member_epoch == 2, "{group_id}");

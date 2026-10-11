@@ -206,8 +206,8 @@ mod tests {
         handlers::{
             encode_response,
             group_heartbeat_test_support::{
-                acl_authorizer, alice, describe_acl, grant_group_read, group_read_acl,
-                topic_with_partitions,
+                GroupTopicSetup, acl_authorizer, alice, describe_acl, grant_group_read,
+                group_read_acl, topic_with_partitions,
             },
             group_read_denied,
         },
@@ -543,14 +543,12 @@ mod tests {
         let allowed_id = uuid::Uuid::from_u128(1);
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g"), describe_acl("topic-a")];
-        records.extend(topic_with_partitions(
-            crate::handlers::group_heartbeat_test_support::GroupTopicSetup {
-                name: "topic-a",
-                topic_id: allowed_id,
-                partitions: PartitionCount(1),
-                node,
-            },
-        ));
+        records.extend(topic_with_partitions(GroupTopicSetup {
+            name: "topic-a",
+            topic_id: allowed_id,
+            partitions: PartitionCount(1),
+            node,
+        }));
         broker
             .controller
             .submit_change(records)

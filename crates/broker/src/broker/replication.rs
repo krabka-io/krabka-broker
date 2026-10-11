@@ -13,6 +13,7 @@ use crate::{
     config::BrokerConfig,
     log_dir_id::LogDirIds,
     log_dir_status::LogDirRegistry,
+    metadata_source::MetadataSource,
     metrics::BrokerMetrics,
     network::client::InterBrokerClient,
     partition_registry::PartitionRegistry,
@@ -33,7 +34,7 @@ pub(super) struct ReplicatorStorage<'a> {
 
 pub(super) fn spawn_replicator_supervisor(
     config: &BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    controller: &Arc<dyn MetadataSource>,
     partitions: &Arc<PartitionRegistry>,
     coordinators: (&Arc<TxnCoordinator>, &Arc<ShareCoordinator>),
     inter_broker_client: &Arc<InterBrokerClient>,

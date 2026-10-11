@@ -21,7 +21,7 @@ use crate::{
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
     producer_state::ProducerState,
-    test_support::{replica_nodes, string_pairs},
+    test_support::{replica_nodes, string_pairs, topic_partition_image},
     txn::coordinator::TxnCoordinator,
 };
 
@@ -173,18 +173,14 @@ pub(super) fn pipeline_input(
 }
 
 pub(crate) fn image_with_topic(topic: &str, isr: &[u64]) -> MetadataImage {
-    crate::test_support::topic_partition_image(
-        topic,
-        i16::try_from(isr.len().max(1)).unwrap(),
-        || {
-            replicated_partition(ReplicatedPartitionSetup {
-                topic,
-                leader: krabka_audit::NodeId(*isr.first().unwrap_or(&1)),
-                replicas: &replica_nodes(isr),
-                ..Default::default()
-            })
-        },
-    )
+    topic_partition_image(topic, i16::try_from(isr.len().max(1)).unwrap(), || {
+        replicated_partition(ReplicatedPartitionSetup {
+            topic,
+            leader: krabka_audit::NodeId(*isr.first().unwrap_or(&1)),
+            replicas: &replica_nodes(isr),
+            ..Default::default()
+        })
+    })
 }
 
 pub(super) fn set_min_isr(img: &mut MetadataImage, topic: &str, n: i32) {

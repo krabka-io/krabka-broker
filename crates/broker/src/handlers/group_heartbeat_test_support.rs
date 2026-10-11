@@ -42,7 +42,7 @@ pub(super) fn acl(
     name: &str,
     operation: AclOperation,
 ) -> MetadataRecord {
-    MetadataRecord::V1AccessControlEntry(allow_acl(crate::test_support::AllowAclSetup {
+    MetadataRecord::V1AccessControlEntry(allow_acl(AllowAclSetup {
         resource_type,
         resource_name: name,
         operation,
@@ -123,8 +123,8 @@ use crate::{
     broker::Broker,
     handlers::test_support::single_replica_partition,
     test_support::{
-        PartitionCount, StreamsJoinSetup, allow_acl, peer, principal, request_context,
-        sasl_principal, start_group_broker, streams_join_request,
+        AllowAclSetup, PartitionCount, StreamsJoinSetup, allow_acl, peer, principal,
+        request_context, sasl_principal, start_group_broker, streams_join_request,
     },
 };
 

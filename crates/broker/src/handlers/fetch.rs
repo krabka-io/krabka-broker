@@ -77,7 +77,7 @@ use crate::{
     handlers::{ApiKeyCode, RequestContext},
     metrics::RequestPhases,
     network::fetch_writer::records_to_serve,
-    wal::quorum::wire::KIP_595_FETCH_VERSION,
+    wal::quorum::wire::{KIP_595_FETCH_VERSION, decode_fetch_request},
 };
 
 /// This handler's own wire api key, for the `api_key` label the request-phase
@@ -179,9 +179,7 @@ pub(crate) async fn handle(
         read_committed,
     } = preparation;
 
-    if version >= KIP_595_FETCH_VERSION
-        && crate::wal::quorum::wire::decode_fetch_request(&req).is_some()
-    {
+    if version >= KIP_595_FETCH_VERSION && decode_fetch_request(&req).is_some() {
         // A KIP-595 fetch always names a replica, so `prepare_fetch` has
         // already checked `ClusterAction` for it.
         if authorization.refuses_every_row() {

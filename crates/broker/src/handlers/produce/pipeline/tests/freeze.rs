@@ -19,7 +19,7 @@ use uuid::Uuid;
 use super::super::{PartitionInput, process_partition};
 use crate::{
     broker::spawn_partition,
-    codes::NONE,
+    codes::{NONE, POLICY_VIOLATION},
     freeze::resolve::{FreezeVerdict, resolve_freeze_mutation, resolve_topic_freeze},
     handlers::{
         produce::{
@@ -170,7 +170,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
     // append, and the wire sentinel for that is -1, not the struct default 0.
     let refused = |scope: &str| PartitionProduceResponse {
         index: 0,
-        error_code: crate::codes::POLICY_VIOLATION,
+        error_code: POLICY_VIOLATION,
         base_offset: -1,
         error_message: Some(verdict(scope, PatternType::Literal, "DR cutover").error_message()),
         ..Default::default()

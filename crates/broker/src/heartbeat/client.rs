@@ -27,6 +27,7 @@ use crate::{
     log_dir_id::LogDirIds,
     log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource,
+    network::client::InterBrokerClient,
 };
 
 /// Where this broker's first unfencing stands: Kafka's
@@ -60,7 +61,7 @@ pub(crate) struct Config {
     /// plain TCP. This is the same dialer the raft transport uses to reach
     /// its peers, so a heartbeat travels the channel the quorum already
     /// authenticates on.
-    pub outbound_client: Arc<crate::network::client::InterBrokerClient>,
+    pub outbound_client: Arc<InterBrokerClient>,
     pub controller_listener_protocol: ListenerProtocol,
     /// SNI and SASL server name for the controller listener, matching the one
     /// the raft dialer presents.
@@ -424,7 +425,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        codes::NOT_CONTROLLER,
+        codes::{NONE, NOT_CONTROLLER},
         cordoned_log_dirs::CordonedLogDirs,
         features::METADATA_VERSION,
         log_dir_id::LogDirIds,
@@ -497,7 +498,7 @@ mod tests {
                 }
                 seen.heartbeats += 1;
                 let error_code = match std::mem::replace(&mut seen.next_answer, Answer::Accept) {
-                    Answer::Accept => crate::codes::NONE,
+                    Answer::Accept => NONE,
                     Answer::NotController => NOT_CONTROLLER,
                     Answer::Silent => return MockReply::Silent,
                     Answer::Close => return MockReply::Close,

@@ -20,6 +20,7 @@ use crate::{
         bootstrap::{bootstrap, bootstrap_audit_topic},
         unified::{ImageMetadataProvider, offsets_log::ProductionOffsetsLog},
     },
+    cordoned_log_dirs::CordonedLogDirs,
     diskless::recovery::{open_config, recover_open_log},
     error::BrokerError,
     log_dir,
@@ -60,7 +61,7 @@ pub(super) async fn recover_storage_and_groups(
     );
     let partitions = Arc::new(
         PartitionRegistry::with_stamp_source(config.stamp_source.as_ref().map(Arc::clone))
-            .with_cordoned_log_dirs(crate::cordoned_log_dirs::CordonedLogDirs::new(
+            .with_cordoned_log_dirs(CordonedLogDirs::new(
                 log_dirs.clone(),
                 config.cordoned_log_dirs.clone(),
             )),

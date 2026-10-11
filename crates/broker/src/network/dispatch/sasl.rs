@@ -23,7 +23,7 @@ use crate::{
     codes,
     error::BrokerError,
     handlers::{ApiKeyCode, api_versions::is_valid_request_body},
-    metrics::UNKNOWN_LABEL,
+    metrics::{BrokerMetrics, UNKNOWN_LABEL},
     network::{
         auth::{
             ConnectionAuth, ReauthClock, generic_failure_message, handle_authenticate_gssapi,
@@ -136,7 +136,7 @@ pub(super) async fn delay_failed_authentication(broker: &Broker) {
 /// `sasl.server.max.receive.size`. The row names the mechanism a handshake
 /// chose, or the `Unknown` sentinel when none did.
 pub(super) fn record_refused_authentication(
-    (metrics, audit_log): (&crate::metrics::BrokerMetrics, &krabka_audit::AuditLog),
+    (metrics, audit_log): (&BrokerMetrics, &krabka_audit::AuditLog),
     auth: &ConnectionAuth,
     peer: &SocketAddr,
     reason: &str,

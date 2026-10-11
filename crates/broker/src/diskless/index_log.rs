@@ -463,6 +463,7 @@ mod tests {
             index_log::test_support::RacingAppendSetup,
             wal_index::{WalFlushRecord, WalIndexEntry},
         },
+        metrics::BrokerMetrics,
         test_support::UnixMillis,
     };
 
@@ -598,7 +599,7 @@ mod tests {
                 .unwrap();
         event_log.publish(0, Bytes::from(bytes)).await.unwrap();
 
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
         let failures = metrics.diskless_wal_index_decode_failures_total.clone();
         let index = DisklessIndexLog::start_with_cache(
             event_log,
@@ -614,7 +615,7 @@ mod tests {
     }
 
     async fn check_invalid_index_log(event_log: Arc<InProcessMetadataEventLog>, case: &str) {
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
         let failures = metrics.diskless_wal_index_decode_failures_total.clone();
         let cache = Arc::new(Mutex::new(WalIndexCache::default()));
         let index = DisklessIndexLog::start_with_cache(event_log, cache.clone(), metrics)

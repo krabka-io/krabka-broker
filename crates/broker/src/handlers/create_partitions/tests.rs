@@ -21,7 +21,7 @@ use crate::{
         test_support::{TopicPartitionCount, replica_availability},
     },
     test_support::{
-        DenyAll, begin_controlled_shutdown, fence_remote_broker, peer, principal,
+        DenyAll, begin_controlled_shutdown, fence_remote_broker, make_witness, peer, principal,
         seed_remote_broker,
     },
 };
@@ -421,7 +421,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         }
         seed_remote_topic(&broker_handle).await;
         for &node_id in witnesses {
-            crate::test_support::make_witness(&broker_handle, node_id).await;
+            make_witness(&broker_handle, node_id).await;
         }
         for &node_id in fenced {
             fence_remote_broker(&broker_handle, node_id).await;

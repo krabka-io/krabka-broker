@@ -8,6 +8,7 @@ use crate::{
         handlers::audit::{GatedTransition, audit_transition},
         metrics::record_refusal,
     },
+    broker::Broker,
     config::BreakGlassConfig,
     handlers::RequestContext,
     time_util::now_ms,
@@ -55,7 +56,7 @@ pub(super) use authorizer;
 
 /// Count a refusal before resolving its target and emitting the audit event.
 pub(super) fn audit_refusal<T: AsRef<str>>(
-    broker: &crate::broker::Broker,
+    broker: &Broker,
     context: &RequestContext<'_>,
     action: BreakGlassAction,
     target: impl FnOnce() -> T,

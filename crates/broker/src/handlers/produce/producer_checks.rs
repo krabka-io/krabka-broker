@@ -9,15 +9,19 @@ use krabka_units::convert::TimeExt as _;
 use super::{ACKS_ALL, INVALID_OFFSET, durability_frontier, prepare::PreparedBatch};
 use crate::{
     api_catalog::UnstableApiVersions,
+    broker::Broker,
     codes,
     error::BrokerError,
     partition::{Partition, ProducerAppendCheck},
     producer_state::{Checked, Decision, ProducerState, SequenceContext},
     time_util::now_ms,
     txn::{
-        coordinator::produce_verification::{
-            INTERNAL_REGISTRATION_VERSION, TransactionCheck, partition_verification_enabled,
-            skips_coordinator_verification,
+        coordinator::{
+            TxnCoordinator,
+            produce_verification::{
+                INTERNAL_REGISTRATION_VERSION, TransactionCheck, partition_verification_enabled,
+                skips_coordinator_verification,
+            },
         },
         state::TopicPartition,
         version::resolve_txn_version,
@@ -62,7 +66,7 @@ impl<'a> TransactionRequest<'a> {
     /// The fields of a `Produce` request that `broker` reads from its own
     /// configuration and from `image`.
     pub(super) fn new(
-        broker: &crate::broker::Broker,
+        broker: &Broker,
         image: &krabka_metadata::MetadataImage,
         (transactional_id, version): (Option<&'a str>, i16),
     ) -> Self {
@@ -199,7 +203,7 @@ pub(super) async fn verify_transactional_produce(
 /// `add.partitions.to.txn.retry.backoff.max.ms` has passed, as
 /// `maybeRetryOnConcurrentTransactions` does.
 pub(super) async fn verify_with_coordinator(
-    coordinator: &std::sync::Arc<crate::txn::coordinator::TxnCoordinator>,
+    coordinator: &std::sync::Arc<TxnCoordinator>,
     image: &krabka_metadata::MetadataImage,
     request: TransactionRequest<'_>,
     (producer_id, producer_epoch): (krabka_log::ProducerId, i16),

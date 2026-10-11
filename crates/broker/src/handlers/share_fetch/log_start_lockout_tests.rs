@@ -34,9 +34,12 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
-    handlers::test_support::{
-        ClientTopicSetup, ProduceRecordsSetup, RecordCount, ShareWireSetup, TopicPartitionCount,
-        share_fetch_partition_rows, share_fetch_topics,
+    handlers::{
+        delete_records::handle,
+        test_support::{
+            ClientTopicSetup, ProduceRecordsSetup, RecordCount, ShareWireSetup,
+            TopicPartitionCount, share_fetch_partition_rows, share_fetch_topics,
+        },
     },
     test_support::{initialize_share_state, peer, principal, start_broker_no_audit_with},
 };
@@ -104,10 +107,9 @@ async fn delete_records(
         principal("admin"),
         client_id = "admin-client"
     );
-    let response =
-        crate::handlers::delete_records::handle(&shared, request, DELETE_RECORDS_VERSION, &ctx)
-            .await
-            .expect("handle delete records");
+    let response = handle(&shared, request, DELETE_RECORDS_VERSION, &ctx)
+        .await
+        .expect("handle delete records");
     response.topics[0].partitions[0].error_code
 }
 

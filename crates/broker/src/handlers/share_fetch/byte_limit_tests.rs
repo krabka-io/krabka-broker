@@ -33,9 +33,10 @@ use crate::{
     handlers::{
         produce::handle,
         test_support::{
-            AcknowledgementPartitionSetup, AcknowledgementSetup, ShareSessionEpoch, ShareWireSetup,
-            TopicPartitionCount, acknowledge_batches_request, acquired_share_records,
-            share_acknowledge_wire, share_fetch_wire,
+            AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup,
+            ClientTopicSetup, ShareSessionEpoch, ShareWireSetup, TopicPartitionCount,
+            acknowledge_batches_request, acquired_share_records, share_acknowledge_wire,
+            share_fetch_wire,
         },
     },
     test_support::{
@@ -84,7 +85,7 @@ async fn create_topic_with_partitions(
 ) -> WireUuid {
     crate::handlers::test_support::create_topic(
         broker,
-        crate::handlers::test_support::ClientTopicSetup {
+        ClientTopicSetup {
             client_id: "share-fetch-byte-limit-test",
             name,
             partitions: TopicPartitionCount(partitions),
@@ -617,7 +618,7 @@ async fn release(
 
         partition: AcknowledgementPartitionSetup::single_batch(
             krabka_log::Offset(first_offset)..=krabka_log::Offset(last_offset),
-            crate::handlers::test_support::AcknowledgementCode(RELEASE),
+            AcknowledgementCode(RELEASE),
         ),
         ..AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
     });

@@ -9,7 +9,7 @@ use crate::{
     handlers::create_topics::{INITIAL_LEADER_EPOCH, InitialLeadership},
     partition::PartitionRuntimeConfig,
     replicator_supervisor::{MaterializePartitionConfig, materialize_partition},
-    wal::OffsetSequencer,
+    wal::{ControllerSequencer, OffsetSequencer},
 };
 
 /// Only assigned replicas open a local partition.
@@ -60,9 +60,8 @@ impl PartitionMaterialization<'_> {
                         Some(broker.hot_tail.clone()),
                         Some(broker.wal_shards.clone()),
                         self.diskless.then(|| {
-                            std::sync::Arc::new(crate::wal::ControllerSequencer::new(
-                                broker.controller.clone(),
-                            )) as std::sync::Arc<dyn OffsetSequencer>
+                            std::sync::Arc::new(ControllerSequencer::new(broker.controller.clone()))
+                                as std::sync::Arc<dyn OffsetSequencer>
                         }),
                     ),
                 ),
