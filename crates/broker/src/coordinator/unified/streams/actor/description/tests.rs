@@ -14,7 +14,7 @@ use krabka_protocol::owned::{
 };
 
 use super::*;
-use crate::coordinator::unified::{
+use crate::{coordinator::unified::{
     StreamsGroupSeed,
     offsets_log::fake::InMemoryOffsetsLog,
     persistence::{Key, parse_key},
@@ -27,7 +27,7 @@ use crate::coordinator::unified::{
         persistence::{StreamsGroupKey, StreamsGroupMetadataValue},
         topology::to_stored_topology,
     },
-};
+}, task_util::ask};
 
 fn coordinator(plugin: TopologyDescriptionPlugin) -> Arc<GroupCoordinator> {
     coordinator_and_log(plugin).0
@@ -109,7 +109,7 @@ async fn heartbeat(
 }
 
 async fn push(handle: &StreamsGroupActorHandle, push: DescriptionPush) -> PushAnswer {
-    crate::task_util::ask(&handle.tx, |reply| {
+    ask(&handle.tx, |reply| {
         StreamsGroupActorMessage::PushDescription {
             push: Box::new(push),
             reply,

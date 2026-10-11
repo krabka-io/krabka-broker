@@ -9,7 +9,7 @@
 //! [`apply_seed`] is their inverse for bootstrap replay and respawn.
 
 use super::ActorState;
-use crate::coordinator::unified::{
+use crate::{coordinator::unified::{
     GroupCoordinator, StreamsGroupSeed,
     member_records::MemberValues,
     offsets_log::OffsetsLog,
@@ -24,7 +24,7 @@ use crate::coordinator::unified::{
             StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState,
         },
     },
-};
+}, error::BrokerError, metadata_source::MetadataSource};
 
 /// The records of one streams-group transition, as Kafka's
 /// `GroupMetadataManager` writes them: a record only where the transition
@@ -257,10 +257,10 @@ crate::coordinator::unified::persistence::flush_pending_records! {
 pub(super) async fn reconcile_and_flush(
     actor: &mut ActorState,
     config: &super::super::config::StreamsGroupConfig,
-    metadata_source: Option<&std::sync::Arc<dyn crate::metadata_source::MetadataSource>>,
+    metadata_source: Option<&std::sync::Arc<dyn MetadataSource>>,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
-) -> Result<(), crate::error::BrokerError> {
+) -> Result<(), BrokerError> {
     let recorder = StreamsRecorder::start(actor, &[]);
     super::reconciliation::reconcile(actor, config, metadata_source);
     let pending = recorder.finish(actor);
@@ -384,9 +384,9 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::{
+    use crate::coordinator::unified::{streams::persistence::{
         StreamsGroupTopologyValue, StreamsMemberWireState,
-    };
+    }, test_support::{plain_streams_member, stable_streams_assignment}};
 
     #[test]
     fn seed_hydrates_state() {
@@ -414,7 +414,7 @@ mod tests {
             "m1".to_string(),
             StreamsGroupCurrentMemberAssignmentValue {
                 active_epochs: maplit::btreemap! {"0".to_string() => vec![3, 4]},
-                ..crate::coordinator::unified::test_support::stable_streams_assignment(
+                ..stable_streams_assignment(
                     (4, 3),
                     maplit::btreemap! {"0".to_string() => vec![0, 1]},
                 )
@@ -515,7 +515,7 @@ mod tests {
             let seed = StreamsGroupSeed {
                 members: [(
                     "m1".to_string(),
-                    crate::coordinator::unified::test_support::plain_streams_member(0),
+                    plain_streams_member(0),
                 )]
                 .into(),
                 current_per_member: [(

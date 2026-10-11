@@ -40,6 +40,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::{codes::{FENCED_MEMBER_EPOCH, UNKNOWN_MEMBER_ID}, coordinator::unified::INITIAL_GROUP_EPOCH};
+
 use self::current_assignment::{TaskOwners, next_member_state};
 
 mod current_assignment;
@@ -127,7 +129,7 @@ pub struct StreamsGroupState {
 /// epoch past the assignment epoch. A member that joins while the initial
 /// rebalance delay holds the assignment back so reconciles to epoch 1, and does
 /// not stay at the join epoch 0.
-pub const INITIAL_EPOCH: i32 = crate::coordinator::unified::INITIAL_GROUP_EPOCH;
+pub const INITIAL_EPOCH: i32 = INITIAL_GROUP_EPOCH;
 
 impl StreamsGroupState {
     pub fn new(group_id: impl Into<String>) -> Self {
@@ -326,7 +328,7 @@ impl StreamsGroupState {
         owned: OwnedTasks<'_>,
     ) -> Result<i32, i16> {
         let Some(member) = self.members.get(member_id) else {
-            return Err(crate::codes::UNKNOWN_MEMBER_ID);
+            return Err(UNKNOWN_MEMBER_ID);
         };
         let lost_bump = requested_epoch == member.previous_member_epoch
             && tasks_contained(owned.active, &member.active)
@@ -335,7 +337,7 @@ impl StreamsGroupState {
         if requested_epoch == 0 || requested_epoch == member.member_epoch || lost_bump {
             Ok(member.member_epoch)
         } else {
-            Err(crate::codes::FENCED_MEMBER_EPOCH)
+            Err(FENCED_MEMBER_EPOCH)
         }
     }
 
