@@ -32,7 +32,7 @@ use krabka_protocol::{
 
 use crate::{
     freeze_signing::{FreezeBytes, freeze_signing_bytes},
-    support,
+    support::{self, OperatorKeysSetup},
 };
 
 /// The proposer. She freezes the topic, opens the proposal, and thaws it.
@@ -211,7 +211,7 @@ pub(super) async fn boot_workflow_cluster() -> Cluster {
     let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl(
         &log_dir,
         crate::support::OperatorSaslSetup {
-            trust: crate::support::OperatorKeysSetup {
+            trust: OperatorKeysSetup {
                 keys: &[&alice_key],
                 approvers: &[ALICE, BOB, CAROL],
             },

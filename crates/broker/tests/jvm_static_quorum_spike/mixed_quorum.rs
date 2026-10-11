@@ -11,7 +11,9 @@ use assert2::check;
 use uuid::Uuid;
 
 use crate::{
-    static_quorum_harness::{docker_rm, kafka_cluster_id_string},
+    static_quorum_harness::{
+        docker_rm, jvm_controller_properties, kafka_cluster_id_string, start_jvm_controller,
+    },
     support,
 };
 
@@ -37,9 +39,8 @@ async fn static_mixed_jvm_krabka_quorum() {
     // ── format + start the JVM controller (id 3) ───────────────────────────
     // The JVM's controller.quorum.voters lists addresses reachable FROM the
     // container: the Krabka voters at host.docker.internal, itself on localhost.
-    let props = crate::static_quorum_harness::jvm_controller_properties([p1, p2, p3], "");
-    let _propdir =
-        crate::static_quorum_harness::start_jvm_controller(CONTAINER, p3, &cid_str, &props);
+    let props = jvm_controller_properties([p1, p2, p3], "");
+    let _propdir = start_jvm_controller(CONTAINER, p3, &cid_str, &props);
 
     eprintln!("JVM controller (id 3) container started");
 

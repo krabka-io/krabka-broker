@@ -541,8 +541,10 @@ fn compile_transactional_producer() -> tempfile::TempDir {
     std::fs::write(&source, TRANSACTIONAL_PRODUCER_JAVA).expect("write the Java helper");
     #[cfg(unix)]
     {
-        crate::support::chmod_for_container(work.path(), 0o777, "chmod the work directory");
-        crate::support::chmod_for_container(&source, 0o644, "chmod the Java helper");
+        use crate::support::chmod_for_container;
+
+        chmod_for_container(work.path(), 0o777, "chmod the work directory");
+        chmod_for_container(&source, 0o644, "chmod the Java helper");
     }
 
     let out = docker_run_kafka_tool_with_image_and_mount(

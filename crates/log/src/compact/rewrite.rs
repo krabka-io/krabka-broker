@@ -22,7 +22,7 @@ use super::{
 };
 use crate::{
     error::LogError,
-    io::{IoTarget, write_all},
+    io::{IoTarget, LogIo, write_all},
     record_limit::check_records_read,
     recovery::swap::cleaned_path,
     segment::Segment,
@@ -38,7 +38,7 @@ mod transaction_tests;
 
 /// Encode one retained batch and advance the inclusive output frontier after its write.
 fn write_rewritten_batch(
-    io: &dyn crate::io::LogIo,
+    io: &dyn LogIo,
     file: &File,
     batch: &RecordBatch,
     previous_last: Offset,
@@ -183,7 +183,7 @@ impl CleaningRound<'_> {
     err,
 )]
 pub fn rewrite_segments(
-    io: &dyn crate::io::LogIo,
+    io: &dyn LogIo,
     dir: &Path,
     segments: &[&Segment],
     offset_map: &HashMap<Bytes, Offset>,

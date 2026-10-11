@@ -83,8 +83,10 @@ use support::topic_id_for;
 
 use crate::support::{
     client::connect_client,
+    consumer_groups::routing_consumer,
+    produce::{SinglePartitionProduceSetup, batch_request},
     records::value_record,
-    topics::{creatable_topic, create_topic_request},
+    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
 /// Produces each value as its OWN single-record batch, one batch per offset,
@@ -106,9 +108,9 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
         let mut produced = false;
         for attempt in 1..=5 {
             let resp = client
-                .send(crate::support::produce::batch_request(
+                .send(batch_request(
                     batch.clone(),
-                    crate::support::produce::SinglePartitionProduceSetup {
+                    SinglePartitionProduceSetup {
                         topic: (topic).into(),
                         topic_id,
                         ..Default::default()
@@ -139,7 +141,7 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
 async fn create_topic(client: &Client, name: &str) {
     let cr = client
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: (name).into(),
                 ..Default::default()
             },
@@ -195,7 +197,7 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
     // `offset_epoch = 0`. This commit MUST happen before the divergence is
     // induced, while the records still exist.
     {
-        let mut seed = crate::support::consumer_groups::routing_consumer(
+        let mut seed = routing_consumer(
             &bootstrap,
             "seed",
             "proactive-grp",
@@ -265,7 +267,7 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
     // `None` and no truncation it would simply park at the log-end and deliver
     // nothing — so any surfaced `LogTruncation` is the proactive validation
     // result, not a fetch-driven reset.
-    let mut consumer = crate::support::consumer_groups::routing_consumer(
+    let mut consumer = routing_consumer(
         &bootstrap,
         "c",
         "proactive-grp",

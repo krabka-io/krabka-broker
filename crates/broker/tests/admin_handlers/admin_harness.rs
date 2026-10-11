@@ -6,7 +6,7 @@ use assert2::assert;
 
 use crate::support::{
     client::connect_owned,
-    topics::{creatable_topic, create_topic_request},
+    topics::{TopicPartitionCount, creatable_topic, create_topic_request},
 };
 
 pub(crate) async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
@@ -26,7 +26,7 @@ pub(crate) async fn create_topic_helper(
     let req = create_topic_request(creatable_topic(
         crate::support::topics::ConfiguredTopicSetup {
             name: (name).into(),
-            partitions: crate::support::topics::TopicPartitionCount(partitions),
+            partitions: TopicPartitionCount(partitions),
             ..Default::default()
         },
     ));

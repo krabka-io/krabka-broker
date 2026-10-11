@@ -7,7 +7,10 @@
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{KAFKA_IMAGE_LEGACY, broker0_advertised, docker_run_kafka_tool};
+use crate::{
+    jvm_acceptance::{KAFKA_IMAGE_LEGACY, broker0_advertised, docker_run_kafka_tool},
+    support::{ContainerInput, JvmDockerSetup, jvm_docker_command, jvm_stdin_output},
+};
 
 /// Test 4: gzip-compressed legacy round-trip.
 ///
@@ -55,7 +58,7 @@ async fn compressed_round_trip(topic: &str, compression: &str) {
     }
 
     // Produce via legacy with gzip.
-    let mut child_command = crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+    let mut child_command = jvm_docker_command(JvmDockerSetup {
         image: KAFKA_IMAGE_LEGACY,
         args: &[
             "kafka-console-producer",
@@ -70,10 +73,10 @@ async fn compressed_round_trip(topic: &str, compression: &str) {
             "--producer-property",
             "linger.ms=100", // give the producer time to batch
         ],
-        input: crate::support::ContainerInput::Attached,
+        input: ContainerInput::Attached,
         ..Default::default()
     });
-    let producer_out = crate::support::jvm_stdin_output(&mut child_command, input.as_bytes());
+    let producer_out = jvm_stdin_output(&mut child_command, input.as_bytes());
     assert!(
         producer_out.status.success(),
         "legacy {compression} producer failed: stdout={} stderr={}",

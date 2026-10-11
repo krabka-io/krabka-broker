@@ -16,7 +16,7 @@ use super::{
 use crate::{
     config::{BootstrapMode, ControllerConfig, UnstableFeatureVersions},
     error::RaftError,
-    kraft::KraftController,
+    kraft::{Activation, KraftController},
     network::{OutboundDialer, PlaintextDialer, RealPeerSender},
     server,
 };
@@ -144,7 +144,7 @@ impl Controller {
             config.max_snapshot_interval,
             metadata_snapshot_fetch_max,
             config.metadata_log,
-            crate::kraft::Activation {
+            Activation {
                 bootstrap_records: config.bootstrap_records.clone(),
                 default_min_insync_replicas: config.default_min_insync_replicas,
             },
@@ -370,7 +370,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        controller::test_support::{submit_change_with_timeout, wait_for_leader},
+        controller::test_support::{
+            joining_controller, submit_change_with_timeout, wait_for_leader,
+        },
+        metadata_partition_dir,
         types::NodeId,
     };
 
@@ -422,7 +425,7 @@ mod tests {
         wait_for_leader(&ctrl).await;
         // The committed offset is written to this file on every advance. A
         // directory in its place makes the next write fail with an I/O error.
-        let high_watermark = crate::metadata_partition_dir(dir.path()).join("high-watermark");
+        let high_watermark = metadata_partition_dir(dir.path()).join("high-watermark");
         let _ = std::fs::remove_file(&high_watermark);
         std::fs::create_dir(&high_watermark).unwrap();
 
@@ -545,9 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_on_empty_log_starts_unattached() {
-        let (_dir, ctrl) =
-            crate::controller::test_support::joining_controller("Join on empty log starts ok")
-                .await;
+        let (_dir, ctrl) = joining_controller("Join on empty log starts ok").await;
         // Without voters this node never elects.
         assert2::assert!(ctrl.watch_leader().borrow().is_none());
         ctrl.shutdown().await;

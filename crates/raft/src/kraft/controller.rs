@@ -80,6 +80,7 @@ use crate::{
         },
         types::{Epoch, LogView, NodeId, QuorumState, ReplicaKey, SimInstant},
     },
+    reconfig::ReconfigOutcome,
 };
 
 mod activation;
@@ -344,7 +345,7 @@ struct KraftControlState {
 
 struct PendingReconfig {
     need_offset: Offset,
-    reply: Option<oneshot::Sender<Result<crate::reconfig::ReconfigOutcome, RaftError>>>,
+    reply: Option<oneshot::Sender<Result<ReconfigOutcome, RaftError>>>,
     removed_local_leader: bool,
 }
 

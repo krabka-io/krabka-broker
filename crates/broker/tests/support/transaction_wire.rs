@@ -18,14 +18,20 @@ use krabka_protocol::{
 };
 
 use crate::support::{
+    produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},
+    topics::{
+        AssignedTopicSetup, ConfiguredTopicSetup, TopicPartitionCount, assigned_topic,
+        creatable_topic,
+    },
     transactions::{
-        PartitionRegistration, ProducerIdentity, init_producer_request as producer_initialization,
+        InitProducerSetup, PartitionRegistration, ProducerIdentity,
+        init_producer_request as producer_initialization,
     },
 };
 
 pub(crate) fn init_producer_request(transactional_id: &str) -> InitProducerIdRequest {
-    producer_initialization(crate::support::transactions::InitProducerSetup {
+    producer_initialization(InitProducerSetup {
         transactional_id: Some(transactional_id.into()),
         ..Default::default()
     })
@@ -124,12 +130,12 @@ pub(crate) fn produce_request(setup: TransactionProduceSetup<'_>) -> ProduceRequ
     ProduceRequest {
         // KIP-890 verification needs the transactional id for transactional batches.
         transactional_id: producer.map(|_| transactional_id.to_string()),
-        ..crate::support::produce::batch_request(
+        ..batch_request(
             batch,
-            crate::support::produce::SinglePartitionProduceSetup {
+            SinglePartitionProduceSetup {
                 topic: (topic).into(),
                 topic_id,
-                ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+                ..SinglePartitionProduceSetup::replicated()
             },
         )
     }
@@ -179,7 +185,7 @@ pub struct TransactionTopicSetup<'a> {
     #[default("orders")]
     pub name: &'a str,
     #[default(crate::support::topics::TopicPartitionCount(1))]
-    pub partitions: crate::support::topics::TopicPartitionCount,
+    pub partitions: TopicPartitionCount,
     pub configs: Vec<CreatableTopicConfig>,
     #[default("CreateTopics")]
     pub context: &'a str,
@@ -196,13 +202,11 @@ pub async fn create_topic(client: &krabka_client_core::Client, setup: Transactio
         .send(crate::support::topics::create_topic_request(
             krabka_protocol::owned::create_topics_request::CreatableTopic {
                 configs,
-                ..crate::support::topics::creatable_topic(
-                    crate::support::topics::ConfiguredTopicSetup {
-                        name: (name).into(),
-                        partitions: crate::support::topics::TopicPartitionCount(partitions.0),
-                        ..Default::default()
-                    },
-                )
+                ..creatable_topic(ConfiguredTopicSetup {
+                    name: (name).into(),
+                    partitions: TopicPartitionCount(partitions.0),
+                    ..Default::default()
+                })
             },
         ))
         .await
@@ -339,7 +343,7 @@ pub(crate) async fn settled_produce(
 
 #[derive(krabka_macros::FieldDefaults)]
 pub(crate) struct AssignedTransactionTopicSetup<'a> {
-    pub topic: crate::support::topics::AssignedTopicSetup,
+    pub topic: AssignedTopicSetup,
     pub context: Option<&'a str>,
 }
 
@@ -349,7 +353,7 @@ pub(crate) async fn create_assigned_topic(
 ) -> Uuid {
     let created = client
         .send(crate::support::topics::create_topic_request(
-            crate::support::topics::assigned_topic(setup.topic),
+            assigned_topic(setup.topic),
         ))
         .await
         .expect("CreateTopics");

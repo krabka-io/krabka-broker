@@ -8,7 +8,8 @@ use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use crate::{
-    ControllerFetchMissLimit, MetadataLogConfig, MetadataRaftFetchMax,
+    ControllerFetchMissLimit, MetadataLogConfig, MetadataRaftCommandQueueCapacity,
+    MetadataRaftFetchMax,
     error::RaftError,
     kraft::{Activation, KraftController, NullPeerSender},
     test_support::single_partition_topic,
@@ -64,7 +65,7 @@ pub(super) fn test_engine_with_voters(
         TEST_ELECTION_TIMEOUT,
         None,
         ControllerFetchMissLimit::default(),
-        crate::MetadataRaftCommandQueueCapacity::default(),
+        MetadataRaftCommandQueueCapacity::default(),
         MetadataRaftFetchMax::default(),
         std::sync::Arc::new(NullPeerSender),
         0,

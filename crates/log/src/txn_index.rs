@@ -22,7 +22,7 @@ use zerocopy::{
 
 use crate::{
     error::LogError,
-    index::{open_index, rewrite_sidecar_file},
+    index::{open_index, rewrite_retained_entries, rewrite_sidecar_file},
 };
 
 const ENTRY_BYTES: usize = 34;
@@ -159,7 +159,7 @@ impl TxnIndex {
     /// Returns an I/O error if the transaction-index sidecar cannot be
     /// rewritten or synchronized.
     pub fn truncate_from(&mut self, offset: Offset) -> Result<(), LogError> {
-        if let Some(entries) = crate::index::rewrite_retained_entries(
+        if let Some(entries) = rewrite_retained_entries(
             &self.entries,
             |entry| entry.last_offset < offset,
             |entries| {

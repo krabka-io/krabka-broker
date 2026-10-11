@@ -12,6 +12,10 @@ use assert2::assert;
 use krabka_client_core::Client;
 use krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRequest;
 
+use crate::support::share::{
+    ConsumptionFixture, ConsumptionSetup, ShareRecordSeedSetup, ShareRecordsSetup,
+    ShareSessionSetup, consumption_fixture, permitted_topic_fixture, start_topic,
+};
 pub use crate::support::share::{
     acquired_count, bootstrap_share_state, broker_config, broker_test_permit, connect,
     create_topic, produce_n,
@@ -90,14 +94,14 @@ crate::share_consumption_fixture!(
 /// Initialize the persisted topic/group fixture before a restart scenario.
 pub async fn initialized_topic(
     log_dir: std::path::PathBuf,
-    setup: crate::support::share::ShareRecordSeedSetup,
+    setup: ShareRecordSeedSetup,
 ) -> (
     krabka_broker::BrokerHandle,
     std::sync::Arc<Client>,
     uuid::Uuid,
     String,
 ) {
-    let (broker, client, tid) = crate::support::share::start_topic(
+    let (broker, client, tid) = start_topic(
         broker_config(log_dir),
         crate::support::share::ShareTopicSetup::default(),
     )
@@ -105,7 +109,7 @@ pub async fn initialized_topic(
     let (member, _) = initialize_consumption(
         &broker,
         &client,
-        crate::support::share::ConsumptionSetup {
+        ConsumptionSetup {
             topic_id: tid,
             count: setup.count,
         },
@@ -116,7 +120,7 @@ pub async fn initialized_topic(
 
 /// Prepare g1's persister and data without joining a member to the group.
 pub async fn seeded_empty_group(
-    setup: crate::support::share::ShareRecordSeedSetup,
+    setup: ShareRecordSeedSetup,
 ) -> (
     tokio::sync::OwnedSemaphorePermit,
     krabka_broker::BrokerHandle,
@@ -124,15 +128,12 @@ pub async fn seeded_empty_group(
     tempfile::TempDir,
     uuid::Uuid,
 ) {
-    let (permit, broker, client, dir, tid) = crate::support::share::permitted_topic_fixture(
-        crate::support::share::ShareTopicSetup::default(),
-        |_| {},
-    )
-    .await;
+    let (permit, broker, client, dir, tid) =
+        permitted_topic_fixture(crate::support::share::ShareTopicSetup::default(), |_| {}).await;
     bootstrap_share_state(&broker, &client, "g1").await;
     produce_n(
         &client,
-        crate::support::share::ShareRecordsSetup {
+        ShareRecordsSetup {
             topic_id: tid,
             count: setup.count,
             ..Default::default()
@@ -164,23 +165,15 @@ pub async fn acquired_topic() -> (
     String,
     krabka_protocol::owned::share_fetch_response::PartitionData,
 ) {
-    let crate::support::share::ConsumptionFixture {
+    let ConsumptionFixture {
         _permit: permit,
         broker,
         client,
         _dir: dir,
         tid,
         member,
-    } = crate::support::share::consumption_fixture(
-        crate::support::share::ShareRecordSeedSetup::default(),
-        initialize_consumption,
-    )
-    .await;
-    let row = fetch_until_acquired(
-        &client,
-        crate::support::share::ShareSessionSetup::opening(&member, tid),
-    )
-    .await;
+    } = consumption_fixture(ShareRecordSeedSetup::default(), initialize_consumption).await;
+    let row = fetch_until_acquired(&client, ShareSessionSetup::opening(&member, tid)).await;
     (permit, broker, client, dir, tid, member, row)
 }
 
@@ -197,9 +190,7 @@ pub struct InitializedRestartFixture {
     ),
 }
 
-pub async fn initialized_restart_fixture(
-    setup: crate::support::share::ShareRecordSeedSetup,
-) -> InitializedRestartFixture {
+pub async fn initialized_restart_fixture(setup: ShareRecordSeedSetup) -> InitializedRestartFixture {
     let (permit, dir, log_dir) = restart_directory().await;
     let topic = initialized_topic(log_dir.clone(), setup).await;
     InitializedRestartFixture {

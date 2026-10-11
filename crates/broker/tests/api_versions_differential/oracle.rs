@@ -34,7 +34,10 @@ use krabka_security::ListenerProtocol;
 
 use crate::{
     probe::{retry_until, wait_bounded},
-    support::{JvmListeners, unique_container_name},
+    support::{
+        JvmBrokerSetup, JvmDockerSetup, JvmListeners, controller_voters, docker_logs,
+        jvm_broker_config, remove_container, unique_container_name,
+    },
 };
 
 /// The Kafka release this suite compares krabka against.
@@ -100,13 +103,13 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
             },
         ],
         inter_broker_listener_name: "BROKER".to_string(),
-        ..crate::support::jvm_broker_config(
+        ..jvm_broker_config(
             dir.path().to_path_buf(),
-            crate::support::JvmBrokerSetup {
+            JvmBrokerSetup {
                 listen: client_addr,
                 controller: controller_addr,
                 advertised: listeners.advertised.clone(),
-                voters: crate::support::controller_voters(&[(1, controller_addr)]),
+                voters: controller_voters(&[(1, controller_addr)]),
                 ..Default::default()
             },
         )
@@ -122,7 +125,7 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
 /// Run the tool from a throwaway container against the krabka broker that
 /// `listeners` advertises, and return its stdout.
 pub(crate) fn krabka_api_versions(listeners: &JvmListeners) -> String {
-    let out = crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+    let out = crate::support::jvm_docker_command(JvmDockerSetup {
         image: ORACLE_IMAGE,
         args: &[TOOL, "--bootstrap-server", &listeners.advertised],
         ..Default::default()
@@ -238,12 +241,12 @@ impl OracleBroker {
     }
 
     fn logs(&self) -> String {
-        crate::support::docker_logs(&self.name)
+        docker_logs(&self.name)
     }
 }
 
 impl Drop for OracleBroker {
     fn drop(&mut self) {
-        crate::support::remove_container(&self.name);
+        remove_container(&self.name);
     }
 }

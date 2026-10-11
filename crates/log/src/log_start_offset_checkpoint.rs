@@ -29,7 +29,7 @@ use krabka_ids::Offset;
 
 use crate::{
     error::LogError,
-    io::{IoTarget, LogIo},
+    io::{IoTarget, LogIo, write_atomic},
     name,
 };
 
@@ -82,7 +82,7 @@ fn parse(contents: &str) -> Result<Offset, LogError> {
 pub(crate) fn write(io: &dyn LogIo, dir: &Path, log_start_offset: Offset) -> Result<(), LogError> {
     let path = name::log_start_offset_checkpoint_path(dir);
     let tmp = path.with_extension("tmp");
-    crate::io::write_atomic(
+    write_atomic(
         io,
         IoTarget::LogStartOffsetCheckpoint,
         &tmp,

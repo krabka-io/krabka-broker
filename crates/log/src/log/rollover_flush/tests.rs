@@ -15,7 +15,9 @@ use tempfile::tempdir;
 
 use crate::{
     Log, LogConfig, LogError, LogIo, Segment,
-    log::test_support::{install_stamps, sample_batch, tiny_segments, verbatim_from},
+    log::test_support::{
+        append_samples, install_stamps, sample_batch, tiny_segments, verbatim_from,
+    },
     name,
     producer_snapshot::{self, ProducerSnapshotEntry},
     test_support::open_log,
@@ -463,7 +465,7 @@ fn sealed_segment_flush_survives_each_post_roll_setup_failure() {
             assert!(log.tierable_segments().len() == 1);
             std::fs::remove_dir(&blocked).unwrap();
             // A retry and another roll must not leave a gap in the archive.
-            crate::log::test_support::append_samples(&mut log, 2, 1);
+            append_samples(&mut log, 2, 1);
             log.sync().unwrap();
             assert!(log.tierable_segments().len() == 2);
         }

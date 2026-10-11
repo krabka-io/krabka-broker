@@ -9,14 +9,18 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{
-        NO_LIMIT, append_samples, sample_batch, test_batch_at, test_log, tiny_segments,
+    log::{
+        RawRead,
+        test_support::{
+            NO_LIMIT, append_samples, sample_batch, test_batch_at, test_log, tiny_segments,
+        },
     },
+    segment::Segment,
     test_support::segmented_log,
 };
 
 /// Read a complete raw response and check every byte against the written wire image.
-fn check_raw_bytes(log: &Log, wire: &[u8]) -> crate::log::RawRead {
+fn check_raw_bytes(log: &Log, wire: &[u8]) -> RawRead {
     let log_end = log.log_end_offset();
     let read = log.read_raw(Offset(0), log_end, mebibytes(10)).unwrap();
     assert2::assert!(read.start_offset == Offset(0));
@@ -251,7 +255,7 @@ fn seam_log() -> (tempfile::TempDir, Log, usize) {
         .segments
         .iter()
         .chain(log.active.as_ref())
-        .map(crate::segment::Segment::base_offset)
+        .map(Segment::base_offset)
         .collect();
     assert2::assert!(bases == vec![Offset(0), Offset(9), Offset(11)]);
     (dir, log, small)

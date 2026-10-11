@@ -11,7 +11,10 @@ use assert2::assert;
 use krabka_client_core::Client;
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
-use crate::support::offsets::{offset_fetch_group, offset_fetch_request, offset_fetch_topic};
+use crate::support::{
+    offsets::{offset_fetch_group, offset_fetch_request, offset_fetch_topic},
+    streams::ElectionReadiness,
+};
 
 // ── error codes ──────────────────────────────────────────────────────────────
 pub const ERR_NONE: i16 = 0;
@@ -21,7 +24,7 @@ pub const ERR_GROUP_ID_NOT_FOUND: i16 = 69;
 // ── boot / connect helpers ────────────────────────────────────────────────────
 
 pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    crate::support::streams::boot(crate::support::streams::ElectionReadiness::BrokerElectable).await
+    crate::support::streams::boot(ElectionReadiness::BrokerElectable).await
 }
 
 pub async fn connect(bootstrap: &str) -> Arc<Client> {

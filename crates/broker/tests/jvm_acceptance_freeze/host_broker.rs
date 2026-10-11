@@ -15,7 +15,8 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 use crate::{
-    support,
+    jvm_acceptance::plain_client_properties,
+    support::{self, JvmBrokerSetup},
     vocabulary::{SASL_LISTENER, approver_set},
 };
 
@@ -57,7 +58,7 @@ pub(super) async fn start_jvm_broker(adjust: impl FnOnce(&mut BrokerConfig)) -> 
 
     let mut config = support::jvm_broker_config(
         dir.path().to_path_buf(),
-        crate::support::JvmBrokerSetup {
+        JvmBrokerSetup {
             listen,
             controller,
             advertised: listeners.advertised.clone(),
@@ -119,5 +120,5 @@ pub(super) fn gate_on(config: &mut BrokerConfig) {
 
 /// The JVM client properties for one PLAIN operator.
 pub(super) fn sasl_props(user: &str, pass: &str) -> String {
-    crate::jvm_acceptance::plain_client_properties(user, pass)
+    plain_client_properties(user, pass)
 }

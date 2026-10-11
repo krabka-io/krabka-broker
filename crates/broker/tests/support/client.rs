@@ -16,8 +16,12 @@ use tokio::{
 };
 
 use crate::support::{
+    produce::{ProduceTimeoutMillis, send_batch},
     records::{batch_from_records, value_record},
-    topics::CreateTopicSetup,
+    topics::{
+        CreateTopicRequestSetup, CreateTopicSetup, CreateTopicsTimeoutMillis, TopicPartitionCount,
+        TopicReplicationFactor, configured_topic_request, create_topic_request_with_setup,
+    },
 };
 pub async fn connect(bootstrap: &str, client_id: &str) -> Arc<Client> {
     Arc::new(connect_client(bootstrap, Some(client_id)).await)
@@ -66,9 +70,9 @@ pub async fn connect_owned(bootstrap: impl AsRef<str>, client_id: &str, context:
 pub async fn create_topic(client: &Client, topic: &str, partitions: i32) {
     create_topic_with(
         client,
-        crate::support::topics::CreateTopicSetup {
+        CreateTopicSetup {
             topic,
-            num_partitions: crate::support::topics::TopicPartitionCount(partitions),
+            num_partitions: TopicPartitionCount(partitions),
             ..Default::default()
         },
     )
@@ -107,12 +111,12 @@ pub async fn http_get(addr: SocketAddr, path: &str, flush: bool) -> String {
 }
 
 pub async fn create_topic_with(client: &Client, setup: CreateTopicSetup<'_>) -> WireUuid {
-    let mut request = crate::support::topics::configured_topic_request(setup);
+    let mut request = configured_topic_request(setup);
     create_topic_spec(
         client,
         request.topics.remove(0),
-        crate::support::topics::CreateTopicRequestSetup {
-            timeout: crate::support::topics::CreateTopicsTimeoutMillis(request.timeout_ms),
+        CreateTopicRequestSetup {
+            timeout: CreateTopicsTimeoutMillis(request.timeout_ms),
         },
     )
     .await
@@ -124,7 +128,7 @@ pub async fn create_replicated_topic(client: &Client, topic: &str) -> WireUuid {
         client,
         CreateTopicSetup {
             topic,
-            replication_factor: crate::support::topics::TopicReplicationFactor(3),
+            replication_factor: TopicReplicationFactor(3),
             timeout: krabka_units::millis(10_000),
             ..Default::default()
         },
@@ -136,12 +140,10 @@ pub async fn create_replicated_topic(client: &Client, topic: &str) -> WireUuid {
 pub async fn create_topic_spec(
     client: &Client,
     topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
-    setup: crate::support::topics::CreateTopicRequestSetup,
+    setup: CreateTopicRequestSetup,
 ) -> WireUuid {
     let resp = client
-        .send(crate::support::topics::create_topic_request_with_setup(
-            topic, setup,
-        ))
+        .send(create_topic_request_with_setup(topic, setup))
         .await
         .expect("CreateTopics");
     assert!(
@@ -182,7 +184,7 @@ pub struct BatchProduceSetup<'a> {
     pub topic: &'a str,
     pub topic_id: WireUuid,
     pub acknowledgements: crate::support::produce::ProduceAcknowledgements,
-    pub timeout: crate::support::produce::ProduceTimeoutMillis,
+    pub timeout: ProduceTimeoutMillis,
 }
 
 /// Produce one batch, preserving the caller's acknowledgement and deadline.
@@ -191,7 +193,7 @@ pub async fn produce_batch(
     batch: RecordBatch,
     setup: BatchProduceSetup<'_>,
 ) -> PartitionProduceResponse {
-    let response = crate::support::produce::send_batch(
+    let response = send_batch(
         &client,
         batch,
         crate::support::produce::SinglePartitionProduceSetup {
@@ -278,7 +280,7 @@ pub async fn metadata_fetch(
 pub async fn create_configured_topic(client: &Client, setup: CreateTopicSetup<'_>) {
     let topic = setup.topic;
     let response = client
-        .send(crate::support::topics::configured_topic_request(setup))
+        .send(configured_topic_request(setup))
         .await
         .expect("CreateTopics");
     let created = response.topics.first().expect("one topic result");
@@ -382,7 +384,7 @@ async fn send_topic_creation(
     setup: CreateTopicSetup<'_>,
 ) -> krabka_protocol::owned::create_topics_response::CreateTopicsResponse {
     client
-        .send(crate::support::topics::configured_topic_request(setup))
+        .send(configured_topic_request(setup))
         .await
         .expect("CreateTopics")
 }

@@ -193,8 +193,9 @@ mod tests {
     use super::*;
     use crate::segment::test_support::{
         DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_TWO_RECORD_BATCH,
-        SampleBatchSetup, THIRD_TWO_RECORD_BATCH, THREE_RECORD_BATCH, TWO_RECORD_BATCH,
-        sample_batch, seeded_fixture, test_batch_at, test_segment, two_record_fixture,
+        SampleBatchSetup, SeededSegmentSetup, THIRD_TWO_RECORD_BATCH, THREE_RECORD_BATCH,
+        TWO_RECORD_BATCH, sample_batch, seeded_fixture, test_batch_at, test_segment,
+        two_record_fixture,
     };
 
     /// A fetch reads nothing when it starts past the segment, and nothing when
@@ -219,7 +220,7 @@ mod tests {
 
     #[test]
     fn a_fetch_past_the_segment_or_at_the_limit_reads_nothing() {
-        let (_dir, seg) = seeded_fixture(crate::segment::test_support::SeededSegmentSetup {
+        let (_dir, seg) = seeded_fixture(SeededSegmentSetup {
             batches: &[
                 THREE_RECORD_BATCH, // offsets 0..=2
             ],

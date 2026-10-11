@@ -8,7 +8,13 @@
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{KAFKA_IMAGE, docker_run_kafka_tool};
+use crate::{
+    jvm_acceptance::{KAFKA_IMAGE, docker_run_kafka_tool},
+    support::{
+        ContainerInput, JvmDockerSetup, init_jvm_tracing, jvm_docker_command, jvm_stdin_output,
+        start_jvm_cluster,
+    },
+};
 
 // Three-node quorum: produce on one node, consume on another, then kill
 // the controller leader and assert the surviving brokers still answer
@@ -28,13 +34,12 @@ use crate::jvm_acceptance::{KAFKA_IMAGE, docker_run_kafka_tool};
 async fn three_node_jvm_round_trip() {
     const TOPIC: &str = "krabka-quorum-itest";
 
-    crate::support::init_jvm_tracing("krabka_broker=debug,info");
+    init_jvm_tracing("krabka_broker=debug,info");
 
     let client_ports = [9192u16, 9292, 9392];
     let controller_ports = [9193u16, 9293, 9393];
 
-    let mut cluster =
-        crate::support::start_jvm_cluster(client_ports, controller_ports, |_| {}).await;
+    let mut cluster = start_jvm_cluster(client_ports, controller_ports, |_| {}).await;
 
     let bootstrap_1 = format!("host.docker.internal:{}", client_ports[0]);
     let bootstrap_2 = format!("host.docker.internal:{}", client_ports[1]);
@@ -55,20 +60,19 @@ async fn three_node_jvm_round_trip() {
     //    Rust producer doesn't yet route across brokers per partition,
     //    so we use the JVM tool here; cross-broker producer routing is
     //    a follow-up that the Rust client will pick up.
-    let mut producer_child_command =
-        crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
-            image: KAFKA_IMAGE,
-            args: &[
-                "kafka-console-producer",
-                "--bootstrap-server",
-                &bootstrap_2,
-                "--topic",
-                TOPIC,
-            ],
-            input: crate::support::ContainerInput::Attached,
-            ..Default::default()
-        });
-    let producer_out = crate::support::jvm_stdin_output(&mut producer_child_command, b"a\nb\nc\n");
+    let mut producer_child_command = jvm_docker_command(JvmDockerSetup {
+        image: KAFKA_IMAGE,
+        args: &[
+            "kafka-console-producer",
+            "--bootstrap-server",
+            &bootstrap_2,
+            "--topic",
+            TOPIC,
+        ],
+        input: ContainerInput::Attached,
+        ..Default::default()
+    });
+    let producer_out = jvm_stdin_output(&mut producer_child_command, b"a\nb\nc\n");
     assert!(
         producer_out.status.success(),
         "JVM producer failed: stdout={}, stderr={}",

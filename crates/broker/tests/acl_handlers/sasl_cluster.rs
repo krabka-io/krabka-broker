@@ -6,7 +6,10 @@
 use krabka_broker::{BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer};
 use krabka_security::SaslMechanism;
 
-use crate::support::acl::TopicAclSetup;
+use crate::support::{
+    acl::{TopicAclSetup, seed_dummy_acl, topic_acl_record},
+    sasl::start_broker,
+};
 
 /// Build a `BrokerConfig` with a single `SASL_PLAINTEXT` listener, PLAIN
 /// enabled, and the given super-user. The non-super-user case still
@@ -70,7 +73,7 @@ pub async fn start_admin_alice() -> (BrokerHandle, tempfile::TempDir, std::net::
         &[("admin", "admin-secret"), ("alice", "wonderland")],
         Some("admin"),
     );
-    crate::support::sasl::start_broker(cfg, dir).await
+    start_broker(cfg, dir).await
 }
 
 /// A single foo partition with Alice's exact topic operation grant.
@@ -81,7 +84,7 @@ pub async fn start_alice_topic_grant(
     let addr = handle.listen_addr();
     crate::acl_admin::create_topic_as_admin(addr, "foo", 1).await;
     handle
-        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(TopicAclSetup {
+        .submit_metadata_record_for_test(topic_acl_record(TopicAclSetup {
             topic: "foo",
             operation,
             ..Default::default()
@@ -108,6 +111,6 @@ pub async fn start_admin_with(
 pub async fn start_denied_foo() -> (BrokerHandle, tempfile::TempDir, std::net::SocketAddr) {
     let (handle, directory, address) = start_admin_alice().await;
     crate::acl_admin::create_topic_as_admin(address, "foo", 1).await;
-    crate::support::acl::seed_dummy_acl(&handle).await;
+    seed_dummy_acl(&handle).await;
     (handle, directory, address)
 }

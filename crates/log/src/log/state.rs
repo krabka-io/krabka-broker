@@ -22,7 +22,7 @@ use crate::{
     log_start_offset_checkpoint,
     producer_snapshot::{self, ProducerSnapshotEntry},
     segment::Segment,
-    txn_index::TxnIndex,
+    txn_index::{AbortedTxn, TxnIndex},
 };
 
 impl Log {
@@ -448,11 +448,7 @@ impl Log {
     /// Return all aborted transactions whose offset range overlaps
     /// `[start, end)`, including entries in sealed segments.
     #[must_use]
-    pub fn aborted_in_range(
-        &self,
-        start: Offset,
-        end: Offset,
-    ) -> Vec<crate::txn_index::AbortedTxn> {
+    pub fn aborted_in_range(&self, start: Offset, end: Offset) -> Vec<AbortedTxn> {
         let mut aborted = Vec::new();
         if let Some(first_base) = self
             .segments

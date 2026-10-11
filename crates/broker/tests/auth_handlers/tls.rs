@@ -17,7 +17,13 @@ use tokio_rustls::{
     },
 };
 
-use crate::{DEV_CERT, DEV_KEY, support::client::connect_owned};
+use crate::{
+    DEV_CERT, DEV_KEY,
+    support::{
+        client::connect_owned,
+        tls::{fixture_signature_schemes, ssl_config},
+    },
+};
 
 fn write_dev_pem(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let cp = dir.join("cert.pem");
@@ -31,7 +37,7 @@ fn write_dev_pem(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathB
 async fn tls_listener_accepts_tls_handshake_only() {
     let (log_dir, _pem_dir, cert_path, key_path) = tls_fixture();
 
-    let cfg = crate::support::tls::ssl_config(
+    let cfg = ssl_config(
         log_dir.path().to_path_buf(),
         TlsConfig {
             cert_chain_path: cert_path.clone(),
@@ -61,7 +67,7 @@ async fn tls_listener_accepts_tls_handshake_only() {
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(crate::support::tls::PinnedCertVerifier {
             pinned: expected_cert,
-            schemes: crate::support::tls::fixture_signature_schemes(),
+            schemes: fixture_signature_schemes(),
             mismatch: "presented cert does not match pinned dev cert",
         }))
         .with_no_client_auth();

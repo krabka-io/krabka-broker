@@ -317,15 +317,15 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        DENSE_INDEX, NO_LIMIT, ONE_RECORD_BATCH, RecordTimestamp, SECOND_LARGE_TIMESTAMP_BATCH,
-        SECOND_SINGLE_RECORD_BATCH, SampleBatchSetup, SeededSegmentSetup, sample_batch,
-        seeded_fixture, segment_at, test_batch_at, test_segment,
+        DENSE_INDEX, FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, RecordTimestamp,
+        SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, SampleBatchSetup,
+        SeededSegmentSetup, sample_batch, seeded_fixture, segment_at, test_batch_at, test_segment,
     };
 
     #[test]
     fn append_then_read_back() {
         let (_dir, mut seg) = test_segment();
-        let b1 = sample_batch(crate::segment::test_support::FIRST_LARGE_TIMESTAMP_BATCH);
+        let b1 = sample_batch(FIRST_LARGE_TIMESTAMP_BATCH);
         let b2 = sample_batch(SECOND_LARGE_TIMESTAMP_BATCH);
         seg.append(&b1, kibibytes(4)).unwrap();
         seg.append(&b2, kibibytes(4)).unwrap();

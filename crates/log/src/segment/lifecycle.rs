@@ -327,8 +327,8 @@ mod tests {
     use super::*;
     use crate::segment::test_support::{
         DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_THREE_RECORD_BATCH,
-        SampleBatchSetup, SeededSegmentSetup, THREE_RECORD_BATCH, sample_batch, segment_at,
-        test_segment,
+        SampleBatchSetup, SeededSegmentSetup, THREE_RECORD_BATCH, sample_batch, seeded_fixture,
+        segment_at, test_segment, two_record_fixture,
     };
 
     /// Truncating to a relative offset keeps every batch that ends before it,
@@ -393,7 +393,7 @@ mod tests {
     /// Sealing is what `is_sealed` reports.
     #[test]
     fn is_sealed_follows_seal() {
-        let (_dir, mut seg) = crate::segment::test_support::two_record_fixture();
+        let (_dir, mut seg) = two_record_fixture();
         check!(!seg.is_sealed(), "a fresh segment is open");
         seg.seal().unwrap();
         check!(seg.is_sealed(), "a sealed segment reports it");
@@ -460,7 +460,7 @@ mod tests {
     /// returns batch B.
     #[test]
     fn truncate_to_relative_uses_batch_last_offset() {
-        let (_dir, mut seg) = crate::segment::test_support::seeded_fixture(SeededSegmentSetup {
+        let (_dir, mut seg) = seeded_fixture(SeededSegmentSetup {
             batches: &[
                 THREE_RECORD_BATCH,        // offsets 0..=2
                 SECOND_THREE_RECORD_BATCH, // offsets 3..=5

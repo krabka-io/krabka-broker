@@ -98,7 +98,7 @@ pub fn diskless_topic_request(name: impl Into<String>, replication: i16) -> Crea
     crate::support::topics::create_topic_request_with_setup(
         creatable_topic_with_configs(crate::support::topics::ConfiguredTopicSetup {
             name: name.into(),
-            replicas: crate::support::topics::TopicReplicationFactor(replication),
+            replicas: TopicReplicationFactor(replication),
             configs: topic_configs([("krabka.diskless", "true")]),
             ..Default::default()
         }),

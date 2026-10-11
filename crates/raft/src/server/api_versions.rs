@@ -270,7 +270,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{ControllerAdminRouter, ControllerApiVersion};
+    use crate::{
+        ControllerAdminRequest, ControllerAdminRouteFuture, ControllerAdminRouter,
+        ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION, test_support::feature_image,
+    };
 
     /// The view a listener with no Admin router and the default unstable
     /// setting answers from, at metadata offset `metadata_offset`.
@@ -351,10 +354,7 @@ mod tests {
                 }]
             }
 
-            fn route(
-                &self,
-                _request: crate::ControllerAdminRequest,
-            ) -> crate::ControllerAdminRouteFuture<'_> {
+            fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
                 Box::pin(async { Ok(None) })
             }
         }
@@ -398,10 +398,7 @@ mod tests {
             }]
         }
 
-        fn route(
-            &self,
-            _request: crate::ControllerAdminRequest,
-        ) -> crate::ControllerAdminRouteFuture<'_> {
+        fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
             Box::pin(async { Ok(None) })
         }
     }
@@ -456,10 +453,7 @@ mod tests {
                 }]
             }
 
-            fn route(
-                &self,
-                _request: crate::ControllerAdminRequest,
-            ) -> crate::ControllerAdminRouteFuture<'_> {
+            fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
                 Box::pin(async { Ok(None) })
             }
         }
@@ -700,7 +694,7 @@ mod tests {
         krabka_macros::finalized_feature_fixture!(finalized);
         // The listener's default, `unstable.api.versions.enable=false`, caps
         // metadata.version at 4.3.1's latest production level.
-        let metadata_max = crate::LATEST_PRODUCTION_METADATA_VERSION;
+        let metadata_max = LATEST_PRODUCTION_METADATA_VERSION;
         let legacy = vec![supported(
             "metadata.version",
             METADATA_VERSION_MIN,
@@ -758,7 +752,7 @@ mod tests {
             want_finalized,
         } in rows
         {
-            let image = crate::test_support::feature_image(kraft_version, levels);
+            let image = feature_image(kraft_version, levels);
             let body = super::api_versions_response_body(version, view(&image, 1234));
             let resp = ApiVersionsResponse::decode(&mut &body[..], version).expect("decode");
             assert2::check!(
@@ -787,7 +781,7 @@ mod tests {
         for (unstable, want_max) in [
             (
                 UnstableApiVersions::Disabled,
-                crate::LATEST_PRODUCTION_METADATA_VERSION,
+                LATEST_PRODUCTION_METADATA_VERSION,
             ),
             (UnstableApiVersions::Enabled, METADATA_VERSION_MAX),
         ] {

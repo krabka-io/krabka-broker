@@ -35,11 +35,15 @@ use crate::{
     kafka_wire::ExchangeSetup as WireExchangeSetup,
     oauthbearer::{
         drive_inband_reauth, drive_sasl_oauthbearer_session_open, now_unix_secs,
-        oauthbearer_zero_skew_validator, unsecured_jws,
+        oauthbearer_fixture, oauthbearer_zero_skew_validator, unsecured_jws,
     },
-    support::wire::{
-        CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-        SocketExchangeSetup,
+    support::{
+        sasl::plain_authentication_body,
+        sasl_plaintext_config,
+        wire::{
+            CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
+            SocketExchangeSetup,
+        },
     },
 };
 
@@ -76,7 +80,7 @@ async fn send_metadata_on_expired_session(stream: &mut TcpStream) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
     let (_log_dir, handle, addr) =
-        crate::oauthbearer::oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
+        oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
     let exp_secs = now_unix_secs() + 600;
     let token = unsecured_jws("alice", exp_secs);
@@ -103,7 +107,7 @@ async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
 /// enforces what it told the client.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_capped_by_connections_max_reauth() {
-    let (_log_dir, handle, addr) = crate::oauthbearer::oauthbearer_fixture(
+    let (_log_dir, handle, addr) = oauthbearer_fixture(
         oauthbearer_zero_skew_validator(),
         Some(krabka_units::millis(300)),
     )
@@ -144,7 +148,7 @@ async fn oauthbearer_session_capped_by_connections_max_reauth() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_expires_closes_connection() {
     let (_log_dir, handle, addr) =
-        crate::oauthbearer::oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
+        oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
     // `now_unix_secs` truncates to whole seconds, so `now + 1` left the
     // handshake anywhere between zero and one second before the token expired,
@@ -180,7 +184,7 @@ async fn oauthbearer_session_expires_closes_connection() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
     let (_log_dir, handle, addr) =
-        crate::oauthbearer::oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
+        oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
     // Token A gets a few seconds so the handshake cannot outlive it -- see the
     // note in `oauthbearer_session_expires_closes_connection`. Token B lasts
@@ -237,7 +241,7 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_in_band_reauth_with_different_principal_closes() {
     let (_log_dir, handle, addr) =
-        crate::oauthbearer::oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
+        oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
     let token_alice = unsecured_jws("alice", now_unix_secs() + 600);
     let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token_alice)
@@ -358,7 +362,7 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
 #[tokio::test(flavor = "current_thread")]
 async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
+    let mut cfg = sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.connections_max_idle = Some(krabka_units::millis(0));
 
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
@@ -405,8 +409,7 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let sh_resp = sasl_handshake_response::SaslHandshakeResponse::decode(&mut cur, 1).unwrap();
     assert!(sh_resp.error_code == 0, "PLAIN handshake must succeed");
 
-    let auth_body =
-        crate::support::sasl::plain_authentication_body("alice", alice_password().as_bytes());
+    let auth_body = plain_authentication_body("alice", alice_password().as_bytes());
     let auth_resp_bytes = round_trip(
         &mut stream,
         SocketExchangeSetup {

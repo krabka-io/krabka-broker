@@ -17,7 +17,7 @@ use super::{BARRIER_CONTROL_TYPE, CompactionContext, Log, VerbatimBatch};
 use crate::{
     CleanupPolicy,
     config::LogConfig,
-    producer_snapshot::ProducerSnapshotEntry,
+    producer_snapshot::{ProducerSnapshotEntry, list},
     stamp_index::{StampEntry, StampIndex},
     stamp_source::MonotonicStampSource,
     test_support::{numbered_record, segmented_log, single_record_batch},
@@ -505,7 +505,7 @@ pub(crate) fn append_path(log: &mut Log, path: AppendPath, mut batch: RecordBatc
 }
 
 pub fn snapshot_offsets(dir: &std::path::Path) -> Vec<Offset> {
-    crate::producer_snapshot::list(dir)
+    list(dir)
         .unwrap()
         .into_iter()
         .map(|(offset, _)| offset)

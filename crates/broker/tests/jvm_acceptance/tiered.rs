@@ -11,6 +11,7 @@ use super::{
     ports::{broker0_advertised, broker0_listen},
     tiered_workload::TIERED_SEGMENT_SIZE,
 };
+use crate::jvm_acceptance::host_broker_config;
 
 /// Same shape as [`start_host_broker`] but with the S3 tiered-storage
 /// backend wired in and a lower `RemoteLogManager` tick, so the acceptance
@@ -49,7 +50,7 @@ pub(crate) fn start_host_broker_with_minio_tier(
         // local-retention pass evicts them) within the test's wall clock.
         remote_log_manager_interval: krabka_units::secs(1),
         remote_log_metadata: rlmm,
-        ..crate::jvm_acceptance::host_broker_config(dir.path(), "static addr")
+        ..host_broker_config(dir.path(), "static addr")
     };
     Box::pin(async move {
         let handle = Broker::start(config.clone()).await.expect("start broker");

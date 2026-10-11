@@ -12,7 +12,10 @@ use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 use krabka_security::SaslMechanism;
 use tempfile::TempDir;
 
-use crate::support::acl::ClusterAclSetup;
+use crate::support::{
+    acl::{ClusterAclSetup, cluster_acl_record},
+    sasl::{sasl_temp_config, start_broker},
+};
 
 pub(crate) fn admin_test_password() -> String {
     ['a', 'd', 'm', 'i', 'n', '-', 's', 'e', 'c', 'r', 'e', 't']
@@ -43,7 +46,7 @@ pub(crate) fn start_single_broker_sasl_plaintext_with_acl_authorizer(
     super_users: &[&str],
     users: &[(&str, &str)],
 ) -> BrokerStartup {
-    let (log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
+    let (log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     for (name, pass) in users {
         cfg.plain_credentials
             .insert((*name).to_string(), (*pass).to_string());
@@ -51,7 +54,7 @@ pub(crate) fn start_single_broker_sasl_plaintext_with_acl_authorizer(
     cfg.super_users = super_users.iter().map(|user| (*user).to_string()).collect();
     crate::support::acl::use_simple_acl_authorizer(&mut cfg);
 
-    Box::pin(crate::support::sasl::start_broker(cfg, log_dir))
+    Box::pin(start_broker(cfg, log_dir))
 }
 
 pub(crate) async fn seed_cluster_acl(
@@ -60,7 +63,7 @@ pub(crate) async fn seed_cluster_acl(
     operation: AclOperation,
 ) {
     handle
-        .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(ClusterAclSetup {
+        .submit_metadata_record_for_test(cluster_acl_record(ClusterAclSetup {
             principal: &format!("User:{principal}"),
             operation,
             ..Default::default()

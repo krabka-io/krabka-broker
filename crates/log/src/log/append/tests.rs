@@ -8,7 +8,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    config::{LogConfig, ScheduleOrder},
+    config::{DeliveryPolicy, LogConfig, ScheduleOrder},
     io::{FileIo, LogIo},
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
@@ -18,6 +18,7 @@ use crate::{
         stamped_test_log, test_batch_at, test_log, tiny_segments, transactional_batch,
         verbatim_from, write_with_budget,
     },
+    name::log_path,
     retention::now_ms,
     stamp_index::{StampEntry, StampIndex},
     test_support::{log_file_count, open_log},
@@ -108,7 +109,7 @@ fn shorter_append_after_partial_write_leaves_no_physical_tail() {
     let (dir, mut log) = test_log();
     let mut first = sample_batch(1);
     log.append(&mut first).unwrap();
-    let log_path = crate::name::log_path(dir.path(), 0);
+    let log_path = log_path(dir.path(), 0);
     let position = std::fs::metadata(&log_path).unwrap().len();
 
     let mut next = sample_batch(1);
@@ -783,7 +784,7 @@ fn scheduled_log(monotonic: ScheduleOrder) -> (tempfile::TempDir, Log) {
     let log = Log::open(
         dir.path(),
         LogConfig {
-            delivery_policy: crate::config::DeliveryPolicy::Scheduled,
+            delivery_policy: DeliveryPolicy::Scheduled,
             schedule_order: monotonic,
             ..LogConfig::default()
         },

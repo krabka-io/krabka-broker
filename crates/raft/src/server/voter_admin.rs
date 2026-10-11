@@ -14,7 +14,7 @@ use crate::{
     NodeId,
     error::RaftError,
     kraft::KraftController,
-    reconfig::{AddVoter, UpdateVoter, VoterChange},
+    reconfig::{AddVoter, RemoveVoter, UpdateVoter, VoterChange},
     voter_requests::{
         Refusal, VoterOperation, add_voter_refusal, candidate_kraft_version_refusal,
         candidate_unavailable_refusal, reconfiguration_refusal, remove_voter_refusal,
@@ -186,7 +186,7 @@ pub(super) async fn remove_raft_voter_response(
         } else {
             reconfiguration_refusal(
                 engine
-                    .reconfigure(VoterChange::Remove(crate::reconfig::RemoveVoter {
+                    .reconfigure(VoterChange::Remove(RemoveVoter {
                         id: NodeId(u64::try_from(request.voter_id).unwrap_or_default()),
                         directory_id: uuid::Uuid::from_bytes(request.voter_directory_id.0),
                     }))

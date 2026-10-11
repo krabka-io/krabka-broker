@@ -53,8 +53,9 @@ use tokio_rustls::rustls::{
 };
 
 use crate::support::{
-    acl::ClusterAclSetup,
-    topics::{creatable_topic, create_topic_request},
+    acl::{ClusterAclSetup, cluster_acl_record},
+    tls::fixture_signature_schemes,
+    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
 const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
@@ -97,7 +98,7 @@ async fn start_with(
 
 async fn allow(broker: &BrokerHandle, principal: &str, operation: AclOperation) {
     broker
-        .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(ClusterAclSetup {
+        .submit_metadata_record_for_test(cluster_acl_record(ClusterAclSetup {
             principal,
             operation,
             ..Default::default()
@@ -374,12 +375,10 @@ async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() 
         create_version,
         true,
         &encode(
-            &create_topic_request(creatable_topic(
-                crate::support::topics::ConfiguredTopicSetup {
-                    name: "created-by-creator".to_owned(),
-                    ..Default::default()
-                },
-            )),
+            &create_topic_request(creatable_topic(ConfiguredTopicSetup {
+                name: "created-by-creator".to_owned(),
+                ..Default::default()
+            })),
             create_version,
         ),
     )
@@ -504,7 +503,7 @@ async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_
         .with_custom_certificate_verifier(std::sync::Arc::new(
             crate::support::tls::PinnedCertVerifier {
                 pinned: server_certificate,
-                schemes: crate::support::tls::fixture_signature_schemes(),
+                schemes: fixture_signature_schemes(),
                 mismatch: "not the pinned fixture certificate",
             },
         ))

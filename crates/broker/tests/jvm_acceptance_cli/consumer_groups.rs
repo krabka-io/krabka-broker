@@ -8,7 +8,10 @@ use std::io::Write as _;
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{KAFKA_IMAGE, broker0_advertised, docker_run_kafka_tool};
+use crate::jvm_acceptance::{
+    KAFKA_IMAGE, broker0_advertised, describe_console_group, docker_run_kafka_tool,
+    start_console_group,
+};
 
 /// `kafka-consumer-groups --list` and `--describe` round-trip after a
 /// real consumer has joined a group.
@@ -18,7 +21,7 @@ async fn kafka_consumer_groups_list_describe() {
     const TOPIC: &str = "krabka-cg-list-itest";
     const GROUP: &str = "krabka-cg-list-grp";
 
-    let (_broker, _dir) = crate::jvm_acceptance::start_console_group(TOPIC, GROUP, 1).await;
+    let (_broker, _dir) = start_console_group(TOPIC, GROUP, 1).await;
 
     let list_out = docker_run_kafka_tool(&[
         "kafka-consumer-groups",
@@ -29,7 +32,7 @@ async fn kafka_consumer_groups_list_describe() {
     let s = String::from_utf8_lossy(&list_out.stdout);
     assert!(s.contains(GROUP), "list output missing {GROUP}: {s}");
 
-    let desc_out = crate::jvm_acceptance::describe_console_group(GROUP);
+    let desc_out = describe_console_group(GROUP);
     let s = String::from_utf8_lossy(&desc_out.stdout);
     assert!(
         s.contains(TOPIC),
@@ -49,12 +52,12 @@ async fn kafka_consumer_groups_delete_offsets() {
     const TOPIC: &str = "krabka-cg-delete-offsets-itest";
     const GROUP: &str = "krabka-cg-delete-offsets-grp";
 
-    let (_broker, _dir) = crate::jvm_acceptance::start_console_group(TOPIC, GROUP, 2).await;
+    let (_broker, _dir) = start_console_group(TOPIC, GROUP, 2).await;
 
     // Sanity: --describe before delete should list TOPIC for GROUP. If this
     // fails, the failure is on the commit/coordinator path — not on
     // OffsetDelete — and the test would otherwise pass-by-accident below.
-    let pre_desc = crate::jvm_acceptance::describe_console_group(GROUP);
+    let pre_desc = describe_console_group(GROUP);
     let pre_s = String::from_utf8_lossy(&pre_desc.stdout);
     assert!(
         pre_s.contains(TOPIC),
@@ -65,8 +68,8 @@ async fn kafka_consumer_groups_delete_offsets() {
     // 2.7 build may emit is satisfied. `kafka-consumer-groups` in 2.7
     // generally does not prompt for --delete-offsets when all flags are
     // supplied; the piped "y\n" is defensive and ignored otherwise.
-    let mut child = crate::support::jvm_spawn_piped(
-        &mut crate::support::jvm_docker_command(crate::support::JvmDockerSetup {
+    let mut child = jvm_spawn_piped(
+        &mut jvm_docker_command(crate::support::JvmDockerSetup {
             image: KAFKA_IMAGE,
             args: &[
                 "kafka-consumer-groups",
@@ -78,7 +81,7 @@ async fn kafka_consumer_groups_delete_offsets() {
                 "--topic",
                 TOPIC,
             ],
-            input: crate::support::ContainerInput::Attached,
+            input: ContainerInput::Attached,
             ..Default::default()
         }),
         "spawn delete-offsets",
@@ -108,7 +111,7 @@ async fn kafka_consumer_groups_delete_offsets() {
     // GROUP. Header text may still mention column names, so guard with a
     // line-level check that the line both belongs to GROUP and refers to
     // TOPIC.
-    let post_desc = crate::jvm_acceptance::describe_console_group(GROUP);
+    let post_desc = describe_console_group(GROUP);
     let post_s = String::from_utf8_lossy(&post_desc.stdout);
     let leaked = post_s
         .lines()
@@ -137,6 +140,7 @@ use crate::{
         parse_reset_table,
     },
     oracle::{CliRun, Side, ToolFile},
+    support::{ContainerInput, jvm_docker_command, jvm_spawn_piped},
 };
 
 /// The topic every reset case reads. One partition, so the record-to-partition

@@ -25,6 +25,7 @@ use krabka_protocol::{
 
 use crate::{
     harness::start_two_dir_broker,
+    two_dir_topic::{Setup, start},
     wire::{alter_replica_log_dirs, describe_log_dirs_at, set_broker_config},
 };
 
@@ -89,7 +90,7 @@ fn move_result(topic: &str, error_code: i16) -> AlterReplicaLogDirsResponse {
 /// the same move succeeds once it is uncordoned.
 #[tokio::test]
 async fn a_cordoned_dir_is_flagged_and_refuses_replica_moves() {
-    let (handle, primary, extra, addr) = crate::two_dir_topic::start(crate::two_dir_topic::Setup {
+    let (handle, primary, extra, addr) = start(Setup {
         client_id: crate::wire::CLIENT_ID,
         ..Default::default()
     })

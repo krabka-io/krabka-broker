@@ -26,8 +26,12 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    configs::{incremental_config, incremental_request, incremental_resource},
+    client::create_topic_with,
+    configs::{
+        IncrementalConfigsSetup, incremental_config, incremental_request, incremental_resource,
+    },
     records::{batch_from_records, value_record},
+    topics::{CreateTopicSetup, TopicPartitionCount},
 };
 const SHARE_STATE_PARTITIONS: i32 = 1;
 const MAX_CONCURRENT_TEST_BROKERS: usize = 3;
@@ -74,20 +78,18 @@ pub async fn bootstrap_share_state(
 
 pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
     let resp = client
-        .send(incremental_request(
-            crate::support::configs::IncrementalConfigsSetup {
-                resources: vec![incremental_resource(
-                    RESOURCE_TYPE_GROUP,
-                    group,
-                    vec![incremental_config(
-                        "share.auto.offset.reset",
-                        Some("earliest".into()),
-                        crate::support::configs::ConfigOperation::Set,
-                    )],
+        .send(incremental_request(IncrementalConfigsSetup {
+            resources: vec![incremental_resource(
+                RESOURCE_TYPE_GROUP,
+                group,
+                vec![incremental_config(
+                    "share.auto.offset.reset",
+                    Some("earliest".into()),
+                    crate::support::configs::ConfigOperation::Set,
                 )],
-                ..Default::default()
-            },
-        ))
+            )],
+            ..Default::default()
+        }))
         .await
         .expect("IncrementalAlterConfigs(group)");
     assert!(
@@ -229,10 +231,10 @@ pub async fn produce_batch(client: &Client, batch: RecordBatch, setup: ShareProd
 pub struct ShareTopicSetup<'a> {
     #[default("t")]
     pub topic: &'a str,
-    pub partitions: crate::support::topics::TopicPartitionCount,
+    pub partitions: TopicPartitionCount,
 }
 
-impl<'a> From<ShareTopicSetup<'a>> for crate::support::topics::CreateTopicSetup<'a> {
+impl<'a> From<ShareTopicSetup<'a>> for CreateTopicSetup<'a> {
     fn from(setup: ShareTopicSetup<'a>) -> Self {
         Self {
             topic: setup.topic,
@@ -283,7 +285,7 @@ pub async fn create_topic(
     client: &Client,
     setup: ShareTopicSetup<'_>,
 ) {
-    crate::support::client::create_topic_with(client, setup.into()).await;
+    create_topic_with(client, setup.into()).await;
     broker.wait_until_partition_present(setup.topic, 0).await;
 }
 

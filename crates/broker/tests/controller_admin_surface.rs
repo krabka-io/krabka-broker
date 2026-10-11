@@ -86,7 +86,8 @@ use crate::support::{
     configs::feature_update,
     discovery::api_versions_request_for,
     sasl::{ScramAlgorithm, ScramIterations, ScramUpsertionSetup, scram_upsertion},
-    topics::{creatable_topic, create_topic_request},
+    start_with_bound_listeners,
+    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
 /// Kafka's `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, which
@@ -167,7 +168,7 @@ async fn start_node(
     roles: &[NodeRole],
     configure: fn(&mut BrokerConfig),
 ) -> (BrokerHandle, tempfile::TempDir) {
-    crate::support::start_with_bound_listeners(|config| {
+    start_with_bound_listeners(|config| {
         config.roles = roles.to_vec();
         configure(config);
     })
@@ -323,7 +324,7 @@ async fn controller_listener_serves_the_topic_lifecycle() {
 
     let created = connection
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: ("controller-lifecycle").into(),
                 ..Default::default()
             },
@@ -582,7 +583,7 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
 
     let created = connection
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: ("controller-dirs").into(),
                 ..Default::default()
             },
@@ -724,7 +725,7 @@ async fn controller_only_node_places_no_replica_on_itself() {
 
     let created = connection
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: ("controller-only-placement").into(),
                 ..Default::default()
             },

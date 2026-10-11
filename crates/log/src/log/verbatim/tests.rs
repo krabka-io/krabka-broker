@@ -10,8 +10,8 @@ use super::*;
 use crate::{
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        install_stamps, log_append_time_log, sample_batch, stamped_test_log, test_batch_at,
-        test_log, verbatim_from,
+        check_append_time_lookup, install_stamps, log_append_time_log, sample_batch,
+        stamped_test_log, test_batch_at, test_log, verbatim_from,
     },
 };
 
@@ -337,7 +337,7 @@ fn verbatim_offset_for_timestamp_answers_in_append_time() {
 
     let (_base_offset, stamp) = log.append_verbatim(&vb).unwrap();
 
-    let stamp = crate::log::test_support::check_append_time_lookup(&log, stamp);
+    let stamp = check_append_time_lookup(&log, stamp);
     check!(log.offset_for_timestamp(stamp + 1) == None);
     drop(dir);
 }

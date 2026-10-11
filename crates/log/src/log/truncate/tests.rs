@@ -9,6 +9,7 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
+    leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
         append_samples, check_stamps, rolling_test_log, sample_batch, sample_batch_with_epoch,
         stamped_rolling_log, test_batch_at, test_log, tiny_segments,
@@ -352,7 +353,7 @@ fn truncate_to_drops_stale_epoch_checkpoint_entries() {
 /// leader's epoch can be recorded at the same offset.
 #[test]
 fn a_no_op_truncation_still_drops_an_epoch_no_record_backs() {
-    let entry = |epoch, start_offset| crate::leader_epoch_checkpoint::EpochEntry {
+    let entry = |epoch, start_offset| EpochEntry {
         epoch: LeaderEpoch(epoch),
         start_offset: Offset(start_offset),
     };

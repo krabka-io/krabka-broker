@@ -29,7 +29,7 @@ use krabka_protocol::owned::{
 };
 use krabka_units::convert::TimeExt as _;
 
-use crate::support::{client::connect_client, discovery::topic_metadata_request};
+use crate::support::{client::connect_client, discovery::topic_metadata_request, shutdown_cluster};
 
 mod support;
 
@@ -128,7 +128,7 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
         "the observer must still be a follower for this test to mean anything"
     );
 
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
 }
 
 fn node_id_of(handle: &BrokerHandle) -> i32 {

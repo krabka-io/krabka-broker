@@ -33,7 +33,7 @@ mod timestamp_scan;
 use crate::{
     index::{OFFSET_ENTRY_SIZE, OffsetIndex, TIME_ENTRY_SIZE, TimeIndex},
     io::LogIo,
-    name::stampindex_path,
+    name::{stampindex_path, txnindex_path},
 };
 
 /// A single log segment: the `.log` data file paired with its sparse
@@ -193,7 +193,7 @@ impl Segment {
     /// Path to this segment's `.txnindex` file (may not exist yet).
     #[must_use]
     pub fn txn_index_path(&self) -> std::path::PathBuf {
-        crate::name::txnindex_path(&self.dir, self.base_offset.0)
+        txnindex_path(&self.dir, self.base_offset.0)
     }
 
     /// Path to this segment's `.stampindex` sidecar (may not exist yet).

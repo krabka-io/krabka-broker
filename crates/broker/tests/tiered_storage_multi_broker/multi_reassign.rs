@@ -40,7 +40,8 @@ use crate::{
     multi_client::topic_id_for,
     multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes},
     multi_workload::local_segment_bases,
-    support::client::connect_owned,
+    support::{client::connect_owned, storage::topic_remote_log_files, topics::AssignedTopicSetup},
+    topic_fixture::{AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup},
 };
 
 /// The topic this suite produces into.
@@ -56,7 +57,7 @@ const PAYLOAD: usize = 256;
 
 /// The total size of every `*.log` object the shared store holds for `TOPIC`.
 fn archive_bytes(root: &Path) -> u64 {
-    let files = crate::support::storage::topic_remote_log_files(root, TOPIC);
+    let files = topic_remote_log_files(root, TOPIC);
     files
         .iter()
         .filter_map(|path| std::fs::metadata(path).ok())
@@ -86,10 +87,10 @@ async fn produce_records(client: &Client, topic_id: WireUuid, count: usize) {
             value.resize(PAYLOAD, b'x');
             bytes::Bytes::from(value)
         },
-        crate::topic_fixture::TieredRecordsSetup {
+        TieredRecordsSetup {
             topic: TOPIC,
             topic_id,
-            count: crate::topic_fixture::TieredRecordCount(count),
+            count: TieredRecordCount(count),
         },
     )
     .await;
@@ -98,13 +99,10 @@ async fn produce_records(client: &Client, topic_id: WireUuid, count: usize) {
 /// Creates the tiered topic on broker 1 alone, with local retention set so
 /// tight that every sealed segment is evicted as soon as it is archived.
 async fn create_single_replica_tiered_topic(admin: &Client, leader: &BrokerHandle) {
-    let assignment = crate::support::topics::AssignedTopicSetup::on_replicas(
-        TOPIC,
-        vec![krabka_metadata::NodeId(1)],
-    );
+    let assignment = AssignedTopicSetup::on_replicas(TOPIC, vec![krabka_metadata::NodeId(1)]);
     crate::topic_fixture::create_assigned_topic(
         admin,
-        crate::topic_fixture::AssignedTieredTopicSetup {
+        AssignedTieredTopicSetup {
             topic: assignment,
             segment_bytes: None,
         },

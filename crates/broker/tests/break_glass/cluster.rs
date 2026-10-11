@@ -19,8 +19,7 @@ use tempfile::TempDir;
 
 use crate::{
     principals::{APPROVERS, USERS, principal},
-    support,
-    support::client::connect_owned,
+    support::{self, OperatorKeysSetup, client::connect_owned},
 };
 
 /// A live broker behind SASL, the operator keys it trusts, and the directory
@@ -88,7 +87,7 @@ pub(super) async fn boot() -> Cluster {
     let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl(
         &dir.path().join("data"),
         crate::support::OperatorSaslSetup {
-            trust: crate::support::OperatorKeysSetup {
+            trust: OperatorKeysSetup {
                 keys: &borrowed,
                 approvers: &approver_refs,
             },

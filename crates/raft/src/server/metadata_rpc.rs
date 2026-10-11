@@ -9,7 +9,7 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use crate::{
     DelegationTokenMutation, NodeId, SubmitChangeResult,
     error::RaftError,
-    kraft::{Epoch, KraftController},
+    kraft::{Epoch, KraftController, ReplicaKey},
     wire::{
         KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
         KrabkaSubmitChangeResponse, SUBMIT_CHANGE_UNCOMMITTED_TAIL,
@@ -176,12 +176,10 @@ pub(super) async fn dispatch_metadata_fetch(
     let max_size = ByteSize::from_bytes_i64(i64::from(req.max_bytes.max(0)));
     // A negative replica id is a fetcher that is not a replica, as in Kafka's
     // `FetchRequest`, and the leader tracks nothing for it.
-    let replica = u64::try_from(req.replica_id)
-        .ok()
-        .map(|id| crate::kraft::ReplicaKey {
-            id: NodeId(id),
-            directory_id: req.replica_directory_id,
-        });
+    let replica = u64::try_from(req.replica_id).ok().map(|id| ReplicaKey {
+        id: NodeId(id),
+        directory_id: req.replica_directory_id,
+    });
     let slice = engine
         .metadata_fetch(fetch_offset, max_size, replica)
         .await?;

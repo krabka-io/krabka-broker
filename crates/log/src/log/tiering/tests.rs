@@ -10,8 +10,8 @@ use super::*;
 use crate::{
     config::LogConfig,
     log::test_support::{
-        rolled_log, sample_batch, sample_batch_with_epoch, sample_log, stamped_rolling_log,
-        test_log,
+        append_samples, check_stamps, rolled_log, sample_batch, sample_batch_with_epoch,
+        sample_log, stamped_rolling_log, test_log,
     },
     test_support::{log_file_count, segmented_log},
 };
@@ -65,7 +65,7 @@ fn tiered_local_delete_removes_only_deleted_segment_stamp_indexes() {
     check!(!log.sealed_txn_indexes.contains_key(&Offset(0)));
     check!(log.sealed_txn_indexes.contains_key(&Offset(1)));
 
-    crate::log::test_support::check_stamps(&log, &[(0, None), (1, Some(11)), (2, Some(12))]);
+    check_stamps(&log, &[(0, None), (1, Some(11)), (2, Some(12))]);
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn epochs_for_range_clamps_and_filters() {
 #[test]
 fn local_log_start_offset_matches_log_start_offset() {
     let (_dir, mut log) = test_log();
-    crate::log::test_support::append_samples(&mut log, 3, 2);
+    append_samples(&mut log, 3, 2);
     assert2::assert!(log.local_log_start_offset() == log.log_start_offset());
 }
 

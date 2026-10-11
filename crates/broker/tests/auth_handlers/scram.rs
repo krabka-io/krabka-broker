@@ -10,8 +10,13 @@ use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
 use crate::{
-    harness::{alice_password, wrong_scram_password},
-    kafka_wire::{SaslAuthenticateSetup, SaslHandshakeSetup, ScramAuthenticationSetup},
+    harness::{alice_password, start_scram_alice, wrong_scram_password},
+    kafka_wire::{
+        SaslAuthenticateSetup, SaslHandshakeSetup, ScramAuthenticationSetup, sasl_authenticate_on,
+        sasl_handshake_on, sasl_scram_authenticate_on,
+    },
+    reauth_cases::{capped_session_closes, different_principal_closes, repeated_expired_reauth},
+    support::wire::CorrelationId,
 };
 
 /// Happy-path drive of a SASL/SCRAM-SHA-512 session.
@@ -106,7 +111,7 @@ pub async fn drive_sasl_scram_session(
     mechanism: krabka_security::SaslMechanism,
 ) -> Result<(), io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
-    crate::kafka_wire::sasl_scram_authenticate_on(
+    sasl_scram_authenticate_on(
         &mut stream,
         &ScramAuthenticationSetup {
             client_id: "krabka-sasl-test",
@@ -123,11 +128,11 @@ pub async fn drive_sasl_scram_session(
 /// response, whose `session_lifetime_ms` is the KIP-368 window.
 pub async fn scram_authenticate(
     stream: &mut TcpStream,
-    corr: &mut crate::support::wire::CorrelationId,
+    corr: &mut CorrelationId,
     setup: &ScramAuthenticationSetup<'_>,
 ) -> Result<SaslAuthenticateResponse, io::Error> {
     corr.0 += 1;
-    crate::kafka_wire::sasl_handshake_on(
+    sasl_handshake_on(
         stream,
         SaslHandshakeSetup {
             client_id: setup.client_id,
@@ -140,7 +145,7 @@ pub async fn scram_authenticate(
     let (client_first, client) =
         krabka_macros::scram_client_first!(setup.user, setup.password.as_str(), setup.mechanism)?;
     corr.0 += 1;
-    let first = crate::kafka_wire::sasl_authenticate_on(
+    let first = sasl_authenticate_on(
         stream,
         bytes::Bytes::from(client_first),
         SaslAuthenticateSetup {
@@ -157,7 +162,7 @@ pub async fn scram_authenticate(
         .step(&first.auth_bytes)
         .map_err(|e| io::Error::other(format!("scram client step: {e:?}")))?;
     corr.0 += 1;
-    crate::kafka_wire::sasl_authenticate_on(
+    sasl_authenticate_on(
         stream,
         bytes::Bytes::from(client_final),
         SaslAuthenticateSetup {
@@ -177,7 +182,7 @@ pub async fn scram_authenticate(
 /// silent is reclaimed by `connections.max.idle.ms`, not by this window.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scram_session_capped_by_connections_max_reauth_then_closes() {
-    crate::reauth_cases::capped_session_closes(SaslMechanism::ScramSha512).await;
+    capped_session_closes(SaslMechanism::ScramSha512).await;
 }
 
 /// KIP-368: a SCRAM re-auth for the same principal runs both rounds in the
@@ -191,7 +196,7 @@ async fn scram_in_band_reauth_same_principal_reopens_data_plane() {
 /// different user answers `SASL_AUTHENTICATION_FAILED` (58) and closes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scram_in_band_reauth_with_different_principal_closes() {
-    crate::reauth_cases::different_principal_closes(SaslMechanism::ScramSha512).await;
+    different_principal_closes(SaslMechanism::ScramSha512).await;
 }
 
 /// KIP-368: a connection re-authenticates round after round for the whole life
@@ -210,7 +215,7 @@ async fn scram_in_band_reauth_with_different_principal_closes() {
 /// itself fails on the first one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
-    crate::reauth_cases::repeated_expired_reauth(
+    repeated_expired_reauth(
         SaslMechanism::ScramSha512,
         krabka_units::secs(1),
         900..=1_000,
@@ -222,7 +227,7 @@ async fn scram_fixture(
     mechanism: SaslMechanism,
 ) -> (tempfile::TempDir, krabka_broker::BrokerHandle, SocketAddr) {
     let log_dir = tempfile::tempdir().unwrap();
-    let handle = crate::harness::start_scram_alice(log_dir.path().to_path_buf(), mechanism).await;
+    let handle = start_scram_alice(log_dir.path().to_path_buf(), mechanism).await;
     let addr = handle.listen_addr();
     (log_dir, handle, addr)
 }

@@ -61,7 +61,7 @@ use self::{
     },
 };
 use crate::{
-    ClusterGrants, ControllerAdminRouter, ControllerApiVersions, ListenerLimits,
+    ClusterGrants, ConnectionLimiter, ControllerAdminRouter, ControllerApiVersions, ListenerLimits,
     RaftHandshakeError, RaftListenerHandshake, RaftShardRouter, UnstableApiVersions,
     error::RaftError, kraft::KraftController,
 };
@@ -155,8 +155,7 @@ pub(crate) async fn run(
     // Kafka's `ControllerServer` builds its own `SocketServer`, whose
     // `ConnectionQuotas` counts this listener's connections apart from any
     // broker listener's.
-    let connections =
-        crate::ConnectionLimiter::new(limits.max_connections, limits.max_connections_per_ip);
+    let connections = ConnectionLimiter::new(limits.max_connections, limits.max_connections_per_ip);
     loop {
         tokio::select! {
             () = shutdown.cancelled() => break,

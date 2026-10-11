@@ -48,6 +48,8 @@ use jvm_acceptance::{
 use krabka_broker::BrokerHandle;
 use krabka_log::DeliveryPolicy;
 
+use crate::support::{ContainerInput, JvmDockerSetup, topics::CreateTopicSetup};
+
 const SCHEDULED_TOPIC: &str = "jvm-deliver-at-time-scheduled";
 const IMMEDIATE_TOPIC: &str = "jvm-deliver-at-time-immediate";
 
@@ -165,7 +167,7 @@ async fn create_topic(bootstrap: &str, topic: &str, mode: &str) {
             .await;
     support::client::create_configured_topic(
         &client,
-        crate::support::topics::CreateTopicSetup {
+        CreateTopicSetup {
             topic,
             configs: &[("delivery.mode", mode)],
             ..Default::default()
@@ -191,7 +193,7 @@ async fn wait_for_delivery_policy(broker: &BrokerHandle, topic: &str, policy: De
 
 // Compile and run the probe in the container, and return everything it printed.
 fn run_probe(bootstrap: &str) -> String {
-    let mut probe = crate::support::jvm_docker_command(crate::support::JvmDockerSetup { image: "--entrypoint", args: &["bash",
+    let mut probe = crate::support::jvm_docker_command(JvmDockerSetup { image: "--entrypoint", args: &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/DeliverAtTimeProbe.java; \
@@ -203,7 +205,7 @@ fn run_probe(bootstrap: &str) -> String {
             SCHEDULED_TOPIC,
             IMMEDIATE_TOPIC,
             &DELAY_MS.to_string(),
-        ], input: crate::support::ContainerInput::Attached, ..Default::default() })
+        ], input: ContainerInput::Attached, ..Default::default() })
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

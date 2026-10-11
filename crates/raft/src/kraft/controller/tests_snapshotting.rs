@@ -6,17 +6,20 @@
 use assert2::assert;
 
 use super::*;
-use crate::kraft::controller::{
-    checkpoint::{
-        checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
-        load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
-        retain_recent_checkpoints, write_checkpoint,
-    },
-    records::decode_control_record,
-    test_support::{
-        ControllerSetup, EngineSetup, TEST_ELECTION_TIMEOUT, await_leader, build,
-        build_engine_only, elect_single_voter_engine, one_offset_batch, submit_change_with_timeout,
-        test_metadata_log, topic_record, voter_set,
+use crate::kraft::{
+    NullPeerSender,
+    controller::{
+        checkpoint::{
+            checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
+            load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
+            retain_recent_checkpoints, write_checkpoint,
+        },
+        records::decode_control_record,
+        test_support::{
+            ControllerSetup, EngineSetup, SnapshotRecordCount, TEST_ELECTION_TIMEOUT, await_leader,
+            build, build_engine_only, elect_single_voter_engine, one_offset_batch,
+            submit_change_with_timeout, test_metadata_log, topic_record, voter_set,
+        },
     },
 };
 
@@ -122,7 +125,7 @@ fn ordinary_snapshot_does_not_reload_the_live_image() {
 async fn single_leader_snapshot_fixture() -> (KraftController, tempfile::TempDir) {
     let (ctrl, dir) = build(ControllerSetup {
         ids: &[NodeId(1)],
-        snapshot_interval_records: crate::kraft::controller::test_support::SnapshotRecordCount(3),
+        snapshot_interval_records: SnapshotRecordCount(3),
         ..Default::default()
     });
     super::test_support::elect_single_voter_controller(&ctrl).await;
@@ -432,7 +435,7 @@ async fn a_restart_recovers_the_header_timestamp_from_the_checkpoint() {
         ControllerFetchMissLimit::default(),
         MetadataRaftCommandQueueCapacity::default(),
         MetadataRaftFetchMax::default(),
-        Arc::new(crate::kraft::NullPeerSender),
+        Arc::new(NullPeerSender),
         0,
         krabka_units::prelude::bytes(0),
         krabka_units::prelude::millis(0),

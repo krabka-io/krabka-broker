@@ -12,7 +12,10 @@ use krabka_protocol::{
 };
 
 use crate::support::{
+    InProcess,
+    client::BatchProduceSetup,
     records::{batch_from_records, value_record},
+    start, topic_id_for,
     topics::CreateTopicSetup,
 };
 
@@ -61,14 +64,12 @@ pub(super) async fn create_topic(
         "create {name} with {configs:?}: {created:?}"
     );
     broker.wait_until_partition_present(name, 0).await;
-    crate::support::topic_id_for(client, name).await
+    topic_id_for(client, name).await
 }
 
 /// Start the boundary-test topic while keeping the broker's directory alive.
-pub(super) async fn orders_fixture(
-    configs: &[(&str, &str)],
-) -> (crate::support::InProcess, WireUuid) {
-    let process = Box::pin(crate::support::start()).await;
+pub(super) async fn orders_fixture(configs: &[(&str, &str)]) -> (InProcess, WireUuid) {
+    let process = Box::pin(start()).await;
     let topic = create_topic(&process.broker, &process.client, "orders", configs).await;
     (process, topic)
 }
@@ -148,7 +149,7 @@ pub(super) async fn produce_batch(
     crate::support::client::produce_batch(
         client,
         batch,
-        crate::support::client::BatchProduceSetup {
+        BatchProduceSetup {
             topic,
             topic_id,
             ..Default::default()

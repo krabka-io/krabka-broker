@@ -6,8 +6,10 @@ use assert2::assert;
 
 use crate::{
     cluster_lock,
+    kafka_wire::ElectionExchangeSetup,
+    support::{admin::ElectionSetup, shutdown_cluster, topics::AssignedTopicSetup},
     wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
-    wire::{create_topic_plaintext, drive_elect_all_partitions, drive_elect_leaders},
+    wire::{CLIENT_ID, create_topic_plaintext, drive_elect_all_partitions, drive_elect_leaders},
 };
 
 /// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
@@ -34,7 +36,7 @@ async fn preferred_election_via_wire_returns_success() {
     // replicas [1, 2]; broker 1 is the preferred (first) replica.
     create_topic_plaintext(
         broker1_addr,
-        crate::support::topics::AssignedTopicSetup {
+        AssignedTopicSetup {
             name: ("foo-preferred").into(),
             replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
         },
@@ -114,9 +116,9 @@ async fn preferred_election_via_wire_returns_success() {
     // preferred replica (replicas[0]) and is now back in ISR and alive.
     let result = drive_elect_leaders(
         elect_addr,
-        crate::kafka_wire::ElectionExchangeSetup {
-            client_id: crate::wire::CLIENT_ID,
-            election: crate::support::admin::ElectionSetup {
+        ElectionExchangeSetup {
+            client_id: CLIENT_ID,
+            election: ElectionSetup {
                 topic: ("foo-preferred").to_string(),
                 ..Default::default()
             },
@@ -134,7 +136,7 @@ async fn preferred_election_via_wire_returns_success() {
 
     // Clean up.
     revived_h.shutdown().await;
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
     drop(dead_dir);
 }
 
@@ -162,7 +164,7 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
     // preferred replica and no election is needed anywhere.
     create_topic_plaintext(
         broker1_addr,
-        crate::support::topics::AssignedTopicSetup {
+        AssignedTopicSetup {
             name: ("foo-all-partitions").into(),
             replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
         },
@@ -183,9 +185,9 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
     // The same partition, named explicitly, still reports why it was skipped.
     let named = drive_elect_leaders(
         broker1_addr,
-        crate::kafka_wire::ElectionExchangeSetup {
-            client_id: crate::wire::CLIENT_ID,
-            election: crate::support::admin::ElectionSetup {
+        ElectionExchangeSetup {
+            client_id: CLIENT_ID,
+            election: ElectionSetup {
                 topic: ("foo-all-partitions").to_string(),
                 ..Default::default()
             },

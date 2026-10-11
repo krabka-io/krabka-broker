@@ -77,7 +77,7 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, RecordTimestamp,
+        FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, RecordCount, RecordTimestamp,
         SECOND_SINGLE_RECORD_BATCH, SampleBatchSetup, SeededSegmentSetup,
         THIRD_SINGLE_RECORD_BATCH, sample_batch, seeded_fixture, test_segment,
     };
@@ -149,7 +149,7 @@ mod tests {
         let (_dir, mut seg) = test_segment();
         seg.append(
             &sample_batch(SampleBatchSetup {
-                records: crate::segment::test_support::RecordCount(2),
+                records: RecordCount(2),
                 timestamp: RecordTimestamp(1_000),
                 ..Default::default()
             }),

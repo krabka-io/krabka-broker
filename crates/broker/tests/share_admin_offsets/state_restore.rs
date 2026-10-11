@@ -9,7 +9,10 @@
 
 use assert2::assert;
 
-use crate::harness::{acquired_count, fetch_until_acquired};
+use crate::{
+    harness::{acquired_count, fetch_until_acquired, initialized_restart_fixture},
+    support::share::{ShareRecordCount, ShareRecordSeedSetup, acknowledge_success},
+};
 
 /// Lag restore: `delivery_complete_count` survives a broker restart.
 ///
@@ -26,8 +29,8 @@ async fn delivery_complete_count_restored_across_restart() {
         _dir,
         log_dir,
         topic: initial,
-    } = crate::harness::initialized_restart_fixture(crate::support::share::ShareRecordSeedSetup {
-        count: crate::support::share::ShareRecordCount(N),
+    } = initialized_restart_fixture(ShareRecordSeedSetup {
+        count: ShareRecordCount(N),
     })
     .await;
 
@@ -44,7 +47,7 @@ async fn delivery_complete_count_restored_across_restart() {
         )
         .await;
         assert!(acquired_count(&row) == N, "must acquire all {N} offsets");
-        crate::support::share::acknowledge_success(
+        acknowledge_success(
             &client,
             crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(N - 1))
                 .starting_at(krabka_ids::Offset(1)),

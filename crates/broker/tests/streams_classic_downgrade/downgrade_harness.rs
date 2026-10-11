@@ -20,11 +20,14 @@ use krabka_protocol::{
 
 use crate::{
     ERR_NONE,
-    support::offsets::{offset_commit_partition, offset_commit_topic},
+    support::{
+        offsets::{offset_commit_partition, offset_commit_topic},
+        streams::ElectionReadiness,
+    },
 };
 
 pub(crate) async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    crate::support::streams::boot(crate::support::streams::ElectionReadiness::BrokerElectable).await
+    crate::support::streams::boot(ElectionReadiness::BrokerElectable).await
 }
 
 pub(crate) async fn connect(bootstrap: &str) -> Arc<Client> {

@@ -14,7 +14,10 @@ use krabka_protocol::owned::alter_share_group_offsets_request::{
 
 use crate::{
     describe::describe_until,
-    harness::{NON_EMPTY_GROUP, NONE, fetch_until_acquired, join, wait_for_share_init},
+    harness::{
+        NON_EMPTY_GROUP, NONE, fetch_until_acquired, join, seeded_empty_group, wait_for_share_init,
+    },
+    support::share::ShareRecordCount,
 };
 
 /// Alter resets the SPSO of an empty group.
@@ -34,8 +37,8 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_resets_empty_group() {
     let (_permit, _broker, client, _dir, tid) =
-        crate::harness::seeded_empty_group(crate::support::share::ShareRecordSeedSetup {
-            count: crate::support::share::ShareRecordCount(6),
+        seeded_empty_group(crate::support::share::ShareRecordSeedSetup {
+            count: ShareRecordCount(6),
         })
         .await;
 
@@ -103,8 +106,7 @@ async fn alter_resets_empty_group() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_non_empty_group_fenced() {
     let (_permit, broker, client, _dir, tid) =
-        crate::harness::seeded_empty_group(crate::support::share::ShareRecordSeedSetup::default())
-            .await;
+        seeded_empty_group(crate::support::share::ShareRecordSeedSetup::default()).await;
 
     // Live member present (steady-state heartbeat), never leaves.
     let (_member, _epoch) = join(&client, "g1", "t").await;

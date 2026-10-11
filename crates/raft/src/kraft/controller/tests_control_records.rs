@@ -5,13 +5,17 @@
 use assert2::{assert, check};
 
 use super::*;
-use crate::kraft::controller::{
-    control_state::{voter_set_from_wire, voter_set_to_wire},
-    records::leader_change_batch,
-    test_support::{
-        EngineSetup, build_engine_only, elect_single_voter_engine, one_offset_batch, topic_record,
-        voter_set,
+use crate::{
+    kraft::controller::{
+        PendingReconfig,
+        control_state::{voter_set_from_wire, voter_set_to_wire},
+        records::leader_change_batch,
+        test_support::{
+            EngineSetup, build_engine_only, elect_single_voter_engine, one_offset_batch,
+            topic_record, voter_set,
+        },
     },
+    reconfig::{AddVoter, ReconfigOutcome},
 };
 
 fn wire_voter(id: i32, directory_byte: u8) -> krabka_protocol::owned::voters_record::Voter {
@@ -427,7 +431,7 @@ async fn reconfiguration_refuses_when_epoch_not_committed_and_admits_when_commit
     );
 
     // Single flight clear
-    leader.pending_reconfig = Some(crate::kraft::controller::PendingReconfig {
+    leader.pending_reconfig = Some(PendingReconfig {
         need_offset: Offset(100),
         reply: None,
         removed_local_leader: false,
@@ -498,7 +502,7 @@ fn apply_and_restore_control_records_updates_core_voters() {
     check!(!engine.core.quorum_state().voters.contains(NodeId(2)));
 
     let (reply, mut rx) = oneshot::channel();
-    engine.pending_reconfig = Some(crate::kraft::controller::PendingReconfig {
+    engine.pending_reconfig = Some(PendingReconfig {
         need_offset: Offset(10),
         reply: Some(reply),
         removed_local_leader: false,
@@ -558,7 +562,7 @@ fn commit_add_voter(
     leader: &mut Engine,
     id: u64,
     directory: u128,
-) -> Result<crate::reconfig::ReconfigOutcome, RaftError> {
+) -> Result<ReconfigOutcome, RaftError> {
     let (reply, mut rx) = oneshot::channel();
     leader.on_reconfigure(
         crate::reconfig::VoterChange::Add(add_request(id, directory)),
@@ -569,8 +573,8 @@ fn commit_add_voter(
     rx.try_recv().expect("the add was answered")
 }
 
-fn add_request(id: u64, directory: u128) -> crate::reconfig::AddVoter {
-    crate::reconfig::AddVoter {
+fn add_request(id: u64, directory: u128) -> AddVoter {
+    AddVoter {
         voter: krabka_metadata::Voter {
             id: NodeId(id),
             directory_id: uuid::Uuid::from_u128(directory),
@@ -710,7 +714,7 @@ async fn an_observer_that_dropped_out_of_describe_quorum_can_still_be_added() {
 async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {
     use crate::reconfig::{ReconfigOutcome, VoterChange};
 
-    let check_add = |leader: &mut Engine, request: crate::reconfig::AddVoter| {
+    let check_add = |leader: &mut Engine, request: AddVoter| {
         let (reply, mut rx) = oneshot::channel();
         leader.on_reconfigure(VoterChange::CheckAdd(request), reply);
         rx.try_recv().expect("the check was answered")
@@ -744,7 +748,7 @@ async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {
     }
 
     // A pending change is REQUEST_TIMED_OUT, whichever candidate asks.
-    leader.pending_reconfig = Some(crate::kraft::controller::PendingReconfig {
+    leader.pending_reconfig = Some(PendingReconfig {
         need_offset: Offset(100),
         reply: None,
         removed_local_leader: false,

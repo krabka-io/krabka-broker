@@ -16,9 +16,9 @@ use crate::{
     alter_scram::{
         KAFKA_DUPLICATE_RESOURCE, KAFKA_MAX_SCRAM_ITERATIONS, KAFKA_UNACCEPTABLE_CREDENTIAL,
         KAFKA_UNSUPPORTED_SASL_MECHANISM, WIRE_MECH_SCRAM_SHA_256, WIRE_MECH_SCRAM_SHA_512,
-        drive_alter_user_scram_credentials_as_plain, pbkdf2_salt_and_salted,
+        drive_alter_user_scram_credentials_as_plain, pbkdf2_salt_and_salted, provision_as_admin,
     },
-    harness::alice_password,
+    harness::{alice_password, scram_admin_fixture},
     support::sasl::{
         ScramAlgorithm, ScramIterations, ScramMechanismCode, ScramUpsertionSetup, scram_upsertion,
     },
@@ -30,8 +30,7 @@ use crate::{
 /// is the parameter validation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_low_iterations_rejected() {
-    let (_log_dir, handle, addr) =
-        crate::harness::scram_admin_fixture(vec![SaslMechanism::Plain]).await;
+    let (_log_dir, handle, addr) = scram_admin_fixture(vec![SaslMechanism::Plain]).await;
 
     // 64-byte salted_password length is valid; only `iterations` violates.
     let req = AlterUserScramCredentialsRequest {
@@ -41,8 +40,7 @@ async fn alter_scram_creds_low_iterations_rejected() {
         })],
         ..Default::default()
     };
-    let resp =
-        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR (rejected)").await;
+    let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR (rejected)").await;
     handle.shutdown().await;
     assert!(resp.results.len() == 1);
     assert!(
@@ -54,8 +52,7 @@ async fn alter_scram_creds_low_iterations_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {
-    let (_log_dir, handle, addr) =
-        crate::harness::scram_admin_fixture(vec![SaslMechanism::Plain]).await;
+    let (_log_dir, handle, addr) = scram_admin_fixture(vec![SaslMechanism::Plain]).await;
     let req = AlterUserScramCredentialsRequest {
         upsertions: vec![
             scram_upsertion(ScramUpsertionSetup {
@@ -74,9 +71,7 @@ async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {
         ..Default::default()
     };
 
-    let resp =
-        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR high iterations")
-            .await;
+    let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR high iterations").await;
 
     handle.shutdown().await;
     assert!(resp.results.len() == 2, "one row per distinct username");
@@ -147,8 +142,7 @@ async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism(
 /// `DUPLICATE_RESOURCE` (92) even when the mechanisms differ.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_duplicate_resource_rejected() {
-    let (_log_dir, handle, addr) =
-        crate::harness::scram_admin_fixture(vec![SaslMechanism::Plain]).await;
+    let (_log_dir, handle, addr) = scram_admin_fixture(vec![SaslMechanism::Plain]).await;
 
     let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
     let upsert = scram_upsertion(ScramUpsertionSetup {
@@ -163,8 +157,7 @@ async fn alter_scram_creds_duplicate_resource_rejected() {
         upsertions: vec![upsert, upsert_sha256],
         ..Default::default()
     };
-    let resp =
-        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR (duplicate)").await;
+    let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR (duplicate)").await;
     handle.shutdown().await;
     assert!(resp.results.len() == 1, "one result row per username");
     assert!(

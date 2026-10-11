@@ -7,22 +7,26 @@ use std::time::Duration as StdDuration;
 use assert2::assert;
 
 use super::*;
-use crate::kraft::{
-    controller::{
-        offsets::metadata_fetch_offset_below_log_start,
-        records::{decode_batches, encode_batches},
-        replication::{
-            FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
-            should_serve_fetch_records, should_start_snapshot_fetch,
-            snapshot_fetch_response_invalid,
+use crate::{
+    error::RaftError,
+    kraft::{
+        controller::{
+            offsets::metadata_fetch_offset_below_log_start,
+            records::{decode_batches, encode_batches},
+            replication::{
+                FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
+                should_serve_fetch_records, should_start_snapshot_fetch,
+                snapshot_fetch_response_invalid,
+            },
+            test_support::{
+                CapturedPeerSend, EngineSetup, build_engine_only, elect_single_voter_engine,
+                one_offset_batch, record_peer_sends, recv_peer_send, recv_peer_send_with_api,
+                submit_change_with_timeout, topic_record,
+            },
         },
-        test_support::{
-            EngineSetup, build_engine_only, elect_single_voter_engine, one_offset_batch,
-            record_peer_sends, recv_peer_send, recv_peer_send_with_api, submit_change_with_timeout,
-            topic_record,
-        },
+        transport::{PeerSender, wire::FETCH_VERSION},
+        types::LogOffsetMetadata,
     },
-    types::LogOffsetMetadata,
 };
 
 #[test]
@@ -97,14 +101,14 @@ struct EndpointRecorder {
 }
 
 #[async_trait::async_trait]
-impl crate::kraft::transport::PeerSender for EndpointRecorder {
+impl PeerSender for EndpointRecorder {
     async fn send(
         &self,
         peer: NodeId,
         _api_key: i16,
         _body: bytes::Bytes,
-    ) -> Result<bytes::Bytes, crate::error::RaftError> {
-        Err(crate::error::RaftError::NotLeader {
+    ) -> Result<bytes::Bytes, RaftError> {
+        Err(RaftError::NotLeader {
             current_leader: Some(peer),
         })
     }
@@ -229,7 +233,7 @@ fn inbound_fetch(
 ) -> oneshot::Receiver<bytes::Bytes> {
     let (reply, receiver) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
-        version: crate::kraft::transport::wire::FETCH_VERSION,
+        version: FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
             cluster_id: None,
             max_wait_ms: 0,
@@ -376,7 +380,7 @@ async fn a_replica_that_cannot_serve_a_fetch_names_the_leader_it_knows() {
         let (reply, mut response) = oneshot::channel();
 
         replica.on_inbound(Inbound::Fetch {
-            version: crate::kraft::transport::wire::FETCH_VERSION,
+            version: FETCH_VERSION,
             req: fetch_request(NodeId(3), request_epoch),
             reply,
         });
@@ -410,7 +414,7 @@ async fn a_leader_refuses_a_fetch_from_another_epoch_and_names_itself() {
     let (reply, mut response) = oneshot::channel();
 
     leader.on_inbound(Inbound::Fetch {
-        version: crate::kraft::transport::wire::FETCH_VERSION,
+        version: FETCH_VERSION,
         req: fetch_request(NodeId(2), i32::try_from(epoch).unwrap() - 1),
         reply,
     });
@@ -471,7 +475,7 @@ async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
 fn broadcast_fixture() -> (
     Engine,
     tempfile::TempDir,
-    tokio::sync::mpsc::UnboundedReceiver<crate::kraft::controller::test_support::CapturedPeerSend>,
+    tokio::sync::mpsc::UnboundedReceiver<CapturedPeerSend>,
 ) {
     let (mut engine, dir) = build_engine_only(EngineSetup::default());
     let sends = record_peer_sends(&mut engine, wire::PeerResponse::Ack { epoch: 4 }.encode());
@@ -1266,7 +1270,7 @@ fn fetch_at(
 ) {
     let (reply, _rx) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
-        version: crate::kraft::transport::wire::FETCH_VERSION,
+        version: FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
             cluster_id: None,
             max_wait_ms: 0,

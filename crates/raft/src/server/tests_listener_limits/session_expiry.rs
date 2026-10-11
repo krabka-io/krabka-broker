@@ -4,12 +4,12 @@ use assert2::assert;
 use krabka_protocol::{Encode as _, owned::describe_quorum_request::DescribeQuorumRequest};
 
 use super::*;
-use crate::ClusterGrants;
+use crate::{ClusterGrants, ClusterOperation};
 
 struct CountingGrants(Arc<AtomicUsize>);
 
 impl ClusterGrants for CountingGrants {
-    fn allows(&self, _: crate::ClusterOperation) -> bool {
+    fn allows(&self, _: ClusterOperation) -> bool {
         self.0.fetch_add(1, Ordering::Relaxed);
         true
     }

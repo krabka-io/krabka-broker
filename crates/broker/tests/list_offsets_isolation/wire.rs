@@ -23,6 +23,7 @@ use krabka_protocol::owned::{
 
 use crate::support::{
     offsets::{list_offset_partition, single_partition_list_offsets},
+    producer::{ProducerRecordSetup, producer_record},
     topics::{creatable_topic, create_topic_request},
 };
 
@@ -156,7 +157,7 @@ pub(super) async fn wait_for_settled_log(broker: &BrokerHandle, topic: &str, off
 }
 
 fn record(topic: &str, value: &'static str) -> ProducerRecord {
-    crate::support::producer::producer_record(crate::support::producer::ProducerRecordSetup {
+    producer_record(ProducerRecordSetup {
         topic: (topic).into(),
         value: Some(Bytes::from_static(value.as_bytes())),
         ..Default::default()

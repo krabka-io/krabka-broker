@@ -29,7 +29,7 @@ use crate::{
     io::FileIo,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
     log_start_offset_checkpoint, name,
-    producer_snapshot::{self, ProducerSnapshotEntry},
+    producer_snapshot::{self, NUM_BATCHES_TO_RETAIN, ProducerSnapshotEntry},
     recovery::{deleted_orphan_recover, swap_orphan_recover},
     segment::Segment,
     txn_index::TxnIndex,
@@ -531,7 +531,7 @@ impl Log {
         } else if let Some(previous) = entry.last_batch() {
             let earlier = self.earlier_batches.entry(producer_id).or_default();
             earlier.push_back(previous);
-            if earlier.len() >= crate::producer_snapshot::NUM_BATCHES_TO_RETAIN {
+            if earlier.len() >= NUM_BATCHES_TO_RETAIN {
                 earlier.pop_front();
             }
         }

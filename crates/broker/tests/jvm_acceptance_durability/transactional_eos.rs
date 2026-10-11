@@ -13,7 +13,13 @@ use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig};
 use krabka_log::LogConfig;
 
-use crate::jvm_acceptance::{KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, docker_run_kafka_tool};
+use crate::{
+    jvm_acceptance::{KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, docker_run_kafka_tool},
+    support::{
+        ContainerInput, JvmBrokerSetup, JvmDockerSetup, controller_voters, jvm_broker_config,
+        jvm_docker_command,
+    },
+};
 
 /// A zombie-fencing probe (KIP-360): two JVM producers share one
 /// `transactional.id`, the second takes the id over, and the first must be
@@ -182,16 +188,16 @@ async fn transactional_console_producer_eos() {
                 },
             ],
             inter_broker_listener_name: "INTERNAL".to_string(),
-            ..crate::support::jvm_broker_config(
+            ..jvm_broker_config(
                 dir.path().to_path_buf(),
-                crate::support::JvmBrokerSetup {
+                JvmBrokerSetup {
                     node: krabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
                     listen: listen_addr,
                     controller: format!("0.0.0.0:{}", controller_ports[i])
                         .parse()
                         .expect("static addr"),
                     advertised: advertised_listener.clone(),
-                    voters: crate::support::controller_voters(&voters),
+                    voters: controller_voters(&voters),
                 },
             )
         };
@@ -229,7 +235,7 @@ async fn transactional_console_producer_eos() {
     // 2. Compile the small Java helper against the image's Kafka client jars.
     //    It writes one committed transaction, one aborted transaction, and a
     //    later record that seals the abort marker's transaction index.
-    let mut producer = crate::support::jvm_docker_command(crate::support::JvmDockerSetup { image: "--entrypoint", args: &["bash",
+    let mut producer = jvm_docker_command(JvmDockerSetup { image: "--entrypoint", args: &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/TransactionalProducer.java; \
@@ -239,7 +245,7 @@ async fn transactional_console_producer_eos() {
             "--",
             &bootstrap_1,
             TOPIC,
-        ], input: crate::support::ContainerInput::Attached, ..Default::default() })
+        ], input: ContainerInput::Attached, ..Default::default() })
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -364,7 +370,7 @@ async fn transactional_console_producer_eos() {
         "--bootstrap-server",
         &bootstrap_1,
     ]);
-    let mut zombie = crate::support::jvm_docker_command(crate::support::JvmDockerSetup { image: "--entrypoint", args: &["bash",
+    let mut zombie = jvm_docker_command(JvmDockerSetup { image: "--entrypoint", args: &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/ZombieProducer.java; \
@@ -374,7 +380,7 @@ async fn transactional_console_producer_eos() {
             "--",
             &bootstrap_1,
             ZOMBIE_TOPIC,
-        ], input: crate::support::ContainerInput::Attached, ..Default::default() })
+        ], input: ContainerInput::Attached, ..Default::default() })
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

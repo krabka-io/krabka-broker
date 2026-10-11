@@ -12,7 +12,8 @@ use crate::{
     epoch_harness::{boot_single, create_topic, record, set_leader_epoch, topic_id_for},
     support::{
         client::connect_client,
-        fetch::{fetch_partition, single_partition_fetch},
+        fetch::{SinglePartitionFetchSetup, fetch_partition, single_partition_fetch},
+        produce::{SinglePartitionProduceSetup, batch_request},
     },
 };
 
@@ -25,7 +26,7 @@ async fn fetch_with_epoch(
     client
         .send(FetchRequest {
             replica_id: 99,
-            ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+            ..single_partition_fetch(SinglePartitionFetchSetup {
                 topic: topic.into(),
                 topic_id,
                 partition: FetchPartition {
@@ -50,9 +51,9 @@ async fn fenced_leader_epoch_truncates_zombie_writes() {
     let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "fence").await;
     client
-        .send(crate::support::produce::batch_request(
+        .send(batch_request(
             record("v0"),
-            crate::support::produce::SinglePartitionProduceSetup {
+            SinglePartitionProduceSetup {
                 topic: ("fence").into(),
                 topic_id,
                 ..Default::default()

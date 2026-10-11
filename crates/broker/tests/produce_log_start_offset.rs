@@ -50,9 +50,10 @@ use krabka_protocol::{
 };
 
 use crate::support::{
+    client::BatchProduceSetup,
     offsets::{delete_records_partition, delete_records_request, delete_records_topic},
     records::{batch_from_records, value_record},
-    topics::{creatable_topic, create_topic_request},
+    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
 mod support;
@@ -147,7 +148,7 @@ async fn create_topic(
 ) -> WireUuid {
     let response = client
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: name.to_owned(),
                 ..Default::default()
             },
@@ -186,7 +187,7 @@ async fn produce_as(
     crate::support::client::produce_batch(
         client,
         batch,
-        crate::support::client::BatchProduceSetup {
+        BatchProduceSetup {
             topic,
             topic_id,
             ..Default::default()

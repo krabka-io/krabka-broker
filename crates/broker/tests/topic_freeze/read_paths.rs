@@ -18,13 +18,14 @@ use krabka_protocol::{
 
 use crate::{
     control_plane::freeze_scope,
-    support,
     support::{
+        self,
         client::connect_owned,
-        fetch::single_partition_fetch,
+        discovery::named_topic_metadata,
+        fetch::{SinglePartitionFetchSetup, single_partition_fetch},
         offsets::{offset_commit_partition, offset_commit_topic},
     },
-    wire::{CONTROL, accepted, create_topic, refused},
+    wire::{CONTROL, accepted, create_topic, frozen_topic_with_record, refused},
 };
 
 /// [`support::start`] with the Prometheus listener bound.
@@ -53,13 +54,11 @@ async fn scrape(addr: std::net::SocketAddr) -> String {
 /// The number of records a fetch from offset zero returns.
 async fn fetch_record_count(client: &Client, topic: &str, topic_id: WireUuid) -> usize {
     let response = client
-        .send(single_partition_fetch(
-            crate::support::fetch::SinglePartitionFetchSetup {
-                topic: topic.into(),
-                topic_id,
-                ..Default::default()
-            },
-        ))
+        .send(single_partition_fetch(SinglePartitionFetchSetup {
+            topic: topic.into(),
+            topic_id,
+            ..Default::default()
+        }))
         .await
         .expect("Fetch");
     assert!(response.error_code == codes::NONE, "Fetch: {response:?}");
@@ -85,14 +84,13 @@ async fn fetch_metadata_and_the_metrics_endpoint_still_answer_for_a_frozen_topic
     let metrics_addr = broker
         .metrics_addr()
         .expect("the metrics listener is bound");
-    let (frozen, control) =
-        crate::wire::frozen_topic_with_record(&broker, &client, "orders", "cutover").await;
+    let (frozen, control) = frozen_topic_with_record(&broker, &client, "orders", "cutover").await;
 
     // The record written before the freeze is still readable, and the topic is
     // still in the metadata a client routes on.
     check!(fetch_record_count(&client, "orders", frozen).await == 1);
     let metadata = client
-        .send(crate::support::discovery::named_topic_metadata("orders"))
+        .send(named_topic_metadata("orders"))
         .await
         .expect("Metadata");
     let topic = &metadata.topics[0];

@@ -13,7 +13,16 @@ use krabka_protocol::owned::{
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 
-use crate::harness::admin_plain_password;
+use crate::{
+    harness::admin_plain_password,
+    support::{
+        sasl::sasl_temp_config,
+        wire::{
+            CorrelationId, WireFrameSetup, decode_response_frame, read_frame, request_frame,
+            write_frame,
+        },
+    },
+};
 
 /// Start a broker with a `SASL_PLAINTEXT` listener and one PLAIN credential,
 /// then dial it with the public `InterBrokerClient` API.
@@ -24,7 +33,7 @@ use crate::harness::admin_plain_password;
 /// stream and decodes the response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inter_broker_client_authenticates_via_plain() {
-    let (_log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
+    let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("broker".to_string(), admin_plain_password());
 
@@ -76,8 +85,8 @@ pub async fn drive_inter_broker_client_then_apiversions(
     let av_req = ApiVersionsRequest::default();
     let av_body = crate::kafka_wire::encode_named(&av_req, 0, "ApiVersions")?;
 
-    let frame = crate::support::wire::request_frame(crate::support::wire::WireFrameSetup {
-        correlation: crate::support::wire::CorrelationId(99),
+    let frame = request_frame(WireFrameSetup {
+        correlation: CorrelationId(99),
         client_id: "krabka-t16-test",
         body: &av_body,
         capacity: Some(
@@ -88,12 +97,12 @@ pub async fn drive_inter_broker_client_then_apiversions(
         ..Default::default()
     });
 
-    crate::support::wire::write_frame(&mut stream, &frame, None).await?;
+    write_frame(&mut stream, &frame, None).await?;
 
-    let resp = crate::support::wire::read_frame(&mut stream).await?;
+    let resp = read_frame(&mut stream).await?;
 
     // Non-flexible response: header is v0 (just corr_id).
     let _av_resp: ApiVersionsResponse =
-        crate::support::wire::decode_response_frame(&resp, 0, false, "ApiVersions decode")?;
+        decode_response_frame(&resp, 0, false, "ApiVersions decode")?;
     Ok(())
 }

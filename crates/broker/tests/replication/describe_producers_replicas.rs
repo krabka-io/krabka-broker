@@ -34,7 +34,13 @@ use krabka_protocol::{
 };
 use tempfile::TempDir;
 
-use crate::support;
+use crate::support::{
+    self,
+    client::connect_with_context,
+    produce::{SinglePartitionProduceSetup, batch_request},
+    shutdown_cluster,
+    transactions::TransactionOutcome,
+};
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 
@@ -121,9 +127,13 @@ fn produce_request(
 ) -> ProduceRequest {
     ProduceRequest {
         transactional_id: transactional_id.map(Into::into),
-        ..crate::support::produce::batch_request(
+        ..batch_request(
             batch,
-            crate::support::produce::SinglePartitionProduceSetup {topic: (TOPIC).into(), topic_id, ..crate::support::produce::SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()},
+            SinglePartitionProduceSetup {
+                topic: (TOPIC).into(),
+                topic_id,
+                ..SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()
+            },
         )
     }
 }
@@ -159,7 +169,7 @@ async fn produce_transactional(leader: &Connection, batch: RecordBatch) -> i16 {
 async fn end_transaction(
     leader: &Connection,
     (producer_id, producer_epoch): (i64, i16),
-    commit: crate::support::transactions::TransactionOutcome,
+    commit: TransactionOutcome,
     transaction_version: i8,
 ) -> i16 {
     let response = leader
@@ -245,12 +255,8 @@ async fn every_replica_describes_the_producers_of_its_log() {
     let cluster = start_cluster().await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 
-    let admin = crate::support::client::connect_with_context(
-        cluster[0].1.listen_addr.to_string(),
-        None,
-        "admin client",
-    )
-    .await;
+    let admin =
+        connect_with_context(cluster[0].1.listen_addr.to_string(), None, "admin client").await;
     let topic_id = support::client::create_topic_spec(
         &admin,
         support::topic_on(TOPIC, &[&[1, 2, 3]]),
@@ -306,13 +312,7 @@ async fn every_replica_describes_the_producers_of_its_log() {
     )
     .await;
     let before_markers = now_ms();
-    let commit = end_transaction(
-        &leader,
-        COMMITTED,
-        crate::support::transactions::TransactionOutcome::Commit,
-        1,
-    )
-    .await;
+    let commit = end_transaction(&leader, COMMITTED, TransactionOutcome::Commit, 1).await;
     let aborted = produce_transactional(
         &leader,
         batch(ProducerBatchSetup {
@@ -327,7 +327,7 @@ async fn every_replica_describes_the_producers_of_its_log() {
     let abort = end_transaction(
         &leader,
         (aborted_id, aborted_epoch + 1),
-        crate::support::transactions::TransactionOutcome::Abort,
+        TransactionOutcome::Abort,
         2,
     )
     .await;
@@ -402,5 +402,5 @@ async fn every_replica_describes_the_producers_of_its_log() {
         ) == (vec![expected; 3], true, true)
     );
 
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
 }

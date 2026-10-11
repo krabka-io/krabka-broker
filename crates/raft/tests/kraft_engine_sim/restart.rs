@@ -3,7 +3,7 @@
 
 use crate::harness::{
     self as fixture, STAGGERED_TIMEOUTS, SimClusterSetup, await_single_leader, await_until,
-    metadata_log, shutdown_nodes, start_engines, topic_record, voter_set,
+    metadata_log, shutdown_nodes, start_engines, three_voter_network, topic_record, voter_set,
 };
 
 /// 4. Restart recovery: commit, snapshot, drop one engine, reopen it over its
@@ -11,7 +11,7 @@ use crate::harness::{
 ///    log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn restart_recovers_image() {
-    let (net, ids) = crate::harness::three_voter_network();
+    let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(400);
 
     // Keep per-node data dirs so we can reopen one.

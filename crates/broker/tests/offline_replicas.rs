@@ -43,7 +43,12 @@ use krabka_protocol::{
 use tempfile::TempDir;
 use tokio::net::TcpStream;
 
-use crate::support::wire::ApiRequestSetup;
+use crate::support::{
+    discovery::named_topic_metadata,
+    registered_cluster, shutdown_cluster,
+    topics::{ConfiguredTopicSetup, TopicPartitionCount, TopicReplicationFactor},
+    wire::ApiRequestSetup,
+};
 
 const CLIENT_ID: &str = "krabka-offline-replicas-test";
 const TOPIC: &str = "kip112-offline-replicas";
@@ -103,10 +108,10 @@ async fn create_topic_named(addr: SocketAddr, name: &str, partitions: i32, repli
     kafka_wire::create_topic_on(
         &mut stream,
         CLIENT_ID,
-        kafka_wire::topic(crate::support::topics::ConfiguredTopicSetup {
+        kafka_wire::topic(ConfiguredTopicSetup {
             name: (name).into(),
-            partitions: crate::support::topics::TopicPartitionCount(partitions),
-            replicas: crate::support::topics::TopicReplicationFactor(replication),
+            partitions: TopicPartitionCount(partitions),
+            replicas: TopicReplicationFactor(replication),
             ..Default::default()
         }),
     )
@@ -120,7 +125,7 @@ async fn metadata_partitions(addr: SocketAddr) -> Vec<MetadataResponsePartition>
 async fn metadata_partitions_of(addr: SocketAddr, name: &str) -> Vec<MetadataResponsePartition> {
     let req = MetadataRequest {
         allow_auto_topic_creation: false,
-        ..crate::support::discovery::named_topic_metadata(name.to_string())
+        ..named_topic_metadata(name.to_string())
     };
     let mut body = BytesMut::new();
     req.encode(&mut body, METADATA_VERSION).unwrap();
@@ -376,7 +381,7 @@ fn expected_partition(observer: &BrokerHandle, dead: i32) -> MetadataResponsePar
 /// controller writes it to the metadata log.
 #[tokio::test]
 async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
-    let mut cluster = crate::support::registered_cluster(3).await;
+    let mut cluster = registered_cluster(3).await;
     create_topic_named(cluster[0].0.listen_addr(), FENCED_TOPIC, 1, 3).await;
     for (handle, _, _) in &cluster {
         handle.wait_until_partition_present(FENCED_TOPIC, 0).await;
@@ -417,5 +422,5 @@ async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
         "the observer must still be a follower for this test to mean anything"
     );
 
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
 }

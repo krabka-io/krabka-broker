@@ -51,6 +51,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        NodeId,
         kraft::transport::{
             Inbound,
             wire::{FETCH_VERSION, PeerRequest},
@@ -167,7 +168,7 @@ mod tests {
             cluster_id: None,
             max_wait_ms: 0,
             high_watermark: -1,
-            from: crate::NodeId(99),
+            from: NodeId(99),
             current_leader_epoch: partition.leader_epoch,
             fetch_epoch: partition.leader_epoch.cast_unsigned(),
             fetch_offset: 0,

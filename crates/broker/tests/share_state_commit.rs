@@ -49,7 +49,8 @@ use tempfile::TempDir;
 
 use crate::support::{
     client::connect_owned,
-    topics::{creatable_topic, create_topic_request},
+    shutdown_cluster,
+    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
 mod support;
@@ -95,7 +96,7 @@ async fn client(handle: &BrokerHandle) -> Client {
 async fn create_orders(client: &Client) -> uuid::Uuid {
     let created = client
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup::default(),
+            ConfiguredTopicSetup::default(),
         )))
         .await
         .expect("CreateTopics");
@@ -355,6 +356,6 @@ async fn a_share_state_request_is_answered_only_when_committed() {
     }
     member.close();
 
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }

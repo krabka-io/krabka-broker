@@ -8,12 +8,10 @@
 
 use krabka_broker::coordinator::AUDIT_TOPIC;
 
-use crate::{
-    support,
-    support::{
-        fetch::single_partition_fetch,
-        topics::{creatable_topic, create_topic_request},
-    },
+use crate::support::{
+    self,
+    fetch::{FetchByteLimit, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch},
+    topics::{creatable_topic, create_topic_request},
 };
 
 /// Verifies that the authorizer-decorator path denies an unauthorized
@@ -75,18 +73,16 @@ async fn denied_operation_returns_topic_authorization_failed() {
     let topic_id = support::topic_id_for(&p.client, AUDIT_TOPIC).await;
     let fr = p
         .client
-        .send(single_partition_fetch(
-            crate::support::fetch::SinglePartitionFetchSetup {
-                topic: AUDIT_TOPIC.into(),
-                topic_id,
-                limits: crate::support::fetch::FetchLimits {
-                    wait: crate::support::fetch::RequestWaitMillis(100),
-                    minimum: crate::support::fetch::FetchByteLimit(0),
-                    maximum: crate::support::fetch::FetchByteLimit(1 << 20),
-                },
-                ..Default::default()
+        .send(single_partition_fetch(SinglePartitionFetchSetup {
+            topic: AUDIT_TOPIC.into(),
+            topic_id,
+            limits: crate::support::fetch::FetchLimits {
+                wait: RequestWaitMillis(100),
+                minimum: FetchByteLimit(0),
+                maximum: FetchByteLimit(1 << 20),
             },
-        ))
+            ..Default::default()
+        }))
         .await
         .unwrap();
     // The broker responded to the Fetch request without crashing.

@@ -130,6 +130,7 @@ mod probe;
 use crate::{
     cluster::SoakCluster,
     drift::{Bound, Series},
+    support::{producer::ProducerRecordSetup, topics::topic_configs},
 };
 
 /// How long the load runs when `KRABKA_SOAK_SECONDS` is unset.
@@ -242,7 +243,7 @@ fn soak_duration() -> Duration {
 
 /// One record of `PAYLOAD_BYTES` bytes on `topic`.
 fn record(topic: &str, key: String, value: Vec<u8>) -> ProducerRecord {
-    crate::support::producer::producer_record(crate::support::producer::ProducerRecordSetup {
+    crate::support::producer::producer_record(ProducerRecordSetup {
         topic: topic.to_owned(),
         key: Some(key.into()),
         value: Some(value.into()),
@@ -329,7 +330,7 @@ fn topic(name: &str, partitions: i32, configs: &[(&str, &str)]) -> CreatableTopi
         // partition, so each one's descriptors and log directory carry the
         // whole load rather than a third of it.
         replication_factor: 3,
-        configs: crate::support::topics::topic_configs(configs.iter().copied()),
+        configs: topic_configs(configs.iter().copied()),
         ..Default::default()
     }
 }

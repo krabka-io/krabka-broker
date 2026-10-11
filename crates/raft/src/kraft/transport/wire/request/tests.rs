@@ -2,6 +2,7 @@ use assert2::{assert, check};
 use base64::Engine as _;
 
 use super::*;
+use crate::kraft::transport::api_key::END_QUORUM_EPOCH;
 
 fn raw_vote_request() -> VoteRequest {
     VoteRequest {
@@ -289,7 +290,7 @@ fn encoded_begin_and_end_requests_are_kafkas_singleton_requests() {
     assert2::check!(raw_end == expected_end(QUORUM_EPOCH_VERSION));
     // At v0 the successors travel in `PreferredSuccessors`.
     let v0 = crate::network::negotiation::convert_request(
-        crate::kraft::transport::api_key::END_QUORUM_EPOCH,
+        END_QUORUM_EPOCH,
         &end.encode(),
         QUORUM_EPOCH_VERSION,
         0,

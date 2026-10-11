@@ -28,7 +28,13 @@ use krabka_protocol::owned::{
     fetch_request::FetchRequest,
 };
 
-use crate::support::fetch::{fetch_partition, single_partition_fetch};
+use crate::support::{
+    client::connect_with_context,
+    discovery::named_topic_metadata,
+    fetch::{FetchByteLimit, FetchPartitionSetup, fetch_partition, single_partition_fetch},
+    producer::{ProducerRecordSetup, producer_record},
+    remove_container_with_volumes,
+};
 
 const BROKER_IMAGE: &str = "docker.io/krabka-io/krabka-broker:dev";
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
@@ -326,7 +332,7 @@ impl BrokerProcess {
 
 impl Drop for BrokerProcess {
     fn drop(&mut self) {
-        crate::support::remove_container_with_volumes(&self.name);
+        remove_container_with_volumes(&self.name);
     }
 }
 
@@ -431,7 +437,7 @@ async fn create_topic(bootstrap: &str) {
 async fn describe(
     bootstrap: &str,
 ) -> krabka_protocol::owned::describe_log_dirs_response::DescribeLogDirsResponse {
-    crate::support::client::connect_with_context(bootstrap, None, "describe client")
+    connect_with_context(bootstrap, None, "describe client")
         .await
         .send(DescribeLogDirsRequest {
             topics: None,
@@ -478,15 +484,11 @@ fn directory_id(fs: &TinyFs) -> uuid::Uuid {
 }
 
 async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
-    let metadata = crate::support::client::connect_with_context(
-        cluster.bootstrap(),
-        None,
-        "assignment metadata client",
-    )
-    .await
-    .send(crate::support::discovery::named_topic_metadata(TOPIC))
-    .await
-    .expect("assignment Metadata");
+    let metadata = connect_with_context(cluster.bootstrap(), None, "assignment metadata client")
+        .await
+        .send(named_topic_metadata(TOPIC))
+        .await
+        .expect("assignment Metadata");
     let controller = usize::try_from(metadata.controller_id - 1).expect("positive controller id");
     let topic_id = metadata.topics[0].topic_id;
     let directory = |id: uuid::Uuid, partitions: &[i32]| DirectoryData {
@@ -504,7 +506,7 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
         }],
         ..Default::default()
     };
-    let response = crate::support::client::connect_with_context(
+    let response = connect_with_context(
         cluster.brokers[controller].bootstrap(),
         None,
         "assignment controller client",
@@ -539,9 +541,9 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
 }
 
 async fn leaders(bootstrap: &str) -> Vec<i32> {
-    let response = crate::support::client::connect_with_context(bootstrap, None, "metadata client")
+    let response = connect_with_context(bootstrap, None, "metadata client")
         .await
-        .send(crate::support::discovery::named_topic_metadata(TOPIC))
+        .send(named_topic_metadata(TOPIC))
         .await
         .expect("Metadata");
     let mut leaders = vec![-1; usize::try_from(PARTITIONS).unwrap()];
@@ -554,12 +556,11 @@ async fn leaders(bootstrap: &str) -> Vec<i32> {
 async fn wait_isr(bootstrap: &str, partition: i32, expected: usize) {
     let deadline = Instant::now() + READY;
     loop {
-        let response =
-            crate::support::client::connect_with_context(bootstrap, None, "ISR metadata client")
-                .await
-                .send(crate::support::discovery::named_topic_metadata(TOPIC))
-                .await
-                .expect("ISR Metadata");
+        let response = connect_with_context(bootstrap, None, "ISR metadata client")
+            .await
+            .send(named_topic_metadata(TOPIC))
+            .await
+            .expect("ISR Metadata");
         if response.topics[0]
             .partitions
             .iter()
@@ -577,7 +578,7 @@ async fn wait_isr(bootstrap: &str, partition: i32, expected: usize) {
 }
 
 fn record(partition: i32, key: String, bytes: usize) -> ProducerRecord {
-    crate::support::producer::producer_record(crate::support::producer::ProducerRecordSetup {
+    producer_record(ProducerRecordSetup {
         topic: (TOPIC).into(),
         partition: Some(krabka_ids::PartitionIndex(partition)),
         key: Some(key.into()),
@@ -623,15 +624,11 @@ async fn wait_exited(broker: &BrokerProcess) {
 }
 
 async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<String> {
-    let metadata = crate::support::client::connect_with_context(
-        cluster.bootstrap(),
-        None,
-        "read metadata client",
-    )
-    .await
-    .send(crate::support::discovery::named_topic_metadata(TOPIC))
-    .await
-    .expect("read Metadata");
+    let metadata = connect_with_context(cluster.bootstrap(), None, "read metadata client")
+        .await
+        .send(named_topic_metadata(TOPIC))
+        .await
+        .expect("read Metadata");
     let topic = &metadata.topics[0];
     let leader = topic
         .partitions
@@ -639,7 +636,7 @@ async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<Stri
         .find(|candidate| candidate.partition_index == partition)
         .expect("read partition metadata")
         .leader_id;
-    let client = crate::support::client::connect_with_context(
+    let client = connect_with_context(
         cluster.brokers[usize::try_from(leader - 1).unwrap()].bootstrap(),
         None,
         "fetch client",
@@ -654,14 +651,14 @@ async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<Stri
                 ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
                     topic: TOPIC.into(),
                     topic_id: topic.topic_id,
-                    partition: fetch_partition(crate::support::fetch::FetchPartitionSetup {
+                    partition: fetch_partition(FetchPartitionSetup {
                         partition: krabka_ids::PartitionIndex(partition),
                         offset: krabka_ids::Offset(offset),
-                        maximum: crate::support::fetch::FetchByteLimit(1 << 24),
+                        maximum: FetchByteLimit(1 << 24),
                     }),
                     limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
                         crate::support::fetch::RequestWaitMillis(0),
-                        crate::support::fetch::FetchByteLimit(1 << 24),
+                        FetchByteLimit(1 << 24),
                     ),
                 })
             })

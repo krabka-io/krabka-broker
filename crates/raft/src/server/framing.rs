@@ -208,7 +208,10 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::{ControllerAdminRequest, ControllerAdminRouter, ControllerApiVersion};
+    use crate::{
+        ControllerAdminRequest, ControllerAdminRouteFuture, ControllerAdminRouter,
+        ControllerApiVersion,
+    };
 
     /// `socket.request.max.bytes` for the tests that do not probe it.
     const MAX_REQUEST_BYTES: usize = 100 * 1024 * 1024;
@@ -309,7 +312,7 @@ mod tests {
             &self.0
         }
 
-        fn route(&self, _request: ControllerAdminRequest) -> crate::ControllerAdminRouteFuture<'_> {
+        fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
             Box::pin(std::future::ready(Ok(None)))
         }
     }

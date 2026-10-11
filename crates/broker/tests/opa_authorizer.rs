@@ -110,14 +110,19 @@ fn start_broker_with_opa_authorizer(
     .expect("OpaAuthorizer::new must succeed inside a tokio runtime");
     cfg.authorizer = std::sync::Arc::new(opa);
 
-    Box::pin(crate::support::sasl::start_broker(cfg, log_dir))
+    Box::pin(start_broker(cfg, log_dir))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire driver helpers.
 // ─────────────────────────────────────────────────────────────────────────────
 
-use crate::kafka_wire::drive_produce_as_plain;
+use crate::{
+    kafka_wire::{AutomaticTopicSetup, PlainAuthenticationSetup, drive_produce_as_plain},
+    support::{
+        produce::single_partition_response, sasl::start_broker, topics::ConfiguredTopicSetup,
+    },
+};
 
 /// Drives `CreateTopics(name, 1 partition, rf=1)` over a SASL/PLAIN admin
 /// session. Admin is the super-user in both tests, so the call bypasses the OPA
@@ -125,9 +130,9 @@ use crate::kafka_wire::drive_produce_as_plain;
 async fn create_topic_as_admin(addr: SocketAddr, name: &str) {
     crate::kafka_wire::create_topic_as_super_user(
         addr,
-        crate::kafka_wire::AutomaticTopicSetup {
+        AutomaticTopicSetup {
             client_id: CLIENT_ID,
-            topic: crate::support::topics::ConfiguredTopicSetup {
+            topic: ConfiguredTopicSetup {
                 name: name.to_string(),
                 ..Default::default()
             },
@@ -168,7 +173,7 @@ async fn produce_when_partition_ready(
     drive_produce_as_plain(
         addr,
         single_record_produce_request(topic, 0, b"hello"),
-        &crate::kafka_wire::PlainAuthenticationSetup {
+        &PlainAuthenticationSetup {
             client_id: CLIENT_ID,
             user,
             password: (password).to_vec(),
@@ -199,7 +204,7 @@ async fn produce_blocked_by_opa_returns_topic_authorization_failed() {
     let resp = drive_produce_as_plain(
         addr,
         single_record_produce_request("blocked-topic", 0, b"hello"),
-        &crate::kafka_wire::PlainAuthenticationSetup {
+        &PlainAuthenticationSetup {
             client_id: CLIENT_ID,
             password: alice_password(),
             ..Default::default()
@@ -210,7 +215,7 @@ async fn produce_blocked_by_opa_returns_topic_authorization_failed() {
 
     handle.shutdown().await;
 
-    let p = crate::support::produce::single_partition_response(&resp);
+    let p = single_partition_response(&resp);
     assert!(
         p.error_code == ERR_TOPIC_AUTHORIZATION_FAILED,
         "OPA denied alice's Write on blocked-topic, expected \
@@ -242,7 +247,7 @@ async fn produce_allowed_by_opa_succeeds() {
 
     handle.shutdown().await;
 
-    let p = crate::support::produce::single_partition_response(&resp);
+    let p = single_partition_response(&resp);
     assert!(
         p.error_code == 0,
         "OPA allowed alice's Write on permitted-topic, expected \

@@ -180,6 +180,8 @@ pub fn init_jvm_tracing(default_filter: &str) {
 
 use krabka_broker::NodeId;
 
+use crate::support::controller_voters;
+
 #[derive(krabka_macros::FieldDefaults)]
 pub struct JvmBrokerSetup {
     #[default(NodeId(1))]
@@ -448,7 +450,7 @@ pub async fn start_jvm_cluster<const N: usize>(
                         .parse()
                         .expect("controller address"),
                     advertised: format!("host.docker.internal:{port}"),
-                    voters: crate::support::controller_voters(&voters),
+                    voters: controller_voters(&voters),
                 },
             );
             adjust(&mut config);

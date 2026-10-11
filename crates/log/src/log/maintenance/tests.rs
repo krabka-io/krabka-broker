@@ -11,7 +11,7 @@ use krabka_units::{Time, millis};
 use super::*;
 use crate::{
     Log, LogConfig, SegmentAllocation,
-    io::{FileIo, IoTarget, file_io},
+    io::{FileIo, IoTarget, LogIo, file_io},
     log::{
         sync::sync_observer,
         test_support::{
@@ -152,7 +152,7 @@ fn repeated_replacement_of_one_base_keeps_each_retired_generation() {
 
 #[derive(Debug)]
 struct FailUnlink;
-impl crate::io::LogIo for FailUnlink {
+impl LogIo for FailUnlink {
     fn remove_file(&self, _: IoTarget, _: &std::path::Path) -> std::io::Result<()> {
         Err(std::io::Error::other("injected deletion failure"))
     }
@@ -282,7 +282,7 @@ struct RejectRetirement {
     fault: RetirementFault,
 }
 
-impl crate::io::LogIo for RejectRetirement {
+impl LogIo for RejectRetirement {
     fn rename(
         &self,
         target: IoTarget,

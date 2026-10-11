@@ -15,6 +15,7 @@ use krabka_protocol::owned::{
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
 };
 
+use crate::support::streams::streams_join_and_converge;
 pub use crate::support::streams::{
     active_partition_count, finalize_streams_version, first_join, follow_up, topology,
 };
@@ -74,13 +75,5 @@ pub async fn join_and_converge(
     want_active: usize,
     tries: usize,
 ) -> (String, StreamsGroupHeartbeatResponse) {
-    crate::support::streams::streams_join_and_converge(
-        client,
-        group,
-        topo,
-        want_active,
-        tries,
-        true,
-    )
-    .await
+    streams_join_and_converge(client, group, topo, want_active, tries, true).await
 }

@@ -27,6 +27,7 @@ pub(crate) fn kafka_cluster_id_string(id: Uuid) -> String {
 /// 3-voter set, with the shared cluster id. `i` is 0-indexed, and the id is
 /// `i+1`.
 pub(crate) use crate::support::jvm_static_voter_config as krabka_controller_config;
+use crate::support::{JvmBrokerSetup, JvmStaticVoterSetup, bind_and_drop_ports, controller_voters};
 
 /// Formats a Krabka voter's log directory at Kafka 4.0's `metadata.version`.
 ///
@@ -102,7 +103,7 @@ impl MixedQuorum {
         (endpoints.ports, brokers, dirs)
     }
     pub(crate) async fn allocate() -> Self {
-        let (clients, controllers) = crate::support::bind_and_drop_ports(3).await;
+        let (clients, controllers) = bind_and_drop_ports(3).await;
         Self {
             ports: std::array::from_fn(|index| controllers[index].port()),
             clients,
@@ -126,15 +127,15 @@ impl MixedQuorum {
             let bind = SocketAddr::from(([0, 0, 0, 0], self.ports[index]));
             let mut config = krabka_controller_config(
                 dirs[index].path(),
-                crate::support::JvmStaticVoterSetup {
-                    broker: crate::support::JvmBrokerSetup {
+                JvmStaticVoterSetup {
+                    broker: JvmBrokerSetup {
                         node: krabka_broker::NodeId(
                             u64::try_from((index) + 1).expect("one-based node id"),
                         ),
                         listen: self.clients[index],
                         advertised: (self.clients[index]).to_string(),
                         controller: bind,
-                        voters: crate::support::controller_voters(&voters),
+                        voters: controller_voters(&voters),
                     },
                     cluster_id,
                 },

@@ -15,8 +15,8 @@ use tracing::instrument;
 use super::Log;
 use crate::{
     compact::{
-        CleaningRound, RewriteOutput, RewriteRetention, atomic_swap_retiring, build_offset_map,
-        rewrite_segments,
+        CleaningRound, RewriteOutput, RewriteRetention, atomic_swap, atomic_swap_retiring,
+        build_offset_map, rewrite_segments,
     },
     error::LogError,
     retention,
@@ -478,7 +478,7 @@ impl Log {
         let mut new_segments: Vec<Segment> = Vec::with_capacity(rewrites.len());
         for (group_bases, rewrite) in &rewrites {
             if self.config.read().unwrap().file_delete_delay <= krabka_units::Time::ZERO {
-                crate::compact::atomic_swap(&*self.io, &self.dir, group_bases, rewrite)?;
+                atomic_swap(&*self.io, &self.dir, group_bases, rewrite)?;
             } else {
                 let io = self.io.clone();
                 let dir = self.dir.clone();

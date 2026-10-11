@@ -8,12 +8,17 @@
 use assert2::assert;
 use krabka_protocol::records::{Attributes, RecordBatch};
 
+use crate::support::{
+    self,
+    discovery::coordinator_lookup_request,
+    records::ProducerValuesSetup,
+    transactions::{InitProducerSetup, claim_idempotent_producer},
+};
 pub(crate) use crate::support::{client::create_topic_named as create_topic, topic_id_for};
-use crate::{support, support::discovery::coordinator_lookup_request};
 
 pub(crate) async fn init_producer(p: &support::InProcess) -> (i64, i16) {
     // A null transactional id is an idempotent producer; an empty one is invalid.
-    let init = crate::support::transactions::claim_idempotent_producer(&p.client).await;
+    let init = claim_idempotent_producer(&p.client).await;
     (init.producer_id, init.producer_epoch)
 }
 
@@ -43,7 +48,7 @@ pub(crate) async fn init_transactional_producer(
         let init = p
             .client
             .send(crate::support::transactions::new_producer_request(
-                crate::support::transactions::InitProducerSetup {
+                InitProducerSetup {
                     transactional_id: Some(transactional_id.into()),
                     ..Default::default()
                 },
@@ -63,9 +68,7 @@ pub(crate) async fn init_transactional_producer(
 
 pub(crate) use crate::support::records::producer_values_batch as batch;
 
-pub(crate) fn transactional_batch(
-    setup: crate::support::records::ProducerValuesSetup<'_>,
-) -> RecordBatch {
+pub(crate) fn transactional_batch(setup: ProducerValuesSetup<'_>) -> RecordBatch {
     RecordBatch {
         attributes: Attributes::default().with_transactional(true),
         ..batch(setup)

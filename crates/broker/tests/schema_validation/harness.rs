@@ -22,7 +22,12 @@ use wiremock::{
     matchers::{method, path},
 };
 
-use crate::support::{records::value_record, topics::creatable_topic};
+use crate::support::{
+    client::BrokerClientSetup,
+    produce::SinglePartitionProduceSetup,
+    records::value_record,
+    topics::{ConfiguredTopicSetup, TopicReplicationFactor, creatable_topic, topic_configs},
+};
 
 /// Kafka error 87. KIP-467 added it for "one or more records in the batch were
 /// invalid", which is what a schema rejection is.
@@ -201,7 +206,7 @@ pub struct SchemaTopicSetup<'a> {
     #[default(VALIDATED)]
     pub configs: &'a [(&'a str, &'a str)],
     #[default(crate::support::topics::TopicReplicationFactor(1))]
-    pub replicas: crate::support::topics::TopicReplicationFactor,
+    pub replicas: TopicReplicationFactor,
 }
 
 /// The committed `CreateTopics` response supplies the identity, even when another
@@ -211,10 +216,10 @@ pub async fn create_topic(
     client: &Client,
     setup: SchemaTopicSetup<'_>,
 ) -> WireUuid {
-    let topic = creatable_topic(crate::support::topics::ConfiguredTopicSetup {
+    let topic = creatable_topic(ConfiguredTopicSetup {
         name: setup.name.into(),
         replicas: setup.replicas,
-        configs: crate::support::topics::topic_configs(setup.configs.iter().copied()),
+        configs: topic_configs(setup.configs.iter().copied()),
         ..Default::default()
     });
     let name = topic.name.clone();
@@ -252,7 +257,7 @@ pub async fn produce(
     let resp = crate::support::produce::send_batch(
         &client,
         batch,
-        crate::support::produce::SinglePartitionProduceSetup {
+        SinglePartitionProduceSetup {
             topic: (topic).into(),
             topic_id,
             ..Default::default()
@@ -271,7 +276,7 @@ pub fn boot_config(
     Box::pin(async move {
         crate::support::client::start_broker_client(
             config,
-            crate::support::client::BrokerClientSetup {
+            BrokerClientSetup {
                 client_id: "schema-validation-test",
                 ..Default::default()
             },

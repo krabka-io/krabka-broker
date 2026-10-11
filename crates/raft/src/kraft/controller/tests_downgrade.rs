@@ -6,13 +6,16 @@ use assert2::assert;
 use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 
 use super::*;
-use crate::kraft::controller::{
-    checkpoint::{load_latest_checkpoint, write_checkpoint},
-    recovery::replay_committed,
-    test_support::{
-        EngineSetup, build_engine_only, elect_single_voter_engine, open_test_controller,
-        topic_record, voter_set,
+use crate::{
+    kraft::controller::{
+        checkpoint::{load_latest_checkpoint, write_checkpoint},
+        recovery::replay_committed,
+        test_support::{
+            EngineSetup, build_engine_only, elect_single_voter_engine, open_test_controller,
+            topic_record, voter_set,
+        },
     },
+    snapshot::SnapshotReader,
 };
 
 fn metadata_version_update(level: i16) -> Vec<MetadataRecord> {
@@ -139,8 +142,7 @@ fn metadata_version_downgrade_retries_mandatory_snapshot_and_prune() {
     let checkpoint = load_latest_checkpoint(&engine.data_dir)
         .expect("read downgrade checkpoint")
         .expect("downgrade checkpoint exists");
-    let contents =
-        crate::snapshot::SnapshotReader::read(&checkpoint).expect("decode downgrade checkpoint");
+    let contents = SnapshotReader::read(&checkpoint).expect("decode downgrade checkpoint");
     let checkpoint_image =
         MetadataImage::from_records(engine.image.cluster_id(), &contents.metadata_records);
     assert2::assert!(checkpoint_image.finalized_metadata_version() == Some(16));
@@ -192,7 +194,7 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
     let checkpoint = load_latest_checkpoint(dir.path())
         .expect("read checkpoint")
         .expect("checkpoint exists");
-    let contents = crate::snapshot::SnapshotReader::read(&checkpoint).expect("decode checkpoint");
+    let contents = SnapshotReader::read(&checkpoint).expect("decode checkpoint");
     let checkpoint_image =
         MetadataImage::from_records(uuid::Uuid::nil(), &contents.metadata_records);
     assert2::assert!(checkpoint_image.finalized_metadata_version() == Some(16));

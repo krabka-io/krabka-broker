@@ -8,6 +8,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
+    ProducerBatchMetadata,
     io::FileIo,
     log::test_support::{
         NO_LIMIT, append_samples, append_transaction, check_contiguous_exports, commit_marker,
@@ -717,7 +718,7 @@ fn reopen_retains_the_snapshot_batch_and_the_replayed_tail() {
     }
 
     let reopened = Log::open(dir.path(), config).unwrap();
-    let batch = |sequence: i32| crate::ProducerBatchMetadata {
+    let batch = |sequence: i32| ProducerBatchMetadata {
         last_sequence: sequence,
         last_offset: Offset(i64::from(sequence)),
         offset_delta: 0,

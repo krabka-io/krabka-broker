@@ -95,9 +95,9 @@ async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str, parti
     support::client::create_led_topic(
         broker,
         client,
-        crate::support::topics::CreateTopicSetup {
+        CreateTopicSetup {
             topic,
-            num_partitions: crate::support::topics::TopicPartitionCount(partitions),
+            num_partitions: TopicPartitionCount(partitions),
             ..Default::default()
         },
     )
@@ -107,6 +107,11 @@ async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str, parti
 /// Finalize `streams.version` to level 1 so the heartbeat/describe handlers
 /// stop returning `UNSUPPORTED_VERSION`. `upgrade_type: 1` is UPGRADE.
 use support::streams::{active_partition_count, finalize_streams_version, follow_up};
+
+use crate::support::{
+    streams::StreamsMemberEpoch,
+    topics::{CreateTopicSetup, TopicPartitionCount},
+};
 
 fn topology(source_topic: &str) -> Topology {
     support::streams::topology(source_topic, Vec::new())
@@ -135,7 +140,7 @@ async fn keepalive(client: &Client, group: &str, member_id: &str, epoch: i32) {
         .send(follow_up(crate::support::streams::StreamsFollowUpSetup {
             group,
             member_id,
-            epoch: crate::support::streams::StreamsMemberEpoch(epoch),
+            epoch: StreamsMemberEpoch(epoch),
             active,
         }))
         .await;

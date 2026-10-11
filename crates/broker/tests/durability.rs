@@ -27,7 +27,15 @@ use support::{
 };
 use tempfile::TempDir;
 
-use crate::support::{client::connect_client, fetch::single_partition_fetch};
+use crate::support::{
+    client::{BatchProduceSetup, connect_client},
+    durability::{ReplicatedTopicSetup, TopicReplicasSetup, replicated_topic_fixture},
+    fetch::single_partition_fetch,
+    produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
+    producer::{ProducerRecordSetup, producer_record},
+    registered_cluster, shutdown_cluster,
+    topics::{TopicPartitionCount, TopicReplicationFactor, configured_topic_request},
+};
 
 mod support;
 
@@ -60,7 +68,7 @@ async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
     create_topic(
         &broker,
         &bootstrap,
-        crate::support::durability::TopicReplicasSetup {
+        TopicReplicasSetup {
             topic: "trunc",
             ..Default::default()
         },
@@ -70,9 +78,9 @@ async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
     let base = produce_batch(
         &bootstrap,
         idempotent_batch(42, 0, &["a", "b", "c"]),
-        crate::support::client::BatchProduceSetup {
+        BatchProduceSetup {
             topic: "trunc",
-            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+            acknowledgements: ProduceAcknowledgements::AllReplicas,
             ..Default::default()
         },
     )
@@ -92,10 +100,10 @@ async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
     let retry = produce_batch(
         &bootstrap,
         idempotent_batch(42, 0, &["a", "b", "c"]),
-        crate::support::client::BatchProduceSetup {
+        BatchProduceSetup {
             topic: "trunc",
-            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
-            timeout: crate::support::produce::ProduceTimeoutMillis(3_000),
+            acknowledgements: ProduceAcknowledgements::AllReplicas,
+            timeout: ProduceTimeoutMillis(3_000),
             ..Default::default()
         },
     )
@@ -118,15 +126,15 @@ async fn disk_backed_restart_recovers_idempotent_producer_state() {
     create_topic(
         &broker,
         &bootstrap,
-        crate::support::durability::TopicReplicasSetup {
+        TopicReplicasSetup {
             topic: "restart-dedup",
             ..Default::default()
         },
     )
     .await;
-    let produce_setup = crate::support::client::BatchProduceSetup {
+    let produce_setup = BatchProduceSetup {
         topic: "restart-dedup",
-        acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+        acknowledgements: ProduceAcknowledgements::AllReplicas,
         ..Default::default()
     };
     let first = produce_batch(&bootstrap, idempotent_batch(42, 0, &["a"]), produce_setup)
@@ -165,7 +173,7 @@ async fn acks_one_returns_quickly_on_rf1_broker() {
     create_topic(
         &broker,
         &bootstrap,
-        crate::support::durability::TopicReplicasSetup {
+        TopicReplicasSetup {
             topic: "ack1",
             ..Default::default()
         },
@@ -175,7 +183,7 @@ async fn acks_one_returns_quickly_on_rf1_broker() {
     let offset = produce_acks(
         &bootstrap,
         &["a", "b", "c"],
-        crate::support::client::BatchProduceSetup {
+        BatchProduceSetup {
             topic: "ack1",
             ..Default::default()
         },
@@ -197,7 +205,7 @@ async fn acks_all_returns_quickly_on_rf1_broker() {
     create_topic(
         &broker,
         &bootstrap,
-        crate::support::durability::TopicReplicasSetup {
+        TopicReplicasSetup {
             topic: "ackall",
             ..Default::default()
         },
@@ -207,9 +215,9 @@ async fn acks_all_returns_quickly_on_rf1_broker() {
     let offset = produce_acks(
         &bootstrap,
         &["a", "b", "c"],
-        crate::support::client::BatchProduceSetup {
+        BatchProduceSetup {
             topic: "ackall",
-            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
+            acknowledgements: ProduceAcknowledgements::AllReplicas,
             ..Default::default()
         },
     )
@@ -230,7 +238,7 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
     create_topic(
         &broker,
         &bootstrap,
-        crate::support::durability::TopicReplicasSetup {
+        TopicReplicasSetup {
             topic: "clamp",
             ..Default::default()
         },
@@ -240,7 +248,7 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
     let offset = produce_acks(
         &bootstrap,
         &["x", "y", "z"],
-        crate::support::client::BatchProduceSetup {
+        BatchProduceSetup {
             topic: "clamp",
             ..Default::default()
         },
@@ -284,7 +292,7 @@ async fn read_committed_under_rf1_unchanged() {
     create_topic(
         &broker,
         &bootstrap,
-        crate::support::durability::TopicReplicasSetup {
+        TopicReplicasSetup {
             topic: "rctxn",
             ..Default::default()
         },
@@ -300,13 +308,11 @@ async fn read_committed_under_rf1_unchanged() {
     for v in ["p", "q", "r"] {
         drop(
             producer
-                .enqueue(crate::support::producer::producer_record(
-                    crate::support::producer::ProducerRecordSetup {
-                        topic: ("rctxn").into(),
-                        value: Some(Bytes::from(v.to_string())),
-                        ..Default::default()
-                    },
-                ))
+                .enqueue(producer_record(ProducerRecordSetup {
+                    topic: ("rctxn").into(),
+                    value: Some(Bytes::from(v.to_string())),
+                    ..Default::default()
+                }))
                 .await
                 .expect("record is queued"),
         );
@@ -343,12 +349,10 @@ async fn read_committed_under_rf1_unchanged() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
     support::init_tracing();
-    let (mut cluster, bootstrap_1) = crate::support::durability::replicated_topic_fixture(
-        crate::support::durability::ReplicatedTopicSetup {
-            topic: "shrink",
-            ..Default::default()
-        },
-    )
+    let (mut cluster, bootstrap_1) = replicated_topic_fixture(ReplicatedTopicSetup {
+        topic: "shrink",
+        ..Default::default()
+    })
     .await;
     // Wait for all 3 replicas to join the ISR before killing broker 3
     // so the scenario genuinely exercises ISR shrink rather than racing the
@@ -364,10 +368,10 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
     let offset = produce_acks(
         &bootstrap_1,
         &["x", "y", "z"],
-        crate::support::client::BatchProduceSetup {
+        BatchProduceSetup {
             topic: "shrink",
-            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
-            timeout: crate::support::produce::ProduceTimeoutMillis(10_000),
+            acknowledgements: ProduceAcknowledgements::AllReplicas,
+            timeout: ProduceTimeoutMillis(10_000),
             ..Default::default()
         },
     )
@@ -383,7 +387,7 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
         elapsed < Duration::from_secs(5),
         "shrink + completion should be well under 5s; took {elapsed:?}"
     );
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
 }
 
 /// A produce that waits on a stalled follower must land in the remote-time
@@ -399,12 +403,10 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
     support::init_tracing();
-    let (mut cluster, bootstrap_1) = crate::support::durability::replicated_topic_fixture(
-        crate::support::durability::ReplicatedTopicSetup {
-            topic: "phase-stall",
-            ..Default::default()
-        },
-    )
+    let (mut cluster, bootstrap_1) = replicated_topic_fixture(ReplicatedTopicSetup {
+        topic: "phase-stall",
+        ..Default::default()
+    })
     .await;
     cluster[0].0.wait_until_isr_len("phase-stall", 0, 3).await;
 
@@ -414,10 +416,10 @@ async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
     let offset = produce_acks(
         &bootstrap_1,
         &["x", "y", "z"],
-        crate::support::client::BatchProduceSetup {
+        BatchProduceSetup {
             topic: "phase-stall",
-            acknowledgements: crate::support::produce::ProduceAcknowledgements::AllReplicas,
-            timeout: crate::support::produce::ProduceTimeoutMillis(10_000),
+            acknowledgements: ProduceAcknowledgements::AllReplicas,
+            timeout: ProduceTimeoutMillis(10_000),
             ..Default::default()
         },
     )
@@ -456,7 +458,7 @@ async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
          local={local} remote={remote}"
     );
 
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
 }
 
 /// Partitions the overlapped-wait case produces to in one request. Wide
@@ -475,7 +477,7 @@ async fn create_topic_with_partitions(
 ) {
     let client = connect_client(bootstrap.to_string(), None).await;
     let resp = client
-        .send(crate::support::topics::configured_topic_request(setup))
+        .send(configured_topic_request(setup))
         .await
         .expect("CreateTopics");
     assert!(
@@ -547,15 +549,15 @@ async fn produce_every_partition(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
     support::init_tracing();
-    let mut cluster = crate::support::registered_cluster(2).await;
+    let mut cluster = registered_cluster(2).await;
     let bootstrap_1 = cluster[0].1.listen_addr.to_string();
     create_topic_with_partitions(
         &cluster[0].0,
         &bootstrap_1,
         crate::support::topics::CreateTopicSetup {
             topic: "overlap",
-            num_partitions: crate::support::topics::TopicPartitionCount(OVERLAP_PARTITIONS),
-            replication_factor: crate::support::topics::TopicReplicationFactor(2),
+            num_partitions: TopicPartitionCount(OVERLAP_PARTITIONS),
+            replication_factor: TopicReplicationFactor(2),
             ..Default::default()
         },
     )
@@ -611,5 +613,5 @@ async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
          {waited} x {OVERLAP_TIMEOUT_MS}ms, this took {elapsed:?}"
     );
 
-    crate::support::shutdown_cluster(cluster).await;
+    shutdown_cluster(cluster).await;
 }

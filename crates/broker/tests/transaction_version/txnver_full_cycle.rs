@@ -8,8 +8,10 @@
 use assert2::assert;
 
 use crate::{
-    support,
-    support::producer::string_record as rec,
+    support::{
+        self, producer::string_record as rec, topics::TopicPartitionCount,
+        transaction_wire::committed_values,
+    },
     txnver_harness::{admin_client, boot_single, create_topic, downgrade_transaction_version},
 };
 
@@ -36,13 +38,7 @@ async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, gro
     }
     txn.commit().await.unwrap();
 
-    let (consumer, seen) = crate::support::transaction_wire::committed_values(
-        bootstrap.to_string(),
-        group,
-        topic,
-        None,
-    )
-    .await;
+    let (consumer, seen) = committed_values(bootstrap.to_string(), group, topic, None).await;
     assert!(
         seen == vec!["a", "b", "c"],
         "tid={tid} level cycle: {seen:?}"
@@ -83,12 +79,7 @@ async fn versioned_full_cycles_commit_and_read() {
     for case in cases {
         let (broker, bootstrap, _dir) = boot_single().await;
         let admin = admin_client(&bootstrap).await;
-        create_topic(
-            &admin,
-            case.topic,
-            crate::support::topics::TopicPartitionCount(1),
-        )
-        .await;
+        create_topic(&admin, case.topic, TopicPartitionCount(1)).await;
         downgrade_transaction_version(&admin, case.level).await;
         // The first lookup asks for `__transaction_state` and answers
         // COORDINATOR_NOT_AVAILABLE. A Kafka producer retries it; the krabka

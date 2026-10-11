@@ -14,8 +14,10 @@ use krabka_protocol::{primitives::uuid::Uuid as WireUuid, records::RecordBatch};
 use tokio::sync::Mutex;
 
 use crate::support::{
+    client::http_get,
+    produce::SinglePartitionProduceSetup,
     records::{batch_from_records, value_record},
-    topics::{creatable_topic, create_topic_request},
+    topics::{TopicPartitionCount, TopicReplicationFactor, creatable_topic, create_topic_request},
 };
 
 pub const TOPIC: &str = "backlog-itest";
@@ -26,7 +28,7 @@ pub fn test_lock() -> &'static Mutex<()> {
 }
 
 pub async fn scrape(addr: SocketAddr) -> String {
-    let response = crate::support::client::http_get(addr, "/metrics", false).await;
+    let response = http_get(addr, "/metrics", false).await;
     let body = response.find("\r\n\r\n").map_or(0, |at| at + 4);
     response[body..].to_owned()
 }
@@ -36,8 +38,8 @@ pub async fn create_topic(client: &Client, partitions: i32, replication_factor: 
         .send(create_topic_request(creatable_topic(
             crate::support::topics::ConfiguredTopicSetup {
                 name: (TOPIC).into(),
-                partitions: crate::support::topics::TopicPartitionCount(partitions),
-                replicas: crate::support::topics::TopicReplicationFactor(replication_factor),
+                partitions: TopicPartitionCount(partitions),
+                replicas: TopicReplicationFactor(replication_factor),
                 ..Default::default()
             },
         )))
@@ -56,10 +58,10 @@ pub async fn produce_five(client: &Client, topic_id: uuid::Uuid) {
                 last_offset_delta: 4,
                 ..batch_from_records(records)
             },
-            crate::support::produce::SinglePartitionProduceSetup {
+            SinglePartitionProduceSetup {
                 topic: (TOPIC).into(),
                 topic_id: WireUuid(*topic_id.as_bytes()),
-                ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+                ..SinglePartitionProduceSetup::replicated()
             },
         ))
         .await

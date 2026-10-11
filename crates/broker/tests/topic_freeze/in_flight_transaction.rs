@@ -21,7 +21,7 @@ use krabka_protocol::{
 
 use crate::{
     control_plane::freeze_scope,
-    support,
+    support::{self, producer::ProducerRecordSetup},
     wire::{CONTROL, accepted, create_topic, refused},
 };
 
@@ -121,7 +121,7 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
         .expect("begin_transaction");
     producer
         .send(crate::support::producer::producer_record(
-            crate::support::producer::ProducerRecordSetup {
+            ProducerRecordSetup {
                 value: Some(Bytes::from_static(b"in-flight")),
                 ..Default::default()
             },

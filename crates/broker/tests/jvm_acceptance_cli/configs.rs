@@ -4,8 +4,9 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    broker0_advertised, docker_run_kafka_tool, docker_run_kafka_tool_allowing_failure,
-    nc_check_connectivity, start_host_broker, tool_output,
+    alter_console_topic_config, broker0_advertised, docker_run_kafka_tool,
+    docker_run_kafka_tool_allowing_failure, nc_check_connectivity, start_console_broker,
+    start_host_broker, tool_output,
 };
 
 /// `kafka-configs --alter --add-config retention.ms=60000 --topic t` then
@@ -16,9 +17,9 @@ use crate::jvm_acceptance::{
 async fn kafka_configs_alter_round_trip() {
     const TOPIC: &str = "krabka-cfg-alter-itest";
 
-    let (_broker, _dir) = crate::jvm_acceptance::start_console_broker(TOPIC, 1).await;
+    let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
 
-    crate::jvm_acceptance::alter_console_topic_config(TOPIC, "retention.ms=60000");
+    alter_console_topic_config(TOPIC, "retention.ms=60000");
 
     let out = docker_run_kafka_tool(&[
         "kafka-configs",
@@ -51,8 +52,8 @@ async fn kafka_configs_alter_round_trip() {
 async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {
     const TOPIC: &str = "krabka-cfg-describe-all-itest";
 
-    let (_broker, _dir) = crate::jvm_acceptance::start_console_broker(TOPIC, 1).await;
-    crate::jvm_acceptance::alter_console_topic_config(TOPIC, "retention.ms=60000");
+    let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
+    alter_console_topic_config(TOPIC, "retention.ms=60000");
     // The cluster-wide default the topic will inherit.
     docker_run_kafka_tool(&[
         "kafka-configs",
@@ -134,7 +135,7 @@ async fn kafka_configs_alter_round_trips_every_registered_topic_key() {
         ("message.timestamp.before.max.ms", "3600000"),
     ];
 
-    let (_broker, _dir) = crate::jvm_acceptance::start_console_broker(TOPIC, 1).await;
+    let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
 
     let added = SETTINGS
         .iter()

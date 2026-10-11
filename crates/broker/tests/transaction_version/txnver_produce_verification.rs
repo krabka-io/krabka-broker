@@ -26,12 +26,18 @@ use crate::{
     support::{
         discovery::coordinator_lookup_request,
         offsets::{list_offset_partition, single_partition_list_offsets},
+        produce::{SinglePartitionProduceSetup, batch_request},
         records::{
             BatchTransaction, ProducerSequence, TransactionProbeBatchSetup, transaction_probe_batch,
+        },
+        topics::TopicPartitionCount,
+        transaction_wire::{
+            TransactionPartitionsSetup, initialize_transactional, partitions_request,
         },
         transactions::{
             ProducerEpoch, ProducerEpochOffset, ProducerIdentity, end_transaction_request,
         },
+        wire::At,
     },
     txnver_harness::{admin_client, boot_single, create_topic},
 };
@@ -122,30 +128,18 @@ async fn produce_at(
 ) -> PartitionProduceResponse {
     let request = ProduceRequest {
         transactional_id: transactional_id.map(str::to_owned),
-        ..crate::support::produce::batch_request(
+        ..batch_request(
             batch,
-            crate::support::produce::SinglePartitionProduceSetup {
+            SinglePartitionProduceSetup {
                 topic: (topic).into(),
-                ..crate::support::produce::SinglePartitionProduceSetup::replicated()
+                ..SinglePartitionProduceSetup::replicated()
             },
         )
     };
     let response = match version.0 {
-        10 => {
-            client
-                .send(crate::support::wire::At::<_, 10>(request))
-                .await
-        }
-        11 => {
-            client
-                .send(crate::support::wire::At::<_, 11>(request))
-                .await
-        }
-        _ => {
-            client
-                .send(crate::support::wire::At::<_, 12>(request))
-                .await
-        }
+        10 => client.send(At::<_, 10>(request)).await,
+        11 => client.send(At::<_, 11>(request)).await,
+        _ => client.send(At::<_, 12>(request)).await,
     }
     .expect("Produce");
     response.responses[0].partition_responses[0].clone()
@@ -190,7 +184,7 @@ async fn init(client: &Client, transactional_id: &'static str) -> Producer {
             vec![transactional_id.into()],
         ))
         .await;
-    let response = crate::support::transaction_wire::initialize_transactional(
+    let response = initialize_transactional(
         client,
         transactional_id,
         |code| {
@@ -214,17 +208,12 @@ async fn add_partition(client: &Client, producer: Producer, topic: &str) {
     let code = until_ready(
         || async {
             let response = client
-                .send(crate::support::transaction_wire::partitions_request(
-                    crate::support::transaction_wire::TransactionPartitionsSetup {
-                        transactional_id: producer.transactional_id,
-                        producer: crate::support::transactions::ProducerIdentity::from_wire((
-                            producer.id.0,
-                            producer.epoch.0,
-                        )),
-                        topics: vec![added.clone()],
-                        ..Default::default()
-                    },
-                ))
+                .send(partitions_request(TransactionPartitionsSetup {
+                    transactional_id: producer.transactional_id,
+                    producer: ProducerIdentity::from_wire((producer.id.0, producer.epoch.0)),
+                    topics: vec![added.clone()],
+                    ..Default::default()
+                }))
                 .await
                 .expect("AddPartitionsToTxn");
             crate::support::transaction_wire::partition_error(&response, true)
@@ -236,12 +225,7 @@ async fn add_partition(client: &Client, producer: Producer, topic: &str) {
 }
 
 async fn set_up(client: &Client, case: &Case) -> Producer {
-    create_topic(
-        client,
-        case.name,
-        crate::support::topics::TopicPartitionCount(1),
-    )
-    .await;
+    create_topic(client, case.name, TopicPartitionCount(1)).await;
     let mut producer = init(client, case.name).await;
     if case.probe.epoch_offset.0 < 0 {
         // A second InitProducerId bumps the epoch, so a batch can carry an
@@ -275,10 +259,7 @@ async fn set_up(client: &Client, case: &Case) -> Producer {
             .send(end_transaction_request(
                 case.name,
                 crate::support::transactions::EndTransactionSetup {
-                    producer: crate::support::transactions::ProducerIdentity::from_wire((
-                        producer.id.0,
-                        producer.epoch.0,
-                    )),
+                    producer: ProducerIdentity::from_wire((producer.id.0, producer.epoch.0)),
                     ..Default::default()
                 },
             ))

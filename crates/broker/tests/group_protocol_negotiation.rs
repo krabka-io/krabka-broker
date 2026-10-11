@@ -17,7 +17,7 @@ use krabka_protocol::owned::{
 };
 
 use crate::support::{
-    classic::{classic_join_request, join_protocol},
+    classic::{ClassicTimeouts, classic_join_request, join_protocol},
     client::connect_owned,
 };
 
@@ -61,7 +61,7 @@ fn join_group_request(setup: ProtocolJoinSetup<'_>) -> JoinGroupRequest {
         ..classic_join_request(crate::support::classic::ClassicJoinSetup {
             group_id: setup.group_id.to_string(),
             member_id: setup.member_id.to_string(),
-            timeouts: crate::support::classic::ClassicTimeouts {
+            timeouts: ClassicTimeouts {
                 rebalance: krabka_units::millis(60_000),
                 ..Default::default()
             },

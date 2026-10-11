@@ -26,10 +26,10 @@ use krabka_protocol::{
 
 use crate::{
     harness::{
-        NONE, UNSUPPORTED_VERSION, acquired_count, bootstrap_share_state, broker_config,
-        broker_test_permit, connect, create_topic,
+        NONE, UNSUPPORTED_VERSION, acquired_count, acquired_topic, bootstrap_share_state,
+        broker_config, broker_test_permit, connect, create_topic,
     },
-    support::configs::feature_update,
+    support::{configs::feature_update, share::acknowledge_success},
 };
 
 /// `UpdateFeatures` `UpgradeType` 2, `SAFE_DOWNGRADE`.
@@ -120,9 +120,9 @@ pub async fn describe_until(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_reflects_spso_after_consume() {
     // Acquire 0..2, Accept all → SPSO advances to 3.
-    let (_permit, _broker, client, _dir, tid, member, row) = crate::harness::acquired_topic().await;
+    let (_permit, _broker, client, _dir, tid, member, row) = acquired_topic().await;
     assert!(acquired_count(&row) == 3, "must acquire all 3 offsets");
-    crate::support::share::acknowledge_success(
+    acknowledge_success(
         &client,
         crate::support::share::ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)),
     )

@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     error::RaftError,
-    voter_wire::{from_wire, to_wire},
+    voter_wire::{from_wire, record, to_wire},
 };
 
 pub(super) fn voter_set_to_wire(voters: &VoterSet) -> Result<WireVotersRecord, RaftError> {
@@ -29,7 +29,7 @@ pub(super) fn voter_set_to_wire(voters: &VoterSet) -> Result<WireVotersRecord, R
             Ok(to_wire(voter, id, min, max))
         })
         .collect::<Result<Vec<_>, RaftError>>()?;
-    Ok(crate::voter_wire::record(voters))
+    Ok(record(voters))
 }
 
 pub(super) fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftError> {

@@ -11,9 +11,12 @@ use krabka_protocol::owned::{
     streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
 };
 
-use crate::streams_harness::{
-    active_partitions_for, boot, connect, create_topic, finalize_streams_version, first_join,
-    follow_up, join_and_converge, topology,
+use crate::{
+    streams_harness::{
+        active_partitions_for, boot, connect, create_topic, finalize_streams_version, first_join,
+        follow_up, join_and_converge, topology,
+    },
+    support::streams::StreamsMemberEpoch,
 };
 
 const GROUP: &str = "streams-restart";
@@ -45,7 +48,7 @@ impl Member {
             .send(follow_up(crate::support::streams::StreamsFollowUpSetup {
                 group: GROUP,
                 member_id: &self.id,
-                epoch: crate::support::streams::StreamsMemberEpoch(self.epoch),
+                epoch: StreamsMemberEpoch(self.epoch),
                 active: Some(owned),
             }))
             .await
