@@ -228,16 +228,14 @@ fn bench_file_write_shapes(c: &mut Criterion) {
         let (_dir, file) = file_fixture();
         b.iter(|| {
             (&file).seek(SeekFrom::End(0)).unwrap();
-            let mut bufs = [IoSlice::new(&header), IoSlice::new(&body)];
-            write_all_vectored(&file, &mut bufs).unwrap();
+            write_file_payload_vectored(&file, &header, &body);
         });
     });
 
     group.bench_function("writev_at_current_cursor_100KiB", |b| {
         let (_dir, file) = file_fixture();
         b.iter(|| {
-            let mut bufs = [IoSlice::new(&header), IoSlice::new(&body)];
-            write_all_vectored(&file, &mut bufs).unwrap();
+            write_file_payload_vectored(&file, &header, &body);
         });
     });
 
@@ -253,6 +251,12 @@ fn bench_file_write_shapes(c: &mut Criterion) {
     });
 
     group.finish();
+}
+
+#[cfg(unix)]
+fn write_file_payload_vectored(file: &std::fs::File, header: &[u8], body: &[u8]) {
+    let mut bufs = [IoSlice::new(header), IoSlice::new(body)];
+    write_all_vectored(file, &mut bufs).unwrap();
 }
 
 #[cfg(not(unix))]

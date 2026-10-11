@@ -23,6 +23,47 @@ use crate::{
     },
 };
 
+pub(crate) mod common_imports {
+    pub use assert2::{assert, check};
+    pub use krabka_broker::Broker;
+    pub use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
+    pub use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse;
+    pub use krabka_security::SaslMechanism;
+    pub use tokio::net::TcpStream;
+}
+
+pub struct BrokerStream {
+    pub broker: krabka_broker::BrokerHandle,
+    pub stream: TcpStream,
+}
+
+pub async fn start_broker_stream(config: krabka_broker::BrokerConfig) -> BrokerStream {
+    let broker = krabka_broker::Broker::start(config)
+        .await
+        .expect("broker must start");
+    let stream = TcpStream::connect(broker.listen_addr())
+        .await
+        .expect("connect to broker");
+    BrokerStream { broker, stream }
+}
+
+pub async fn sasl_authenticate_round_trip(
+    stream: &mut TcpStream,
+    body: &[u8],
+) -> io::Result<Vec<u8>> {
+    round_trip(
+        stream,
+        crate::support::wire::SocketExchangeSetup {
+            api_key: WireApiKey(36),
+            version: WireApiVersion(2),
+            correlation: WireCorrelationId(3),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        body,
+    )
+    .await
+}
+
 /// admin PLAIN test password, built at runtime.
 ///
 /// A runtime value stops code scanning from giving a false positive for a

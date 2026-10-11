@@ -166,8 +166,7 @@ impl Sim {
     // ---- public scenario surface ---------------------------------------------
 
     pub fn partition(&mut self, node: NodeId) {
-        self.partitioned.insert(node);
-        self.queue.retain(|m| m.src != node && m.dst != node);
+        crate::simulation_support::partition_node(&mut self.partitioned, &mut self.queue, node);
         self.record(
             TraceAction::Partition { node: node.0 },
             format!("N{node} is isolated from the cluster"),

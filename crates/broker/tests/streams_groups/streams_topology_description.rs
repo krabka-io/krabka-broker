@@ -45,10 +45,12 @@ async fn boot_with_plugin() -> (krabka_broker::BrokerHandle, String, tempfile::T
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     let file: FileConfig = toml::from_str(TRUNK_WITH_PLUGIN).expect("parse the properties");
     file.apply_to(&mut config).expect("apply the properties");
-    let broker = Broker::start(config).await.unwrap();
-    broker.wait_until_group_coordinator_ready().await;
-    let bootstrap = broker.listen_addr().to_string();
-    (broker, bootstrap, dir)
+    let started = crate::support::start_group_coordinator_with_config()
+        .config(config)
+        .directory(dir)
+        .call()
+        .await;
+    (started.broker, started.bootstrap, started.directory)
 }
 
 /// The description a Streams client pushes for [`topology`]: one source node.

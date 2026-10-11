@@ -788,11 +788,12 @@ mod tests {
         ];
 
         assert!(
-            cases
-                .iter()
-                .map(|(response, _)| outcome(&classify_produce(response, &target)))
-                .collect::<Vec<_>>()
-                == cases.iter().map(|(_, want)| *want).collect::<Vec<_>>()
+            super::record::projected_cases_match(
+                cases
+                    .iter()
+                    .map(|(response, _)| outcome(&classify_produce(response, &target))),
+                cases.iter().map(|(_, want)| *want),
+            )
         );
     }
 

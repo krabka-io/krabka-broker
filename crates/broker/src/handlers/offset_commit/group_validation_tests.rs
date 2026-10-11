@@ -131,15 +131,7 @@ async fn drive(broker: &BrokerHandle, row: usize, case: Case) -> (OffsetCommitRe
         group_id: group_id.clone(),
         generation_id_or_member_epoch: case.generation,
         member_id: case.member_id.to_string(),
-        topics: vec![OffsetCommitRequestTopic {
-            name: TOPIC.to_string(),
-            partitions: vec![OffsetCommitRequestPartition {
-                partition_index: 0,
-                committed_offset: 42,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
+        topics: vec![super::test_topic_row().name(TOPIC.to_string()).call()],
         ..Default::default()
     };
     request_identity!(

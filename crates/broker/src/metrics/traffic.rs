@@ -118,6 +118,15 @@ mod tests {
         Arc::from(name)
     }
 
+    fn assert_topic_counters(
+        cases: &[(&str, &Family<TopicLabel, Counter>, &TopicLabel, u64)],
+    ) {
+        for (family_name, family, label, want) in cases {
+            let got = family.get_or_create(label).get();
+            assert!(got == *want, "{family_name} for {:?}", label.topic);
+        }
+    }
+
     #[test]
     fn record_fetch_zero_bytes_still_bumps_request_count() {
         let m = BrokerMetrics::new();
@@ -238,12 +247,7 @@ mod tests {
             ("failed_fetch", &m.topic_failed_fetch_requests, &good, 1),
             ("failed_fetch", &m.topic_failed_fetch_requests, &bad, 0),
         ];
-        for (family_name, family, label, want) in cases {
-            // One `get_or_create` guard per statement (first
-            // materialization takes the family write lock).
-            let got = family.get_or_create(label).get();
-            assert!(got == want, "{family_name} for {:?}", label.topic);
-        }
+        assert_topic_counters(&cases);
     }
 
     #[test]
@@ -317,11 +321,6 @@ mod tests {
                 2,
             ),
         ];
-        for (family_name, family, label, want) in cases {
-            // One `get_or_create` guard per statement (first
-            // materialization takes the family write lock).
-            let got = family.get_or_create(label).get();
-            assert!(got == want, "{family_name} for {:?}", label.topic);
-        }
+        assert_topic_counters(&cases);
     }
 }

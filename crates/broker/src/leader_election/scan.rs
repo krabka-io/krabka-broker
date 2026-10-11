@@ -12,12 +12,17 @@
 //! Kafka's `handleBrokerUnfenced` does over `partitionsWithNoLeader`.
 
 use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
+#[cfg(test)]
+use krabka_metadata::{
+    LeaderEpoch, LeaderRecoveryState, PartitionElrRecord, PartitionRecoveryRecord,
+    PartitionUpdateRecord,
+};
 use krabka_raft::NodeId;
 use tracing::warn;
 
 use super::policy::{
-    FailoverDecision, FailoverPlan, elect_leaderless_one, failover_one, push_partition_change,
-    unclean_restart_one,
+    FailoverDecision, FailoverPlan, Ladder, elect_leaderless_one, failover_one,
+    push_partition_change, unclean_restart_one,
 };
 use crate::{
     config_keys::{
@@ -28,6 +33,15 @@ use crate::{
     heartbeat::controller_state::ControllerLivenessState,
     metadata_epoch::next_partition_change,
     metrics::BrokerMetrics,
+};
+
+#[cfg(test)]
+use crate::{
+    config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
+    leader_election::test_support::{
+        ElectionSetup, ElrFinalization, ExpectedPartitionSetup, expected_partition,
+        img_with_partition,
+    },
 };
 
 #[cfg(test)]
@@ -70,15 +84,14 @@ impl ScanElr {
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
         let elr_state = self.state(image, &pr.topic, pr.partition);
-        failover_one(
-            pr,
-            departed,
-            alive,
-            witnesses,
-            &elr_state,
-            strategy,
-            unclean_enabled,
-        )
+        let ladder = Ladder::builder()
+            .alive(alive)
+            .witnesses(witnesses)
+            .elr(&elr_state)
+            .strategy(strategy)
+            .unclean_enabled(unclean_enabled)
+            .build();
+        failover_one(pr, departed, &ladder)
     }
 }
 
@@ -543,11 +556,13 @@ pub(crate) async fn compute_unfence_changes(
             unclean,
         } = elect_leaderless_one(
             pr,
-            &alive,
-            &witnesses,
-            &elr_state,
-            strategy,
-            unclean_enabled,
+            &Ladder::builder()
+                .alive(&alive)
+                .witnesses(&witnesses)
+                .elr(&elr_state)
+                .strategy(strategy)
+                .unclean_enabled(unclean_enabled)
+                .build(),
         )
         else {
             continue;

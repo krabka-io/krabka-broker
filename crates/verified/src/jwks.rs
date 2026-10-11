@@ -25,17 +25,23 @@ model_types! {
     }
 }
 
+#[cfg(creusot)]
+#[logic]
+pub fn jwks_cache_facts_admissible_at(facts: JwksCacheFacts, now_ms: i64) -> bool {
+    pearlite! {
+        facts.generation_before@ % 2 == 0
+            && facts.generation_before@ == facts.generation_after@
+            && (!facts.expiry_enabled || (
+                facts.expiry_ms@ >= 0
+                    && facts.last_successful_fetch_ms@ > 0
+                    && now_ms@ >= facts.last_successful_fetch_ms@
+                    && now_ms@ - facts.last_successful_fetch_ms@ <= facts.expiry_ms@
+            ))
+    }
+}
+
 /// Admit only a stable, fully published cache generation that is not stale.
-#[ensures((result == JwksCacheDecision::Admit) == (
-    facts.generation_before@ % 2 == 0
-        && facts.generation_before@ == facts.generation_after@
-        && (!facts.expiry_enabled || (
-            facts.expiry_ms@ >= 0
-                && facts.last_successful_fetch_ms@ > 0
-                && facts.now_ms@ >= facts.last_successful_fetch_ms@
-                && facts.now_ms@ - facts.last_successful_fetch_ms@ <= facts.expiry_ms@
-        ))
-))]
+#[ensures((result == JwksCacheDecision::Admit) == jwks_cache_facts_admissible_at(facts, facts.now_ms))]
 #[must_use]
 pub fn jwks_cache_admission(facts: JwksCacheFacts) -> JwksCacheDecision {
     if !facts.generation_before.is_multiple_of(2)

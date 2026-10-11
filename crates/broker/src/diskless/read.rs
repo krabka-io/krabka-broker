@@ -246,8 +246,21 @@ mod tests {
     use crate::{
         broker::spawn_partition,
         config::{RemoteStorageBackend, RlmmKind},
-        diskless::wal_index::WalFlushRecord,
+        diskless::wal_index::{WalFlushRecord, WalIndexEntry},
     };
+
+    #[bon::builder]
+    fn wal_index_entry(topic_id: Uuid, byte_len: u32) -> WalIndexEntry {
+        WalIndexEntry {
+            topic_id,
+            partition: 0,
+            first_offset: 0,
+            last_offset: 0,
+            byte_start: 0,
+            byte_len,
+            max_timestamp_ms: 0,
+        }
+    }
 
     fn batch(base_offset: i64, value: &'static [u8]) -> RecordBatch {
         RecordBatch {
@@ -496,15 +509,10 @@ mod tests {
                 object_key: "diskless-wal/present".into(),
                 format_version: WalFlushRecord::FORMAT_VERSION,
                 entries: vec![
-                    super::super::wal_index::WalIndexEntry {
-                        topic_id,
-                        partition: 0,
-                        first_offset: 0,
-                        last_offset: 0,
-                        byte_start: 0,
-                        byte_len: u32::try_from(first.len()).unwrap(),
-                        max_timestamp_ms: 0,
-                    },
+                    wal_index_entry()
+                        .topic_id(topic_id)
+                        .byte_len(u32::try_from(first.len()).unwrap())
+                        .call(),
                     super::super::wal_index::WalIndexEntry {
                         topic_id,
                         partition: 0,
@@ -582,15 +590,7 @@ mod tests {
             .apply(&super::super::wal_index::WalFlushRecord {
                 object_key: "diskless-wal/missing".into(),
                 format_version: WalFlushRecord::FORMAT_VERSION,
-                entries: vec![super::super::wal_index::WalIndexEntry {
-                    topic_id,
-                    partition: 0,
-                    first_offset: 0,
-                    last_offset: 0,
-                    byte_start: 0,
-                    byte_len: 1,
-                    max_timestamp_ms: 0,
-                }],
+                entries: vec![wal_index_entry().topic_id(topic_id).byte_len(1).call()],
             });
         pending.out = PartitionData {
             error_code: codes::OFFSET_OUT_OF_RANGE,

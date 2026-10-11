@@ -187,17 +187,8 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
         2,
         "SaslAuthenticate",
     )?;
-    let auth_resp_bytes = round_trip(
-        &mut stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(36),
-            version: WireApiVersion(2),
-            correlation: WireCorrelationId(3),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &auth_body,
-    )
-    .await?;
+    let auth_resp_bytes =
+        crate::harness::sasl_authenticate_round_trip(&mut stream, &auth_body).await?;
     let auth_resp =
         decode_named::<SaslAuthenticateResponse>(&auth_resp_bytes, 2, "SaslAuthenticate")?;
     if auth_resp.error_code != 0 {

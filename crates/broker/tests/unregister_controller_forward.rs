@@ -89,17 +89,9 @@ async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
 
     check!(
         answers
-            == vec![
-                UnregisterControllerResponse {
-                    error_message: Some(String::new()),
-                    ..Default::default()
-                },
-                UnregisterControllerResponse {
-                    error_code: CONTROLLER_ID_NOT_REGISTERED,
-                    error_message: Some("Controller ID 7 is not currently registered.".into()),
-                    ..Default::default()
-                },
-            ]
+            == crate::support::admin::unregister_controller_answers()
+                .controller_id(7)
+                .call()
     );
     check!(
         leader_handle

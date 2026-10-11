@@ -4,6 +4,18 @@ use std::net::SocketAddr;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use tempfile::TempDir;
 
+/// The metadata for each `*.log` file directly under a partition directory.
+pub fn local_log_segment_metadata(directory: &std::path::Path) -> Vec<std::fs::Metadata> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|extension| extension.to_str()) == Some("log"))
+        .filter_map(|entry| entry.metadata().ok())
+        .collect()
+}
+
 /// Preserve the primary directory and the one extra directory in configured order.
 pub fn two_dir_config(primary: &std::path::Path, extra: &std::path::Path) -> BrokerConfig {
     let mut config = BrokerConfig::for_tests(primary.to_path_buf());

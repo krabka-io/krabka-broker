@@ -495,11 +495,17 @@ mod tests {
         ];
 
         assert!(
-            cases
-                .iter()
-                .map(|((source, count), _)| destination_partition(*source, *count))
-                .collect::<Vec<_>>()
-                == cases.iter().map(|(_, want)| *want).collect::<Vec<_>>()
+            projected_cases_match(
+                cases.iter().map(|((source, count), _)| destination_partition(*source, *count)),
+                cases.iter().map(|(_, want)| *want),
+            )
         );
     }
+}
+
+pub(super) fn projected_cases_match<T: PartialEq>(
+    actual: impl IntoIterator<Item = T>,
+    expected: impl IntoIterator<Item = T>,
+) -> bool {
+    actual.into_iter().eq(expected)
 }

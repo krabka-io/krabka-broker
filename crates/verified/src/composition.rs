@@ -6,6 +6,12 @@
 #![cfg_attr(creusot, allow(dead_code))] // Theorems are checked without a runtime caller.
 
 use creusot_std::prelude::*;
+
+pub(super) use crate::broker::FetchVisibility;
+#[cfg(creusot)]
+pub(super) use crate::broker::{clamped_fetch_watermarks, committed_fetch_response};
+#[cfg(creusot)]
+pub(super) use crate::leader_epoch::kafka_end_offset_for;
 use krabka_ids::{LeaderEpoch, Offset};
 
 use crate::{

@@ -47,6 +47,16 @@ use crate::{
     topic_resolve::resolve,
 };
 
+#[cfg(test)]
+use krabka_protocol::{
+    owned::{
+        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_response::{PartitionProduceResponse, ProduceResponse, TopicProduceResponse},
+    },
+    primitives::uuid::Uuid as WireUuid,
+    records::RecordsPayload,
+};
+
 mod append;
 mod authorization;
 mod delivery;

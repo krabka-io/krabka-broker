@@ -53,10 +53,9 @@ async fn gssapi_handshake_advertised_when_enabled() {
         max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
 
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let broker_stream = crate::harness::start_broker_stream(cfg).await;
+    let handle = broker_stream.broker;
+    let mut stream = broker_stream.stream;
     let mut corr = 0;
 
     // ApiVersions (pre-auth) so the connection is in a clean state.

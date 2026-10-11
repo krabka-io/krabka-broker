@@ -64,6 +64,15 @@ fn park_waiter(
     receiver
 }
 
+async fn assert_rejected_change_and_shutdown(
+    ctrl: &KraftController,
+    change: krabka_metadata::MetadataRecord,
+) {
+    let retry = ctrl.submit_change(vec![change]).await;
+    assert2::assert!(matches!(retry, Err(RaftError::ChangeRejected(_))));
+    ctrl.shutdown().await;
+}
+
 #[test]
 fn direct_single_voter_submit_applies_image_and_resolves_waiter() {
     let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
@@ -254,11 +263,11 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
             .is_some_and(|stored| stored.consumed_at_ms == i64::MAX)
     );
 
-    let retry = ctrl
-        .submit_change(vec![MetadataRecord::V1BreakGlassProposal(consumed)])
-        .await;
-    assert2::assert!(matches!(retry, Err(RaftError::ChangeRejected(_))));
-    ctrl.shutdown().await;
+    assert_rejected_change_and_shutdown(
+        &ctrl,
+        MetadataRecord::V1BreakGlassProposal(consumed),
+    )
+    .await;
 }
 
 /// A new leader refuses a break-glass consume with the retriable
@@ -393,11 +402,7 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
             .is_some_and(|stored| stored.set_at_ms == i64::MAX)
     );
 
-    let retry = ctrl
-        .submit_change(vec![MetadataRecord::V1TopicFreeze(replacement)])
-        .await;
-    assert2::assert!(matches!(retry, Err(RaftError::ChangeRejected(_))));
-    ctrl.shutdown().await;
+    assert_rejected_change_and_shutdown(&ctrl, MetadataRecord::V1TopicFreeze(replacement)).await;
 }
 
 #[tokio::test]

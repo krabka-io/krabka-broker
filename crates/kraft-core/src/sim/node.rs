@@ -26,6 +26,8 @@ pub(super) struct Message {
     pub(super) event: Event,
 }
 
+crate::impl_partition_message!(Message, NodeId);
+
 /// A node and everything the harness owns on its behalf.
 pub(super) struct Node {
     pub(super) id: NodeId,

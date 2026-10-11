@@ -19,6 +19,8 @@ pub(super) struct Message {
     pub(super) event: Event,
 }
 
+krabka_kraft_core::impl_partition_message!(Message, NodeId);
+
 /// A node and everything the harness owns on its behalf.
 pub(super) struct Node<L: SimNodeLog> {
     pub(super) id: NodeId,

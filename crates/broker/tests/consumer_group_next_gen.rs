@@ -31,10 +31,12 @@ async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     config.heartbeat_timeout = krabka_units::secs(30);
-    let broker = Broker::start(config).await.unwrap();
-    broker.wait_until_group_coordinator_ready().await;
-    let bootstrap = broker.listen_addr().to_string();
-    (broker, bootstrap, dir)
+    let started = support::start_group_coordinator_with_config()
+        .config(config)
+        .directory(dir)
+        .call()
+        .await;
+    (started.broker, started.bootstrap, started.directory)
 }
 
 async fn create_topic(client: &Client, topic: &str, partitions: i32) {

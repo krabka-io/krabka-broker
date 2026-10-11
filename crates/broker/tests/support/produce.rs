@@ -2,6 +2,18 @@
 
 krabka_macros::single_partition_produce_fixture!(single_partition_produce);
 
+#[bon::builder]
+pub fn replicated_topic_produce_setup(
+    topic: String,
+    topic_id: [u8; 16],
+) -> SinglePartitionProduceSetup {
+    SinglePartitionProduceSetup {
+        topic: topic.into(),
+        topic_id: krabka_protocol::primitives::uuid::Uuid(topic_id),
+        ..SinglePartitionProduceSetup::replicated()
+    }
+}
+
 /// Verify the response cardinality before a scenario checks its partition row.
 ///
 /// # Panics
@@ -73,23 +85,17 @@ impl BatchSender for krabka_client_core::Connection {
     }
 }
 
-impl<T: BatchSender + Send> BatchSender for std::sync::Arc<T> {
+impl<T> BatchSender for T
+where
+    T: std::ops::Deref + Sync,
+    T::Target: BatchSender,
+{
     fn send_produce_request(
         &self,
         request: krabka_protocol::owned::produce_request::ProduceRequest,
     ) -> impl std::future::Future<Output = krabka_protocol::owned::produce_response::ProduceResponse>
     + Send {
-        self.as_ref().send_produce_request(request)
-    }
-}
-
-impl<T: BatchSender + ?Sized> BatchSender for &T {
-    fn send_produce_request(
-        &self,
-        request: krabka_protocol::owned::produce_request::ProduceRequest,
-    ) -> impl std::future::Future<Output = krabka_protocol::owned::produce_response::ProduceResponse>
-    + Send {
-        (*self).send_produce_request(request)
+        std::ops::Deref::deref(self).send_produce_request(request)
     }
 }
 

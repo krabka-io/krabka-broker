@@ -477,33 +477,23 @@ fn fetch_request(setup: RenewFetchSetup<'_>) -> ShareFetchRequest {
         limits,
         batches,
     } = setup;
-    ShareFetchRequest {
-        group_id: Some(group.into()),
-        member_id: Some("member".into()),
-        share_session_epoch: epoch.0,
-        max_wait_ms: 0,
-        min_bytes: 0,
-        max_bytes: limits.max_bytes.0,
-        max_records: limits.max_records.0,
-        batch_size: limits.max_records.0,
-        is_renew_ack: matches!(mode, AcknowledgementMode::Renew),
-        topics: vec![FetchTopic {
-            topic_id,
-            partitions: vec![FetchPartition {
-                partition_index: 0,
-                acknowledgement_batches: batches
-                    .into_iter()
-                    .map(|batch| FetchAcknowledgeBatch {
-                        first_offset: batch.first_offset.0,
-                        last_offset: batch.last_offset.0,
-                        acknowledge_types: batch.types.into_iter().map(|code| code.0).collect(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }],
+    let acknowledgement_batches = batches
+        .into_iter()
+        .map(|batch| FetchAcknowledgeBatch {
+            first_offset: batch.first_offset.0,
+            last_offset: batch.last_offset.0,
+            acknowledge_types: batch.types.into_iter().map(|code| code.0).collect(),
             ..Default::default()
-        }],
-        ..Default::default()
-    }
+        })
+        .collect();
+    super::test_fetch_request()
+        .group_id(group.into())
+        .member_id("member".into())
+        .topic_id(topic_id.0)
+        .share_session_epoch(epoch.0)
+        .max_bytes(limits.max_bytes.0)
+        .max_records(limits.max_records.0)
+        .acknowledgement_batches(acknowledgement_batches)
+        .is_renew_ack(matches!(mode, AcknowledgementMode::Renew))
+        .call()
 }

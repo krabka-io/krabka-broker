@@ -150,11 +150,7 @@ fn marker_fencing_and_publication_cases() -> Vec<(
         // The same generation already closed the transaction: append
         // nothing.
         (
-            marker(MarkerSetup {
-                producer_epoch: ProducerEpoch(3),
-                coordinator_epoch: CoordinatorEpoch(8),
-                ..Default::default()
-            }),
+            committed_marker(),
             partition(MarkerPartitionSetup {
                 producer_epoch: ProducerEpoch(3),
                 coordinator_epoch: CoordinatorEpoch(8),
@@ -172,11 +168,7 @@ fn marker_fencing_and_publication_cases() -> Vec<(
         ),
         // A pending COMMIT on `__consumer_offsets` publishes its offsets.
         (
-            marker(MarkerSetup {
-                producer_epoch: ProducerEpoch(3),
-                coordinator_epoch: CoordinatorEpoch(8),
-                ..Default::default()
-            }),
+            committed_marker(),
             partition(MarkerPartitionSetup {
                 producer_epoch: ProducerEpoch(3),
                 coordinator_epoch: CoordinatorEpoch(7),

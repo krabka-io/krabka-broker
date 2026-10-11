@@ -11,6 +11,7 @@ use krabka_protocol::{
     krabka::freeze::{DescribedTopicFreeze, SetTopicFreezeRequest},
     primitives::uuid::Uuid as WireUuid,
 };
+use krabka_broker::operator_keys::freeze_signing_input;
 
 use crate::support::OperatorKey;
 
@@ -20,19 +21,6 @@ use crate::support::OperatorKey;
 /// broker. That constant is `pub(crate)`, so this suite carries the literal.
 const FREEZE_DOMAIN: &[u8] = b"krabka-topic-freeze-v1\0";
 
-/// The freeze-record fields a signature covers.
-#[derive(Debug, Clone, Copy)]
-struct SigningInput<'a> {
-    cluster_id: &'a str,
-    pattern_type: i8,
-    scope: &'a str,
-    frozen: bool,
-    reason: &'a str,
-    set_by: &'a str,
-    set_at_ms: i64,
-    proposal_id: [u8; 16],
-}
-
 /// Rebuild the canonical bytes that the broker verifies against.
 ///
 /// The layout is the one `crates/broker/src/freeze/signing.rs` documents:
@@ -41,7 +29,7 @@ struct SigningInput<'a> {
 /// behind a `u32` big-endian length. The length prefixes are what stop a scope
 /// of `"a"` with a reason of `"bc"` from signing the same bytes as a scope of
 /// `"ab"` with a reason of `"c"`.
-fn signing_bytes(input: &SigningInput<'_>) -> Vec<u8> {
+fn signing_bytes(input: &krabka_broker::operator_keys::FreezeSigningInput<'_>) -> Vec<u8> {
     fn put(bytes: &mut Vec<u8>, field: &[u8]) {
         let len = u32::try_from(field.len()).expect("a field inside u32");
         bytes.extend_from_slice(&len.to_be_bytes());
@@ -110,16 +98,13 @@ pub(super) fn verifies_locally(
     entry: &DescribedTopicFreeze,
 ) -> bool {
     let public = std::fs::read(&key.public_path).expect("read the operator public key");
-    let bytes = signing_bytes(&SigningInput {
-        cluster_id,
-        pattern_type: entry.pattern_type,
-        scope: &entry.scope,
-        frozen: true,
-        reason: &entry.reason,
-        set_by: &entry.set_by,
-        set_at_ms: entry.set_at_ms,
-        proposal_id: entry.proposal_id.0,
-    });
+    let bytes = signing_bytes(
+        &freeze_signing_input()
+            .cluster_id(cluster_id)
+            .entry(entry)
+            .frozen(true)
+            .call(),
+    );
     ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
         .verify(&bytes, &entry.signature)
         .is_ok()

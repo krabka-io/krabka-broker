@@ -34,6 +34,18 @@ pub struct FormatTargetOutcome {
     pub metadata: MetadataRestoreReport,
 }
 
+fn feature_level_records(excluded: &[&str]) -> impl Iterator<Item = MetadataRecord> + '_ {
+    krabka_metadata::feature_registry()
+        .iter()
+        .filter(|registered| !excluded.contains(&registered.name()))
+        .map(|registered| {
+            MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: registered.name().to_owned(),
+                level: 0,
+            })
+        })
+}
+
 /// Format the target log directory, seed it with the recovered topics, and
 /// return the cluster id it was formatted with.
 ///
@@ -587,23 +599,10 @@ mod tests {
         .expect("seed metadata");
 
         let mut expected = vec![feature];
-        expected.extend(
-            krabka_metadata::feature_registry()
-                .iter()
-                .filter(|registered| {
-                    !matches!(
-                        registered.name(),
-                        "metadata.version"
-                            | krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
-                    )
-                })
-                .map(|registered| {
-                    MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                        name: registered.name().to_owned(),
-                        level: 0,
-                    })
-                }),
-        );
+        expected.extend(feature_level_records(&[
+            "metadata.version",
+            krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE,
+        ]));
         expected.extend([
             epoch,
             MetadataRecord::V1Topic(TopicRecord {
@@ -667,24 +666,11 @@ mod tests {
         .expect("seed metadata");
 
         let mut expected = vec![group_version];
-        expected.extend(
-            krabka_metadata::feature_registry()
-                .iter()
-                .filter(|registered| {
-                    !matches!(
-                        registered.name(),
-                        "metadata.version"
-                            | "group.version"
-                            | krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
-                    )
-                })
-                .map(|registered| {
-                    MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                        name: registered.name().to_owned(),
-                        level: 0,
-                    })
-                }),
-        );
+        expected.extend(feature_level_records(&[
+            "metadata.version",
+            "group.version",
+            krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE,
+        ]));
         check!(records == expected);
     }
 

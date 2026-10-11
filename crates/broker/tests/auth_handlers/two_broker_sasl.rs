@@ -21,7 +21,7 @@ use crate::{
         ClusterNodeSetup, NodeIndex, broker_config,
         client::connect_client,
         controller_voters, init_tracing_with,
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::{batch_request, replicated_topic_produce_setup},
         records::{batch_from_records, value_record},
         shutdown_cluster,
     },
@@ -194,11 +194,10 @@ async fn two_broker_sasl_plaintext_replication() {
     let prod = producer
         .send(batch_request(
             batch,
-            SinglePartitionProduceSetup {
-                topic: ("sasl-repl").into(),
-                topic_id,
-                ..SinglePartitionProduceSetup::replicated()
-            },
+            replicated_topic_produce_setup()
+                .topic("sasl-repl".into())
+                .topic_id(topic_id.0)
+                .call(),
         ))
         .await
         .unwrap();

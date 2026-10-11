@@ -26,6 +26,21 @@ struct SweepFixture {
     state: LivenessTickState,
 }
 
+struct FailoverTestContext {
+    controller: Arc<dyn MetadataSource>,
+    liveness: Arc<ControllerLivenessState>,
+    recovery: UncleanRecoveryHandle,
+}
+
+#[bon::builder]
+async fn failover_test_context(source: Arc<dyn MetadataSource>) -> FailoverTestContext {
+    FailoverTestContext {
+        controller: source,
+        liveness: liveness_with_alive(&[2, 3]).await,
+        recovery: recovery_handle_for_tests(),
+    }
+}
+
 impl SweepFixture {
     async fn new(dead: &[u64], alive: &[u64]) -> Self {
         Self {
@@ -55,17 +70,18 @@ async fn on_broker_dead_submits_failover_when_this_controller_is_leader() {
         ..Default::default()
     });
     let source = fake_source(img, Some(NodeId(7)));
-    let controller: Arc<dyn MetadataSource> = source.clone();
-    let liveness = liveness_with_alive(&[2, 3]).await;
-    let recovery = recovery_handle_for_tests();
+    let context = failover_test_context()
+        .source(source.clone())
+        .call()
+        .await;
 
     on_broker_dead(
-        &controller,
+        &context.controller,
         NodeId(7),
         NodeId(1),
-        &liveness,
+        &context.liveness,
         &BrokerMetrics::new(),
-        &recovery,
+        &context.recovery,
     )
     .await
     .expect("broker dead handling should submit");
@@ -83,19 +99,20 @@ async fn on_broker_dead_bounds_a_stalled_commit() {
         ..Default::default()
     });
     let source = stalled_fake_source(img, Some(NodeId(7)));
-    let controller: Arc<dyn MetadataSource> = source.clone();
-    let liveness = liveness_with_alive(&[2, 3]).await;
-    let recovery = recovery_handle_for_tests();
+    let context = failover_test_context()
+        .source(source.clone())
+        .call()
+        .await;
 
     // Paused time: the runtime auto-advances past the bound as soon as
     // the only pending future is the timeout itself.
     let result = on_broker_dead(
-        &controller,
+        &context.controller,
         NodeId(7),
         NodeId(1),
-        &liveness,
+        &context.liveness,
         &BrokerMetrics::new(),
-        &recovery,
+        &context.recovery,
     )
     .await;
 

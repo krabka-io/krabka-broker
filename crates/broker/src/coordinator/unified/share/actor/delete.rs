@@ -204,6 +204,15 @@ mod tests {
     /// `(key, value)` of every record appended to `__consumer_offsets`.
     type Appended = Vec<(Option<Bytes>, Option<Bytes>)>;
 
+    async fn appended_records(log: &dyn OffsetsLog) -> Appended {
+        log.batches()
+            .await
+            .into_iter()
+            .flat_map(|batch| batch.records)
+            .map(|record| (record.key, record.value))
+            .collect()
+    }
+
     /// `(share group seed, persister wired, expected result, group kept,
     /// expected appended records)`.
     type Row = (
@@ -391,13 +400,7 @@ mod tests {
                     == kept,
                 "row {index}"
             );
-            let written: Appended = log
-                .batches()
-                .await
-                .into_iter()
-                .flat_map(|batch| batch.records)
-                .map(|record| (record.key, record.value))
-                .collect();
+            let written = appended_records(log.as_ref()).await;
             check!(written == appended, "row {index}");
         }
     }
@@ -424,13 +427,7 @@ mod tests {
 
         let result = coordinator.delete_group("sg").await;
 
-        let written: Appended = log
-            .batches()
-            .await
-            .into_iter()
-            .flat_map(|batch| batch.records)
-            .map(|record| (record.key, record.value))
-            .collect();
+        let written = appended_records(log.as_ref()).await;
         let tombstones: Appended = tombstone_batch("sg", 0)
             .unwrap()
             .records

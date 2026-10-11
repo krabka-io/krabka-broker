@@ -30,6 +30,10 @@ mod test_support;
 pub(crate) use self::decision::{
     BatchMeta, RecordMeta, RetainDecision, TxnDataState, retain_decision, should_index_key,
 };
+#[cfg(test)]
+pub(crate) use self::decision::{
+    RetentionMetadata, data_retention_metadata, marker_retention_metadata,
+};
 pub use self::{
     offset_map::build_offset_map,
     rewrite::{

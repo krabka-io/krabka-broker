@@ -24,6 +24,51 @@ pub(crate) struct BatchMeta {
     pub existing_horizon: Option<i64>,
 }
 
+#[cfg(test)]
+pub(crate) struct RetentionMetadata {
+    pub(crate) record: RecordMeta,
+    pub(crate) batch: BatchMeta,
+}
+
+#[cfg(test)]
+#[bon::builder]
+pub(crate) fn data_retention_metadata(
+    has_key: bool,
+    has_value: bool,
+    #[builder(default)] existing_horizon: Option<i64>,
+) -> RetentionMetadata {
+    RetentionMetadata {
+        record: RecordMeta {
+            has_key,
+            has_value,
+        },
+        batch: BatchMeta {
+            is_control: false,
+            producer_id: ProducerId(-1),
+            existing_horizon,
+        },
+    }
+}
+
+#[cfg(test)]
+#[bon::builder]
+pub(crate) fn marker_retention_metadata(
+    producer_id: i64,
+    #[builder(default)] existing_horizon: Option<i64>,
+) -> RetentionMetadata {
+    RetentionMetadata {
+        record: RecordMeta {
+            has_key: true,
+            has_value: false,
+        },
+        batch: BatchMeta {
+            is_control: true,
+            producer_id: ProducerId(producer_id),
+            existing_horizon,
+        },
+    }
+}
+
 /// Compute the delete horizon timestamp: `now + delete.retention.ms`. The log
 /// retains the tombstone or the marker until the wall clock reaches this
 /// value.

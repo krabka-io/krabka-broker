@@ -23,7 +23,7 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, mebibytes};
 
 use super::{
     Log,
-    test_support::{NO_LIMIT, append_samples, configured_test_log},
+    test_support::{NO_LIMIT, append_samples, assert_log_end_offset, configured_test_log},
 };
 use crate::{
     config::{LogConfig, SegmentAllocation},
@@ -245,7 +245,7 @@ fn recovery_cuts_the_padding_a_crash_leaves() {
 
     let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
 
-    assert2::assert!(log.log_end_offset() == Offset(6));
+    assert_log_end_offset(&log, Offset(6));
     assert2::assert!(log_len(dir.path(), 0) == written);
     append_samples(&mut log, 1, 3);
     assert2::assert!(batches(&log) == [(0, 2), (3, 2), (6, 2)]);

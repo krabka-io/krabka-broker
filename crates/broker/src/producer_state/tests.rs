@@ -275,6 +275,18 @@ async fn out_of_order_when_gap() {
     assert!(d == Decision::OutOfOrder);
 }
 
+async fn commit_epoch_five_prefix(state: &ProducerState) {
+    commit_fixture(
+        state,
+        ProducerCommitSetup {
+            epoch: ProducerEpoch(5),
+            delta: SequenceDelta(2),
+            ..Default::default()
+        },
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn lower_epoch_is_fenced() {
     let s = ProducerState::new();
@@ -304,15 +316,7 @@ async fn lower_epoch_is_fenced() {
 async fn higher_epoch_at_seq_zero_appends() {
     let s = ProducerState::new();
     // Epoch 5 committed sequences 0..=2 (last_sequence = 2).
-    commit_fixture(
-        &s,
-        ProducerCommitSetup {
-            epoch: ProducerEpoch(5),
-            delta: SequenceDelta(2),
-            ..Default::default()
-        },
-    )
-    .await;
+    commit_epoch_five_prefix(&s).await;
     // Same pid, epoch 6, base_sequence 0 — a fresh write, NOT a duplicate.
     let d = s.check("t", PartitionIndex(0), 1000, 6, 0, 0).await;
     assert!(d == Decision::Append);
@@ -328,15 +332,7 @@ async fn higher_epoch_at_seq_zero_appends() {
 #[tokio::test]
 async fn higher_epoch_continuing_sequence_is_out_of_order() {
     let s = ProducerState::new();
-    commit_fixture(
-        &s,
-        ProducerCommitSetup {
-            epoch: ProducerEpoch(5),
-            delta: SequenceDelta(2),
-            ..Default::default()
-        },
-    )
-    .await;
+    commit_epoch_five_prefix(&s).await;
     check!(s.check("t", PartitionIndex(0), 1000, 6, 3, 0).await == Decision::OutOfOrder);
     check!(s.check("t", PartitionIndex(0), 1000, 6, 0, 0).await == Decision::Append);
     commit_fixture(

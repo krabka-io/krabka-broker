@@ -125,16 +125,10 @@ async fn drive(
     // the membership check passes.
     let request = OffsetCommitRequest {
         group_id: group.clone(),
-        topics: vec![OffsetCommitRequestTopic {
-            name: name.to_string(),
-            topic_id,
-            partitions: vec![OffsetCommitRequestPartition {
-                partition_index: 0,
-                committed_offset: 42,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
+        topics: vec![super::test_topic_row()
+            .name(name.to_string())
+            .topic_id(topic_id.0)
+            .call()],
         ..Default::default()
     };
 
