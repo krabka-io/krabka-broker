@@ -21,8 +21,8 @@ use krabka_protocol::owned::{
 use crate::{
     cluster::{start_broker, wait_for_token, wait_for_token_gone},
     rpc::{
-        send_create_delegation_token, send_describe_delegation_token, send_expire_delegation_token,
-        send_renew_delegation_token,
+        check_created_identity, send_create_delegation_token, send_describe_delegation_token,
+        send_expire_delegation_token, send_renew_delegation_token,
     },
     wire::{sasl_plain_authenticate, sasl_scram_sha256_authenticate, token_session},
 };
@@ -65,7 +65,7 @@ async fn delegation_token_lifecycle_end_to_end() {
                 create_resp.token_requester_principal_name,
             ));
         }
-        crate::rpc::check_created_identity(&create_resp, "alice", "alice");
+        check_created_identity(&create_resp, "alice", "alice");
         check!(create_resp.expiry_timestamp_ms > create_resp.issue_timestamp_ms);
 
         let token_id = create_resp.token_id.clone();

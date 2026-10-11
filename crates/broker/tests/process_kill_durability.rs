@@ -83,8 +83,9 @@ use support::{docker, free_port};
 use zerocopy::FromBytes;
 
 use crate::support::{
-    producer::{no_retry_acks_all_producer, producer_record},
+    producer::{ProducerRecordSetup, no_retry_acks_all_producer, producer_record},
     remove_container_with_volumes,
+    storage::host_directory_user,
 };
 
 mod support;
@@ -194,7 +195,7 @@ impl BrokerProcess {
 
     /// `uid:gid` of the host data directory, for `docker run --user`.
     fn user(&self) -> String {
-        crate::support::storage::host_directory_user(self.host_root())
+        host_directory_user(self.host_root())
     }
 
     fn host_root(&self) -> &Path {
@@ -429,7 +430,7 @@ async fn produce_settled(producer: &Producer, topic: &str, keys: &[String]) -> V
 }
 
 fn record(topic: &str, key: &str) -> ProducerRecord {
-    producer_record(crate::support::producer::ProducerRecordSetup {
+    producer_record(ProducerRecordSetup {
         topic: topic.to_owned(),
         partition: Some(krabka_ids::PartitionIndex(0)),
         key: Some(key.to_owned().into()),

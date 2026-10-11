@@ -14,7 +14,7 @@ use krabka_protocol::owned::{
 use crate::{
     DELEGATION_TOKEN_AUTHORIZATION_FAILED,
     cluster::{start_admin_alice, start_broker_with_super_users, wait_for_token},
-    rpc::{send_create_delegation_token, send_describe_delegation_token},
+    rpc::{check_created_identity, send_create_delegation_token, send_describe_delegation_token},
     wire::{admin_plain, sasl_plain_authenticate, token_session},
 };
 
@@ -68,7 +68,7 @@ async fn act_as_super_user_mints_token_owned_by_target() {
                 create_resp.token_requester_principal_name,
             ));
         }
-        crate::rpc::check_created_identity(&create_resp, "alice", "admin");
+        check_created_identity(&create_resp, "alice", "admin");
 
         let token_id = create_resp.token_id.clone();
         let hmac_bytes = create_resp.hmac.clone();

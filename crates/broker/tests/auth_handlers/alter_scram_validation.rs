@@ -18,7 +18,7 @@ use crate::{
         KAFKA_UNSUPPORTED_SASL_MECHANISM, WIRE_MECH_SCRAM_SHA_256, WIRE_MECH_SCRAM_SHA_512,
         drive_alter_user_scram_credentials_as_plain, pbkdf2_salt_and_salted, provision_as_admin,
     },
-    harness::{alice_password, scram_admin_fixture},
+    harness::{alice_password, scram_admin_fixture, start_scram_admin},
     support::sasl::{
         ScramAlgorithm, ScramIterations, ScramMechanismCode, ScramUpsertionSetup, scram_upsertion,
     },
@@ -254,11 +254,7 @@ async fn random_scram_admin_fixture() -> (
 ) {
     let log_dir = tempfile::tempdir().unwrap();
     let admin_password = uuid::Uuid::new_v4().to_string();
-    let (handle, addr) = crate::harness::start_scram_admin(
-        log_dir.path(),
-        &admin_password,
-        vec![SaslMechanism::Plain],
-    )
-    .await;
+    let (handle, addr) =
+        start_scram_admin(log_dir.path(), &admin_password, vec![SaslMechanism::Plain]).await;
     (log_dir, admin_password, handle, addr)
 }

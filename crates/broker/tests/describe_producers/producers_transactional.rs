@@ -14,7 +14,7 @@ use crate::{
     support::{
         self,
         admin::describe_producers_request,
-        produce::SinglePartitionProduceSetup,
+        produce::{SinglePartitionProduceSetup, batch_request},
         records::{ProducerSequence, ProducerValuesSetup},
         topics::CreateTopicSetup,
         transactions::ProducerEpoch,
@@ -127,7 +127,7 @@ fn transaction_values_request(
 ) -> ProduceRequest {
     ProduceRequest {
         transactional_id: Some("describe-producers-tid".into()),
-        ..crate::support::produce::batch_request(
+        ..batch_request(
             transactional_batch(values),
             SinglePartitionProduceSetup {
                 topic: ("transactions").into(),

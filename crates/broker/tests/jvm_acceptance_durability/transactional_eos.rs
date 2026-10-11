@@ -14,7 +14,10 @@ use krabka_broker::{Broker, BrokerConfig};
 use krabka_log::LogConfig;
 
 use crate::{
-    jvm_acceptance::{KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, docker_run_kafka_tool},
+    jvm_acceptance::{
+        KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, create_plain_console_topic_at,
+        docker_run_kafka_tool,
+    },
     support::{
         ContainerInput, JvmBrokerSetup, JvmDockerSetup, controller_voters, jvm_broker_config,
         jvm_docker_command,
@@ -215,7 +218,7 @@ async fn transactional_console_producer_eos() {
     let bootstrap_3 = format!("host.docker.internal:{}", client_ports[2]);
 
     // 1. Create the topic via node 1.
-    crate::jvm_acceptance::create_plain_console_topic_at(&bootstrap_1, TOPIC);
+    create_plain_console_topic_at(&bootstrap_1, TOPIC);
     // Wait for the partition to materialize on the broker that leads it: the
     // producer's first batch must not land before the log exists with the
     // segment size the cluster booted with.

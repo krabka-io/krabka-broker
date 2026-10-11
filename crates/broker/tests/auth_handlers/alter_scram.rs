@@ -29,6 +29,7 @@ use crate::{
     },
     scram::drive_sasl_scram_session,
     support::{
+        acl::use_simple_acl_authorizer,
         sasl::{ScramAlgorithm, ScramUpsertionSetup, sasl_temp_config, scram_upsertion},
         wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
@@ -129,7 +130,7 @@ async fn alter_scram_creds_non_super_user_rejected() {
     // Install `SimpleAclAuthorizer` so the cluster-Alter gate
     // fires for non-super principals; the default `AllowAllAuthorizer`
     // would let alice through.
-    crate::support::acl::use_simple_acl_authorizer(&mut cfg);
+    use_simple_acl_authorizer(&mut cfg);
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();

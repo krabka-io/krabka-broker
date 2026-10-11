@@ -27,7 +27,10 @@ use crate::support::{
     client::connect_owned,
     discovery::coordinator_lookup_request,
     shutdown_cluster,
-    topics::{ConfiguredTopicSetup, TopicReplicationFactor, creatable_topic, create_topic_request},
+    topics::{
+        ConfiguredTopicSetup, TopicPartitionCount, TopicReplicationFactor, creatable_topic,
+        create_topic_request,
+    },
 };
 
 mod support;
@@ -199,7 +202,7 @@ async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {
         .send(create_topic_request(creatable_topic(
             ConfiguredTopicSetup {
                 name: (LED_TOPIC).into(),
-                partitions: crate::support::topics::TopicPartitionCount(3),
+                partitions: TopicPartitionCount(3),
                 replicas: TopicReplicationFactor(3),
                 ..Default::default()
             },

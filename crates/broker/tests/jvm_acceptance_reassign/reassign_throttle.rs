@@ -8,9 +8,9 @@
 use assert2::assert;
 
 use crate::{
-    cluster::{assignment, execute_plan, reassignment_cluster, removed_replica},
+    cluster::{assert_reassigned, assignment, execute_plan, reassignment_cluster, removed_replica},
     jvm_acceptance::{KAFKA_IMAGE_TXN, broker0_advertised, verify_console_reassignment},
-    support::jvm_docker_command,
+    support::{JvmDockerSetup, jvm_docker_command},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -24,7 +24,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
     let (_json_file, json_mount) = execute_plan(&admin_mount, TOPIC, staying, new_node, true);
 
     // Verify throttle configs were applied via kafka-configs --describe.
-    let desc = jvm_docker_command(crate::support::JvmDockerSetup {
+    let desc = jvm_docker_command(JvmDockerSetup {
         image: KAFKA_IMAGE_TXN,
         mounts: &[&admin_mount],
         args: &[
@@ -88,7 +88,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
         })
         .await;
     // After completion the replica set must be exactly {staying, new_node}.
-    crate::cluster::assert_reassigned(&cluster.h1, TOPIC, staying, new_node);
+    assert_reassigned(&cluster.h1, TOPIC, staying, new_node);
     eprintln!("KRABKA[test] reassignment completed; running --verify");
 
     // --verify clears throttle configs and exits 0 (broker-scoped

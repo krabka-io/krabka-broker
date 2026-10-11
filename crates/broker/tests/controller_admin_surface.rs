@@ -83,7 +83,7 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    configs::feature_update,
+    configs::{controller_registration, feature_update},
     discovery::api_versions_request_for,
     sasl::{ScramAlgorithm, ScramIterations, ScramUpsertionSetup, scram_upsertion},
     start_with_bound_listeners,
@@ -651,9 +651,7 @@ async fn controller_listener_serves_unregister_controller() {
 
     let (broker, _dir) = start_trunk_broker().await;
     broker
-        .submit_metadata_record_for_test(crate::support::configs::controller_registration(NodeId(
-            7,
-        )))
+        .submit_metadata_record_for_test(controller_registration(NodeId(7)))
         .await
         .expect("seed the registration");
     let connection = dial_controller(&broker).await;

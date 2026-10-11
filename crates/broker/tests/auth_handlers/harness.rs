@@ -17,7 +17,7 @@ pub use crate::support::sasl::alice_password;
 use crate::{
     kafka_wire::{self, ExchangeSetup as WireExchangeSetup},
     support::{
-        sasl::{ScramCredentialSetup, provision_scram, sasl_plaintext_mechanisms},
+        sasl::{ScramCredentialSetup, provision_scram, sasl_plaintext_mechanisms, start_broker},
         wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
     },
 };
@@ -143,7 +143,7 @@ pub async fn start_alice_plain(
 ) {
     let log_dir = tempfile::tempdir().unwrap();
     let cfg = alice_plain_config(log_dir.path().to_path_buf(), password);
-    let (handle, log_dir, addr) = crate::support::sasl::start_broker(cfg, log_dir).await;
+    let (handle, log_dir, addr) = start_broker(cfg, log_dir).await;
     (log_dir, handle, addr)
 }
 

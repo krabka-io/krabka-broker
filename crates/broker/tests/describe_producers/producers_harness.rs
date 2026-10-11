@@ -12,7 +12,7 @@ use crate::support::{
     self,
     discovery::coordinator_lookup_request,
     records::ProducerValuesSetup,
-    transactions::{InitProducerSetup, claim_idempotent_producer},
+    transactions::{InitProducerSetup, claim_idempotent_producer, new_producer_request},
 };
 pub(crate) use crate::support::{client::create_topic_named as create_topic, topic_id_for};
 
@@ -47,12 +47,10 @@ pub(crate) async fn init_transactional_producer(
     loop {
         let init = p
             .client
-            .send(crate::support::transactions::new_producer_request(
-                InitProducerSetup {
-                    transactional_id: Some(transactional_id.into()),
-                    ..Default::default()
-                },
-            ))
+            .send(new_producer_request(InitProducerSetup {
+                transactional_id: Some(transactional_id.into()),
+                ..Default::default()
+            }))
             .await
             .expect("transactional InitProducerId");
         if init.error_code == 0 {

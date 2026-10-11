@@ -11,7 +11,8 @@ use krabka_client_core::Client;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 use crate::harness::{
-    INVALID_RECORD, KNOWN_ID, boot, boot_config, check_value_append, create_topic, framed,
+    INVALID_RECORD, KNOWN_ID, apply_registry_config, boot, boot_config, check_value_append,
+    create_topic, framed,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -43,7 +44,7 @@ async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    crate::harness::apply_registry_config(
+    apply_registry_config(
         &mut config,
         &format!(
             r#"

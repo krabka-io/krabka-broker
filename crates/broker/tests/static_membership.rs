@@ -25,8 +25,8 @@ use krabka_protocol::owned::{
 };
 
 use crate::support::classic::{
-    ClassicJoinSetup, ClassicTimeouts, GenerationId, classic_join_request, classic_sync_request,
-    sync_assignment,
+    ClassicJoinSetup, ClassicSyncSetup, ClassicTimeouts, GenerationId, classic_join_request,
+    classic_sync_request, sync_assignment,
 };
 
 mod support;
@@ -82,7 +82,7 @@ async fn bootstrap_static_member(
     let r3 = client
         .send(SyncGroupRequest {
             group_instance_id: Some(instance_id.into()),
-            ..classic_sync_request(crate::support::classic::ClassicSyncSetup {
+            ..classic_sync_request(ClassicSyncSetup {
                 group_id: (group_id).into(),
                 generation_id: GenerationId(generation),
                 member_id: mid.clone(),

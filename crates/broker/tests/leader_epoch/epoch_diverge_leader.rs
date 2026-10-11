@@ -13,7 +13,10 @@ use crate::{
     epoch_harness::{boot_single, create_topic, record, topic_id_for},
     support::{
         client::connect_client,
-        fetch::{FetchPartitionSetup, RequestWaitMillis, fetch_partition, single_partition_fetch},
+        fetch::{
+            FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup, fetch_partition,
+            single_partition_fetch,
+        },
         produce::{SinglePartitionProduceSetup, batch_request},
     },
 };
@@ -116,7 +119,7 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
                 replica_id: 7,
                 ..Default::default()
             },
-            ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+            ..single_partition_fetch(SinglePartitionFetchSetup {
                 topic: "diverge".into(),
                 topic_id,
                 partition: FetchPartition {

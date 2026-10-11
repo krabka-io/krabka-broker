@@ -55,7 +55,7 @@ use crate::{
         SaslClusterSetup, break_glass::propose, broker0_advertised, plain_client_properties,
         start_registered_sasl_cluster, wait_three_brokers_registered,
     },
-    oracle::{CliRun, Side, ToolFile},
+    oracle::{AssignedTopicCommandSetup, CliRun, Side, ToolFile},
     tool_output::{Assignment, TopicPartition, parse_cancelled, reassignment_json},
 };
 
@@ -248,7 +248,7 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
         bootstrap: &advertised,
     };
 
-    side.create_assigned_topic(crate::oracle::AssignedTopicCommandSetup {
+    side.create_assigned_topic(AssignedTopicCommandSetup {
         topic: TOPIC,
         props_path: CLIENT_PROPS,
         files: &[ToolFile::new(CLIENT_PROPS, &props)],

@@ -24,8 +24,8 @@ use crate::support::{
     client::{metrics_config, scrape_metrics},
     discovery::api_versions_request_for,
     wire::{
-        CorrelationId, WireFrameSetup, decode_response_frame, read_frame, request_body_capacity,
-        write_frame,
+        CorrelationId, HeaderEncoding, WireFrameSetup, decode_response_frame, read_frame,
+        request_body_capacity, write_frame,
     },
 };
 
@@ -73,7 +73,7 @@ async fn send_api_versions(
     let frame = crate::support::wire::request_frame(WireFrameSetup {
         version: krabka_ids::ApiVersion(version),
         correlation: CorrelationId(99),
-        header: crate::support::wire::HeaderEncoding::from_wire(flexible),
+        header: HeaderEncoding::from_wire(flexible),
         client_id: "krabka-kip-511-test",
         body: &body,
         capacity: Some(request_body_capacity(&body)),

@@ -9,7 +9,8 @@
 
 use crate::jvm_acceptance::{
     ADMIN, ADMIN_PASS, KAFKA_IMAGE, assert_console_produced, create_console_topic,
-    nc_check_connectivity, produce_console, start_two_sasl_brokers, write_plain_props,
+    nc_check_connectivity, numbered_payload, produce_console, start_two_sasl_brokers,
+    write_plain_props,
 };
 
 /// JVM-driven 2-broker test for the `SASL_PLAINTEXT` inter-broker
@@ -79,7 +80,7 @@ async fn jvm_inter_broker_replication_authed() {
     // Produce 50 records via `kafka-console-producer`. The metadata
     // response steers the producer to whichever broker leads partition 0.
 
-    let payload = crate::jvm_acceptance::numbered_payload("rec", 50);
+    let payload = numbered_payload("rec", 50);
     let producer_out = produce_console(KAFKA_IMAGE, &[&mount], TOPIC, false, payload.as_bytes());
     assert_console_produced(&producer_out);
 

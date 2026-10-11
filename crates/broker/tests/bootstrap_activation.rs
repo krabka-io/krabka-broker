@@ -37,7 +37,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 use crate::support::{
-    AddressedNodeSetup,
+    AddressedNodeSetup, addressed_node_config,
     client::{connect_owned, metadata_fetch},
     configs::describe_resource,
     records::metadata_batches,
@@ -135,7 +135,7 @@ fn config(node: &Node, setup: ActivationSetup<'_>) -> BrokerConfig {
         None,
     )
     .expect("krabka-format wrote meta.properties");
-    let mut config = crate::support::addressed_node_config(
+    let mut config = addressed_node_config(
         &node.log_dir,
         AddressedNodeSetup {
             node: node.id,

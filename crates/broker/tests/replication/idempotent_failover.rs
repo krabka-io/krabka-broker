@@ -31,7 +31,7 @@ use crate::{
     support::{
         self,
         client::connect_with_context,
-        produce::SinglePartitionProduceSetup,
+        produce::{SinglePartitionProduceSetup, send_batch},
         records::{batch_from_records, value_record},
         registered_cluster, shutdown_cluster,
         topics::create_topic_request,
@@ -124,7 +124,7 @@ async fn produce(
 ) -> PartitionProduceResponse {
     let client =
         connect_with_context(broker.listen_addr().to_string(), None, "producer client").await;
-    let response = crate::support::produce::send_batch(
+    let response = send_batch(
         &client,
         batch,
         SinglePartitionProduceSetup {

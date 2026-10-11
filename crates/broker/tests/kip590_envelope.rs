@@ -44,7 +44,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use crate::support::{
     acl::{ClusterAclSetup, cluster_acl_record},
     start_with_bound_listeners,
-    topics::{ConfiguredTopicSetup, create_topic_request},
+    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
 mod support;
@@ -199,12 +199,10 @@ async fn send_envelope_on(
 fn embedded_create_topics(topic: &str) -> Bytes {
     let version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
     let body = encode(
-        &create_topic_request(crate::support::topics::creatable_topic(
-            ConfiguredTopicSetup {
-                name: (topic).into(),
-                ..Default::default()
-            },
-        )),
+        &create_topic_request(creatable_topic(ConfiguredTopicSetup {
+            name: (topic).into(),
+            ..Default::default()
+        })),
         version,
     );
     // The length prefix belongs to the outer connection, not to `request_data`
@@ -660,12 +658,10 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
         client_id: Some("adminclient-1".as_bytes()),
         tagged: Some(&[0]),
         body: &encode(
-            &create_topic_request(crate::support::topics::creatable_topic(
-                ConfiguredTopicSetup {
-                    name: (TOPIC).into(),
-                    ..Default::default()
-                },
-            )),
+            &create_topic_request(creatable_topic(ConfiguredTopicSetup {
+                name: (TOPIC).into(),
+                ..Default::default()
+            })),
             krabka_protocol::owned::create_topics_request::MAX_VERSION,
         ),
     })

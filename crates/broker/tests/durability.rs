@@ -30,11 +30,13 @@ use tempfile::TempDir;
 use crate::support::{
     client::{BatchProduceSetup, connect_client},
     durability::{ReplicatedTopicSetup, TopicReplicasSetup, replicated_topic_fixture},
-    fetch::single_partition_fetch,
+    fetch::{SinglePartitionFetchSetup, single_partition_fetch},
     produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
-    producer::{ProducerRecordSetup, producer_record},
+    producer::{ProducerRecordSetup, producer_record, transactional_producer},
     registered_cluster, shutdown_cluster,
-    topics::{TopicPartitionCount, TopicReplicationFactor, configured_topic_request},
+    topics::{
+        CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor, configured_topic_request,
+    },
 };
 
 mod support;
@@ -267,7 +269,7 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
     let resp = client
         .send(FetchRequest {
             replica_id: -1,
-            ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+            ..single_partition_fetch(SinglePartitionFetchSetup {
                 topic: "clamp".into(),
                 topic_id,
                 ..Default::default()
@@ -302,8 +304,7 @@ async fn read_committed_under_rf1_unchanged() {
     // FindCoordinator. Bring the transaction coordinator up first.
     broker.wait_until_transaction_coordinator_ready().await;
 
-    let producer =
-        crate::support::producer::transactional_producer(bootstrap.clone(), "rc-tid").await;
+    let producer = transactional_producer(bootstrap.clone(), "rc-tid").await;
     let txn = producer.begin_transaction().await.unwrap();
     for v in ["p", "q", "r"] {
         drop(
@@ -473,7 +474,7 @@ const OVERLAP_TIMEOUT_MS: i32 = 1_000;
 async fn create_topic_with_partitions(
     broker: &BrokerHandle,
     bootstrap: &str,
-    setup: crate::support::topics::CreateTopicSetup<'_>,
+    setup: CreateTopicSetup<'_>,
 ) {
     let client = connect_client(bootstrap.to_string(), None).await;
     let resp = client
@@ -554,7 +555,7 @@ async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
     create_topic_with_partitions(
         &cluster[0].0,
         &bootstrap_1,
-        crate::support::topics::CreateTopicSetup {
+        CreateTopicSetup {
             topic: "overlap",
             num_partitions: TopicPartitionCount(OVERLAP_PARTITIONS),
             replication_factor: TopicReplicationFactor(2),

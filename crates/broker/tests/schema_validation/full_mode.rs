@@ -9,14 +9,14 @@
 use assert2::check;
 
 use crate::harness::{
-    INVALID_RECORD, KNOWN_ID, SchemaTopicSetup, VALIDATED, create_topic, framed, order_avro_body,
-    produce_value,
+    INVALID_RECORD, KNOWN_ID, SchemaTopicSetup, VALIDATED, create_topic, framed,
+    mock_topic_fixture, order_avro_body, produce_value,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn full_mode_checks_the_body_and_id_mode_does_not() {
     let (_registry, broker, client, _dir, id_mode) =
-        crate::harness::mock_topic_fixture("validated", VALIDATED).await;
+        mock_topic_fixture("validated", VALIDATED).await;
     let full_mode = create_topic(
         &broker,
         &client,

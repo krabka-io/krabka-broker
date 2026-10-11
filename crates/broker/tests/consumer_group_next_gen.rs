@@ -20,7 +20,7 @@ use krabka_protocol::owned::{
 };
 
 use crate::support::{
-    classic::{ClassicTimeouts, classic_join_request},
+    classic::{ClassicJoinSetup, ClassicTimeouts, classic_join_request},
     client::connect_client,
     consumer_groups::{consumer_heartbeat, reported_assignment},
     discovery::named_topic_metadata,
@@ -174,7 +174,7 @@ async fn classic_group_locked_against_next_gen() {
     // Kafka's `validateOnlineUpgrade` refuses to upgrade it; an empty classic
     // group would be replaced instead.
     let join = |member_id: String| {
-        classic_join_request(crate::support::classic::ClassicJoinSetup {
+        classic_join_request(ClassicJoinSetup {
             group_id: ("g3").into(),
             member_id,
             timeouts: ClassicTimeouts {

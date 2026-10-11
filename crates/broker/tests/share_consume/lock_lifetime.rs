@@ -12,11 +12,11 @@ use crate::{
     NONE,
     harness::initialize_consumption,
     share_rpc::{
-        acquired_count, fetch_empty, fetch_redelivered, fetch_until_acquired, share_fetch,
-        share_renew,
+        ShareRenewSetup, acquired_count, fetch_empty, fetch_redelivered, fetch_until_acquired,
+        share_fetch, share_renew,
     },
     support::share::{
-        ConsumptionSetup, ShareRecordCount, ShareSessionEpoch, ShareSessionSetup,
+        ConsumptionSetup, ShareRecordCount, ShareSessionEpoch, ShareSessionSetup, ShareTopicSetup,
         permitted_topic_fixture,
     },
 };
@@ -115,7 +115,7 @@ async fn renew_extends_lock_not_redelivered() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     let renew = share_renew(
         &client,
-        crate::share_rpc::ShareRenewSetup {
+        ShareRenewSetup {
             session: ShareSessionSetup::joined(&member, tid),
             ..Default::default()
         },
@@ -175,16 +175,14 @@ async fn lock_fixture(
     uuid::Uuid,
     String,
 ) {
-    let (permit, broker, client, dir, tid) = permitted_topic_fixture(
-        crate::support::share::ShareTopicSetup::default(),
-        |config| {
+    let (permit, broker, client, dir, tid) =
+        permitted_topic_fixture(ShareTopicSetup::default(), |config| {
             config.share_group.record_lock_duration = lock_duration;
             if let Some(attempts) = max_delivery_attempts {
                 config.share_group.max_delivery_attempts = attempts;
             }
-        },
-    )
-    .await;
+        })
+        .await;
     let (member, _) = initialize_consumption(
         &broker,
         &client,

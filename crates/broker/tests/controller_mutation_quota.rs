@@ -36,7 +36,7 @@ use crate::{
     cluster::start_single_broker_sasl_plaintext_with_users,
     kafka_wire::{
         PlainAuthenticationSetup,
-        quotas::{QuotaEntity, UserQuotaSetup, alter_user_quota},
+        quotas::{QuotaEntity, QuotaValue, UserQuotaSetup, alter_user_quota},
     },
     support::acl::{ClusterAclSetup, TopicAclSetup, cluster_acl_record, topic_acl_record},
     topic_admin::{drive_create_topics_sasl, drive_delete_topics_sasl},
@@ -49,7 +49,7 @@ async fn set_controller_mutation_quota(addr: std::net::SocketAddr) -> Vec<(Quota
         UserQuotaSetup {
             authentication: PlainAuthenticationSetup::admin(crate::CLIENT_ID),
             key: "controller_mutation_rate",
-            value: crate::kafka_wire::quotas::QuotaValue(2.0),
+            value: QuotaValue(2.0),
             ..Default::default()
         },
     )

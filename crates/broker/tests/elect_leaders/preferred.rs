@@ -7,7 +7,9 @@ use assert2::assert;
 use crate::{
     cluster_lock,
     kafka_wire::ElectionExchangeSetup,
-    support::{admin::ElectionSetup, shutdown_cluster, topics::AssignedTopicSetup},
+    support::{
+        admin::ElectionSetup, registered_cluster, shutdown_cluster, topics::AssignedTopicSetup,
+    },
     wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
     wire::{CLIENT_ID, create_topic_plaintext, drive_elect_all_partitions, drive_elect_leaders},
 };
@@ -27,7 +29,7 @@ use crate::{
 async fn preferred_election_via_wire_returns_success() {
     let _g = cluster_lock().lock().await;
 
-    let mut cluster = crate::support::registered_cluster(3).await;
+    let mut cluster = registered_cluster(3).await;
 
     // All three brokers' addresses captured before any shutdowns.
     let broker1_addr = cluster[0].1.listen_addr;
@@ -157,7 +159,7 @@ async fn preferred_election_via_wire_returns_success() {
 async fn electing_every_partition_omits_the_ones_already_on_their_preferred_leader() {
     let _g = cluster_lock().lock().await;
 
-    let cluster = crate::support::registered_cluster(3).await;
+    let cluster = registered_cluster(3).await;
     let broker1_addr = cluster[0].1.listen_addr;
 
     // Nothing has failed over, so every partition is already led by its

@@ -36,13 +36,17 @@ use crate::{
             IncrementalConfigsSetup, feature_update, incremental_config, incremental_request,
             incremental_resource,
         },
-        fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
+        fetch::{
+            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
+        },
         offsets::{list_offset_partition, single_partition_list_offsets},
         share::{
-            ShareAck, ShareProduceSetup, ShareRecordCount, ShareRecordsSetup, ShareSessionEpoch,
-            ShareSessionSetup, StartGroupTopicSetup, acknowledge_partition, acknowledge_request,
-            acknowledge_success, acknowledge_topic, join_consume_member, start_group_topic,
+            AcknowledgeRequestSetup, ShareAck, ShareProduceSetup, ShareRecordCount,
+            ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup, StartGroupTopicSetup,
+            acknowledge_partition, acknowledge_request, acknowledge_success, acknowledge_topic,
+            join_consume_member, start_group_topic,
         },
+        topics::topic_configs,
     },
 };
 
@@ -82,7 +86,7 @@ async fn create_dead_letter_topic_with(
     client: &Client,
     extra: &[(&str, &str)],
 ) {
-    let configs = crate::support::topics::topic_configs(
+    let configs = topic_configs(
         std::iter::once(("errors.deadletterqueue.group.enable", "true"))
             .chain(extra.iter().copied()),
     );
@@ -175,14 +179,12 @@ async fn point_group_at_dead_letter_topic(client: &Client) {
 async fn dead_letter_records(broker: &BrokerHandle, client: &Client) -> Vec<Record> {
     let dlq_id = topic_id(broker, DLQ_TOPIC);
     let response = client
-        .send(single_partition_fetch(
-            crate::support::fetch::SinglePartitionFetchSetup {
-                topic: DLQ_TOPIC.into(),
-                topic_id: wire(dlq_id),
-                limits: FetchLimits::one_mebibyte(RequestWaitMillis(100)),
-                ..Default::default()
-            },
-        ))
+        .send(single_partition_fetch(SinglePartitionFetchSetup {
+            topic: DLQ_TOPIC.into(),
+            topic_id: wire(dlq_id),
+            limits: FetchLimits::one_mebibyte(RequestWaitMillis(100)),
+            ..Default::default()
+        }))
         .await
         .expect("Fetch");
     records_of(response.responses[0].partitions[0].records.as_ref())
@@ -246,34 +248,31 @@ struct RejectRangesSetup<'a> {
 /// offsets of partition 0, in a batch of its own.
 async fn reject_ranges(client: &Client, member: &str, setup: RejectRangesSetup<'_>) {
     let response = client
-        .send(acknowledge_request(
-            crate::support::share::AcknowledgeRequestSetup {
-                group_id: Some(GROUP.into()),
-                member_id: Some(member.into()),
-                epoch: setup.epoch,
-                topics: vec![acknowledge_topic(
-                    wire(setup.topic_id),
-                    vec![acknowledge_partition(
-                        0,
-                        setup
-                            .ranges
-                            .iter()
-                            .map(|(first, last)| AcknowledgementBatch {
-                                first_offset: first.0,
-                                last_offset: last.0,
-                                acknowledge_types: vec![
-                                    REJECT;
-                                    usize::try_from(last.0 - first.0 + 1)
-                                        .unwrap()
-                                ],
-                                ..Default::default()
-                            })
-                            .collect(),
-                    )],
+        .send(acknowledge_request(AcknowledgeRequestSetup {
+            group_id: Some(GROUP.into()),
+            member_id: Some(member.into()),
+            epoch: setup.epoch,
+            topics: vec![acknowledge_topic(
+                wire(setup.topic_id),
+                vec![acknowledge_partition(
+                    0,
+                    setup
+                        .ranges
+                        .iter()
+                        .map(|(first, last)| AcknowledgementBatch {
+                            first_offset: first.0,
+                            last_offset: last.0,
+                            acknowledge_types: vec![
+                                REJECT;
+                                usize::try_from(last.0 - first.0 + 1).unwrap()
+                            ],
+                            ..Default::default()
+                        })
+                        .collect(),
                 )],
-                ..Default::default()
-            },
-        ))
+            )],
+            ..Default::default()
+        }))
         .await
         .expect("ShareAcknowledge");
     assert!(response.error_code == NONE, "{response:?}");

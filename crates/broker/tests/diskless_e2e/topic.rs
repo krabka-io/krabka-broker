@@ -16,9 +16,9 @@ use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 use crate::{
     CLIENT_PRINCIPAL, PASSWORD, RECORDS, TOPIC, VOTERS,
-    cluster::{DisklessCluster, wait_for},
+    cluster::{DisklessCluster, start_flushing_cluster, wait_for},
     support::{self, topics::diskless_topic_request},
-    wire::produce_all,
+    wire::{produce_all, value_at},
 };
 
 /// Create the suite's diskless topic and return its assigned id.
@@ -108,7 +108,7 @@ pub(crate) async fn seed_workload(
     .await;
     let topic_id = create_diskless_topic(&admin).await;
     let leader = await_wal_quorum(cluster).await;
-    let values: Vec<bytes::Bytes> = (0..RECORDS).map(crate::wire::value_at).collect();
+    let values: Vec<bytes::Bytes> = (0..RECORDS).map(value_at).collect();
     let producer = support::sasl_client(
         &cluster.bootstrap_for_node(leader),
         CLIENT_PRINCIPAL,
@@ -130,7 +130,7 @@ pub(crate) async fn flushing_workload(
     Vec<bytes::Bytes>,
     Client,
 ) {
-    let cluster = Box::pin(crate::cluster::start_flushing_cluster(interval)).await;
+    let cluster = Box::pin(start_flushing_cluster(interval)).await;
     cluster.await_ready().await;
     let (admin, topic, leader, values, producer) = Box::pin(seed_workload(&cluster)).await;
     (cluster, admin, topic, leader, values, producer)

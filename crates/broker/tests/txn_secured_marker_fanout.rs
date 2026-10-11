@@ -59,10 +59,10 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 use crate::support::{
-    acl::AllowAclSetup,
+    acl::{AllowAclSetup, use_simple_acl_authorizer},
     controller_voters,
     discovery::named_topic_metadata,
-    produce::SinglePartitionProduceSetup,
+    produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},
     shutdown_cluster,
     topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
@@ -465,7 +465,7 @@ fn apply_acls(cfg: &mut BrokerConfig) {
     cfg.super_users = [ADMIN_USER.to_string(), "ANONYMOUS".to_string()]
         .into_iter()
         .collect();
-    crate::support::acl::use_simple_acl_authorizer(cfg);
+    use_simple_acl_authorizer(cfg);
 }
 
 // An Allow ACL on a literal resource.
@@ -651,7 +651,7 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
         };
         let request = ProduceRequest {
             transactional_id: Some(case.name.into()),
-            ..crate::support::produce::batch_request(
+            ..batch_request(
                 batch,
                 SinglePartitionProduceSetup {
                     topic: (case.name).into(),

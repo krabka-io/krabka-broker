@@ -11,8 +11,8 @@
 use assert2::{assert, check};
 
 use crate::support::classic::{
-    ClassicJoinSetup, ClassicSyncSetup, GenerationId, classic_join_request, classic_sync_request,
-    join_protocol, sync_assignment,
+    ClassicJoinSetup, ClassicSyncSetup, ClassicTimeouts, GenerationId, classic_join_request,
+    classic_sync_request, join_protocol, sync_assignment,
 };
 mod support;
 
@@ -35,7 +35,7 @@ async fn start() -> support::InProcess {
 fn join_setup() -> ClassicJoinSetup {
     ClassicJoinSetup {
         group_id: GROUP.into(),
-        timeouts: crate::support::classic::ClassicTimeouts {
+        timeouts: ClassicTimeouts {
             rebalance: krabka_units::millis(1_500),
             ..Default::default()
         },

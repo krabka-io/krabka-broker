@@ -24,7 +24,7 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    fetch::{RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch},
+    fetch::{FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch},
     produce::{SinglePartitionProduceSetup, send_batch},
     records::{batch_from_records, value_record},
 };
@@ -85,7 +85,7 @@ async fn produce_and_fetch(client: &krabka_client_core::Client) -> usize {
         .send(single_partition_fetch(SinglePartitionFetchSetup {
             topic: TOPIC.into(),
             topic_id,
-            limits: crate::support::fetch::FetchLimits::one_mebibyte(RequestWaitMillis(100)),
+            limits: FetchLimits::one_mebibyte(RequestWaitMillis(100)),
             ..Default::default()
         }))
         .await

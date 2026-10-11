@@ -20,7 +20,7 @@ use krabka_audit::signing::FileEd25519Signer;
 use krabka_log::LogConfig;
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 
-use crate::support::{JvmBrokerSetup, controller_voters};
+use crate::support::{JvmBrokerSetup, controller_voters, init_tracing_with};
 
 /// Object-Lock bucket for this suite. It is not [`MINIO_BUCKET`]: that bucket
 /// is the ordinary mutable tier, and a locked bucket behaves differently enough
@@ -197,7 +197,7 @@ async fn start_worm_broker(
     s3: krabka_remote_storage::S3Config,
     key_path: &std::path::Path,
 ) -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
-    crate::support::init_tracing_with("krabka_broker=debug,info");
+    init_tracing_with("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir for log.dir");
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("allocated addr");
     let controller_addr: std::net::SocketAddr =

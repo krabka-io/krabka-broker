@@ -22,7 +22,7 @@ use crate::support::{
     records::{batch_from_records, value_record},
     topics::{
         AssignedTopicSetup, ConfiguredTopicSetup, TopicPartitionCount, assigned_topic,
-        creatable_topic,
+        creatable_topic, create_topic_request,
     },
     transactions::{
         InitProducerSetup, PartitionRegistration, ProducerIdentity,
@@ -199,7 +199,7 @@ pub async fn create_topic(client: &krabka_client_core::Client, setup: Transactio
         context,
     } = setup;
     let response = client
-        .send(crate::support::topics::create_topic_request(
+        .send(create_topic_request(
             krabka_protocol::owned::create_topics_request::CreatableTopic {
                 configs,
                 ..creatable_topic(ConfiguredTopicSetup {
@@ -352,9 +352,7 @@ pub(crate) async fn create_assigned_topic(
     setup: AssignedTransactionTopicSetup<'_>,
 ) -> Uuid {
     let created = client
-        .send(crate::support::topics::create_topic_request(
-            assigned_topic(setup.topic),
-        ))
+        .send(create_topic_request(assigned_topic(setup.topic)))
         .await
         .expect("CreateTopics");
     match setup.context {

@@ -14,6 +14,7 @@ use assert2::assert;
 
 use crate::support::{
     client::create_topic,
+    discovery::named_topic_metadata,
     fetch::{SinglePartitionFetchSetup, single_partition_fetch},
     produce::{SinglePartitionProduceSetup, single_partition_produce},
 };
@@ -29,7 +30,7 @@ use krabka_records_legacy::{Magic, ParsedRecord, encode_flat_message_set};
 async fn topic_id_for(p: &support::InProcess, name: &str) -> Uuid {
     let resp = p
         .client
-        .send(crate::support::discovery::named_topic_metadata(name))
+        .send(named_topic_metadata(name))
         .await
         .expect("Metadata");
     resp.topics

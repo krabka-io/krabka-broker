@@ -18,7 +18,7 @@ use tempfile::TempDir;
 use crate::{
     harness::admin_plain_password,
     support::{
-        ClusterNodeSetup, broker_config,
+        ClusterNodeSetup, NodeIndex, broker_config,
         client::connect_client,
         controller_voters, init_tracing_with,
         produce::{SinglePartitionProduceSetup, batch_request},
@@ -115,7 +115,7 @@ async fn start_two_node_sasl() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
         dir1.path(),
         SaslNodeSetup {
             cluster: ClusterNodeSetup {
-                index: crate::support::NodeIndex(1),
+                index: NodeIndex(1),
                 client_addrs: &plaintext_addrs,
                 controller_addrs: &controller_addrs,
                 voters: controller_voters(&voters),

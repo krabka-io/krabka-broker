@@ -7,7 +7,9 @@
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{KAFKA_IMAGE_LEGACY, consume_console, start_legacy_console_broker};
+use crate::jvm_acceptance::{
+    KAFKA_IMAGE_LEGACY, consume_console, produce_console, start_legacy_console_broker,
+};
 
 /// Test 1: pure-legacy round-trip.
 ///
@@ -29,7 +31,7 @@ async fn jvm_legacy_010_round_trip() {
 
 pub(crate) async fn run_round_trip(topic: &str, producer_image: &str, consumer_image: &str) {
     let (broker, _dir) = start_legacy_console_broker(topic).await;
-    let producer = crate::jvm_acceptance::produce_console(
+    let producer = produce_console(
         producer_image,
         &[],
         topic,

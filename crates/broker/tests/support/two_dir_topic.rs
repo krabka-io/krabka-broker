@@ -7,7 +7,10 @@ use tempfile::TempDir;
 pub(crate) use crate::support::storage::PartitionReadiness;
 use crate::{
     kafka_wire::AutomaticTopicSetup,
-    support::{storage::start_two_dir_broker, topics::TopicPartitionCount},
+    support::{
+        storage::start_two_dir_broker,
+        topics::{ConfiguredTopicSetup, TopicPartitionCount},
+    },
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -26,7 +29,7 @@ pub(crate) async fn create_and_wait(handle: &BrokerHandle, address: SocketAddr, 
         address,
         AutomaticTopicSetup {
             client_id: setup.client_id,
-            topic: crate::support::topics::ConfiguredTopicSetup {
+            topic: ConfiguredTopicSetup {
                 name: setup.topic.into(),
                 partitions: setup.partitions,
                 ..Default::default()

@@ -12,8 +12,10 @@ use crate::{
     cluster_lock,
     epoch_harness::record,
     support::{
-        self, client::connect_client, produce::SinglePartitionProduceSetup, registered_cluster,
-        shutdown_cluster,
+        self,
+        client::connect_client,
+        produce::{SinglePartitionProduceSetup, batch_request},
+        registered_cluster, shutdown_cluster,
     },
 };
 
@@ -62,7 +64,7 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
     let producer = connect_client(leader_addr, None).await;
     for i in 0..k {
         let prod = producer
-            .send(crate::support::produce::batch_request(
+            .send(batch_request(
                 record(&format!("v{i}")),
                 SinglePartitionProduceSetup {
                     topic: ("divtrunc").into(),

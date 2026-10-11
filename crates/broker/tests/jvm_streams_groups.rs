@@ -109,7 +109,7 @@ async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str, parti
 use support::streams::{active_partition_count, finalize_streams_version, follow_up};
 
 use crate::support::{
-    streams::StreamsMemberEpoch,
+    streams::{StreamsFollowUpSetup, StreamsMemberEpoch},
     topics::{CreateTopicSetup, TopicPartitionCount},
 };
 
@@ -137,7 +137,7 @@ async fn keepalive(client: &Client, group: &str, member_id: &str, epoch: i32) {
         ..Default::default()
     }]);
     let _ = client
-        .send(follow_up(crate::support::streams::StreamsFollowUpSetup {
+        .send(follow_up(StreamsFollowUpSetup {
             group,
             member_id,
             epoch: StreamsMemberEpoch(epoch),

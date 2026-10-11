@@ -34,7 +34,7 @@ use support::cluster_lock;
 
 use crate::support::{
     client::{connect_client, create_topic},
-    consumer_groups::routing_consumer,
+    consumer_groups::{collect_routing_values, routing_consumer},
     partitions::require_non_bootstrap_partitions,
     producer::{ProducerRecordSetup, producer_record},
     shutdown_cluster,
@@ -178,13 +178,9 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     // Track which partition each consumed record came from so we can prove the
     // non-bootstrap partitions are durably stored on their leaders.
     let mut seen_partitions: HashMap<i32, String> = HashMap::new();
-    let seen = crate::support::consumer_groups::collect_routing_values(
-        &mut consumer,
-        expected.len(),
-        |partition, value| {
-            seen_partitions.insert(partition, value);
-        },
-    )
+    let seen = collect_routing_values(&mut consumer, expected.len(), |partition, value| {
+        seen_partitions.insert(partition, value);
+    })
     .await;
     assert!(
         seen == expected,

@@ -13,7 +13,9 @@ use crate::{
         KAFKA_IMAGE, broker0_advertised, broker0_listen, docker_run_kafka_tool, host_broker_config,
         nc_check_connectivity, wait_jvm_log_config,
     },
-    support::{ContainerInput, jvm_docker_command, jvm_stdin_output},
+    support::{
+        ContainerInput, JvmDockerSetup, init_jvm_tracing, jvm_docker_command, jvm_stdin_output,
+    },
 };
 
 /// `kafka-console-consumer` sees a compacted topic with only
@@ -51,7 +53,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     /// parsed broker config; the harness sets the struct field directly.
     const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(256);
 
-    crate::support::init_jvm_tracing("krabka_broker=debug,info");
+    init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
     let config = BrokerConfig {
         // The topic below overrides no segment size, so it inherits this one.
@@ -130,7 +132,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
 
     // 2. Produce 5 records under 3 keys — k1 has three values (v1, v2, v4);
     //    only v4 should survive compaction.
-    let mut child_command = jvm_docker_command(crate::support::JvmDockerSetup {
+    let mut child_command = jvm_docker_command(JvmDockerSetup {
         image: KAFKA_IMAGE,
         args: &[
             "kafka-console-producer",

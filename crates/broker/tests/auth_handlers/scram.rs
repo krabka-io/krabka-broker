@@ -10,12 +10,15 @@ use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
 use crate::{
-    harness::{alice_password, start_scram_alice, wrong_scram_password},
+    harness::{alice_password, metadata_probe, start_scram_alice, wrong_scram_password},
     kafka_wire::{
         SaslAuthenticateSetup, SaslHandshakeSetup, ScramAuthenticationSetup, sasl_authenticate_on,
         sasl_handshake_on, sasl_scram_authenticate_on,
     },
-    reauth_cases::{capped_session_closes, different_principal_closes, repeated_expired_reauth},
+    reauth_cases::{
+        capped_session_closes, different_principal_closes, repeated_expired_reauth,
+        same_principal_reopens,
+    },
     support::wire::CorrelationId,
 };
 
@@ -121,7 +124,7 @@ pub async fn drive_sasl_scram_session(
         },
     )
     .await?;
-    crate::harness::metadata_probe(&mut stream, 5).await
+    metadata_probe(&mut stream, 5).await
 }
 
 /// Runs the two RFC 5802 rounds on `stream` and returns the round-2
@@ -189,7 +192,7 @@ async fn scram_session_capped_by_connections_max_reauth_then_closes() {
 /// `Reauthenticating` state and re-arms the window.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scram_in_band_reauth_same_principal_reopens_data_plane() {
-    crate::reauth_cases::same_principal_reopens(SaslMechanism::ScramSha512).await;
+    same_principal_reopens(SaslMechanism::ScramSha512).await;
 }
 
 /// KIP-368 forbids a principal switch mid-connection: a SCRAM re-auth as a

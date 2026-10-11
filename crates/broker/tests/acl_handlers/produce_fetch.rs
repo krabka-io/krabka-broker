@@ -17,6 +17,7 @@ use crate::{
     ERR_TOPIC_AUTHORIZATION_FAILED,
     client_api::{drive_fetch_as_plain, drive_produce_as_plain, single_record_produce_request},
     framing::CLIENT_ID,
+    kafka_wire::PlainAuthenticationSetup,
     polling::retry_produce_until_allowed,
     sasl_cluster::{start_alice_topic_grant, start_denied_foo},
     support::{
@@ -33,7 +34,7 @@ async fn produce_denied_without_topic_acl() {
     let resp = drive_produce_as_plain(
         addr,
         single_record_produce_request("foo", 0, b"hello"),
-        &crate::kafka_wire::PlainAuthenticationSetup {
+        &PlainAuthenticationSetup {
             client_id: CLIENT_ID,
             ..Default::default()
         },
@@ -92,7 +93,7 @@ async fn fetch_denied_without_topic_read_acl() {
     let resp = drive_fetch_as_plain(
         addr,
         req,
-        &crate::kafka_wire::PlainAuthenticationSetup {
+        &PlainAuthenticationSetup {
             client_id: CLIENT_ID,
             ..Default::default()
         },

@@ -10,8 +10,8 @@ use assert2::assert;
 
 use crate::{
     cluster::{
-        assert_reassigned, execute_plan, offline_for_partition, reassignment_cluster,
-        removed_replica,
+        admin_text_cluster, assert_reassigned, assignment, execute_plan, offline_for_partition,
+        reassignment_cluster, removed_replica,
     },
     jvm_acceptance::{KAFKA_IMAGE_TXN, broker0_advertised, verify_console_reassignment},
     oracle::{AssignedTopicCommandSetup, CliRun},
@@ -52,7 +52,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     drop(producer.stdin.take());
     assert!(producer.wait().expect("producer exit").success());
 
-    let (initial, new_node, staying) = crate::cluster::assignment(&cluster.h1, TOPIC, true);
+    let (initial, new_node, staying) = assignment(&cluster.h1, TOPIC, true);
     let (_json_file, json_mount) = execute_plan(&admin_mount, TOPIC, staying, new_node, false);
 
     let pr_after = cluster
@@ -300,7 +300,7 @@ async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
 async fn reassign_partitions_additional_keeps_the_reassignment_already_running() {
     const TOPIC: &str = "krabka-additional-itest";
 
-    let (brokers, props, advertised) = Box::pin(crate::cluster::admin_text_cluster()).await;
+    let (brokers, props, advertised) = Box::pin(admin_text_cluster()).await;
     let side = Side::Krabka {
         bootstrap: &advertised,
     };

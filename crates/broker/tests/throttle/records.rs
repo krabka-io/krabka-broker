@@ -18,12 +18,12 @@ use crate::{
     CLIENT_ID,
     kafka_wire::{self, ExchangeSetup as WireExchangeSetup},
     support::{
-        fetch::named_topic_fetch,
+        fetch::{RequestWaitMillis, named_topic_fetch},
         produce::{SinglePartitionProduceSetup, single_partition_produce},
         records::{batch_from_records, value_record},
         wire::{
             HeaderEncoding as RequestHeaderEncoding, WireFrameSetup, read_frame,
-            request_body_capacity, request_frame,
+            request_body_capacity, request_frame, write_frame,
         },
     },
 };
@@ -113,9 +113,7 @@ pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: 
         replica_id,
         ..named_topic_fetch(
             topic,
-            crate::support::fetch::FetchLimits::one_mebibyte(
-                crate::support::fetch::RequestWaitMillis(0),
-            ),
+            crate::support::fetch::FetchLimits::one_mebibyte(RequestWaitMillis(0)),
         )
     };
 
@@ -135,9 +133,7 @@ pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: 
         ..Default::default()
     });
 
-    crate::support::wire::write_frame(&mut stream, &frame, None)
-        .await
-        .unwrap();
+    write_frame(&mut stream, &frame, None).await.unwrap();
 
     let resp = read_frame(&mut stream).await.unwrap();
 

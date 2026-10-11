@@ -34,12 +34,15 @@ use krabka_protocol::{
 };
 use tempfile::TempDir;
 
-use crate::support::{
-    self,
-    client::connect_with_context,
-    produce::{SinglePartitionProduceSetup, batch_request},
-    shutdown_cluster,
-    transactions::TransactionOutcome,
+use crate::{
+    cluster_lock,
+    support::{
+        self,
+        client::connect_with_context,
+        produce::{SinglePartitionProduceSetup, batch_request},
+        shutdown_cluster,
+        transactions::TransactionOutcome,
+    },
 };
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
@@ -251,7 +254,7 @@ fn reported_timestamp(answer: &DescribeProducersResponse, producer_id: i64) -> i
 /// and the transaction fields of the producer state of its log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_replica_describes_the_producers_of_its_log() {
-    let _g = crate::cluster_lock().lock().await;
+    let _g = cluster_lock().lock().await;
     let cluster = start_cluster().await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 

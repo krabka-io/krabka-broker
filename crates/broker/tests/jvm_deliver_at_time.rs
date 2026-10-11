@@ -48,7 +48,9 @@ use jvm_acceptance::{
 use krabka_broker::BrokerHandle;
 use krabka_log::DeliveryPolicy;
 
-use crate::support::{ContainerInput, JvmDockerSetup, topics::CreateTopicSetup};
+use crate::support::{
+    ContainerInput, JvmDockerSetup, jvm_docker_command, topics::CreateTopicSetup,
+};
 
 const SCHEDULED_TOPIC: &str = "jvm-deliver-at-time-scheduled";
 const IMMEDIATE_TOPIC: &str = "jvm-deliver-at-time-immediate";
@@ -193,7 +195,7 @@ async fn wait_for_delivery_policy(broker: &BrokerHandle, topic: &str, policy: De
 
 // Compile and run the probe in the container, and return everything it printed.
 fn run_probe(bootstrap: &str) -> String {
-    let mut probe = crate::support::jvm_docker_command(JvmDockerSetup { image: "--entrypoint", args: &["bash",
+    let mut probe = jvm_docker_command(JvmDockerSetup { image: "--entrypoint", args: &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/DeliverAtTimeProbe.java; \

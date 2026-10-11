@@ -11,7 +11,7 @@ use crate::{
         docker_run_kafka_tool_with_image, docker_run_kafka_tool_with_mount, nc_check_connectivity,
         start_host_broker, start_host_broker_in, wait_jvm_partition_leader, write_temp_file,
     },
-    support::{JvmDockerSetup, jvm_docker_command, jvm_parse_offset},
+    support::{ContainerInput, JvmDockerSetup, jvm_docker_command, jvm_parse_offset},
 };
 
 /// `kafka-delete-records --offset-json-file <(...)`: produce 20
@@ -102,7 +102,7 @@ fn produce_lines(topic: &str, count: usize) {
             "--topic",
             topic,
         ],
-        input: crate::support::ContainerInput::Attached,
+        input: ContainerInput::Attached,
         ..Default::default()
     })
     .stdin(std::process::Stdio::piped())

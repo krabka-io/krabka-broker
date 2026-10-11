@@ -11,7 +11,11 @@ use krabka_metadata::{MetadataRecord, PartitionRecord};
 use crate::{
     cluster_lock,
     kafka_wire::ElectionExchangeSetup,
-    support::{admin::ElectionSetup, registered_cluster, shutdown_cluster},
+    support::{
+        admin::{ElectionKind, ElectionSetup},
+        registered_cluster, shutdown_cluster,
+        topics::AssignedTopicSetup,
+    },
     wait::{
         wait_partition_exists, wait_partition_isr_contains, wait_partition_isr_only,
         wait_partition_leader, wait_partition_record_known,
@@ -64,7 +68,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     // Create rf=2 topic. Replicas=[1,2]; broker 1 is preferred.
     create_topic_plaintext(
         addr,
-        crate::support::topics::AssignedTopicSetup {
+        AssignedTopicSetup {
             name: ("foo-unclean").into(),
             replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
         },
@@ -117,7 +121,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
             client_id: CLIENT_ID,
             election: ElectionSetup {
                 topic: ("foo-unclean").to_string(),
-                kind: crate::support::admin::ElectionKind::Unclean,
+                kind: ElectionKind::Unclean,
                 ..Default::default()
             },
         },

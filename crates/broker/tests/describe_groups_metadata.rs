@@ -30,7 +30,7 @@ use krabka_protocol::owned::{
 
 use crate::support::{
     classic::{
-        ClassicJoinSetup, ClassicSyncSetup, GenerationId, classic_join_request,
+        ClassicJoinSetup, ClassicSyncSetup, ClassicTimeouts, GenerationId, classic_join_request,
         classic_sync_request, join_protocol, sync_assignment,
     },
     client::connect_owned,
@@ -137,7 +137,7 @@ fn join_request(group_id: &str, member_id: &str, metadata: &'static [u8]) -> Joi
         ..classic_join_request(ClassicJoinSetup {
             group_id: group_id.to_string(),
             member_id: member_id.to_string(),
-            timeouts: crate::support::classic::ClassicTimeouts {
+            timeouts: ClassicTimeouts {
                 session: krabka_units::millis(10_000),
                 ..Default::default()
             },

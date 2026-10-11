@@ -11,7 +11,7 @@ use super::{
     ports::{broker0_advertised, broker0_listen},
     tiered_workload::TIERED_SEGMENT_SIZE,
 };
-use crate::jvm_acceptance::host_broker_config;
+use crate::{jvm_acceptance::host_broker_config, support::init_jvm_tracing};
 
 /// Same shape as [`start_host_broker`] but with the S3 tiered-storage
 /// backend wired in and a lower `RemoteLogManager` tick, so the acceptance
@@ -35,7 +35,7 @@ pub(crate) fn start_host_broker_with_minio_tier(
         krabka_broker::BrokerConfig,
     ),
 > {
-    crate::support::init_jvm_tracing("krabka_broker=debug,info");
+    init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
     let config = BrokerConfig {
         // The tiered topics these suites create override no segment size —

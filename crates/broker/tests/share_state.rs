@@ -42,7 +42,9 @@ use krabka_protocol::owned::{
 };
 
 use crate::support::{
-    client::connect_client, discovery::coordinator_lookup_request, topics::CreateTopicSetup,
+    client::{connect_client, create_topic_with},
+    discovery::coordinator_lookup_request,
+    topics::CreateTopicSetup,
 };
 
 const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
@@ -67,7 +69,7 @@ async fn connect(bootstrap: &str) -> Arc<Client> {
 /// coordinator refuses a read or a write of a topic partition that the
 /// metadata image does not hold.
 async fn create_topic(client: &Client, name: &str) -> uuid::Uuid {
-    let id = crate::support::client::create_topic_with(
+    let id = create_topic_with(
         client,
         CreateTopicSetup {
             topic: name,

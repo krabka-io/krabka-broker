@@ -13,7 +13,7 @@ use krabka_security::SaslMechanism;
 use tempfile::TempDir;
 
 use crate::support::{
-    acl::{ClusterAclSetup, cluster_acl_record},
+    acl::{ClusterAclSetup, cluster_acl_record, use_simple_acl_authorizer},
     sasl::{sasl_temp_config, start_broker},
 };
 
@@ -52,7 +52,7 @@ pub(crate) fn start_single_broker_sasl_plaintext_with_acl_authorizer(
             .insert((*name).to_string(), (*pass).to_string());
     }
     cfg.super_users = super_users.iter().map(|user| (*user).to_string()).collect();
-    crate::support::acl::use_simple_acl_authorizer(&mut cfg);
+    use_simple_acl_authorizer(&mut cfg);
 
     Box::pin(start_broker(cfg, log_dir))
 }

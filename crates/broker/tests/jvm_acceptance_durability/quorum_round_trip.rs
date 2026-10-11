@@ -9,7 +9,7 @@
 use assert2::assert;
 
 use crate::{
-    jvm_acceptance::{KAFKA_IMAGE, docker_run_kafka_tool},
+    jvm_acceptance::{KAFKA_IMAGE, create_plain_console_topic_at, docker_run_kafka_tool},
     support::{
         ContainerInput, JvmDockerSetup, init_jvm_tracing, jvm_docker_command, jvm_stdin_output,
         start_jvm_cluster,
@@ -46,7 +46,7 @@ async fn three_node_jvm_round_trip() {
     let bootstrap_3 = format!("host.docker.internal:{}", client_ports[2]);
 
     // 1. Create topic via node 1.
-    crate::jvm_acceptance::create_plain_console_topic_at(&bootstrap_1, TOPIC);
+    create_plain_console_topic_at(&bootstrap_1, TOPIC);
 
     // 2. Wait for the topic to propagate from node 1 (where kafka-topics
     //    created it) to node 2 (where we'll produce) by observing node 2's

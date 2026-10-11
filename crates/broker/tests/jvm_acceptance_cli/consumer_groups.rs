@@ -69,7 +69,7 @@ async fn kafka_consumer_groups_delete_offsets() {
     // generally does not prompt for --delete-offsets when all flags are
     // supplied; the piped "y\n" is defensive and ignored otherwise.
     let mut child = jvm_spawn_piped(
-        &mut jvm_docker_command(crate::support::JvmDockerSetup {
+        &mut jvm_docker_command(JvmDockerSetup {
             image: KAFKA_IMAGE,
             args: &[
                 "kafka-consumer-groups",
@@ -140,7 +140,7 @@ use crate::{
         parse_reset_table,
     },
     oracle::{CliRun, Side, ToolFile},
-    support::{ContainerInput, jvm_docker_command, jvm_spawn_piped},
+    support::{ContainerInput, JvmDockerSetup, jvm_docker_command, jvm_spawn_piped},
 };
 
 /// The topic every reset case reads. One partition, so the record-to-partition

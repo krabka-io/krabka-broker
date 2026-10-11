@@ -22,7 +22,7 @@ use crate::{
         producer::{ProducerRecordSetup, producer_record, transactional_producer},
         share::{
             ShareFetchSetup, ShareRecordsSetup, ShareSessionEpoch, ShareTopicSetup,
-            join_consume_member, permitted_topic_fixture,
+            join_consume_member, permitted_topic_fixture, record_values,
         },
     },
 };
@@ -127,7 +127,7 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
         if acquired_count(&row) > 0
             && let Some(batches) = row.records.as_ref().and_then(|r| r.as_v2())
         {
-            values = crate::support::share::record_values(batches);
+            values = record_values(batches);
             values.sort();
             if values == vec!["a", "b", "c"] {
                 break;

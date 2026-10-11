@@ -6,8 +6,9 @@ use crate::support::{
     produce::ProduceTimeoutMillis,
     records::batch_from_records,
     topics::{
-        AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicRequestSetup, assigned_topic,
-        creatable_topic, create_topic_request_with_setup, topic_configs,
+        AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicRequestSetup,
+        CreateTopicsTimeoutMillis, assigned_topic, creatable_topic,
+        create_topic_request_with_setup, topic_configs,
     },
 };
 
@@ -66,7 +67,7 @@ pub async fn create_assigned_topic(
                 ..assigned_topic(setup.topic)
             },
             CreateTopicRequestSetup {
-                timeout: crate::support::topics::CreateTopicsTimeoutMillis(10_000),
+                timeout: CreateTopicsTimeoutMillis(10_000),
             },
         ))
         .await

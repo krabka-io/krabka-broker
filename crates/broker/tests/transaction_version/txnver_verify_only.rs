@@ -14,8 +14,9 @@ use krabka_protocol::owned::common::add_partitions_to_txn_request::add_partition
 use crate::{
     support::{
         discovery::coordinator_lookup_request,
+        topics::TopicPartitionCount,
         transaction_wire::{TransactionPartitionsSetup, partitions_request},
-        transactions::{InitProducerSetup, init_producer_request},
+        transactions::{InitProducerSetup, PartitionRegistration, init_producer_request},
     },
     txnver_harness::{
         NONE, TRANSACTION_ABORTABLE, admin_client, boot_single, create_topic, expected_partitions,
@@ -85,7 +86,7 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
     let (broker, bootstrap, _dir) = boot_single().await;
     let client = admin_client(&bootstrap).await;
     // Two partitions so (t,1) is a real partition that simply isn't in the txn.
-    create_topic(&client, "t", crate::support::topics::TopicPartitionCount(2)).await;
+    create_topic(&client, "t", TopicPartitionCount(2)).await;
 
     // Locate (and trigger loading of) the transaction coordinator for TID.
     // On a single-broker cluster the coordinator is this same node, but the
@@ -127,7 +128,7 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
         .send(partitions_request(TransactionPartitionsSetup {
             transactional_id: VERIFY_TID,
             producer: crate::support::transactions::ProducerIdentity::from_wire((pid, epoch)),
-            registration: crate::support::transactions::PartitionRegistration::VerifyOnly,
+            registration: PartitionRegistration::VerifyOnly,
             topics: vec![verify_topic],
         }))
         .await

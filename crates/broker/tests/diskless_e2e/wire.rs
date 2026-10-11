@@ -23,8 +23,8 @@ use crate::{
     support::{
         self,
         fetch::{
-            FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis, fetch_partition,
-            single_partition_fetch,
+            FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
+            SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
         },
         offsets::{
             delete_records_partition, delete_records_request, delete_records_topic,
@@ -140,7 +140,7 @@ fn data_fetch(
     topic_id: WireUuid,
     offset: krabka_ids::Offset,
 ) -> krabka_protocol::owned::fetch_request::FetchRequest {
-    single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+    single_partition_fetch(SinglePartitionFetchSetup {
         topic: TOPIC.into(),
         topic_id,
         partition: fetch_partition(FetchPartitionSetup {

@@ -32,7 +32,7 @@ use crate::{
         docker_run_kafka_tool_with_image_and_mounts, host_broker_config, nc_check_connectivity,
         prepare_jks_truststore, produce_console, write_client_props,
     },
-    support::{init_jvm_tracing, manifest_dir},
+    support::{fixture_cache_dir, init_jvm_tracing, manifest_dir},
 };
 
 /// The Subject DN of `tests/fixtures/security/dev_client_cert.pem`, as
@@ -63,7 +63,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 /// read it. Java reads a PKCS#12 keystore directly, so no `keytool`
 /// conversion follows.
 fn prepare_client_keystore() -> std::path::PathBuf {
-    let cache_dir = crate::support::fixture_cache_dir(
+    let cache_dir = fixture_cache_dir(
         "krabka-jvm-mtls-keystore",
         &["dev_client_cert.pem", "dev_client_key.pem"],
     );

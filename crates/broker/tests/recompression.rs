@@ -40,7 +40,7 @@ use krabka_protocol::{
 use crate::support::{
     discovery::named_topic_metadata,
     fetch::{SinglePartitionFetchSetup, single_partition_fetch},
-    produce::SinglePartitionProduceSetup,
+    produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},
 };
 
@@ -98,7 +98,7 @@ async fn produce_gzip(addr: SocketAddr, topic: &str, topic_id: Uuid, value: &[u8
         attributes: Attributes::default().with_compression(CompressionType::Gzip),
         ..batch_from_records(vec![value_record(0, Some(Bytes::copy_from_slice(value)))])
     };
-    let req = crate::support::produce::batch_request(
+    let req = batch_request(
         batch,
         SinglePartitionProduceSetup {
             topic: (topic).into(),

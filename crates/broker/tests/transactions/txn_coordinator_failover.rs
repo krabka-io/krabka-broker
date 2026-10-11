@@ -26,7 +26,7 @@ use crate::{
             AssignedTransactionTopicSetup, TransactionProduceSetup, add_partition_request,
             coordinator_loading, create_assigned_topic, init_producer_request,
             initialized_identity, partition_added, partition_leader, produce_fixture,
-            retry_coordinator,
+            read_committed_through, retry_coordinator,
         },
         transactions::{EndTransactionSetup, ProducerIdentity, end_transaction_request},
     },
@@ -165,7 +165,7 @@ async fn end_txn(client: &Client, (producer_id, epoch): (i64, i16)) -> EndTxnRes
 }
 
 async fn read_committed(bootstrap: &str, last: &str) -> Vec<String> {
-    crate::support::transaction_wire::read_committed_through(bootstrap, TOPIC, last, SETTLE).await
+    read_committed_through(bootstrap, TOPIC, last, SETTLE).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

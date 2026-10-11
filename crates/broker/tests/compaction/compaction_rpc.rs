@@ -27,7 +27,7 @@ use crate::{
     kafka_wire::{self, ExchangeSetup as WireExchangeSetup},
     support::{
         discovery::named_topic_metadata,
-        produce::SinglePartitionProduceSetup,
+        produce::{SinglePartitionProduceSetup, batch_request},
         records::{batch_from_records, value_record},
         topics::{CreateTopicSetup, configured_topic_request},
         wire::HeaderEncoding as RequestHeaderEncoding,
@@ -121,7 +121,7 @@ pub(crate) async fn produce_record(addr: SocketAddr, setup: ProduceRecordSetup<'
         ..batch_from_records(vec![record])
     };
 
-    let req = crate::support::produce::batch_request(
+    let req = batch_request(
         batch,
         SinglePartitionProduceSetup {
             topic: topic.to_string(),

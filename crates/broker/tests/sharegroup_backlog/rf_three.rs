@@ -27,8 +27,8 @@ use crate::{
         self,
         client::connect_client,
         fetch::{
-            FetchByteLimit, FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup,
-            fetch_partition, single_partition_fetch,
+            FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
+            SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
         },
         shutdown_cluster,
     },
@@ -329,7 +329,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             topic_id: WireUuid(*topic_id.as_bytes()),
             partition: FetchPartition {
                 current_leader_epoch: leader_epoch.0,
-                ..fetch_partition(crate::support::fetch::FetchPartitionSetup {
+                ..fetch_partition(FetchPartitionSetup {
                     partition: krabka_ids::PartitionIndex(data_partition),
                     offset: krabka_ids::Offset(i64::MAX),
                     maximum: FetchByteLimit(0),

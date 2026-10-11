@@ -24,7 +24,7 @@ use krabka_protocol::owned::{
 use crate::support::{
     offsets::{list_offset_partition, single_partition_list_offsets},
     producer::{ProducerRecordSetup, producer_record},
-    topics::{creatable_topic, create_topic_request},
+    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
 /// Request timestamp sentinel (-1) asking for the end of the partition.
@@ -95,7 +95,7 @@ pub(super) fn latest_row(offset: i64) -> ListOffsetsPartitionResponse {
 pub(super) async fn create_topic(client: &Client, name: &str) {
     let response = client
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: (name).into(),
                 ..Default::default()
             },

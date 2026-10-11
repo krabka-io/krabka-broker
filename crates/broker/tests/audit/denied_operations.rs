@@ -10,7 +10,10 @@ use krabka_broker::coordinator::AUDIT_TOPIC;
 
 use crate::support::{
     self,
-    fetch::{FetchByteLimit, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch},
+    fetch::{
+        FetchByteLimit, FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup,
+        single_partition_fetch,
+    },
     topics::{creatable_topic, create_topic_request},
 };
 
@@ -76,7 +79,7 @@ async fn denied_operation_returns_topic_authorization_failed() {
         .send(single_partition_fetch(SinglePartitionFetchSetup {
             topic: AUDIT_TOPIC.into(),
             topic_id,
-            limits: crate::support::fetch::FetchLimits {
+            limits: FetchLimits {
                 wait: RequestWaitMillis(100),
                 minimum: FetchByteLimit(0),
                 maximum: FetchByteLimit(1 << 20),

@@ -33,9 +33,11 @@ use crate::{
         topics::TopicPartitionCount,
         transaction_wire::{
             TransactionPartitionsSetup, initialize_transactional, partitions_request,
+            transaction_topic,
         },
         transactions::{
-            ProducerEpoch, ProducerEpochOffset, ProducerIdentity, end_transaction_request,
+            EndTransactionSetup, ProducerEpoch, ProducerEpochOffset, ProducerIdentity,
+            end_transaction_request,
         },
         wire::At,
     },
@@ -204,7 +206,7 @@ async fn init(client: &Client, transactional_id: &'static str) -> Producer {
 }
 
 async fn add_partition(client: &Client, producer: Producer, topic: &str) {
-    let added = crate::support::transaction_wire::transaction_topic(topic, vec![0]);
+    let added = transaction_topic(topic, vec![0]);
     let code = until_ready(
         || async {
             let response = client
@@ -258,7 +260,7 @@ async fn set_up(client: &Client, case: &Case) -> Producer {
         let end = client
             .send(end_transaction_request(
                 case.name,
-                crate::support::transactions::EndTransactionSetup {
+                EndTransactionSetup {
                     producer: ProducerIdentity::from_wire((producer.id.0, producer.epoch.0)),
                     ..Default::default()
                 },

@@ -35,8 +35,8 @@ use krabka_security::ListenerProtocol;
 use crate::{
     probe::{retry_until, wait_bounded},
     support::{
-        JvmBrokerSetup, JvmDockerSetup, JvmListeners, controller_voters, docker_logs,
-        jvm_broker_config, remove_container, unique_container_name,
+        JvmBrokerSetup, JvmDockerSetup, JvmListeners, controller_voters, docker_logs, init_tracing,
+        jvm_broker_config, kafka_single_node_env_args, remove_container, unique_container_name,
     },
 };
 
@@ -72,7 +72,7 @@ const ORACLE_BOOT_GAP: Duration = Duration::from_secs(1);
 /// this suite exists to have removed, because there the one listener carries
 /// both kinds of traffic.
 pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tempfile::TempDir) {
-    crate::support::init_tracing();
+    init_tracing();
     let dir = tempfile::tempdir().expect("tempdir");
     let controller_addr: std::net::SocketAddr =
         listeners.controller.parse().expect("allocated addr");
@@ -159,7 +159,7 @@ impl OracleBroker {
         let name = unique_container_name("krabka-apiversions-oracle");
         let out = Command::new("docker")
             .args(["run", "-d", "--name", &name])
-            .args(crate::support::kafka_single_node_env_args())
+            .args(kafka_single_node_env_args())
             .args(["-e", "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk", ORACLE_IMAGE])
             .output()
             .expect("spawn docker run kafka oracle");

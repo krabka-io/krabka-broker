@@ -5,7 +5,8 @@ use krabka_metadata::PartitionRecord;
 use crate::{
     jvm_acceptance::{
         ADMIN, ADMIN_PASS, ClientPropsFile, KAFKA_IMAGE_TXN, SaslClusterSetup, TempFileMount,
-        broker0_advertised, create_console_topic, plain_client_properties, write_temp_file,
+        broker0_advertised, create_console_topic, plain_client_properties, write_plain_props,
+        write_temp_file,
     },
     support::{JvmDockerSetup, jvm_docker_command},
 };
@@ -136,7 +137,7 @@ async fn registered_admin() -> RegisteredCluster {
 /// Registered default-admin cluster and its mounted client configuration.
 pub(crate) async fn admin_cluster() -> (RegisteredCluster, ClientPropsFile) {
     let cluster = Box::pin(registered_admin()).await;
-    let props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
+    let props = write_plain_props(ADMIN, ADMIN_PASS);
     (cluster, props)
 }
 

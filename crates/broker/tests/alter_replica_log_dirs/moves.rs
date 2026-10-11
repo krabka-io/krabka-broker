@@ -15,14 +15,14 @@ use krabka_client_producer::Producer;
 use crate::{
     harness::{count_topic_dirs, wait_for_move_complete},
     support::{producer::enqueue_unkeyed_values, topics::TopicPartitionCount},
-    two_dir_topic::start,
+    two_dir_topic::{Setup, start},
     wire::{CLIENT_ID, alter_replica_log_dirs},
 };
 
 #[tokio::test]
 async fn alter_replica_log_dirs_moves_partitions_to_target_dir() {
     let n: i32 = 2;
-    let (handle, primary, extra, addr) = start(crate::two_dir_topic::Setup {
+    let (handle, primary, extra, addr) = start(Setup {
         client_id: CLIENT_ID,
         partitions: TopicPartitionCount(n),
         ..Default::default()
@@ -101,7 +101,7 @@ async fn alter_replica_log_dirs_moves_partitions_to_target_dir() {
 /// `append_at` loop.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_replica_log_dirs_preserves_records_across_move() {
-    let (handle, primary, extra, addr) = start(crate::two_dir_topic::Setup {
+    let (handle, primary, extra, addr) = start(Setup {
         client_id: CLIENT_ID,
         ..Default::default()
     })

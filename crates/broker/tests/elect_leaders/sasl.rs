@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 pub use crate::kafka_wire::create_configured_topic_sasl as create_topic_sasl_plain;
 use crate::{
     kafka_wire::{self, PlainAuthenticationSetup},
-    support::admin::{ElectionSetup, election_partition_errors},
+    support::admin::{ElectionSetup, election_partition_errors, election_request},
 };
 
 /// Drives `ElectLeaders` over a SASL/PLAIN authenticated connection.
@@ -27,7 +27,7 @@ pub async fn drive_elect_leaders_sasl_plain(
         .await
         .expect("SASL authenticate for ElectLeaders");
     let topic = election.topic.clone();
-    let req = crate::support::admin::election_request(election);
+    let req = election_request(election);
     let resp =
         kafka_wire::elect_leaders_response(&mut stream, &req, authentication.client_id).await;
 

@@ -6,13 +6,13 @@ use krabka_client_core::{ClientError, Connection, ConnectionOptions, fetch_parti
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 use crate::support::{
-    admin::topic_spec,
-    producer::{ProducerRecordSetup, default_producer},
+    admin::{standalone_admin, topic_spec},
+    producer::{ProducerRecordSetup, default_producer, producer_record},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_records_truncates_wal_and_maps_outcome() {
-    let (_dir, _broker, bootstrap, mut admin) = crate::support::admin::standalone_admin().await;
+    let (_dir, _broker, bootstrap, mut admin) = standalone_admin().await;
     admin
         .create_topics(
             &[topic_spec("wal".to_string(), 1, 1)],
@@ -24,14 +24,12 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
     let producer = default_producer(&bootstrap).await;
     for offset in 0..100 {
         producer
-            .send(crate::support::producer::producer_record(
-                ProducerRecordSetup {
-                    topic: "wal".to_string(),
-                    partition: Some(krabka_ids::PartitionIndex(0)),
-                    value: Some(format!("frame-{offset}").into_bytes().into()),
-                    ..Default::default()
-                },
-            ))
+            .send(producer_record(ProducerRecordSetup {
+                topic: "wal".to_string(),
+                partition: Some(krabka_ids::PartitionIndex(0)),
+                value: Some(format!("frame-{offset}").into_bytes().into()),
+                ..Default::default()
+            }))
             .await
             .unwrap();
     }

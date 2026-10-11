@@ -15,6 +15,7 @@ use crate::{
     support::{
         ContainerInput, JvmDockerSetup, client::connect_with_context,
         discovery::metadata_first_leader, init_jvm_tracing, jvm_docker_command, jvm_output_lines,
+        start_jvm_cluster,
     },
 };
 
@@ -38,7 +39,7 @@ async fn acks_all_survives_leader_crash() {
     let client_ports = [10392u16, 10492, 10592];
     let controller_ports = [10393u16, 10493, 10593];
 
-    let mut cluster = crate::support::start_jvm_cluster(client_ports, controller_ports, |config| {
+    let mut cluster = start_jvm_cluster(client_ports, controller_ports, |config| {
         config.heartbeat_interval = krabka_units::millis(200);
         config.heartbeat_timeout = krabka_units::millis(2_000);
         config.replica_lag_time_max = krabka_units::millis(2_000);

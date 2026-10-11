@@ -25,13 +25,14 @@ use tempfile::TempDir;
 use crate::{
     support::{
         produce::{SinglePartitionProduceSetup, batch_request},
+        topics::TopicPartitionCount,
         transaction_wire::{
-            add_partition_request, coordinator_loading, initialize_producer, records_batch,
-            retry_coordinator, settled_produce,
+            add_partition_request, coordinator_loading, initialize_producer, partition_added,
+            records_batch, retry_coordinator, settled_produce,
         },
         transactions::{
-            EndTransactionSetup, ProducerIdentity, TransactionOutcome, end_transaction_request,
-            init_producer_request,
+            EndTransactionSetup, InitProducerSetup, ProducerIdentity, TransactionOutcome,
+            end_transaction_request, init_producer_request,
         },
     },
     txnver_harness::{
@@ -62,13 +63,11 @@ async fn init_producer_id(
     identity: (i64, i16),
 ) -> InitProducerIdResponse {
     client
-        .send(init_producer_request(
-            crate::support::transactions::InitProducerSetup {
-                transactional_id: Some(transactional_id.into()),
-                producer: ProducerIdentity::from_wire((identity.0, identity.1)),
-                ..Default::default()
-            },
-        ))
+        .send(init_producer_request(InitProducerSetup {
+            transactional_id: Some(transactional_id.into()),
+            producer: ProducerIdentity::from_wire((identity.0, identity.1)),
+            ..Default::default()
+        }))
         .await
         .expect("InitProducerId")
 }
@@ -88,7 +87,7 @@ async fn init_producer(client: &Client, transactional_id: &str) -> Identity {
 }
 
 async fn add_partition(client: &Client, transactional_id: &str, producer: Identity, topic: &str) {
-    crate::support::transaction_wire::partition_added(client.send(add_partition_request(
+    partition_added(client.send(add_partition_request(
         transactional_id,
         topic,
         (producer.producer_id, producer.epoch),
@@ -195,12 +194,7 @@ async fn open_transaction(
     topic: &str,
     downgrade_to: Option<i16>,
 ) -> Identity {
-    create_topic(
-        client,
-        topic,
-        crate::support::topics::TopicPartitionCount(1),
-    )
-    .await;
+    create_topic(client, topic, TopicPartitionCount(1)).await;
     if let Some(level) = downgrade_to {
         downgrade_transaction_version(client, level).await;
     }

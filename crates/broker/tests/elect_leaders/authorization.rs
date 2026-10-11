@@ -17,6 +17,7 @@ use crate::{
     sasl::{create_topic_sasl_plain, drive_elect_leaders_sasl_plain},
     support::{
         acl::{TopicAclSetup, topic_acl_record, use_simple_acl_authorizer},
+        admin::ElectionSetup,
         topics::ConfiguredTopicSetup,
     },
     wait::wait_partition_exists,
@@ -100,7 +101,7 @@ async fn non_super_user_without_acl_denied() {
     let resp = loop {
         let r = drive_elect_leaders_sasl_plain(
             addr,
-            crate::support::admin::ElectionSetup {
+            ElectionSetup {
                 topic: ("foo-auth-test").to_string(),
                 ..Default::default()
             },

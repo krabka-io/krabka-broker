@@ -17,8 +17,11 @@ use krabka_protocol::{
 use crate::support::{
     client::connect_owned,
     discovery::named_topic_metadata,
-    fetch::{FetchByteLimit, FetchLimits, SinglePartitionFetchSetup, single_partition_fetch},
-    produce::{SinglePartitionProduceSetup, send_batch},
+    fetch::{
+        FetchByteLimit, FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup,
+        single_partition_fetch,
+    },
+    produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch},
     records::batch_from_records,
     topics::{
         ConfiguredTopicSetup, CreateTopicRequestSetup, CreateTopicsTimeoutMillis, creatable_topic,
@@ -84,7 +87,7 @@ async fn produce_one(client: &Client, topic: &str, topic_id: WireUuid, value: &'
         SinglePartitionProduceSetup {
             topic: (topic).into(),
             topic_id,
-            timeout: crate::support::produce::ProduceTimeoutMillis(10_000),
+            timeout: ProduceTimeoutMillis(10_000),
             ..Default::default()
         },
     )
@@ -187,7 +190,7 @@ pub(crate) async fn min_bytes_exchange(bootstrap: &str, topic: &str) -> (Duratio
             topic: topic.into(),
             topic_id,
             limits: FetchLimits {
-                wait: crate::support::fetch::RequestWaitMillis(MAX_WAIT_MS),
+                wait: RequestWaitMillis(MAX_WAIT_MS),
                 minimum: FetchByteLimit(MIN_BYTES),
                 ..Default::default()
             },

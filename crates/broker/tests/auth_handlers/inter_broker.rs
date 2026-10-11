@@ -15,6 +15,7 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 
 use crate::{
     harness::admin_plain_password,
+    kafka_wire::encode_named,
     support::{
         sasl::sasl_temp_config,
         wire::{
@@ -83,7 +84,7 @@ pub async fn drive_inter_broker_client_then_apiversions(
     // client returned a usable stream and (b) the broker treats the
     // stream as fully authenticated.
     let av_req = ApiVersionsRequest::default();
-    let av_body = crate::kafka_wire::encode_named(&av_req, 0, "ApiVersions")?;
+    let av_body = encode_named(&av_req, 0, "ApiVersions")?;
 
     let frame = request_frame(WireFrameSetup {
         correlation: CorrelationId(99),

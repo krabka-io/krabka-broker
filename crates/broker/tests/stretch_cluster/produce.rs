@@ -9,12 +9,12 @@ use krabka_client_core::Client;
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 use crate::{
-    N_RECORDS, NODE_B, NODE_C, TOPIC, WITNESS,
+    N_RECORDS, NODE_A, NODE_B, NODE_C, TOPIC, WITNESS,
     support::{
         client::{
             ValueBatchSetup, ValueRecordCount, connect_owned, create_replicated_topic, value_batch,
         },
-        produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup},
+        produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
     },
     within,
 };
@@ -31,7 +31,7 @@ pub async fn create_topic(client: &Client) -> WireUuid {
 /// The partition-level error code of one `acks=all` produce.
 pub async fn produce_once(client: &Client, topic_id: WireUuid, timeout_ms: i32) -> i16 {
     let resp = client
-        .send(crate::support::produce::batch_request(
+        .send(batch_request(
             value_batch(ValueBatchSetup {
                 records: ValueRecordCount(N_RECORDS),
             }),
@@ -90,9 +90,5 @@ pub async fn initialize_sites<'a>(
     addr: String,
     handle: impl Fn(usize) -> &'a krabka_broker::BrokerHandle,
 ) -> WireUuid {
-    initialize_topic(
-        &addr,
-        [handle(crate::NODE_A), handle(NODE_B), handle(NODE_C)],
-    )
-    .await
+    initialize_topic(&addr, [handle(NODE_A), handle(NODE_B), handle(NODE_C)]).await
 }

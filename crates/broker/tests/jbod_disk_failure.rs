@@ -38,7 +38,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     support::{
-        produce::batch_request,
+        produce::{SinglePartitionProduceSetup, batch_request},
         records::{batch_from_records, value_record},
         topics::TopicPartitionCount,
         wire::ApiRequestSetup,
@@ -80,7 +80,7 @@ async fn produce_and_get_error(addr: SocketAddr, topic: &str, partition: i32) ->
     )]);
     let req = batch_request(
         batch,
-        crate::support::produce::SinglePartitionProduceSetup {
+        SinglePartitionProduceSetup {
             topic: topic.to_string(),
             partition: krabka_ids::PartitionIndex(partition),
             ..Default::default()

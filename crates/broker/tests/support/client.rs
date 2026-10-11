@@ -16,7 +16,7 @@ use tokio::{
 };
 
 use crate::support::{
-    produce::{ProduceTimeoutMillis, send_batch},
+    produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch},
     records::{batch_from_records, value_record},
     topics::{
         CreateTopicRequestSetup, CreateTopicSetup, CreateTopicsTimeoutMillis, TopicPartitionCount,
@@ -196,7 +196,7 @@ pub async fn produce_batch(
     let response = send_batch(
         &client,
         batch,
-        crate::support::produce::SinglePartitionProduceSetup {
+        SinglePartitionProduceSetup {
             topic: setup.topic.to_owned(),
             topic_id: setup.topic_id,
             acknowledgements: setup.acknowledgements,

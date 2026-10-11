@@ -35,7 +35,7 @@ use crate::{
     kafka_wire::ExchangeSetup as WireExchangeSetup,
     support::{
         client::{metrics_config, scrape_metrics},
-        fetch::single_partition_fetch,
+        fetch::{SinglePartitionFetchSetup, single_partition_fetch},
         records::{batch_from_records, value_record},
         topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
         wire::HeaderEncoding as RequestHeaderEncoding,
@@ -119,7 +119,7 @@ async fn produce_to(addr: std::net::SocketAddr, topic: &str, partition: i32) -> 
 
 async fn fetch_one(addr: std::net::SocketAddr) {
     use krabka_protocol::owned::fetch_response::FetchResponse;
-    let req = single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+    let req = single_partition_fetch(SinglePartitionFetchSetup {
         topic: TOPIC.into(),
         topic_id: krabka_protocol::primitives::uuid::Uuid::default(),
         ..Default::default()

@@ -12,7 +12,7 @@ use crate::jvm_acceptance::{
     ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, authenticated_console_round_trip,
     broker0_advertised, create_console_topic, docker_run_kafka_tool_with_image_and_mount,
     nc_check_connectivity, provision_plain_scram, scram_jaas, start_dual_mech_broker,
-    start_dual_mech_broker_with_reauth, write_client_props,
+    start_dual_mech_broker_with_reauth, write_client_props, write_plain_props,
 };
 
 /// End-to-end `SASL_PLAINTEXT` + SCRAM-SHA-512 drive of the JVM tools
@@ -68,7 +68,7 @@ async fn jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window() {
         start_dual_mech_broker_with_reauth(ADMIN, ADMIN_PASS, Some(krabka_units::secs(2))).await;
     nc_check_connectivity();
 
-    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
+    let admin_props = write_plain_props(ADMIN, ADMIN_PASS);
     provision_plain_scram(&admin_props.mount_str(), ALICE, ALICE_PASS, "SCRAM-SHA-512");
     create_console_topic(KAFKA_IMAGE_TXN, &[&admin_props.mount_str()], TOPIC, 1, 1);
     docker_run_kafka_tool_with_image_and_mount(
@@ -135,7 +135,7 @@ async fn scram_round_trip(topic: &str, mechanism: &str) {
     let (broker, _dir) = start_dual_mech_broker(ADMIN, ADMIN_PASS).await;
     nc_check_connectivity();
 
-    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
+    let admin_props = write_plain_props(ADMIN, ADMIN_PASS);
     provision_plain_scram(&admin_props.mount_str(), ALICE, ALICE_PASS, mechanism);
 
     let alice_props = write_client_props(&format!(

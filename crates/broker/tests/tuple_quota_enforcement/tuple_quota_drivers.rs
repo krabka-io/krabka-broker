@@ -18,7 +18,10 @@ use krabka_protocol::owned::produce_response::ProduceResponse;
 pub use crate::kafka_wire::quotas::drive_alter_client_quotas_sasl;
 use crate::{
     CLIENT_ID,
-    kafka_wire::{self, ProduceRecordCount, SaslProduceSetup, ZeroFilledRecordsSetup},
+    kafka_wire::{
+        self, PlainAuthenticationSetup, ProduceRecordCount, SaslProduceSetup,
+        ZeroFilledRecordsSetup,
+    },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,7 +38,7 @@ pub(crate) async fn await_authorized_produce(
         let response = kafka_wire::produce_sasl_with_ids(
             addr,
             SaslProduceSetup {
-                authentication: crate::kafka_wire::PlainAuthenticationSetup {
+                authentication: PlainAuthenticationSetup {
                     client_id: CLIENT_ID,
                     password: (password).to_vec(),
                     ..Default::default()

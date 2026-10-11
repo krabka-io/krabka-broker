@@ -41,6 +41,7 @@ use crate::support::{
         BIT_DESCRIBE_CONFIGS, BIT_IDEMPOTENT_WRITE, BIT_READ, TOPIC_FULL_MASK,
     },
     client::connect_owned,
+    discovery::named_topic_metadata,
     topics::{
         ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request,
         metadata_topic,
@@ -203,7 +204,7 @@ async fn metadata_topic_authorized_operations_super_user_gets_full_mask() {
         .client
         .send(MetadataRequest {
             include_topic_authorized_operations: true,
-            ..crate::support::discovery::named_topic_metadata("foo")
+            ..named_topic_metadata("foo")
         })
         .await
         .expect("Metadata");

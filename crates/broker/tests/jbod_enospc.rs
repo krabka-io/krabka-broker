@@ -31,8 +31,11 @@ use krabka_protocol::owned::{
 use crate::support::{
     client::connect_with_context,
     discovery::named_topic_metadata,
-    fetch::{FetchByteLimit, FetchPartitionSetup, fetch_partition, single_partition_fetch},
-    producer::{ProducerRecordSetup, producer_record},
+    fetch::{
+        FetchByteLimit, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
+        fetch_partition, single_partition_fetch,
+    },
+    producer::{ProducerRecordSetup, no_retry_acks_all_producer, producer_record},
     remove_container_with_volumes,
 };
 
@@ -587,8 +590,7 @@ fn record(partition: i32, key: String, bytes: usize) -> ProducerRecord {
 }
 
 async fn producer(bootstrap: &str) -> Producer {
-    crate::support::producer::no_retry_acks_all_producer(bootstrap, Some(512 * 1024), "producer")
-        .await
+    no_retry_acks_all_producer(bootstrap, Some(512 * 1024), "producer").await
 }
 
 async fn wait_metric(url: &str, expected: f64, broker: &BrokerProcess) {
@@ -648,7 +650,7 @@ async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<Stri
         let response = client
             .send(FetchRequest {
                 replica_id: -1,
-                ..single_partition_fetch(crate::support::fetch::SinglePartitionFetchSetup {
+                ..single_partition_fetch(SinglePartitionFetchSetup {
                     topic: TOPIC.into(),
                     topic_id: topic.topic_id,
                     partition: fetch_partition(FetchPartitionSetup {
@@ -657,7 +659,7 @@ async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<Stri
                         maximum: FetchByteLimit(1 << 24),
                     }),
                     limits: crate::support::fetch::FetchLimits::wait_for_data_with_maximum(
-                        crate::support::fetch::RequestWaitMillis(0),
+                        RequestWaitMillis(0),
                         FetchByteLimit(1 << 24),
                     ),
                 })

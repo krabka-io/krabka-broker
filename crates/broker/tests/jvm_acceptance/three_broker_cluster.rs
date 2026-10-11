@@ -6,7 +6,9 @@
 
 use krabka_broker::{Broker, BrokerConfig};
 
-use crate::support::{JvmBrokerSetup, JvmListeners, controller_voters, init_jvm_tracing};
+use crate::support::{
+    JvmBrokerSetup, JvmListeners, controller_voters, init_jvm_tracing, jvm_broker_config,
+};
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(crate) struct SaslClusterSetup<'a> {
@@ -97,7 +99,7 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
         .collect();
     let configs: [BrokerConfig; N] = std::array::from_fn(|index| {
         let listener = &listeners[index];
-        let mut config = crate::support::jvm_broker_config(
+        let mut config = jvm_broker_config(
             dirs[index].path().to_path_buf(),
             JvmBrokerSetup {
                 node: krabka_broker::NodeId(voters[index].0),

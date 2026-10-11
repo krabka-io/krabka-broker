@@ -13,7 +13,8 @@ use crate::{
     share_rpc::{acquire_three_and_acknowledge, acquired_count, share_fetch},
     support::share::{
         RefetchSetup, ShareProduceSetup, ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup,
-        acknowledge_success, join_consume_member, permitted_topic_fixture, record_values,
+        acknowledge_success, join_consume_member, permitted_topic_fixture, produce_values,
+        record_values, refetch_while_empty,
     },
 };
 
@@ -56,7 +57,7 @@ async fn acquire_past_leading_batch_returns_bytes() {
 
     // Acquire offset 3 — the payload must carry the record bytes.
     let row3 = share_fetch(&client, session.fetch_at(ShareSessionEpoch(2))).await;
-    let row3 = crate::support::share::refetch_while_empty(
+    let row3 = refetch_while_empty(
         &client,
         row3,
         RefetchSetup {
@@ -98,7 +99,7 @@ async fn acquire_past_leading_batch_returns_bytes() {
 /// byte-exact disjoint offsets. This helper retries while the partition is still
 /// materializing.
 async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i32, value: &str) {
-    crate::support::share::produce_values(
+    produce_values(
         client,
         vec![bytes::Bytes::from(value.to_string())],
         ShareProduceSetup {

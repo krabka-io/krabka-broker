@@ -21,7 +21,7 @@ use crate::{
         KAFKA_IMAGE, KAFKA_IMAGE_MODERN, docker_rm, docker_run_kafka_tool_with_image,
         produce_lines_via_jvm,
     },
-    support::{self, JvmBrokerSetup},
+    support::{self, JvmBrokerSetup, controller_voters, jvm_broker_config},
 };
 
 /// Single-broker Krabka config bound on `0.0.0.0:<client_port>`, advertised as
@@ -42,13 +42,13 @@ async fn start_host_broker_on(client_port: u16, controller_port: u16) -> (Broker
         // Keep it alive for the bounded in-container Java compile and probe.
         heartbeat_timeout: krabka_units::secs(120),
         bootstrap_mode: BootstrapMode::Bootstrap,
-        ..crate::support::jvm_broker_config(
+        ..jvm_broker_config(
             dir.path().to_path_buf(),
             JvmBrokerSetup {
                 listen: format!("0.0.0.0:{client_port}").parse().expect("addr"),
                 controller: format!("0.0.0.0:{controller_port}").parse().expect("addr"),
                 advertised: format!("host.docker.internal:{client_port}"),
-                voters: crate::support::controller_voters(&[(
+                voters: controller_voters(&[(
                     1,
                     format!("0.0.0.0:{controller_port}").parse().expect("addr"),
                 )]),

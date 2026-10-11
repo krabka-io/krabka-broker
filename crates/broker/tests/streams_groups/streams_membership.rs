@@ -12,7 +12,7 @@ use crate::{
         active_partition_count, active_partitions_for, boot, connect, create_topic, describe,
         finalize_streams_version, follow_up, join_and_converge, topology,
     },
-    support::streams::StreamsMemberEpoch,
+    support::streams::{StreamsFollowUpSetup, StreamsMemberEpoch},
 };
 
 /// A lone stateless member joins a 2-partition topic and is assigned both tasks
@@ -75,7 +75,7 @@ async fn leave_removes_member() {
 
     // Leave: member_epoch == -1.
     let leave = client
-        .send(follow_up(crate::support::streams::StreamsFollowUpSetup {
+        .send(follow_up(StreamsFollowUpSetup {
             group: "streams-app-4",
             member_id: &member_id,
             epoch: StreamsMemberEpoch(-1),

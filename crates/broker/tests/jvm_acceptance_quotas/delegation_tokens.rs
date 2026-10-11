@@ -8,7 +8,7 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    ADMIN, ADMIN_PASS, KAFKA_IMAGE_TXN, broker0_advertised,
+    ADMIN, ADMIN_PASS, KAFKA_IMAGE_TXN, broker0_advertised, create_console_topic,
     docker_run_kafka_tool_with_image_and_mount, extract_jvm_kv, nc_check_connectivity,
     produce_console, start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens,
     wait_three_brokers_registered, write_client_props, write_plain_props,
@@ -96,7 +96,7 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
     let token_mount = token_props.mount_str();
 
     // 3. Create the topic as admin so the token producer can target it.
-    crate::jvm_acceptance::create_console_topic(KAFKA_IMAGE_TXN, &[&admin_mount], TOPIC, 1, 1);
+    create_console_topic(KAFKA_IMAGE_TXN, &[&admin_mount], TOPIC, 1, 1);
 
     // 4. Produce one message authenticated as the delegation token.
 

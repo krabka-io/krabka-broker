@@ -29,7 +29,7 @@ use krabka_protocol::records::RecordBatch;
 use support::cluster_lock;
 
 use crate::support::{
-    client::{connect_client, create_topic_with},
+    client::{connect_client, connect_with_context, create_topic_with},
     consumer_groups::{collect_routing_values, routing_consumer},
     partitions::require_non_bootstrap_partitions,
     produce::{SinglePartitionProduceSetup, batch_request},
@@ -158,7 +158,7 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
             .find(|(h, _, _)| h.node_id() == node)
             .map(|(_, c, _)| c.listen_addr.to_string())
             .expect("leader node is in the cluster");
-        async move { crate::support::client::connect_with_context(addr, None, "producer client").await }
+        async move { connect_with_context(addr, None, "producer client").await }
     };
     let mut producers: std::collections::HashMap<u64, Client> = std::collections::HashMap::new();
     let mut expected: HashSet<String> = HashSet::new();

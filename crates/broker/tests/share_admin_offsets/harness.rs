@@ -14,7 +14,7 @@ use krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRe
 
 use crate::support::share::{
     ConsumptionFixture, ConsumptionSetup, ShareRecordSeedSetup, ShareRecordsSetup,
-    ShareSessionSetup, consumption_fixture, permitted_topic_fixture, start_topic,
+    ShareSessionSetup, ShareTopicSetup, consumption_fixture, permitted_topic_fixture, start_topic,
 };
 pub use crate::support::share::{
     acquired_count, bootstrap_share_state, broker_config, broker_test_permit, connect,
@@ -101,11 +101,8 @@ pub async fn initialized_topic(
     uuid::Uuid,
     String,
 ) {
-    let (broker, client, tid) = start_topic(
-        broker_config(log_dir),
-        crate::support::share::ShareTopicSetup::default(),
-    )
-    .await;
+    let (broker, client, tid) =
+        start_topic(broker_config(log_dir), ShareTopicSetup::default()).await;
     let (member, _) = initialize_consumption(
         &broker,
         &client,
@@ -129,7 +126,7 @@ pub async fn seeded_empty_group(
     uuid::Uuid,
 ) {
     let (permit, broker, client, dir, tid) =
-        permitted_topic_fixture(crate::support::share::ShareTopicSetup::default(), |_| {}).await;
+        permitted_topic_fixture(ShareTopicSetup::default(), |_| {}).await;
     bootstrap_share_state(&broker, &client, "g1").await;
     produce_n(
         &client,

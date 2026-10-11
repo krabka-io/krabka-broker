@@ -45,8 +45,9 @@ use crate::{
         shutdown_cluster,
         transaction_wire::{
             AssignedTransactionTopicSetup, TransactionProduceSetup, add_partition_request,
-            create_assigned_topic, initialized_identity, partition_added, partition_leader,
-            produce_fixture, retry_coordinator,
+            coordinator_loading, create_assigned_topic, init_producer_request,
+            initialized_identity, partition_added, partition_leader, produce_fixture,
+            read_committed_through, retry_coordinator,
         },
         transactions::{
             EndTransactionSetup, ProducerIdentity, end_transaction_request, txn_offset_partition,
@@ -69,7 +70,7 @@ const CONCURRENT_TRANSACTIONS: i16 = 51;
 const SETTLE: Duration = Duration::from_secs(60);
 
 fn retriable(code: i16) -> bool {
-    crate::support::transaction_wire::coordinator_loading(code) || code == CONCURRENT_TRANSACTIONS
+    coordinator_loading(code) || code == CONCURRENT_TRANSACTIONS
 }
 
 /// One connection to the broker that binds `address`, past any relay, so a
@@ -113,7 +114,7 @@ async fn init_producer(connection: &Connection) -> (i64, i16) {
     initialized_identity(
         || async {
             connection
-                .send(crate::support::transaction_wire::init_producer_request(TID))
+                .send(init_producer_request(TID))
                 .await
                 .expect("InitProducerId")
         },
@@ -212,13 +213,7 @@ async fn describe_until(connection: &Connection, expected: &Described) -> Option
 }
 
 async fn read_committed(bootstrap: SocketAddr, last: &str) -> Vec<String> {
-    crate::support::transaction_wire::read_committed_through(
-        &bootstrap.to_string(),
-        TOPIC,
-        last,
-        SETTLE,
-    )
-    .await
+    read_committed_through(&bootstrap.to_string(), TOPIC, last, SETTLE).await
 }
 
 /// Three brokers whose data listeners each sit behind a [`Relay`]: every

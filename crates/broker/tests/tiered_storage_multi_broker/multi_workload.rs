@@ -23,7 +23,7 @@ use crate::{
     RECORDS, TOPIC,
     multi_client::topic_id_for,
     support::{
-        client::BatchProduceSetup,
+        client::{BatchProduceSetup, produce_batch},
         produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
         records::batch_from_records,
         storage::remote_log_files,
@@ -146,7 +146,7 @@ pub(crate) async fn produce_and_await_remote_segments(
             value: Some(bytes::Bytes::from(format!("test-record-{index}"))),
             ..Default::default()
         }]);
-        let response = crate::support::client::produce_batch(
+        let response = produce_batch(
             admin,
             batch,
             BatchProduceSetup {

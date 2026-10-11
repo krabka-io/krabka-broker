@@ -50,7 +50,7 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    client::BatchProduceSetup,
+    client::{BatchProduceSetup, produce_batch},
     offsets::{delete_records_partition, delete_records_request, delete_records_topic},
     records::{batch_from_records, value_record},
     topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
@@ -184,7 +184,7 @@ async fn produce_as(
         base_sequence,
         ..batch_from_records(vec![value_record(0, Some(Bytes::from_static(b"frame")))])
     };
-    crate::support::client::produce_batch(
+    produce_batch(
         client,
         batch,
         BatchProduceSetup {

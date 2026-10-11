@@ -14,7 +14,7 @@ use krabka_client_core::{Client, security::ClientSecurity};
 use krabka_protocol::krabka::freeze::SetTopicFreezeRequest;
 
 use crate::{
-    host_broker::JvmBroker,
+    host_broker::{JvmBroker, start_jvm_broker},
     jvm_acceptance::break_glass::propose,
     support,
     vocabulary::{APPROVER_ONE, APPROVER_TWO, PROPOSER, WIRE_UNCLEAN_ELECT_LEADERS},
@@ -136,7 +136,7 @@ async fn approve(
 
 /// Plaintext fixture with all topics installed before the first control-plane mutation.
 pub(super) async fn plain_topic_fixture(names: &[&str]) -> (JvmBroker, Client) {
-    let broker = crate::host_broker::start_jvm_broker(|_| {}).await;
+    let broker = start_jvm_broker(|_| {}).await;
     let client = plain_client(&broker.host).await;
     create_topics(&broker.host, None, names).await;
     (broker, client)

@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use krabka_protocol::records::{Record, RecordBatch};
 
-use crate::support::transactions::ProducerIdentity;
+use crate::support::transactions::{ProducerEpoch, ProducerIdentity};
 
 pub fn value_record(offset_delta: i32, value: Option<Bytes>) -> Record {
     Record {
@@ -62,7 +62,7 @@ pub struct ProducerSequence(pub i32);
 pub struct ProducerValuesSetup<'a> {
     #[default(krabka_ids::ProducerId(7))]
     pub pid: krabka_ids::ProducerId,
-    pub epoch: crate::support::transactions::ProducerEpoch,
+    pub epoch: ProducerEpoch,
     pub base_seq: ProducerSequence,
     #[default(&["v"])]
     pub values: &'a [&'a str],

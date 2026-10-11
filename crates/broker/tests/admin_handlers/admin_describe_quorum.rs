@@ -9,7 +9,9 @@ use krabka_protocol::owned::describe_quorum_response::DescribeQuorumResponse;
 use crate::{
     admin_harness::build_client,
     support::{
-        quorum::{follower_config, metadata_quorum_request as describe_quorum_request},
+        quorum::{
+            follower_config, metadata_quorum_request as describe_quorum_request, two_node_leader,
+        },
         shutdown_cluster, start_n_node_client, start_n_node_with_retry,
     },
 };
@@ -112,7 +114,7 @@ async fn combined_follower_forwards_describe_quorum_to_the_active_controller() {
         .await
         .expect("describe_quorum from node 0");
     assert!(first_resp.error_code == 0, "top-level error_code");
-    let leader_id = crate::support::quorum::two_node_leader(&first_resp, (1, 2));
+    let leader_id = two_node_leader(&first_resp, (1, 2));
     let follower_cfg = follower_config(&cluster, leader_id);
     let follower_client = build_client(follower_cfg.listen_addr).await;
     let follower_resp = follower_client

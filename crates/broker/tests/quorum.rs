@@ -23,7 +23,7 @@ use crate::support::{
     client::connect_client,
     discovery::topic_metadata_request,
     shutdown_cluster,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
 };
 
 mod support;
@@ -79,7 +79,7 @@ async fn create_topic_on_any_node_propagates() {
         .send(create_topic_request(creatable_topic(
             ConfiguredTopicSetup {
                 name: ("prop").into(),
-                partitions: crate::support::topics::TopicPartitionCount(3),
+                partitions: TopicPartitionCount(3),
                 ..Default::default()
             },
         )))

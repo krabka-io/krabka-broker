@@ -15,8 +15,10 @@ use krabka_protocol::owned::delete_share_group_offsets_request::{
 use crate::{
     describe::{describe_all_offsets, describe_until, initialized_partitions},
     harness::{
-        InitializedRestartFixture, NONE, fetch_until_acquired, initialized_restart_fixture, leave,
+        InitializedRestartFixture, NONE, acquired_topic, fetch_until_acquired,
+        initialized_restart_fixture, leave,
     },
+    support::share::rejoin_group,
 };
 
 fn delete_topic_request() -> DeleteShareGroupOffsetsRequest {
@@ -36,7 +38,7 @@ fn delete_topic_request() -> DeleteShareGroupOffsetsRequest {
 /// `start_offset` -1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_removes_topic() {
-    let (_permit, _broker, client, _dir, _tid, member, _) = crate::harness::acquired_topic().await;
+    let (_permit, _broker, client, _dir, _tid, member, _) = acquired_topic().await;
     leave(&client, "g1", &member).await;
 
     let resp = client
@@ -158,7 +160,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
     }
 
     {
-        let (_broker, client) = crate::support::share::rejoin_group(log_dir, "g1").await;
+        let (_broker, client) = rejoin_group(log_dir, "g1").await;
 
         // After restart, the v14 seed no longer lists "t" (the rewrite removed
         // it), so the describe with no topic list must STILL

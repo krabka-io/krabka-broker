@@ -13,9 +13,9 @@ use crate::{
     NONE, RENEW,
     harness::wire,
     support::share::{
-        AcknowledgeRequestSetup, FetchSessionMode, RenewalMode, ShareFetchSetup, ShareSessionEpoch,
-        ShareSessionSetup, acknowledge_partition, acknowledge_request, acknowledge_success,
-        acknowledge_topic, acknowledgement, fetch_row,
+        AcknowledgeRequestSetup, FetchSessionMode, RenewalMode, ShareAck, ShareFetchSetup,
+        ShareSessionEpoch, ShareSessionSetup, acknowledge_partition, acknowledge_request,
+        acknowledge_success, acknowledge_topic, acknowledgement, fetch_row,
     },
 };
 
@@ -67,7 +67,7 @@ pub async fn acquire_count(
 
 pub async fn acquire_three_and_acknowledge<'a>(
     client: &Client,
-    setup: crate::support::share::ShareAck<'a>,
+    setup: ShareAck<'a>,
 ) -> ShareSessionSetup<'a> {
     acquire_count(client, setup.session, AcquiredRecordCount(3)).await;
     acknowledge_success(client, setup).await;

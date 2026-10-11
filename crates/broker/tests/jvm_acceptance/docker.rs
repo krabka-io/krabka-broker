@@ -11,7 +11,7 @@ use assert2::assert;
 use super::ports::host_port;
 use crate::support::{
     ContainerInput, JvmDockerSetup, combined_output, docker_tool_command, jvm_docker_command,
-    jvm_tool_output,
+    jvm_stdin_output, jvm_tool_output,
 };
 
 /// Create a topic through the JVM admin client, optionally with client properties.
@@ -106,7 +106,7 @@ pub(crate) fn produce_console(
     if !mounts.is_empty() {
         args.extend(["--producer.config", "/client.properties"]);
     }
-    crate::support::jvm_stdin_output(
+    jvm_stdin_output(
         &mut jvm_docker_command(JvmDockerSetup {
             image,
             mounts,
@@ -889,7 +889,9 @@ pub(crate) fn write_temp_file(filename: &str, contents: &str) -> TempFileMount {
     std::fs::write(tmp.path(), contents).expect("write tempfile");
     #[cfg(unix)]
     {
-        crate::support::chmod_for_container(tmp.path(), 0o644, "chmod tempfile");
+        use crate::support::chmod_for_container;
+
+        chmod_for_container(tmp.path(), 0o644, "chmod tempfile");
     }
     TempFileMount { tmp }
 }

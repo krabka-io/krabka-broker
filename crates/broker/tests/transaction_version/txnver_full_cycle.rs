@@ -9,7 +9,9 @@ use assert2::assert;
 
 use crate::{
     support::{
-        self, producer::string_record as rec, topics::TopicPartitionCount,
+        self,
+        producer::{string_record as rec, transactional_producer},
+        topics::TopicPartitionCount,
         transaction_wire::committed_values,
     },
     txnver_harness::{admin_client, boot_single, create_topic, downgrade_transaction_version},
@@ -27,8 +29,7 @@ use crate::{
 /// transitions within one broker lifetime. Unit tests in `txn::log_record`
 /// cover decode and recovery from disk.
 async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, group: &str) {
-    let producer =
-        crate::support::producer::transactional_producer(bootstrap.to_string(), tid).await;
+    let producer = transactional_producer(bootstrap.to_string(), tid).await;
     let txn = producer.begin_transaction().await.unwrap();
     for v in ["a", "b", "c"] {
         producer

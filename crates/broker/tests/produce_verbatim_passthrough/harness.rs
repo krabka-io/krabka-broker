@@ -25,7 +25,7 @@ use crate::support::{
         FetchByteLimit, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
         fetch_partition, single_partition_fetch,
     },
-    produce::single_partition_produce,
+    produce::{SinglePartitionProduceSetup, single_partition_produce},
     records::value_record,
 };
 
@@ -124,14 +124,12 @@ pub async fn produce_payload(
     records: RecordsPayload,
 ) -> Result<i64, i16> {
     let resp = client
-        .send(single_partition_produce(
-            crate::support::produce::SinglePartitionProduceSetup {
-                topic: (topic).into(),
-                topic_id,
-                records: Some(records),
-                ..Default::default()
-            },
-        ))
+        .send(single_partition_produce(SinglePartitionProduceSetup {
+            topic: (topic).into(),
+            topic_id,
+            records: Some(records),
+            ..Default::default()
+        }))
         .await
         .expect("Produce");
     let pr = &resp.responses[0].partition_responses[0];

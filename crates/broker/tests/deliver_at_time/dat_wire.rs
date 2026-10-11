@@ -20,7 +20,9 @@ use crate::{
     dat_fixtures::{Mode, Visible, now_ms},
     support::{
         self,
-        fetch::{RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch},
+        fetch::{
+            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
+        },
         offsets::{list_offset_partition, single_partition_list_offsets},
         produce::{SinglePartitionProduceSetup, send_batch},
         topics::CreateTopicSetup,
@@ -106,9 +108,7 @@ pub async fn fetch_values(
         .send(single_partition_fetch(SinglePartitionFetchSetup {
             topic: topic.to_owned(),
             topic_id,
-            limits: crate::support::fetch::FetchLimits::one_mebibyte(RequestWaitMillis(
-                max_wait_ms,
-            )),
+            limits: FetchLimits::one_mebibyte(RequestWaitMillis(max_wait_ms)),
             ..Default::default()
         }))
         .await

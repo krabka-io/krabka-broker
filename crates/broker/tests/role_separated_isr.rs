@@ -16,7 +16,9 @@ use krabka_broker::{BootstrapMode, BrokerConfig, BrokerHandle, config::NodeRole}
 use tempfile::TempDir;
 
 use crate::support::{
-    NodeIndex, RoleNodeSetup, client::create_topic_for_broker, topics::TopicReplicationFactor,
+    NodeIndex, RoleNodeSetup,
+    client::create_topic_for_broker,
+    topics::{CreateTopicSetup, TopicReplicationFactor},
 };
 
 mod support;
@@ -119,7 +121,7 @@ async fn a_restarted_follower_rejoins_the_isr_when_the_controller_is_controller_
     let mut cluster = start_role_separated().await;
     create_topic_for_broker(
         &cluster.brokers[0],
-        crate::support::topics::CreateTopicSetup {
+        CreateTopicSetup {
             topic,
             replication_factor: TopicReplicationFactor(2),
             ..Default::default()

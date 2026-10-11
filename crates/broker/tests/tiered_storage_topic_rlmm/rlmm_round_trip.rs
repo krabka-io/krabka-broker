@@ -15,7 +15,9 @@ use krabka_client_core::Client;
 
 use crate::{
     support::{
-        fetch::{RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch},
+        fetch::{
+            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
+        },
         topic_id_for,
     },
     topic_fixture::create_configured_topic,
@@ -105,7 +107,7 @@ pub(crate) async fn copy_then_fetch_round_trip(
             .send(single_partition_fetch(SinglePartitionFetchSetup {
                 topic: topic.into(),
                 topic_id,
-                limits: crate::support::fetch::FetchLimits::wait_for_data(RequestWaitMillis(500)),
+                limits: FetchLimits::wait_for_data(RequestWaitMillis(500)),
                 ..Default::default()
             }))
             .await

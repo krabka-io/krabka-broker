@@ -10,7 +10,7 @@ use krabka_broker::Broker;
 
 use crate::{
     harness::start_two_dir_broker,
-    support::acl::use_simple_acl_authorizer,
+    support::{acl::use_simple_acl_authorizer, storage::two_dir_config},
     two_dir_topic::Setup,
     wire::{CLIENT_ID, alter_replica_log_dirs},
 };
@@ -62,7 +62,7 @@ async fn alter_replica_log_dirs_rejects_unknown_replica() {
 async fn alter_replica_log_dirs_denied_without_cluster_alter() {
     let primary = tempfile::tempdir().unwrap();
     let extra = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::storage::two_dir_config(primary.path(), extra.path());
+    let mut cfg = two_dir_config(primary.path(), extra.path());
     // Default authorizer for `for_tests` is AllowAll; swap in a deny-
     // everything SimpleAclAuthorizer (empty super-users + empty ACL
     // image) so the Cluster Alter gate engages.

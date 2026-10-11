@@ -32,13 +32,13 @@ use tokio::{io::AsyncReadExt, net::TcpStream};
 
 use crate::{
     harness::{alice_password, round_trip},
-    kafka_wire::ExchangeSetup as WireExchangeSetup,
+    kafka_wire::{ExchangeSetup as WireExchangeSetup, exchange},
     oauthbearer::{
         drive_inband_reauth, drive_sasl_oauthbearer_session_open, now_unix_secs,
         oauthbearer_fixture, oauthbearer_zero_skew_validator, unsecured_jws,
     },
     support::{
-        sasl::plain_authentication_body,
+        sasl::{plain_authentication_body, sasl_temp_config},
         sasl_plaintext_config,
         wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
@@ -276,10 +276,8 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
     // Enable both OAUTHBEARER + SCRAM-SHA-512 on the same listener so a
     // fresh-connection SCRAM handshake WOULD succeed. The reject here
     // must be due to the same-mechanism rule, not "mechanism unknown".
-    let (_log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![
-        SaslMechanism::OAuthBearer,
-        SaslMechanism::ScramSha512,
-    ]);
+    let (_log_dir, mut cfg) =
+        sasl_temp_config(vec![SaslMechanism::OAuthBearer, SaslMechanism::ScramSha512]);
     cfg.oauthbearer_validator = oauthbearer_zero_skew_validator();
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -376,7 +374,7 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     // `session_lifetime_ms` field directly.
     let mut stream = TcpStream::connect(addr).await.unwrap();
 
-    let _: api_versions_response::ApiVersionsResponse = crate::kafka_wire::exchange(
+    let _: api_versions_response::ApiVersionsResponse = exchange(
         &mut stream,
         &api_versions_request::ApiVersionsRequest::default(),
         WireExchangeSetup {

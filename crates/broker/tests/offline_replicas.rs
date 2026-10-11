@@ -46,6 +46,7 @@ use tokio::net::TcpStream;
 use crate::support::{
     discovery::named_topic_metadata,
     registered_cluster, shutdown_cluster,
+    storage::two_dir_config,
     topics::{ConfiguredTopicSetup, TopicPartitionCount, TopicReplicationFactor},
     wire::ApiRequestSetup,
 };
@@ -88,7 +89,7 @@ async fn start_two_dir_broker() -> (BrokerHandle, TempDir, TempDir, SocketAddr) 
     let controller = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = data_plane.local_addr().unwrap();
     let controller_addr = controller.local_addr().unwrap();
-    let mut cfg = crate::support::storage::two_dir_config(primary.path(), extra.path());
+    let mut cfg = two_dir_config(primary.path(), extra.path());
     cfg.listen_addr = addr;
     cfg.advertised_listener = addr.to_string();
     cfg.controller_listen_addr = controller_addr;

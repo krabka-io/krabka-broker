@@ -16,7 +16,7 @@ use tempfile::TempDir;
 
 use crate::{
     jvm_acceptance::plain_client_properties,
-    support::{self, JvmBrokerSetup},
+    support::{self, JvmBrokerSetup, controller_voters},
     vocabulary::{SASL_LISTENER, approver_set},
 };
 
@@ -62,7 +62,7 @@ pub(super) async fn start_jvm_broker(adjust: impl FnOnce(&mut BrokerConfig)) -> 
             listen,
             controller,
             advertised: listeners.advertised.clone(),
-            voters: crate::support::controller_voters(&[(1, controller)]),
+            voters: controller_voters(&[(1, controller)]),
             ..Default::default()
         },
     );

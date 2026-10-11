@@ -10,7 +10,7 @@ use krabka_protocol::owned::create_partitions_request::{
 use crate::{
     admin_harness::{build_client, create_topic_helper},
     support::{
-        start_n_node_client,
+        registered_cluster, start_n_node_client,
         topics::{
             ConfiguredTopicSetup, TopicReplicationFactor, creatable_topic, create_topic_request,
         },
@@ -19,7 +19,7 @@ use crate::{
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
-    let mut cluster = crate::support::registered_cluster(3).await;
+    let mut cluster = registered_cluster(3).await;
     // Stop a broker that is neither the one the test talks to nor the
     // controller leader. Its controlled shutdown ends fenced, as Kafka's
     // `processBrokerHeartbeat` fences a broker that may shut down, and it

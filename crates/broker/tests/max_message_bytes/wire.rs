@@ -16,7 +16,7 @@ use crate::support::{
     client::BatchProduceSetup,
     records::{batch_from_records, value_record},
     start, topic_id_for,
-    topics::CreateTopicSetup,
+    topics::{CreateTopicSetup, configured_topic_request},
 };
 
 /// Kafka's `max.message.bytes`, and its broker-wide default
@@ -49,13 +49,11 @@ pub(super) async fn create_topic(
     configs: &[(&str, &str)],
 ) -> WireUuid {
     let response = client
-        .send(crate::support::topics::configured_topic_request(
-            CreateTopicSetup {
-                topic: name,
-                configs,
-                ..Default::default()
-            },
-        ))
+        .send(configured_topic_request(CreateTopicSetup {
+            topic: name,
+            configs,
+            ..Default::default()
+        }))
         .await
         .expect("CreateTopics");
     let created = &response.topics[0];

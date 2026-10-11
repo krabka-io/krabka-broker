@@ -29,6 +29,7 @@ use super::{
     quota_admin::drive_alter_client_quotas_sasl,
 };
 use crate::{
+    cluster::wait_alice_quota,
     kafka_wire::{
         self, AutomaticTopicSetup, ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup,
         ProduceRecordCount, ProduceValueBytes,
@@ -38,6 +39,7 @@ use crate::{
     support::{
         acl::{TopicAclSetup, seed_topic_acl},
         discovery::api_versions_request_for,
+        topics::ConfiguredTopicSetup,
         wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
     },
 };
@@ -232,7 +234,7 @@ async fn consumer_byte_rate_throttles_fetch() {
     );
 
     // Wait for the quota to appear in the image.
-    crate::cluster::wait_alice_quota(&handle, "consumer_byte_rate", 128.0).await;
+    wait_alice_quota(&handle, "consumer_byte_rate", 128.0).await;
 
     // Produce 8 KB as admin (not subject to quota yet).
     seed_alice_write_acl(&handle, "throttle-fetch").await; // give admin path a topic
@@ -604,7 +606,7 @@ async fn prepare_quota_topic(
         addr,
         AutomaticTopicSetup {
             client_id: crate::CLIENT_ID,
-            topic: crate::support::topics::ConfiguredTopicSetup {
+            topic: ConfiguredTopicSetup {
                 name: (topic).into(),
                 ..Default::default()
             },

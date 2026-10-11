@@ -17,8 +17,8 @@ use crate::{
     },
     support::share::{
         ConsumptionSetup, RefetchSetup, RetryEpochs, ShareRecordCount, ShareRecordSeedSetup,
-        ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup, acknowledge_success, rejoin_group,
-        start_topic,
+        ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup, acknowledge_success,
+        refetch_while_empty, rejoin_group, start_topic,
     },
 };
 
@@ -171,7 +171,7 @@ async fn reject_archives() {
     )
     .await;
     let row3 = share_fetch(&fixture.client, session.fetch_at(ShareSessionEpoch(3))).await;
-    let row3 = crate::support::share::refetch_while_empty(
+    let row3 = refetch_while_empty(
         &fixture.client,
         row3,
         RefetchSetup {

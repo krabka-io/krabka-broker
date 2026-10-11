@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     jvm_acceptance::wait_jvm_log_config,
-    support::{ContainerInput, jvm_docker_command, jvm_stdin_output},
+    support::{ContainerInput, JvmDockerSetup, jvm_docker_command, jvm_stdin_output},
 };
 
 /// Segment size every tiered-storage suite boots its broker with, as
@@ -121,7 +121,7 @@ pub(crate) fn produce_records(topic: &str, n: usize) {
         use std::fmt::Write as _;
         let _ = writeln!(payload, "record-{i:04}");
     }
-    let mut child_command = jvm_docker_command(crate::support::JvmDockerSetup {
+    let mut child_command = jvm_docker_command(JvmDockerSetup {
         image: KAFKA_IMAGE,
         args: &[
             "kafka-console-producer",

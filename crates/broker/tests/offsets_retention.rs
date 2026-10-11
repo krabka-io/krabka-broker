@@ -29,6 +29,7 @@ use crate::support::{
     offsets::{
         offset_commit_topic, offset_delete_partition, offset_delete_request, offset_delete_topic,
     },
+    standalone_broker,
     topics::{
         ConfiguredTopicSetup, CreateTopicRequestSetup, CreateTopicsTimeoutMillis, creatable_topic,
         create_topic_request_with_setup,
@@ -71,7 +72,7 @@ async fn client_for(broker: &krabka_broker::BrokerHandle) -> Arc<Client> {
 /// Kafka's own defaults.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_configs_reports_the_retention_knobs() {
-    let (_dir, broker) = crate::support::standalone_broker().await;
+    let (_dir, broker) = standalone_broker().await;
     let client = client_for(&broker).await;
 
     let described = client

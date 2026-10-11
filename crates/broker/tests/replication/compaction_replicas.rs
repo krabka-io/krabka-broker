@@ -33,7 +33,7 @@ use crate::{
         client::connect_with_context,
         produce::{SinglePartitionProduceSetup, send_batch},
         records::batch_from_records,
-        shutdown_cluster,
+        registered_cluster, shutdown_cluster,
     },
 };
 
@@ -146,7 +146,7 @@ async fn wait_for_the_topic_config(broker: &BrokerHandle) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
     let _g = cluster_lock().lock().await;
-    let cluster = crate::support::registered_cluster(3).await;
+    let cluster = registered_cluster(3).await;
 
     let admin =
         connect_with_context(cluster[0].1.listen_addr.to_string(), None, "admin client").await;

@@ -10,8 +10,11 @@
 use assert2::assert;
 
 use crate::{
-    harness::{acquired_count, fetch_until_acquired, initialized_restart_fixture},
-    support::share::{ShareRecordCount, ShareRecordSeedSetup, acknowledge_success},
+    harness::{
+        InitializedRestartFixture, acquired_count, fetch_until_acquired,
+        initialized_restart_fixture,
+    },
+    support::share::{ShareRecordCount, ShareRecordSeedSetup, acknowledge_success, rejoin_group},
 };
 
 /// Lag restore: `delivery_complete_count` survives a broker restart.
@@ -24,7 +27,7 @@ use crate::{
 async fn delivery_complete_count_restored_across_restart() {
     const N: i64 = 4;
     const COMPLETE: i32 = 3; // N - 1
-    let crate::harness::InitializedRestartFixture {
+    let InitializedRestartFixture {
         _permit,
         _dir,
         log_dir,
@@ -69,7 +72,7 @@ async fn delivery_complete_count_restored_across_restart() {
     }
 
     {
-        let (broker, _client) = crate::support::share::rejoin_group(log_dir, "g1").await;
+        let (broker, _client) = rejoin_group(log_dir, "g1").await;
 
         // The summary load is driven by the share coordinator reading the
         // persisted record; await until the recovered state is present.

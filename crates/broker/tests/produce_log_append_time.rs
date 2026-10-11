@@ -42,7 +42,7 @@ use krabka_protocol::{
 
 use crate::support::{
     offsets::{list_offset_partition, single_partition_list_offsets},
-    produce::SinglePartitionProduceSetup,
+    produce::{SinglePartitionProduceSetup, send_batch},
     records::{batch_from_records, value_record},
 };
 
@@ -345,7 +345,7 @@ async fn produce(
             ..value_record(0, Some(Bytes::from_static(b"frame")))
         }])
     };
-    let response = crate::support::produce::send_batch(
+    let response = send_batch(
         &client,
         batch,
         SinglePartitionProduceSetup {

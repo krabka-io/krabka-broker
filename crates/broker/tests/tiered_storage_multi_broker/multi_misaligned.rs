@@ -32,7 +32,9 @@ use crate::{
     multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes},
     multi_workload::local_segment_bases,
     support::{client::connect_owned, storage::topic_remote_log_files, topics::AssignedTopicSetup},
-    topic_fixture::{TieredRecordsSetup, await_tiered_replicas, create_assigned_topic},
+    topic_fixture::{
+        TieredRecordCount, TieredRecordsSetup, await_tiered_replicas, create_assigned_topic,
+    },
 };
 
 /// The topic this suite produces into. It sets no `segment.bytes`, so each
@@ -89,7 +91,7 @@ async fn produce_records(client: &Client, topic_id: WireUuid, prefix: &str, coun
         TieredRecordsSetup {
             topic: TOPIC,
             topic_id,
-            count: crate::topic_fixture::TieredRecordCount(count),
+            count: TieredRecordCount(count),
         },
     )
     .await;

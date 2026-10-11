@@ -32,7 +32,7 @@ use krabka_client_admin::{AdminClient, AdminError, RaftVoterEndpoint};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-use crate::support::AddressedNodeSetup;
+use crate::support::{AddressedNodeSetup, addressed_node_config};
 
 mod support;
 
@@ -100,7 +100,7 @@ async fn start(
         None,
     )
     .expect("krabka-format wrote meta.properties");
-    let mut config = crate::support::addressed_node_config(
+    let mut config = addressed_node_config(
         log_dir,
         AddressedNodeSetup {
             node: krabka_broker::NodeId(node.id),

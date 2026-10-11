@@ -9,9 +9,9 @@ use assert2::assert;
 
 use crate::jvm_acceptance::{
     ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, broker0_advertised,
-    denied_console_consumer, docker_run_kafka_tool_with_image_and_mount, nc_check_connectivity,
-    plain_jaas, produce_console, start_sasl_plaintext_broker_with_super_user, write_client_props,
-    write_plain_props,
+    create_console_topic, denied_console_consumer, docker_run_kafka_tool_with_image_and_mount,
+    nc_check_connectivity, plain_jaas, produce_console,
+    start_sasl_plaintext_broker_with_super_user, write_client_props, write_plain_props,
 };
 
 /// JVM acceptance: a prefixed topic ACL grants exactly the prefix.
@@ -48,7 +48,7 @@ async fn jvm_prefixed_topic_acl_works() {
 
     // Pre-create both topics.
     for topic in [TOPIC_OK, TOPIC_DENIED] {
-        crate::jvm_acceptance::create_console_topic(KAFKA_IMAGE_TXN, &[&admin_mount], topic, 1, 1);
+        create_console_topic(KAFKA_IMAGE_TXN, &[&admin_mount], topic, 1, 1);
     }
 
     // Prefixed Read on `team-*` for alice. ACL implications grant Describe from

@@ -9,7 +9,7 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, create_console_topic,
+    ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, add_console_acl, create_console_topic,
     denied_console_consumer, nc_check_connectivity, plain_jaas, produce_console,
     start_plain_acl_topic_with_ops, start_sasl_plaintext_broker_with_super_user,
     write_client_props, write_plain_props,
@@ -52,7 +52,7 @@ async fn jvm_unauthorized_produce_fails() {
     // alice gets Read+Write — proves that the broker has ACLs configured
     // (i.e. the empty-ACL ALLOW shim is not active). ACL implications grant
     // Describe from Read/Write so no explicit Describe ACL is needed.
-    crate::jvm_acceptance::add_console_acl(
+    add_console_acl(
         KAFKA_IMAGE_TXN,
         &[&admin_mount],
         "User:alice",

@@ -8,9 +8,10 @@
 use assert2::assert;
 
 use crate::{
-    jvm_acceptance::{KAFKA_IMAGE, docker_run_kafka_tool},
+    jvm_acceptance::{KAFKA_IMAGE, consume_committed_at, docker_run_kafka_tool},
     support::{
-        ContainerInput, init_jvm_tracing, jvm_docker_command, jvm_output_lines, start_jvm_cluster,
+        ContainerInput, JvmDockerSetup, init_jvm_tracing, jvm_docker_command, jvm_output_lines,
+        start_jvm_cluster,
     },
 };
 
@@ -56,7 +57,7 @@ async fn acks_all_durability() {
     ]);
 
     // Produce 100 records with --request-required-acks=-1.
-    let producer_out = jvm_docker_command(crate::support::JvmDockerSetup {
+    let producer_out = jvm_docker_command(JvmDockerSetup {
         image: KAFKA_IMAGE,
         args: &[
             "bash",
@@ -97,7 +98,7 @@ async fn acks_all_durability() {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let bootstrap_3 = format!("host.docker.internal:{}", client_ports[2]);
-    let consume_out = crate::jvm_acceptance::consume_committed_at(&bootstrap_3, TOPIC, 100);
+    let consume_out = consume_committed_at(&bootstrap_3, TOPIC, 100);
     let stdout = String::from_utf8_lossy(&consume_out.stdout);
     let line_count = jvm_output_lines(&consume_out).len();
     assert!(

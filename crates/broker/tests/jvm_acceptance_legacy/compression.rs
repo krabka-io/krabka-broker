@@ -8,7 +8,9 @@
 use assert2::assert;
 
 use crate::{
-    jvm_acceptance::{KAFKA_IMAGE_LEGACY, broker0_advertised, docker_run_kafka_tool},
+    jvm_acceptance::{
+        KAFKA_IMAGE_LEGACY, broker0_advertised, docker_run_kafka_tool, start_legacy_console_broker,
+    },
     support::{ContainerInput, JvmDockerSetup, jvm_docker_command, jvm_stdin_output},
 };
 
@@ -46,7 +48,7 @@ async fn jvm_legacy_010_snappy_round_trip() {
 }
 
 async fn compressed_round_trip(topic: &str, compression: &str) {
-    let (broker, _dir) = crate::jvm_acceptance::start_legacy_console_broker(topic).await;
+    let (broker, _dir) = start_legacy_console_broker(topic).await;
 
     // 50 newline-separated records to give gzip something to compress.
     let mut input = String::with_capacity(50 * 12);

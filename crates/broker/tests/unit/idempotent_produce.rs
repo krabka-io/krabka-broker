@@ -11,7 +11,9 @@ use crate::{
     support::{
         self,
         produce::{SinglePartitionProduceSetup, batch_request},
-        records::{ProducerValuesSetup, producer_values_batch as one_batch_with_producer},
+        records::{
+            ProducerSequence, ProducerValuesSetup, producer_values_batch as one_batch_with_producer,
+        },
         transactions::claim_idempotent_producer,
     },
 };
@@ -65,7 +67,7 @@ async fn out_of_order_returns_45() {
         batch_request(
             one_batch_with_producer(ProducerValuesSetup {
                 pid: krabka_ids::ProducerId(pid),
-                base_seq: crate::support::records::ProducerSequence(base_seq),
+                base_seq: ProducerSequence(base_seq),
                 values: &["x", "y"],
                 ..Default::default()
             }),

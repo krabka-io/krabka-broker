@@ -24,7 +24,7 @@ use crate::support::{
         FetchByteLimit, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
         fetch_partition, single_partition_fetch,
     },
-    produce::send_batch,
+    produce::{SinglePartitionProduceSetup, send_batch},
     records::value_record,
 };
 mod support;
@@ -121,7 +121,7 @@ async fn large_message_fetch_round_trips_byte_exact() {
     let prod = send_batch(
         &p.client,
         batch,
-        crate::support::produce::SinglePartitionProduceSetup {
+        SinglePartitionProduceSetup {
             topic: ("big").into(),
             topic_id: tid,
             ..Default::default()

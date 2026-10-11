@@ -19,8 +19,11 @@ use crate::{
     kafka_wire::{
         PlainAuthenticationSetup, sasl_plain_authenticate_on, sasl_plain_reauthenticate_on,
     },
-    reauth_cases::{different_principal_closes, repeated_expired_reauth, same_principal_reopens},
-    support::wire::{HeaderEncoding as RequestHeaderEncoding, SocketExchangeSetup},
+    reauth_cases::{
+        capped_session_closes, different_principal_closes, repeated_expired_reauth,
+        same_principal_reopens,
+    },
+    support::wire::{CorrelationId, HeaderEncoding as RequestHeaderEncoding, SocketExchangeSetup},
 };
 
 /// Happy-path drive of a SASL/PLAIN session: `ApiVersions` → `SaslHandshake`
@@ -148,7 +151,7 @@ async fn drive_sasl_plain_session(
 /// in-band re-auth on the same connection.
 pub async fn plain_authenticate(
     stream: &mut TcpStream,
-    corr: &mut crate::support::wire::CorrelationId,
+    corr: &mut CorrelationId,
     setup: &PlainAuthenticationSetup<'_>,
 ) -> Result<SaslAuthenticateResponse, io::Error> {
     sasl_plain_reauthenticate_on(stream, corr, setup).await
@@ -159,7 +162,7 @@ pub async fn plain_authenticate(
 /// it elapses without an in-band re-authentication closes the connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plain_session_capped_by_connections_max_reauth_then_closes() {
-    crate::reauth_cases::capped_session_closes(SaslMechanism::Plain).await;
+    capped_session_closes(SaslMechanism::Plain).await;
 }
 
 /// KIP-368: an in-band re-authentication with the same principal succeeds and

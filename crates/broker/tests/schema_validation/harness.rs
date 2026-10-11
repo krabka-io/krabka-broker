@@ -23,8 +23,8 @@ use wiremock::{
 };
 
 use crate::support::{
-    client::BrokerClientSetup,
-    produce::SinglePartitionProduceSetup,
+    client::{BrokerClientSetup, start_broker_client},
+    produce::{SinglePartitionProduceSetup, send_batch},
     records::value_record,
     topics::{ConfiguredTopicSetup, TopicReplicationFactor, creatable_topic, topic_configs},
 };
@@ -254,7 +254,7 @@ pub async fn produce(
     topic_id: WireUuid,
     batch: RecordBatch,
 ) -> PartitionProduceResponse {
-    let resp = crate::support::produce::send_batch(
+    let resp = send_batch(
         &client,
         batch,
         SinglePartitionProduceSetup {
@@ -274,7 +274,7 @@ pub fn boot_config(
     config: BrokerConfig,
 ) -> impl std::future::Future<Output = (BrokerHandle, Client)> {
     Box::pin(async move {
-        crate::support::client::start_broker_client(
+        start_broker_client(
             config,
             BrokerClientSetup {
                 client_id: "schema-validation-test",

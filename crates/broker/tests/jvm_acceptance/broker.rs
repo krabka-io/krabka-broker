@@ -9,7 +9,7 @@ use std::path::Path;
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
 
 use super::ports::{broker0_advertised, broker0_listen, controller_addr_0};
-use crate::support::{JvmBrokerSetup, controller_voters, init_jvm_tracing};
+use crate::support::{JvmBrokerSetup, controller_voters, init_jvm_tracing, jvm_broker_config};
 
 pub(crate) type HostBroker = (krabka_broker::BrokerHandle, tempfile::TempDir);
 
@@ -17,7 +17,7 @@ pub(crate) type HostBroker = (krabka_broker::BrokerHandle, tempfile::TempDir);
 pub(crate) fn host_broker_config(dir: &Path, client_context: &str) -> BrokerConfig {
     let listen = broker0_listen().parse().expect(client_context);
     let controller = controller_addr_0().parse().expect("allocated addr");
-    crate::support::jvm_broker_config(
+    jvm_broker_config(
         dir.to_path_buf(),
         JvmBrokerSetup {
             listen,

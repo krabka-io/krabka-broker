@@ -68,7 +68,7 @@ const CLIENT_ID: &str = "krabka-opa-test";
 fn start_broker_with_opa_authorizer(
     opa_url: String,
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
-    let (log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
+    let (log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("admin".to_string(), "admin-secret".to_string());
     cfg.plain_credentials
@@ -118,9 +118,14 @@ fn start_broker_with_opa_authorizer(
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::{
-    kafka_wire::{AutomaticTopicSetup, PlainAuthenticationSetup, drive_produce_as_plain},
+    kafka_wire::{
+        AutomaticTopicSetup, PlainAuthenticationSetup, create_topic_as_super_user,
+        drive_produce_as_plain,
+    },
     support::{
-        produce::single_partition_response, sasl::start_broker, topics::ConfiguredTopicSetup,
+        produce::single_partition_response,
+        sasl::{sasl_temp_config, start_broker},
+        topics::ConfiguredTopicSetup,
     },
 };
 
@@ -128,7 +133,7 @@ use crate::{
 /// session. Admin is the super-user in both tests, so the call bypasses the OPA
 /// mock and the topic materialises whatever OPA answers.
 async fn create_topic_as_admin(addr: SocketAddr, name: &str) {
-    crate::kafka_wire::create_topic_as_super_user(
+    create_topic_as_super_user(
         addr,
         AutomaticTopicSetup {
             client_id: CLIENT_ID,

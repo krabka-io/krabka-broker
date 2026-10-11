@@ -10,7 +10,10 @@ use tokio::net::TcpStream;
 
 use crate::{
     harness,
-    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup, exchange},
+    kafka_wire::{
+        ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup, ScramAuthenticationSetup,
+        exchange,
+    },
     plain, scram,
     support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
 };
@@ -60,7 +63,7 @@ impl Session {
                 scram::scram_authenticate(
                     &mut self.stream,
                     &mut self.correlation,
-                    &crate::kafka_wire::ScramAuthenticationSetup {
+                    &ScramAuthenticationSetup {
                         client_id: "krabka-sasl-test",
                         user,
                         mechanism: self.mechanism,

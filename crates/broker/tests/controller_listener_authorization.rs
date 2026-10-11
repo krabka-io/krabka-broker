@@ -54,7 +54,8 @@ use tokio_rustls::rustls::{
 
 use crate::support::{
     acl::{ClusterAclSetup, cluster_acl_record},
-    tls::fixture_signature_schemes,
+    start_with_bound_listeners,
+    tls::{PinnedCertVerifier, fixture_signature_schemes},
     topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
@@ -76,7 +77,7 @@ async fn start_with(
     users: &[(&str, &str)],
     adjust: impl FnOnce(&mut BrokerConfig),
 ) -> (BrokerHandle, tempfile::TempDir) {
-    crate::support::start_with_bound_listeners(|config| {
+    start_with_bound_listeners(|config| {
         config.controller_listener_protocol = protocol;
         config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
         for (user, password) in std::iter::once(&NODE).chain(users) {
@@ -500,13 +501,11 @@ async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_
         PrivateKeyDer::from_pem_slice(DEV_CLIENT_KEY.as_bytes()).expect("parse client key");
     let client = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(std::sync::Arc::new(
-            crate::support::tls::PinnedCertVerifier {
-                pinned: server_certificate,
-                schemes: fixture_signature_schemes(),
-                mismatch: "not the pinned fixture certificate",
-            },
-        ))
+        .with_custom_certificate_verifier(std::sync::Arc::new(PinnedCertVerifier {
+            pinned: server_certificate,
+            schemes: fixture_signature_schemes(),
+            mismatch: "not the pinned fixture certificate",
+        }))
         .with_client_auth_cert(client_certificates, client_key)
         .expect("client certificate");
     let tcp = TcpStream::connect(broker.controller_addr())

@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 use crate::support::{
     client::http_get,
-    produce::SinglePartitionProduceSetup,
+    produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},
     topics::{TopicPartitionCount, TopicReplicationFactor, creatable_topic, create_topic_request},
 };
@@ -53,7 +53,7 @@ pub async fn produce_five(client: &Client, topic_id: uuid::Uuid) {
         .map(|offset| value_record(offset, Some(bytes::Bytes::from_static(b"work"))))
         .collect();
     let response = client
-        .send(crate::support::produce::batch_request(
+        .send(batch_request(
             RecordBatch {
                 last_offset_delta: 4,
                 ..batch_from_records(records)

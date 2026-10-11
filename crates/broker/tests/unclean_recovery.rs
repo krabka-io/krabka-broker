@@ -102,7 +102,7 @@ async fn wait_partition_hosted(handle: &BrokerHandle, topic: &str, partition: i3
 }
 
 use crate::support::{
-    admin::ElectionKind,
+    admin::{ElectionKind, ElectionSetup},
     partitions::{wait_partition_isr_only, wait_partition_leader},
     registered_cluster, shutdown_cluster,
 };
@@ -362,7 +362,7 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
         elect_addr,
         ElectionExchangeSetup {
             client_id: CLIENT_ID,
-            election: crate::support::admin::ElectionSetup {
+            election: ElectionSetup {
                 topic: (topic).to_string(),
                 kind: ElectionKind::Unclean,
                 ..Default::default()

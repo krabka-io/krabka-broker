@@ -9,7 +9,10 @@
 
 use crate::support::{
     self,
-    topics::{CreateTopicSetup, configured_topic_request, creatable_topic, create_topic_request},
+    topics::{
+        ConfiguredTopicSetup, CreateTopicSetup, configured_topic_request, creatable_topic,
+        create_topic_request,
+    },
 };
 
 /// Verifies the checkpoint path. The broker is configured with an audit
@@ -35,7 +38,7 @@ async fn signed_checkpoints_appear_on_audit_topic() {
     let _ = p
         .client
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: ("cp-topic").into(),
                 ..Default::default()
             },

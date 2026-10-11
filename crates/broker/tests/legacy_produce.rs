@@ -5,9 +5,12 @@
 
 use assert2::assert;
 
-use crate::support::{
-    fetch::{SinglePartitionFetchSetup, single_partition_fetch},
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+use crate::{
+    kafka_wire::LegacyExchangeSetup,
+    support::{
+        fetch::{SinglePartitionFetchSetup, single_partition_fetch},
+        topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    },
 };
 mod kafka_wire;
 mod support;
@@ -114,7 +117,7 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
     // Produce v0, correlation ID 1 and legacy headers are the setup defaults.
     let resp_body = round_trip_v0(
         &mut stream,
-        crate::kafka_wire::LegacyExchangeSetup {
+        LegacyExchangeSetup {
             client_id: "legacy-produce-test",
             ..Default::default()
         },

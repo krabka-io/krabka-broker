@@ -22,7 +22,9 @@ use crate::{
             IncrementalConfigsSetup, incremental_config, incremental_request, incremental_resource,
         },
         start_n_node_with,
-        topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+        topics::{
+            ConfiguredTopicSetup, TopicReplicationFactor, creatable_topic, create_topic_request,
+        },
     },
 };
 
@@ -32,7 +34,7 @@ const POLICY_VIOLATION: i16 = 44;
 fn create_request(name: &str, replication_factor: i16) -> CreateTopicsRequest {
     create_topic_request(creatable_topic(ConfiguredTopicSetup {
         name: (name).into(),
-        replicas: crate::support::topics::TopicReplicationFactor(replication_factor),
+        replicas: TopicReplicationFactor(replication_factor),
         ..Default::default()
     }))
 }

@@ -8,9 +8,9 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE, KAFKA_IMAGE_TXN, assert_console_values, broker0_advertised, docker_run_kafka_tool,
-    docker_run_kafka_tool_with_image, nc_check_connectivity, produce_console_checked,
-    start_console_broker, start_host_broker,
+    KAFKA_IMAGE, KAFKA_IMAGE_TXN, assert_console_values, broker0_advertised,
+    describe_console_group, docker_run_kafka_tool, docker_run_kafka_tool_with_image,
+    nc_check_connectivity, produce_console_checked, start_console_broker, start_host_broker,
 };
 
 // Same multi-thread runtime caveat as `console_producer_round_trip`:
@@ -96,7 +96,7 @@ async fn console_consumer_with_static_membership() {
     // `kafka-consumer-groups --describe` exercises the broker's
     // DescribeGroups path. The output should mention the instance id so
     // operators can correlate static slots back to pods.
-    let desc_out = crate::jvm_acceptance::describe_console_group(GROUP);
+    let desc_out = describe_console_group(GROUP);
     let s = String::from_utf8_lossy(&desc_out.stdout);
     assert!(s.contains(TOPIC), "describe missing topic {TOPIC}: {s}");
 

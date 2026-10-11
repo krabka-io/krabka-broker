@@ -23,7 +23,7 @@ use crate::{
     },
     support::{
         self,
-        topics::{creatable_topic, create_topic_request},
+        topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
     },
 };
 
@@ -35,7 +35,7 @@ async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {
     let cr = p
         .client
         .send(create_topic_request(creatable_topic(
-            crate::support::topics::ConfiguredTopicSetup {
+            ConfiguredTopicSetup {
                 name: ("legacy_fetch_basic").into(),
                 ..Default::default()
             },

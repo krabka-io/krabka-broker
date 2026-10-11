@@ -20,10 +20,11 @@ use crate::{
     control_plane::freeze_scope,
     support::{
         self,
-        client::connect_owned,
+        client::{connect_owned, scrape_metrics},
         discovery::named_topic_metadata,
         fetch::{SinglePartitionFetchSetup, single_partition_fetch},
         offsets::{offset_commit_partition, offset_commit_topic},
+        records::record_count,
     },
     wire::{CONTROL, accepted, create_topic, frozen_topic_with_record, refused},
 };
@@ -48,7 +49,7 @@ async fn start_with_metrics() -> (BrokerHandle, Client, tempfile::TempDir) {
 
 /// Scrape the `OpenMetrics` body from the broker's `/metrics` endpoint.
 async fn scrape(addr: std::net::SocketAddr) -> String {
-    crate::support::client::scrape_metrics(addr).await
+    scrape_metrics(addr).await
 }
 
 /// The number of records a fetch from offset zero returns.
@@ -67,7 +68,7 @@ async fn fetch_record_count(client: &Client, topic: &str, topic_id: WireUuid) ->
         partition.error_code == codes::NONE,
         "Fetch partition: {partition:?}"
     );
-    crate::support::records::record_count(partition.records.as_ref())
+    record_count(partition.records.as_ref())
 }
 
 /// A frozen topic stays readable, stays visible, and stays observable.

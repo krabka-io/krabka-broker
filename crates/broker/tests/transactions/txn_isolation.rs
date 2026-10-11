@@ -16,10 +16,10 @@ use crate::{
     support::{
         client::connect_client,
         discovery::topic_metadata_request,
-        fetch::{SinglePartitionFetchSetup, single_partition_fetch},
+        fetch::{RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch},
         producer::{default_producer, enqueue_string_values, transactional_producer},
         topics::metadata_topic,
-        transaction_wire::{observed_values, read_committed_at_least},
+        transaction_wire::{committed_values, observed_values, read_committed_at_least},
     },
     txn_harness::{boot_single, create_topic, create_topic_with_segment_bytes, rec, send_ok},
 };
@@ -36,8 +36,7 @@ async fn commit_then_read_committed_sees_records() {
     enqueue_string_values(&producer, "t", &["a", "b", "c"]).await;
     txn.commit().await.unwrap();
 
-    let (consumer, seen) =
-        crate::support::transaction_wire::committed_values(bootstrap, "g1", "t", None).await;
+    let (consumer, seen) = committed_values(bootstrap, "g1", "t", None).await;
     assert!(seen == vec!["a", "b", "c"]);
 
     producer.close().await.unwrap();
@@ -102,9 +101,7 @@ async fn abort_then_read_committed_skips_records() {
             ..single_partition_fetch(SinglePartitionFetchSetup {
                 topic: "ta".into(),
                 topic_id,
-                limits: crate::support::fetch::FetchLimits::one_mebibyte(
-                    crate::support::fetch::RequestWaitMillis(1_000),
-                ),
+                limits: crate::support::fetch::FetchLimits::one_mebibyte(RequestWaitMillis(1_000)),
                 ..Default::default()
             })
         })

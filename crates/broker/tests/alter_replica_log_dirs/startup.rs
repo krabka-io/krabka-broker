@@ -13,7 +13,7 @@ use krabka_client_producer::Producer;
 
 use crate::{
     harness::{count_topic_dirs, wait_for_move_complete},
-    support::storage::two_dir_config,
+    support::{producer::enqueue_unkeyed_values, storage::two_dir_config},
     two_dir_topic::{Setup, create_and_wait},
     wire::{CLIENT_ID, describe_log_dirs},
 };
@@ -50,7 +50,7 @@ async fn startup_resumes_move_for_existing_partition() {
         .build()
         .await
         .expect("producer");
-    crate::support::producer::enqueue_unkeyed_values(
+    enqueue_unkeyed_values(
         &producer,
         "t",
         (0..5i32).map(|i| Bytes::from(format!("v{i}"))),

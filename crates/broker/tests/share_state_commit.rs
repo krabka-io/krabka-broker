@@ -49,6 +49,7 @@ use tempfile::TempDir;
 
 use crate::support::{
     client::connect_owned,
+    share::crash_follower,
     shutdown_cluster,
     topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
@@ -339,7 +340,7 @@ async fn a_share_state_request_is_answered_only_when_committed() {
 
     // Stop a follower of the state partition. It stays in the ISR, so the
     // high watermark stops below every later record.
-    let stopped_dir = crate::support::share::crash_follower(&mut cluster, coordinator).await;
+    let stopped_dir = crash_follower(&mut cluster, coordinator).await;
 
     let rows = [
         Rpc::Write { start_offset: 10 },

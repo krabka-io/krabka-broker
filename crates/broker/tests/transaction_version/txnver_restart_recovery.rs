@@ -20,7 +20,7 @@ use crate::{
     support::{
         client::start_client,
         topics::TopicPartitionCount,
-        transaction_wire::{TransactionPartitionsSetup, partitions_request},
+        transaction_wire::{TransactionPartitionsSetup, partitions_request, transaction_topic},
         transactions::{
             EndTransactionSetup, InitProducerSetup, ProducerIdentity, end_transaction_request,
             init_producer_request,
@@ -111,7 +111,7 @@ async fn add_partition_ongoing(
     topic: &str,
     partition: i32,
 ) {
-    let added_topic = crate::support::transaction_wire::transaction_topic(topic, vec![partition]);
+    let added_topic = transaction_topic(topic, vec![partition]);
     let add = client
         .send(partitions_request(TransactionPartitionsSetup {
             transactional_id: tid,

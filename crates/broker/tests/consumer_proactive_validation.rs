@@ -86,6 +86,7 @@ use crate::support::{
     consumer_groups::routing_consumer,
     produce::{SinglePartitionProduceSetup, batch_request},
     records::value_record,
+    standalone_broker,
     topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
 };
 
@@ -168,7 +169,7 @@ async fn create_topic(client: &Client, name: &str) {
 /// therefore discriminating.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_proactively_validates_and_surfaces_truncation() {
-    let (_dir, broker) = crate::support::standalone_broker().await;
+    let (_dir, broker) = standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
     let topic = "proactive-trunc";
 

@@ -48,7 +48,7 @@ pub use topics::creatable_topic as topic;
 
 use crate::support::{
     admin::{ElectionSetup, election_partition_errors, election_request},
-    produce::{SinglePartitionProduceSetup, batch_request},
+    produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
     topics::{self, AssignedTopicSetup, ConfiguredTopicSetup, assigned_topic},
     wire::{self as frames, ApiRequestSetup, CorrelationId},
 };
@@ -794,7 +794,7 @@ pub fn produce_records(
         },
         SinglePartitionProduceSetup {
             topic: setup.topic,
-            timeout: crate::support::produce::ProduceTimeoutMillis(30_000),
+            timeout: ProduceTimeoutMillis(30_000),
             ..Default::default()
         },
     )

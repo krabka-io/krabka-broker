@@ -9,7 +9,7 @@ use assert2::assert;
 use krabka_client_producer::{ConsumerGroupMetadata, Producer};
 
 use crate::{
-    support::producer::enqueue_string_values,
+    support::{producer::enqueue_string_values, transaction_wire::committed_values},
     txn_harness::{boot_single_sasl, create_topic_sasl, sasl_plain_security},
 };
 
@@ -74,7 +74,7 @@ async fn sasl_authenticated_transactional_flow_commits() {
         return;
     }
 
-    let (consumer, seen) = crate::support::transaction_wire::committed_values(
+    let (consumer, seen) = committed_values(
         bootstrap,
         "sasl-verify",
         "sasl-txn",

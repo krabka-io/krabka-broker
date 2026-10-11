@@ -32,7 +32,7 @@ use crate::{
         storage::count_partition_dirs, topics::TopicPartitionCount,
         wire::HeaderEncoding as RequestHeaderEncoding,
     },
-    two_dir_topic::{PartitionReadiness, Setup},
+    two_dir_topic::{PartitionReadiness, Setup, start},
 };
 
 const CLIENT_ID: &str = "krabka-jbod-test";
@@ -65,7 +65,7 @@ fn count_topic_dirs(dir: &std::path::Path, topic: &str) -> usize {
 #[tokio::test]
 async fn partitions_spread_across_dirs_and_describe_log_dirs_reports_them() {
     let n: i32 = 6;
-    let (handle, primary, extra, addr) = crate::two_dir_topic::start(Setup {
+    let (handle, primary, extra, addr) = start(Setup {
         client_id: CLIENT_ID,
         partitions: TopicPartitionCount(n),
         readiness: PartitionReadiness::LocalWriterPresent,

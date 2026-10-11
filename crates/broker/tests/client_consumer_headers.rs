@@ -5,7 +5,7 @@ use krabka_client_producer::{Header, ProducerRecord};
 
 use crate::support::{
     client::standalone_topic,
-    producer::{default_producer, producer_record},
+    producer::{ProducerRecordSetup, default_producer, producer_record},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -19,7 +19,7 @@ async fn consumer_record_carries_headers() {
                 key: "trace".into(),
                 value: Some("abc".into()),
             }],
-            ..producer_record(crate::support::producer::ProducerRecordSetup {
+            ..producer_record(ProducerRecordSetup {
                 topic: ("h").into(),
                 value: Some("v".into()),
                 ..Default::default()

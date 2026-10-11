@@ -29,8 +29,8 @@ use crate::{
         },
         topics::TopicPartitionCount,
         transaction_wire::{
-            add_partition_request, coordinator_loading, partition_error, retry_coordinator,
-            settled_produce,
+            add_partition_request, coordinator_loading, initialize_transactional, partition_error,
+            retry_coordinator, settled_produce,
         },
         transactions::{
             EndTransactionSetup, ProducerEpoch, ProducerEpochOffset, ProducerIdentity,
@@ -148,7 +148,7 @@ async fn init_transactional_producer(
     transactional_id: &str,
 ) -> krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse {
     find_coordinator(client, transactional_id).await;
-    crate::support::transaction_wire::initialize_transactional(
+    initialize_transactional(
         client,
         transactional_id,
         |code| coordinator_loading(code) || code == CONCURRENT_TRANSACTIONS,

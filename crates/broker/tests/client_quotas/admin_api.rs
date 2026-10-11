@@ -12,6 +12,7 @@ use super::{
 };
 use crate::{
     CLIENT_ID,
+    cluster::wait_alice_quota,
     kafka_wire::{
         PlainAuthenticationSetup,
         quotas::{QuotaAlterSetup, QuotaDescribeSetup, UserQuotaSetup},
@@ -47,7 +48,7 @@ async fn alter_then_describe_round_trip() {
     );
 
     // Await until the quota is visible in the committed metadata image.
-    crate::cluster::wait_alice_quota(&handle, "producer_byte_rate", 1024.0).await;
+    wait_alice_quota(&handle, "producer_byte_rate", 1024.0).await;
 
     // Describe: fetch back the quota.
     let desc = drive_describe_client_quotas_sasl(

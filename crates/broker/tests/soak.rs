@@ -130,7 +130,10 @@ mod probe;
 use crate::{
     cluster::SoakCluster,
     drift::{Bound, Series},
-    support::{producer::ProducerRecordSetup, topics::topic_configs},
+    support::{
+        producer::{ProducerRecordSetup, producer_record},
+        topics::topic_configs,
+    },
 };
 
 /// How long the load runs when `KRABKA_SOAK_SECONDS` is unset.
@@ -243,7 +246,7 @@ fn soak_duration() -> Duration {
 
 /// One record of `PAYLOAD_BYTES` bytes on `topic`.
 fn record(topic: &str, key: String, value: Vec<u8>) -> ProducerRecord {
-    crate::support::producer::producer_record(ProducerRecordSetup {
+    producer_record(ProducerRecordSetup {
         topic: topic.to_owned(),
         key: Some(key.into()),
         value: Some(value.into()),
