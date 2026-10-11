@@ -131,7 +131,8 @@ fn args(
     target: &std::path::Path,
     capture: &std::path::Path,
 ) -> krabka_restore::RestoreArgs {
-    capture_args(archive, target, capture, &[])
+    let empty: [String; 0] = [];
+    capture_args(archive, target, capture, &empty)
 }
 
 fn bounded_args(
@@ -139,12 +140,8 @@ fn bounded_args(
     target: &std::path::Path,
     capture: &std::path::Path,
 ) -> krabka_restore::RestoreArgs {
-    capture_args(
-        archive,
-        target,
-        capture,
-        &["--to-offset".into(), "orders:0=0".into()],
-    )
+    let limit = ["--to-offset".into(), "orders:0=0".into()];
+    capture_args(archive, target, capture, &limit)
 }
 
 fn trusted_args(

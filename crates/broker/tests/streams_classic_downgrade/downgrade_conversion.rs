@@ -77,14 +77,12 @@ async fn drained_streams_group_downgrades_and_preserves_offsets() {
 
     // ── Phase 2: classic JoinGroup for the same id → downgrade to classic. ──
     let (_cm, _gen) = classic_join_sync(&classic_client, "g").await;
-    broker
-        .wait_until_group_type("g", krabka_broker::coordinator::unified::GroupType::Classic)
-        .await;
-    assert!(
-        broker.group_type_for_test("g")
-            == Some(krabka_broker::coordinator::unified::GroupType::Classic),
-        "group_type must be Classic after downgrade, got {:?}",
-        broker.group_type_for_test("g")
+    use krabka_broker::coordinator::unified::GroupType;
+    broker.wait_until_group_type("g", GroupType::Classic).await;
+    assert_eq!(
+        broker.group_type_for_test("g"),
+        Some(GroupType::Classic),
+        "group_type must be Classic after downgrade"
     );
 
     // ── Phase 3: committed offset survives the flip. ──

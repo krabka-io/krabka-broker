@@ -283,19 +283,16 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
 /// `last_snapshot_offset == 1`, not `Offset(-1)`.
 #[tokio::test]
 async fn replay_snapshot_offset_is_base_plus_delta() {
-    let dir = tempdir().unwrap();
-    let tid = uuid::Uuid::from_bytes([12; 16]);
-    let (coord, _reg, part) = led_state_partition(dir.path(), tid).await;
+    let scratch = tempdir().unwrap();
+    let topic_id = uuid::Uuid::from_bytes([12; 16]);
+    let (coord, _reg, part) = led_state_partition(scratch.path(), topic_id).await;
 
-    let (snap_key, upd_key) = state_keys(tid);
-
-    // Single batch, base_offset 0: an UPDATE at delta 0 then a SNAPSHOT at
-    // delta 1. The snapshot's rec_offset is `0 + 1 == 1`.
+    let (snap_key, upd_key) = state_keys(topic_id);
     append_update_then_snapshot(&part, &snap_key, upd_key).await;
 
     coord.reload_all_partitions_for_test().await;
 
-    let st = coord.state_for_test("g", tid, 0).await.expect("recovered");
+    let st = coord.state_for_test("g", topic_id, 0).await.expect("recovered");
     check!(st.leader_epoch == 3);
     check!(st.start_offset == 20);
     // The snapshot record sits at base_offset(0) + offset_delta(1) == 1.

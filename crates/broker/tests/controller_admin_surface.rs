@@ -408,22 +408,20 @@ async fn controller_listener_serves_the_topic_lifecycle() {
         .expect("DeleteTopics over the controller listener");
     connection.close();
 
-    check!(
-        deleted
-            == DeleteTopicsResponse {
-                throttle_time_ms: 0,
-                responses: vec![DeletableTopicResult {
-                    name: Some("controller-lifecycle".into()),
-                    // A deleted topic's row carries its topic id, as Kafka's
-                    // `ControllerApis.deleteTopics` answers it (#634).
-                    topic_id: created_topic.topic_id,
-                    error_code: 0,
-                    error_message: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
-    );
+    let expected_delete = DeleteTopicsResponse {
+        throttle_time_ms: 0,
+        responses: vec![DeletableTopicResult {
+            name: Some("controller-lifecycle".into()),
+            // A deleted topic's row carries its topic id, as Kafka's
+            // `ControllerApis.deleteTopics` answers it (#634).
+            topic_id: created_topic.topic_id,
+            error_code: 0,
+            error_message: None,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    check!(deleted == expected_delete);
     broker.shutdown().await;
 }
 

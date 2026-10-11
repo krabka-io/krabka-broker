@@ -117,25 +117,26 @@ pub fn describe_quorum(
     quorum: &QuorumStateSnapshot,
 ) -> DescribeQuorumResponse {
     if !names_only_the_metadata_partition(request) {
+        let topics: Vec<TopicData> = request
+            .topics
+            .iter()
+            .map(|topic| TopicData {
+                topic_name: topic.topic_name.clone(),
+                partitions: topic
+                    .partitions
+                    .iter()
+                    .map(|partition| PartitionData {
+                        partition_index: partition.partition_index,
+                        error_code: UNKNOWN_TOPIC_OR_PARTITION,
+                        error_message: Some(UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .collect();
         return DescribeQuorumResponse {
-            topics: request
-                .topics
-                .iter()
-                .map(|topic| TopicData {
-                    topic_name: topic.topic_name.clone(),
-                    partitions: topic
-                        .partitions
-                        .iter()
-                        .map(|partition| PartitionData {
-                            partition_index: partition.partition_index,
-                            error_code: UNKNOWN_TOPIC_OR_PARTITION,
-                            error_message: Some(UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()),
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                })
-                .collect(),
+            topics,
             // Kafka's `getPartitionLevelErrorResponse` leaves the top-level
             // message at its empty default.
             error_message: Some(String::new()),

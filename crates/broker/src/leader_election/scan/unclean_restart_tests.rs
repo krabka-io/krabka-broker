@@ -143,16 +143,14 @@ async fn a_partition_the_returning_broker_leads_is_re_elected() {
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
-    assert!(
-        plan.changes
-            == vec![MetadataRecord::V1Partition(expected_partition(
-                ExpectedPartitionSetup {
-                    leader: krabka_raft::NodeId(1),
-                    isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
-                    ..Default::default()
-                }
-            ))]
-    );
+    let expected = vec![MetadataRecord::V1Partition(expected_partition(
+        ExpectedPartitionSetup {
+            leader: krabka_raft::NodeId(1),
+            isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+            ..Default::default()
+        },
+    ))];
+    assert_eq!(plan.changes, expected);
 }
 
 /// A partition the returning broker is neither leading nor in the ISR of, and

@@ -638,13 +638,13 @@ mod tests {
             RecoveryStrategy::None,
             true,
         );
-        assert!(
-            decision
-                == super::FailoverDecision::Elect {
-                    leader: NodeId(3),
-                    isr: vec![NodeId(3)],
-                    unclean: true,
-                }
+        assert_eq!(
+            decision,
+            super::FailoverDecision::Elect {
+                leader: NodeId(3),
+                isr: vec![NodeId(3)],
+                unclean: true,
+            }
         );
     }
 

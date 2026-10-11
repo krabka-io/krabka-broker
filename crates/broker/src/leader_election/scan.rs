@@ -427,13 +427,16 @@ pub(crate) async fn compute_unclean_restart_changes(
                 isr,
                 unclean,
             } => {
-                let Some((partition_epoch, new_leader_epoch)) = checked_epochs(
+                let (partition_epoch, new_leader_epoch) = match checked_epochs(
                     pr,
                     true,
                     "unclean-restart failover skipped because a metadata epoch is exhausted",
-                ) else {
-                    unavailable.push((pr.topic.clone(), pr.partition));
-                    continue;
+                ) {
+                    Some(pair) => pair,
+                    None => {
+                        unavailable.push((pr.topic.clone(), pr.partition));
+                        continue;
+                    }
                 };
                 if unclean {
                     warn!(

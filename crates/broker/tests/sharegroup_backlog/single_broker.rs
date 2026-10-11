@@ -58,17 +58,15 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
         .expect("topic metadata");
     produce_five(&client, topic_id).await;
 
-    let joined = client
-        .send(ShareGroupHeartbeatRequest {
-            group_id: GROUP.into(),
-            member_id: "member-1".into(),
-            member_epoch: 0,
-            subscribed_topic_names: Some(vec![TOPIC.into()]),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(joined.error_code == 0, "{joined:?}");
+    let join_req = ShareGroupHeartbeatRequest {
+        group_id: GROUP.into(),
+        member_id: "member-1".into(),
+        member_epoch: 0,
+        subscribed_topic_names: Some(vec![TOPIC.into()]),
+        ..Default::default()
+    };
+    let joined = client.send(join_req).await.unwrap();
+    assert_eq!(joined.error_code, 0, "{joined:?}");
     broker
         .wait_for_share_state_summary(GROUP, topic_id, 0)
         .await;
