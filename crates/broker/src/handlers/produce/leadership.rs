@@ -9,6 +9,7 @@ use krabka_protocol::owned::produce_response::LeaderIdAndEpoch;
 use super::{ACKS_ALL, NO_LEADER_ID, topic_settings::topic_min_insync_replicas};
 use crate::{
     codes,
+    log_dir_status::LogDirRegistry,
     partition::{Partition, ReplicationTarget},
     partition_registry::PartitionRegistry,
     replica_state::ReplicaState,
@@ -41,7 +42,7 @@ pub(super) fn validate_partition_gate(
     partition_index: i32,
     acks: i16,
     partitions: &PartitionRegistry,
-    log_dir_status: &crate::log_dir_status::LogDirRegistry,
+    log_dir_status: &LogDirRegistry,
     image: &krabka_metadata::MetadataImage,
     broker_policy: BrokerProducePolicy,
 ) -> Result<Arc<Partition>, PartitionGateError> {

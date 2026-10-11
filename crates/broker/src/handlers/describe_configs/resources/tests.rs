@@ -29,8 +29,11 @@ use crate::{
     codes::{INVALID_REQUEST, INVALID_TOPIC_EXCEPTION, UNKNOWN_TOPIC_OR_PARTITION},
     config::BrokerConfig,
     config_keys::{
-        KAFKA_TRUNK_TOPIC_KEYS, broker_dynamic::TOPIC_DEFAULT_SYNONYMS, group::KAFKA_GROUP_KEYS,
-        kafka_broker::KAFKA_BROKER_CONFIGS, registry::ConfigType,
+        KAFKA_TRUNK_TOPIC_KEYS,
+        broker_dynamic::TOPIC_DEFAULT_SYNONYMS,
+        group::KAFKA_GROUP_KEYS,
+        kafka_broker::{KAFKA_BROKER_CONFIGS, lookup},
+        registry::ConfigType,
     },
     coordinator::unified::streams::config::StreamsGroupConfig,
     file_config::FileConfig,
@@ -98,7 +101,7 @@ fn static_view(result: &DescribeConfigsResult) -> Vec<DescribeConfigsResourceRes
                 .iter()
                 .any(|(broker, _)| *broker == entry.name)
                 && (EMITTED_ELSEWHERE.contains(&entry.name.as_str())
-                    || crate::config_keys::kafka_broker::lookup(&entry.name).is_none())
+                    || lookup(&entry.name).is_none())
         })
         .cloned()
         .collect()

@@ -22,6 +22,7 @@ use crate::{
             DeletionTarget, DeletionTombstonesSetup, OffsetRecordSetup,
             TopicDeletionTombstonesSetup, default_coordinator, deletion_tombstones, offset_record,
             parsed_offset_records, replay_offset_batch as batch, temp_log,
+            topic_deletion_tombstones,
         },
         unified::{
             GroupCoordinator, actor::test_support::empty_metadata,
@@ -63,12 +64,11 @@ struct Row {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
-    let orders_group_tombstones =
-        crate::coordinator::test_support::topic_deletion_tombstones(TopicDeletionTombstonesSetup {
-            partitions: &[krabka_ids::PartitionIndex(0), krabka_ids::PartitionIndex(1)],
-            target: DeletionTarget::Group,
-            ..Default::default()
-        });
+    let orders_group_tombstones = topic_deletion_tombstones(TopicDeletionTombstonesSetup {
+        partitions: &[krabka_ids::PartitionIndex(0), krabka_ids::PartitionIndex(1)],
+        target: DeletionTarget::Group,
+        ..Default::default()
+    });
     let rows = [
         Row {
             name: "no offsets",

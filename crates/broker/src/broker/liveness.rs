@@ -13,7 +13,7 @@ use crate::{
     cordoned_log_dirs::CordonedLogDirs,
     heartbeat::{
         client::{Config, InitialUnfence, run},
-        controller_state::ControllerLivenessState,
+        controller_state::{ControllerLivenessState, replicated_registrations},
     },
     leader_election::{LivenessTickState, run_liveness_tick},
     log_dir_id::LogDirIds,
@@ -86,7 +86,7 @@ async fn on_leadership_wake(
         liveness
             .seed_term(
                 controller.current_controller_epoch(),
-                crate::heartbeat::controller_state::replicated_registrations(&image),
+                replicated_registrations(&image),
             )
             .await;
     }

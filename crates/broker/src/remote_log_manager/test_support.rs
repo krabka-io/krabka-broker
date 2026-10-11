@@ -25,6 +25,7 @@ use crate::{
     api_catalog::UnstableApiVersions,
     broker::spawn_partition,
     log_dir::partition_dir,
+    log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource,
     metrics::{BrokerMetrics, TopicLabel},
     partition::Partition,
@@ -358,7 +359,7 @@ pub fn leading_partition_over(
         index,
         log_dir.to_path_buf(),
         log,
-        crate::log_dir_status::LogDirRegistry::default(),
+        LogDirRegistry::default(),
         Arc::new(ProducerState::new()),
         false,
     );
