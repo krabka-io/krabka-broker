@@ -5,8 +5,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 
 use crate::{
-    event::{AuditEvent, AuditEventClass},
-    ocsf::{ProductInfo, to_ocsf},
+    chain::to_hex, event::{AuditEvent, AuditEventClass}, ocsf::{ProductInfo, to_ocsf},
 };
 
 /// Record-header key for the per-broker chain sequence number in decimal ASCII.
@@ -49,7 +48,7 @@ impl AuditRecord {
             .push((HEADER_SEQ.to_string(), seq.to_string().into_bytes()));
         self.headers.push((
             HEADER_PREV_HASH.to_string(),
-            crate::chain::to_hex(prev_head).into_bytes(),
+            to_hex(prev_head).into_bytes(),
         ));
     }
 
@@ -176,7 +175,9 @@ impl AuditSink for MemorySink {
 mod tests {
     use assert2::check;
 
-    use super::*;
+    use crate::test_support::authentication;
+
+use super::*;
 
     #[test]
     fn io_error_displays() {
@@ -222,7 +223,7 @@ mod tests {
             name: "n".into(),
             version: "0".into(),
         };
-        let authn = crate::test_support::authentication(1, None, 0);
+        let authn = authentication(1, None, 0);
         let r = AuditRecord::from_event(&authn, &product);
         check!(
             (hdr(&r, "principal"), hdr(&r, "status"))

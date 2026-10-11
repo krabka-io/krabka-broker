@@ -13,7 +13,7 @@ use krabka_units::{
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::{broker::Broker, config::BrokerConfig, partition_registry::PartitionRegistry};
+use crate::{audit_sink::KafkaTopicAuditSink, broker::Broker, config::BrokerConfig, metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry, time_util::system_timer};
 
 fn audit_signer(config: &BrokerConfig) -> Option<Arc<krabka_audit::FileEd25519Signer>> {
     let (Some(path), Some(key_id)) = (&config.audit_signing_key_path, &config.audit_signing_key_id)
@@ -48,7 +48,7 @@ fn open_audit_spool(
 fn spawn_audit_metrics(
     stats: Arc<krabka_audit::AuditStats>,
     log: Arc<krabka_audit::AuditLog>,
-    metrics: crate::metrics::BrokerMetrics,
+    metrics: BrokerMetrics,
     poll_interval: Time,
     shutdown: CancellationToken,
 ) {
@@ -87,9 +87,9 @@ fn spawn_audit_metrics(
 
 pub(super) fn start_audit_pipeline(
     config: &mut BrokerConfig,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
     partitions: &Arc<PartitionRegistry>,
-    metrics: &crate::metrics::BrokerMetrics,
+    metrics: &BrokerMetrics,
     supervisor_shutdown: &CancellationToken,
 ) -> (
     Option<PartitionIndex>,
@@ -168,7 +168,7 @@ pub(super) fn start_audit_pipeline(
         drop(receiver);
         None
     } else if let Some(partition_index) = led_partition {
-        let sink = Arc::new(crate::audit_sink::KafkaTopicAuditSink::new(
+        let sink = Arc::new(KafkaTopicAuditSink::new(
             Arc::clone(partitions),
             config.audit_topic.clone(),
             partition_index,
@@ -202,7 +202,7 @@ pub(super) fn start_audit_pipeline(
                 spool,
                 stats: Arc::clone(&stats),
                 replay_every: config.audit_spool_replay_interval,
-                timer: crate::time_util::system_timer(),
+                timer: system_timer(),
             },
         );
         let writer_handle = tokio::spawn(writer.run());

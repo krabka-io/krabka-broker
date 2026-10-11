@@ -38,8 +38,7 @@ use krabka_verified::{
 
 use self::codec::{HEADER_LEN, decode_record, encode_frame, file_header, strip_file_header};
 use crate::{
-    ids::{MaxSpoolBytes, RecordCount, SpoolBytes},
-    sink::{AuditError, AuditRecord},
+    event::AuditEventClass, ids::{MaxSpoolBytes, RecordCount, SpoolBytes}, sink::{AuditError, AuditRecord},
 };
 
 mod codec;
@@ -239,7 +238,7 @@ impl PendingLosses {
 
 /// The losses a records-lost marker reports, or `None` for any other record.
 fn loss_marker_batch(record: &AuditRecord) -> Option<AuditLosses> {
-    if record.class != crate::event::AuditEventClass::RecordsLost {
+    if record.class != AuditEventClass::RecordsLost {
         return None;
     }
     let value = serde_json::from_slice::<serde_json::Value>(&record.value).ok()?;

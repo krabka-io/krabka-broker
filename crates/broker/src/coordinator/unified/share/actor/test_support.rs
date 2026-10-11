@@ -15,11 +15,9 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use super::{ShareGroupActorHandle, ShareGroupActorMessage};
-use crate::coordinator::unified::{
-    GroupCoordinator, actor::MetadataProvider, config::NextGenConfig,
-    offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-    share::config::ShareGroupConfig,
-};
+use crate::{coordinator::unified::{
+    GroupCoordinator, actor::MetadataProvider, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig, test_support::{MemberEpoch, fixed_source, make_share_persister},
+}, test_support::PartitionCount};
 
 #[derive(Debug)]
 struct StaticMetadata {
@@ -35,13 +33,13 @@ impl MetadataProvider for StaticMetadata {
 pub(super) struct TopicMetadataSetup<'a> {
     #[default("t")]
     pub name: &'a str,
-    pub partitions: crate::test_support::PartitionCount,
+    pub partitions: PartitionCount,
 }
 
 impl TopicMetadataSetup<'_> {
     pub(super) fn four_partitions() -> Self {
         Self {
-            partitions: crate::test_support::PartitionCount(4),
+            partitions: PartitionCount(4),
             ..Default::default()
         }
     }
@@ -78,8 +76,8 @@ pub(super) fn unavailable_persister_coordinator(
     let (metadata, topic_id) = metadata_with_topic(setup);
     let (coordinator, log) = make_coordinator(metadata);
     coordinator.set_share_persister(
-        crate::coordinator::unified::test_support::make_share_persister(
-            crate::coordinator::unified::test_support::fixed_source(
+        make_share_persister(
+            fixed_source(
                 krabka_metadata::MetadataImage::default(),
             ),
         ),
@@ -122,7 +120,7 @@ pub(super) fn make_coordinator_with_config(
         share,
         metadata,
         log.clone(),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        StreamsGroupConfig::default(),
     ));
     (coord, log)
 }
@@ -131,7 +129,7 @@ pub(super) fn make_coordinator_with_config(
 pub(super) struct ShareSubscriptionSetup<'a> {
     #[default("m1")]
     pub member_id: &'a str,
-    pub epoch: crate::coordinator::unified::test_support::MemberEpoch,
+    pub epoch: MemberEpoch,
 }
 
 /// Ordinary share heartbeat for the test topic, with every other wire field defaulted.

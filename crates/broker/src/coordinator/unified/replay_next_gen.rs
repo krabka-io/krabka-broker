@@ -380,9 +380,7 @@ mod tests {
         persistence_next_gen::{
             AssignedTopicPartitions, GroupMetadataValue, NextGenKey, RegularExpressionValue,
             TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
-        },
-        share::persistence::ShareGroupMetadataValue,
-        test_support::{next_current, next_member, proto_uuid, replay_tombstone_constructor},
+        }, share::persistence::ShareGroupMetadataValue, test_support::{check_replay_cases, deletion_replay_cases, next_current, next_member, proto_uuid, replay_tombstone_constructor},
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -646,12 +644,12 @@ mod tests {
         ];
         rows.splice(
             5..5,
-            crate::coordinator::unified::test_support::deletion_replay_cases(
+            deletion_replay_cases(
                 full_group(),
                 kafka_deletion(),
             ),
         );
-        crate::coordinator::unified::test_support::check_replay_cases(
+        check_replay_cases(
             &rows,
             replay,
             |coord| coord.seeds.get("g").map(|seed| seed.value().clone()),

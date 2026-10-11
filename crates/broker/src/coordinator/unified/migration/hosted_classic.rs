@@ -315,7 +315,9 @@ mod tests {
     use assert2::check;
     use krabka_protocol::primitives::uuid::Uuid;
 
-    use super::*;
+    use crate::coordinator::unified::actor::test_support::topic_reconcile_input;
+
+use super::*;
 
     const TOPIC: Uuid = Uuid([7; 16]);
     const TARGET_EPOCH: i32 = 5;
@@ -373,7 +375,7 @@ mod tests {
     }
 
     fn image() -> ReconcileInput {
-        crate::coordinator::unified::actor::test_support::topic_reconcile_input("t", TOPIC, 2)
+        topic_reconcile_input("t", TOPIC, 2)
     }
 
     fn sync_request(member_id: &str, generation_id: i32) -> SyncGroupRequest {

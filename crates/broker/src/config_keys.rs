@@ -108,6 +108,8 @@ mod validation;
 #[cfg(test)]
 pub(crate) use topic_scope::ELIGIBLE_LEADER_REPLICAS;
 
+use crate::api_catalog::UnstableApiVersions;
+
 pub use self::docs::{TopicConfigDoc, topic_config_docs};
 pub(crate) use self::{
     broker_defaults::{BrokerLogDefaults, dynamic_log_base},
@@ -272,9 +274,9 @@ pub(crate) const KAFKA_TRUNK_TOPIC_KEYS: &[&str] = &[
 /// under trunk, and every key but [`KAFKA_TRUNK_TOPIC_KEYS`] otherwise.
 pub(crate) fn serves_topic_key(
     name: &str,
-    unstable: crate::api_catalog::UnstableApiVersions,
+    unstable: UnstableApiVersions,
 ) -> bool {
-    unstable == crate::api_catalog::UnstableApiVersions::Enabled
+    unstable == UnstableApiVersions::Enabled
         || !KAFKA_TRUNK_TOPIC_KEYS.contains(&name)
 }
 

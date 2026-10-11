@@ -187,7 +187,7 @@ mod tests {
     use bytes::Bytes;
 
     use super::*;
-    use crate::coordinator::unified::{
+    use crate::{coordinator::unified::{
         ShareGroupSeed,
         share::{
             actor::ShareGroupActorMessage,
@@ -196,7 +196,7 @@ mod tests {
             },
         },
         test_support::{fixed_source, make_coord_with_log, make_share_persister, share_member},
-    };
+    }, metrics::{BrokerMetrics, ShareGroupIdLabel}};
 
     /// `(key, value)` of every record appended to `__consumer_offsets`.
     type Appended = Vec<(Option<Bytes>, Option<Bytes>)>;
@@ -446,8 +446,8 @@ mod tests {
     /// stay either way.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn deleting_a_share_group_releases_its_dead_letter_counters() {
-        let series = |metrics: &crate::metrics::BrokerMetrics, group: &str| {
-            let label = crate::metrics::ShareGroupIdLabel {
+        let series = |metrics: &BrokerMetrics, group: &str| {
+            let label = ShareGroupIdLabel {
                 group_id: group.to_owned(),
             };
             [
@@ -470,7 +470,7 @@ mod tests {
 
         for (members, expected, kept) in rows {
             let (coordinator, _log) = make_coord_with_log();
-            let metrics = crate::metrics::BrokerMetrics::new();
+            let metrics = BrokerMetrics::new();
             coordinator.set_metrics(metrics.clone());
             for group in ["sg", "other"] {
                 metrics.record_share_dlq_produce(group);

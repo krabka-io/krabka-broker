@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 
+use crate::{metadata_source::MetadataSource, metrics::BrokerMetrics, share_coordinator::persister_client::SharePersister};
+
 use super::{
     actor::{GroupActorHandle, MetadataProvider},
     config::NextGenConfig,
@@ -69,7 +71,7 @@ pub struct GroupCoordinator {
     /// calls after reconcile. It is `None` in the pure-coordinator unit tests,
     /// where the lifecycle hook does nothing.
     pub(crate) share_persister:
-        std::sync::OnceLock<Arc<crate::share_coordinator::persister_client::SharePersister>>,
+        std::sync::OnceLock<Arc<SharePersister>>,
 
     // ── KIP-1071 streams groups ──────────────────────────────────────────
     pub streams_config: Arc<StreamsGroupConfig>,
@@ -95,7 +97,7 @@ pub struct GroupCoordinator {
     /// `Broker::start` sets it once. It is `None` in the pure-coordinator unit
     /// tests, where nothing samples group lag and there is no series to
     /// release.
-    pub(crate) metrics: std::sync::OnceLock<crate::metrics::BrokerMetrics>,
+    pub(crate) metrics: std::sync::OnceLock<BrokerMetrics>,
     /// The latest topic deletions the image watcher saw, as name and topic id,
     /// oldest first. A `__consumer_offsets` partition that finishes loading
     /// after a deletion applies them to its groups. See
@@ -122,7 +124,7 @@ pub struct GroupCoordinator {
 /// placeholder.
 #[derive(Clone, derive_more::Debug)]
 pub(crate) struct MetadataSourceHandle(
-    #[debug(skip)] pub(crate) Arc<dyn crate::metadata_source::MetadataSource>,
+    #[debug(skip)] pub(crate) Arc<dyn MetadataSource>,
 );
 
 impl GroupCoordinator {
@@ -165,7 +167,7 @@ impl GroupCoordinator {
     /// not matter.
     pub(crate) fn set_share_persister(
         &self,
-        persister: Arc<crate::share_coordinator::persister_client::SharePersister>,
+        persister: Arc<SharePersister>,
     ) {
         let _ = self.share_persister.set(persister);
     }
@@ -186,7 +188,7 @@ impl GroupCoordinator {
     #[must_use]
     pub(crate) fn share_persister(
         &self,
-    ) -> Option<&Arc<crate::share_coordinator::persister_client::SharePersister>> {
+    ) -> Option<&Arc<SharePersister>> {
         self.share_persister.get()
     }
 
@@ -194,7 +196,7 @@ impl GroupCoordinator {
     ///
     /// `Broker::start` calls this once. A second call does nothing, because
     /// the `OnceLock` keeps the first value.
-    pub(crate) fn set_metadata_source(&self, src: Arc<dyn crate::metadata_source::MetadataSource>) {
+    pub(crate) fn set_metadata_source(&self, src: Arc<dyn MetadataSource>) {
         let _ = self.metadata_source.set(MetadataSourceHandle(src));
     }
 
@@ -206,7 +208,7 @@ impl GroupCoordinator {
     #[must_use]
     pub(crate) fn metadata_source(
         &self,
-    ) -> Option<Arc<dyn crate::metadata_source::MetadataSource>> {
+    ) -> Option<Arc<dyn MetadataSource>> {
         self.metadata_source.get().map(|h| h.0.clone())
     }
 
@@ -215,7 +217,7 @@ impl GroupCoordinator {
     ///
     /// `Broker::start` calls this once. A second call does nothing, because
     /// the `OnceLock` keeps the first value.
-    pub(crate) fn set_metrics(&self, metrics: crate::metrics::BrokerMetrics) {
+    pub(crate) fn set_metrics(&self, metrics: BrokerMetrics) {
         let _ = self.metrics.set(metrics);
     }
 

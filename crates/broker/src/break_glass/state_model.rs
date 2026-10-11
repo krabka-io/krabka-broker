@@ -31,12 +31,8 @@ use uuid::Uuid;
 
 use crate::{
     break_glass::{
-        config::BreakGlassPolicy,
-        gate,
-        handlers::approve::{self, Attempt},
-    },
-    config::BreakGlassConfig,
-    operator_keys::OperatorKeys,
+        config::BreakGlassPolicy, gate, handlers::{Refusal, approve::{self, Attempt}},
+    }, config::BreakGlassConfig, model_check::check_model, operator_keys::OperatorKeys,
 };
 
 /// The logical millisecond at which the proposal expires.
@@ -263,7 +259,7 @@ pub(super) fn config(
 }
 
 fn run(model: BreakGlassModel, label: &str, pinned_unique_states: usize) {
-    crate::model_check::check_model(
+    check_model(
         model,
         label,
         (MAX_DEPTH, TARGET_STATE_COUNT, MAX_UNIQUE_STATES),
@@ -340,7 +336,7 @@ pub(super) fn model_settle(
     principal: &str,
     withdraw: bool,
     now_ms: i64,
-) -> Result<BreakGlassProposalRecord, crate::break_glass::handlers::Refusal> {
+) -> Result<BreakGlassProposalRecord, Refusal> {
     let attempt = Attempt {
         principal,
         key_id: "",

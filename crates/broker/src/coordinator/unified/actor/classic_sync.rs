@@ -89,14 +89,10 @@ mod tests {
     use super::*;
     use crate::coordinator::unified::{
         actor::{
-            DescribeMember, GroupActorMessage,
-            test_support::{
-                decode_assignment, last_classic_metadata, make_coordinator,
-                make_coordinator_with_topic_policy, rpc, seed_and_upgrade,
-                upgrade_and_rejoin_classic, upgrade_coordinator,
+            DescribeMember, GroupActorMessage, test_support::{
+                decode_assignment, last_classic_metadata, make_coordinator, make_coordinator_with_topic_policy, rpc, seed_and_upgrade, seed_completing_classic, upgrade_and_rejoin_classic, upgrade_coordinator,
             },
-        },
-        classic_state::GroupState as ClassicGroupState,
+        }, classic_state::GroupState as ClassicGroupState, config::ConsumerGroupMigrationPolicy,
     };
 
     /// Partitions by topic id.
@@ -115,7 +111,7 @@ mod tests {
     async fn classic_leader_sync_persists_complete_stable_snapshot() {
         let (coord, log) = make_coordinator();
         let (handle, generation) =
-            crate::coordinator::unified::actor::test_support::seed_completing_classic(
+            seed_completing_classic(
                 &coord,
                 &["m1", "m2"],
             );
@@ -154,7 +150,7 @@ mod tests {
     async fn classic_sync_append_failure_rolls_back_and_can_retry() {
         let (coord, log) = make_coordinator();
         let (handle, generation) =
-            crate::coordinator::unified::actor::test_support::seed_completing_classic(
+            seed_completing_classic(
                 &coord,
                 &["m1"],
             );
@@ -346,7 +342,7 @@ mod tests {
         let (coord, log) = make_coordinator_with_topic_policy(
             "t",
             2,
-            crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
+            ConsumerGroupMigrationPolicy::Upgrade,
         );
         let handle = seed_and_upgrade(&coord, "t").await;
         let join = rpc::classic_join(&handle, "m-classic", "t").await;

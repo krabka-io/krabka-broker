@@ -7,7 +7,7 @@
 use assert2::check;
 
 use super::*;
-use crate::event::*;
+use crate::{event::*, test_support::{admin, denied, privileged_freeze}};
 
 fn product() -> ProductInfo {
     ProductInfo {
@@ -49,7 +49,7 @@ fn authentication_failure_maps_to_3002() {
 
 #[test]
 fn authorization_denied_maps_to_3003_failure() {
-    let ev = crate::test_support::denied(5);
+    let ev = denied(5);
     let j = to_ocsf(&ev, &product());
     check_fields(
         &j,
@@ -67,7 +67,7 @@ fn authorization_denied_maps_to_3003_failure() {
 
 #[test]
 fn admin_operation_maps_to_6003_with_resources() {
-    let ev = crate::test_support::admin(6);
+    let ev = admin(6);
     let j = to_ocsf(&ev, &product());
     check_fields(
         &j,
@@ -165,7 +165,7 @@ fn privileged_action_maps_to_6003_with_the_whole_body() {
     let cases = [
         (
             "signed freeze, verified, no proposal",
-            crate::test_support::privileged_freeze(vec![0xde, 0xad, 0xbe, 0xef], 0, 10),
+            privileged_freeze(vec![0xde, 0xad, 0xbe, 0xef], 0, 10),
             serde_json::json!({
                 "class_uid": 6003,
                 "category_uid": 6,

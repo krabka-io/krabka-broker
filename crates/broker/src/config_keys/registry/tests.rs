@@ -4,6 +4,8 @@
 use assert2::{assert, check};
 use krabka_units::convert::{ByteSizeExt as _, RatioExt as _, TimeExt as _};
 
+use crate::throttle::{ALTER_LOG_DIRS_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_REPLICAS_KEY, LEADER_THROTTLED_RATE_KEY, LEADER_THROTTLED_REPLICAS_KEY};
+
 use super::*;
 
 #[test]
@@ -53,11 +55,11 @@ fn topic_key_types_match_apache_kafka() {
         (LOCAL_RETENTION_BYTES, ConfigType::Long),
         (DELETE_RETENTION_MS, ConfigType::Long),
         (
-            crate::throttle::LEADER_THROTTLED_REPLICAS_KEY,
+            LEADER_THROTTLED_REPLICAS_KEY,
             ConfigType::List,
         ),
         (
-            crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY,
+            FOLLOWER_THROTTLED_REPLICAS_KEY,
             ConfigType::List,
         ),
         (SEGMENT_MS, ConfigType::Long),
@@ -83,13 +85,13 @@ fn topic_key_types_match_apache_kafka() {
 #[test]
 fn broker_key_types_match_apache_kafka() {
     for (name, expected) in [
-        (crate::throttle::LEADER_THROTTLED_RATE_KEY, ConfigType::Long),
+        (LEADER_THROTTLED_RATE_KEY, ConfigType::Long),
         (
-            crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
+            FOLLOWER_THROTTLED_RATE_KEY,
             ConfigType::Long,
         ),
         (
-            crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY,
+            ALTER_LOG_DIRS_THROTTLED_RATE_KEY,
             ConfigType::Long,
         ),
         (UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean),
@@ -129,8 +131,8 @@ fn topic_key_defaults_match_apache_kafka() {
         (LOCAL_RETENTION_MS, "-2"),
         (LOCAL_RETENTION_BYTES, "-2"),
         (DELETE_RETENTION_MS, "86400000"),
-        (crate::throttle::LEADER_THROTTLED_REPLICAS_KEY, ""),
-        (crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY, ""),
+        (LEADER_THROTTLED_REPLICAS_KEY, ""),
+        (FOLLOWER_THROTTLED_REPLICAS_KEY, ""),
         (SEGMENT_MS, "604800000"),
         (SEGMENT_INDEX_BYTES, "10485760"),
         (SEGMENT_JITTER_MS, "0"),

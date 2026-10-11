@@ -18,10 +18,7 @@ use crate::{
             PrivilegedAudit, Refusal, admit_privileged_request, from_wire_uuid, principal_name,
             submit_error,
         },
-    },
-    broker::Broker,
-    codes,
-    handlers::RequestContext,
+    }, broker::Broker, codes, handlers::RequestContext, time_util::now_ms,
 };
 
 /// Apply the request to the stored proposal and write the result.
@@ -50,7 +47,7 @@ pub(super) async fn settle(
             key_id: &req.key_id,
             signature: &req.signature,
             withdraw: req.withdraw,
-            now_ms: crate::time_util::now_ms(),
+            now_ms: now_ms(),
         },
     )?;
     let counterparties: Vec<String> = updated

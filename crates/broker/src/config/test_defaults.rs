@@ -7,7 +7,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use krabka_raft::NodeId;
 use krabka_units::{Time, convert::TimeExt, millis, secs};
 
-use crate::config::{BrokerConfig, RlmmKind, feature_flags::test_feature_flags};
+use crate::{config::{BrokerConfig, RlmmKind, feature_flags::test_feature_flags}, coordinator::unified::{config::NextGenConfig, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig}, share_coordinator::config::ShareCoordinatorConfig};
 
 impl BrokerConfig {
     /// Builds a test config that listens on an OS-assigned port under a
@@ -67,15 +67,15 @@ impl BrokerConfig {
             // assignment interval, and a consumer group resolves its regular
             // expressions again as soon as the metadata changed, without
             // Kafka's ten seconds between two resolutions.
-            next_gen_consumer_group: Box::new(crate::coordinator::unified::config::NextGenConfig {
+            next_gen_consumer_group: Box::new(NextGenConfig {
                 assignment_interval: std::time::Duration::ZERO,
                 regex_refresh_min_interval: std::time::Duration::ZERO,
-                ..crate::coordinator::unified::config::NextGenConfig::default()
+                ..NextGenConfig::default()
             }),
             share_group: Box::new(
-                crate::coordinator::unified::share::config::ShareGroupConfig {
+                ShareGroupConfig {
                     assignment_interval: std::time::Duration::ZERO,
-                    ..crate::coordinator::unified::share::config::ShareGroupConfig::default()
+                    ..ShareGroupConfig::default()
                 },
             ),
             // Tests drive streams heartbeats directly and expect each change to
@@ -84,16 +84,16 @@ impl BrokerConfig {
             // integration tests set `group.streams.initial.rebalance.delay.ms`
             // to 0.
             streams_group: Box::new(
-                crate::coordinator::unified::streams::config::StreamsGroupConfig {
+                StreamsGroupConfig {
                     initial_rebalance_delay: std::time::Duration::ZERO,
                     assignment_interval: std::time::Duration::ZERO,
-                    ..crate::coordinator::unified::streams::config::StreamsGroupConfig::default()
+                    ..StreamsGroupConfig::default()
                 },
             ),
-            share_coordinator: Box::new(crate::share_coordinator::config::ShareCoordinatorConfig {
+            share_coordinator: Box::new(ShareCoordinatorConfig {
                 state_topic_replication_factor: 1,
                 state_topic_min_isr: 1,
-                ..crate::share_coordinator::config::ShareCoordinatorConfig::default()
+                ..ShareCoordinatorConfig::default()
             }),
             // Short interval so hot-reload tests don't wait long for a
             // watcher tick. Tests that don't care can ignore it.

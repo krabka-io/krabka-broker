@@ -6,6 +6,8 @@
 use std::sync::Arc;
 
 use crate::broker::{Broker, BrokerHandle, TEST_AWAITER_TIMEOUT};
+#[cfg(any(test, feature = "test-helpers"))]
+use crate::metrics::BrokerMetrics;
 
 impl BrokerHandle {
     /// Test-only: the controller's current quorum state (leader epoch, HWM,
@@ -33,12 +35,14 @@ impl BrokerHandle {
         &self,
         rec: krabka_metadata::MetadataRecord,
     ) -> Result<(), crate::error::BrokerError> {
+        use crate::error::BrokerError;
+
         self.broker
             .controller
             .submit_change(vec![rec])
             .await
             .map(|_| ())
-            .map_err(|e| crate::error::BrokerError::Replication(format!("submit: {e}")))
+            .map_err(|e| BrokerError::Replication(format!("submit: {e}")))
     }
 
     /// Test-only: return a snapshot of the current `MetadataImage` as seen by
@@ -225,7 +229,7 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn metrics(&self) -> &crate::metrics::BrokerMetrics {
+    pub fn metrics(&self) -> &BrokerMetrics {
         &self.broker.metrics
     }
 
@@ -244,7 +248,7 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_for_metrics<F>(&self, what: &str, mut predicate: F)
     where
-        F: FnMut(&crate::metrics::BrokerMetrics) -> bool,
+        F: FnMut(&BrokerMetrics) -> bool,
     {
         let held = super::await_until(|| std::future::ready(predicate(&self.broker.metrics))).await;
         assert2::assert!(
@@ -339,8 +343,10 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_broker_electable(&self, node: u64) {
         let electable = super::await_until(|| async {
+            use crate::handlers::offline_replicas::live_brokers;
+
             let image = self.broker.controller.current_image();
-            crate::handlers::offline_replicas::live_brokers(&self.broker, &image)
+            live_brokers(&self.broker, &image)
                 .await
                 .contains(&node)
         })

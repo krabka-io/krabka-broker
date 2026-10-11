@@ -24,7 +24,7 @@ use super::{
     serves_topic_key,
     validation::canonical_value,
 };
-use crate::{api_catalog::UnstableApiVersions, codes};
+use crate::{api_catalog::UnstableApiVersions, codes, cordoned_log_dirs::{CORDONED_LOG_DIRS, resolve, validate_value_type}, throttle::{FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY}};
 
 /// The live facts used by either broker-configuration mutation API.
 #[derive(Clone, Copy)]
@@ -190,8 +190,8 @@ pub(crate) fn broker_key_row(
 /// The three KIP-73 replication quotas, which Kafka's
 /// `QuotaConfig.brokerQuotaConfigs` defines as `LONG` with `atLeast(0)`.
 const THROTTLE_RATES: [&str; 3] = [
-    crate::throttle::LEADER_THROTTLED_RATE_KEY,
-    crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
+    LEADER_THROTTLED_RATE_KEY,
+    FOLLOWER_THROTTLED_RATE_KEY,
     crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY,
 ];
 
@@ -332,8 +332,8 @@ fn check_broker_value(
     if THROTTLE_RATES.contains(&name) {
         return check_range(name, parse_long(name, value)?, Some(0), None).map(drop);
     }
-    if name == crate::cordoned_log_dirs::CORDONED_LOG_DIRS {
-        return crate::cordoned_log_dirs::validate_value_type(value);
+    if name == CORDONED_LOG_DIRS {
+        return validate_value_type(value);
     }
     if name == UNCLEAN_RECOVERY_STRATEGY {
         return registry::lookup(ConfigScope::Broker, name)
@@ -455,8 +455,8 @@ pub(crate) fn cordoned_log_dirs_error(
     props: &BTreeMap<String, String>,
     log_dirs: &[std::path::PathBuf],
 ) -> Result<(), (i16, String)> {
-    match props.get(crate::cordoned_log_dirs::CORDONED_LOG_DIRS) {
-        Some(value) if !log_dirs.is_empty() => crate::cordoned_log_dirs::resolve(value, log_dirs)
+    match props.get(CORDONED_LOG_DIRS) {
+        Some(value) if !log_dirs.is_empty() => resolve(value, log_dirs)
             .map(drop)
             .map_err(|message| (codes::INVALID_REQUEST, message)),
         _ => Ok(()),
@@ -473,7 +473,7 @@ pub(crate) fn cordoned_log_dirs_disabled_error(
     let supported = image.finalized_metadata_version().is_some_and(|level| {
         level >= krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL
     });
-    (name == crate::cordoned_log_dirs::CORDONED_LOG_DIRS && !supported).then(|| {
+    (name == CORDONED_LOG_DIRS && !supported).then(|| {
         (
             codes::INVALID_CONFIG,
             format!(
@@ -493,7 +493,7 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::test_support::config_map as map;
+    use crate::{test_support::config_map as map, throttle::LEADER_THROTTLED_RATE_KEY};
 
     #[test]
     fn broker_resource_names_follow_kafkas_node_id_rule() {
@@ -561,7 +561,7 @@ mod tests {
             (map(&[("log.retention.ms", " 86400000 ")]), false, Ok(())),
             (map(&[("num.io.threads", "16")]), false, Ok(())),
             (
-                map(&[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "-1")]),
+                map(&[(LEADER_THROTTLED_RATE_KEY, "-1")]),
                 true,
                 Err(
                     "Invalid value -1 for configuration leader.replication.throttled.rate: Value \
@@ -699,7 +699,7 @@ mod tests {
             ("log.cleanup.policy", BrokerKeyKind::List),
             ("log.retention.ms", BrokerKeyKind::Scalar),
             (
-                crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                LEADER_THROTTLED_RATE_KEY,
                 BrokerKeyKind::Scalar,
             ),
             // Kafka types the operation off `KafkaConfig`'s whole `ConfigDef`,

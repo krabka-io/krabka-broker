@@ -36,7 +36,7 @@ use super::{
     partitioner::local_partition_for_group,
     unified::actor::GroupActorMessage,
 };
-use crate::metadata_source::MetadataSource;
+use crate::{metadata_source::MetadataSource, task_util::ask};
 
 #[cfg(test)]
 mod tests;
@@ -166,7 +166,7 @@ pub(crate) async fn on_topics_deleted(
             continue;
         };
         let Ok(deleted) =
-            crate::task_util::ask(&handle.tx, |reply| GroupActorMessage::DeleteTopicOffsets {
+            ask(&handle.tx, |reply| GroupActorMessage::DeleteTopicOffsets {
                 topics: topics.to_vec(),
                 reply,
             })

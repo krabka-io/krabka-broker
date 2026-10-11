@@ -79,11 +79,13 @@ mod tests {
     use krabka_protocol::records::{Record, RecordBatch, RecordHeader};
     use tokio::sync::Notify;
 
-    use super::*;
+    use crate::partition::test_support::test_partition;
+
+use super::*;
 
     fn test_partition() -> (Partition, tempfile::TempDir) {
         let (mut partition, dir) =
-            crate::partition::test_support::test_partition(Arc::new(Notify::new()));
+            test_partition(Arc::new(Notify::new()));
         partition.topic = "__audit".into();
         (partition, dir)
     }

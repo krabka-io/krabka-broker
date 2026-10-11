@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use krabka_units::convert::TimeExt as _;
 
-use crate::{config::BrokerConfig, error::BrokerError, host_port::parse_advertised_host_port};
+use crate::{config::BrokerConfig, config_keys::{BROKER_WITNESS, STRETCH_PREFERRED_LEADER_SITE}, elr::withdraw_elr_membership, error::BrokerError, host_port::{advertised_host, local_host_name, parse_advertised_host_port, parse_host_port}, log_dir_id::LogDirIds, metadata_source::MetadataSource};
 
 fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerRegistrationRecord {
     let (host, port) = parse_advertised_host_port(&config.advertised_listener);
@@ -29,7 +29,7 @@ fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerReg
         })
         .collect();
     let log_dirs = config.all_log_dirs();
-    let log_dir_ids = crate::log_dir_id::LogDirIds::provision(
+    let log_dir_ids = LogDirIds::provision(
         &log_dirs,
         config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
         config.node_id,
@@ -66,7 +66,7 @@ fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerReg
 fn self_witness_record(config: &BrokerConfig) -> krabka_metadata::MetadataRecord {
     krabka_metadata::MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
         node_id: config.node_id,
-        config_name: crate::config_keys::BROKER_WITNESS.to_string(),
+        config_name: BROKER_WITNESS.to_string(),
         config_value: config
             .is_witness()
             .then(|| crate::config_keys::WITNESS_TRUE.to_string()),
@@ -95,7 +95,7 @@ fn stretch_default_records(config: &BrokerConfig) -> Vec<krabka_metadata::Metada
         .map(|profile| {
             krabka_metadata::MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
                 node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
-                config_name: crate::config_keys::STRETCH_PREFERRED_LEADER_SITE.to_string(),
+                config_name: STRETCH_PREFERRED_LEADER_SITE.to_string(),
                 config_value: Some(profile.preferred_leader_site.clone()),
             })
         })
@@ -114,12 +114,12 @@ fn self_controller_registration_record(
         .controller_quorum_voters
         .iter()
         .find(|(node_id, _)| *node_id == config.node_id)
-        .and_then(|(_, endpoint)| crate::host_port::parse_host_port(endpoint))
+        .and_then(|(_, endpoint)| parse_host_port(endpoint))
         .unwrap_or_else(|| {
             (
-                crate::host_port::advertised_host(
+                advertised_host(
                     config.controller_listen_addr.ip(),
-                    crate::host_port::local_host_name,
+                    local_host_name,
                 ),
                 config.controller_listen_addr.port(),
             )
@@ -141,7 +141,7 @@ fn self_controller_registration_record(
 /// Submits one startup metadata batch and retries it under backoff.
 async fn submit_startup_records(
     config: &BrokerConfig,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
     records: Vec<krabka_metadata::MetadataRecord>,
     operation: &str,
 ) -> Result<(), BrokerError> {
@@ -172,7 +172,7 @@ async fn submit_startup_records(
 
 pub(super) async fn register_controller(
     config: &BrokerConfig,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
 ) -> Result<(), BrokerError> {
     if !config.is_controller() {
         return Ok(());
@@ -204,7 +204,7 @@ fn controller_registration_update(
 
 pub(super) fn spawn_deferred_controller_registration(
     config: &BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    controller: &Arc<dyn MetadataSource>,
 ) {
     if !config.is_controller() {
         return;
@@ -275,7 +275,7 @@ fn broker_restart_batch(
     ) {
         Vec::new()
     } else {
-        crate::elr::withdraw_elr_membership(image, config.node_id)
+        withdraw_elr_membership(image, config.node_id)
     };
     records.extend(broker_registration_batch(config));
     records
@@ -291,7 +291,7 @@ fn broker_restart_batch(
 /// incarnation's registration.
 pub(super) async fn register_broker(
     config: &BrokerConfig,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
 ) -> Result<Option<i64>, BrokerError> {
     if !config.is_broker() {
         return Ok(None);
@@ -352,7 +352,7 @@ pub(super) async fn register_broker(
 /// `Broker::start` would hang forever waiting for it.
 async fn wait_for_self_registration_published(
     config: &BrokerConfig,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
     previous: Option<&krabka_metadata::BrokerRegistrationRecord>,
 ) -> Result<i64, BrokerError> {
     let previous_epoch = previous.map(|registration| registration.broker_epoch);
@@ -412,7 +412,7 @@ fn stretch_defaults_to_submit(config: &BrokerConfig) -> Vec<krabka_metadata::Met
 
 pub(super) async fn submit_stretch_defaults(
     config: &BrokerConfig,
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
 ) -> Result<(), BrokerError> {
     let records = stretch_defaults_to_submit(config);
     if records.is_empty() {

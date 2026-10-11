@@ -7,19 +7,16 @@ use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeart
 
 use super::*;
 use crate::coordinator::unified::{
-    actor::{
-        GroupActorMessage,
-        member_state::build_member,
-        test_support::{bidirectional_coordinator, last_classic_metadata, make_coordinator, rpc},
-    },
-    classic_state::GroupState as ClassicGroupState,
+    ClientIdentity, actor::{
+        GroupActorHandle, GroupActorMessage, member_state::build_member, test_support::{bidirectional_coordinator, last_classic_metadata, make_coordinator, rpc, seed_completing_classic, seed_stable_classic},
+    }, classic_state::GroupState as ClassicGroupState,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_last_member_persists_empty_generation() {
     let (coord, log) = make_coordinator();
     let (handle, prior_generation) =
-        crate::coordinator::unified::actor::test_support::seed_stable_classic(&coord, &["m1"]);
+        seed_stable_classic(&coord, &["m1"]);
     let result = rpc::classic_leave_member(&handle, "m1").await;
     rpc::check_successful_classic_leave(&result);
     let view = rpc::classic_inspect(&handle).await;
@@ -36,7 +33,7 @@ async fn classic_leave_last_member_persists_empty_generation() {
 async fn classic_leave_with_members_remaining_does_not_commit_empty_generation() {
     let (coord, log) = make_coordinator();
     let (handle, prior_generation) =
-        crate::coordinator::unified::actor::test_support::seed_stable_classic(
+        seed_stable_classic(
             &coord,
             &["m1", "m2"],
         );
@@ -53,7 +50,7 @@ async fn classic_leave_with_members_remaining_does_not_commit_empty_generation()
 async fn classic_leave_legacy_append_failure_rolls_back_and_reports_error() {
     let (coord, log) = make_coordinator();
     let (handle, _generation) =
-        crate::coordinator::unified::actor::test_support::seed_stable_classic(&coord, &["m1"]);
+        seed_stable_classic(&coord, &["m1"]);
     log.fail_next
         .store(true, std::sync::atomic::Ordering::SeqCst);
     let result = rpc::classic_leave_request(
@@ -134,7 +131,7 @@ fn consumer_classic_leave_resolves_batch_and_static_identities() {
     group.add_or_update_member(build_member(
         "m1",
         &dynamic,
-        crate::coordinator::unified::ClientIdentity { id: "c", host: "h" },
+        ClientIdentity { id: "c", host: "h" },
         Instant::now(),
     ));
     let static_request = ConsumerGroupHeartbeatRequest {
@@ -145,7 +142,7 @@ fn consumer_classic_leave_resolves_batch_and_static_identities() {
     group.add_or_update_member(build_member(
         "m-static",
         &static_request,
-        crate::coordinator::unified::ClientIdentity { id: "c", host: "h" },
+        ClientIdentity { id: "c", host: "h" },
         Instant::now(),
     ));
     let request = LeaveGroupRequest {
@@ -243,7 +240,7 @@ async fn delete_tombstones_the_keys_of_an_in_flight_transactional_commit() {
     }
 
     async fn reservation(
-        handle: &crate::coordinator::unified::actor::GroupActorHandle,
+        handle: &GroupActorHandle,
         keys: Vec<(String, i32)>,
         reserve: bool,
     ) -> bool {
@@ -420,7 +417,7 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
 async fn classic_leave_in_completing_rebalance_reopens_the_rebalance() {
     let (coord, _log) = make_coordinator();
     let (handle, generation) =
-        crate::coordinator::unified::actor::test_support::seed_completing_classic(
+        seed_completing_classic(
             &coord,
             &["m1", "m2", "m3"],
         );

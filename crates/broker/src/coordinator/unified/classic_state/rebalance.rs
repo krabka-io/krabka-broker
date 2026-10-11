@@ -12,6 +12,8 @@ use std::{
 
 use bytes::Bytes;
 
+use crate::metadata_epoch::next_i32;
+
 use super::group::{ClassicGroup, GroupState, InitialDelayedJoin};
 
 impl ClassicGroup {
@@ -214,7 +216,7 @@ impl ClassicGroup {
     /// smallest member id. It then raises the generation and advances the
     /// state.
     pub fn complete_rebalance(&mut self, protocol_name: impl Into<String>) -> bool {
-        let Some(generation_id) = crate::metadata_epoch::next_i32(self.generation_id) else {
+        let Some(generation_id) = next_i32(self.generation_id) else {
             return false;
         };
         let leader = match self.leader_id.as_deref() {

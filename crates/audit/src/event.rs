@@ -215,7 +215,9 @@ impl AuditEvent {
 mod tests {
     use assert2::check;
 
-    use super::*;
+    use crate::test_support::{admin, authentication, privileged_freeze};
+
+use super::*;
 
     #[test]
     fn class_tag_round_trips_and_header_maps() {
@@ -236,14 +238,14 @@ mod tests {
 
     #[test]
     fn event_class_maps_each_variant() {
-        let authn = crate::test_support::authentication(
+        let authn = authentication(
             51120,
             Some("authentication failed"),
             1_700_000_000_000,
         );
         let denied = crate::test_support::denied(1);
-        let admin = crate::test_support::admin(2);
-        let privileged = crate::test_support::privileged_freeze(vec![0xde, 0xad], 3, 4);
+        let admin = admin(2);
+        let privileged = privileged_freeze(vec![0xde, 0xad], 3, 4);
         let life = AuditEvent::Lifecycle {
             kind: LifecycleKind::BrokerStarted,
             node_id: 1,

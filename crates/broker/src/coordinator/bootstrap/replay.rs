@@ -25,15 +25,10 @@ use super::{
 };
 use crate::{
     coordinator::{
-        GroupCoordinator,
-        persistence::{self, GroupMetadataValue, Key, OffsetCommitValue, RecordKey},
-        unified::{
-            classic_state::{ClassicGroup as ClassicState, OffsetEntry},
-            group::{CoordinatorGroup, GroupKind},
+        GroupCoordinator, persistence::{self, GroupMetadataValue, Key, OffsetCommitValue, RecordKey}, unified::{
+            actor::GroupActorMessage, classic_state::{ClassicGroup as ClassicState, OffsetEntry}, group::{CoordinatorGroup, GroupKind},
         },
-    },
-    error::BrokerError,
-    partition_registry::PartitionRegistry,
+    }, error::BrokerError, partition_registry::PartitionRegistry,
 };
 
 /// How much of `__consumer_offsets` one replay read returns before the walk
@@ -487,7 +482,7 @@ pub(super) async fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: 
             if handle
                 .tx
                 .send(
-                    crate::coordinator::unified::actor::GroupActorMessage::UpdateCommitted {
+                    GroupActorMessage::UpdateCommitted {
                         entries,
                         reply: tx,
                     },
@@ -513,7 +508,7 @@ pub(super) async fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: 
                 if handle
                     .tx
                     .send(
-                        crate::coordinator::unified::actor::GroupActorMessage::AddPendingTxnOffsets {
+                        GroupActorMessage::AddPendingTxnOffsets {
                             producer_id,
                             written_at: pending.written_at,
                             keys: pending.keys.into_iter().collect(),

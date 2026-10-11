@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    broker::{
+    break_glass::{metrics::record_proposal_states, sweep::{BreakGlassController, PROPOSAL_RETENTION, SWEEP_INTERVAL, run}}, broker::{
         DisklessRuntime,
         adapters::ControllerAdapter,
         audit::start_audit_pipeline,
@@ -22,15 +22,12 @@ use crate::{
         remote_storage::{RemoteStorageStartup, start_remote_storage},
         replication::{ReplicatorStorage, spawn_replicator_supervisor},
         rlmm::{KafkaSwapKickoff, kafka_swap_kickoff},
-    },
-    config::BrokerConfig,
-    error::BrokerError,
-    partition_registry::PartitionRegistry,
+    }, client_metrics::ClientMetrics, config::BrokerConfig, cordoned_log_dirs::spawn_watcher, delegation_token_cleanup::DelegationTokenController, diskless::read::DisklessReadHandle, error::BrokerError, fetch_session::FetchSessionCache, health::HealthState, log_dir_id::LogDirIds, log_dir_status::LogDirRegistry, metadata_source::MetadataSource, metrics::{BrokerMetrics, spawn_metric_series_evictor}, network::client::InterBrokerClient, partition_registry::PartitionRegistry, producer_state::ProducerState, quota::{QuotaBuckets, run}, remote_reader::RemoteReader, share_coordinator::coordinator::ShareCoordinator, throttle::{ThrottleState, apply_image}, time_util::now_ms, tls_reload::run, txn::{coordinator::TxnCoordinator, expiration::run},
 };
 
 struct RuntimeCaches {
-    fetch_sessions: Arc<crate::fetch_session::FetchSessionCache>,
-    quota_buckets: Arc<crate::quota::QuotaBuckets>,
+    fetch_sessions: Arc<FetchSessionCache>,
+    quota_buckets: Arc<QuotaBuckets>,
 }
 
 /// Publish the KFC-9 gauges that only the metadata image knows.
@@ -42,8 +39,8 @@ struct RuntimeCaches {
 /// ticks, and two loops would read two different images.
 fn spawn_break_glass_gauges(
     config: &BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
-    metrics: &crate::metrics::BrokerMetrics,
+    controller: &Arc<dyn MetadataSource>,
+    metrics: &BrokerMetrics,
     shutdown: CancellationToken,
 ) {
     let images = controller.watch_image();
@@ -57,11 +54,11 @@ fn spawn_break_glass_gauges(
             metrics.record_topic_freezes_active(
                 i64::try_from(image.topic_freezes().count()).unwrap_or(i64::MAX),
             );
-            crate::break_glass::metrics::record_proposal_states(
+            record_proposal_states(
                 &metrics,
                 image,
                 &break_glass,
-                crate::time_util::now_ms(),
+                now_ms(),
             );
         },
     ));
@@ -69,36 +66,36 @@ fn spawn_break_glass_gauges(
 
 fn start_runtime_watchers(
     config: &BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    controller: &Arc<dyn MetadataSource>,
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
-    throttle_state: &Arc<crate::throttle::ThrottleState>,
-    txn_coordinator: &Arc<crate::txn::coordinator::TxnCoordinator>,
-    metrics: &crate::metrics::BrokerMetrics,
+    throttle_state: &Arc<ThrottleState>,
+    txn_coordinator: &Arc<TxnCoordinator>,
+    metrics: &BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> RuntimeCaches {
     if let (Some(dynamic), Some(tls_config)) = (tls_dynamic.cloned(), config.tls_config.clone()) {
-        tokio::spawn(crate::tls_reload::run(
+        tokio::spawn(run(
             dynamic,
             tls_config,
             config.tls_reload_interval,
             shutdown.child_token(),
         ));
     }
-    crate::throttle::apply_image(&controller.current_image(), config.node_id, throttle_state);
+    apply_image(&controller.current_image(), config.node_id, throttle_state);
     tokio::spawn(crate::throttle::run(
         controller.watch_image(),
         config.node_id,
         Arc::clone(throttle_state),
         shutdown.child_token(),
     ));
-    let fetch_sessions = Arc::new(crate::fetch_session::FetchSessionCache::new(
+    let fetch_sessions = Arc::new(FetchSessionCache::new(
         config.max_incremental_fetch_session_cache_slots,
     ));
     // KIP-13's `quota.window.num` * `quota.window.size.seconds`: the window a
     // client's byte rate is averaged over, which is also the burst a bucket
     // allows before it throttles (#418).
-    let quota_buckets = Arc::new(crate::quota::QuotaBuckets::with_window(config.quota_window));
-    tokio::spawn(crate::quota::run(
+    let quota_buckets = Arc::new(QuotaBuckets::with_window(config.quota_window));
+    tokio::spawn(run(
         controller.watch_image(),
         Arc::clone(&quota_buckets),
         shutdown.child_token(),
@@ -114,7 +111,7 @@ fn start_runtime_watchers(
     ));
     if config.delegation_token_secret_key.is_some() {
         let interval = config.delegation_token_expiry_check_interval;
-        let token_controller: Arc<dyn crate::delegation_token_cleanup::DelegationTokenController> =
+        let token_controller: Arc<dyn DelegationTokenController> =
             Arc::new(ControllerAdapter {
                 handle: Arc::clone(controller),
                 node_id: config.node_id,
@@ -127,22 +124,22 @@ fn start_runtime_watchers(
     }
     // KFC-9. Every broker sweeps, the tombstone is idempotent, and a broker
     // that never sweeps is still safe, so the sweep needs no config gate.
-    let break_glass_controller: Arc<dyn crate::break_glass::sweep::BreakGlassController> =
+    let break_glass_controller: Arc<dyn BreakGlassController> =
         Arc::new(ControllerAdapter {
             handle: Arc::clone(controller),
             node_id: config.node_id,
         });
-    tokio::spawn(crate::break_glass::sweep::run(
+    tokio::spawn(run(
         break_glass_controller,
-        crate::break_glass::sweep::SWEEP_INTERVAL,
-        crate::break_glass::sweep::PROPOSAL_RETENTION,
+        SWEEP_INTERVAL,
+        PROPOSAL_RETENTION,
         shutdown.child_token(),
     ));
     spawn_break_glass_gauges(config, controller, metrics, shutdown.child_token());
     // Per-partition and per-topic series are created lazily by the data path
     // and are not released by anything else, so the image watch that adds a
     // partition is also what has to take its series away again.
-    crate::metrics::spawn_metric_series_evictor(
+    spawn_metric_series_evictor(
         controller.watch_image(),
         config.node_id,
         metrics.clone(),
@@ -154,7 +151,7 @@ fn start_runtime_watchers(
         shutdown.child_token(),
     ));
     if config.txn_abort_cleanup_interval > <Time as TimeExt>::ZERO {
-        tokio::spawn(crate::txn::expiration::run(
+        tokio::spawn(run(
             Arc::clone(txn_coordinator),
             Arc::clone(controller),
             config.txn_abort_cleanup_interval,
@@ -181,14 +178,14 @@ pub(super) struct BrokerRuntimeStartup {
     pub(super) supervisor_handle: JoinHandle<()>,
     pub(super) disk_scanner_handle: Option<JoinHandle<()>>,
     pub(super) liveness_services: LivenessStartup,
-    pub(super) metrics: crate::metrics::BrokerMetrics,
+    pub(super) metrics: BrokerMetrics,
     pub(super) metrics_bound_addr: Option<SocketAddr>,
-    pub(super) throttle_state: Arc<crate::throttle::ThrottleState>,
-    pub(super) quota_buckets: Arc<crate::quota::QuotaBuckets>,
-    pub(super) fetch_session_cache: Arc<crate::fetch_session::FetchSessionCache>,
-    pub(super) remote_reader: Option<Arc<crate::remote_reader::RemoteReader>>,
-    pub(super) diskless_read: Option<Arc<crate::diskless::read::DisklessReadHandle>>,
-    pub(super) client_metrics: Arc<crate::client_metrics::ClientMetrics>,
+    pub(super) throttle_state: Arc<ThrottleState>,
+    pub(super) quota_buckets: Arc<QuotaBuckets>,
+    pub(super) fetch_session_cache: Arc<FetchSessionCache>,
+    pub(super) remote_reader: Option<Arc<RemoteReader>>,
+    pub(super) diskless_read: Option<Arc<DisklessReadHandle>>,
+    pub(super) client_metrics: Arc<ClientMetrics>,
     pub(super) audit_log: Arc<krabka_audit::AuditLog>,
     pub(super) audit_writer_handle: Option<JoinHandle<()>>,
     pub(super) audit_led_partition: Option<PartitionIndex>,
@@ -199,34 +196,34 @@ pub(super) struct BrokerRuntimeStartup {
 
 pub(super) async fn start_broker_runtime(
     config: &mut BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
-    inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
+    controller: &Arc<dyn MetadataSource>,
+    inter_broker_client: &Arc<InterBrokerClient>,
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     storage: (
         &Arc<PartitionRegistry>,
-        &Arc<crate::producer_state::ProducerState>,
-        &crate::log_dir_status::LogDirRegistry,
-        &crate::log_dir_id::LogDirIds,
+        &Arc<ProducerState>,
+        &LogDirRegistry,
+        &LogDirIds,
     ),
     coordinators: (
-        &Arc<crate::txn::coordinator::TxnCoordinator>,
-        &Arc<crate::share_coordinator::coordinator::ShareCoordinator>,
+        &Arc<TxnCoordinator>,
+        &Arc<ShareCoordinator>,
     ),
     // The three things the runtime needs pre-built: the diskless WAL runtime,
     // the metric registry the coordinators already report into, and the
     // health state the readiness probe and the gauge sampler both read.
     runtime_deps: (
         &DisklessRuntime,
-        crate::metrics::BrokerMetrics,
-        Option<crate::health::HealthState>,
+        BrokerMetrics,
+        Option<HealthState>,
     ),
 ) -> Result<BrokerRuntimeStartup, BrokerError> {
     let (diskless_runtime, metrics, health) = runtime_deps;
     let supervisor_shutdown = CancellationToken::new();
-    let throttle_state = Arc::new(crate::throttle::ThrottleState::new());
+    let throttle_state = Arc::new(ThrottleState::new());
     // KIP-1066: keep the cordoned set in step with this broker's dynamic
     // `cordoned.log.dirs`, as Kafka's `DynamicLogConfig.reconfigure` does.
-    crate::cordoned_log_dirs::spawn_watcher(
+    spawn_watcher(
         controller,
         config.node_id,
         storage.0.cordoned_log_dirs().clone(),

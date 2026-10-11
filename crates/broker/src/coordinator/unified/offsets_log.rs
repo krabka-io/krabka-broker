@@ -7,12 +7,9 @@ use krabka_protocol::records::RecordBatch;
 use tokio::sync::{oneshot, watch};
 
 use crate::{
-    codes,
-    error::BrokerError,
-    partition::{
+    codes, coordinator::partitioner::partition_for_group, error::BrokerError, metadata_source::MetadataSource, partition::{
         Partition, ProduceData, ProduceJob, ProducerAppendCheck, Uncommitted, WriterMessage,
-    },
-    partition_registry::PartitionRegistry,
+    }, partition_registry::PartitionRegistry,
 };
 
 #[cfg(test)]
@@ -45,7 +42,7 @@ pub(crate) struct ProductionOffsetsLog {
     #[debug(skip)]
     partitions: Arc<PartitionRegistry>,
     #[debug(skip)]
-    controller: Arc<dyn crate::metadata_source::MetadataSource>,
+    controller: Arc<dyn MetadataSource>,
     node_id: NodeId,
 }
 
@@ -53,7 +50,7 @@ impl ProductionOffsetsLog {
     #[must_use]
     pub(crate) fn new(
         partitions: Arc<PartitionRegistry>,
-        controller: Arc<dyn crate::metadata_source::MetadataSource>,
+        controller: Arc<dyn MetadataSource>,
         node_id: NodeId,
     ) -> Self {
         Self {
@@ -67,7 +64,7 @@ impl ProductionOffsetsLog {
 #[async_trait]
 impl OffsetsLog for ProductionOffsetsLog {
     async fn append(&self, group_id: &str, batch: RecordBatch) -> Result<(), BrokerError> {
-        let partition_id = crate::coordinator::partitioner::partition_for_group(
+        let partition_id = partition_for_group(
             &self.controller.current_image(),
             group_id,
         );
@@ -140,7 +137,7 @@ impl LeaderAppend {
 pub(crate) async fn append_as_leader(
     (partitions, controller, node_id): (
         &PartitionRegistry,
-        &dyn crate::metadata_source::MetadataSource,
+        &dyn MetadataSource,
         NodeId,
     ),
     partition_id: i32,
@@ -284,7 +281,9 @@ pub mod fake {
     use krabka_protocol::records::RecordBatch;
     use tokio::sync::Mutex;
 
-    use super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, async_trait};
+    use crate::coordinator::unified::persistence_next_gen::NextGenKey;
+
+use super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, async_trait};
 
     /// Which classic metadata operation a test expects in the append log.
     #[derive(Clone, Copy)]
@@ -417,7 +416,7 @@ pub mod fake {
 
         async fn has_next_gen_tombstone(
             &self,
-            expected: &crate::coordinator::unified::persistence_next_gen::NextGenKey,
+            expected: &NextGenKey,
         ) -> bool {
             use crate::coordinator::unified::persistence::{Key, parse_key};
             self.appended

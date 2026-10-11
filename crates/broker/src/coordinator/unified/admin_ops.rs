@@ -15,8 +15,7 @@ use super::{
     streams::{self, actor::StreamsGroupActorMessage},
 };
 use crate::{
-    coordinator::{DeleteGroupError, GroupSnapshot},
-    task_util::{ask, cloned_registry_values, shutdown_actor},
+    coordinator::{DeleteGroupError, GroupSnapshot}, task_util::{ask, cloned_registry_values, shutdown_actor}, time_util::now_ms,
 };
 
 impl GroupCoordinator {
@@ -129,7 +128,7 @@ impl GroupCoordinator {
         let batch = streams::migration::streams_records_tombstone_batch(
             group_id,
             &[],
-            crate::time_util::now_ms(),
+            now_ms(),
         )
         .map_err(|_| DeleteGroupError::Internal)?;
         self.offsets_log

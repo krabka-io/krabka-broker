@@ -20,16 +20,10 @@ use krabka_remote_storage::{ObjectEntry, Sha256Digest};
 use krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig};
 
 use crate::{
-    archive::{Archive, ArchiveArgs},
-    capture::{RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key, newest_metadata_checkpoint},
-    cli::{CaptureSigningArgs, CaptureTrustArgs, LATEST},
-    connection::SecurityArgs,
-    error::BackupError,
-    manifest::{
+    archive::{Archive, ArchiveArgs}, capture::{RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key, newest_metadata_checkpoint}, cli::{CaptureSigningArgs, CaptureTrustArgs, LATEST}, connection::SecurityArgs, diskless::capture_projection, error::BackupError, manifest::{
         Artifact, CAPTURE_ROOT, DISKLESS_WAL_INDEX, GROUP_OFFSETS, MANIFEST, MANIFEST_VERSION,
         METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, artifact_problem, sha256_hex,
-    },
-    offsets::{GroupOffsetsFile, commit_refusals, commit_request, group_offsets},
+    }, offsets::{GroupOffsetsFile, commit_refusals, commit_request, group_offsets},
 };
 
 /// Milliseconds since the Unix epoch, saturating at zero on a clock set before
@@ -273,7 +267,7 @@ async fn capture_diskless_index(
     let log = KafkaMetadataEventLog::open_read_only(config)
         .await
         .map_err(|error| BackupError::Cluster(format!("diskless WAL index: {error}")))?;
-    let mut capture = crate::diskless::capture_projection(log.clone(), &topics, now_ms())
+    let mut capture = capture_projection(log.clone(), &topics, now_ms())
         .await
         .map_err(BackupError::Integrity)?;
     capture.metadata_snapshot_sha256 = metadata_snapshot_sha256;

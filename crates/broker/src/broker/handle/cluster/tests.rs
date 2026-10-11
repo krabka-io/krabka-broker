@@ -5,7 +5,7 @@ use krabka_raft::NodeId;
 use tokio::net::TcpListener;
 
 use super::*;
-use crate::{broker::test_support::submit_metadata_topic_partition, config::BrokerConfig};
+use crate::{broker::test_support::{MetadataPartitionSetup, submit_metadata_topic_partition}, config::BrokerConfig};
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct StaticVoterSetup<'a> {
@@ -262,7 +262,7 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
     for (topic, topic_id, leader, replicas, leader_epoch, excluded) in leader_changed_cases {
         submit_metadata_topic_partition(
             &handle,
-            crate::broker::test_support::MetadataPartitionSetup {
+            MetadataPartitionSetup {
                 topic,
                 topic_id: uuid::Uuid::from_u128(topic_id),
                 leader: krabka_ids::NodeId(leader),
@@ -292,7 +292,7 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
 
     submit_metadata_topic_partition(
         &handle,
-        crate::broker::test_support::MetadataPartitionSetup {
+        MetadataPartitionSetup {
             topic: "isr-len-mutant-topic",
             topic_id: uuid::Uuid::from_u128(0xF005),
             replicas: [1, 2].iter().copied().map(krabka_ids::NodeId).collect(),

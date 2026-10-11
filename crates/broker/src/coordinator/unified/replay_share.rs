@@ -331,13 +331,11 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::{
-        persistence_next_gen::GroupMetadataValue,
-        share::persistence::{
+        persistence_next_gen::GroupMetadataValue, share::persistence::{
             ShareGroupCurrentMemberAssignmentValue, ShareGroupKey, ShareGroupMetadataValue,
             ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
             ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo,
-        },
-        test_support::{proto_uuid, replay_tombstone_constructor, share_member},
+        }, test_support::{AssignmentDeletionSetup, check_replay_cases, proto_uuid, replay_fixtures, replay_tombstone_constructor, share_member},
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -451,10 +449,10 @@ mod tests {
     fn share_records_replay_as_kafka() {
         let tombstone = replay_tombstone_constructor(key, Record::Tombstone);
         // Kafka's `ShareGroup.createGroupTombstoneRecords` for member `m`.
-        let (group, kafka_deletion) = crate::coordinator::unified::test_support::replay_fixtures(
+        let (group, kafka_deletion) = replay_fixtures(
             ShareGroupSeed::new_group,
             tombstone,
-            crate::coordinator::unified::test_support::AssignmentDeletionSetup::default(),
+            AssignmentDeletionSetup::default(),
         );
         let rows: Vec<(&str, Vec<Record>, Outcome)> = vec![
             (
@@ -551,7 +549,7 @@ mod tests {
                 Err("Group g is not a share group.".into()),
             ),
         ];
-        crate::coordinator::unified::test_support::check_replay_cases(
+        check_replay_cases(
             &rows,
             replay,
             |coord| coord.share_seeds.get("g").map(|seed| seed.value().clone()),

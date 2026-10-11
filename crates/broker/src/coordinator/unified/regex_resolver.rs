@@ -20,7 +20,7 @@ use krabka_metadata::{AclOperation, MetadataImage};
 use krabka_security::Principal;
 
 use super::consumer_state::ResolvedRegularExpression;
-use crate::authorizer::{AuthorizationResult, Authorizer, authorize_topics_logged};
+use crate::{authorizer::{AuthorizationResult, Authorizer, authorize_topics_logged}, time_util::now_ms};
 
 /// Resolves regular expressions to topics. See the module documentation.
 pub trait TopicRegexResolver: Send + Sync + fmt::Debug {
@@ -74,7 +74,7 @@ impl ImageTopicRegexResolver {
 
 impl TopicRegexResolver for ImageTopicRegexResolver {
     fn resolve(&self, regexes: &BTreeSet<String>) -> HashMap<String, ResolvedRegularExpression> {
-        let timestamp_ms = crate::time_util::now_ms();
+        let timestamp_ms = now_ms();
         let compiled: Vec<(&String, regex::Regex)> = regexes
             .iter()
             .filter_map(|pattern| {
@@ -247,8 +247,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
-        test_support::peer,
+        authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer}, test_support::{AllowAclSetup, allow_acl, peer, sasl_principal}, time_util::now_ms,
     };
 
     fn image_with_topics(names: &[&str]) -> MetadataImage {
@@ -265,12 +264,12 @@ mod tests {
     }
 
     fn alice() -> Principal {
-        crate::test_support::sasl_principal("alice")
+        sasl_principal("alice")
     }
 
     fn describe_acl(topic: &str) -> MetadataRecord {
-        MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
-            crate::test_support::AllowAclSetup {
+        MetadataRecord::V1AccessControlEntry(allow_acl(
+            AllowAclSetup {
                 resource_name: topic,
                 operation: AclOperation::Describe,
                 ..Default::default()
@@ -329,9 +328,9 @@ mod tests {
     #[test]
     fn a_resolution_carries_the_version_and_the_time() {
         let resolver = resolver(image_with_topics(&["a"]), Arc::new(AllowAllAuthorizer));
-        let before = crate::time_util::now_ms();
+        let before = now_ms();
         let resolutions = resolver.resolve(&BTreeSet::from(["a".to_owned()]));
-        let after = crate::time_util::now_ms();
+        let after = now_ms();
         let resolution = &resolutions["a"];
         assert!(resolution.version == 42);
         assert!((before..=after).contains(&resolution.timestamp_ms));

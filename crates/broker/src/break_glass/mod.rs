@@ -150,7 +150,9 @@ mod tests {
     use assert2::check;
     use krabka_metadata::BreakGlassAction;
 
-    use super::{
+    use crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS;
+
+use super::{
         ALL_ACTIONS, action_from_name, action_from_wire, action_name, action_targets_partition,
         action_to_wire,
     };
@@ -188,7 +190,7 @@ mod tests {
 
     #[test]
     fn the_default_signed_actions_name_actions_that_exist() {
-        for name in crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS {
+        for name in DEFAULT_BREAK_GLASS_SIGNED_ACTIONS {
             check!(
                 ALL_ACTIONS.iter().any(|a| action_name(*a) == *name),
                 "signed action {name}"

@@ -16,11 +16,8 @@ use krabka_protocol::{
 
 use super::{GroupActorHandle, test_support::StaticMetadata};
 use crate::{
-    codes,
-    coordinator::unified::{
-        GroupCoordinator, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog,
-        reconciler::ReconcileInput, share::config::ShareGroupConfig,
-        streams::config::StreamsGroupConfig, test_support::fixed_source,
+    codes, coordinator::unified::{
+        GroupCoordinator, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig, test_support::{check_group_assignment_timing, check_group_session_timeout, fixed_source, group_config_image},
     },
 };
 
@@ -46,7 +43,7 @@ fn coordinator(
         Arc::new(InMemoryOffsetsLog::default()),
         StreamsGroupConfig::default(),
     ));
-    let image = crate::coordinator::unified::test_support::group_config_image(overrides);
+    let image = group_config_image(overrides);
     coordinator.set_metadata_source(fixed_source(image));
     coordinator
 }
@@ -105,7 +102,7 @@ async fn a_group_expires_a_member_by_its_own_session_timeout() {
         },
         &[("brief", &[("consumer.session.timeout.ms", "1")])],
     );
-    crate::coordinator::unified::test_support::check_group_session_timeout(
+    check_group_session_timeout(
         |id| coordinator.get_or_create_consumer(id),
         heartbeat,
     )
@@ -129,7 +126,7 @@ async fn a_group_assigns_no_sooner_than_its_own_assignment_interval() {
             ("paced", &[("consumer.assignment.interval.ms", "300")]),
         ],
     );
-    crate::coordinator::unified::test_support::check_group_assignment_timing(
+    check_group_assignment_timing(
         async |id| coordinator.get_or_create_consumer(id),
         heartbeat,
         |response| {

@@ -1,6 +1,8 @@
 use assert2::assert;
 use tempfile::tempdir;
 
+use crate::{log_dir::partition_dir, wal::quorum::{registry::ShardId, wire::fetch_request}};
+
 use super::*;
 
 #[tokio::test]
@@ -104,7 +106,7 @@ fn diskless_partition_requires_distributed_identity_and_registry() {
 async fn distributed_wal_ack_restores_the_partition_watermark() {
     let dir = tempdir().expect("tempdir");
     let topic_id = uuid::Uuid::new_v4();
-    let shard = crate::wal::quorum::registry::ShardId {
+    let shard = ShardId {
         topic_id,
         partition: PartitionIndex(0),
     };
@@ -121,7 +123,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
             leader_epoch: 0,
         }},
     );
-    let partition_dir = crate::log_dir::partition_dir(dir.path(), "recovered", 0);
+    let partition_dir = partition_dir(dir.path(), "recovered", 0);
     std::fs::create_dir_all(&partition_dir).expect("partition directory");
     let mut log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default()).unwrap();
     let mut batch = krabka_protocol::records::RecordBatch {
@@ -153,7 +155,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
     .expect("spawn recovered partition");
     assert!(partition.high_watermark().await == krabka_log::Offset(0));
 
-    let acknowledgement = crate::wal::quorum::wire::fetch_request(
+    let acknowledgement = fetch_request(
         crate::wal::quorum::wire::QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
         krabka_raft::NodeId(2),
         0,

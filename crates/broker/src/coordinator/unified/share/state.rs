@@ -11,6 +11,8 @@ use std::{
 
 use krabka_protocol::primitives::uuid::Uuid;
 
+use crate::{codes::FENCED_MEMBER_EPOCH, coordinator::unified::actor::MetadataProvider};
+
 use super::super::INITIAL_GROUP_EPOCH;
 
 /// One member of a share group.
@@ -390,7 +392,7 @@ impl ShareGroupState {
         {
             Ok(member.member_epoch)
         } else {
-            Err(crate::codes::FENCED_MEMBER_EPOCH)
+            Err(FENCED_MEMBER_EPOCH)
         }
     }
 
@@ -453,7 +455,7 @@ impl ShareGroupState {
         &mut self,
         member_id: &str,
         has_subscription_changed: bool,
-        metadata: &dyn crate::coordinator::unified::actor::MetadataProvider,
+        metadata: &dyn MetadataProvider,
     ) {
         let target_epoch = self.target.epoch;
         let target = self

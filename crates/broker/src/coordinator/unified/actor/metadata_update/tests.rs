@@ -14,19 +14,11 @@ use krabka_protocol::owned::{
 };
 
 use crate::coordinator::unified::{
-    GroupCoordinator,
-    actor::{
-        GroupActorHandle, GroupActorMessage,
-        test_support::{
-            decode_assignment, rpc, rpc::consumer_request_as_client as heartbeat, seed_and_upgrade,
+    GroupCoordinator, actor::{
+        GroupActorHandle, GroupActorMessage, test_support::{
+            decode_assignment, rpc::{self, consumer_request_as_client as heartbeat}, seed_and_upgrade,
         },
-    },
-    config::{ConsumerGroupMigrationPolicy, NextGenConfig},
-    offsets_log::fake::InMemoryOffsetsLog,
-    reconciler::ReconcileInput,
-    share::config::ShareGroupConfig,
-    streams::config::StreamsGroupConfig,
-    test_support::{SwitchableMetadata, make_coord_with_metadata, proto_uuid, snapshot_of},
+    }, config::{ConsumerGroupMigrationPolicy, NextGenConfig}, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig, test_support::{ConsumerJoinSetup, SwitchableMetadata, assignment_interval_fixture, consumer_join_request, make_coord_with_metadata, proto_uuid, snapshot_of},
 };
 
 async fn metadata_update(handle: &GroupActorHandle, topics: &[&str]) {
@@ -41,8 +33,8 @@ async fn metadata_update(handle: &GroupActorHandle, topics: &[&str]) {
 
 /// The first heartbeat of member `m1`, which subscribes to `orders`.
 fn join() -> ConsumerGroupHeartbeatRequest {
-    crate::coordinator::unified::test_support::consumer_join_request(
-        crate::coordinator::unified::test_support::ConsumerJoinSetup {
+    consumer_join_request(
+        ConsumerJoinSetup {
             topics: &["orders"],
             ..Default::default()
         },
@@ -328,7 +320,7 @@ async fn the_replayed_assignment_timestamp_holds_the_interval() {
     use crate::coordinator::unified::{GroupSeed, wall_clock_ms};
 
     let (rows, mut cases) =
-        crate::coordinator::unified::test_support::assignment_interval_fixture();
+        assignment_interval_fixture();
 
     for (case, ago, wanted) in rows {
         let coordinator = Arc::new(GroupCoordinator::new(

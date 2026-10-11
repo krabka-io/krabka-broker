@@ -9,7 +9,7 @@ use futures_util::future::BoxFuture;
 use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 
 use crate::{
-    broker::{
+    auto_topic_creation::AutoTopicCreation, barrier::scheduler::run, broker::{
         Broker, BrokerHandle, DisklessRuntime,
         coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators},
         finish::{BrokerStorageStartup, finish_broker_startup},
@@ -17,11 +17,7 @@ use crate::{
         runtime::start_broker_runtime,
         storage::{StorageStartup, recover_storage_and_groups},
         transport::{StartupTransport, prepare_startup_transport},
-    },
-    config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG},
-    error::BrokerError,
-    health::HealthState,
-    metadata_source::or_fatal_fault,
+    }, config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG}, controller_admin::BrokerControllerAdminRouter, coordinator::topic_deletion::spawn, delivery::{metrics::BrokerDeliveryMetrics, scheduler::run}, error::BrokerError, health::{HealthState, metadata_progress}, heartbeat::client::InitialUnfence, lag::LAG_POLL_INTERVAL, metadata_source::{MetadataSource, or_fatal_fault}, metrics::BrokerMetrics, share_coordinator::coordinator::jobs::spawn, share_partition::backlog_poller::BacklogPoller,
 };
 
 impl Broker {
@@ -153,7 +149,7 @@ impl Broker {
         )
         .await?;
         let transport = prepare_startup_transport(&config).await?;
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let metrics = BrokerMetrics::new();
         let diskless_runtime = DisklessRuntime::new(
             config.node_id,
             config.inter_broker_principal_node_ids.clone(),
@@ -280,7 +276,7 @@ impl Broker {
 
         // The metadata authority exists and this node has reached the quorum,
         // so `/readyz` can compare this node's offset against the quorum's.
-        health.install_metadata_progress(crate::health::metadata_progress(Arc::clone(&controller)));
+        health.install_metadata_progress(metadata_progress(Arc::clone(&controller)));
 
         let StorageStartup {
             log_dir_status,
@@ -298,7 +294,7 @@ impl Broker {
         // on first use. The broker binds itself to the component once it is
         // built.
         let auto_topic_creation =
-            Arc::new(crate::auto_topic_creation::AutoTopicCreation::default());
+            Arc::new(AutoTopicCreation::default());
         // The barrier coordinator reports through the process registry, and it
         // is built here rather than inside the runtime because the coordinators
         // start first. BrokerMetrics clones cheaply.
@@ -362,7 +358,7 @@ impl Broker {
         // Refresh the metadata of the groups that subscribe to a changed
         // topic, and tombstone the committed offsets of every deleted topic,
         // as Kafka's `GroupCoordinatorService.onMetadataUpdate` does.
-        crate::coordinator::topic_deletion::spawn(
+        spawn(
             config.node_id,
             Arc::clone(&controller),
             Arc::clone(&group_coordinator),
@@ -372,7 +368,7 @@ impl Broker {
         // Tombstone the share state of every deleted topic, and run the
         // cold-partition snapshot and the prune of `__share_group_state`, as
         // Kafka's `ShareCoordinatorService` does.
-        crate::share_coordinator::coordinator::jobs::spawn(
+        spawn(
             Arc::clone(&share_coordinator),
             controller.watch_image(),
             runtime.supervisor_shutdown.child_token(),
@@ -390,7 +386,7 @@ impl Broker {
             runtime.supervisor_shutdown.child_token(),
         ));
 
-        tokio::spawn(crate::barrier::scheduler::run(
+        tokio::spawn(run(
             Arc::clone(&barrier_coordinator),
             Arc::clone(&controller),
             runtime.supervisor_shutdown.child_token(),
@@ -409,18 +405,18 @@ impl Broker {
             .delivery_clock_uncertainty_seconds
             .set(config.log_config.delivery_clock_uncertainty.secs_f64());
 
-        tokio::spawn(crate::delivery::scheduler::run(
+        tokio::spawn(run(
             Arc::clone(&partitions),
             config.node_id,
             crate::delivery::config::DeliveryConfig::default(),
-            Arc::new(crate::delivery::metrics::BrokerDeliveryMetrics::new(
+            Arc::new(BrokerDeliveryMetrics::new(
                 runtime.metrics.clone(),
             )),
             Arc::new(crate::delivery::DeliveryWaker::new()),
             runtime.supervisor_shutdown.child_token(),
         ));
 
-        crate::share_partition::backlog_poller::BacklogPoller {
+        BacklogPoller {
             node_id: config.node_id,
             coordinator: Arc::clone(&group_coordinator),
             metadata: Arc::clone(&controller),
@@ -449,7 +445,7 @@ impl Broker {
             listener_protocol: runtime.inter_listener_protocol,
             listener_name: config.inter_broker_listener_name.clone(),
             inter_broker_server_name: config.inter_broker_server_name.clone(),
-            period: crate::lag::LAG_POLL_INTERVAL,
+            period: LAG_POLL_INTERVAL,
             metrics: runtime.metrics.clone(),
             shutdown: runtime.supervisor_shutdown.child_token(),
         }
@@ -500,10 +496,10 @@ struct JoinedQuorum {
     data_plane_listeners: Vec<tokio::net::TcpListener>,
     health: HealthState,
     transport: StartupTransport,
-    metrics: crate::metrics::BrokerMetrics,
+    metrics: BrokerMetrics,
     diskless_runtime: DisklessRuntime,
-    controller: Arc<dyn crate::metadata_source::MetadataSource>,
-    controller_admin_router: Option<Arc<crate::controller_admin::BrokerControllerAdminRouter>>,
+    controller: Arc<dyn MetadataSource>,
+    controller_admin_router: Option<Arc<BrokerControllerAdminRouter>>,
     raft_handshake_audit: crate::raft_handshake::AuditLogArc,
 }
 
@@ -524,7 +520,7 @@ struct JoinedQuorum {
 /// image carries the unfenced registration. A broker-only node places replicas
 /// against that image, and it trails the controller's.
 async fn wait_for_initial_unfence(
-    mut initial_unfence: tokio::sync::watch::Receiver<crate::heartbeat::client::InitialUnfence>,
+    mut initial_unfence: tokio::sync::watch::Receiver<InitialUnfence>,
     mut images: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     node_id: krabka_raft::NodeId,
     timeout: std::time::Duration,

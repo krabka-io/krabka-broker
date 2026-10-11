@@ -184,8 +184,7 @@ mod tests {
 
     use super::*;
     use crate::break_glass::{
-        action_name,
-        gate::tests::{CREATED_MS, EXPIRES_MS, NOW_MS, image_of, proposal, signed_approval},
+        ALL_ACTIONS, action_name, gate::tests::{CREATED_MS, EXPIRES_MS, NOW_MS, image_of, proposal, signed_approval},
     };
 
     fn ids(described: &[DescribedBreakGlassProposal]) -> Vec<Uuid> {
@@ -322,7 +321,7 @@ mod tests {
 
     #[test]
     fn every_action_reaches_the_wire_as_its_own_value() {
-        for action in crate::break_glass::ALL_ACTIONS {
+        for action in ALL_ACTIONS {
             let image = image_of(&[proposal(1, action, "target")]);
 
             let described = select(&image, false, None, NOW_MS).expect("read the registry");

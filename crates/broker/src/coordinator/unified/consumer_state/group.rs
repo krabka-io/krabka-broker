@@ -481,9 +481,9 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::consumer_state::test_support::{
+    use crate::coordinator::{test_support::sorted_epoch_pairs, unified::consumer_state::test_support::{
         Topics, member, subscribed_member,
-    };
+    }};
 
     #[test]
     fn state_name_follows_kafka_consumer_group_state() {
@@ -821,7 +821,7 @@ mod tests {
         let topics = Topics(vec![("t", T)]);
         g.add_or_update_member(subscribed_member("m1", &["t"]));
         let epochs = |g: &GroupState| {
-            crate::coordinator::test_support::sorted_epoch_pairs(
+            sorted_epoch_pairs(
                 g.members["m1"].assignment_epochs.get(&T),
             )
         };

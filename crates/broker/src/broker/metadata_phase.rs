@@ -9,35 +9,32 @@ use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use tokio::net::TcpListener;
 
 use crate::{
-    broker::{
+    auto_join::{AutoJoinParams, run}, bootstrap::load_bootstrap_records, broker::{
         endpoints::static_controller_voter_set,
         registration::{
             register_broker, register_controller, spawn_deferred_controller_registration,
             submit_stretch_defaults,
         },
-    },
-    config::BrokerConfig,
-    error::BrokerError,
-    metadata_source::or_fatal_fault,
+    }, clean_shutdown::take, config::BrokerConfig, controller_admin::BrokerControllerAdminRouter, controller_endpoint::CONTROLLER_LISTENER_NAME, error::BrokerError, features::LATEST_PRODUCTION_METADATA_VERSION, metadata_observer::{MetadataObserver, ObserverConfig}, metadata_source::{MetadataSource, ObserverSource, QuorumForwarder, or_fatal_fault}, network::client::InterBrokerClient, platform::{Sockets, bind_listener}, raft_handshake::{AuditLogArc, BrokerRaftHandshake}, time_util::system_timer, wal::quorum::registry::WalShardRegistry,
 };
 
 struct RaftTransport {
     controller_cell: Arc<tokio::sync::OnceCell<Arc<krabka_raft::ControllerHandle>>>,
     /// Filled by `Broker::start` once the audit pipeline exists, so the
     /// controller listener's SASL logins reach the audit trail.
-    audit_cell: crate::raft_handshake::AuditLogArc,
+    audit_cell: AuditLogArc,
     handshake: Option<Arc<dyn krabka_raft::RaftListenerHandshake>>,
     dialer: Option<Arc<dyn krabka_raft::OutboundDialer>>,
-    admin_router: Option<Arc<crate::controller_admin::BrokerControllerAdminRouter>>,
+    admin_router: Option<Arc<BrokerControllerAdminRouter>>,
 }
 
 fn prepare_raft_transport(
     config: &BrokerConfig,
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
-    inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
+    inter_broker_client: &Arc<InterBrokerClient>,
 ) -> RaftTransport {
     let controller_cell = Arc::new(tokio::sync::OnceCell::new());
-    let audit_cell: crate::raft_handshake::AuditLogArc = Arc::new(tokio::sync::OnceCell::new());
+    let audit_cell: AuditLogArc = Arc::new(tokio::sync::OnceCell::new());
     // Only a controller binds the controller listener. A broker-only node
     // reads the quorum as an observer and has no such listener to warn about.
     if config.is_controller()
@@ -53,7 +50,7 @@ fn prepare_raft_transport(
     // listener checks for every request.
     let tls_acceptor =
         tls_dynamic.map(|dynamic| tokio_rustls::TlsAcceptor::from(dynamic.current()));
-    let handshake = Some(Arc::new(crate::raft_handshake::BrokerRaftHandshake {
+    let handshake = Some(Arc::new(BrokerRaftHandshake {
         tls_acceptor,
         plain_credentials: config.plain_credentials.as_map().clone(),
         enabled_sasl_mechanisms: config.enabled_sasl_mechanisms.clone(),
@@ -88,7 +85,7 @@ fn prepare_raft_transport(
         dialer: Some(dialer),
         admin_router: config
             .is_controller()
-            .then(|| Arc::new(crate::controller_admin::BrokerControllerAdminRouter::new())),
+            .then(|| Arc::new(BrokerControllerAdminRouter::new())),
     }
 }
 
@@ -141,7 +138,7 @@ fn controller_bootstrap_records(
         .any(|record| matches!(record, krabka_metadata::MetadataRecord::V1FeatureLevel(_)))
     {
         records.extend(krabka_metadata::bootstrap_feature_records(
-            crate::features::LATEST_PRODUCTION_METADATA_VERSION,
+            LATEST_PRODUCTION_METADATA_VERSION,
         ));
     }
     records
@@ -161,14 +158,14 @@ fn observer_snapshot_fetch_max(
 
 /// Metadata publication and its optional controller administration endpoint.
 pub(super) struct MetadataControlPlane {
-    pub(super) source: Arc<dyn crate::metadata_source::MetadataSource>,
-    pub(super) admin_router: Option<Arc<crate::controller_admin::BrokerControllerAdminRouter>>,
+    pub(super) source: Arc<dyn MetadataSource>,
+    pub(super) admin_router: Option<Arc<BrokerControllerAdminRouter>>,
 }
 
 /// Handles owned by startup after metadata quorum readiness has completed.
 pub(super) struct MetadataPhase {
     pub(super) control_plane: MetadataControlPlane,
-    pub(super) audit: crate::raft_handshake::AuditLogArc,
+    pub(super) audit: AuditLogArc,
 }
 
 async fn start_metadata_source(
@@ -176,7 +173,7 @@ async fn start_metadata_source(
     bootstrap_records: Vec<krabka_metadata::MetadataRecord>,
     controller_listener: Option<tokio::net::TcpListener>,
     transport: RaftTransport,
-    wal_shards: Arc<crate::wal::quorum::registry::WalShardRegistry>,
+    wal_shards: Arc<WalShardRegistry>,
 ) -> Result<MetadataControlPlane, BrokerError> {
     let RaftTransport {
         controller_cell,
@@ -227,7 +224,7 @@ async fn start_metadata_source(
             listener_limits: krabka_raft::ListenerLimits {
                 max_request_size: config.socket_request_max,
                 max_idle: config
-                    .connections_max_idle_for(crate::controller_endpoint::CONTROLLER_LISTENER_NAME),
+                    .connections_max_idle_for(CONTROLLER_LISTENER_NAME),
                 max_connections: config.max_connections,
                 max_connections_per_ip: config.max_connections_per_ip,
             },
@@ -251,15 +248,15 @@ async fn start_metadata_source(
         );
         let _ = controller_cell.set(Arc::clone(&controller));
         return Ok(MetadataControlPlane {
-            source: controller as Arc<dyn crate::metadata_source::MetadataSource>,
+            source: controller as Arc<dyn MetadataSource>,
             admin_router,
         });
     }
 
     drop(controller_listener);
     let dialer = dialer.expect("broker-only node requires a raft dialer");
-    let observer = crate::metadata_observer::MetadataObserver::start(
-        crate::metadata_observer::ObserverConfig {
+    let observer = MetadataObserver::start(
+        ObserverConfig {
             client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
             client_frame_max: config.client_frame_max,
             voters: config.controller_quorum_voters.clone(),
@@ -279,10 +276,10 @@ async fn start_metadata_source(
             snapshot_fetch_max: observer_snapshot_fetch_max(config)?,
             max_bytes: config.observer_fetch_max,
             poll_interval: config.observer_poll_interval,
-            timer: crate::time_util::system_timer(),
+            timer: system_timer(),
         },
     );
-    let forwarder = crate::metadata_source::QuorumForwarder {
+    let forwarder = QuorumForwarder {
         client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
         client_frame_max: config.client_frame_max,
         voters: config.controller_quorum_voters.clone(),
@@ -293,7 +290,7 @@ async fn start_metadata_source(
         leader: observer.watch_leader(),
     };
     Ok(MetadataControlPlane {
-        source: Arc::new(crate::metadata_source::ObserverSource::new(
+        source: Arc::new(ObserverSource::new(
             observer,
             Arc::new(forwarder),
         )),
@@ -303,14 +300,14 @@ async fn start_metadata_source(
 
 fn spawn_auto_join(
     config: &BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
-    inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
+    controller: &Arc<dyn MetadataSource>,
+    inter_broker_client: &Arc<InterBrokerClient>,
 ) {
     if !config.is_controller() {
         return;
     }
     let listener_protocol = config.controller_listener_protocol;
-    let params = crate::auto_join::AutoJoinParams {
+    let params = AutoJoinParams {
         auto_join: config.auto_join,
         retry_backoff: config.auto_join_retry_backoff,
         voter_request_timeout: config.auto_join_voter_request_timeout,
@@ -331,12 +328,12 @@ fn spawn_auto_join(
         controller: Arc::clone(controller),
         inter_broker_client: Arc::clone(inter_broker_client),
     };
-    tokio::spawn(crate::auto_join::run(params.clone()));
+    tokio::spawn(run(params.clone()));
     tokio::spawn(crate::auto_join::run_voter_updates(params));
 }
 
 async fn wait_for_metadata_leader(
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
     timeout: std::time::Duration,
 ) -> Result<(), BrokerError> {
     let mut leaders = controller.watch_leader();
@@ -364,7 +361,7 @@ async fn wait_for_metadata_leader(
 /// `metadata.version` within `timeout`, or when the image channel closes
 /// before it does.
 async fn wait_for_metadata_version(
-    controller: &dyn crate::metadata_source::MetadataSource,
+    controller: &dyn MetadataSource,
     timeout: std::time::Duration,
 ) -> Result<(), BrokerError> {
     let mut images = controller.watch_image();
@@ -404,8 +401,8 @@ async fn bind_ephemeral_controller_listener(
     if prebound.is_some() || !config.is_controller() || config.controller_listen_addr.port() != 0 {
         return Ok(prebound);
     }
-    let listener = crate::platform::bind_listener(config.controller_listen_addr).await?;
-    let bound = crate::platform::Sockets::TARGET
+    let listener = bind_listener(config.controller_listen_addr).await?;
+    let bound = Sockets::TARGET
         .listener_address(&listener, config.controller_listen_addr)?;
     publish_bound_controller_addr(config, bound);
     Ok(Some(listener))
@@ -431,8 +428,8 @@ pub(super) async fn start_metadata_phase(
     config: &mut BrokerConfig,
     controller_listener: Option<TcpListener>,
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
-    inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
-    wal_shards: Arc<crate::wal::quorum::registry::WalShardRegistry>,
+    inter_broker_client: &Arc<InterBrokerClient>,
+    wal_shards: Arc<WalShardRegistry>,
 ) -> Result<MetadataPhase, BrokerError> {
     let controller_listener =
         bind_ephemeral_controller_listener(config, controller_listener).await?;
@@ -443,7 +440,7 @@ pub(super) async fn start_metadata_phase(
     // never reads it: it applies the records the controller writes to the
     // log.
     let bootstrap_records = if config.is_controller() {
-        crate::bootstrap::load_bootstrap_records(config.metadata_dir())?
+        load_bootstrap_records(config.metadata_dir())?
     } else {
         Vec::new()
     };
@@ -482,7 +479,7 @@ pub(super) async fn start_metadata_phase(
 /// finalizes a `metadata.version` that supports it.
 async fn join_metadata_quorum(
     config: &mut BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    controller: &Arc<dyn MetadataSource>,
 ) -> Result<(), BrokerError> {
     let timeout = config.startup_leader_wait_timeout.to_std();
     wait_for_metadata_leader(&**controller, timeout).await?;
@@ -494,7 +491,7 @@ async fn join_metadata_quorum(
         // Spend the clean-shutdown proof the last stop left, if it left one.
         // Reading it here -- before this node registers -- is what lets
         // `register_broker` tell a graceful restart from a crash.
-        config.previous_broker_epoch = crate::clean_shutdown::take(&config.log_dir);
+        config.previous_broker_epoch = take(&config.log_dir);
     }
     submit_stretch_defaults(config, &**controller).await?;
     register_controller(config, &**controller).await?;
@@ -513,13 +510,13 @@ mod tests {
     use tracing::Level;
 
     use super::*;
-    use crate::{config::NodeRole, test_support::LogCapture};
+    use crate::{config::NodeRole, features::LATEST_PRODUCTION_METADATA_VERSION, network::client::InterBrokerClient, test_support::LogCapture};
 
     // A node warns that its controller listener is PLAINTEXT only when it has
     // one, which only a node with the controller role binds.
     #[test]
     fn only_a_controller_warns_about_a_plaintext_controller_listener() {
-        let client = Arc::new(crate::network::client::InterBrokerClient::new(None, None));
+        let client = Arc::new(InterBrokerClient::new(None, None));
         let warning = (
             Level::WARN,
             "controller listener is PLAINTEXT: every peer is ANONYMOUS, and each controller RPC \
@@ -583,7 +580,7 @@ mod tests {
             }),
         ];
         let defaults = krabka_metadata::bootstrap_feature_records(
-            crate::features::LATEST_PRODUCTION_METADATA_VERSION,
+            LATEST_PRODUCTION_METADATA_VERSION,
         );
         // (what, the bootstrap stream, the records the controller writes)
         let cases = [

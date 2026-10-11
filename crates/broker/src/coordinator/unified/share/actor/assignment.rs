@@ -11,13 +11,10 @@ use std::{
 use krabka_protocol::primitives::uuid::Uuid;
 
 use crate::coordinator::unified::{
-    actor::MetadataProvider,
-    assignor::{GroupSpec, MemberSubscription, SubscriptionShape, subscription_type},
-    reconciler::ReconcileInput,
-    share::{
+    actor::MetadataProvider, assignor::{GroupSpec, MemberSubscription, SubscriptionShape, subscription_type}, reconciler::ReconcileInput, share::{
         assignor::ShareGroupAssignor,
         state::{ShareGroupState, ShareMemberState},
-    },
+    }, wall_clock_ms,
 };
 
 /// The group epoch cannot move past `i32::MAX`.
@@ -60,7 +57,7 @@ pub(super) fn reconcile(
     if state.target.epoch >= state.group_epoch
         || state.assignment_delayed(
             assignment_interval,
-            crate::coordinator::unified::wall_clock_ms(),
+            wall_clock_ms(),
         )
     {
         return Ok(None);
@@ -104,7 +101,7 @@ pub(super) fn reconcile(
     let assignment = ShareGroupAssignor.assign(&group, &topics, Some(&assignable));
     Ok(Some(state.install_target(
         assignment,
-        crate::coordinator::unified::wall_clock_ms(),
+        wall_clock_ms(),
     )))
 }
 

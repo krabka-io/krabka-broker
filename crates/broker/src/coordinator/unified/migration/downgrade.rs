@@ -167,7 +167,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::coordinator::unified::persistence_next_gen::NextGenKey;
+    use crate::coordinator::unified::persistence_next_gen::{NextGenKey, encode_key};
 
     #[test]
     fn downgrade_re_expresses_members_as_classic() {
@@ -262,7 +262,7 @@ mod tests {
         // order of `ConsumerGroup.createGroupTombstoneRecords`, the deprecated
         // k4 record always among them, then the classic k2 value.
         let ng = |key: NextGenKey| {
-            crate::coordinator::unified::persistence_next_gen::encode_key(&key).unwrap()
+            encode_key(&key).unwrap()
         };
         let keys: Vec<_> = first
             .records

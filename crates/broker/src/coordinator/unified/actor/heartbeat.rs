@@ -34,8 +34,7 @@ use super::{
     },
 };
 use crate::{
-    codes,
-    coordinator::unified::{
+    codes, coordinator::unified::{
         ClientIdentity,
         config::NextGenConfig,
         consumer_state::GroupState,
@@ -43,7 +42,7 @@ use crate::{
         group::{CoordinatorGroup, GroupKind},
         migration, reconciler,
         regex_resolver::TopicRegexResolver,
-    },
+    }, error::BrokerError,
 };
 
 mod identity;
@@ -540,7 +539,7 @@ async fn handle_heartbeat(
     client: ClientIdentity<'_>,
     regex_resolver: &dyn TopicRegexResolver,
     prefix: Option<PendingRecords>,
-) -> Result<ConsumerGroupHeartbeatResponse, crate::error::BrokerError> {
+) -> Result<ConsumerGroupHeartbeatResponse, BrokerError> {
     let now = Instant::now();
     let now_ms = chrono_now_ms();
     let regexes = RegexResolution::of(

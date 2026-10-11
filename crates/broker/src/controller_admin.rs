@@ -9,10 +9,7 @@ use krabka_raft::{
 };
 
 use crate::{
-    broker::Broker,
-    envelope::{self, EnvelopeError, ForwardedRequest},
-    handlers::{ApiKeyCode, ApiVersion, CorrelationId, DispatchKind, RequestContext},
-    network::auth::ConnectionAuth,
+    authorizer::AuthorizationRequest, broker::Broker, envelope::{self, EnvelopeError, ForwardedRequest}, error::BrokerError, handlers::{ApiKeyCode, ApiVersion, CorrelationId, DispatchKind, RequestContext, acl_wire::CLUSTER_RESOURCE_NAME}, network::auth::ConnectionAuth,
 };
 
 /// `Envelope`'s api key. KIP-590 forwarding is the one controller-listener API
@@ -227,7 +224,7 @@ struct Invocation<'a> {
 async fn invoke_registered_handler(
     broker: &std::sync::Arc<Broker>,
     invocation: Invocation<'_>,
-) -> Result<Bytes, crate::error::BrokerError> {
+) -> Result<Bytes, BrokerError> {
     let Invocation {
         api_key,
         api_version,
@@ -239,7 +236,7 @@ async fn invoke_registered_handler(
         authenticated_via_token,
     } = invocation;
     let entry = broker.handlers().get(api_key).ok_or_else(|| {
-        crate::error::BrokerError::UnsupportedApi {
+        BrokerError::UnsupportedApi {
             api_key,
             version: api_version,
         }
@@ -272,7 +269,7 @@ async fn invoke_registered_handler(
             };
             handler(broker, api_version, correlation_id, body, &auth, peer).await
         }
-        _ => Err(crate::error::BrokerError::UnsupportedApi {
+        _ => Err(BrokerError::UnsupportedApi {
             api_key,
             version: api_version,
         }),
@@ -377,11 +374,11 @@ fn unwrap_envelope(
     if crate::authorizer::AuthorizationResult::Deny
         == broker.config.authorizer.authorize(
             image.as_ref(),
-            &crate::authorizer::AuthorizationRequest {
+            &AuthorizationRequest {
                 principal: outer,
                 host: &request.peer,
                 resource_type: krabka_metadata::ResourceType::Cluster,
-                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+                resource_name: CLUSTER_RESOURCE_NAME,
                 operation: krabka_metadata::AclOperation::ClusterAction,
             },
         )
@@ -443,7 +440,9 @@ mod tests {
     use assert2::check;
     use bytes::Bytes;
 
-    use super::*;
+    use crate::test_support::start_controller;
+
+use super::*;
 
     /// The Kafka 4.x controller-listener set, as a live
     /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same
@@ -548,7 +547,7 @@ mod tests {
     async fn a_context_kind_api_key_routes_to_the_broker_registry() {
         use krabka_protocol::{Decode as _, Encode as _};
 
-        let (controller, _controller_addr, _dir) = crate::test_support::start_controller().await;
+        let (controller, _controller_addr, _dir) = start_controller().await;
         let handle = controller;
 
         let router = BrokerControllerAdminRouter::new();

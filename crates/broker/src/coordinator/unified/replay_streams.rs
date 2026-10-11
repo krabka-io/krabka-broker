@@ -345,14 +345,12 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::{
-        persistence_next_gen::GroupMetadataValue,
-        streams::persistence::{
+        persistence_next_gen::GroupMetadataValue, streams::persistence::{
             LastAssignmentConfig, StreamsGroupCurrentMemberAssignmentValue, StreamsGroupKey,
             StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMemberValue,
             StreamsGroupTargetAssignmentMetadataValue, StreamsGroupTopologyValue,
             StreamsMemberWireState,
-        },
-        test_support::{replay_tombstone_constructor, streams_member},
+        }, test_support::{AssignmentDeletionProtocol, AssignmentDeletionSetup, check_replay_cases, replay_tombstone_constructor, streams_member},
     };
 
     /// What a log leaves: the group that replay holds, or the message of
@@ -478,9 +476,9 @@ mod tests {
         let (group, kafka_deletion) = crate::coordinator::unified::test_support::replay_fixtures(
             StreamsGroupSeed::new_group,
             tombstone,
-            crate::coordinator::unified::test_support::AssignmentDeletionSetup {
+            AssignmentDeletionSetup {
                 protocol:
-                    crate::coordinator::unified::test_support::AssignmentDeletionProtocol::Streams,
+                    AssignmentDeletionProtocol::Streams,
                 ..Default::default()
             },
         );
@@ -597,7 +595,7 @@ mod tests {
                 kafka_deletion(),
             ),
         );
-        crate::coordinator::unified::test_support::check_replay_cases(
+        check_replay_cases(
             &rows,
             replay,
             |coord| {

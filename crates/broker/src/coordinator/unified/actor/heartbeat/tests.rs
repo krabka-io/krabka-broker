@@ -7,19 +7,13 @@ use krabka_ids::PartitionIndex;
 use krabka_protocol::primitives::uuid::Uuid;
 
 use super::*;
-use crate::coordinator::unified::{
-    actor::{
-        member_state::build_member,
-        test_support::{
-            StaticMetadata, empty_metadata, make_coordinator, make_coordinator_with_topic,
-            make_coordinator_with_topic_policy, rpc, seed_classic_member, subscription_blob,
+use crate::{coordinator::unified::{
+    ClientIdentity, actor::{
+        member_state::build_member, test_support::{
+            StaticMetadata, coordinator_with_log, empty_metadata, make_coordinator, make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc::{self, consumer_request}, seed_classic_member, subscription_blob,
         },
-    },
-    offsets_log::fake::InMemoryOffsetsLog,
-    persistence_next_gen::GroupMetadataValue,
-    reconciler::ReconcileInput,
-    test_support::MemberEpoch,
-};
+    }, offsets_log::fake::InMemoryOffsetsLog, persistence_next_gen::GroupMetadataValue, reconciler::ReconcileInput, test_support::{ConsumerJoinSetup, MemberEpoch, assert_next_tombstone_batch},
+}, test_support::KafkaErrorCode};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn first_join_emits_one_batch() {
@@ -64,7 +58,7 @@ async fn first_join_adopts_client_member_id() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn member_limit_rejects_only_new_members() {
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = crate::coordinator::unified::actor::test_support::coordinator_with_log(
+    let coord = coordinator_with_log(
         NextGenConfig {
             max_size: 1,
             ..NextGenConfig::assigning_at_once()
@@ -162,7 +156,7 @@ fn handoff_join(state: &mut GroupState, member_id: &str) -> HeartbeatStep {
     handoff_heartbeat(
         state,
         crate::coordinator::unified::test_support::consumer_join_request(
-            crate::coordinator::unified::test_support::ConsumerJoinSetup {
+            ConsumerJoinSetup {
                 group_id: "",
                 member_id,
                 ..Default::default()
@@ -389,7 +383,7 @@ fn identity_ok(setup: IdentityExpectationSetup<'_>) -> ConsumerGroupHeartbeatRes
 }
 
 fn identity_error(
-    error_code: crate::test_support::KafkaErrorCode,
+    error_code: KafkaErrorCode,
     message: &str,
 ) -> ConsumerGroupHeartbeatResponse {
     ConsumerGroupHeartbeatResponse {
@@ -402,7 +396,7 @@ fn identity_error(
 fn fenced_epoch(direction: &str, received: MemberEpoch) -> ConsumerGroupHeartbeatResponse {
     let received = received.0;
     identity_error(
-        crate::test_support::KafkaErrorCode(codes::FENCED_MEMBER_EPOCH),
+        KafkaErrorCode(codes::FENCED_MEMBER_EPOCH),
         &format!(
             "The consumer group member has a {direction} member epoch ({received}) than the one \
              known by the group coordinator (5). The member must abandon all its partitions and \
@@ -414,7 +408,7 @@ fn fenced_epoch(direction: &str, received: MemberEpoch) -> ConsumerGroupHeartbea
 fn identity_rows() -> Vec<IdentityRow> {
     let fenced_instance = || {
         identity_error(
-            crate::test_support::KafkaErrorCode(codes::FENCED_INSTANCE_ID),
+            KafkaErrorCode(codes::FENCED_INSTANCE_ID),
             "Static member m9 with instance id i1 was fenced by member s1.",
         )
     };
@@ -612,7 +606,7 @@ fn identity_group() -> GroupState {
                 member_epoch: MemberEpoch(0),
                 ..Default::default()
             }),
-            crate::coordinator::unified::ClientIdentity { id: "c", host: "h" },
+            ClientIdentity { id: "c", host: "h" },
             Instant::now(),
         );
         member.member_epoch = 5;
@@ -643,7 +637,7 @@ fn heartbeat_identity_rules_follow_kafka() {
             ..Default::default()
         },
     };
-    let client = crate::coordinator::unified::ClientIdentity { id: "c", host: "h" };
+    let client = ClientIdentity { id: "c", host: "h" };
 
     for row in identity_rows() {
         let mut state = identity_group();
@@ -735,7 +729,7 @@ fn written<T>(records: &[(String, Option<T>)]) -> Vec<(String, MemberRecordKind)
 fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
     let config = NextGenConfig::assigning_at_once();
     let metadata = empty_metadata();
-    let client = crate::coordinator::unified::ClientIdentity { id: "c", host: "h" };
+    let client = ClientIdentity { id: "c", host: "h" };
     let join = |member_id: &str, member_epoch: i32| {
         identity_request(IdentityRequestSetup {
             member_id,
@@ -851,7 +845,7 @@ async fn leave_emits_tombstone_batch() {
         },
     )
     .await;
-    crate::coordinator::unified::test_support::assert_next_tombstone_batch(&log, pre_leave).await;
+    assert_next_tombstone_batch(&log, pre_leave).await;
 }
 
 /// Kafka's `consumerGroupFenceMembers`: a leave writes the leaver's
@@ -869,13 +863,13 @@ fn a_leave_bumps_the_epoch_and_the_next_heartbeat_assigns() {
             ..Default::default()
         },
     };
-    let client = crate::coordinator::unified::ClientIdentity {
+    let client = ClientIdentity {
         id: "client",
         host: "host",
     };
     let join = |member_id: &str| {
         crate::coordinator::unified::test_support::consumer_join_request(
-            crate::coordinator::unified::test_support::ConsumerJoinSetup {
+            ConsumerJoinSetup {
                 member_id,
                 ..Default::default()
             },
@@ -996,7 +990,7 @@ async fn failed_upgrade_append_keeps_the_atomic_batch_unpublished() {
     log.fail_next
         .store(true, std::sync::atomic::Ordering::SeqCst);
 
-    let response = crate::coordinator::unified::actor::test_support::rpc::consumer_request(
+    let response = consumer_request(
         &handle,
         ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
@@ -1038,7 +1032,7 @@ fn step_heartbeat_first_join_targets_all_partitions() {
         &config,
         &metadata,
         &req,
-        crate::coordinator::unified::ClientIdentity {
+        ClientIdentity {
             id: "client-a",
             host: "",
         },
@@ -1149,7 +1143,7 @@ async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
             )),
         );
         let handle = coord.find("g").expect("seeded classic actor");
-        let response = crate::coordinator::unified::actor::test_support::rpc::consumer_request(
+        let response = consumer_request(
             &handle,
             ConsumerGroupHeartbeatRequest {
                 group_id: "g".into(),

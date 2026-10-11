@@ -2,7 +2,9 @@
 //! consumer, classic, and streams group views, the group-type marker, and the
 //! awaiters that block until an actor settles at an expected membership.
 
-use crate::broker::{BrokerHandle, TEST_AWAITER_TIMEOUT};
+use crate::{broker::{BrokerHandle, TEST_AWAITER_TIMEOUT}, coordinator::unified::actor::GroupActorMessage};
+#[cfg(any(test, feature = "test-helpers"))]
+use crate::coordinator::unified::{GroupType, actor::{ClassicView, DescribeView}};
 
 impl BrokerHandle {
     async fn inspect_group_actor<T>(
@@ -10,7 +12,7 @@ impl BrokerHandle {
         group_id: &str,
         message: impl FnOnce(
             tokio::sync::oneshot::Sender<T>,
-        ) -> crate::coordinator::unified::actor::GroupActorMessage,
+        ) -> GroupActorMessage,
     ) -> Option<T> {
         let handle = self
             .broker
@@ -33,9 +35,11 @@ impl BrokerHandle {
     pub async fn group_describe_for_test(
         &self,
         group_id: &str,
-    ) -> Option<crate::coordinator::unified::actor::DescribeView> {
+    ) -> Option<DescribeView> {
         self.inspect_group_actor(group_id, |reply| {
-            crate::coordinator::unified::actor::GroupActorMessage::Describe { reply }
+            use crate::coordinator::unified::actor::GroupActorMessage;
+
+            GroupActorMessage::Describe { reply }
         })
         .await
     }
@@ -71,9 +75,11 @@ impl BrokerHandle {
     pub async fn classic_group_inspect_for_test(
         &self,
         group_id: &str,
-    ) -> Option<crate::coordinator::unified::actor::ClassicView> {
+    ) -> Option<ClassicView> {
         self.inspect_group_actor(group_id, |reply| {
-            crate::coordinator::unified::actor::GroupActorMessage::ClassicInspect { reply }
+            use crate::coordinator::unified::actor::GroupActorMessage;
+
+            GroupActorMessage::ClassicInspect { reply }
         })
         .await
     }
@@ -110,6 +116,8 @@ impl BrokerHandle {
         &self,
         group_id: &str,
     ) -> Option<crate::coordinator::unified::streams::actor::StreamsDescribeView> {
+        use crate::coordinator::unified::streams::actor::StreamsGroupActorMessage;
+
         let handle = self
             .broker
             .group_coordinator
@@ -121,7 +129,7 @@ impl BrokerHandle {
         handle
             .tx
             .send(
-                crate::coordinator::unified::streams::actor::StreamsGroupActorMessage::Describe {
+                StreamsGroupActorMessage::Describe {
                     reply: tx,
                 },
             )
@@ -181,7 +189,7 @@ impl BrokerHandle {
     pub fn group_type_for_test(
         &self,
         group_id: &str,
-    ) -> Option<crate::coordinator::unified::GroupType> {
+    ) -> Option<GroupType> {
         self.broker.group_coordinator.group_type(group_id)
     }
 
@@ -194,7 +202,7 @@ impl BrokerHandle {
     pub async fn wait_until_group_type(
         &self,
         group_id: &str,
-        expected: crate::coordinator::unified::GroupType,
+        expected: GroupType,
     ) {
         let settled =
             super::await_until(|| async { self.group_type_for_test(group_id) == Some(expected) })

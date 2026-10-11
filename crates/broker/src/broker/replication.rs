@@ -8,13 +8,13 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::{broker::DisklessRuntime, config::BrokerConfig, partition_registry::PartitionRegistry};
+use crate::{broker::DisklessRuntime, config::BrokerConfig, log_dir_id::LogDirIds, log_dir_status::LogDirRegistry, metrics::BrokerMetrics, network::client::InterBrokerClient, partition_registry::PartitionRegistry, producer_state::ProducerState, replicator_supervisor::{ReplicatorSupervisor, ReplicatorSupervisorConfig}, share_coordinator::coordinator::ShareCoordinator, txn::coordinator::TxnCoordinator};
 
 #[derive(Clone, Copy)]
 pub(super) struct ReplicatorStorage<'a> {
-    pub(super) log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
-    pub(super) producer_state: &'a Arc<crate::producer_state::ProducerState>,
-    pub(super) log_dir_ids: &'a crate::log_dir_id::LogDirIds,
+    pub(super) log_dir_status: &'a LogDirRegistry,
+    pub(super) producer_state: &'a Arc<ProducerState>,
+    pub(super) log_dir_ids: &'a LogDirIds,
     pub(super) diskless: &'a DisklessRuntime,
 }
 
@@ -23,14 +23,14 @@ pub(super) fn spawn_replicator_supervisor(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     partitions: &Arc<PartitionRegistry>,
     coordinators: (
-        &Arc<crate::txn::coordinator::TxnCoordinator>,
-        &Arc<crate::share_coordinator::coordinator::ShareCoordinator>,
+        &Arc<TxnCoordinator>,
+        &Arc<ShareCoordinator>,
     ),
-    inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
+    inter_broker_client: &Arc<InterBrokerClient>,
     runtime: (
         &CancellationToken,
         &Arc<crate::throttle::ThrottleState>,
-        &crate::metrics::BrokerMetrics,
+        &BrokerMetrics,
     ),
     storage: ReplicatorStorage<'_>,
 ) -> JoinHandle<()> {
@@ -41,8 +41,8 @@ pub(super) fn spawn_replicator_supervisor(
         .map_or(krabka_security::ListenerProtocol::Plaintext, |listener| {
             listener.protocol
         });
-    crate::replicator_supervisor::ReplicatorSupervisor::new(
-        crate::replicator_supervisor::ReplicatorSupervisorConfig {
+    ReplicatorSupervisor::new(
+        ReplicatorSupervisorConfig {
             node_id: config.node_id,
             broker_id: config.broker_id,
             controller: Arc::clone(controller),

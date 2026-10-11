@@ -10,16 +10,12 @@ use std::sync::Arc;
 use super::replay::Replayed;
 use crate::{
     coordinator::{
-        GroupCoordinator,
-        persistence::{GroupMetadataValue, Key, OffsetCommitValue},
-        unified::{
+        GroupCoordinator, persistence::{GroupMetadataValue, Key, OffsetCommitValue}, unified::{
             classic_state::{
                 ClassicGroup as ClassicState, GroupState as ClassicGroupState, Member,
-            },
-            replay_policy::{ExistingGroup, GroupLookup, ModernGroupType, persisted_group},
+            }, persistence_next_gen::NextGenKey, replay_policy::{ExistingGroup, GroupLookup, ModernGroupType, persisted_group}, share::persistence::ShareGroupKey, streams::persistence::StreamsGroupKey,
         },
-    },
-    error::BrokerError,
+    }, error::BrokerError,
 };
 
 /// Decodes `value` as the value of `key`'s record type and drops the result.
@@ -149,7 +145,7 @@ pub(super) fn settle_classic_group(
 pub(super) fn apply_next_gen_record(
     coordinator: &Arc<GroupCoordinator>,
     acc: &mut Replayed,
-    key: crate::coordinator::unified::persistence_next_gen::NextGenKey,
+    key: NextGenKey,
     value_bytes: &bytes::Bytes,
 ) -> Result<(), BrokerError> {
     use crate::coordinator::unified::persistence_next_gen as ng;
@@ -213,7 +209,7 @@ pub(super) fn apply_next_gen_record(
 pub(super) fn apply_share_record(
     coordinator: &Arc<GroupCoordinator>,
     acc: &mut Replayed,
-    key: crate::coordinator::unified::share::persistence::ShareGroupKey,
+    key: ShareGroupKey,
     value_bytes: &bytes::Bytes,
 ) -> Result<(), BrokerError> {
     use crate::coordinator::unified::share::persistence as sp;
@@ -277,7 +273,7 @@ pub(super) fn apply_share_record(
 pub(super) fn apply_streams_record(
     coordinator: &Arc<GroupCoordinator>,
     acc: &mut Replayed,
-    key: crate::coordinator::unified::streams::persistence::StreamsGroupKey,
+    key: StreamsGroupKey,
     value_bytes: &bytes::Bytes,
 ) -> Result<(), BrokerError> {
     use crate::coordinator::unified::streams::persistence as sp;

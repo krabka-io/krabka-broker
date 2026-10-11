@@ -119,6 +119,8 @@ macro_rules! assignment_delay_method {
 }
 pub(crate) use assignment_delay_method;
 
+use crate::coordinator::unified::consumer_state::same_assignment;
+
 /// An absent heartbeat field keeps the stored value; allocate only when it changes.
 pub(crate) fn update_present<T: Clone + PartialEq>(
     stored: &mut Option<T>,
@@ -253,7 +255,7 @@ pub(crate) fn new_target_assignment<'a>(
             partitions.sort_unstable();
         }
         if !held.get(member_id).is_some_and(|held| {
-            crate::coordinator::unified::consumer_state::same_assignment(held, &assignment)
+            same_assignment(held, &assignment)
         }) {
             changed.push(member_id.clone());
         }

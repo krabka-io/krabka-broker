@@ -18,11 +18,7 @@ use crate::{
         metrics::BrokerBarrierMetrics,
         state::GroupSpec,
         test_support::{metadata_source, open_partition, topic_records},
-    },
-    metadata_source::MetadataSource,
-    metrics::BrokerMetrics,
-    partition_registry::PartitionRegistry,
-    test_support::FakeMetadataSource,
+    }, metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry, test_support::{FakeMetadataSource, StandalonePartitionSetup},
 };
 
 pub(crate) const GROUP: &str = "orders-cut";
@@ -90,7 +86,7 @@ impl Fixture {
             open_partition(
                 &registry,
                 dir.path(),
-                crate::test_support::StandalonePartitionSetup {
+                StandalonePartitionSetup {
                     topic: STATE_TOPIC,
                     partition: krabka_ids::PartitionIndex(p),
                     ..Default::default()
@@ -102,7 +98,7 @@ impl Fixture {
                 open_partition(
                     &registry,
                     dir.path(),
-                    crate::test_support::StandalonePartitionSetup {
+                    StandalonePartitionSetup {
                         topic,
                         partition: krabka_ids::PartitionIndex(p),
                         ..Default::default()

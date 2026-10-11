@@ -12,31 +12,28 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    broker::{
+    auto_topic_creation::AutoTopicCreation, barrier::coordinator::BarrierCoordinator, broker::{
         Broker, BrokerHandle, DisklessRuntime,
         diskless_index::{DisklessFlusherStartup, bootstrap_diskless_index_log},
         listeners::{ListenerStartup, bind_listeners_and_recover_moves, spawn_listener_tasks},
         rlmm::{KafkaSwapKickoff, bootstrap_topic_rlmm},
         runtime::BrokerRuntimeStartup,
-    },
-    config::BrokerConfig,
-    error::BrokerError,
-    partition_registry::PartitionRegistry,
+    }, config::BrokerConfig, controller_admin::BrokerControllerAdminRouter, coordinator::GroupCoordinator, diskless::{flusher::FlushConfig, read::DisklessReadHandle}, error::BrokerError, handlers::registry::build_registry, log_dir_status::LogDirRegistry, network::dispatch::RequestByteBudget, partition_registry::PartitionRegistry, producer_id_manager::ProducerIdManager, share_coordinator::coordinator::ShareCoordinator, share_partition::manager::SharePartitionLeaderManager, txn::coordinator::TxnCoordinator,
 };
 
 pub(super) type BrokerCoordinatorSet = (
-    Arc<crate::coordinator::GroupCoordinator>,
-    Arc<crate::producer_id_manager::ProducerIdManager>,
+    Arc<GroupCoordinator>,
+    Arc<ProducerIdManager>,
     Arc<crate::producer_state::ProducerState>,
-    Arc<crate::txn::coordinator::TxnCoordinator>,
-    Arc<crate::share_coordinator::coordinator::ShareCoordinator>,
-    Arc<crate::share_partition::manager::SharePartitionLeaderManager>,
-    Arc<crate::barrier::coordinator::BarrierCoordinator>,
-    Arc<crate::auto_topic_creation::AutoTopicCreation>,
+    Arc<TxnCoordinator>,
+    Arc<ShareCoordinator>,
+    Arc<SharePartitionLeaderManager>,
+    Arc<BarrierCoordinator>,
+    Arc<AutoTopicCreation>,
 );
 
 pub(super) struct BrokerStorageStartup {
-    pub(super) log_dir_status: crate::log_dir_status::LogDirRegistry,
+    pub(super) log_dir_status: LogDirRegistry,
     pub(super) diskless: DisklessRuntime,
 }
 
@@ -46,7 +43,7 @@ pub(super) async fn finish_broker_startup(
     metadata: (
         Arc<dyn crate::metadata_source::MetadataSource>,
         Arc<PartitionRegistry>,
-        Option<Arc<crate::controller_admin::BrokerControllerAdminRouter>>,
+        Option<Arc<BrokerControllerAdminRouter>>,
     ),
     coordinators: BrokerCoordinatorSet,
     transport: (
@@ -73,7 +70,7 @@ pub(super) async fn finish_broker_startup(
     let queued_requests_sem = Arc::new(tokio::sync::Semaphore::new(config.queued_max_requests));
     let queued_request_bytes = config
         .queued_max_request_bytes
-        .map(|budget| crate::network::dispatch::RequestByteBudget::of(budget.bytes_usize()));
+        .map(|budget| RequestByteBudget::of(budget.bytes_usize()));
     let broker = Arc::new(Broker {
         config,
         controller,
@@ -115,7 +112,7 @@ pub(super) async fn finish_broker_startup(
         offset_for_leader_epoch_requests: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         audit_log: runtime.audit_log,
         audit_writer_handle: tokio::sync::Mutex::new(runtime.audit_writer_handle),
-        handlers: crate::handlers::registry::build_registry(),
+        handlers: build_registry(),
     });
     // Publish the startup kTLS probe. It is a constant of the running process,
     // so this is the one place it is ever set, and an operator can read
@@ -220,7 +217,7 @@ fn spawn_rlmm_bootstrap(
 
 fn spawn_diskless_bootstrap(
     broker: &Arc<Broker>,
-    handle: &Arc<crate::diskless::read::DisklessReadHandle>,
+    handle: &Arc<DisklessReadHandle>,
     kickoff: &KafkaSwapKickoff,
     shutdown: &CancellationToken,
 ) -> (JoinHandle<()>, Arc<AtomicBool>) {
@@ -234,7 +231,7 @@ fn spawn_diskless_bootstrap(
         node_id: broker.config.node_id,
         broker_id: broker.config.broker_id,
         metrics: broker.metrics.clone(),
-        flush_config: crate::diskless::flusher::FlushConfig::from_broker(&broker.config),
+        flush_config: FlushConfig::from_broker(&broker.config),
         ready: Arc::clone(&ready),
     };
     let kickoff = kickoff.clone();

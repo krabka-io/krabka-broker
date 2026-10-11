@@ -28,6 +28,8 @@ use krabka_metadata::{MetadataImage, NodeId};
 use krabka_protocol::records::TimestampType;
 use krabka_units::ByteSize;
 
+use crate::config::BrokerConfig;
+
 use super::{
     MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS,
     broker_dynamic::TOPIC_DEFAULT_SYNONYMS, log_config::apply_to_log_config, parse::long_value,
@@ -93,7 +95,7 @@ impl BrokerLogDefaults {
     /// The defaults `config`'s node runs with: the dynamic layers in `image`
     /// over its static `LogConfig` and timestamp windows.
     #[must_use]
-    pub(crate) fn for_broker(image: &MetadataImage, config: &crate::config::BrokerConfig) -> Self {
+    pub(crate) fn for_broker(image: &MetadataImage, config: &BrokerConfig) -> Self {
         Self::resolve(
             image,
             NodeId(config.node_id.0),

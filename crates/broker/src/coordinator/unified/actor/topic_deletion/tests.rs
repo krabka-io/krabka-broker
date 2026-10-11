@@ -7,8 +7,7 @@ use bytes::Bytes;
 use tokio::sync::oneshot;
 
 use crate::coordinator::{
-    test_support::{offset_entry, parsed_offset_records},
-    unified::{
+    test_support::{TopicDeletionTombstonesSetup, offset_entry, parsed_offset_records}, unified::{
         actor::{
             GroupActorMessage,
             test_support::{make_coordinator, rpc},
@@ -66,7 +65,7 @@ async fn deleting_a_topic_tombstones_its_offsets_in_the_group() {
             append_result: AppendResult::Success,
             expected_reply: vec![key("orders", 0), key("orders", 1), key("orders", 2)],
             expected_records: crate::coordinator::test_support::topic_deletion_tombstones(
-                crate::coordinator::test_support::TopicDeletionTombstonesSetup {
+                TopicDeletionTombstonesSetup {
                     partitions: &[
                         krabka_ids::PartitionIndex(0),
                         krabka_ids::PartitionIndex(1),

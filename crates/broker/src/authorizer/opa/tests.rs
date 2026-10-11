@@ -16,10 +16,12 @@ use qubit_clock::ManualMonotonicClock;
 use uuid::Uuid;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
+use crate::test_support::sasl_principal;
+
 use super::*;
 
 fn test_principal(name: &str) -> Principal {
-    crate::test_support::sasl_principal(name)
+    sasl_principal(name)
 }
 
 fn img() -> MetadataImage {
