@@ -18,6 +18,7 @@ use krabka_protocol::owned::{
 
 use super::TxnCoordinator;
 use crate::{
+    broker::registered_listener_endpoint,
     codes,
     config::BrokerConfig,
     txn::{
@@ -153,8 +154,7 @@ impl TxnCoordinator {
         let Some(broker) = image.broker(leader) else {
             return Remote::Failed(codes::COORDINATOR_NOT_AVAILABLE);
         };
-        let (host, port) =
-            crate::broker::registered_listener_endpoint(broker, &transport.listener_name);
+        let (host, port) = registered_listener_endpoint(broker, &transport.listener_name);
         let host = host.to_owned();
         let mut topics: Vec<AddPartitionsToTxnTopic> = Vec::new();
         for partition in &check.partitions {

@@ -22,6 +22,8 @@ use krabka_verified::isr::{
     CaughtUpCredit, HighWatermarkFacts, HwmReplica, IsrEligibilityFacts, leader_high_watermark,
 };
 
+use crate::config_keys::node_min_insync_replicas;
+
 /// What the leader knows of one follower's progress, Kafka's `ReplicaState`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FollowerStats {
@@ -178,7 +180,7 @@ impl LeaderPolicy {
                 )
             })
             .collect();
-        let configured = crate::config_keys::node_min_insync_replicas(image, node, &record.topic)
+        let configured = node_min_insync_replicas(image, node, &record.topic)
             .unwrap_or(default_min_insync_replicas);
         Self {
             effective_min_isr: usize::try_from(configured)
@@ -504,7 +506,7 @@ mod tests {
     use super::*;
     use crate::{
         config_keys::MIN_INSYNC_REPLICAS,
-        test_support::{TopicSetup, topic_image},
+        test_support::{TopicSetup, broker_registration, topic_image},
     };
 
     /// Shorthand for wrapping a raw offset in the test asserts below.
@@ -1091,7 +1093,7 @@ mod tests {
                 in_controlled_shutdown,
                 broker_epoch,
                 host: "localhost".to_string(),
-                ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
+                ..broker_registration(krabka_raft::NodeId(node))
             })
         };
         let mut image = policy_image();

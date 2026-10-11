@@ -20,6 +20,7 @@ use crate::{
     codes,
     handlers::describe_transactions::transaction_state_row,
     partition_registry::PartitionRegistry,
+    producer_id_manager::ProducerIdManager,
     test_support::{FakeMetadataSource, StandalonePartitionSetup, open_partition},
     txn::{
         bootstrap,
@@ -167,7 +168,7 @@ async fn seeded_coordinator(entry: TxnEntry, leader: NodeId) -> (Arc<TxnCoordina
     let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),
         partitions,
-        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+        Arc::new(ProducerIdManager::new()),
         1,
         mebibytes(1),
     ));

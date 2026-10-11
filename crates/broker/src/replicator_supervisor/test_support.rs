@@ -34,8 +34,9 @@ use crate::{
     log_dir_id::LogDirIds,
     log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource,
+    metrics::BrokerMetrics,
     network::client::InterBrokerClient,
-    partition::PartitionRuntimeConfig,
+    partition::{Partition, PartitionRuntimeConfig},
     partition_registry::PartitionRegistry,
     producer_state::ProducerState,
     test_support::{FakeMetadataSource, PartitionCount, ReplicationFactor, broker_registration},
@@ -318,7 +319,7 @@ pub(super) type SupervisorFixture = (
 pub(super) async fn reconciled_partition(
     image: &MetadataImage,
     context: &str,
-) -> (SupervisorFixture, Arc<crate::partition::Partition>) {
+) -> (SupervisorFixture, Arc<Partition>) {
     let fixture = reconciled_supervisor(image).await;
     let partition = fixture
         .1
@@ -364,7 +365,7 @@ pub(super) fn supervisor_fixture(image: MetadataImage) -> SupervisorFixture {
         max_produce_group: 1_024,
         partition_writer_queue_depth: 64,
         diskless_wal_local_replica_count: 3,
-        metrics: crate::metrics::BrokerMetrics::default(),
+        metrics: BrokerMetrics::default(),
         log_dir_ids: LogDirIds::resolve(&[dir.path().to_path_buf()]),
         hot_tail: Arc::new(HotTailCache::default()),
         wal_shards: Arc::new(WalShardRegistry::new(krabka_raft::NodeId(2))),

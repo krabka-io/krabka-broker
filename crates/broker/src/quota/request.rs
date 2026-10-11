@@ -65,7 +65,9 @@ mod tests {
     use krabka_units::{millis, secs};
 
     use super::*;
-    use crate::quota::test_support::{QuotaValue, image_with_quotas, quota_record};
+    use crate::quota::test_support::{
+        QuotaRecordSetup, QuotaValue, image_with_quotas, quota_record,
+    };
 
     crate::quota::test_support::image_builder!(img_with_quota, "request_percentage");
 
@@ -162,7 +164,7 @@ mod tests {
                 vec![("user", Some("alice")), ("client-id", None)],
             ]
             .map(|entity| {
-                quota_record(crate::quota::test_support::QuotaRecordSetup {
+                quota_record(QuotaRecordSetup {
                     entity,
                     key: "request_percentage",
                     value: QuotaValue(0.001),

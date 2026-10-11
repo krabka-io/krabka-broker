@@ -11,7 +11,10 @@ use krabka_metadata::{MetadataImage, NodeId};
 use tempfile::TempDir;
 
 use super::*;
-use crate::{test_support::PartitionCount, txn::state::TopicPartition};
+use crate::{
+    test_support::PartitionCount,
+    txn::{coordinator::test_support::StateImageSetup, state::TopicPartition},
+};
 
 const TID: &str = "tid-completion";
 const DATA_TOPIC: &str = "orders";
@@ -111,14 +114,12 @@ fn completion_decision_accepts_only_the_exact_prepared_snapshot() {
 }
 
 fn image(leader: NodeId, leader_epoch: krabka_metadata::LeaderEpoch) -> MetadataImage {
-    super::super::test_support::state_image(
-        crate::txn::coordinator::test_support::StateImageSetup {
-            leader,
-            leader_epoch,
-            replicas: &[leader],
-            ..Default::default()
-        },
-    )
+    super::super::test_support::state_image(StateImageSetup {
+        leader,
+        leader_epoch,
+        replicas: &[leader],
+        ..Default::default()
+    })
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]

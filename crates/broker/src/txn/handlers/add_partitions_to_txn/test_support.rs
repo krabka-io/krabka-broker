@@ -11,6 +11,7 @@ use krabka_protocol::owned::common::{
 };
 
 use crate::{
+    authorizer::Authorizer,
     broker::{Broker, BrokerHandle},
     coordinator::test_support::single_replica_partition,
     test_support::{configure_single_partition_transactions, start_broker_no_audit_with},
@@ -79,7 +80,7 @@ pub(in crate::txn::handlers) async fn seed_topic(broker: &Broker, topic: &str, p
 /// `__transaction_state-0`, and this returns once that partition is loaded,
 /// so [`seed_transaction`] and the handler both see a coordinator.
 pub(in crate::txn::handlers) async fn start_coordinator(
-    authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+    authorizer: std::sync::Arc<dyn Authorizer>,
 ) -> (BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = start_broker_no_audit_with(|cfg| {
         configure_single_partition_transactions(cfg, authorizer);

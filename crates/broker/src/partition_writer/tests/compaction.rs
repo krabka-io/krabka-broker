@@ -17,6 +17,7 @@ use tokio::sync::oneshot;
 
 use super::*;
 use crate::{
+    config::BrokerConfig,
     partition::{ProduceData, ProduceJob},
     replica_state::ReplicaState,
     test_support::UnixMillis,
@@ -362,7 +363,7 @@ async fn compacted(role: Role, history: &History, now_ms: i64) -> Vec<Kept> {
     if matches!(history.expiry, ProducerExpiry::Swept) {
         // The maintenance loop sweeps the tracker and the log of every
         // hosted partition (`spawn_producer_expiry`).
-        let expiration = crate::config::BrokerConfig::default().producer_id_expiration;
+        let expiration = BrokerConfig::default().producer_id_expiration;
         let later = now_ms + expiration.millis_i64();
         producer_state.expire_older_than(later, expiration).await;
         log.lock()

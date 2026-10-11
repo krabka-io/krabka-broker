@@ -235,11 +235,13 @@ mod tests {
     use super::{CommittedOffsets, checked_batch_advance, scan_pending_offset_entries};
     use crate::coordinator::{
         persistence::OffsetCommitValue,
-        test_support::{OffsetRecordSetup, offset_entry as entry, replay_offset_batch},
+        test_support::{
+            OffsetRecordSetup, offset_entry as entry, offset_record, replay_offset_batch,
+        },
     };
 
     fn commit(group: &str, topic: &str, partition: i32, offset: i64) -> Record {
-        crate::coordinator::test_support::offset_record(OffsetRecordSetup {
+        offset_record(OffsetRecordSetup {
             group,
             topic,
             partition: krabka_ids::PartitionIndex(partition),

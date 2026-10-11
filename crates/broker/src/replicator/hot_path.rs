@@ -25,7 +25,7 @@ use krabka_protocol::records::RecordBatch;
 
 use crate::{
     config::BrokerConfig, error::BrokerError, log_dir_status::LogDirRegistry, partition::Partition,
-    producer_state::ProducerState,
+    partition_writer::run_with_sequencer, producer_state::ProducerState,
 };
 
 /// A follower partition over `dir`, with its writer actor running.
@@ -56,7 +56,7 @@ impl ReplicaSeam {
                 log,
                 log_dir,
                 |identity, storage, rx, signals| {
-                    tokio::spawn(crate::partition_writer::run_with_sequencer(
+                    tokio::spawn(run_with_sequencer(
                         identity,
                         storage,
                         rx,

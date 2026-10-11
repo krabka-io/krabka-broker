@@ -710,7 +710,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::codes::{COORDINATOR_LOAD_IN_PROGRESS, FENCED_LEADER_EPOCH, INVALID_REQUEST};
+    use crate::codes::{
+        COORDINATOR_LOAD_IN_PROGRESS, FENCED_LEADER_EPOCH, FENCED_STATE_EPOCH, INVALID_REQUEST,
+    };
 
     fn response(partitions: &[(i32, i16)]) -> InitializeShareGroupStateResponse {
         InitializeShareGroupStateResponse {
@@ -758,7 +760,7 @@ mod tests {
         let cases = [
             ("ReadShareGroupState", INVALID_REQUEST),
             ("ReadShareGroupState", FENCED_LEADER_EPOCH),
-            ("WriteShareGroupState", crate::codes::FENCED_STATE_EPOCH),
+            ("WriteShareGroupState", FENCED_STATE_EPOCH),
             ("ReadShareGroupStateSummary", COORDINATOR_LOAD_IN_PROGRESS),
         ];
         let actual: Vec<_> = cases

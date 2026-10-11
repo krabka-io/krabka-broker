@@ -30,6 +30,7 @@ use tokio::{
 // `std::sync::Mutex` is kept for `log` (sync hot-path callers);
 // `replica_state` uses `tokio::sync::Mutex` to avoid blocking worker threads.
 use crate::{
+    config::BrokerConfig,
     diskless::hot_tail::HotTailCache,
     txn::{handlers::write_txn_markers::CommittedOffsets, marker::MarkerType},
     wal::{OffsetSequencer, quorum::registry::WalShardRegistry},
@@ -106,7 +107,7 @@ impl PartitionRuntimeConfig {
     }
 
     pub(crate) fn from_broker(
-        config: &crate::config::BrokerConfig,
+        config: &BrokerConfig,
         diskless: bool,
         services: PartitionWalServices,
     ) -> Self {

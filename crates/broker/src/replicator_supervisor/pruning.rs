@@ -9,8 +9,9 @@ use tracing::warn;
 
 use super::{ReplicatorSupervisor, TopicPartition};
 use crate::{
+    log_dir::partition_dir,
     partition::Partition,
-    wal::quorum::{ShardRemoval, remove_shard},
+    wal::quorum::{ShardRemoval, registry::ShardId, remove_shard},
 };
 
 impl ReplicatorSupervisor {
@@ -53,7 +54,7 @@ impl ReplicatorSupervisor {
             if image.partition(&key.0, key.1).is_none() || local_set.contains(&key) {
                 continue;
             }
-            let shard = crate::wal::quorum::registry::ShardId {
+            let shard = ShardId {
                 topic_id,
                 partition: partition.index,
             };
@@ -99,7 +100,7 @@ impl ReplicatorSupervisor {
                 "failed to prune WAL shard"
             );
         }
-        let partition_dir = crate::log_dir::partition_dir(&owning_dir, topic, index.get());
+        let partition_dir = partition_dir(&owning_dir, topic, index.get());
         if let Err(error) = remove_partition_dir(&partition_dir) {
             warn!(
                 topic = %topic,

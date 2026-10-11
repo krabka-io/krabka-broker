@@ -660,8 +660,9 @@ mod tests {
         *,
     };
     use crate::{
-        api_catalog::UnstableApiVersions, metadata_source::MetadataSource,
-        remote_log_manager::test_support as fixtures,
+        api_catalog::UnstableApiVersions,
+        metadata_source::MetadataSource,
+        remote_log_manager::{local_retention::finished_segment_ranges, test_support as fixtures},
     };
 
     mod concurrency;
@@ -815,9 +816,7 @@ mod tests {
             let mut log = fixtures::partition_log_guard(&partition);
             log.sync().expect("flush rolled segments");
             let observed = Tiered {
-                remote: crate::remote_log_manager::local_retention::finished_segment_ranges(
-                    &rlmm.list_remote_log_segments(&tp()).unwrap(),
-                ),
+                remote: finished_segment_ranges(&rlmm.list_remote_log_segments(&tp()).unwrap()),
                 local_sealed: log
                     .tierable_segments()
                     .iter()

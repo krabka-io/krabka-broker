@@ -73,7 +73,7 @@ use crate::{
         AclSource, AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer,
     },
     bootstrap::encode_bootstrap_records,
-    broker::{Broker, BrokerHandle},
+    broker::{Broker, BrokerHandle, spawn_partition},
     codes::{
         COORDINATOR_NOT_AVAILABLE, KAFKA_STORAGE_ERROR, MESSAGE_TOO_LARGE, NOT_COORDINATOR,
         NOT_ENOUGH_REPLICAS, NOT_LEADER_OR_FOLLOWER, RECORD_LIST_TOO_LARGE, REQUEST_TIMED_OUT,
@@ -85,9 +85,12 @@ use crate::{
     elr::state::PartitionElr,
     error::BrokerError,
     features::ELR_VERSION,
-    handlers::{DispatchKind, RequestContext, alter_partition::handle},
+    handlers::{
+        DispatchKind, RequestContext, alter_partition::handle,
+        describe_configs::effective_topic_configs, encode_response,
+    },
     heartbeat::{
-        controller_state::{ControllerLivenessState, LivenessTransition},
+        controller_state::{ControllerLivenessState, LivenessTransition, TestClock},
         fencing::{RegistrationChange, registration_change},
     },
     log_dir::partition_dir,
@@ -98,7 +101,7 @@ use crate::{
     partition_registry::PartitionRegistry,
     producer_state::ProducerState,
     share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
-    txn::coordinator::leadership::LoadStatus,
+    txn::{bootstrap::TOPIC, coordinator::leadership::LoadStatus},
 };
 
 /// The localhost ECDSA pair used by reload and socket-drain tests.
@@ -339,7 +342,7 @@ pub(crate) fn spawn_standalone_partition(
         partition,
         storage,
     } = setup;
-    crate::broker::spawn_partition(
+    spawn_partition(
         topic.to_owned(),
         partition,
         log_dir.to_path_buf(),
@@ -1169,7 +1172,7 @@ pub(crate) async fn lead_transaction_state_partitions(
 ) {
     let broker = handle.broker_arc_for_test();
     let node = broker.config.node_id;
-    let topic = crate::txn::bootstrap::TOPIC;
+    let topic = TOPIC;
     // The controller translates a partition record against the topic that the
     // image already holds, so the topic goes first.
     broker
@@ -1380,7 +1383,7 @@ pub(crate) fn round_trip_response<T: Encode + Decode<'static>>(
     response: &T,
     version: krabka_ids::ApiVersion,
 ) -> (T, bool) {
-    let bytes = crate::handlers::encode_response(response, version.0).expect("encode");
+    let bytes = encode_response(response, version.0).expect("encode");
     let mut cursor: &[u8] = &bytes;
     let decoded = T::decode(&mut cursor, version.0).expect("decode");
     (decoded, cursor.is_empty())
@@ -2399,7 +2402,7 @@ mod tests {
     use super::FakeMetadataSource;
     use crate::{
         authorizer::{
-            AllowAllAuthorizer, AuthorizationRequest,
+            AclSource, AllowAllAuthorizer, AuthorizationRequest,
             AuthorizationResult::{self, Allow, Deny},
             Authorizer,
         },
@@ -2414,7 +2417,7 @@ mod tests {
     impl Authorizer for Cached {
         fn authorize(
             &self,
-            _source: &dyn crate::authorizer::AclSource,
+            _source: &dyn AclSource,
             _request: &AuthorizationRequest<'_>,
         ) -> AuthorizationResult {
             AuthorizationResult::Deny
@@ -2426,7 +2429,7 @@ mod tests {
 
         fn authorize_by_resource_type(
             &self,
-            _source: &dyn crate::authorizer::AclSource,
+            _source: &dyn AclSource,
             _principal: &krabka_security::Principal,
             _host: &std::net::SocketAddr,
             _resource_type: krabka_metadata::ResourceType,
@@ -2720,7 +2723,7 @@ pub(crate) async fn committed_partition(
         leader,
         registry,
     } = setup;
-    let part = crate::broker::spawn_partition(
+    let part = spawn_partition(
         topic.to_owned(),
         partition,
         root.to_path_buf(),
@@ -2806,7 +2809,7 @@ pub(crate) fn described_creation_configs(
     image: &krabka_metadata::MetadataImage,
     setup: DescribedCreationSetup<'_>,
 ) -> Vec<krabka_protocol::owned::create_topics_response::CreatableTopicConfigs> {
-    crate::handlers::describe_configs::effective_topic_configs(
+    effective_topic_configs(
         image,
         setup.node,
         setup.topic,
@@ -2924,11 +2927,7 @@ pub(crate) const COORDINATOR_WRITE_ERROR_CASES: [(i16, i16); 7] = [
 /// One heartbeat expiring after the fixed ten-millisecond test window.
 pub(crate) async fn expired_broker_fixture(
     broker: u64,
-) -> (
-    crate::heartbeat::controller_state::TestClock,
-    ControllerLivenessState,
-    Vec<LivenessTransition>,
-) {
+) -> (TestClock, ControllerLivenessState, Vec<LivenessTransition>) {
     use crate::heartbeat::controller_state::{ControllerLivenessState, TestClock};
     let clock = TestClock::new();
     let liveness =

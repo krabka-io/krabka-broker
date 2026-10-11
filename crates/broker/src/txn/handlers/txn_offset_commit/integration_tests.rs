@@ -46,7 +46,11 @@ use crate::{
         decode_response, dispatch_context, encode_request, peer, principal, request_context,
         start_broker_no_audit_with, start_transaction_grant_broker,
     },
-    txn::{state::TxnEntry, util::now_millis, version::resolve_txn_version},
+    txn::{
+        state::{TopicPartition, TxnEntry, TxnState},
+        util::now_millis,
+        version::resolve_txn_version,
+    },
 };
 
 const READ_ON_STAR: &str = "TransactionalId:Write+Group:Read+Topic:Read";
@@ -93,7 +97,7 @@ pub(super) struct TransactionSeedSetup<'a> {
     pub transactional_id: &'a str,
     pub producer: super::test_support::TxnCommitProducer,
     #[default(crate::txn::state::TxnState::Ongoing)]
-    pub state: crate::txn::state::TxnState,
+    pub state: TxnState,
     pub group_id: Option<&'a str>,
 }
 
@@ -110,7 +114,7 @@ pub(super) async fn seed_transaction(broker: &Broker, setup: TransactionSeedSetu
     entry.state = setup.state;
     entry.start_ms = now_ms;
     if let Some(group_id) = setup.group_id {
-        entry.partitions.insert(crate::txn::state::TopicPartition {
+        entry.partitions.insert(TopicPartition {
             topic: OFFSETS_TOPIC.to_owned(),
             partition: PartitionIndex(partition_for_group(&image, group_id)),
         });
@@ -781,7 +785,7 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
 
 /// The transaction the coordinator holds for one verification case: its state,
 /// its producer epoch, and whether it holds the group's offsets partition.
-type HeldTransaction = (crate::txn::state::TxnState, i16, bool);
+type HeldTransaction = (TxnState, i16, bool);
 
 struct VerificationCase {
     name: &'static str,

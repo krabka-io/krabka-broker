@@ -13,7 +13,7 @@ use crate::{
         bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group, persistence::OffsetCommitValue,
     },
     partition::Partition,
-    test_support::StandalonePartitionSetup,
+    test_support::{StandalonePartitionSetup, start_group_broker_with},
 };
 
 /// Open `topic-partition` under `log_dir` and register it with the broker.
@@ -34,7 +34,7 @@ pub(crate) fn open_partition(
 /// coordinator serves `__consumer_offsets`: the offsets-partition marker tests
 /// append to that topic, and no broker creates it when it starts.
 pub(super) async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_group_broker_with(|cfg| cfg.audit_enabled = false).await
+    start_group_broker_with(|cfg| cfg.audit_enabled = false).await
 }
 
 /// Find the group's local offsets replica from one current metadata snapshot.

@@ -290,10 +290,13 @@ mod tests {
             bootstrap::OFFSETS_TOPIC,
             partitioner::partition_for_group,
             persistence::OffsetCommitValue,
-            unified::actor::{GroupActorHandle, GroupActorMessage, test_support::rpc},
+            unified::actor::{
+                GroupActorHandle, GroupActorMessage, GroupKindTag, test_support::rpc,
+            },
         },
         replica_state::LeaderPolicy,
         test_support::{StandalonePartitionSetup, peer, principal, request_context},
+        time_util::now_ms,
         txn::handlers::write_txn_markers::test_support::{open_partition, start_broker},
     };
 
@@ -334,10 +337,9 @@ mod tests {
             topic,
             partition,
         } = setup;
-        let handle = broker.group_coordinator.get_or_create_group(
-            group_id,
-            crate::coordinator::unified::actor::GroupKindTag::Classic,
-        );
+        let handle = broker
+            .group_coordinator
+            .get_or_create_group(group_id, GroupKindTag::Classic);
         let ack = rpc::begin(&handle, |reply| GroupActorMessage::AddPendingTxnOffsets {
             producer_id: 91,
             written_at: 0,
@@ -647,7 +649,7 @@ mod tests {
             // A real commit timestamp: an epoch-relative one is older than
             // `offsets.retention.minutes`, so the KIP-211 sweep would
             // correctly reap the offset this test is about.
-            commit_timestamp_ms: crate::time_util::now_ms(),
+            commit_timestamp_ms: now_ms(),
             expire_timestamp_ms: None,
             topic_id: None,
         };

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR},
-    txn::coordinator::test_support::state_image,
+    txn::coordinator::test_support::{StateImageSetup, state_image},
 };
 
 const THIS_BROKER: NodeId = NodeId(1);
@@ -18,7 +18,7 @@ fn image_without_topic() -> MetadataImage {
 }
 
 fn image(topic_id: Uuid, leader: NodeId, leader_epoch: LeaderEpoch) -> MetadataImage {
-    state_image(crate::txn::coordinator::test_support::StateImageSetup {
+    state_image(StateImageSetup {
         topic_id,
         leader,
         leader_epoch,

@@ -13,7 +13,7 @@ use super::{
     AcquisitionState, InFlightBatch, RecordState, clamp_i32,
     dlq::{ArchiveSink, DlqCause},
 };
-use crate::codes::INVALID_RECORD_STATE;
+use crate::codes::{INVALID_RECORD_STATE, INVALID_REQUEST};
 
 /// Gives an acquired run back: Kafka's `InFlightState.tryUpdateState` to
 /// `AVAILABLE`, which archives the run instead when its delivery count has
@@ -131,7 +131,7 @@ impl AcquisitionState {
         }
         let end = self.in_flight_end().ok_or(INVALID_RECORD_STATE)?;
         if last >= end {
-            return Err(crate::codes::INVALID_REQUEST);
+            return Err(INVALID_REQUEST);
         }
         Ok(Some((first.max(self.start_offset), last)))
     }

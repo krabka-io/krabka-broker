@@ -61,7 +61,10 @@ pub(in crate::txn::handlers) mod test_support;
 
 use self::versions::{HandlerDependencies, handle_v3, handle_v4};
 use crate::{
-    broker::Broker, error::BrokerError, handlers::cluster_action_denied,
+    broker::Broker,
+    codes::CLUSTER_AUTHORIZATION_FAILED,
+    error::BrokerError,
+    handlers::{RequestContext, cluster_action_denied},
     txn::version::resolve_txn_version,
 };
 
@@ -69,7 +72,7 @@ pub(crate) async fn handle(
     broker: &Broker,
     req: AddPartitionsToTxnRequest,
     version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
 ) -> Result<AddPartitionsToTxnResponse, BrokerError> {
     let coord = broker.txn_coordinator.clone();
     let controller = broker.controller.clone();
@@ -79,7 +82,7 @@ pub(crate) async fn handle(
     // `AddPartitionsToTxnRequest.getErrorResponse`: the top-level error code.
     if version >= 4 && cluster_action_denied(authorizer, &controller.current_image(), ctx) {
         return Ok(AddPartitionsToTxnResponse {
-            error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
+            error_code: CLUSTER_AUTHORIZATION_FAILED,
             ..Default::default()
         });
     }

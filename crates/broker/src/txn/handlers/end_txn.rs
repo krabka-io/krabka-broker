@@ -35,7 +35,7 @@ use crate::{
     txn::{
         decision::{CompletionDecision, decide_end_txn_completion},
         util::now_millis,
-        version::TxnVersion,
+        version::{TxnVersion, resolve_txn_version},
     },
 };
 
@@ -91,7 +91,7 @@ pub(crate) async fn handle(
     // only picks the `__transaction_state` value format, so an EndTxn v4 on a
     // `TV_2` cluster keeps its epoch, as a client that cannot read the new
     // epoch out of the response needs.
-    let txnv = crate::txn::version::resolve_txn_version(&image);
+    let txnv = resolve_txn_version(&image);
     let client_txnv = TxnVersion::for_end_txn(version);
     // Trunk's answer to a commit that races a coordinator-side abort
     // (KAFKA-20785) is not in Kafka 4.3.1.

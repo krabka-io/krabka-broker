@@ -299,10 +299,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::remote_reader::test_support::{
-        caching_sparse_remote_segment_reader, empty_reader, not_ready_reader,
-        sparse_fixture_batch_bytes, sparse_fixture_second_batch_len, sparse_remote_segment_reader,
-        tp,
+    use crate::{
+        remote_log_manager::test_support::local_backends,
+        remote_reader::test_support::{
+            caching_sparse_remote_segment_reader, empty_reader, not_ready_reader,
+            sparse_fixture_batch_bytes, sparse_fixture_second_batch_len,
+            sparse_remote_segment_reader, tp,
+        },
     };
 
     // Kafka's `RemoteLogManager.read` returns the segment's own bytes from the
@@ -520,8 +523,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_batch_returns_none_for_in_progress_segment() {
         let remote_dir = tempfile::tempdir().unwrap();
-        let (rsm, rlmm) =
-            crate::remote_log_manager::test_support::local_backends(remote_dir.path());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
         let id = krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4());
         let md = RemoteLogSegmentMetadata::new(
             id,

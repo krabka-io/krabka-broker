@@ -19,6 +19,7 @@ use super::{
 use crate::{
     codes::{OFFSET_NOT_AVAILABLE, from_broker_error},
     coordinator::unified::streams::config::ShareAutoOffsetReset,
+    error::BrokerError,
     share_partition::state::AcquisitionState,
     time_util::{duration_millis, now_ms},
 };
@@ -198,8 +199,7 @@ impl SharePartitionLeaderManager {
                 // `InvalidRecordException` through
                 // `ReplicaManager.fetchOffsetForTimestamp` into the share
                 // partition's initialization.
-                let found = found
-                    .map_err(|error| from_broker_error(&crate::error::BrokerError::from(error)))?;
+                let found = found.map_err(|error| from_broker_error(&BrokerError::from(error)))?;
                 // Every record predates the window: Kafka's
                 // `ShareFetchUtils.offsetForTimestamp` throws, and the
                 // initialization of the share partition fails.

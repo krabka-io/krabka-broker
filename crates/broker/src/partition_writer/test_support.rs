@@ -18,11 +18,11 @@ use crate::{
     diskless::hot_tail::HotTailCache,
     error::BrokerError,
     log_dir_status::LogDirRegistry,
-    partition::{ProduceData, WriterMessage},
+    partition::{AppendedBatch, ProduceData, ProduceJob, WriterMessage},
     producer_state::ProducerState,
     replica_state::ReplicaState,
     test_support::{EmptyPayloadBatchSetup, RecordCount},
-    wal::OffsetSequencer,
+    wal::{OffsetSequencer, SharedWal, WalStore},
 };
 
 #[derive(Debug)]
@@ -100,7 +100,7 @@ impl GatedWal {
 }
 
 #[async_trait::async_trait]
-impl crate::wal::WalStore for GatedWal {
+impl WalStore for GatedWal {
     async fn sync_durable(&self, leo: Offset) -> Result<Offset, BrokerError> {
         if let Some(started) = self.sync_started.lock().unwrap().take() {
             let _ = started.send(());
@@ -159,7 +159,7 @@ pub(super) struct WriterOptions {
     pub(super) delivery: DeliveryHandles,
     pub(super) log_dir_status: LogDirRegistry,
     pub(super) producer_state: Arc<ProducerState>,
-    pub(super) wal: Option<crate::wal::SharedWal>,
+    pub(super) wal: Option<SharedWal>,
     pub(super) max_produce_group: usize,
     pub(super) sequencer: Option<Arc<dyn OffsetSequencer>>,
 }
@@ -245,8 +245,7 @@ pub(super) fn default_writer() -> DefaultWriter {
     }
 }
 
-pub(super) type ProduceAck =
-    oneshot::Receiver<Result<crate::partition::AppendedBatch, BrokerError>>;
+pub(super) type ProduceAck = oneshot::Receiver<Result<AppendedBatch, BrokerError>>;
 
 /// Queue an owned batch without waiting for its append. Callers decide when to
 /// receive or drop the ack, so notification and group-draining tests retain
@@ -257,7 +256,7 @@ pub(super) async fn queue_batch(
 ) -> ProduceAck {
     let (ack, receiver) = oneshot::channel();
     sender
-        .send(WriterMessage::Produce(crate::partition::ProduceJob {
+        .send(WriterMessage::Produce(ProduceJob {
             data: ProduceData::Owned(batch),
             ack,
             producer_check: None,

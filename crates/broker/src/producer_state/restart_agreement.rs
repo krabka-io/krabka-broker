@@ -21,6 +21,7 @@ use super::{
     test_support::{ProducerEpoch, ProducerSequence},
 };
 use crate::{
+    broker::spawn_partition,
     log_dir_status::LogDirRegistry,
     partition::Partition,
     test_support::RecordCount,
@@ -94,7 +95,7 @@ pub(super) fn producer_partition() -> (tempfile::TempDir, Arc<ProducerState>, Ar
     let directory = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(ProducerState::new());
     let log = Log::open(directory.path(), LogConfig::default()).expect("open log");
-    let partition = crate::broker::spawn_partition(
+    let partition = spawn_partition(
         TOPIC.to_string(),
         PARTITION,
         directory.path().to_path_buf(),

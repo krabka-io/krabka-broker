@@ -583,15 +583,18 @@ mod tests {
     use krabka_units::{mebibytes, secs};
 
     use super::*;
-    use crate::replicator::{
-        ensure_local_partition,
-        test_support::{
-            LEADER_ID, NODE_ID, PARTITION, TOPIC, WIRE_TOPIC_ID, fetch_response, image_with_leader,
-            partition_response, test_config,
+    use crate::{
+        partition::Partition,
+        replicator::{
+            ensure_local_partition,
+            test_support::{
+                LEADER_ID, NODE_ID, PARTITION, TOPIC, WIRE_TOPIC_ID, fetch_response,
+                image_with_leader, partition_response, test_config,
+            },
         },
     };
 
-    fn local_partition_fixture() -> (Config, tempfile::TempDir, Arc<crate::partition::Partition>) {
+    fn local_partition_fixture() -> (Config, tempfile::TempDir, Arc<Partition>) {
         let (cfg, log_dir) = test_config(image_with_leader(LEADER_ID));
         ensure_local_partition(&cfg).unwrap();
         let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();

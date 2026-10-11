@@ -102,7 +102,7 @@ mod tests {
     use super::Uncommitted;
     use crate::partition::{
         Partition,
-        test_support::{CommitFixtureLeader, CommitPartitionSetup},
+        test_support::{CommitFixtureLeader, CommitPartitionSetup, commit_partition},
     };
 
     /// Whether `partition` still has the leader and leader epoch it had when
@@ -181,12 +181,11 @@ mod tests {
             },
         ];
         for case in cases {
-            let (partition, _dir, hw_notify) =
-                crate::partition::test_support::commit_partition(CommitPartitionSetup {
-                    high_watermark: Offset(case.hw_now),
-                    leader: CommitFixtureLeader::BrokerOneAtEpochZero,
-                })
-                .await;
+            let (partition, _dir, hw_notify) = commit_partition(CommitPartitionSetup {
+                high_watermark: Offset(case.hw_now),
+                leader: CommitFixtureLeader::BrokerOneAtEpochZero,
+            })
+            .await;
 
             let changes = crate::coordinator::test_support::schedule_commit_changes!(case, partition;
                 captures {} leader(leader, epoch) {

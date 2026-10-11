@@ -12,6 +12,7 @@ use crate::{
     partition::Partition,
     remote_log_manager::{
         ArchiveMode,
+        local_retention::finished_segment_ranges,
         test_support::{
             self as fixtures, archived_backends, batch, copy_exports, leading_partition_over,
             local_backends, partition_log_fixture, partition_snapshot,
@@ -608,9 +609,7 @@ async fn local_retention_drive_deletes_copied_segments() {
 
     // Gather finished ranges the same way `local_retention_pass` would.
     let finished: Vec<(i64, i64)> =
-        crate::remote_log_manager::local_retention::finished_segment_ranges(
-            &rlmm.list_remote_log_segments(&tp()).unwrap(),
-        );
+        finished_segment_ranges(&rlmm.list_remote_log_segments(&tp()).unwrap());
     assert!(finished.len() == exports.len());
 
     // Drive retention with `now_ms` far in the future so every sealed

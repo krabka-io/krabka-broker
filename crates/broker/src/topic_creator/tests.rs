@@ -31,7 +31,7 @@ use crate::{
     network::client::InterBrokerClient,
     test_support::{
         ControllerPeerAllowed, DescribedCreationSetup, FakeMetadataSource, GrantsInPrincipalName,
-        described_creation_configs, request_context, start_broker_no_audit,
+        described_creation_configs, principal, request_context, start_broker_no_audit,
         start_broker_no_audit_with,
     },
 };
@@ -774,7 +774,7 @@ fn each_error_reads_as_kafka_reports_it() {
 /// the client id and the correlation id of the request.
 #[test]
 fn a_forwarded_identity_is_the_identity_of_the_request() {
-    let principal = crate::test_support::principal("alice");
+    let principal = principal("alice");
     let peer: SocketAddr = "10.1.2.3:50000".parse().expect("literal address");
     let ctx = request_context(&principal, &peer, "admin-client").with_correlation_id(9);
 

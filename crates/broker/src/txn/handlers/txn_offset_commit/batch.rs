@@ -192,7 +192,7 @@ mod tests {
             test_support::offsets_partition_image,
         },
         partition::{Partition, ProducerAppendCheck},
-        test_support::{FakeMetadataSource, open_partition},
+        test_support::{FakeMetadataSource, StandalonePartitionSetup, open_partition},
         txn::handlers::txn_offset_commit::{test_support::request, verification::offset_batch},
     };
 
@@ -224,7 +224,7 @@ mod tests {
             PartitionIndex(OFFSETS_PARTITION),
             open_partition(
                 dir.path(),
-                crate::test_support::StandalonePartitionSetup {
+                StandalonePartitionSetup {
                     topic: OFFSETS_TOPIC,
                     partition: krabka_ids::PartitionIndex(OFFSETS_PARTITION),
                     ..Default::default()

@@ -16,7 +16,7 @@ use crate::{
     wal::quorum::{
         ShardRemoval,
         follower::{Config, run},
-        registry::ShardId,
+        registry::{ShardId, WalPlacement},
     },
 };
 
@@ -24,7 +24,7 @@ impl ReplicatorSupervisor {
     pub(super) fn desired_wal_followers(
         &self,
         image: &MetadataImage,
-        placements: &HashMap<ShardId, crate::wal::quorum::registry::WalPlacement>,
+        placements: &HashMap<ShardId, WalPlacement>,
     ) -> HashMap<ShardId, WalFollowerSpec> {
         image
             .all_partitions()
@@ -168,7 +168,8 @@ mod tests {
     use super::*;
     use crate::{
         replicator_supervisor::test_support::{
-            broker_record, image_with, partition_record, supervisor_fixture,
+            SupervisorPartitionSetup, broker_record, image_with, partition_record,
+            supervisor_fixture,
         },
         test_support::single_partition_topic,
         wal::quorum::{
@@ -207,14 +208,12 @@ mod tests {
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(2))),
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(3))),
             MetadataRecord::V1Topic(single_partition_topic("diskless", topic_id)),
-            partition_record(
-                crate::replicator_supervisor::test_support::SupervisorPartitionSetup {
-                    topic: "diskless",
-                    replicas: vec![NodeId(1)],
-                    epoch: krabka_metadata::LeaderEpoch(7),
-                    ..Default::default()
-                },
-            ),
+            partition_record(SupervisorPartitionSetup {
+                topic: "diskless",
+                replicas: vec![NodeId(1)],
+                epoch: krabka_metadata::LeaderEpoch(7),
+                ..Default::default()
+            }),
             MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                 topic: "diskless".into(),
                 overrides,
@@ -249,14 +248,12 @@ mod tests {
             overrides.insert("krabka.diskless".into(), "true".into());
             image_with(&[
                 MetadataRecord::V1Topic(single_partition_topic("diskless", topic_id)),
-                partition_record(
-                    crate::replicator_supervisor::test_support::SupervisorPartitionSetup {
-                        topic: "diskless",
-                        replicas: vec![NodeId(1)],
-                        epoch: krabka_metadata::LeaderEpoch(leader_epoch),
-                        ..Default::default()
-                    },
-                ),
+                partition_record(SupervisorPartitionSetup {
+                    topic: "diskless",
+                    replicas: vec![NodeId(1)],
+                    epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+                    ..Default::default()
+                }),
                 MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                     topic: "diskless".into(),
                     overrides,

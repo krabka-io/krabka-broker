@@ -33,6 +33,7 @@ use crate::{
             skips_coordinator_verification,
         },
         state::TopicPartition,
+        version::TxnVersion,
     },
 };
 
@@ -72,7 +73,7 @@ pub(super) async fn verify_producer(
     broker: &Broker,
     req: &TxnOffsetCommitRequest,
     version: i16,
-    (offsets_partition, format_txnv): (i32, crate::txn::version::TxnVersion),
+    (offsets_partition, format_txnv): (i32, TxnVersion),
 ) -> Result<ProducerAppendCheck, i16> {
     let Some(partition) = broker
         .partitions

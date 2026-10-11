@@ -231,6 +231,7 @@ mod tests {
 
     use super::PartitionRegistry;
     use crate::{
+        log_dir::partition_dir,
         partition::Partition,
         test_support::{StandalonePartitionSetup, spawn_standalone_partition},
     };
@@ -239,7 +240,7 @@ mod tests {
     /// the real `spawn_partition` path. It mirrors the test fixture in
     /// `future_log`.
     fn fixture_partition(log_dir: &Path, topic: &str, partition: PartitionIndex) -> Arc<Partition> {
-        let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition.get());
+        let part_dir = partition_dir(log_dir, topic, partition.get());
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = Log::open(&part_dir, LogConfig::default()).unwrap();
         spawn_standalone_partition(

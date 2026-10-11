@@ -16,6 +16,8 @@ use krabka_ids::PartitionIndex;
 use krabka_log::Log;
 use tokio::sync::{Notify, mpsc};
 
+#[cfg(test)]
+use crate::config::BrokerConfig;
 use crate::{
     delivery::DeliveryHandles,
     error::BrokerError,
@@ -88,7 +90,7 @@ pub async fn run(
         rx,
         signals,
         services,
-        crate::config::BrokerConfig::default().max_produce_group,
+        BrokerConfig::default().max_produce_group,
         None,
     )
     .await;

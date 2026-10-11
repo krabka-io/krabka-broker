@@ -22,7 +22,7 @@ use tokio::{
 };
 
 use super::{BrokerRaftHandshake, frame::read_kafka_request};
-use crate::SslPrincipalMapper;
+use crate::{SslPrincipalMapper, authorizer::AllowAllAuthorizer};
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct HandshakeApiKey(pub i16);
@@ -147,7 +147,7 @@ pub(super) fn handshake_config(setup: HandshakeSetup) -> BrokerRaftHandshake {
         audit_log: Arc::new(OnceCell::new()),
         sasl_max_receive_bytes: 4096,
         failed_authentication_delay: std::time::Duration::ZERO,
-        authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
+        authorizer: Arc::new(AllowAllAuthorizer),
         principal_mapper: SslPrincipalMapper::default(),
     }
 }

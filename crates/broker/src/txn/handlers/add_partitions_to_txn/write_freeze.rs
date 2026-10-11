@@ -84,7 +84,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::AuthorizationResult,
+        authorizer::{AllowAllAuthorizer, AuthorizationResult, Authorizer},
         broker::{Broker, BrokerHandle},
         test_support::{
             FreezeSetup, FrozenTopicsImageSetup, start_broker_no_audit_with, test_ctx,
@@ -228,7 +228,7 @@ mod tests {
     /// `transaction_state_num_partitions = 1` puts every tid on partition 0,
     /// so the coordinator check passes and the freeze gate behind it runs.
     async fn start_frozen_coordinator(
-        authorizer: Arc<dyn crate::authorizer::Authorizer>,
+        authorizer: Arc<dyn Authorizer>,
         freeze: (&str, PatternType),
     ) -> (BrokerHandle, tempfile::TempDir) {
         let (handle, dir) = start_broker_no_audit_with(move |cfg| {
@@ -362,11 +362,8 @@ mod tests {
             ),
             ("v4, a prefix freeze", 4, "tenant-a.", PatternType::Prefixed),
         ] {
-            let (broker_handle, _dir) = start_frozen_coordinator(
-                Arc::new(crate::authorizer::AllowAllAuthorizer),
-                (scope, pattern_type),
-            )
-            .await;
+            let (broker_handle, _dir) =
+                start_frozen_coordinator(Arc::new(AllowAllAuthorizer), (scope, pattern_type)).await;
             let broker = broker_handle.broker_arc_for_test();
             let resp = anonymous_freeze_request(&broker, version).await;
 

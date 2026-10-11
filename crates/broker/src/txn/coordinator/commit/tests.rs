@@ -19,6 +19,7 @@ use crate::{
     config_keys::MIN_INSYNC_REPLICAS,
     coordinator::test_support::read_batch_epochs,
     error::BrokerError,
+    log_dir::partition_dir,
     log_dir_status::LogDirRegistry,
     metadata_source::MetadataSource as _,
     partition::Partition,
@@ -95,7 +96,7 @@ async fn coordinator(
     metadata: &Arc<FakeMetadataSource>,
     with_metadata: bool,
 ) -> (Arc<TxnCoordinator>, Arc<Partition>) {
-    let part_dir = crate::log_dir::partition_dir(dir, bootstrap::TOPIC, 0);
+    let part_dir = partition_dir(dir, bootstrap::TOPIC, 0);
     std::fs::create_dir_all(&part_dir).expect("create the partition dir");
     let partition = spawn_partition(
         bootstrap::TOPIC.to_owned(),

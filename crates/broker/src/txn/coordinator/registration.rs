@@ -15,8 +15,8 @@ use krabka_verified::transaction::{
 use super::TxnCoordinator;
 use crate::{
     codes::{
-        CONCURRENT_TRANSACTIONS, COORDINATOR_LOAD_IN_PROGRESS, INVALID_REQUEST, NONE,
-        NOT_COORDINATOR, PRODUCER_FENCED,
+        CONCURRENT_TRANSACTIONS, COORDINATOR_LOAD_IN_PROGRESS, INVALID_PRODUCER_EPOCH,
+        INVALID_PRODUCER_ID_MAPPING, INVALID_REQUEST, NONE, NOT_COORDINATOR, PRODUCER_FENCED,
     },
     txn::{
         state::TxnState,
@@ -185,14 +185,12 @@ fn registration_code(decision: TransactionRegistrationDecision, version: i16) ->
     match decision {
         TransactionRegistrationDecision::RejectNotCoordinator => NOT_COORDINATOR,
         TransactionRegistrationDecision::RejectUnknownProducer
-        | TransactionRegistrationDecision::RejectProducerId => {
-            crate::codes::INVALID_PRODUCER_ID_MAPPING
-        }
+        | TransactionRegistrationDecision::RejectProducerId => INVALID_PRODUCER_ID_MAPPING,
         TransactionRegistrationDecision::RejectPendingTransition
         | TransactionRegistrationDecision::RejectState => CONCURRENT_TRANSACTIONS,
         TransactionRegistrationDecision::RejectProducerEpoch => {
             if version < PRODUCER_FENCED_MIN_VERSION {
-                crate::codes::INVALID_PRODUCER_EPOCH
+                INVALID_PRODUCER_EPOCH
             } else {
                 PRODUCER_FENCED
             }
@@ -214,7 +212,7 @@ mod tests {
     use super::{TxnCoordinator, TxnState, TxnVersion};
     use crate::{
         partition::Partition,
-        test_support::StandalonePartitionSetup,
+        test_support::{StandalonePartitionSetup, open_partition},
         txn::{
             bootstrap,
             coordinator::test_support::test_coordinator,
@@ -245,7 +243,7 @@ mod tests {
         transactional_id: &str,
     ) -> Arc<Partition> {
         let index = coordinator.partition_for(transactional_id);
-        let opened = crate::test_support::open_partition(
+        let opened = open_partition(
             directory,
             StandalonePartitionSetup {
                 topic: bootstrap::TOPIC,

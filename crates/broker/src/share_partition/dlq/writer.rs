@@ -58,6 +58,7 @@ use super::{
 };
 use crate::{
     auto_topic_creation::AutoTopicCreation,
+    broker::registered_listener_endpoint,
     codes,
     config::BrokerConfig,
     config_keys::{BrokerLogDefaults, resolve_max_message_bytes},
@@ -66,6 +67,7 @@ use crate::{
     network::client::InterBrokerClient,
     partition_registry::PartitionRegistry,
     remote_reader::RemoteReader,
+    time_util::now_ms,
     topic_creator::TopicCreatorError,
 };
 
@@ -331,7 +333,7 @@ impl ProduceTransport for InterBrokerProduce {
         let broker = image
             .broker(node)
             .ok_or_else(|| format!("node {node} is not in the metadata image"))?;
-        let (host, port) = crate::broker::registered_listener_endpoint(broker, &self.listener.name);
+        let (host, port) = registered_listener_endpoint(broker, &self.listener.name);
         let host = host.to_owned();
         let connection = self
             .connections
@@ -609,7 +611,7 @@ impl DlqSink for DlqWriter {
                     last_resolved: fetched.last_resolved,
                     max_message_bytes: target.max_message_bytes,
                 },
-                crate::time_util::now_ms(),
+                now_ms(),
             );
             self.produce(&request.group, &target, &round.batch).await?;
             next = round.last_offset + 1;

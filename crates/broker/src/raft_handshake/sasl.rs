@@ -24,6 +24,7 @@ use super::{
     frame::{read_kafka_request, write_response, write_response_body},
 };
 use crate::{
+    codes::SASL_AUTHENTICATION_FAILED,
     network::{
         auth::{
             ConnectionAuth, ReauthClock, generic_failure_message, handle_authenticate_gssapi,
@@ -243,9 +244,7 @@ pub(super) async fn run_inbound_sasl(
                         handle_authenticate_gssapi(&req, &mut auth, config, CONTROLLER_MAX_REAUTH)
                     }
                 };
-                if resp.error_code == crate::codes::SASL_AUTHENTICATION_FAILED
-                    && resp.error_message.is_none()
-                {
+                if resp.error_code == SASL_AUTHENTICATION_FAILED && resp.error_message.is_none() {
                     resp.error_message = Some(generic_failure_message(mech, false));
                 }
                 let error_code = resp.error_code;

@@ -234,6 +234,8 @@ pub(crate) mod test_support {
     }
     pub(crate) use image_builder;
 
+    use crate::throttle::TokenBucket;
+
     /// Independent expected throttles for producer and consumer quotas.
     pub(crate) fn fractional_bandwidth_cases() -> [(f64, u64, Time); 7] {
         [
@@ -335,7 +337,7 @@ pub(crate) mod test_support {
         setup: UserBucketSetup<'_>,
     ) -> (
         std::sync::Arc<super::QuotaBuckets>,
-        std::sync::Arc<crate::throttle::TokenBucket>,
+        std::sync::Arc<TokenBucket>,
     ) {
         let buckets = std::sync::Arc::new(super::QuotaBuckets::new());
         let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];

@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::{
     api_catalog::UnstableApiVersions,
     broker::spawn_partition,
+    log_dir::partition_dir,
     metadata_source::MetadataSource,
     metrics::{BrokerMetrics, TopicLabel},
     partition::Partition,
@@ -502,7 +503,7 @@ pub fn three_exports() -> Vec<SegmentExport> {
 
 /// Open the real orders-partition directory under the supplied log root.
 pub fn partition_log(log_dir: &std::path::Path, index: PartitionIndex, config: LogConfig) -> Log {
-    let part_dir = crate::log_dir::partition_dir(log_dir, "orders", index.get());
+    let part_dir = partition_dir(log_dir, "orders", index.get());
     std::fs::create_dir_all(&part_dir).unwrap();
     Log::open(&part_dir, config).unwrap()
 }

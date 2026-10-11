@@ -11,12 +11,13 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::{
+    partition::Partition,
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
     test_support::{StandalonePartitionSetup, open_partition},
     txn::{
         coordinator::test_support::StateImageSetup,
-        log_record::encode_value,
+        log_record::{encode_key, encode_value},
         partitioner::partition_for_tid,
         state::{TopicPartition, TxnEntry, TxnState},
         version::TxnVersion,
@@ -35,7 +36,7 @@ fn image(leader: NodeId, leader_epoch: krabka_metadata::LeaderEpoch) -> Metadata
     })
 }
 
-fn open_state_partition(dir: &Path) -> Arc<crate::partition::Partition> {
+fn open_state_partition(dir: &Path) -> Arc<Partition> {
     open_partition(
         dir,
         StandalonePartitionSetup {
@@ -358,7 +359,7 @@ async fn a_bad_record_loads_the_transactions_before_it_and_serves_them() {
         }],
         ..RecordBatch::default()
     };
-    let key = |tid: &str| Some(crate::txn::log_record::encode_key(tid).unwrap());
+    let key = |tid: &str| Some(encode_key(tid).unwrap());
     let value = |tid: &str, producer_id: i64| {
         let entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(producer_id), 0, 60_000, 0);
         Some(encode_value(&entry, TxnVersion::Verified, false))

@@ -77,7 +77,7 @@ mod tests {
     use tokio::sync::OnceCell;
 
     use super::*;
-    use crate::test_support::{GrantsInPrincipalName, peer};
+    use crate::test_support::{GrantsInPrincipalName, peer, principal};
 
     /// Each cluster operation maps to the ACL operation of the same name, the
     /// principal and peer of the connection reach the authorizer, and a
@@ -98,7 +98,7 @@ mod tests {
         let grants = |controller: &ControllerHandleArc, name: &str| ControllerPeerGrants {
             authorizer: Arc::new(GrantsInPrincipalName),
             controller: Arc::clone(controller),
-            principal: crate::test_support::principal(name),
+            principal: principal(name),
             peer: peer(),
         };
 

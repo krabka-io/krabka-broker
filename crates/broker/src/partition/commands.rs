@@ -7,6 +7,7 @@ use krabka_protocol::records::RecordBatch;
 use tokio::sync::oneshot;
 
 use crate::{
+    blocking::run_blocking,
     config_keys::apply_to_log_config,
     error::BrokerError,
     partition::{Partition, ProduceData, ProduceJob, ProducerAppendCheck, WriterMessage},
@@ -77,7 +78,7 @@ impl Partition {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .maybe_start_transaction_verification(batch, supports_epoch_bump, clock)
         };
-        crate::blocking::run_blocking(start).await.unwrap_or(Err(
+        run_blocking(start).await.unwrap_or(Err(
             krabka_log::TransactionAppendRefusal::InvalidTransactionState,
         ))
     }

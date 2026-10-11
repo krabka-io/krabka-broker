@@ -13,7 +13,10 @@ use std::time::Duration;
 
 use krabka_metadata::MetadataImage;
 
-use crate::coordinator::unified::{config::clamp_to_range, share::config::ShareGroupConfig};
+use crate::{
+    coordinator::unified::{config::clamp_to_range, share::config::ShareGroupConfig},
+    features::share_dlq_supported,
+};
 
 /// Kafka's `GroupConfig.SHARE_RECORD_LOCK_DURATION_MS_CONFIG`.
 const KEY_RECORD_LOCK_DURATION_MS: &str = "share.record.lock.duration.ms";
@@ -107,7 +110,7 @@ impl GroupShareSettings {
                 .is_some_and(|level| level.trim().eq_ignore_ascii_case("read_committed")),
             renew_acknowledge_enabled: value(KEY_RENEW_ACKNOWLEDGE_ENABLE)
                 .is_none_or(|enabled| !enabled.trim().eq_ignore_ascii_case("false")),
-            dlq_enabled: crate::features::share_dlq_supported(image)
+            dlq_enabled: share_dlq_supported(image)
                 && value(KEY_DLQ_TOPIC_NAME).is_some_and(|topic| !topic.trim().is_empty()),
         }
     }

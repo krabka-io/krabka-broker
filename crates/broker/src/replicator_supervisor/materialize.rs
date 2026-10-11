@@ -8,14 +8,17 @@ use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig};
 
 use crate::{
-    broker::{PartitionSpawnConfig, try_spawn_partition_with_sequencer},
+    broker::{
+        PartitionSpawnConfig, try_spawn_partition_with_replication_target,
+        try_spawn_partition_with_sequencer,
+    },
     diskless::recovery::open_config,
     log_dir::place_partition_dir_avoiding,
     log_dir_status::LogDirRegistry,
     partition::{PartitionRuntimeConfig, ReplicationTarget},
     partition_registry::PartitionRegistry,
     producer_state::ProducerState,
-    wal::quorum::registry::ShardId,
+    wal::quorum::{follower::hydrate_on_promotion, registry::ShardId},
 };
 
 /// Open (or recover) the on-disk `Partition` for `(topic, partition)` and
@@ -106,7 +109,7 @@ pub(super) fn materialize_partition_with_replication_target(
                 partition: PartitionIndex(partition),
             };
             if registry.local_is_leader(shard) {
-                crate::wal::quorum::follower::hydrate_on_promotion(
+                hydrate_on_promotion(
                     log_dirs,
                     topic,
                     shard,
@@ -141,9 +144,7 @@ pub(super) fn materialize_partition_with_replication_target(
             runtime,
         };
         let partition = match initial_target {
-            Some(target) => {
-                crate::broker::try_spawn_partition_with_replication_target(spawn, target)
-            }
+            Some(target) => try_spawn_partition_with_replication_target(spawn, target),
             None => try_spawn_partition_with_sequencer(spawn),
         }
         .map_err(|e| format!("spawn partition: {e}"))?;
@@ -167,7 +168,9 @@ mod tests {
     use crate::{
         log_dir::partition_dir,
         partition::{Partition, test_support::install_three_replica_isr},
-        replicator_supervisor::test_support::{MaterializeFixture, MaterializeSetup},
+        replicator_supervisor::test_support::{
+            MaterializeFixture, MaterializeSetup, materialized_partition,
+        },
     };
 
     #[derive(Debug)]
@@ -213,8 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn materialize_partition_helper_supports_isr_install() {
-        let (_dir, partitions) =
-            crate::replicator_supervisor::test_support::materialized_partition();
+        let (_dir, partitions) = materialized_partition();
         let part = partitions.get("t", PartitionIndex(0)).expect("part");
         // Mirror what reconcile does for leader partitions.
         install_three_replica_isr(&part).await;

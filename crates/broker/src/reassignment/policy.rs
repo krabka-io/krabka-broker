@@ -219,7 +219,7 @@ mod tests {
         config_keys::MIN_INSYNC_REPLICAS,
         elr::state::test_records,
         reassignment::test_support::{first_partition, img, liveness},
-        test_support::{FreezeSetup, ReassignmentSetup, broker_registration},
+        test_support::{FreezeSetup, ReassignmentSetup, broker_registration, topic_freeze_record},
     };
 
     #[test]
@@ -579,7 +579,7 @@ mod tests {
         });
         Arc::make_mut(&mut image).apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
             set_at_ms: 10,
-            ..crate::test_support::topic_freeze_record(FreezeSetup {
+            ..topic_freeze_record(FreezeSetup {
                 scope: "foo",
                 ..Default::default()
             })

@@ -30,8 +30,8 @@ pub fn tp() -> TopicIdPartition {
 }
 
 use crate::{
-    remote_log_manager::{ProducerSnapshotExport, export_epoch_map},
-    remote_reader::ReaderPool,
+    remote_log_manager::{ProducerSnapshotExport, export_epoch_map, export_segment_data},
+    remote_reader::{ReaderPool, RemoteReaderLimits},
     test_support::{KeyedBatchSetup, KeyedRecordCount, keyed_records_batch as batch_of},
 };
 
@@ -149,7 +149,7 @@ pub fn caching_sparse_remote_segment_reader() -> (
     let cached = RemoteReader::with_limits(
         counting,
         Arc::clone(&reader.rlmm),
-        crate::remote_reader::RemoteReaderLimits {
+        RemoteReaderLimits {
             index_cache: Arc::new(cache),
             pool: ReaderPool::new(10, 100),
         },
@@ -401,11 +401,9 @@ fn copy_log_to_reader(log: &Log, remote_dir: &std::path::Path) -> RemoteReader {
         for (e, st) in &epochs {
             let _ = writeln!(s, "{e} {st}");
         }
-        let data = crate::remote_log_manager::export_segment_data(
-            ex,
-            ProducerSnapshotExport::Omit,
-            || bytes::Bytes::from(s.into_bytes()),
-        );
+        let data = export_segment_data(ex, ProducerSnapshotExport::Omit, || {
+            bytes::Bytes::from(s.into_bytes())
+        });
         rsm.copy_log_segment_data(&md, &data).unwrap();
         rlmm.update_remote_log_segment_metadata(
             krabka_remote_storage::RemoteLogSegmentMetadataUpdate {

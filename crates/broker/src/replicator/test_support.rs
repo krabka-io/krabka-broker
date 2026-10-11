@@ -21,6 +21,7 @@ use crate::{
     config::ReplicationRuntimeConfig,
     log_dir_status::LogDirRegistry,
     metrics::BrokerMetrics,
+    network::client::InterBrokerClient,
     partition_registry::PartitionRegistry,
     producer_state::ProducerState,
     test_support::FakeMetadataSource,
@@ -98,9 +99,7 @@ pub(super) fn test_config(image: MetadataImage) -> (Config, tempfile::TempDir) {
         log_settings: LogConfig::default(),
         client_id: "replica-test".into(),
         connection: super::ReplicationConnectionConfig {
-            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                None, None,
-            )),
+            inter_broker_client: Arc::new(InterBrokerClient::new(None, None)),
             inter_broker_listener_protocol: ListenerProtocol::Plaintext,
             inter_broker_server_name: "localhost".into(),
             replication: ReplicationRuntimeConfig::default(),

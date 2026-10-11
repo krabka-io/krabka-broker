@@ -133,7 +133,7 @@ pub(crate) struct MarkerDispatchContext<'a> {
     pub(crate) inter_broker_protocol: ListenerProtocol,
     pub(crate) inter_broker_listener_name: &'a str,
     pub(crate) inter_broker_server_name: &'a str,
-    pub(crate) group_coordinator: Option<&'a std::sync::Arc<crate::coordinator::GroupCoordinator>>,
+    pub(crate) group_coordinator: Option<&'a std::sync::Arc<GroupCoordinator>>,
 }
 
 pub(crate) async fn dispatch_markers(

@@ -24,7 +24,10 @@ use krabka_ids::PartitionIndex;
 use krabka_metadata::{LeaderEpoch, MetadataImage, NodeId};
 use uuid::Uuid;
 
-use crate::{codes::NOT_COORDINATOR, txn::bootstrap};
+use crate::{
+    codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR},
+    txn::bootstrap,
+};
 
 /// The load status of a `__transaction_state` partition that this broker
 /// leads.
@@ -209,9 +212,7 @@ pub(super) fn loaded_generation(
 pub(crate) fn coordinator_error(status: Option<LoadStatus>) -> Option<i16> {
     match status {
         Some(LoadStatus::Loaded) => None,
-        Some(LoadStatus::Pending | LoadStatus::Loading) => {
-            Some(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
-        }
+        Some(LoadStatus::Pending | LoadStatus::Loading) => Some(COORDINATOR_LOAD_IN_PROGRESS),
         Some(LoadStatus::Failed) | None => Some(NOT_COORDINATOR),
     }
 }

@@ -16,7 +16,7 @@ use crate::{
     config_keys::resolve_diskless,
     partition::{PartitionRuntimeConfig, ReplicationTarget},
     wal::{
-        OffsetSequencer,
+        ControllerSequencer, OffsetSequencer,
         quorum::{follower::hydrate_on_promotion, registry::ShardId},
     },
 };
@@ -209,9 +209,8 @@ impl ReplicatorSupervisor {
                         Some(self.hot_tail.clone()),
                         Some(self.wal_shards.clone()),
                         diskless.then(|| {
-                            Arc::new(crate::wal::ControllerSequencer::new(
-                                self.controller.clone(),
-                            )) as Arc<dyn OffsetSequencer>
+                            Arc::new(ControllerSequencer::new(self.controller.clone()))
+                                as Arc<dyn OffsetSequencer>
                         }),
                     ),
                 ),
@@ -234,8 +233,9 @@ mod tests {
     use crate::{
         partition::ReplicationTarget,
         replicator_supervisor::test_support::{
-            SupervisorPartitionSetup, follower_promotion_images, image_with, partition_record,
-            reconciled_partition, supervisor_fixture, three_replica_image, topic_record,
+            SupervisorPartitionSetup, SupervisorTopicSetup, follower_promotion_images, image_with,
+            partition_record, reconciled_partition, supervisor_fixture, three_replica_image,
+            topic_record,
         },
         test_support::single_partition_topic,
     };
@@ -334,12 +334,10 @@ mod tests {
         let mut overrides = BTreeMap::new();
         overrides.insert("krabka.diskless".into(), "true".into());
         let img = image_with(&[
-            topic_record(
-                crate::replicator_supervisor::test_support::SupervisorTopicSetup {
-                    topic: "diskless",
-                    ..Default::default()
-                },
-            ),
+            topic_record(SupervisorTopicSetup {
+                topic: "diskless",
+                ..Default::default()
+            }),
             partition_record(SupervisorPartitionSetup {
                 topic: "diskless",
                 leader: NodeId(2),

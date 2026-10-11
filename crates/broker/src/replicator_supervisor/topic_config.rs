@@ -9,7 +9,11 @@ use krabka_metadata::MetadataImage;
 use tracing::warn;
 
 use super::TopicPartition;
-use crate::{config_keys::dynamic_log_base, partition_registry::PartitionRegistry};
+use crate::{
+    api_catalog::UnstableApiVersions,
+    config_keys::{dynamic_log_base, log_max_decompressed_record},
+    partition_registry::PartitionRegistry,
+};
 
 /// Push topic-config overrides onto every locally-hosted partition in
 /// `desired`. The call is idempotent, because the same `LogConfig` sent twice
@@ -35,7 +39,7 @@ pub(crate) async fn push_topic_configs(
     image: &MetadataImage,
     base: &LogConfig,
     node: krabka_metadata::NodeId,
-    unstable: crate::api_catalog::UnstableApiVersions,
+    unstable: UnstableApiVersions,
 ) {
     let base = &dynamic_log_base(image, node, base);
     let empty: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
@@ -47,9 +51,7 @@ pub(crate) async fn push_topic_configs(
         // `apply_to_log_config` leaves the field alone, so the topic's own
         // limit travels in the base it merges over.
         let topic_base = LogConfig {
-            max_decompressed_record: crate::config_keys::log_max_decompressed_record(
-                image, node, topic, unstable,
-            ),
+            max_decompressed_record: log_max_decompressed_record(image, node, topic, unstable),
             ..base.clone()
         };
         if let Err(e) = part

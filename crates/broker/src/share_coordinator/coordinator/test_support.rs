@@ -23,6 +23,7 @@ use crate::{
     log_dir_status::LogDirRegistry,
     partition::ReplicationTarget,
     partition_registry::PartitionRegistry,
+    producer_state::ProducerState,
     share_coordinator::{
         bootstrap,
         config::ShareCoordinatorConfig,
@@ -118,7 +119,7 @@ pub(crate) fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i
         log_dir.to_path_buf(),
         log,
         LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
+        Arc::new(ProducerState::new()),
         false,
     );
     reg.insert(bootstrap::TOPIC.into(), PartitionIndex(p), part);

@@ -238,7 +238,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        test_support::{DenyAll, start_broker_with_authorizer_no_audit as start_broker, test_ctx},
+        test_support::{
+            ControllerPeerAllowed, DenyAll, start_broker_with_authorizer_no_audit as start_broker,
+            test_ctx,
+        },
         txn::handlers::add_partitions_to_txn::{
             handle,
             test_support::{enlisted, seed_transaction, start_coordinator, topic, topic_result},
@@ -363,10 +366,8 @@ mod tests {
             },
         ];
 
-        let (broker_handle, _dir) = start_coordinator(Arc::new(
-            crate::test_support::ControllerPeerAllowed(DenyAll),
-        ))
-        .await;
+        let (broker_handle, _dir) =
+            start_coordinator(Arc::new(ControllerPeerAllowed(DenyAll))).await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "ANONYMOUS");
         for (index, case) in (0_i64..).zip(&cases) {

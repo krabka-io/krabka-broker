@@ -26,7 +26,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::{LoadStatus, ShareCoordinator, Term, state_machine::StateRecord};
-use crate::{coordinator::topic_deletion::deleted_topics, features::share_groups_enabled};
+use crate::{
+    coordinator::topic_deletion::deleted_topics, features::share_groups_enabled,
+    time_util::duration_millis,
+};
 
 impl ShareCoordinator {
     /// The state partitions that this broker leads and has loaded.
@@ -150,8 +153,7 @@ impl ShareCoordinator {
     /// A state partition whose every key already has a cold snapshot (its
     /// write timestamp differs from its create timestamp) is skipped.
     pub(crate) async fn snapshot_cold_partitions(&self) -> usize {
-        let interval =
-            crate::time_util::duration_millis(self.config.cold_partition_snapshot_interval);
+        let interval = duration_millis(self.config.cold_partition_snapshot_interval);
         let mut written = 0;
         for state_partition in self.active_partitions().await {
             let Ok(active) = self.active(state_partition).await else {

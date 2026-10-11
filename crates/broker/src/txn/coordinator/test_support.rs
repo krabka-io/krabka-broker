@@ -17,7 +17,7 @@ use crate::{
     partition::Partition,
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
-    test_support::{PartitionCount, StandalonePartitionSetup},
+    test_support::{PartitionCount, StandalonePartitionSetup, open_partition},
     txn::{bootstrap, state::TxnEntry},
 };
 
@@ -67,7 +67,7 @@ pub(super) fn state_registry(dir: &Path) -> Arc<PartitionRegistry> {
     partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),
-        crate::test_support::open_partition(
+        open_partition(
             dir,
             StandalonePartitionSetup {
                 topic: bootstrap::TOPIC,
@@ -97,7 +97,7 @@ pub(super) async fn hosted_data_partition(
     dir: &Path,
     partitions: &PartitionRegistry,
 ) -> Arc<Partition> {
-    let data = crate::test_support::open_partition(
+    let data = open_partition(
         dir,
         StandalonePartitionSetup {
             topic: DATA_TOPIC,

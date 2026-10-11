@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     heartbeat::controller_state::ControllerLivenessState,
-    test_support::{ReassignmentSetup, reassignment_partition},
+    test_support::{ReassignmentSetup, broker_registration, reassignment_partition},
 };
 
 pub(super) async fn liveness(alive: &[u64]) -> ControllerLivenessState {
@@ -40,7 +40,7 @@ pub(super) fn img(setup: ReassignmentSetup<'_>) -> Arc<MetadataImage> {
             BrokerRegistrationRecord {
                 host: String::new(),
                 port: 0,
-                ..crate::test_support::broker_registration(krabka_raft::NodeId(n))
+                ..broker_registration(krabka_raft::NodeId(n))
             },
         ));
     }

@@ -11,7 +11,7 @@ use tracing::warn;
 
 use super::{ReplicatorSupervisor, TopicPartition};
 use crate::{
-    assign_dirs::{build_request, send_assignments},
+    assign_dirs::{UNKNOWN_BROKER_EPOCH, build_request, send_assignments},
     controller_endpoint::ControllerDialer,
     log_dir_id::LogDirIds,
     metadata_source::MetadataSource,
@@ -115,7 +115,7 @@ impl ReplicatorSupervisor {
             .broker_epoch(krabka_raft::NodeId(
                 u64::try_from(self.broker_id).unwrap_or(u64::MAX),
             ))
-            .unwrap_or(crate::assign_dirs::UNKNOWN_BROKER_EPOCH);
+            .unwrap_or(UNKNOWN_BROKER_EPOCH);
         let req = build_request(self.broker_id, broker_epoch, &wire);
         match self
             .assign_dirs_reporter
@@ -146,15 +146,18 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::replicator_supervisor::test_support::{
-        materialized_partition, single_partition_image, static_source, supervisor_fixture,
+    use crate::{
+        replicator_supervisor::test_support::{
+            materialized_partition, single_partition_image, static_source, supervisor_fixture,
+        },
+        test_support::plaintext_controller_dialer,
     };
 
     /// A reporter that dials a plaintext controller listener and knows no
     /// statically configured quorum.
     fn plaintext_reporter() -> NetworkAssignDirsReporter {
         NetworkAssignDirsReporter {
-            dialer: crate::test_support::plaintext_controller_dialer(),
+            dialer: plaintext_controller_dialer(),
         }
     }
 

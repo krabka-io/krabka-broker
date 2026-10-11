@@ -158,7 +158,7 @@ pub(crate) mod test_support {
                 LoadStatus, ShareCoordinator,
                 test_support::{
                     DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, image_with_topic,
-                    manual_clock, open_state_partition, state_batch,
+                    manual_clock, open_state_partition, share_write, state_batch,
                 },
             },
             persistence::StateBatch,
@@ -254,11 +254,7 @@ pub(crate) mod test_support {
                 "share-group",
                 topic,
                 partition.0,
-                crate::share_coordinator::coordinator::test_support::share_write(
-                    (17, 3),
-                    (101, 9),
-                    vec![batch(Offset(101)..=Offset(105))],
-                ),
+                share_write((17, 3), (101, 9), vec![batch(Offset(101)..=Offset(105))]),
             )
             .await
             .expect("write state");

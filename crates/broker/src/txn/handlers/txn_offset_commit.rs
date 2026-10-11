@@ -86,6 +86,7 @@ use self::{
     response::{build_response, error_response},
 };
 use crate::{
+    api_catalog::UnstableApiVersions,
     authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
@@ -341,8 +342,7 @@ pub(crate) async fn handle(
     // the topic id of every commit. 4.3.1 keeps the zero id, and its versions
     // stop at 5, so only a v6 request and trunk mode record an id.
     let record_topic_ids = version >= FIRST_TOPIC_ID_VERSION
-        || broker.config.features.unstable_api_versions
-            == crate::api_catalog::UnstableApiVersions::Enabled;
+        || broker.config.features.unstable_api_versions == UnstableApiVersions::Enabled;
     let appended = match append_txn_batch(
         &req,
         (&partitions, &*broker.controller, broker.config.node_id),

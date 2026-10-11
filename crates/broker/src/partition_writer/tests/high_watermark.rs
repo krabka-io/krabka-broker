@@ -7,7 +7,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    partition_writer::test_support::{observed_writer, sample_batch},
+    partition_writer::test_support::{ObservedWriter, observed_writer, sample_batch},
     test_support::{EmptyPayloadBatchSetup, RecordCount},
 };
 
@@ -16,7 +16,7 @@ async fn fixture(
 ) -> (
     tempfile::TempDir,
     mpsc::Sender<WriterMessage>,
-    crate::partition_writer::test_support::ObservedWriter,
+    ObservedWriter,
 ) {
     let dir = tempdir().expect("tempdir");
     let log = open_default_log(dir.path());
