@@ -174,7 +174,7 @@ resolves paths and adds a module-scope import. Prefer this assist for shortening
 qualified references; it preserves name resolution and handles import conflicts.
 Avoid `crate::...` paths in code: import the item or its containing module at
 module scope and refer to that name. CI checks this with
-`tools/imports/check_imported_paths.py`.
+`aspect check-imported-paths`.
 
 ## Code & Documentation Style
 

@@ -125,7 +125,7 @@ This is the rustfmt `imports_granularity = "Crate"` layout. `rustfmt.toml` also 
 function or type declaration. Add a module-scope `use` for the item (or its
 containing module when several items are used) and refer to the imported name,
 with at most `module::item` in the body. CI enforces this with
-[`tools/imports/check_imported_paths.py`](../../tools/imports/check_imported_paths.py).
+`aspect check-imported-paths`.
 The check skips imports, documentation, attributes, and macro bodies, where
 paths have different resolution rules.
 
