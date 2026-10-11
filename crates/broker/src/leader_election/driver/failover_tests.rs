@@ -198,16 +198,17 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         leader_epoch: LeaderEpoch(5),
         ..Default::default()
     });
+    let isr_123 = &[
+        krabka_raft::NodeId(1),
+        krabka_raft::NodeId(2),
+        krabka_raft::NodeId(3),
+    ];
     let cases = [
         Case {
             name: "dead leader still leads: elect an alive ISR member",
             controller_leader: Some(NodeId(7)),
             leader: NodeId(1),
-            isr: &[
-                krabka_raft::NodeId(1),
-                krabka_raft::NodeId(2),
-                krabka_raft::NodeId(3),
-            ],
+            isr: isr_123,
             dead: &[1],
             alive: &[2, 3],
             expected: Some(PartitionRecord {
@@ -221,11 +222,7 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
             name: "dead ISR member: shrink the ISR without an epoch bump",
             controller_leader: Some(NodeId(7)),
             leader: NodeId(1),
-            isr: &[
-                krabka_raft::NodeId(1),
-                krabka_raft::NodeId(2),
-                krabka_raft::NodeId(3),
-            ],
+            isr: isr_123,
             dead: &[2],
             alive: &[1, 3],
             expected: Some(PartitionRecord {
@@ -246,11 +243,7 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
             name: "not the controller leader: no re-drive",
             controller_leader: Some(NodeId(8)),
             leader: NodeId(1),
-            isr: &[
-                krabka_raft::NodeId(1),
-                krabka_raft::NodeId(2),
-                krabka_raft::NodeId(3),
-            ],
+            isr: isr_123,
             dead: &[1],
             alive: &[2, 3],
             expected: None,
