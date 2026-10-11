@@ -93,7 +93,10 @@ def _macro_opening(code):
     return -1
 
 def _advance_macro(delimiters, code, start = 0):
-    pairs = {")": "(", "]": "[", "}": "{",
+    pairs = {
+        ")": "(",
+        "]": "[",
+        "}": "{",
     }
     for char in code[start:].elems():
         if char in "([{":
@@ -142,6 +145,7 @@ def imported_path_violations(text):
         for start, end, path in paths:
             before = code[:start]
             after = code[end:]
+
             # `pub(in crate::...)` is a visibility declaration, not a use in
             # an item body.
             if "pub(in " in before and ")" in after:
@@ -152,7 +156,13 @@ def imported_path_violations(text):
 def _impl(ctx: TaskContext) -> int:
     root = ctx.std.env.bazel_root_dir()
     result = ctx.std.process.command("git").args([
-        "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.rs",
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        "*.rs",
     ]).current_dir(root).stdout("piped").stderr("piped").spawn().wait_with_output()
     if result.status.code != 0:
         fail("git ls-files failed:\n%s" % result.stderr)
