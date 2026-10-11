@@ -362,14 +362,15 @@ mod tests {
     fn strict_rejection_reports_the_uncapped_refill_time() {
         let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
         let buckets = QuotaBuckets::new();
-        let mut quota = ControllerMutationQuota::new(&QuotaRequest {
+        let quota_req = QuotaRequest {
             image: &img,
             buckets: &buckets,
             principal: "alice",
             client_id: Some(""),
             window: secs(1),
             strict: true,
-        });
+        };
+        let mut quota = ControllerMutationQuota::new(&quota_req);
 
         let outcomes = [61, 1].map(|charge| quota.record(charge));
 

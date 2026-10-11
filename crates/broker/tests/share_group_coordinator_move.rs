@@ -133,9 +133,9 @@ fn position_of(cluster: &Cluster, node_id: u64) -> usize {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_join_that_does_not_commit_is_not_answered() {
     let mut cluster = start_three().await;
-    let lookup = client(&cluster[0].0).await;
-    let coordinator = coordinator_of(&lookup, None).await;
-    lookup.close();
+    let lookup_cli = client(&cluster[0].0).await;
+    let coordinator = coordinator_of(&lookup_cli, None).await;
+    lookup_cli.close();
     let stopped_dir = crash_follower(&mut cluster, coordinator).await;
 
     let member = client(&cluster[position_of(&cluster, coordinator)].0).await;

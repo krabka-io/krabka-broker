@@ -198,17 +198,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::check;
-    use krabka_protocol::{
-        owned::{
-            offset_commit_request::{
-                OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-            },
-            offset_commit_response::{
-                OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
-            },
-        },
-        primitives::uuid::Uuid as WireUuid,
+    use krabka_protocol::owned::offset_commit_request::{
+        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     };
+    use krabka_protocol::owned::offset_commit_response::{
+        OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
+    };
+    use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
     use super::{
         CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile,

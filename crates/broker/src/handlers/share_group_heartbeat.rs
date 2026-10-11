@@ -583,7 +583,7 @@ mod tests {
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         request_identity!((principal, peer, ctx), principal("ANONYMOUS"), test_context);
-        let req = ShareGroupHeartbeatRequest {
+        let heartbeat_req = ShareGroupHeartbeatRequest {
             group_id: "identity-group".into(),
             member_id: "member-1".into(),
             member_epoch: 0,
@@ -591,7 +591,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, version, &ctx)
+        let resp = handle(&broker, heartbeat_req, version, &ctx)
             .await
             .expect("ShareGroupHeartbeat handler");
         assert!(resp.error_code == 0);

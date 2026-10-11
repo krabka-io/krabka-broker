@@ -15,9 +15,9 @@ mod support;
 
 use assert2::{assert, check};
 use bytes::{BufMut as _, Bytes, BytesMut};
-use krabka_broker::{
-    BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer, config::InterBrokerCredentials,
-};
+use krabka_broker::authorizer::SimpleAclAuthorizer;
+use krabka_broker::config::InterBrokerCredentials;
+use krabka_broker::{BrokerConfig, BrokerHandle};
 use krabka_metadata::{AclOperation, MetadataRecord, TopicRecord};
 use krabka_protocol::{
     Decode, Encode, UnknownTaggedFields,

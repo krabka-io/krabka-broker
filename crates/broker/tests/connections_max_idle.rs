@@ -176,8 +176,8 @@ async fn is_closed(stream: &mut TcpStream) -> bool {
 /// passes, and the close lands on the idle reason of the close counter.
 #[tokio::test(flavor = "current_thread")]
 async fn silent_plaintext_connection_is_closed_past_the_idle_window() {
-    let (cfg, log_dir) = config_with_idle_window(krabka_units::secs(60));
-    let fixture = Fixture::start(cfg, log_dir, "PLAINTEXT").await;
+    let (idle_cfg, log_dir) = config_with_idle_window(krabka_units::secs(60));
+    let fixture = Fixture::start(idle_cfg, log_dir, "PLAINTEXT").await;
 
     let mut stream = fixture.connect().await;
     assert!(fixture.idle_closes() == 0);

@@ -353,14 +353,11 @@ mod tests {
 
         let (broker_handle, dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        open_partition(
-            &broker,
-            dir.path(),
-            StandalonePartitionSetup {
-                topic: "stamped-orders",
-                ..Default::default()
-            },
-        );
+        let part_setup = StandalonePartitionSetup {
+            topic: "stamped-orders",
+            ..Default::default()
+        };
+        open_partition(&broker, dir.path(), part_setup);
         let part = broker
             .partitions
             .get("stamped-orders", PartitionIndex(0))

@@ -80,8 +80,8 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
     );
     let expected_endpoint = krabka_protocol::owned::produce_response::NodeEndpoint {
         node_id: leader_id,
-        host: advertised.host.clone(),
         port: i32::from(advertised.port),
+        host: advertised.host.clone(),
         rack: registration.rack.clone(),
         ..Default::default()
     };

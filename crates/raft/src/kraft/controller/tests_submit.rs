@@ -347,12 +347,10 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
 
-    let create = super::test_support::spawn_submit(
-        &ctrl,
-        vec![MetadataRecord::V1TopicFreeze(freeze("orders", 10, true))],
-    );
+    let record = MetadataRecord::V1TopicFreeze(freeze("orders", 10, true));
+    let create_task = super::test_support::spawn_submit(&ctrl, vec![record]);
     acknowledge_tip(&ctrl, NodeId(2)).await;
-    create.await.unwrap().unwrap();
+    create_task.await.unwrap().unwrap();
 
     let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
     for rejected in [

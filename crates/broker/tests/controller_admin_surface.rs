@@ -591,24 +591,25 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
     assert!(let [created_topic] = &created.topics[..]);
     let topic_id = created_topic.topic_id;
 
-    let assigned = connection
-        .send(AssignReplicasToDirsRequest {
-            broker_id: 1,
-            broker_epoch,
-            directories: vec![DirectoryData {
-                id: LOG_DIR_ID,
-                topics: vec![TopicData {
-                    topic_id,
-                    partitions: vec![PartitionData {
-                        partition_index: 0,
-                        ..Default::default()
-                    }],
+    let req = AssignReplicasToDirsRequest {
+        broker_id: 1,
+        broker_epoch,
+        directories: vec![DirectoryData {
+            id: LOG_DIR_ID,
+            topics: vec![TopicData {
+                topic_id,
+                partitions: vec![PartitionData {
+                    partition_index: 0,
                     ..Default::default()
                 }],
                 ..Default::default()
             }],
             ..Default::default()
-        })
+        }],
+        ..Default::default()
+    };
+    let assigned = connection
+        .send(req)
         .await
         .expect("AssignReplicasToDirs over the controller listener");
     connection.close();

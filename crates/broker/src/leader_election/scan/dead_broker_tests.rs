@@ -115,11 +115,12 @@ async fn failover_leaves_partition_unavailable_when_unclean_disabled() {
     // ISR is just {1}, broker 1 dies, brokers 2/3 alive. With
     // `unclean.leader.election.enable=false` (the default) the
     // controller must not elect — partition stays unavailable.
-    let img = img_with_partition(ElectionSetup {
+    let partition_setup = ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
         ..Default::default()
-    });
-    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
+    };
+    let img = img_with_partition(partition_setup);
+    let plan = failover_with_alive(&img, NodeId(1), &[2u64, 3]).await;
     assert!(
         plan.changes.is_empty(),
         "default-off must not emit any change, got {:?}",
@@ -180,12 +181,13 @@ async fn failover_unclean_skips_when_no_alive_replica() {
 #[tokio::test]
 async fn failover_unclean_false_string_keeps_default_safe_behavior() {
     // Explicit `false` must behave the same as unset.
-    let img = img_with_partition(ElectionSetup {
+    let setup = ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
         configs: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "false")],
         ..Default::default()
-    });
-    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
+    };
+    let img = img_with_partition(setup);
+    let plan = failover_with_alive(&img, NodeId(1), &[2u64, 3]).await;
     assert!(
         plan.changes.is_empty(),
         "explicit `false` keeps safe default"

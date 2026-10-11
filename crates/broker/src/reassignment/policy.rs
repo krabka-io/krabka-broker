@@ -651,10 +651,10 @@ mod tests {
             leader: krabka_ids::NodeId(2),
             ..Default::default()
         });
-        let l = liveness(&[1, 2, 3]).await;
-        let updates = compute_reassignment_progress(&img, &l).await;
-        assert!(updates.len() == 1);
-        let pr = first_partition(&updates[0]);
+        let live = liveness(&[1, 2, 3]).await;
+        let progress = compute_reassignment_progress(&img, &live).await;
+        assert_eq!(progress.len(), 1);
+        let pr = first_partition(&progress[0]);
         assert!(
             pr.leader == 1 || pr.leader == 3,
             "leader was {}",
@@ -801,7 +801,7 @@ mod tests {
         });
         let l = liveness(&[1, 2, 3, 4]).await;
         let updates = compute_reassignment_progress(&img, &l).await;
-        assert!(updates.len() == 1);
+        check!(updates.len() == 1);
         let pr = first_partition(&updates[0]);
         assert!(pr.isr == vec![NodeId(1), NodeId(3), NodeId(4)]);
     }

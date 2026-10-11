@@ -506,9 +506,11 @@ mod tests {
                                     let req = crate::handlers::decode_group_request::<
                                         krabka_protocol::owned::heartbeat_request::HeartbeatRequest,
                                     >(&mut cur, version)?;
-                                    let resp = crate::handlers::heartbeat::handle(
-                                        broker, req, version, ctx).await?;
-                                    crate::handlers::encode_response(&resp, version)
+                                    let reply = crate::handlers::heartbeat::handle(
+                                        broker, req, version, ctx,
+                                    )
+                                    .await?;
+                                    crate::handlers::encode_response(&reply, version)
                                 }}).await{error_event}
                             }},
                             ::tracing::info_span!(\"handle_heartbeat\", api = \"Heartbeat\",

@@ -326,16 +326,17 @@ mod tests {
 
     #[test]
     fn mid_batch_positioning_returns_covering_batch_boundary() {
+        let test_records = (0..3)
+            .map(|delta| Record {
+                offset_delta: delta,
+                value: Some(Bytes::from_static(b"v")),
+                ..Default::default()
+            })
+            .collect();
         let run = encode_batches(&[RecordBatch {
             base_offset: 10,
             last_offset_delta: 2,
-            records: (0..3)
-                .map(|offset_delta| Record {
-                    offset_delta,
-                    value: Some(Bytes::from_static(b"v")),
-                    ..Default::default()
-                })
-                .collect(),
+            records: test_records,
             ..Default::default()
         }]);
 

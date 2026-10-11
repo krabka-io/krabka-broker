@@ -1501,14 +1501,12 @@ mod tests {
     /// the (here empty) list its read found.
     #[tokio::test]
     async fn a_reread_carries_aborted_transactions_only_for_read_committed() {
-        let cases = aborted_isolation_cases!();
-
         broker_fixture!(
             (broker_handle, _dir, broker),
             crate::handlers::test_support::start_broker()
         );
 
-        for (name, read_committed, want_aborted) in cases {
+        for (name, read_committed, want_aborted) in aborted_isolation_cases!() {
             let (part, _part_dir) = consumer_partition(Vec::new()).await;
             let mut pending = [consumer_read("reread", &part, read_committed)];
             let phases = RequestPhases::default();

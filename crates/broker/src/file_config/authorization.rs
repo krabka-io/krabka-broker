@@ -397,15 +397,16 @@ url = "http://opa.invalid:8181/v1/data/k/a"
         // Default authorizer is AllowAll — anyone gets Allow, including
         // a principal who isn't in any super-user set.
         let img = MetadataImage::new(uuid::Uuid::nil());
+        let peer_host = peer();
         let anyone = test_principal("anyone");
-        let host = peer();
-        let req = AuthorizationRequest {
+        let check_req = AuthorizationRequest {
             principal: &anyone,
-            host: &host,
+            host: &peer_host,
             resource_type: ResourceType::Topic,
             resource_name: "t",
             operation: AclOperation::Read,
         };
-        assert!(cfg.authorizer.authorize(&img, &req) == AuthorizationResult::Allow);
+        let auth_res = cfg.authorizer.authorize(&img, &check_req);
+        assert!(auth_res == AuthorizationResult::Allow);
     }
 }

@@ -174,11 +174,11 @@ context_handler! {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::sync::Arc;
 
     use assert2::assert;
 
-    use super::*;
     use crate::{
         test_support::{
             grant_topic_operation, lead_transaction_state_partitions, peer, principal,

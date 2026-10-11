@@ -228,6 +228,11 @@ async fn commit_is_fenced_by_kafka_group_rule() {
     for (row, case) in cases.into_iter().enumerate() {
         let (response, exists) = drive(&broker, row, case).await;
         actual.push((case.group, case.version, case.member_id, response, exists));
+        let resp_parts = vec![OffsetCommitResponsePartition {
+            partition_index: 0,
+            error_code: case.error_code,
+            ..Default::default()
+        }];
         expected.push((
             case.group,
             case.version,
@@ -235,11 +240,7 @@ async fn commit_is_fenced_by_kafka_group_rule() {
             OffsetCommitResponse {
                 topics: vec![OffsetCommitResponseTopic {
                     name: TOPIC.to_string(),
-                    partitions: vec![OffsetCommitResponsePartition {
-                        partition_index: 0,
-                        error_code: case.error_code,
-                        ..Default::default()
-                    }],
+                    partitions: resp_parts,
                     ..Default::default()
                 }],
                 ..Default::default()

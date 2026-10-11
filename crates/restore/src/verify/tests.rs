@@ -696,12 +696,12 @@ async fn malformed_leader_epoch_checkpoints_are_rejected() {
 
 #[tokio::test]
 async fn every_batch_reporting_unknown_timestamp_keeps_the_sentinel() {
-    let (dir, store, partition) = verification_context();
-    let fixture = segment_bytes(-1, -1);
+    let (ctx_dir, store, partition) = verification_context();
+    let bytes_fixture = segment_bytes(-1, -1);
 
-    let segment = write_segment(dir.path(), &fixture, &[]);
-    let verified = verify_segment(&store, &partition, &segment)
+    let target_segment = write_segment(ctx_dir.path(), &bytes_fixture, &[]);
+    let res = verify_segment(&store, &partition, &target_segment)
         .await
         .expect("verify");
-    check!(verified.facts.max_timestamp_ms == -1);
+    check!(res.facts.max_timestamp_ms == -1);
 }

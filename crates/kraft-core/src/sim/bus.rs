@@ -19,10 +19,8 @@ use crate::{
 
 impl Sim {
     pub(super) fn deliver(&mut self, msg: &Message) {
-        if self.partitioned.contains(&msg.src) || self.partitioned.contains(&msg.dst) {
-            return;
-        }
-        if !self.nodes.contains_key(&msg.dst) {
+        let blocked = self.partitioned.contains(&msg.src) || self.partitioned.contains(&msg.dst);
+        if blocked || !self.nodes.contains_key(&msg.dst) {
             return;
         }
         let label = event_label(&msg.event);

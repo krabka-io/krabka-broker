@@ -535,10 +535,10 @@ async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_
         )
         .await;
 
-        let image = broker_handle.controller_image_for_test();
-        let added = (1..)
-            .map_while(|index| image.partition("grow", index).cloned())
-            .collect::<Vec<_>>();
+        let ctrl_image = broker_handle.controller_image_for_test();
+        let added: Vec<_> = (1..)
+            .map_while(|idx| ctrl_image.partition("grow", idx).cloned())
+            .collect();
         let label = format!("fenced {fenced:?}, shutting down {shutting_down:?}");
         let (error_code, error_message) = match outcome {
             Ok(_) => (codes::NONE, None),

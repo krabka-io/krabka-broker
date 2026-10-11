@@ -40,12 +40,11 @@ pub(super) fn check_broker_epoch(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::test_support::broker_registration;
     use assert2::assert;
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
     use uuid::Uuid;
-
-    use super::*;
-    use crate::test_support::broker_registration;
 
     fn image_with_broker(node_id: u64, broker_epoch: i64) -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::nil());

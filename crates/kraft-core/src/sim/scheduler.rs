@@ -44,10 +44,8 @@ impl Sim {
                 continue;
             }
             let fired = self.fire_next_timer();
-            if stability.observe(self.fingerprint()) {
-                return;
-            }
-            if !fired && self.queue.is_empty() {
+            let stable = stability.observe(self.fingerprint());
+            if stable || (!fired && self.queue.is_empty()) {
                 return;
             }
         }

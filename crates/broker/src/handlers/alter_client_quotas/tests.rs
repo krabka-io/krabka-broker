@@ -116,10 +116,11 @@ async fn handle_denies_cluster_alter_for_each_entry() {
 #[tokio::test]
 async fn cluster_alter_configs_gates_the_quota_write() {
     let version = 1;
+    let empty_super_users = std::collections::HashSet::new();
     broker_fixture!(
         (broker_handle, _dir, broker),
         start_broker(Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
-            std::collections::HashSet::new()
+            empty_super_users,
         ),))
     );
     let peer = peer();
