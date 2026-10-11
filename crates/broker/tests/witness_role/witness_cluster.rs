@@ -77,6 +77,24 @@ pub(crate) async fn client_at(addr: &str) -> Client {
     connect_owned(addr.to_string(), "witness-role-test", "client build").await
 }
 
+pub(crate) async fn wait_for_witness_isr(
+    cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
+    topic: &str,
+) {
+    for (handle, _, _) in cluster {
+        within(
+            "partition present on every node",
+            handle.wait_until_partition_present(topic, 0),
+        )
+        .await;
+    }
+    within(
+        "the witness joins the ISR",
+        cluster[0].0.wait_until_isr_len(topic, 0, 3),
+    )
+    .await;
+}
+
 pub(crate) async fn shutdown(cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>) {
     shutdown_cluster(cluster).await;
 }

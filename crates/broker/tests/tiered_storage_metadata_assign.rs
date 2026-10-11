@@ -93,15 +93,14 @@ async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
             "did not receive 4 records in 15s: {got:?}"
         );
     }
-    got.sort();
-    assert!(
-        got == vec![
-            (0, 1, b"b".to_vec()),
-            (0, 2, b"c".to_vec()),
-            (1, 0, b"x".to_vec()),
-            (1, 1, b"y".to_vec()),
-        ]
-    );
+    got.sort_unstable();
+    let expected = [
+        (0, 1, b"b".to_vec()),
+        (0, 2, b"c".to_vec()),
+        (1, 0, b"x".to_vec()),
+        (1, 1, b"y".to_vec()),
+    ];
+    assert!(got == expected);
 
     // Brief grace: ensure no stray partition-2 record sneaks in.
     if let Ok(Some(extra)) = tokio::time::timeout(Duration::from_millis(500), stream.next()).await {

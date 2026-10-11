@@ -301,6 +301,16 @@ mod tests {
     /// `handleShareGroupHeartbeat`. A principal denied `Read` on the group
     /// still gets `UNSUPPORTED_VERSION`, not `GROUP_AUTHORIZATION_FAILED`,
     /// when the protocol itself is unavailable.
+    async fn handle_denied_group_heartbeat(
+        broker: &crate::broker::Broker,
+    ) -> ShareGroupHeartbeatResponse {
+        test_ctx!(ctx, "ANONYMOUS");
+        let req = request("denied-group", vec!["t1"]);
+        handle(broker, req, VERSION, &ctx)
+            .await
+            .expect("ShareGroupHeartbeat handler")
+    }
+
     #[tokio::test]
     async fn handle_protocol_gate_precedes_group_acl() {
         broker_fixture!(
@@ -308,12 +318,7 @@ mod tests {
             start_broker(Arc::new(acl_authorizer()))
         );
         finalize_share_version(&broker, 0).await;
-        test_ctx!(ctx, "ANONYMOUS");
-        let req = request("denied-group", vec!["t1"]);
-
-        let resp = handle(&broker, req, VERSION, &ctx)
-            .await
-            .expect("ShareGroupHeartbeat handler");
+        let resp = handle_denied_group_heartbeat(&broker).await;
 
         assert!(resp.error_code == codes::UNSUPPORTED_VERSION, "{resp:?}");
 
@@ -326,12 +331,7 @@ mod tests {
             (broker_handle, _dir, broker),
             start_broker(Arc::new(acl_authorizer()))
         );
-        test_ctx!(ctx, "ANONYMOUS");
-        let req = request("denied-group", vec!["t1"]);
-
-        let resp = handle(&broker, req, VERSION, &ctx)
-            .await
-            .expect("ShareGroupHeartbeat handler");
+        let resp = handle_denied_group_heartbeat(&broker).await;
 
         assert!(
             resp.error_code == codes::GROUP_AUTHORIZATION_FAILED,

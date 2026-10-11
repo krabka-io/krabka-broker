@@ -14,10 +14,6 @@ use krabka_broker::BrokerHandle;
 pub(crate) use crate::kafka_wire::create_configured_topic_sasl as create_topic_as_admin;
 pub use crate::support::sasl::start_single_broker_sasl_plaintext_with_users;
 
-/// Waits until `handle` sees `(topic, partition)` in its image.
-pub(crate) async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition: i32) {
-    handle.wait_until_partition_present(topic, partition).await;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: seed a dummy ACL to disable the compat shim (allow-all when no ACLs)

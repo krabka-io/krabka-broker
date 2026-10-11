@@ -47,18 +47,7 @@ impl<L: SimNodeLog> Sim<L> {
             );
             nodes.insert(
                 id,
-                Node {
-                    id,
-                    machine,
-                    log: make_log(id),
-                    high_watermark: 0,
-                    // Arm the initial election timer: an idle voter must time out
-                    // and begin an election to bootstrap the cluster.
-                    election_deadline: Some(SimInstant(election_timeout_ms)),
-                    fetch_deadline: None,
-                    heartbeat_deadline: None,
-                    check_quorum_deadline: None,
-                },
+                Node::new(id, machine, make_log(id), election_timeout_ms),
             );
         }
         Self {

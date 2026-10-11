@@ -10,7 +10,6 @@ use assert2::assert;
 
 use crate::{
     kafka_wire::AutomaticTopicSetup,
-    plaintext_cluster::wait_partition_exists,
     plaintext_wire::CLIENT_ID,
     sasl_wire::{
         create_topic_as_admin, drive_alter_reassignments_sasl_plain,
@@ -61,13 +60,14 @@ async fn non_super_user_denied() {
         AutomaticTopicSetup {
             client_id: CLIENT_ID,
             topic: ConfiguredTopicSetup {
-                name: ("foo").into(),
+                name: "foo".to_string(),
+                configs: vec![],
                 ..Default::default()
             },
         },
     )
     .await;
-    wait_partition_exists(&handle, "foo", 0).await;
+    handle.wait_until_partition_present("foo", 0).await;
 
     // Retry up to 5s to absorb raft apply latency on slow runners.
     // intentional: bounded RPC-response poll on the alter response error code
