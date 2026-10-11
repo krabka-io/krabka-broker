@@ -278,11 +278,40 @@ fn reserve(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
+/// The most one `POSIX_FADV_WILLNEED` call is asked to read.
+///
+/// Linux's `force_page_cache_ra` clamps each call to the larger of the
+/// device's `max_sectors_kb` and the file's readahead window, and drops the
+/// rest of the range without saying so. On a drive with a 4 MiB
+/// `max_sectors_kb` that is 4 MiB of a 14 MiB hint; on a cloud block device with a
+/// 256 KiB `max_sectors_kb` it is under 2% of it, and the fetch then reads the
+/// rest through small synchronous misses at the device's round-trip latency.
+/// That kept a 100 GB benchmark backlog on a Google Cloud persistent disk
+/// draining at 70-140K 1 KiB records/s, where Kafka read 160-180K on the same
+/// VM.
+/// 128 KiB is the default `read_ahead_kb`, so no call is clamped short on a
+/// device that keeps it; each call starts its reads and returns without
+/// waiting, so a window's worth of them keeps the device's queue full.
+const WILL_NEED_CHUNK: u64 = 128 * 1024;
+
+/// The `(offset, len)` pieces a `WILLNEED` hint over `len` bytes from
+/// `offset` is issued as: consecutive, none longer than [`WILL_NEED_CHUNK`],
+/// together covering exactly the range.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn will_need_chunks(offset: u64, len: u64) -> impl Iterator<Item = (u64, u64)> {
+    let end = offset.saturating_add(len);
+    (offset..end)
+        .step_by(usize::try_from(WILL_NEED_CHUNK).unwrap_or(usize::MAX))
+        .map(move |start| (start, WILL_NEED_CHUNK.min(end - start)))
+}
+
 #[cfg(target_os = "linux")]
 fn advise_will_need(file: &File, offset: u64, len: u64) {
-    if let Some(len) = std::num::NonZeroU64::new(len) {
-        // A refused hint leaves the read exactly as it was without one.
-        let _ = rustix::fs::fadvise(file, offset, Some(len), rustix::fs::Advice::WillNeed);
+    for (offset, len) in will_need_chunks(offset, len) {
+        if let Some(len) = std::num::NonZeroU64::new(len) {
+            // A refused hint leaves the read exactly as it was without one.
+            let _ = rustix::fs::fadvise(file, offset, Some(len), rustix::fs::Advice::WillNeed);
+        }
     }
 }
 
@@ -442,6 +471,34 @@ mod tests {
         let tmp = dir.path().join("state.tmp");
         std::fs::write(&path, contents).unwrap();
         (dir, path, tmp)
+    }
+
+    /// A hint goes out in consecutive pieces of at most `WILL_NEED_CHUNK`
+    /// that cover exactly its range, so no single call is long enough for the
+    /// kernel to clamp.
+    #[test]
+    fn will_need_hints_are_split_into_unclamped_pieces() {
+        const C: u64 = WILL_NEED_CHUNK;
+        for (name, offset, len, expected) in [
+            ("empty", 7, 0, vec![]),
+            ("under a chunk", 7, 100, vec![(7, 100)]),
+            ("exactly a chunk", 0, C, vec![(0, C)]),
+            (
+                "a window and a bit",
+                5,
+                2 * C + 1,
+                vec![(5, C), (5 + C, C), (5 + 2 * C, 1)],
+            ),
+            (
+                "at the top of the range",
+                u64::MAX - 3,
+                10,
+                vec![(u64::MAX - 3, 3)],
+            ),
+        ] {
+            let chunks: Vec<_> = will_need_chunks(offset, len).collect();
+            check!(chunks == expected, "{name}");
+        }
     }
 
     #[test]
