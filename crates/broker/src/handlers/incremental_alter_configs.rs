@@ -104,13 +104,17 @@ pub(crate) async fn dispatch(
             .map(|resource| (resource.resource_type, resource.resource_name.as_str())),
     );
     let mut local = Vec::new();
-    let mut refusals = Vec::new();
+    let mut local_indices = Vec::new();
+    let mut indexed_responses = Vec::new();
     let mut forwarded = Vec::new();
-    for (resource, duplicate) in std::mem::take(&mut req.resources)
+    let mut forwarded_indices = Vec::new();
+    for (index, (resource, duplicate)) in std::mem::take(&mut req.resources)
         .into_iter()
         .zip(duplicates)
+        .enumerate()
     {
         if resource.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
+            local_indices.push(index);
             local.push(resource);
             continue;
         }
@@ -140,10 +144,14 @@ pub(crate) async fn dispatch(
                     )
                     .unwrap_or((code, message))
                 };
-                refusals.push(resource_refusal(&resource, code).with_error(code, message));
+                indexed_responses.push((
+                    index,
+                    resource_refusal(&resource, code).with_error(code, message),
+                ));
                 continue;
             }
         }
+        forwarded_indices.push(index);
         forwarded.push(resource);
     }
     req.resources = forwarded;
@@ -165,13 +173,17 @@ pub(crate) async fn dispatch(
             None => handle(broker, req.clone(), version, ctx).await?,
         }
     };
-    response.responses.extend(refusals);
+    indexed_responses.extend(forwarded_indices.into_iter().zip(response.responses));
     if !local.is_empty() {
         req.resources = local;
-        response
-            .responses
-            .extend(handle(broker, req, version, ctx).await?.responses);
+        indexed_responses.extend(
+            local_indices
+                .into_iter()
+                .zip(handle(broker, req, version, ctx).await?.responses),
+        );
     }
+    indexed_responses.sort_unstable_by_key(|(index, _)| *index);
+    response.responses = indexed_responses.into_iter().map(|(_, row)| row).collect();
     encode_response(&response, version)
 }
 
@@ -455,10 +467,100 @@ async fn process_resource_once(
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
+    use assert2::{assert, check};
     use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
 
     use super::*;
+    use crate::{
+        handlers::incremental_alter_configs::test_support::make_scoped_resource,
+        test_support::{context_helper, start_broker_with_authorizer as start_broker, test_ctx},
+    };
+
+    context_helper!(client_id = "admin-client");
+
+    /// The wire response interleaves logger results, local broker refusals and
+    /// controller results in the original order, keeping duplicate rows.
+    #[tokio::test]
+    async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
+        broker_fixture!((handle, _dir, broker), allow_all, context(ctx, "admin"));
+        let resource = |kind, name| make_scoped_resource(kind, name, vec![]);
+        let duplicate_topic = tagged_wire!(AlterConfigsResourceResponse {
+            resource_type: RESOURCE_TYPE_TOPIC,
+            resource_name: "duplicate".into(),
+            error_code: codes::INVALID_REQUEST,
+            error_message: Some("Each resource must appear at most once.".into())
+        });
+        let duplicate_logger = tagged_wire!(AlterConfigsResourceResponse {
+            resource_type: RESOURCE_TYPE_BROKER_LOGGER,
+            resource_name: "2".into(),
+            error_code: codes::INVALID_REQUEST,
+            error_message: Some("Each resource must appear at most once.".into())
+        });
+        let rows = [
+            (
+                resource(RESOURCE_TYPE_BROKER_LOGGER, "1"),
+                tagged_wire!(AlterConfigsResourceResponse {
+                    resource_type: RESOURCE_TYPE_BROKER_LOGGER,
+                    resource_name: "1".into(),
+                    error_code: codes::NONE,
+                    error_message: None
+                }),
+            ),
+            (
+                resource(RESOURCE_TYPE_BROKER, "2"),
+                tagged_wire!(AlterConfigsResourceResponse {
+                    resource_type: RESOURCE_TYPE_BROKER,
+                    resource_name: "2".into(),
+                    error_code: codes::INVALID_REQUEST,
+                    error_message: Some("Unexpected broker id, expected 1, but received 2".into())
+                }),
+            ),
+            (
+                resource(RESOURCE_TYPE_TOPIC, "duplicate"),
+                duplicate_topic.clone(),
+            ),
+            (
+                resource(RESOURCE_TYPE_BROKER, "1"),
+                tagged_wire!(AlterConfigsResourceResponse {
+                    resource_type: RESOURCE_TYPE_BROKER,
+                    resource_name: "1".into(),
+                    error_code: codes::NONE,
+                    error_message: None
+                }),
+            ),
+            (
+                resource(RESOURCE_TYPE_TOPIC, "missing"),
+                tagged_wire!(AlterConfigsResourceResponse {
+                    resource_type: RESOURCE_TYPE_TOPIC,
+                    resource_name: "missing".into(),
+                    error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                    error_message: Some("The topic 'missing' does not exist.".into())
+                }),
+            ),
+            (resource(RESOURCE_TYPE_TOPIC, "duplicate"), duplicate_topic),
+            (
+                resource(RESOURCE_TYPE_BROKER_LOGGER, "2"),
+                duplicate_logger.clone(),
+            ),
+            (resource(RESOURCE_TYPE_BROKER_LOGGER, "2"), duplicate_logger),
+        ];
+        for order in [[0, 1, 2, 3, 4, 5, 6, 7], [7, 6, 5, 4, 3, 2, 1, 0]] {
+            let request = IncrementalAlterConfigsRequest {
+                resources: order.iter().map(|&index| rows[index].0.clone()).collect(),
+                validate_only: true,
+                ..Default::default()
+            };
+            let bytes = encode_response(&request, 1).unwrap();
+            let bytes = Box::pin(dispatch(&broker, 1, &bytes, &ctx)).await.unwrap();
+            let response = decode_request::<IncrementalAlterConfigsResponse>(&bytes, 1).unwrap();
+            let expected = IncrementalAlterConfigsResponse {
+                responses: order.iter().map(|&index| rows[index].1.clone()).collect(),
+                ..Default::default()
+            };
+            assert!(response == expected);
+        }
+        handle.shutdown().await;
+    }
 
     fn config(name: &str, operation: i8, value: Option<&str>) -> AlterableConfig {
         AlterableConfig {

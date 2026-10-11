@@ -19,7 +19,7 @@ use std::{
     collections::HashSet,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -31,6 +31,7 @@ use krabka_protocol::owned::{
     create_partitions_response::{CreatePartitionsResponse, CreatePartitionsTopicResult},
 };
 use krabka_raft::{NodeId, RaftError};
+use krabka_units::Time;
 use tokio::sync::Mutex;
 
 mod admission;
@@ -176,7 +177,8 @@ context_handler! {
             if duplicates.contains(&t.name) || denied_topics.contains(&t.name) {
                 continue;
             }
-            let growth = GrowthContext { broker, ctx, quota: &quota, charged: AtomicBool::new(false), validate_only };
+            let prior_delay = quota.lock().await.delay();
+            let growth = GrowthContext { broker, ctx, quota: &quota, charged: AtomicU64::new(0), prior_delay, validate_only };
             let attempt = guarded_operation(broker, deadline, |image| grow_topic(&growth, &t, image)).await;
             let out = match attempt {
                 Ok(Ok(row)) => row,
@@ -218,7 +220,8 @@ struct GrowthContext<'a, 'ctx> {
     broker: &'a Broker,
     ctx: &'a RequestContext<'ctx>,
     quota: &'a Mutex<ControllerMutationQuota>,
-    charged: AtomicBool,
+    charged: AtomicU64,
+    prior_delay: Time,
     validate_only: bool,
 }
 
@@ -241,6 +244,7 @@ async fn grow_topic(
     )
     .contains(&t.name)
     {
+        reconcile_growth_charge(growth, 0).await;
         return Ok(CreatePartitionsTopicResult {
             name: t.name.clone(),
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
@@ -253,14 +257,10 @@ async fn grow_topic(
     };
 
     let topic_rec = {
-        let mut quota = growth.quota.lock().await;
-        let charge = !growth.charged.load(Ordering::Relaxed);
-        match admit_growth(t, &image, charge.then_some(&mut *quota)) {
-            Ok(topic) => {
-                growth.charged.store(true, Ordering::Relaxed);
-                topic
-            }
+        match admit_growth(t, &image, None) {
+            Ok(topic) => topic,
             Err((code, message)) => {
+                reconcile_growth_charge(growth, 0).await;
                 out.error_code = code;
                 out.error_message = message;
                 return Ok(out);
@@ -268,6 +268,12 @@ async fn grow_topic(
         }
     };
     let existing = topic_rec.partitions;
+    let additional = u64::try_from(i64::from(t.count) - i64::from(existing)).unwrap_or(0);
+    if !reconcile_growth_charge(growth, additional).await {
+        out.error_code = codes::THROTTLING_QUOTA_EXCEEDED;
+        out.error_message = Some("The throttling quota has been exceeded.".into());
+        return Ok(out);
+    }
     let diskless = resolve_diskless(image.topic_config(&t.name));
     let new_partition_indices: Vec<i32> = (existing..t.count).collect();
 
@@ -329,6 +335,26 @@ async fn grow_topic(
     )
     .await;
     Ok(out)
+}
+
+async fn reconcile_growth_charge(growth: &GrowthContext<'_, '_>, current: u64) -> bool {
+    let mut quota = growth.quota.lock().await;
+    let previous = growth.charged.load(Ordering::Relaxed);
+    if quota
+        .reconcile_record(previous, current, growth.prior_delay)
+        .is_err()
+    {
+        // A refused increment was never submitted, and the earlier stale
+        // reservation did not commit. Preserve the refusal's response delay.
+        let refusal_delay = quota.delay();
+        quota
+            .reconcile_record(previous, 0, refusal_delay)
+            .expect("refunding a reservation adds no mutations");
+        growth.charged.store(0, Ordering::Relaxed);
+        return false;
+    }
+    growth.charged.store(current, Ordering::Relaxed);
+    true
 }
 
 struct GrowthPlacement {

@@ -51,6 +51,14 @@ Reviewed and implemented on 2026-10-11 in `/workspace/krabka-broker`, branch `re
 
 ## Validation status
 
+### PR review follow-up
+
+- **Backup writer/read-cap agreement:** capture checks the same artifact limits used by verification and restore before uploading an artifact, and checks the manifest limit before committing it. Local snapshot metadata is checked before reading, with a second check for file growth. Sequential uploads retain their existing memory use; a failed capture may leave earlier orphan artifacts, but publishes no manifest referring to an oversized artifact. [Source](crates/backup-cli/src/run.rs). All 77 backup tests pass, including exact limits, one-byte overflow, and sparse oversized-snapshot captures.
+- **CreatePartitions retry quota:** each topic retains its charged partition delta and the request's earlier throttle maximum. A fresh guarded attempt refunds the obsolete delta and recomputes its throttle contribution; a newly invalid admission or quota-refused attempt withdraws its known uncommitted reservation. Strict quota admission remains enforced, and an ambiguous timeout does not refund a possibly committed operation. [Handler](crates/broker/src/handlers/create_partitions.rs); [quota accounting](crates/broker/src/quota/controller_mutation.rs).
+- **Config response ordering:** `AlterConfigs` and `IncrementalAlterConfigs` retain each original resource index across local refusals, controller processing, and broker-logger processing, then merge their response rows in request order. Duplicate rows retain their individual positions. Wire-dispatch regressions compare complete responses for mixed resources in both forward and reverse order. [AlterConfigs](crates/broker/src/handlers/alter_configs.rs); [IncrementalAlterConfigs](crates/broker/src/handlers/incremental_alter_configs.rs).
+
+Review-repair validation: all **114 selected broker tests** passed across CreatePartitions, both config handlers, and controller-mutation quota accounting, with automatic retries disabled; all **77 backup tests** passed. Workspace/all-target Clippy passed with `-D warnings`; formatting and imported-path checks passed, and duplicate-code analysis found zero clones across 2,915 Rust files. These are targeted regressions, not a new full workspace test run. Logs are retained locally as `/tmp/pr1358-review-*.log`.
+
 ### PR CI follow-up
 
 - The WASI Clippy failure exposed unused internal networking methods. The codec's test-only limit setter now compiles only for tests, and sendfile write-idle accessors use the existing sendfile platform gate. The codec documentation now describes the production frame-admission reader accurately.

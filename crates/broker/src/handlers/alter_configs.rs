@@ -79,15 +79,18 @@ pub(crate) async fn dispatch(
             .iter()
             .map(|r| (r.resource_type, r.resource_name.as_str())),
     );
-    let mut refusals = Vec::new();
+    let mut indexed_responses = Vec::new();
+    let mut forwarded_indices = Vec::new();
     req.resources = std::mem::take(&mut req.resources)
         .into_iter()
         .zip(duplicates)
-        .filter_map(|(resource, duplicate)| {
+        .enumerate()
+        .filter_map(|(index, (resource, duplicate))| {
             if let Some(refusal) = preprocess_resource(broker, ctx, &resource, duplicate) {
-                refusals.push(refusal);
+                indexed_responses.push((index, refusal));
                 None
             } else {
+                forwarded_indices.push(index);
                 Some(resource)
             }
         })
@@ -110,7 +113,9 @@ pub(crate) async fn dispatch(
             None => handle(broker, req, version, ctx).await?,
         }
     };
-    response.responses.extend(refusals);
+    indexed_responses.extend(forwarded_indices.into_iter().zip(response.responses));
+    indexed_responses.sort_unstable_by_key(|(index, _)| *index);
+    response.responses = indexed_responses.into_iter().map(|(_, row)| row).collect();
     encode_response(&response, version)
 }
 
