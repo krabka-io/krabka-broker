@@ -9,7 +9,7 @@ use crate::{
     kraft::controller::{
         PendingReconfig,
         control_state::{voter_set_from_wire, voter_set_to_wire},
-        records::leader_change_batch,
+        records::{leader_change_batch, typed_control_batch},
         test_support::{
             EngineSetup, build_engine_only, elect_single_voter_engine, one_offset_batch,
             topic_record, voter_set,
@@ -490,11 +490,8 @@ fn apply_and_restore_control_records_updates_core_voters() {
         ..Default::default()
     });
     let two_voters = voter_set(&[NodeId(1), NodeId(2)]);
-    let batch = crate::kraft::controller::records::typed_control_batch(
-        1,
-        &[ControlRecord::Voters(voter_set_to_wire(&two_voters))],
-    )
-    .unwrap();
+    let batch =
+        typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&two_voters))]).unwrap();
     engine.apply_control_batch(&batch).unwrap();
     check!(engine.core.quorum_state().voters.contains(NodeId(2)));
 

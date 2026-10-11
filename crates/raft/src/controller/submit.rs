@@ -15,7 +15,7 @@ use crate::{
     wire::{
         API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_SUBMIT_CHANGE, KrabkaSubmitChangeRequest,
         KrabkaSubmitChangeResponse, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
-        PRIVATE_UNSUPPORTED_VERSION, private_request_version,
+        PRIVATE_UNSUPPORTED_VERSION, SUBMIT_CHANGE_UNCOMMITTED_TAIL, private_request_version,
     },
 };
 
@@ -388,7 +388,7 @@ fn translate_submit_change_response(
         2 => Err(RaftError::Metadata(
             krabka_metadata::MetadataError::TopicExists(String::new()),
         )),
-        crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL => Err(RaftError::UncommittedTail),
+        SUBMIT_CHANGE_UNCOMMITTED_TAIL => Err(RaftError::UncommittedTail),
         PRIVATE_CLUSTER_AUTHORIZATION_FAILED => Err(RaftError::ClusterAuthorizationFailed),
         PRIVATE_UNSUPPORTED_VERSION => {
             Err(RaftError::UnsupportedPrivateVersion { api_key, version })
@@ -414,7 +414,7 @@ mod tests {
         wire::{
             API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
             KrabkaSubmitChangeRequest, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
-            SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+            PRIVATE_UNSUPPORTED_VERSION, SUBMIT_CHANGE_UNCOMMITTED_TAIL,
         },
     };
 
@@ -683,7 +683,7 @@ mod tests {
         // for each of the two APIs that share the response.
         for api_key in [API_KEY_SUBMIT_CHANGE, API_KEY_DELEGATION_TOKEN_MUTATION] {
             let err = translate_submit_change_response(
-                &submit_change_response_bytes(crate::wire::PRIVATE_UNSUPPORTED_VERSION, -1),
+                &submit_change_response_bytes(PRIVATE_UNSUPPORTED_VERSION, -1),
                 NodeId(5),
                 api_key,
                 2,

@@ -260,7 +260,7 @@ mod tests {
         config::ControllerConfig,
         controller::test_support::{
             FAST_ELECTION_TIMEOUT, TEST_OP_TIMEOUT, bind_eventually, bootstrap_controller,
-            committable_topic_record, wait_for_leader,
+            committable_topic_record, joining_controller, wait_for_leader,
         },
     };
 
@@ -313,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn quorum_view_reports_join_node_is_not_leader() {
-        let (_dir, ctrl) = crate::controller::test_support::joining_controller("join start").await;
+        let (_dir, ctrl) = joining_controller("join start").await;
 
         assert2::assert!(ctrl.quorum_state().current_leader.is_none());
         assert2::assert!(ctrl.voted_directory_id().is_none());

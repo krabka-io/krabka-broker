@@ -174,7 +174,7 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::test_support::{http_listener, serve_http_pages};
+    use crate::test_support::{http_listener, s3_config, serve_http_pages};
 
     async fn with_listing<T>(
         pages: Vec<(&'static str, &'static str, &'static str)>,
@@ -200,7 +200,7 @@ mod tests {
     }
 
     fn config(endpoint: String) -> S3Config {
-        crate::test_support::s3_config("bucket", endpoint)
+        s3_config("bucket", endpoint)
     }
 
     #[test]

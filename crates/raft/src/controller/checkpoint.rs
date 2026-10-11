@@ -8,7 +8,10 @@
 use super::ControllerHandle;
 use crate::{
     error::RaftError,
-    kraft::{controller::checkpoint::load_checkpoint_by_id, transport::Inbound},
+    kraft::{
+        controller::checkpoint::{latest_checkpoint_id, load_checkpoint_by_id},
+        transport::Inbound,
+    },
     snapshot::SnapshotReader,
 };
 
@@ -107,7 +110,7 @@ impl ControllerHandle {
 /// bytes. Matches the bare-checkpoint format the engine writes (no `.meta`
 /// sidecar).
 pub(super) fn load_latest_checkpoint(dir: &std::path::Path) -> Option<((i64, i32), Vec<u8>)> {
-    let id = crate::kraft::controller::checkpoint::latest_checkpoint_id(dir)?;
+    let id = latest_checkpoint_id(dir)?;
     let bytes = load_checkpoint_by_id(dir, id.0, id.1)?;
     Some((id, bytes))
 }

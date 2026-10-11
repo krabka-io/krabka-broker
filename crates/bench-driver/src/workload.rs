@@ -31,7 +31,7 @@ use tokio::{task::JoinSet, time::Instant};
 use tracing::{info, warn};
 
 use crate::{
-    failover::{kill_broker_pod, try_client},
+    failover::{kill_broker_pod, partition0_leader_from_metadata, try_client},
     hist,
     ids::{MessageCount, TimeOffsetMs, WallclockMs},
     numeric::{
@@ -815,7 +815,7 @@ fn spawn_failover(
             }
         };
         let leader_id = if spec.target == "partition0_leader" {
-            match crate::failover::partition0_leader_from_metadata(
+            match partition0_leader_from_metadata(
                 &bootstrap,
                 &topic,
                 security,

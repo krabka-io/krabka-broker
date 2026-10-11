@@ -15,7 +15,7 @@ use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
 
 use super::{AuditLog, AuditReceiver, AuditWriter, AuditWriterParams};
 use crate::{
-    FileEd25519Signer, NodeId,
+    AuditEventClass, FileEd25519Signer, NodeId,
     chain::ChainState,
     event::{AuditEvent, LifecycleKind},
     ocsf::ProductInfo,
@@ -101,7 +101,7 @@ pub fn roomy_spool() -> (tempfile::TempDir, Spool) {
 pub fn record_sequences(records: &[AuditRecord]) -> Vec<String> {
     records
         .iter()
-        .filter(|record| record.class != crate::AuditEventClass::Checkpoint)
+        .filter(|record| record.class != AuditEventClass::Checkpoint)
         .map(|record| header(record, "seq").unwrap())
         .collect()
 }

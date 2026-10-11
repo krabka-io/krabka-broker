@@ -15,7 +15,8 @@ use crate::{
     action::Action,
     event::Event,
     simulation_support::{
-        SimulationTimer as SimTimer, StableFingerprint, clear_timer, reconcile_timers,
+        SimulationTimer as SimTimer, StableFingerprint, clear_timer, earliest_timer,
+        reconcile_timers,
     },
     types::{Epoch, NodeId},
 };
@@ -60,7 +61,7 @@ impl Sim {
     }
 
     pub(super) fn fire_next_timer(&mut self) -> bool {
-        let best = crate::simulation_support::earliest_timer(self.nodes.values().map(|node| {
+        let best = earliest_timer(self.nodes.values().map(|node| {
             (
                 node.id,
                 [

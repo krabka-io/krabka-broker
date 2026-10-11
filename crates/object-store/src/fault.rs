@@ -33,7 +33,7 @@ use object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
 };
 
-use crate::{build::build_object_store, config::ObjectStoreConfig};
+use crate::{build::build_object_store, config::ObjectStoreConfig, error::ObjectStoreError};
 
 /// The operation classes a [`FaultPolicy`] can single out.
 ///
@@ -387,7 +387,7 @@ impl ObjectStore for FaultInjectingStore {
 pub fn build_faulty_object_store(
     cfg: &ObjectStoreConfig,
     policy: FaultPolicy,
-) -> Result<Arc<FaultInjectingStore>, crate::error::ObjectStoreError> {
+) -> Result<Arc<FaultInjectingStore>, ObjectStoreError> {
     Ok(Arc::new(FaultInjectingStore::new(
         build_object_store(cfg)?,
         policy,
