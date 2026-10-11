@@ -41,6 +41,13 @@ jobs:
           bazelisk-cache: true
           disk-cache: false
           repository-cache: true
+      - name: reject deep crate-qualified Rust paths
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/import-path-check"
+          "${RUNNER_TEMP}/import-path-check/bin/python" -m pip install \
+            --disable-pip-version-check --no-input -r tools/imports/requirements.txt
+          "${RUNNER_TEMP}/import-path-check/bin/python" tools/imports/check_imported_paths.py
       - name: reject Rust duplicates with jscpd
         run: aspect check-cpd --output "${RUNNER_TEMP}/cpd-reports"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
