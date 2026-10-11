@@ -17,7 +17,11 @@ use krabka_protocol::krabka::barrier::{
 };
 
 use crate::{
-    authorizer::AllowAllAuthorizer, barrier::handlers::{alter_groups, write_markers}, broker::{Broker, BrokerHandle}, codes, coordinator::unified::persistence::MAX_STRING_BYTES, test_support::{
+    authorizer::AllowAllAuthorizer,
+    barrier::handlers::{alter_groups, write_markers},
+    codes,
+    coordinator::unified::persistence::MAX_STRING_BYTES,
+    test_support::{
         decode_response, encode_request, peer, principal, request_context, start_broker_with,
     },
 };
@@ -163,9 +167,9 @@ async fn write_barrier_markers_refuses_a_group_of_32768_bytes_on_every_partition
 }
 
 async fn anonymous_broker() -> (
-    BrokerHandle,
+    crate::broker::BrokerHandle,
     tempfile::TempDir,
-    Arc<Broker>,
+    Arc<crate::broker::Broker>,
 ) {
     let (handle, dir) =
         start_broker_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await;

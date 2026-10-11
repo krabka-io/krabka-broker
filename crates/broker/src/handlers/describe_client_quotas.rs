@@ -10,7 +10,8 @@ use krabka_protocol::owned::{
 
 use super::acl_wire::CLUSTER_RESOURCE_NAME;
 use crate::{
-    broker::Broker, codes::{CLUSTER_AUTHORIZATION_FAILED, INVALID_REQUEST, NONE, UNSUPPORTED_VERSION}, handlers::{RequestContext, acl_denied},
+    broker::Broker,
+    codes::{CLUSTER_AUTHORIZATION_FAILED, INVALID_REQUEST, NONE, UNSUPPORTED_VERSION},
 };
 
 /// Wire `match_type`: entity name must equal `match_` exactly (KIP-546 `EXACT`).
@@ -98,14 +99,14 @@ pub(crate) fn handle(
     broker: &Broker,
     req: &DescribeClientQuotasRequest,
     _version: i16,
-    ctx: &RequestContext<'_>,
+    ctx: &crate::handlers::RequestContext<'_>,
 ) -> DescribeClientQuotasResponse {
     let image = broker.controller.current_image();
     // Kafka's `KafkaApis.handleDescribeClientQuotasRequest` authorizes
     // `DescribeConfigs` on the cluster. A denial goes through
     // `ApiError.fromThrowable`, which drops the default message, so the
     // response carries a null `error_message`.
-    if acl_denied(
+    if crate::handlers::acl_denied(
         broker.config.authorizer.as_ref(),
         &image,
         ctx,
@@ -217,9 +218,7 @@ mod tests {
     use krabka_metadata::MetadataRecord;
 
     use super::*;
-    use crate::authorizer::AllowAllAuthorizer;
-use crate::quota::test_support::{QuotaRecordSetup, QuotaValue};
-use crate::{broker::BrokerHandle, test_support::DenyAll};
+    use crate::{broker::BrokerHandle, test_support::DenyAll};
 
     const VERSION: i16 = 1;
 
@@ -294,11 +293,11 @@ use crate::{broker::BrokerHandle, test_support::DenyAll};
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    use crate::test_support::{grant_cluster_operation, start_broker_with_authorizer_no_audit as start_broker, test_ctx};
+    use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
     async fn seed_quota(
         handle: &BrokerHandle,
-        setup: QuotaRecordSetup<'_>,
+        setup: crate::quota::test_support::QuotaRecordSetup<'_>,
     ) {
         handle
             .broker_arc_for_test()
@@ -313,8 +312,8 @@ use crate::{broker::BrokerHandle, test_support::DenyAll};
     async fn seed_alice_quota(handle: &BrokerHandle) {
         seed_quota(
             handle,
-            QuotaRecordSetup {
-                value: QuotaValue(1024.0),
+            crate::quota::test_support::QuotaRecordSetup {
+                value: crate::quota::test_support::QuotaValue(1024.0),
                 ..Default::default()
             },
         )
@@ -459,7 +458,7 @@ use crate::{broker::BrokerHandle, test_support::DenyAll};
             crate::test_support::describe_configs_acl_cases(&allowed, &denied)
         {
             if let Some(operation) = grant {
-                grant_cluster_operation(&broker_handle, user, operation).await;
+                crate::test_support::grant_cluster_operation(&broker_handle, user, operation).await;
             }
             test_ctx!(ctx, user);
 
@@ -481,22 +480,22 @@ use crate::{broker::BrokerHandle, test_support::DenyAll};
     #[tokio::test]
     async fn handle_returns_matching_quota_entry_fields() {
         let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_quota(
             &broker_handle,
-            QuotaRecordSetup {
+            crate::quota::test_support::QuotaRecordSetup {
                 entity: vec![("client-id", Some("app-1")), ("user", Some("alice"))],
-                value: QuotaValue(2048.0),
+                value: crate::quota::test_support::QuotaValue(2048.0),
                 ..Default::default()
             },
         )
         .await;
         seed_quota(
             &broker_handle,
-            QuotaRecordSetup {
+            crate::quota::test_support::QuotaRecordSetup {
                 entity: vec![("user", Some("bob"))],
                 key: "consumer_byte_rate",
-                value: QuotaValue(512.0),
+                value: crate::quota::test_support::QuotaValue(512.0),
             },
         )
         .await;
@@ -547,13 +546,13 @@ use crate::{broker::BrokerHandle, test_support::DenyAll};
     #[tokio::test]
     async fn invalid_filters_answer_kafkas_top_level_error() {
         let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_alice_quota(&broker_handle).await;
         seed_quota(
             &broker_handle,
-            QuotaRecordSetup {
+            crate::quota::test_support::QuotaRecordSetup {
                 entity: vec![("user", None)],
-                value: QuotaValue(2048.0),
+                value: crate::quota::test_support::QuotaValue(2048.0),
                 ..Default::default()
             },
         )

@@ -14,7 +14,7 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::{FreezeSignatureCheck, freeze_signing_bytes};
-use crate::{operator_keys::{OperatorKeyEntry, OperatorKeys}, test_support::{OperatorKeyFileSetup, ed25519_public_key_file}};
+use crate::operator_keys::{OperatorKeyEntry, OperatorKeys};
 
 mod accepted;
 mod canonical_bytes;
@@ -40,9 +40,9 @@ struct Trust {
 }
 
 fn fresh_key(dir: &TempDir, name: &str) -> (Ed25519KeyPair, PathBuf) {
-    ed25519_public_key_file(
+    crate::test_support::ed25519_public_key_file(
         dir.path(),
-        OperatorKeyFileSetup {
+        crate::test_support::OperatorKeyFileSetup {
             name,
             ..Default::default()
         },

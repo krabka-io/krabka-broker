@@ -12,9 +12,10 @@ use krabka_protocol::owned::delete_acls_response::{
 };
 
 use crate::{
-    codes, handlers::{acl_wire::{
+    codes,
+    handlers::acl_wire::{
         operation_to_wire, pattern_type_to_wire, permission_to_wire, resource_type_to_wire,
-    }, stamp_unset},
+    },
 };
 
 /// The echo of one ACL a filter removed.
@@ -62,7 +63,7 @@ pub(super) fn apply_submit_error<E: std::fmt::Display>(
     filter_results: &mut [DeleteAclsFilterResult],
     err: E,
 ) {
-    stamp_unset(
+    crate::handlers::stamp_unset(
         filter_results,
         codes::COORDINATOR_NOT_AVAILABLE,
         &format!("submit failed: {err}"),
@@ -75,15 +76,15 @@ mod tests {
     use krabka_metadata::{AclOperation, PatternType};
 
     use super::*;
-    use crate::{handlers::{acl_test_support::expected_deleted_orders_acl, delete_acls::test_support::{OPERATION_WRITE, PATTERN_TYPE_PREFIXED, acl}}, test_support::AllowAclSetup};
+    use crate::handlers::delete_acls::test_support::{OPERATION_WRITE, PATTERN_TYPE_PREFIXED, acl};
 
     #[test]
     fn helpers_preserve_matching_acl_and_submit_error_fields() {
-        let matched = matching_acl_result(&acl(AllowAclSetup::default()));
-        let expected_matched = expected_deleted_orders_acl();
+        let matched = matching_acl_result(&acl(crate::test_support::AllowAclSetup::default()));
+        let expected_matched = crate::handlers::acl_test_support::expected_deleted_orders_acl();
         assert!(matched == expected_matched);
 
-        let mut prefixed_acl = acl(AllowAclSetup {
+        let mut prefixed_acl = acl(crate::test_support::AllowAclSetup {
             resource_name: "orders-",
             principal: "User:bob",
             operation: AclOperation::Write,

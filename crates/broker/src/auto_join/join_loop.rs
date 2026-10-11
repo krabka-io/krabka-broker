@@ -143,7 +143,7 @@ mod tests {
     use krabka_units::{millis, secs};
 
     use super::*;
-    use crate::{auto_join::test_support::params, metadata_source::MetadataSource, test_support::FakeMetadataSource};
+    use crate::test_support::FakeMetadataSource;
 
     fn image_with_voter(node_id: NodeId) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
@@ -168,13 +168,13 @@ mod tests {
     /// `run` honoured the flag it never dials; if it regressed and dialed, the
     /// loop would spin against the unreachable address and the timeout would
     /// fire (failing the test).
-    fn voter_params(source: Arc<dyn MetadataSource>) -> AutoJoinParams {
+    fn voter_params(source: Arc<dyn crate::metadata_source::MetadataSource>) -> AutoJoinParams {
         AutoJoinParams {
             retry_backoff: millis(7),
             voter_request_timeout: secs(30),
             node_id: NodeId(7),
             directory_id: uuid::Uuid::from_u128(7),
-            ..params(source, vec!["127.0.0.1:1".to_string()])
+            ..crate::auto_join::test_support::params(source, vec!["127.0.0.1:1".to_string()])
         }
     }
 

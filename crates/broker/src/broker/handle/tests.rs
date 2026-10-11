@@ -6,9 +6,13 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     broker::{
-        Broker, test_support::{LocalPartitionSetup, MetadataPartitionSetup, local_partition_with_records, submit_metadata_topic_partition},
-    }, config::BrokerConfig, partition::{Partition, WriterMessage}, test_support::{
-        UNSUPPORTED_LEVEL_FAULT, broker_registration, finalize_unstable_metadata_version, write_bootstrap_records,
+        Broker,
+        test_support::{local_partition_with_records, submit_metadata_topic_partition},
+    },
+    config::BrokerConfig,
+    partition::WriterMessage,
+    test_support::{
+        UNSUPPORTED_LEVEL_FAULT, finalize_unstable_metadata_version, write_bootstrap_records,
     },
 };
 
@@ -100,7 +104,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
                     port: 19_092,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 }],
-                ..broker_registration(krabka_raft::NodeId(
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(
                     handle.node_id() + 1,
                 ))
             },
@@ -133,7 +137,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     let partition_isr = [partition_leader, handle.node_id()];
     submit_metadata_topic_partition(
         &handle,
-        MetadataPartitionSetup {
+        crate::broker::test_support::MetadataPartitionSetup {
             topic,
             topic_id: uuid::Uuid::from_u128(0xCAFE),
             leader: krabka_ids::NodeId(partition_leader),
@@ -216,7 +220,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     let local_topic = "handle-local-log-mutant-topic";
     let local_part = local_partition_with_records(
         dir.path(),
-        LocalPartitionSetup {
+        crate::broker::test_support::LocalPartitionSetup {
             topic: local_topic,
             values: &[b"a", b"b"],
             ..Default::default()
@@ -258,12 +262,12 @@ struct ShutdownFixture {
     handle: BrokerHandle,
     broker: Arc<Broker>,
     addr: SocketAddr,
-    partition: Arc<Partition>,
+    partition: Arc<crate::partition::Partition>,
 }
 
 async fn shutdown_fixture(
     root: &std::path::Path,
-    setup: LocalPartitionSetup<'_>,
+    setup: crate::broker::test_support::LocalPartitionSetup<'_>,
 ) -> ShutdownFixture {
     let (handle, broker, addr) = start_default_broker(root).await;
     let (topic, index) = (setup.topic, setup.partition);
@@ -289,7 +293,7 @@ async fn start_and_shutdown_clean() {
         partition,
     } = shutdown_fixture(
         dir.path(),
-        LocalPartitionSetup {
+        crate::broker::test_support::LocalPartitionSetup {
             topic: "shutdown",
             ..Default::default()
         },
@@ -327,7 +331,7 @@ async fn dropping_handle_stops_idle_connections_and_partition_writers() {
         partition,
     } = shutdown_fixture(
         dir.path(),
-        LocalPartitionSetup {
+        crate::broker::test_support::LocalPartitionSetup {
             topic: "drop-shutdown",
             ..Default::default()
         },

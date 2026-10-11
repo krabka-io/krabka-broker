@@ -21,7 +21,7 @@ use super::acl_wire::{
     binding_filter::{AclBindingFilter, UnknownElement, WireAclBindingFilter},
     operation_to_wire, pattern_type_to_wire, permission_to_wire, resource_type_to_wire,
 };
-use crate::{broker::Broker, codes, error::BrokerError, handlers::{ErrorResponse as _, RequestContext}};
+use crate::{broker::Broker, codes, handlers::ErrorResponse as _};
 
 /// The message of a cluster-describe refusal. Kafka's `AuthHelper` writes
 /// "Request <request> needs DESCRIBE permission.", where `<request>` is the JVM
@@ -71,8 +71,8 @@ pub(crate) fn handle(
     broker: &Broker,
     req: &DescribeAclsRequest,
     _version: i16,
-    ctx: &RequestContext<'_>,
-) -> Result<DescribeAclsResponse, BrokerError> {
+    ctx: &crate::handlers::RequestContext<'_>,
+) -> Result<DescribeAclsResponse, crate::error::BrokerError> {
     // Kafka's `DescribeAclsRequest` constructor refuses an `UNKNOWN` element
     // while the request parses, before any authorization, and the broker
     // closes the connection. The error return is that close.
@@ -153,9 +153,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        broker::Broker, handlers::{RequestContext, acl_test_support::{
-            OPERATION_ANY, OPERATION_READ, OPERATION_WRITE, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_MATCH, PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC, expected_empty_match_filter,
-        }}, test_support::DenyAll,
+        handlers::acl_test_support::{
+            OPERATION_ANY, OPERATION_READ, OPERATION_WRITE, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL,
+            PATTERN_TYPE_MATCH, PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY,
+            RESOURCE_TYPE_TOPIC,
+        },
+        test_support::DenyAll,
     };
     const VERSION: i16 = 3;
 
@@ -195,7 +198,7 @@ mod tests {
 
         let built = build_filter(&req).expect("filter");
 
-        let expected = expected_empty_match_filter();
+        let expected = crate::handlers::acl_test_support::expected_empty_match_filter();
         assert!(built == expected);
     }
 
@@ -268,8 +271,8 @@ mod tests {
     }
 
     fn describe_alice_orders(
-        broker: &Broker,
-        ctx: &RequestContext<'_>,
+        broker: &crate::broker::Broker,
+        ctx: &crate::handlers::RequestContext<'_>,
     ) -> DescribeAclsResponse {
         handle(
             broker,

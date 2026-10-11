@@ -140,19 +140,24 @@ mod tests {
 
     use super::*;
     use crate::{
-        codes, coordinator::unified::{
-            actor::test_support::topic_reconcile_input, consumer_state::ResolvedRegularExpression, migration::serve_classic_heartbeat, persistence_next_gen::{
+        codes,
+        coordinator::unified::{
+            consumer_state::ResolvedRegularExpression,
+            migration::serve_classic_heartbeat,
+            persistence_next_gen::{
                 ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
                 MemberAssignmentState, MemberMetadataValue, RegularExpressionValue,
                 TargetAssignmentMemberValue,
-            }, reconciler::ReconcileInput, test_support::MemberEpoch,
+            },
+            reconciler::ReconcileInput,
+            test_support::MemberEpoch,
         },
     };
 
     const TOPIC: Uuid = Uuid([7; 16]);
 
     fn image() -> ReconcileInput {
-        topic_reconcile_input("t", TOPIC, 2)
+        crate::coordinator::unified::actor::test_support::topic_reconcile_input("t", TOPIC, 2)
     }
 
     /// The replayed client identity and timeout shared by the member seed fixtures.

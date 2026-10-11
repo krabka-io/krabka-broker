@@ -14,7 +14,9 @@ use krabka_protocol::{
 
 use super::*;
 use crate::{
-    BrokerHandle, broker::Broker, codes, features::METADATA_VERSION, handlers::test_support::{ReplicatedPartitionSetup, replicated_partition}, test_support::{broker_registration, peer, start_broker_with_authorizer as start_broker, test_ctx},
+    broker::Broker,
+    codes,
+    test_support::{peer, start_broker_with_authorizer as start_broker, test_ctx},
 };
 
 fn request(
@@ -139,7 +141,7 @@ fn new_registration(node: u64) -> krabka_metadata::MetadataRecord {
             incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
             port: 19_090 + u16::try_from(node).expect("a small node id"),
             log_dirs: vec![uuid::Uuid::from_u128(1000 + u128::from(node))],
-            ..broker_registration(krabka_raft::NodeId(node))
+            ..crate::test_support::broker_registration(krabka_raft::NodeId(node))
         },
     )
 }
@@ -148,7 +150,7 @@ fn new_registration(node: u64) -> krabka_metadata::MetadataRecord {
 /// partition 0 led by 2 with the ISR `[2, 3, 1]`, partition 1 led by 3 with
 /// the ISR `[3, 2]`.
 struct Cluster {
-    handle: BrokerHandle,
+    handle: crate::BrokerHandle,
     _dir: tempfile::TempDir,
     broker: Arc<Broker>,
 }
@@ -459,8 +461,8 @@ async fn an_unfencing_broker_takes_back_a_partition_with_no_leader() {
         isr: vec![NodeId(2)],
         leader_epoch: LeaderEpoch(4),
         directories: vec![uuid::Uuid::nil(); 2],
-        ..replicated_partition(
-            ReplicatedPartitionSetup {
+        ..crate::handlers::test_support::replicated_partition(
+            crate::handlers::test_support::ReplicatedPartitionSetup {
                 topic: "t",
                 partition: krabka_ids::PartitionIndex(1),
                 leader: NodeId(2),
@@ -537,7 +539,7 @@ fn a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0() {
         broker_epoch: 5,
         incarnation_id: dir(2),
         log_dirs: vec![dir(1), dir(2)],
-        ..broker_registration(krabka_raft::NodeId(2))
+        ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
     };
     let image_at = |level: i16| {
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
@@ -546,7 +548,7 @@ fn a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0() {
         ));
         image.apply(&krabka_metadata::MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: METADATA_VERSION.into(),
+                name: crate::features::METADATA_VERSION.into(),
                 level,
             },
         ));

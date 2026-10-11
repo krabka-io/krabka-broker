@@ -14,7 +14,7 @@ use std::sync::Arc;
 use krabka_metadata::{MetadataImage, MetadataRecord};
 use krabka_raft::NodeId;
 
-use crate::{heartbeat::controller_state::ControllerLivenessState, leader_election::compute_failover_changes, metrics::BrokerMetrics};
+use crate::heartbeat::controller_state::ControllerLivenessState;
 
 /// The partition changes that take `broker` out of every ISR and every
 /// leadership, and whether it still leads a partition that another replica
@@ -40,10 +40,10 @@ pub(super) async fn leave_isrs(
     image: &MetadataImage,
     broker: NodeId,
     liveness: &Arc<ControllerLivenessState>,
-    metrics: &BrokerMetrics,
+    metrics: &crate::metrics::BrokerMetrics,
 ) -> LeaveIsrs {
     let plan =
-        compute_failover_changes(image, broker, liveness, metrics).await;
+        crate::leader_election::compute_failover_changes(image, broker, liveness, metrics).await;
     let has_leaderships = plan.changes.iter().any(|change| {
         matches!(change, MetadataRecord::V1Partition(moved)
             if moved.leader != broker
@@ -64,9 +64,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{handlers::broker_heartbeat::test_support::{
-        ElectionSetup, image_with_dir_partition, liveness_with,
-    }, leader_election::test_support::mark_witnesses_in_image, test_support::replica_nodes};
+    use crate::handlers::broker_heartbeat::test_support::{
+        image_with_dir_partition, liveness_with,
+    };
 
     /// One partition, and what leaving its ISR does to it.
     struct Case {
@@ -133,15 +133,15 @@ mod tests {
         for case in cases {
             let node = |id: &u64| NodeId(*id);
             let mut image = image_with_dir_partition(
-                ElectionSetup {
+                crate::handlers::broker_heartbeat::test_support::ElectionSetup {
                     leader: krabka_raft::NodeId(case.leader),
                     replicas: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
-                    isr: &replica_nodes(case.isr),
+                    isr: &crate::test_support::replica_nodes(case.isr),
                     dirs: &[Uuid::nil(), Uuid::nil()],
                     ..Default::default()
                 },
             );
-            mark_witnesses_in_image(
+            crate::leader_election::test_support::mark_witnesses_in_image(
                 &mut image,
                 case.witnesses,
             );

@@ -9,7 +9,7 @@ use krabka_protocol::owned::create_partitions_request::{
 };
 use krabka_raft::NodeId;
 
-use crate::{broker::BrokerHandle, handlers::test_support::{TopicPartitionCount, TopicReplicationFactor, seed_controller_quota, single_replica_partition}};
+use crate::broker::BrokerHandle;
 
 pub const VERSION: i16 = 3;
 
@@ -25,7 +25,7 @@ pub struct PartitionTopicSetup<'a> {
     #[default("t")]
     pub name: &'a str,
     #[default(crate::handlers::test_support::TopicPartitionCount(3))]
-    pub count: TopicPartitionCount,
+    pub count: crate::handlers::test_support::TopicPartitionCount,
     pub assignments: Option<Vec<CreatePartitionsAssignment>>,
 }
 
@@ -62,16 +62,16 @@ pub struct SeedTopicSetup<'a> {
     #[default("t")]
     pub name: &'a str,
     #[default(crate::handlers::test_support::TopicPartitionCount(2))]
-    pub partitions: TopicPartitionCount,
+    pub partitions: crate::handlers::test_support::TopicPartitionCount,
     #[default(crate::handlers::test_support::TopicReplicationFactor(1))]
-    pub rf: TopicReplicationFactor,
+    pub rf: crate::handlers::test_support::TopicReplicationFactor,
 }
 
 impl<'a> SeedTopicSetup<'a> {
     pub fn single_partition(name: &'a str) -> Self {
         Self {
             name,
-            partitions: TopicPartitionCount(1),
+            partitions: crate::handlers::test_support::TopicPartitionCount(1),
             ..Default::default()
         }
     }
@@ -91,7 +91,7 @@ pub async fn seed_topic(handle: &BrokerHandle, setup: SeedTopicSetup<'_>) {
     })];
     for partition in 0..partitions.0 {
         records.push(MetadataRecord::V1Partition(
-            single_replica_partition(
+            crate::handlers::test_support::single_replica_partition(
                 name,
                 krabka_ids::PartitionIndex(partition),
                 NodeId(handle.node_id()),
@@ -107,7 +107,7 @@ pub async fn seed_topic(handle: &BrokerHandle, setup: SeedTopicSetup<'_>) {
 }
 
 pub async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
-    seed_controller_quota(handle, rate).await;
+    crate::handlers::test_support::seed_controller_quota(handle, rate).await;
 }
 
 /// Independent complete wire rows expected by the handler tests.

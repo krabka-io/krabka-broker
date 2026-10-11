@@ -2,8 +2,6 @@ use assert2::{assert, check};
 use krabka_units::{mebibytes, millis, minutes, secs};
 use tempfile::tempdir;
 
-use crate::{config::{KafkaRlmmConfig, RemoteStorageBackend}, diskless::index_log::DISKLESS_WAL_INDEX_TOPIC, handlers::test_support::{ReplicatedPartitionSetup, replicated_partition}, test_support::replica_nodes};
-
 use super::*;
 
 #[test]
@@ -122,11 +120,11 @@ fn needed_metadata_partitions_covers_led_and_followed() {
         (2, 8, vec![8, 9]),
     ] {
         image.apply(&MetadataRecord::V1Partition(
-            replicated_partition(
-                ReplicatedPartitionSetup {
+            crate::handlers::test_support::replicated_partition(
+                crate::handlers::test_support::ReplicatedPartitionSetup {
                     partition: krabka_ids::PartitionIndex(partition),
                     leader: krabka_audit::NodeId(leader),
-                    replicas: &replica_nodes(&replicas),
+                    replicas: &crate::test_support::replica_nodes(&replicas),
                     ..Default::default()
                 },
             ),
@@ -174,7 +172,7 @@ fn diskless_index_gets_topic_kickoff_with_in_memory_rlmm() {
     ));
     check!(kafka_swap_kickoff(&config).is_none());
 
-    config.remote_storage_backend = Some(RemoteStorageBackend::Local {
+    config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
         dir: dir.path().join("objects"),
     });
     let kickoff = kafka_swap_kickoff(&config).expect("diskless index kickoff");
@@ -185,7 +183,7 @@ fn diskless_index_gets_topic_kickoff_with_in_memory_rlmm() {
 
 #[test]
 fn metadata_log_config_copies_shared_transport_policy() {
-    let policy = KafkaRlmmConfig {
+    let policy = crate::config::KafkaRlmmConfig {
         dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity::new(7)
             .unwrap(),
         frame_max: krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32))
@@ -200,7 +198,7 @@ fn metadata_log_config_copies_shared_transport_policy() {
         fetch_retry_backoff: millis(300),
         event_queue_capacity: krabka_remote_storage_topic::MetadataEventQueueCapacity::new(2048)
             .unwrap(),
-        ..KafkaRlmmConfig::default()
+        ..crate::config::KafkaRlmmConfig::default()
     };
 
     let rlmm = metadata_log_config(
@@ -210,7 +208,7 @@ fn metadata_log_config_copies_shared_transport_policy() {
     );
     let diskless = metadata_log_config(
         &policy,
-        DISKLESS_WAL_INDEX_TOPIC.to_owned(),
+        crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC.to_owned(),
         "diskless-client".to_owned(),
     );
 
@@ -247,7 +245,7 @@ async fn cancelled_topic_rlmm_bootstrap_attempts_once_without_activating() {
         krabka_remote_storage_topic::NotReadyRlmm::new(),
     )));
     let snapshot_dir = tempdir().unwrap();
-    let cfg = super::test_kickoff(KafkaRlmmConfig {
+    let cfg = super::test_kickoff(crate::config::KafkaRlmmConfig {
         bootstrap,
         num_partitions: 1,
         replication: 1,
@@ -255,7 +253,7 @@ async fn cancelled_topic_rlmm_bootstrap_attempts_once_without_activating() {
         snapshot_interval: minutes(1),
         snapshot_dir: snapshot_dir.path().to_path_buf(),
         security: None,
-        ..KafkaRlmmConfig::default()
+        ..crate::config::KafkaRlmmConfig::default()
     });
     let metrics = crate::metrics::BrokerMetrics::new();
     let (_image_tx, image_rx) = tokio::sync::watch::channel(Arc::new(

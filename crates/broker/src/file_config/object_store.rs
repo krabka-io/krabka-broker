@@ -175,6 +175,14 @@ mod tests {
         }
     }
 
+    fn configured_s3(source: &str) -> krabka_remote_storage::S3Config {
+        let config = crate::file_config::test_support::configured_unwrap_parse(source).unwrap();
+        match config.remote_storage_backend {
+            Some(crate::config::RemoteStorageBackend::S3(s3)) => s3,
+            other => panic!("expected S3 backend, got {other:?}"),
+        }
+    }
+
     #[test]
     fn s3_config_debug_redacts_credentials() {
         let cfg = FileRemoteStorageS3Config {

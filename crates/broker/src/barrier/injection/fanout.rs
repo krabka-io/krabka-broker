@@ -203,16 +203,22 @@ mod tests {
     use super::{MarkerFanout, RemoteMarkerWriter};
     use crate::{
         barrier::{
-            config::BarrierConfig, injection::{
+            config::BarrierConfig,
+            injection::{
                 MarkerPlacement, MockRemoteMarkerWriter,
                 test_support::{at, fast_config, marker, source},
-            }, metrics::BrokerBarrierMetrics, state::TargetPartition, test_support::{check_control_marker, open_partition, topic_records},
-        }, error::BrokerError, metadata_source::MetadataSource, metrics::BrokerMetrics, partition_registry::PartitionRegistry,
+            },
+            metrics::BrokerBarrierMetrics,
+            test_support::{open_partition, topic_records},
+        },
+        error::BrokerError,
+        metrics::BrokerMetrics,
+        partition_registry::PartitionRegistry,
     };
 
     fn test_fanout<'a>(
         partitions: &'a PartitionRegistry,
-        controller: &'a Arc<dyn MetadataSource>,
+        controller: &'a Arc<dyn crate::metadata_source::MetadataSource>,
         remote: Option<&'a Arc<dyn RemoteMarkerWriter>>,
         metrics: &'a BrokerBarrierMetrics,
         config: &'a BarrierConfig,
@@ -229,7 +235,7 @@ mod tests {
 
     async fn place_local(
         registry: &PartitionRegistry,
-    ) -> BTreeMap<TargetPartition, Offset> {
+    ) -> BTreeMap<crate::barrier::state::TargetPartition, Offset> {
         let controller = source(&topic_records("orders", 2, NodeId(1)));
         let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
         let config = fast_config();
@@ -244,7 +250,7 @@ mod tests {
 
     async fn place_one(
         fanout: MarkerFanout<'_>,
-    ) -> BTreeMap<TargetPartition, Offset> {
+    ) -> BTreeMap<crate::barrier::state::TargetPartition, Offset> {
         fanout
             .run(
                 &marker(),
@@ -256,7 +262,7 @@ mod tests {
 
     async fn check_remote_placement(
         registry: &PartitionRegistry,
-        controller: &Arc<dyn MetadataSource>,
+        controller: &Arc<dyn crate::metadata_source::MetadataSource>,
         remote: MockRemoteMarkerWriter,
         metrics: &BrokerBarrierMetrics,
         config: &BarrierConfig,
@@ -278,7 +284,7 @@ mod tests {
     }
 
     fn placements(
-        targets: &[TargetPartition],
+        targets: &[crate::barrier::state::TargetPartition],
         offset: Offset,
     ) -> Vec<MarkerPlacement> {
         targets
@@ -324,7 +330,7 @@ mod tests {
                 .read_log(Offset(0), krabka_units::mebibytes(1))
                 .expect("read the log back");
             let batch = &read.batches[0];
-            check_control_marker(batch, &marker());
+            crate::barrier::test_support::check_control_marker(batch, &marker());
         }
     }
 

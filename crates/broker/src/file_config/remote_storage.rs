@@ -12,8 +12,6 @@ use krabka_units::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::config::{DEFAULT_RLMM_TOPIC_MIN_ISR, DEFAULT_RLMM_TOPIC_NUM_PARTITIONS, RemoteStorageBackend, RlmmKind};
-
 use super::{
     FileConfigError,
     object_store::{FileRemoteStorageGcsConfig, FileRemoteStorageS3Config, FileWormConfig},
@@ -267,14 +265,14 @@ pub(super) fn apply_remote_storage(
         ));
     }
     if let Some(dir) = &rs.storage_dir {
-        cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
+        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
             dir: std::path::PathBuf::from(dir),
         });
     } else if let Some(s3) = &rs.s3 {
-        cfg.remote_storage_backend = Some(RemoteStorageBackend::S3(s3_config(s3)));
+        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::S3(s3_config(s3)));
     } else if let Some(gcs) = &rs.gcs {
         cfg.remote_storage_backend =
-            Some(RemoteStorageBackend::Gcs(gcs_config(gcs)));
+            Some(crate::config::RemoteStorageBackend::Gcs(gcs_config(gcs)));
     }
 
     // WORM archive mode layers over whichever object store was just
@@ -285,10 +283,10 @@ pub(super) fn apply_remote_storage(
         // inherited from the caller's `BrokerConfig` is caught too.
         match &cfg.remote_storage_backend {
             Some(
-                RemoteStorageBackend::S3(_)
-                | RemoteStorageBackend::Gcs(_),
+                crate::config::RemoteStorageBackend::S3(_)
+                | crate::config::RemoteStorageBackend::Gcs(_),
             ) => {}
-            Some(RemoteStorageBackend::Local { .. }) => {
+            Some(crate::config::RemoteStorageBackend::Local { .. }) => {
                 return Err(FileConfigError::InvalidConfig(
                     "[remote_storage.worm] requires an object-store backend \
                      (`[remote_storage.s3]` or `[remote_storage.gcs]`); \
@@ -341,19 +339,19 @@ pub(super) fn apply_remote_storage(
     if cfg.remote_storage_backend.is_some() {
         let km = rs.kafka_metadata.as_ref();
         if km.is_some_and(|k| k.in_memory) {
-            cfg.remote_log_metadata = RlmmKind::InMemory;
+            cfg.remote_log_metadata = crate::config::RlmmKind::InMemory;
         } else {
             let mut policy = crate::config::KafkaRlmmConfig {
                 bootstrap: km.map(|k| k.bootstrap.clone()).unwrap_or_default(),
                 num_partitions: km
                     .and_then(|k| k.num_partitions)
-                    .unwrap_or(DEFAULT_RLMM_TOPIC_NUM_PARTITIONS),
+                    .unwrap_or(crate::config::DEFAULT_RLMM_TOPIC_NUM_PARTITIONS),
                 replication: km
                     .and_then(|k| k.replication)
                     .unwrap_or(crate::config::DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR),
                 min_isr: km
                     .and_then(|k| k.min_isr)
-                    .unwrap_or(DEFAULT_RLMM_TOPIC_MIN_ISR),
+                    .unwrap_or(crate::config::DEFAULT_RLMM_TOPIC_MIN_ISR),
                 snapshot_dir: cfg.log_dir.join("remote-log-metadata"),
                 ..crate::config::KafkaRlmmConfig::default()
             };
@@ -377,7 +375,7 @@ pub(super) fn apply_remote_storage(
             policy
                 .validate()
                 .map_err(|error| invalid_runtime_value("remote_storage.kafka_metadata", error))?;
-            cfg.remote_log_metadata = RlmmKind::TopicBacked(policy);
+            cfg.remote_log_metadata = crate::config::RlmmKind::TopicBacked(policy);
         }
     }
     Ok(())
@@ -388,7 +386,7 @@ mod tests {
     use assert2::{assert, check};
     use krabka_units::{gibibytes, mebibytes, millis, secs};
 
-    use crate::{config::{BrokerConfig, RemoteStorageBackend, RlmmKind}, file_config::{FileConfig, test_support::configured_unwrap_parse}};
+    use crate::file_config::FileConfig;
 
     #[test]
     fn remote_storage_section_enables_and_sets_dir() {
@@ -396,9 +394,9 @@ mod tests {
 [remote_storage]
 storage_dir = "/var/lib/krabka/tier"
 "#;
-        let cfg = configured_unwrap_parse(toml).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         match cfg.remote_storage_backend {
-            Some(RemoteStorageBackend::Local { dir }) => {
+            Some(crate::config::RemoteStorageBackend::Local { dir }) => {
                 assert!(dir == std::path::PathBuf::from("/var/lib/krabka/tier"));
             }
             other => panic!("expected Local backend, got {other:?}"),
@@ -407,7 +405,7 @@ storage_dir = "/var/lib/krabka/tier"
     #[test]
     fn no_remote_storage_section_leaves_backend_none() {
         let cfg =
-            configured_unwrap_parse("broker_id = 1").unwrap();
+            crate::file_config::test_support::configured_unwrap_parse("broker_id = 1").unwrap();
         assert!(cfg.remote_storage_backend.is_none());
         // No remote_storage section: RLMM stays at the production default (TopicBacked).
         assert!(matches!(
@@ -416,10 +414,10 @@ storage_dir = "/var/lib/krabka/tier"
         ));
     }
     fn parsed_kafka_metadata(toml: &str) -> crate::config::KafkaRlmmConfig {
-        let cfg = configured_unwrap_parse(toml).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         match cfg.remote_log_metadata {
-            RlmmKind::TopicBacked(config) => config,
-            RlmmKind::InMemory => panic!("expected TopicBacked"),
+            crate::config::RlmmKind::TopicBacked(config) => config,
+            crate::config::RlmmKind::InMemory => panic!("expected TopicBacked"),
         }
     }
 
@@ -494,7 +492,7 @@ snapshot_interval = "90s"
                  [remote_storage.kafka_metadata]\n{field} = {value}\n"
             );
             let file: FileConfig = toml::from_str(&source).expect("parse policy syntax");
-            let mut config = BrokerConfig::default();
+            let mut config = crate::config::BrokerConfig::default();
             let error = file
                 .apply_to(&mut config)
                 .expect_err("invalid metadata policy must fail");
@@ -507,7 +505,7 @@ snapshot_interval = "90s"
 [remote_storage]
 storage_dir = "/tmp/tier"
 "#;
-        let cfg = configured_unwrap_parse(toml).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         check!(cfg.remote_reader_threads == 10);
         check!(cfg.remote_reader_max_pending_tasks == 100);
         check!(cfg.remote_index_cache_size == gibibytes(1));
@@ -522,7 +520,7 @@ reader_threads = 4
 reader_max_pending_tasks = 32
 index_cache_size = "256MiB"
 "#;
-        let cfg = configured_unwrap_parse(toml).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         check!(cfg.remote_reader_threads == 4);
         check!(cfg.remote_reader_max_pending_tasks == 32);
         check!(cfg.remote_index_cache_size == mebibytes(256));
@@ -547,7 +545,7 @@ index_cache_size = "256MiB"
                 4,
             ),
         ] {
-            let cfg = configured_unwrap_parse(toml).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
             check!(cfg.remote_copier_threads == copier, "{case}");
             check!(cfg.remote_expiration_threads == expiration, "{case}");
         }
@@ -565,7 +563,7 @@ index_cache_size = "256MiB"
             let source =
                 format!("[remote_storage]\nstorage_dir = \"/tmp/tier\"\n{field} = {value}\n");
             let file: FileConfig = toml::from_str(&source).expect("parse syntax");
-            let mut config = BrokerConfig::default();
+            let mut config = crate::config::BrokerConfig::default();
             let error = file
                 .apply_to(&mut config)
                 .expect_err("a zero bound must fail");
@@ -613,7 +611,7 @@ bucket = "b"
             ),
         ] {
             let error =
-                configured_unwrap_parse(source).unwrap_err();
+                crate::file_config::test_support::configured_unwrap_parse(source).unwrap_err();
             let rendered = error.to_string();
             assert!(
                 rendered.contains(expected),
@@ -631,7 +629,7 @@ storage_dir = "/tmp/tier"
 [remote_storage.kafka_metadata]
 in_memory = true
 "#;
-        let cfg = configured_unwrap_parse(toml).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         assert!(
             matches!(cfg.remote_log_metadata, crate::config::RlmmKind::InMemory),
             "in_memory = true must opt out to RlmmKind::InMemory, got {:?}",
@@ -649,7 +647,7 @@ in_memory = true
         ];
         for (line, want) in cases {
             let toml = format!("[remote_storage]\nstorage_dir = \"/tmp/tier\"\n{line}");
-            let cfg = configured_unwrap_parse(&toml).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
             check!(cfg.remote_copy_timeout == want, "{line:?}");
         }
     }
@@ -663,7 +661,7 @@ in_memory = true
 storage_dir = "/tmp/tier"
 copy_timeout = "0s"
 "#;
-        let err = configured_unwrap_parse(toml).unwrap_err();
+        let err = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap_err();
         check!(err.to_string().contains("remote_storage.copy_timeout"));
     }
 }

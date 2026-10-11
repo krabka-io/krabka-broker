@@ -20,7 +20,7 @@ use super::{
     request::EffectivePartition,
     response::group_into_topic_responses,
 };
-use crate::{broker::Broker, codes, metrics::RequestPhases, partition::Partition};
+use crate::{broker::Broker, codes, partition::Partition};
 
 /// The initial pass and a long-poll re-read use the same planned read inputs.
 fn planned_read_request(
@@ -265,7 +265,7 @@ pub(super) async fn execute_pending_reads(
     response_max_bytes: usize,
     max_wait_ms: i32,
     sendfile_capable: bool,
-    phases: &RequestPhases,
+    phases: &crate::metrics::RequestPhases,
 ) -> (Vec<FetchableTopicResponse>, Vec<Vec<u64>>) {
     let mut state = LongPollState {
         // Kafka's `fetchMinBytes = min(minBytes, fetchMaxBytes)`: a floor the
@@ -404,7 +404,7 @@ async fn long_poll_then_reread(
     pending: &mut [PendingRead],
     mut waits: Vec<WaitFut>,
     state: &mut LongPollState,
-    phases: &RequestPhases,
+    phases: &crate::metrics::RequestPhases,
 ) {
     let max_wait = Duration::from_millis(u64::from(u32::try_from(state.max_wait_ms).unwrap_or(0)));
     let deadline = tokio::time::Instant::now() + max_wait;
@@ -527,7 +527,7 @@ async fn reread_woken(
     pending: &mut [PendingRead],
     index: usize,
     state: &mut LongPollState,
-    phases: &RequestPhases,
+    phases: &crate::metrics::RequestPhases,
 ) {
     let Some(read) = pending.get_mut(index) else {
         return;
@@ -636,7 +636,7 @@ async fn serve_from_cold_tier(
     broker: &Broker,
     read: &mut PendingRead,
     part: &Partition,
-    phases: &RequestPhases,
+    phases: &crate::metrics::RequestPhases,
 ) -> usize {
     if read.out.error_code != codes::OFFSET_OUT_OF_RANGE {
         return 0;
@@ -664,7 +664,7 @@ mod tests {
     };
     use object_store::{ObjectStoreExt as _, PutPayload, path::Path};
 
-    use crate::{broker::{Broker, spawn_partition}, codes::{NONE, OFFSET_OUT_OF_RANGE}, diskless::wal_index::WalFlushRecord, handlers::test_support::partition, metrics::RequestPhases, partition::Partition, test_support::{StandalonePartitionSetup, StorageMode}};
+    use crate::{broker::Broker, metrics::RequestPhases};
 
     /// Table over a run of per-partition reads (each partition's own
     /// `partition_max_bytes` and the bytes its read actually served) against
@@ -795,16 +795,16 @@ mod tests {
         broker: &Broker,
         dir: &std::path::Path,
         log: Log,
-        setup: StandalonePartitionSetup<'_>,
-    ) -> std::sync::Arc<Partition> {
-        spawn_partition(
+        setup: crate::test_support::StandalonePartitionSetup<'_>,
+    ) -> std::sync::Arc<crate::partition::Partition> {
+        crate::broker::spawn_partition(
             setup.topic.to_owned(),
             setup.partition,
             dir.to_path_buf(),
             log,
             broker.log_dir_status.clone(),
             broker.producer_state.clone(),
-            setup.storage == StorageMode::Diskless,
+            setup.storage == crate::test_support::StorageMode::Diskless,
         )
     }
 
@@ -823,13 +823,13 @@ mod tests {
         broker: &Broker,
         dir: &std::path::Path,
         setup: NonemptyPartitionSetup<'_>,
-    ) -> std::sync::Arc<Partition> {
+    ) -> std::sync::Arc<crate::partition::Partition> {
         let NonemptyPartitionSetup { topic, payload } = setup;
         let part = spawn_fixture_partition(
             broker,
             dir,
             open_fixture_log(dir, topic),
-            StandalonePartitionSetup {
+            crate::test_support::StandalonePartitionSetup {
                 topic,
                 ..Default::default()
             },
@@ -919,7 +919,7 @@ mod tests {
     async fn consumer_partition(
         mut batches: Vec<RecordBatch>,
     ) -> (
-        std::sync::Arc<Partition>,
+        std::sync::Arc<crate::partition::Partition>,
         tempfile::TempDir,
     ) {
         let (part, dir) = crate::partition::test_support::test_partition(std::sync::Arc::new(
@@ -939,7 +939,7 @@ mod tests {
     /// A consumer read of `topic`'s partition 0 from offset 0.
     fn consumer_read(
         topic: &str,
-        part: &std::sync::Arc<Partition>,
+        part: &std::sync::Arc<crate::partition::Partition>,
         read_committed: bool,
     ) -> super::PendingRead {
         super::PendingRead {
@@ -1069,7 +1069,7 @@ mod tests {
         broker: &Broker,
         dir: &std::path::Path,
         topic: &str,
-    ) -> std::sync::Arc<Partition> {
+    ) -> std::sync::Arc<crate::partition::Partition> {
         let mut log = open_fixture_log(dir, topic);
         log.append(&mut RecordBatch {
             records: vec![Record {
@@ -1086,9 +1086,9 @@ mod tests {
             broker,
             dir,
             log,
-            StandalonePartitionSetup {
+            crate::test_support::StandalonePartitionSetup {
                 topic,
-                storage: StorageMode::Diskless,
+                storage: crate::test_support::StorageMode::Diskless,
                 ..Default::default()
             },
         )
@@ -1149,9 +1149,9 @@ mod tests {
             .index
             .lock()
             .await
-            .apply(&WalFlushRecord {
+            .apply(&crate::diskless::wal_index::WalFlushRecord {
                 object_key: "diskless-wal/a".into(),
-                format_version: WalFlushRecord::FORMAT_VERSION,
+                format_version: crate::diskless::wal_index::WalFlushRecord::FORMAT_VERSION,
                 entries: vec![crate::diskless::wal_index::WalIndexEntry {
                     topic_id: topic_a,
                     partition: 0,
@@ -1182,9 +1182,9 @@ mod tests {
             .index
             .lock()
             .await
-            .apply(&WalFlushRecord {
+            .apply(&crate::diskless::wal_index::WalFlushRecord {
                 object_key: "diskless-wal/b".into(),
-                format_version: WalFlushRecord::FORMAT_VERSION,
+                format_version: crate::diskless::wal_index::WalFlushRecord::FORMAT_VERSION,
                 entries: vec![
                     crate::diskless::wal_index::WalIndexEntry {
                         topic_id: topic_b,
@@ -1311,9 +1311,9 @@ mod tests {
             .index
             .lock()
             .await
-            .apply(&WalFlushRecord {
+            .apply(&crate::diskless::wal_index::WalFlushRecord {
                 object_key: "diskless-wal/cold".into(),
-                format_version: WalFlushRecord::FORMAT_VERSION,
+                format_version: crate::diskless::wal_index::WalFlushRecord::FORMAT_VERSION,
                 entries: vec![crate::diskless::wal_index::WalIndexEntry {
                     topic_id,
                     partition: 0,
@@ -1325,12 +1325,12 @@ mod tests {
                 }],
             });
 
-        let part = partition(
+        let part = crate::handlers::test_support::partition(
             &broker,
             dir.path(),
-            StandalonePartitionSetup {
+            crate::test_support::StandalonePartitionSetup {
                 topic: "cold",
-                storage: StorageMode::Diskless,
+                storage: crate::test_support::StorageMode::Diskless,
                 ..Default::default()
             },
         );
@@ -1348,7 +1348,7 @@ mod tests {
             follower_position: None,
             partition: Some(std::sync::Arc::clone(&part)),
             out: super::PartitionData {
-                error_code: OFFSET_OUT_OF_RANGE,
+                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
                 high_watermark: 1,
                 log_start_offset: 1,
                 ..Default::default()
@@ -1368,7 +1368,7 @@ mod tests {
 
         // A partition the local log answered never enters the fallback, so a
         // cluster with no cold tier sees an unchanged remote phase.
-        pending.out.error_code = NONE;
+        pending.out.error_code = crate::codes::NONE;
         let local_only = RequestPhases::default();
         let served = super::serve_from_cold_tier(&broker, &mut pending, &part, &local_only).await;
 
@@ -1386,7 +1386,7 @@ mod tests {
             (broker_handle, dir, broker, part),
             local_follower_partition(TOPIC)
         );
-        let mut pending = [follower_read(TOPIC, &part, NONE)];
+        let mut pending = [follower_read(TOPIC, &part, crate::codes::NONE)];
 
         part.install_leader_change(1, 1).await;
         part.produce_batch(RecordBatch {
@@ -1433,7 +1433,7 @@ mod tests {
         let mut pending = [follower_read(
             TOPIC,
             &part,
-            OFFSET_OUT_OF_RANGE,
+            crate::codes::OFFSET_OUT_OF_RANGE,
         )];
 
         // Nothing will ever append, and the floor is unreachable: only the
@@ -1473,7 +1473,7 @@ mod tests {
             log_start_offset: -1,
             partition_max_bytes: 1024,
         };
-        let mut pending = [planned_follower(TOPIC, &part, &request, NONE)];
+        let mut pending = [planned_follower(TOPIC, &part, &request, crate::codes::NONE)];
 
         // What `execute_pending_reads` arms around its first pass: the append
         // waiters before it, the leadership waiters after it.
@@ -1754,7 +1754,7 @@ mod tests {
             local_follower_partition(TOPIC)
         );
 
-        let mut pending = [follower_read(TOPIC, &part, NONE)];
+        let mut pending = [follower_read(TOPIC, &part, crate::codes::NONE)];
 
         // What `execute_pending_reads` does in this order: arm the waiters,
         // read (the log is empty, so the read finds nothing), then park.
@@ -1786,7 +1786,7 @@ mod tests {
     }
     fn planned_follower(
         topic: &str,
-        part: &std::sync::Arc<Partition>,
+        part: &std::sync::Arc<crate::partition::Partition>,
         request: &super::EffectivePartition,
         error_code: i16,
     ) -> super::PendingRead {
@@ -1806,7 +1806,7 @@ mod tests {
 
     fn follower_read(
         topic: &str,
-        part: &std::sync::Arc<Partition>,
+        part: &std::sync::Arc<crate::partition::Partition>,
         error_code: i16,
     ) -> super::PendingRead {
         planned_follower(

@@ -10,7 +10,7 @@ use krabka_metadata::NodeId;
 use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::TempDir;
 
-use crate::{cleaner::test_support::CompactionSetup, log_dir::partition_dir, log_dir_status::LogDirRegistry, partition::Partition, test_support::CommittedPartitionSetup};
+use crate::partition::Partition;
 
 fn keyed_batch(base: i64, key: &[u8], value: &[u8]) -> RecordBatch {
     RecordBatch {
@@ -48,7 +48,7 @@ pub(super) struct CompactionSetup<'a> {
     pub partition_id: PartitionIndex,
     pub leader: NodeId,
     pub cfg: krabka_log::LogConfig,
-    pub log_dir_status: LogDirRegistry,
+    pub log_dir_status: crate::log_dir_status::LogDirRegistry,
 }
 
 impl Default for CompactionSetup<'_> {
@@ -62,7 +62,7 @@ impl Default for CompactionSetup<'_> {
                 segment_size: krabka_units::bytes(256),
                 ..Default::default()
             },
-            log_dir_status: LogDirRegistry::default(),
+            log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
         }
     }
 }
@@ -79,7 +79,7 @@ pub(super) async fn compactable_partition(
         cfg,
         log_dir_status,
     } = setup;
-    let part_dir = partition_dir(root.path(), topic, partition_id.0);
+    let part_dir = crate::log_dir::partition_dir(root.path(), topic, partition_id.0);
     std::fs::create_dir_all(&part_dir).expect("create partition dir");
     let mut log = krabka_log::Log::open(&part_dir, cfg).expect("open compactable log");
     for idx in 0..12 {
@@ -92,7 +92,7 @@ pub(super) async fn compactable_partition(
     crate::test_support::committed_partition(
         root.path(),
         log,
-        CommittedPartitionSetup {
+        crate::test_support::CommittedPartitionSetup {
             topic,
             partition: partition_id,
             leader,
@@ -120,7 +120,7 @@ pub(super) async fn register_compactable(
 ) -> (Arc<Partition>, usize) {
     let partition = compactable_partition(
         root,
-        CompactionSetup {
+        crate::cleaner::test_support::CompactionSetup {
             topic,
             ..Default::default()
         },

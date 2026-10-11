@@ -76,7 +76,8 @@ use crate::{
         group::{ConsumerState, CoordinatorGroup},
         offsets_log::OffsetsLog,
         reconciler::ReconcileInput,
-    }, task_util::spawn_mailbox, time_util,
+    },
+    time_util,
 };
 
 /// A Kafka wire `error_code` value, as carried in response `error_code`
@@ -140,7 +141,7 @@ impl GroupActorHandle {
         offsets_log: Arc<dyn OffsetsLog>,
         coordinator: Arc<GroupCoordinator>,
     ) -> Self {
-        let (tx, task) = spawn_mailbox(config.actor_mailbox_capacity, |rx| {
+        let (tx, task) = crate::task_util::spawn_mailbox(config.actor_mailbox_capacity, |rx| {
             actor_loop(
                 group_id,
                 kind,

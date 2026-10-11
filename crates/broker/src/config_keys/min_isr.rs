@@ -49,8 +49,6 @@
 //! min ISR -- can only clear the set early. It cannot leave a replica in it
 //! that an accepted write has moved past.
 
-use crate::{elr::unclean_restart::clear_published_elr_for_topic, features::ELR_VERSION};
-
 use super::{
     MIN_INSYNC_REPLICAS,
     lookup::{topic_node_or_cluster_default, topic_or_cluster_default},
@@ -60,10 +58,10 @@ pub(crate) fn clear_elr_records(
     image: &krabka_metadata::MetadataImage,
     topic: Option<&str>,
 ) -> Vec<krabka_metadata::MetadataRecord> {
-    if !crate::features::feature_enabled(image, ELR_VERSION, 1) {
+    if !crate::features::feature_enabled(image, crate::features::ELR_VERSION, 1) {
         return Vec::new();
     }
-    clear_published_elr_for_topic(image, topic)
+    crate::elr::unclean_restart::clear_published_elr_for_topic(image, topic)
 }
 
 /// Apache Kafka's `min.insync.replicas` default, used when neither the topic
@@ -131,7 +129,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::test_support::{TopicSetup, finalize_elr_version};
+    use crate::test_support::TopicSetup;
 
     fn image(topic_override: Option<&str>, cluster_default: Option<&str>) -> MetadataImage {
         let mut image = crate::test_support::topic_image(TopicSetup {
@@ -233,7 +231,7 @@ mod tests {
     #[test]
     fn a_min_isr_change_clears_only_the_selected_topics_elr() {
         let mut image = image(None, None);
-        finalize_elr_version(&mut image);
+        crate::test_support::finalize_elr_version(&mut image);
         for topic in ["t", "other"] {
             image.apply(&MetadataRecord::V1Partition(PartitionRecord {
                 topic: topic.into(),

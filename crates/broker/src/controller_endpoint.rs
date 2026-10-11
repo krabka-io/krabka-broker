@@ -12,8 +12,6 @@
 //! quorum -- the same two-tier lookup `ControllerHandle::voter_addr` uses for
 //! the leader it forwards a rejected `submit_change` to.
 
-use crate::{host_port::parse_host_port, network::client::InterBrokerClient};
-
 /// The listener name a controller advertises for the RPCs its peers address
 /// to it.
 pub(crate) const CONTROLLER_LISTENER_NAME: &str = "CONTROLLER";
@@ -65,7 +63,7 @@ pub(crate) fn leader_endpoint(
             static_voters
                 .iter()
                 .find(|(node_id, _)| *node_id == leader)
-                .and_then(|(_, endpoint)| parse_host_port(endpoint))
+                .and_then(|(_, endpoint)| crate::host_port::parse_host_port(endpoint))
         })
 }
 
@@ -125,7 +123,7 @@ pub(crate) fn quorum_targets(
 /// Kafka frames at a secured controller port and fail every attempt.
 pub(crate) struct ControllerDialer {
     /// Shared outbound dialer that runs the controller listener's TLS / SASL.
-    pub outbound_client: std::sync::Arc<InterBrokerClient>,
+    pub outbound_client: std::sync::Arc<crate::network::client::InterBrokerClient>,
     pub listener_protocol: krabka_security::ListenerProtocol,
     /// SNI and SASL server name for the controller listener, matching the one
     /// the raft dialer presents.
@@ -140,9 +138,7 @@ pub(crate) struct ControllerDialer {
 mod tests {
     use assert2::assert;
 
-    use crate::test_support::{VoterImageSetup, voter_image};
-
-use super::*;
+    use super::*;
 
     fn endpoints(named: &[(&str, &str, u16)]) -> Vec<krabka_metadata::VoterEndpoint> {
         named
@@ -188,7 +184,7 @@ use super::*;
     }
 
     fn image_with_voter(node: u64, host: &str, port: u16) -> krabka_metadata::MetadataImage {
-        voter_image(VoterImageSetup {
+        crate::test_support::voter_image(crate::test_support::VoterImageSetup {
             node: krabka_ids::NodeId(node),
             endpoints: endpoints(&[("CONTROLLER", host, port)]),
         })

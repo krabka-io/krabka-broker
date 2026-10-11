@@ -8,7 +8,7 @@ use std::sync::Arc;
 use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
-use crate::{config::BrokerConfig, config_keys::resolve_broker_witness, health::HealthState, heartbeat::controller_state::ControllerLivenessState, metadata_source::MetadataSource, metrics::{BrokerMetrics, DirectoryLabel, RaftStateLabel}, partition_registry::PartitionRegistry};
+use crate::{config::BrokerConfig, partition_registry::PartitionRegistry};
 
 /// Epoch milliseconds for the KIP-835 time-since-last-applied-record gauge.
 fn epoch_now_ms() -> i64 {
@@ -54,12 +54,12 @@ fn leader_site_drift_partitions(
 }
 
 fn update_metadata_health_metrics(
-    metrics: &BrokerMetrics,
-    controller: &dyn MetadataSource,
+    metrics: &crate::metrics::BrokerMetrics,
+    controller: &dyn crate::metadata_source::MetadataSource,
 ) {
     let quorum_snapshot = controller.quorum_snapshot();
     if let Some(snap) = &quorum_snapshot {
-        for state_label in RaftStateLabel::ALL {
+        for state_label in crate::metrics::RaftStateLabel::ALL {
             let is_active = i64::from(state_label.state == snap.current_state);
             metrics
                 .raft_current_state
@@ -113,12 +113,12 @@ pub(super) fn spawn_broker_gauge_updater(
         Arc<PartitionRegistry>,
         crate::log_dir_status::LogDirRegistry,
     ),
-    controller: Arc<dyn MetadataSource>,
-    liveness: Arc<ControllerLivenessState>,
+    controller: Arc<dyn crate::metadata_source::MetadataSource>,
+    liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
     node_id: krabka_metadata::NodeId,
     observability: (
-        BrokerMetrics,
-        Option<HealthState>,
+        crate::metrics::BrokerMetrics,
+        Option<crate::health::HealthState>,
     ),
     config: &BrokerConfig,
     shutdown: CancellationToken,
@@ -201,7 +201,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 i64::try_from(leader_site_drift_partitions(&image, node_id)).unwrap_or(i64::MAX),
             );
             metrics.witness_role.set(i64::from(u8::from(
-                resolve_broker_witness(&image, node_id),
+                crate::config_keys::resolve_broker_witness(&image, node_id),
             )));
             metrics
                 .active_controller
@@ -291,7 +291,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 if let Some(directory_id) = previous_voted_directory {
                     metrics
                         .voted_directory
-                        .get_or_create(&DirectoryLabel {
+                        .get_or_create(&crate::metrics::DirectoryLabel {
                             directory_id: directory_id.to_string(),
                         })
                         .set(0);
@@ -299,7 +299,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 if let Some(directory_id) = voted_directory {
                     metrics
                         .voted_directory
-                        .get_or_create(&DirectoryLabel {
+                        .get_or_create(&crate::metrics::DirectoryLabel {
                             directory_id: directory_id.to_string(),
                         })
                         .set(1);
@@ -316,7 +316,7 @@ mod tests {
     use krabka_units::{millis, secs};
 
     use super::*;
-    use crate::{broker::test_support::fake_source, handlers::test_support::{ReplicatedPartitionSetup, replicated_partition}, metrics::BrokerMetrics, test_support::single_partition_topic};
+    use crate::broker::test_support::fake_source;
 
     #[test]
     fn active_controller_applied_timestamp_lag_stays_zero() {
@@ -329,7 +329,7 @@ mod tests {
         let node_id = krabka_metadata::NodeId(1);
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         image.apply(&krabka_metadata::MetadataRecord::V1Topic(
-            single_partition_topic("gauge-topic", uuid::Uuid::nil()),
+            crate::test_support::single_partition_topic("gauge-topic", uuid::Uuid::nil()),
         ));
         image.apply(&krabka_metadata::MetadataRecord::V1Partition(
             krabka_metadata::PartitionRecord {
@@ -377,8 +377,8 @@ mod tests {
         shutdown.cancel();
     }
 
-    fn gauge_fixture() -> (BrokerMetrics, BrokerConfig) {
-        let metrics = BrokerMetrics::new();
+    fn gauge_fixture() -> (crate::metrics::BrokerMetrics, BrokerConfig) {
+        let metrics = crate::metrics::BrokerMetrics::new();
         let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
         config.gauge_poll_interval = millis(1);
         (metrics, config)
@@ -450,8 +450,8 @@ mod tests {
         for partition in 0..=led {
             let leader = if partition < led { 1 } else { 2 };
             image.apply(&krabka_metadata::MetadataRecord::V1Partition(
-                replicated_partition(
-                    ReplicatedPartitionSetup {
+                crate::handlers::test_support::replicated_partition(
+                    crate::handlers::test_support::ReplicatedPartitionSetup {
                         topic: "stretch-topic",
                         partition: krabka_ids::PartitionIndex(partition),
                         leader: krabka_metadata::NodeId(leader),

@@ -22,9 +22,9 @@ use krabka_security::SecretBytes;
 use tempfile::TempDir;
 
 use super::handle;
-use crate::{authorizer::{AllowAllAuthorizer, Authorizer, SimpleAclAuthorizer}, handlers::delegation_token_test_support::{
+use crate::handlers::delegation_token_test_support::{
     TokenSetup, anonymous, authed, kp, seed_token, test_controller, token_authed,
-}, metadata_source::MetadataSource, test_support::AllowAclSetup};
+};
 
 #[derive(Clone, Copy, Default)]
 struct DescribeTokenSetup<'a> {
@@ -34,8 +34,8 @@ struct DescribeTokenSetup<'a> {
 }
 
 fn describe(
-    controller: &dyn MetadataSource,
-    authorizer: &dyn Authorizer,
+    controller: &dyn crate::metadata_source::MetadataSource,
+    authorizer: &dyn crate::authorizer::Authorizer,
     setup: DescribeTokenSetup<'_>,
 ) -> krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse {
     let default_request = no_owner_filter();
@@ -51,10 +51,10 @@ fn describe(
 }
 
 fn describe_unrestricted(
-    controller: &dyn MetadataSource,
+    controller: &dyn crate::metadata_source::MetadataSource,
     setup: DescribeTokenSetup<'_>,
 ) -> krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse {
-    describe(controller, &AllowAllAuthorizer, setup)
+    describe(controller, &crate::authorizer::AllowAllAuthorizer, setup)
 }
 
 fn check_refused_token_description(
@@ -102,8 +102,8 @@ fn peer() -> SocketAddr {
 /// `DelegationToken:<token_id>`. With [`crate::authorizer::AllowAllAuthorizer`]
 /// every token would surface, which is correct under "allow everything" but
 /// does not exercise the ACL filter these tests are written against.
-fn simple_authz() -> SimpleAclAuthorizer {
-    SimpleAclAuthorizer::new(std::collections::HashSet::new())
+fn simple_authz() -> crate::authorizer::SimpleAclAuthorizer {
+    crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new())
 }
 
 async fn seed_acl(controller: &ControllerHandle, entry: AclEntry) {
@@ -119,7 +119,7 @@ async fn seed_acl(controller: &ControllerHandle, entry: AclEntry) {
 /// admin tooling use. A resource name of the owner's principal string
 /// instead would grant every token of that owner from one ACL.
 fn describe_token_acl(token_id: &str, principal: &str) -> AclEntry {
-    crate::test_support::allow_acl(AllowAclSetup {
+    crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
         resource_type: ResourceType::DelegationToken,
         resource_name: token_id,
         principal: &format!("User:{principal}"),
@@ -242,7 +242,7 @@ async fn empty_owners_list_returns_no_tokens_without_error() {
     };
     check_description_visibility(
         &*controller,
-        &AllowAllAuthorizer,
+        &crate::authorizer::AllowAllAuthorizer,
         DescribeTokenSetup {
             request: Some(&req),
             secret: Some(&secret),
@@ -656,8 +656,8 @@ async fn describe_response_reports_the_requester_that_created_the_token() {
 }
 
 fn check_description_visibility(
-    controller: &dyn MetadataSource,
-    authorizer: &dyn Authorizer,
+    controller: &dyn crate::metadata_source::MetadataSource,
+    authorizer: &dyn crate::authorizer::Authorizer,
     setup: DescribeTokenSetup<'_>,
     expected: &[&str],
 ) {
@@ -665,8 +665,8 @@ fn check_description_visibility(
 }
 
 fn describe_checked(
-    controller: &dyn MetadataSource,
-    authorizer: &dyn Authorizer,
+    controller: &dyn crate::metadata_source::MetadataSource,
+    authorizer: &dyn crate::authorizer::Authorizer,
     setup: DescribeTokenSetup<'_>,
 ) -> krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse {
     let response = describe(controller, authorizer, setup);

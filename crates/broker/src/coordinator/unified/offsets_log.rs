@@ -292,6 +292,13 @@ use super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, async_trait};
         Tombstone,
     }
 
+    /// Which classic metadata operation a test expects in the append log.
+    #[derive(Clone, Copy)]
+    pub enum ClassicMetadataRecord {
+        Write,
+        Tombstone,
+    }
+
     #[derive(Debug, Default)]
     pub struct InMemoryOffsetsLog {
         pub appended: Mutex<Vec<RecordBatch>>,

@@ -98,9 +98,7 @@ mod tests {
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
 
-    use crate::test_support::wait_tasks_started;
-
-use super::*;
+    use super::*;
 
     macro_rules! pending_move_fixture {
         ($dir:ident, $log:ident, $logs:ident, $started:ident, $dropped:ident) => {
@@ -153,7 +151,7 @@ use super::*;
             cancels.push(cancel);
         }
 
-        wait_tasks_started(
+        crate::test_support::wait_tasks_started(
             || started.load(Ordering::SeqCst) == 2,
             "move tasks start",
         )

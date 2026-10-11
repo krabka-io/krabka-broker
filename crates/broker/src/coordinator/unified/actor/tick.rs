@@ -13,9 +13,9 @@ use super::{
     persistence::{flush_classic_metadata, flush_pending},
     waiters::settle_removed_classic_waiters,
 };
-use crate::{coordinator::unified::{
+use crate::coordinator::unified::{
     classic_state::ClassicGroup as ClassicState, group::CoordinatorGroup,
-}, metadata_epoch::next_i32};
+};
 
 pub(super) async fn handle_actor_tick(
     group: &mut CoordinatorGroup,
@@ -93,7 +93,7 @@ async fn settle_classic_removal(
     services: ActorServices<'_>,
 ) -> bool {
     if state.members.is_empty() && !removed.is_empty() {
-        let Some(generation_id) = next_i32(state.generation_id) else {
+        let Some(generation_id) = crate::metadata_epoch::next_i32(state.generation_id) else {
             *state = previous;
             tracing::warn!(group = %state.group_id,
                 "classic expiration stopped because the generation is exhausted");
@@ -175,12 +175,22 @@ mod tests {
 
     use super::*;
     use crate::{
-        codes, coordinator::unified::{
-            ClientIdentity, GroupCoordinator, actor::{
-                GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution, test_support::{
-                    ConsumerMemberSetup, completing_classic_group, empty_metadata, last_classic_metadata, make_coordinator, parked_follower, rpc, subscribed_member,
+        codes,
+        coordinator::unified::{
+            GroupCoordinator,
+            actor::{
+                GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution,
+                test_support::{
+                    completing_classic_group, empty_metadata, last_classic_metadata,
+                    make_coordinator, parked_follower, rpc, subscribed_member,
                 },
-            }, classic_state::GroupState as ClassicGroupState, config::NextGenConfig, consumer_state::GroupState, group::GroupKind, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput, regex_resolver::no_topic_regex_resolver, test_support::{check_two_members_expired, expired_session_last_seen},
+            },
+            classic_state::GroupState as ClassicGroupState,
+            config::NextGenConfig,
+            consumer_state::GroupState,
+            group::GroupKind,
+            offsets_log::fake::InMemoryOffsetsLog,
+            test_support::check_two_members_expired,
         },
     };
 
@@ -223,9 +233,9 @@ mod tests {
         let mut state = GroupState::new("g");
         for member_id in ["m1", "m2"] {
             let mut m = subscribed_member(
-                ConsumerMemberSetup {
+                crate::coordinator::unified::actor::test_support::ConsumerMemberSetup {
                     member_id,
-                    client: ClientIdentity {
+                    client: crate::coordinator::unified::ClientIdentity {
                         id: "client-a",
                         host: "h",
                     },
@@ -233,7 +243,7 @@ mod tests {
                     ..Default::default()
                 },
             );
-            m.last_seen = expired_session_last_seen();
+            m.last_seen = crate::coordinator::unified::test_support::expired_session_last_seen();
             state.add_or_update_member(m);
         }
         state.group_epoch = 2;
@@ -340,7 +350,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let client = ClientIdentity { id: "c", host: "h" };
+        let client = crate::coordinator::unified::ClientIdentity { id: "c", host: "h" };
         let owned = |partitions: Vec<i32>| {
             Some(vec![TopicPartitions {
                 topic_id: topic,
@@ -453,7 +463,7 @@ mod tests {
             },
             crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
             Arc::new(StaticMetadata {
-                input: ReconcileInput {
+                input: crate::coordinator::unified::reconciler::ReconcileInput {
                     topic_id_by_name: [("t".to_string(), topic)].into(),
                     partitions_per_topic: [(topic, 2)].into(),
                     ..Default::default()
@@ -489,7 +499,7 @@ mod tests {
                     client_host: "h".into(),
                     reply,
                     regex_resolver:
-                        no_topic_regex_resolver(),
+                        crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
                 })
                 .await;
                 response.await.unwrap()

@@ -27,7 +27,11 @@ use super::{
     response::{err_row, ok_row},
 };
 use crate::{
-    break_glass::handlers::batch::GatedBatch, broker::Broker, codes::POLICY_VIOLATION, freeze::resolve::{FreezeMutationResolution, FreezeVerdict}, handlers::{RequestContext, partition_transition::audit_refusal},
+    break_glass::handlers::batch::GatedBatch,
+    broker::Broker,
+    codes::POLICY_VIOLATION,
+    freeze::resolve::{FreezeMutationResolution, FreezeVerdict},
+    handlers::RequestContext,
 };
 
 /// Everything one alter row reads, and nothing it writes.
@@ -136,7 +140,7 @@ pub(super) fn alter_one(
                 return err_row(index, code, message);
             };
             let message = denial.to_string();
-            audit_refusal(
+            crate::handlers::partition_transition::audit_refusal(
                 env.broker,
                 env.ctx,
                 BreakGlassAction::CancelReassignment,
@@ -174,7 +178,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::AllowAllAuthorizer, break_glass::gate::tests::{APPROVED_PROPOSAL_ID, approved_proposal}, config::BreakGlassConfig, handlers::alter_partition_reassignments::test_support::{ReassignmentImageSetup, img_with, pending_reassignment_image}, test_support::{ReassignmentSetup, start_broker_no_audit_with},
+        break_glass::gate::tests::{APPROVED_PROPOSAL_ID, approved_proposal},
+        handlers::alter_partition_reassignments::test_support::{ReassignmentImageSetup, img_with},
+        test_support::ReassignmentSetup,
     };
 
     const NOW_MS: i64 = 60_000;
@@ -191,16 +197,16 @@ mod tests {
         };
     }
 
-    fn gated_config() -> BreakGlassConfig {
-        BreakGlassConfig {
+    fn gated_config() -> crate::config::BreakGlassConfig {
+        crate::config::BreakGlassConfig {
             approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
-            ..BreakGlassConfig::default()
+            ..crate::config::BreakGlassConfig::default()
         }
     }
 
     /// A partition mid-reassignment, beside the proposals the registry holds.
     fn img_reassigning(proposals: &[krabka_metadata::BreakGlassProposalRecord]) -> MetadataImage {
-        let mut img = pending_reassignment_image();
+        let mut img = crate::handlers::alter_partition_reassignments::test_support::pending_reassignment_image();
         for proposal in proposals {
             img.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
         }
@@ -213,7 +219,7 @@ mod tests {
         let cases: [(
             &'static str,
             MetadataImage,
-            BreakGlassConfig,
+            crate::config::BreakGlassConfig,
             bool,
         ); 4] = [
             (
@@ -240,7 +246,7 @@ mod tests {
             (
                 "no approver set, so nothing is gated",
                 img_reassigning(&[]),
-                BreakGlassConfig::default(),
+                crate::config::BreakGlassConfig::default(),
                 true,
             ),
         ];
@@ -358,8 +364,8 @@ mod tests {
     /// that names it claims a reassignment that never happened.
     #[tokio::test]
     async fn only_a_start_that_plans_a_record_counts_as_altered() {
-        let (handle, _dir) = start_broker_no_audit_with(|cfg| {
-            cfg.authorizer = Arc::new(AllowAllAuthorizer);
+        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         })
         .await;
         let broker = handle.broker_arc_for_test();

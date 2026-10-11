@@ -57,8 +57,6 @@
 
 use krabka_metadata::BreakGlassAction;
 
-use crate::model_check::check_model;
-
 use self::{
     transitions::CrossSpendModel,
     universe::{EXPIRES_AT, ProposalSpec, Request},
@@ -85,7 +83,7 @@ const PINNED_UNIQUE_STATES_PARTITION_LOOKALIKE: usize = 432;
 const PINNED_UNIQUE_STATES_BOTH_COVER: usize = 432;
 
 fn run(model: CrossSpendModel, label: &str, pinned_unique_states: usize) {
-    check_model(
+    crate::model_check::check_model(
         model,
         label,
         (MAX_DEPTH, TARGET_STATE_COUNT, MAX_UNIQUE_STATES),

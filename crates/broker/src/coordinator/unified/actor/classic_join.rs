@@ -32,8 +32,17 @@ use super::{
     waiters::{complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member},
 };
 use crate::{
-    codes, coordinator::unified::{
-        ClientIdentity, classic_ops, classic_state::{ClassicGroup, GroupState as ClassicGroupState}, config::{ConsumerGroupMigrationPolicy, NextGenConfig}, consumer_state::GroupState as ConsumerState, first_join_member_id, group::{CoordinatorGroup, GroupKind}, migration, reconciler::ReconcileInput, regex_resolver::TopicRegexResolver,
+    codes,
+    coordinator::unified::{
+        ClientIdentity, classic_ops,
+        classic_state::GroupState as ClassicGroupState,
+        config::{ConsumerGroupMigrationPolicy, NextGenConfig},
+        consumer_state::GroupState as ConsumerState,
+        first_join_member_id,
+        group::{CoordinatorGroup, GroupKind},
+        migration,
+        reconciler::ReconcileInput,
+        regex_resolver::TopicRegexResolver,
     },
 };
 
@@ -88,7 +97,7 @@ pub(super) async fn handle_classic_join_message(
                 .coordinator
                 .mark_classic_after_downgrade(&group.group_id);
             *group.kind_mut() = GroupKind::Classic(
-                ClassicGroup::new(
+                crate::coordinator::unified::classic_state::ClassicGroup::new(
                     group.group_id.clone(),
                 ),
             );
@@ -638,10 +647,17 @@ mod tests {
     use super::*;
     use crate::coordinator::unified::{
         actor::{
-            GroupActorHandle, GroupActorMessage, GroupKindTag, SyncResult, test_support::{
-                completing_classic_group, decode_assignment, last_classic_metadata, make_coordinator, make_coordinator_with_config, make_coordinator_with_topic_config, make_coordinator_with_topic_policy, marked_classic_handle, rpc, seed_and_upgrade,
+            GroupActorMessage, GroupKindTag, SyncResult,
+            test_support::{
+                completing_classic_group, decode_assignment, last_classic_metadata,
+                make_coordinator, make_coordinator_with_config, make_coordinator_with_topic_config,
+                make_coordinator_with_topic_policy, rpc, seed_and_upgrade,
             },
-        }, classic_state::GroupState as ClassicGroupState, config::{ConsumerGroupMigrationPolicy as Policy, NextGenConfig}, persistence_next_gen::NextGenKey, regex_resolver::{FixedRegexResolver, no_topic_regex_resolver},
+        },
+        classic_state::GroupState as ClassicGroupState,
+        config::{ConsumerGroupMigrationPolicy as Policy, NextGenConfig},
+        persistence_next_gen::NextGenKey,
+        regex_resolver::FixedRegexResolver,
     };
 
     /// Kafka's `group.initial.rebalance.delay.ms = 0`: the first member of a
@@ -658,7 +674,7 @@ mod tests {
             ..NextGenConfig::assigning_at_once()
         });
         let handle =
-            marked_classic_handle(&coord, "g");
+            crate::coordinator::unified::actor::test_support::marked_classic_handle(&coord, "g");
 
         let assigned = rpc::classic_join(&handle, "", "t").await;
         check!(assigned.error_code == codes::MEMBER_ID_REQUIRED);
@@ -694,7 +710,7 @@ mod tests {
                 classic_initial_rebalance_delay: Duration::ZERO,
                 ..NextGenConfig::assigning_at_once()
             });
-            let handle = marked_classic_handle(
+            let handle = crate::coordinator::unified::actor::test_support::marked_classic_handle(
                 &coord, "g",
             );
             let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicJoin {
@@ -713,7 +729,7 @@ mod tests {
                 client_id: "client-a".into(),
                 client_host: "127.0.0.1".into(),
                 regex_resolver:
-                    no_topic_regex_resolver(),
+                    crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
                 reply: tx,
             })
             .await;
@@ -764,14 +780,14 @@ mod tests {
     }
 
     async fn send_join(
-        handle: &GroupActorHandle,
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
         req: JoinGroupRequest,
     ) -> JoinResult {
         send_join_at(handle, req, 4).await
     }
 
     async fn send_join_at(
-        handle: &GroupActorHandle,
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
         req: JoinGroupRequest,
         version: i16,
     ) -> JoinResult {
@@ -780,7 +796,7 @@ mod tests {
             version,
             client_id: "new-client".into(),
             client_host: "new-host".into(),
-            regex_resolver: no_topic_regex_resolver(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: tx,
         })
         .await;
@@ -859,7 +875,7 @@ mod tests {
         let (coord, _log) = make_coordinator_with_topic_policy(
             "t",
             2,
-            ConsumerGroupMigrationPolicy::Upgrade,
+            crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
         );
         let handle = seed_and_upgrade(&coord, "t").await;
 
@@ -985,7 +1001,7 @@ mod tests {
 
     /// A `JoinGroup` for topic `t` as a classic consumer client sends it.
     async fn join_at(
-        handle: &GroupActorHandle,
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
         member_id: &str,
         group_instance_id: Option<&str>,
         version: i16,
@@ -1203,7 +1219,7 @@ mod tests {
     /// A native consumer member `member_id` that joins subscribed to `t`, as
     /// the static member `instance_id` when one is given.
     async fn native_join(
-        handle: &GroupActorHandle,
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
         member_id: &str,
         instance_id: Option<&str>,
     ) {
@@ -1225,7 +1241,7 @@ mod tests {
 
     /// The member ids `Describe` reports, sorted.
     async fn member_ids(
-        handle: &GroupActorHandle,
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
     ) -> Vec<String> {
         let mut ids: Vec<String> = rpc::describe(handle)
             .await

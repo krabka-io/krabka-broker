@@ -15,7 +15,8 @@ use krabka_protocol::{
 };
 
 use crate::{
-    broker::Broker, codes::COORDINATOR_NOT_AVAILABLE, coordinator::{bootstrap::OFFSETS_TOPIC, persistence::{Key, OffsetCommitValue}, unified::{
+    broker::Broker,
+    coordinator::unified::{
         GroupCoordinator,
         actor::MetadataProvider,
         classic_state::OffsetEntry,
@@ -24,7 +25,8 @@ use crate::{
         persistence::{Key, parse_key},
         share::config::ShareGroupConfig,
         streams::config::StreamsGroupConfig,
-    }}, handlers::offset_fetch::handle, test_support::{KafkaErrorCode, peer, principal, request_context},
+    },
+    test_support::{peer, principal, request_context},
 };
 
 krabka_macros::single_replica_partition_fixture!(single_replica_partition);
@@ -57,13 +59,13 @@ pub(crate) fn offsets_partition_image(
         uuid::Uuid::nil(),
         &[
             krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-                name: OFFSETS_TOPIC.into(),
+                name: crate::coordinator::bootstrap::OFFSETS_TOPIC.into(),
                 topic_id: uuid::Uuid::from_u128(7),
                 partitions: partition + 1,
                 replication_factor: i16::try_from(replicas.len()).unwrap(),
             }),
             krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                topic: OFFSETS_TOPIC.into(),
+                topic: crate::coordinator::bootstrap::OFFSETS_TOPIC.into(),
                 partition,
                 leader,
                 leader_epoch: krabka_metadata::LeaderEpoch(epoch),
@@ -203,7 +205,7 @@ pub(crate) struct DeletionTombstonesSetup<'a> {
 
 pub(crate) fn deletion_tombstones(
     setup: DeletionTombstonesSetup<'_>,
-) -> Vec<(Key, Option<bytes::Bytes>)> {
+) -> Vec<(crate::coordinator::persistence::Key, Option<bytes::Bytes>)> {
     use crate::coordinator::persistence::Key;
     let mut records: Vec<_> = setup
         .offsets
@@ -243,7 +245,7 @@ pub(crate) struct TopicDeletionTombstonesSetup<'a> {
 
 pub(crate) fn topic_deletion_tombstones(
     setup: TopicDeletionTombstonesSetup<'_>,
-) -> Vec<(Key, Option<bytes::Bytes>)> {
+) -> Vec<(crate::coordinator::persistence::Key, Option<bytes::Bytes>)> {
     let offsets: Vec<_> = setup
         .partitions
         .iter()
@@ -263,7 +265,7 @@ pub(crate) fn offset_record(setup: OffsetRecordSetup<'_>) -> krabka_protocol::re
         partition,
         offset,
     } = setup;
-    let value = OffsetCommitValue {
+    let value = crate::coordinator::persistence::OffsetCommitValue {
         offset,
         leader_epoch: -1,
         metadata: String::new(),
@@ -273,7 +275,7 @@ pub(crate) fn offset_record(setup: OffsetRecordSetup<'_>) -> krabka_protocol::re
     };
     krabka_protocol::records::Record {
         key: Some(
-            OffsetCommitValue::encode_key(
+            crate::coordinator::persistence::OffsetCommitValue::encode_key(
                 group,
                 topic,
                 partition.0,
@@ -316,7 +318,7 @@ pub(crate) async fn fetch_offset(broker: &Broker, group: &str, topic: &str, vers
     let principal = principal("admin");
     let peer = peer();
     let context = request_context(&principal, &peer, "consumer");
-    let response = handle(broker, request, version, &context)
+    let response = crate::handlers::offset_fetch::handle(broker, request, version, &context)
         .await
         .expect("OffsetFetch");
     response.topics[0].partitions[0].committed_offset
@@ -366,14 +368,14 @@ pub(crate) enum CommitWaitOutcome {
 
 impl CommitWaitOutcome {
     /// Independent Kafka error expectation for the commit-wait matrix.
-    pub(crate) fn kafka_error(self) -> Option<KafkaErrorCode> {
+    pub(crate) fn kafka_error(self) -> Option<crate::test_support::KafkaErrorCode> {
         match self {
             Self::Committed => None,
-            Self::NotLeader => Some(KafkaErrorCode(
+            Self::NotLeader => Some(crate::test_support::KafkaErrorCode(
                 crate::codes::NOT_COORDINATOR,
             )),
-            Self::TimedOut => Some(KafkaErrorCode(
-                COORDINATOR_NOT_AVAILABLE,
+            Self::TimedOut => Some(crate::test_support::KafkaErrorCode(
+                crate::codes::COORDINATOR_NOT_AVAILABLE,
             )),
         }
     }

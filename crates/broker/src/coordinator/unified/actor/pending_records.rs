@@ -8,12 +8,15 @@ use krabka_protocol::records::RecordBatch;
 
 use crate::{
     coordinator::unified::{
-        GroupCoordinator, OffsetRecordBatchBuilder, member_records::{MemberRecordFamilies, MemberRecordLists}, persistence::{GroupMetadataValue, Key, encode_key}, persistence_next_gen::{
+        GroupCoordinator, OffsetRecordBatchBuilder,
+        member_records::{MemberRecordFamilies, MemberRecordLists},
+        persistence_next_gen::{
             CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
             RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
             encode_key,
         },
-    }, error::BrokerError,
+    },
+    error::BrokerError,
 };
 
 /// The key of the deprecated k4 `ConsumerGroupPartitionMetadata` record.
@@ -126,7 +129,7 @@ pub(crate) struct PendingRecords {
     pub group_tombstone: Option<GroupTombstone>,
     /// Write the classic k2 `GroupMetadata` value (downgrade flip).
     pub classic_group_metadata:
-        Option<GroupMetadataValue>,
+        Option<crate::coordinator::unified::persistence::GroupMetadataValue>,
     /// The records that follow these in the same batch, such as a
     /// heartbeat's own records after the records of Kafka's `replaceMember`.
     pub then: Option<Box<PendingRecords>>,
@@ -226,8 +229,8 @@ impl PendingRecords {
 
         if self.classic_group_metadata_tombstone {
             batch.push(
-                encode_key(
-                    &Key::GroupMetadata {
+                crate::coordinator::unified::persistence::encode_key(
+                    &crate::coordinator::unified::persistence::Key::GroupMetadata {
                         group_id: group(),
                     },
                 )?,
@@ -344,8 +347,8 @@ impl PendingRecords {
         }
         if let Some(v) = &self.classic_group_metadata {
             batch.push(
-                encode_key(
-                    &Key::GroupMetadata {
+                crate::coordinator::unified::persistence::encode_key(
+                    &crate::coordinator::unified::persistence::Key::GroupMetadata {
                         group_id: group(),
                     },
                 )?,
@@ -422,10 +425,14 @@ mod tests {
     use super::*;
     use crate::{
         coordinator::unified::{
-            ClientIdentity, GroupSeed, actor::{
-                persistence::full_pending_records, test_support::{ConsumerMemberSetup, make_coordinator, subscribed_member},
-            }, consumer_state::{ClassicMemberFacade, GroupState}, persistence::MAX_STRING_BYTES, persistence_next_gen::MemberAssignmentState,
-        }, error::BrokerError,
+            actor::{
+                persistence::full_pending_records,
+                test_support::{make_coordinator, subscribed_member},
+            },
+            consumer_state::GroupState,
+            persistence_next_gen::MemberAssignmentState,
+        },
+        error::BrokerError,
     };
 
     #[test]
@@ -568,7 +575,7 @@ mod tests {
                 p.classic_group_metadata.as_mut().unwrap().members[0].client_host = s;
             }),
         ];
-        let limit = MAX_STRING_BYTES;
+        let limit = crate::coordinator::unified::persistence::MAX_STRING_BYTES;
         for (name, set) in fields {
             for (length, encodes) in [(limit, true), (limit + 1, false)] {
                 let mut pending = every_record();
@@ -604,8 +611,8 @@ mod tests {
         state.target.epoch = 6;
 
         let mut m = subscribed_member(
-            ConsumerMemberSetup {
-                client: ClientIdentity {
+            crate::coordinator::unified::actor::test_support::ConsumerMemberSetup {
+                client: crate::coordinator::unified::ClientIdentity {
                     id: "client-a",
                     host: "h",
                 },
@@ -618,7 +625,7 @@ mod tests {
         m.assigned_partitions.insert(topic, vec![0, 1]);
         m.assignment_epochs.insert(topic, [(0, 4), (1, 7)].into());
         m.classic = Some(
-            ClassicMemberFacade {
+            crate::coordinator::unified::consumer_state::ClassicMemberFacade {
                 supported_protocols: vec![(
                     "range".to_string(),
                     bytes::Bytes::from_static(b"meta"),
@@ -643,7 +650,7 @@ mod tests {
         pending.apply_to_cache(&coordinator, "g");
         let seed = coordinator.cached_seed("g").expect("cached seed");
 
-        let expected = GroupSeed {
+        let expected = crate::coordinator::unified::GroupSeed {
             has_subscription_metadata_record: false,
             group_epoch: 7,
             metadata_hash: 0,

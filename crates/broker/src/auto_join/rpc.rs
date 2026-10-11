@@ -18,10 +18,8 @@ use krabka_protocol::{
     },
 };
 
-use crate::{host_port::parse_host_port, network::client::InterBrokerClient};
-
 pub(super) async fn send_remove_raft_voter(
-    client: &InterBrokerClient,
+    client: &crate::network::client::InterBrokerClient,
     protocol: krabka_security::ListenerProtocol,
     server_name: &str,
     target: &str,
@@ -47,7 +45,7 @@ pub(super) async fn send_remove_raft_voter(
 }
 
 pub(super) async fn send_update_voter(
-    client: &InterBrokerClient,
+    client: &crate::network::client::InterBrokerClient,
     protocol: krabka_security::ListenerProtocol,
     server_name: &str,
     target: &str,
@@ -77,7 +75,7 @@ pub(super) async fn send_update_voter(
 /// decoded response. A fresh connection per attempt mirrors
 /// `Controller::forward_submit_to`.
 pub(super) async fn send_add_raft_voter(
-    client: &InterBrokerClient,
+    client: &crate::network::client::InterBrokerClient,
     protocol: krabka_security::ListenerProtocol,
     server_name: &str,
     target: &str,
@@ -106,7 +104,7 @@ pub(super) async fn send_add_raft_voter(
 
 /// One fresh connection per attempt; close it even when the request fails.
 async fn controller_request(
-    client: &InterBrokerClient,
+    client: &crate::network::client::InterBrokerClient,
     protocol: krabka_security::ListenerProtocol,
     server_name: &str,
     target: &str,
@@ -136,7 +134,7 @@ async fn controller_request(
 /// Splits a `<host>:<port>` bootstrap server, dropping the brackets of an IPv6
 /// literal so the dialer resolves the bare address.
 fn split_bootstrap_server(target: &str) -> Result<(String, u16), String> {
-    let (host, port) = parse_host_port(target)
+    let (host, port) = crate::host_port::parse_host_port(target)
         .ok_or_else(|| format!("bootstrap server {target:?} must use <host>:<port>"))?;
     Ok((host.trim_matches(['[', ']']).to_owned(), port))
 }

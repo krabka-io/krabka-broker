@@ -93,7 +93,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::AuthorizationResult, handlers::RequestContext, test_support::{DenyAll, dispatch_context, peer, principal, start_group_broker_no_audit, test_ctx},
+        authorizer::AuthorizationResult,
+        test_support::{DenyAll, peer, principal, test_ctx},
     };
 
     const VERSION: i16 = 2;
@@ -110,7 +111,7 @@ mod tests {
     async fn drive(
         broker: &Broker,
         req: &DeleteGroupsRequest,
-        ctx: &RequestContext<'_>,
+        ctx: &crate::handlers::RequestContext<'_>,
     ) -> DeleteGroupsResponse {
         handle(broker, req.clone(), VERSION, ctx)
             .await
@@ -120,7 +121,7 @@ mod tests {
     #[tokio::test]
     async fn handle_denies_delete_for_each_group() {
         let (broker_handle, _dir) =
-            start_group_broker_no_audit(Arc::new(DenyAll)).await;
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
         request_identity!((p, peer), principal("alice"));
         let req = request(&["group-a", "group-b"]);
@@ -163,7 +164,7 @@ mod tests {
     #[tokio::test]
     async fn handle_deduplicates_ids_and_appends_denied_rows() {
         let (broker_handle, _dir) =
-            start_group_broker_no_audit(Arc::new(DenyGroupNamedDenied)).await;
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyGroupNamedDenied)).await;
         let broker = broker_handle.broker_arc_for_test();
         request_identity!((p, peer), principal("alice"));
         let response = |rows: &[(&str, i16)]| DeleteGroupsResponse {
@@ -244,7 +245,7 @@ mod tests {
         use krabka_protocol::{Decode as _, Encode as _};
 
         let (broker_handle, _dir) =
-            start_group_broker_no_audit(Arc::new(DenyAll)).await;
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "alice");
         let req = request(&["group-a", "group-b"]);
@@ -253,7 +254,7 @@ mod tests {
         for version in [2_i16, 3] {
             let mut body = bytes::BytesMut::new();
             req.encode(&mut body, version).expect("encode request");
-            let bytes = dispatch_context(
+            let bytes = crate::test_support::dispatch_context(
                 &broker,
                 krabka_protocol::api_key::ApiKey::DeleteGroups as i16,
                 version,

@@ -17,7 +17,7 @@
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
-use crate::{api_catalog::UnstableApiVersions, codes, config_keys, topic_policy::{TopicPolicy, check}};
+use crate::{api_catalog::UnstableApiVersions, codes, config_keys, topic_policy::TopicPolicy};
 
 /// Build the authoritative `V1TopicConfig` record for a topic resource. The
 /// request carries the *complete* set of non-default values, so the map this
@@ -83,7 +83,7 @@ pub(super) fn topic_config_record(
     // factor, so neither is passed here. It runs after the built-in
     // validators, as `ConfigAdminManager` does: a config the broker itself
     // refuses never reaches the policy.
-    check(policy, &resource.resource_name, None, None, &overrides)
+    crate::topic_policy::check(policy, &resource.resource_name, None, None, &overrides)
         .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
@@ -96,9 +96,9 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::{config_keys::{CLEANUP_POLICY, DELIVERY_MODE, REMOTE_STORAGE_ENABLE, RETENTION_MS}, handlers::{alter_configs::test_support::{
+    use crate::handlers::alter_configs::test_support::{
         image_with_topic, image_with_topic_config, topic_resource,
-    }, test_support::check_config_result}};
+    };
 
     /// The record builder under the empty policy, which is the state of a
     /// broker with no `[topic_policy]` section. It shadows the glob-imported
@@ -126,8 +126,8 @@ mod tests {
             &topic_resource(
                 "orders",
                 &[
-                    (CLEANUP_POLICY, "compact"),
-                    (DELIVERY_MODE, "scheduled"),
+                    (crate::config_keys::CLEANUP_POLICY, "compact"),
+                    (crate::config_keys::DELIVERY_MODE, "scheduled"),
                 ],
             ),
             &image,
@@ -158,8 +158,8 @@ mod tests {
                 &topic_resource(
                     "orders",
                     &[
-                        (CLEANUP_POLICY, policy),
-                        (REMOTE_STORAGE_ENABLE, "true"),
+                        (crate::config_keys::CLEANUP_POLICY, policy),
+                        (crate::config_keys::REMOTE_STORAGE_ENABLE, "true"),
                     ],
                 ),
                 &image,
@@ -195,8 +195,8 @@ mod tests {
             &topic_resource(
                 "orders",
                 &[
-                    (CLEANUP_POLICY, "delete"),
-                    (REMOTE_STORAGE_ENABLE, "true"),
+                    (crate::config_keys::CLEANUP_POLICY, "delete"),
+                    (crate::config_keys::REMOTE_STORAGE_ENABLE, "true"),
                 ],
             ),
             &image,
@@ -204,7 +204,7 @@ mod tests {
         .expect("a tiered delete-policy topic is valid");
 
         let expected =
-            expected_delete_policy_record((REMOTE_STORAGE_ENABLE, "true"));
+            expected_delete_policy_record((crate::config_keys::REMOTE_STORAGE_ENABLE, "true"));
         assert!(record == expected);
     }
 
@@ -216,8 +216,8 @@ mod tests {
             &topic_resource(
                 "orders",
                 &[
-                    (CLEANUP_POLICY, "delete"),
-                    (DELIVERY_MODE, "scheduled"),
+                    (crate::config_keys::CLEANUP_POLICY, "delete"),
+                    (crate::config_keys::DELIVERY_MODE, "scheduled"),
                 ],
             ),
             &image,
@@ -225,7 +225,7 @@ mod tests {
         .expect("a scheduled delete-policy topic is valid");
 
         let expected =
-            expected_delete_policy_record((DELIVERY_MODE, "scheduled"));
+            expected_delete_policy_record((crate::config_keys::DELIVERY_MODE, "scheduled"));
         assert!(record == expected);
     }
 
@@ -314,7 +314,7 @@ mod tests {
 
             let result = topic_config_record(&topic_resource("orders", replacement), &image);
 
-            check_config_result(
+            crate::handlers::test_support::check_config_result(
                 result,
                 want_ok,
                 label,
@@ -328,7 +328,7 @@ mod tests {
         let image = image_with_topic("orders");
 
         let record = topic_config_record(
-            &topic_resource("orders", &[(RETENTION_MS, "60000")]),
+            &topic_resource("orders", &[(crate::config_keys::RETENTION_MS, "60000")]),
             &image,
         )
         .expect("an ordinary topic config is valid");

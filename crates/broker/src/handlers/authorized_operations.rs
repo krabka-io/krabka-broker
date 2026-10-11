@@ -206,7 +206,7 @@ mod tests {
     use crate::authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer};
 
     fn principal(name: &str) -> Principal {
-        sasl_principal(name)
+        crate::test_support::sasl_principal(name)
     }
 
     fn ctx<'a>(principal: &'a Principal, peer: &'a SocketAddr) -> RequestContext<'a> {
@@ -217,9 +217,9 @@ mod tests {
         "127.0.0.1:0".parse().unwrap()
     }
 
-    use crate::test_support::{AllowAclSetup, allow_acl, sasl_principal};
+    use crate::test_support::allow_acl;
 
-    fn acl_image(setup: AllowAclSetup<'_>) -> MetadataImage {
+    fn acl_image(setup: crate::test_support::AllowAclSetup<'_>) -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1AccessControlEntry(allow_acl(setup)));
         image
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn read_allow_on_topic_sets_read_and_describe_bits_only() {
-        let img = acl_image(AllowAclSetup {
+        let img = acl_image(crate::test_support::AllowAclSetup {
             resource_name: "foo",
             ..Default::default()
         });
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn write_allow_on_topic_sets_write_and_describe_only() {
-        let img = acl_image(AllowAclSetup {
+        let img = acl_image(crate::test_support::AllowAclSetup {
             resource_name: "foo",
 
             operation: AclOperation::Write,
@@ -427,7 +427,7 @@ mod tests {
             ),
         ];
         for (granted, expected) in rows {
-            let img = acl_image(AllowAclSetup {
+            let img = acl_image(crate::test_support::AllowAclSetup {
                 resource_type: ResourceType::Group,
                 resource_name: "cg",
 
@@ -441,13 +441,13 @@ mod tests {
 
     #[test]
     fn deny_wins_the_exact_operation_but_not_its_implied_describe() {
-        let mut img = acl_image(AllowAclSetup {
+        let mut img = acl_image(crate::test_support::AllowAclSetup {
             resource_name: "foo",
             ..Default::default()
         });
         img.apply(&MetadataRecord::V1AccessControlEntry(AclEntry {
             permission_type: PermissionType::Deny,
-            ..allow_acl(AllowAclSetup {
+            ..allow_acl(crate::test_support::AllowAclSetup {
                 resource_name: "foo",
                 ..Default::default()
             })

@@ -44,9 +44,7 @@ mod tests {
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
     use uuid::Uuid;
 
-    use crate::test_support::broker_registration;
-
-use super::*;
+    use super::*;
 
     fn image_with_broker(node_id: u64, broker_epoch: i64) -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::nil());
@@ -54,7 +52,7 @@ use super::*;
             BrokerRegistrationRecord {
                 broker_epoch,
                 host: "localhost".into(),
-                ..broker_registration(krabka_raft::NodeId(node_id))
+                ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
             },
         ));
         image

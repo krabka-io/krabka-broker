@@ -5,7 +5,8 @@ use std::sync::Arc;
 use krabka_metadata::{AclEntry, MetadataRecord};
 
 use crate::{
-    authorizer::{Authorizer, SimpleAclAuthorizer}, broker::BrokerHandle, handlers::acl_wire::binding_filter::AclBindingFilter, test_support::{AllowAclSetup, allow_acl},
+    authorizer::{Authorizer, SimpleAclAuthorizer},
+    broker::BrokerHandle,
 };
 
 pub(super) const RESOURCE_TYPE_TOPIC: i8 = 2;
@@ -28,7 +29,7 @@ pub(super) fn configured_authorizer() -> Arc<dyn Authorizer> {
 
 /// The matching orders ACL shared by live ACL handler fixtures.
 pub(super) fn alice_orders_acl() -> AclEntry {
-    allow_acl(AllowAclSetup::default())
+    crate::test_support::allow_acl(crate::test_support::AllowAclSetup::default())
 }
 
 /// Independent wire oracle for a successful deletion of the standard orders ACL.
@@ -115,7 +116,7 @@ macro_rules! empty_match_acl_filter {
 }
 
 pub(super) fn expected_empty_match_filter()
--> AclBindingFilter {
+-> crate::handlers::acl_wire::binding_filter::AclBindingFilter {
     use crate::handlers::acl_wire::binding_filter::{
         AclBindingFilter, AxisFilter, PatternTypeFilter,
     };

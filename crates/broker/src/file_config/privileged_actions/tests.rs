@@ -8,10 +8,11 @@ use tempfile::TempDir;
 
 use super::{FileBreakGlassConfig, FileFreezeConfig, FileOperatorKey};
 use crate::{
-    break_glass::action_name, config::{BackgroundUncleanRecovery, BrokerConfig}, file_config::{FileConfig, FileConfigError, test_support::configured},
+    config::BackgroundUncleanRecovery,
+    file_config::{FileConfig, FileConfigError},
 };
 
-fn check_operator_key_refusal(file: FileConfig, cfg: &mut BrokerConfig, case: &str) {
+fn check_operator_key_refusal(file: FileConfig, cfg: &mut crate::config::BrokerConfig, case: &str) {
     assert!(let Err(error) = file.apply_to(cfg), "case {case}");
     check!(
         matches!(error, FileConfigError::OperatorKeys(_)),
@@ -186,12 +187,12 @@ fn background_unclean_recovery_accepts_exactly_three_spellings() {
 fn configured_privileged_actions(
     directory: &TempDir,
     sections: &str,
-) -> BrokerConfig {
+) -> crate::config::BrokerConfig {
     let source = format!(
         "{}\n{sections}",
         operator_key_fixture(directory, "alice-yubi", "User:alice")
     );
-    configured(&source, "parse config").expect("apply config")
+    crate::file_config::test_support::configured(&source, "parse config").expect("apply config")
 }
 
 #[test]
@@ -226,7 +227,7 @@ fn freeze_and_break_glass_sections_apply_their_documented_defaults() {
 
 #[test]
 fn absent_privileged_action_sections_retain_the_broker_defaults() {
-    let cfg = configured("", "parse empty config")
+    let cfg = crate::file_config::test_support::configured("", "parse empty config")
         .expect("apply empty config");
 
     check!(cfg.operator_keys.is_empty());
@@ -286,7 +287,7 @@ fn break_glass_required_approvals_below_two_is_a_config_error() {
              required_approvals = {required}\n"
         );
         let file: FileConfig = toml::from_str(&toml).expect("parse config");
-        let mut cfg = BrokerConfig::default();
+        let mut cfg = crate::config::BrokerConfig::default();
 
         let outcome = file.apply_to(&mut cfg);
 
@@ -310,7 +311,7 @@ fn break_glass_required_approvals_below_two_is_a_config_error() {
 fn freeze_max_entries_of_zero_is_a_config_error() {
     let file: FileConfig =
         toml::from_str("[freeze]\nmax_entries = 0\n").expect("parse freeze section");
-    let mut cfg = BrokerConfig::default();
+    let mut cfg = crate::config::BrokerConfig::default();
 
     let error = file
         .apply_to(&mut cfg)
@@ -339,7 +340,7 @@ fn demanding_a_signature_with_no_operator_key_is_a_startup_error() {
         ),
     ] {
         let file: FileConfig = toml::from_str(toml).expect("parse config");
-        let mut cfg = BrokerConfig::default();
+        let mut cfg = crate::config::BrokerConfig::default();
 
         check_operator_key_refusal(file, &mut cfg, name);
     }
@@ -349,7 +350,7 @@ fn demanding_a_signature_with_no_operator_key_is_a_startup_error() {
 fn an_empty_signed_actions_list_needs_no_operator_key() {
     // The explicit opt-out. It is distinct from omitting the key, which
     // selects the irreversible set.
-    let cfg = configured(
+    let cfg = crate::file_config::test_support::configured(
         "[break_glass]\napprovers = [\"User:alice\"]\nsigned_actions = []\n",
         "parse break_glass section",
     )
@@ -378,7 +379,7 @@ fn a_signed_action_that_names_no_action_is_a_startup_error() {
         let file: FileConfig =
             toml::from_str(&format!("[break_glass]\nsigned_actions = [{spelling:?}]\n"))
                 .expect("parse break_glass section");
-        let mut cfg = BrokerConfig::default();
+        let mut cfg = crate::config::BrokerConfig::default();
 
         let result = file.apply_to(&mut cfg);
 
@@ -398,7 +399,7 @@ fn every_signed_action_spelling_the_broker_accepts_is_a_real_action() {
     names.extend(
         crate::break_glass::ALL_ACTIONS
             .into_iter()
-            .map(|action| action_name(action).to_owned()),
+            .map(|action| crate::break_glass::action_name(action).to_owned()),
     );
     for name in names {
         let list = name
@@ -409,7 +410,7 @@ fn every_signed_action_spelling_the_broker_accepts_is_a_real_action() {
         let file: FileConfig =
             toml::from_str(&format!("[break_glass]\nsigned_actions = [{list}]\n"))
                 .expect("parse break_glass section");
-        let mut cfg = BrokerConfig::default();
+        let mut cfg = crate::config::BrokerConfig::default();
 
         let result = file.apply_to(&mut cfg);
 
@@ -468,7 +469,7 @@ fn an_unloadable_operator_key_is_a_startup_error() {
         ),
     ] {
         let file: FileConfig = toml::from_str(&toml).expect("parse operator_keys section");
-        let mut cfg = BrokerConfig::default();
+        let mut cfg = crate::config::BrokerConfig::default();
 
         check_operator_key_refusal(file, &mut cfg, name);
         check!(cfg.operator_keys.is_empty(), "case {name}");

@@ -74,7 +74,12 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics}, broker::Broker, codes, elr::TopicElr, handlers::{RequestContext, authorized_operations::authorized_operations_bits, offline_replicas::partition_availability}, internal_topics::is_internal_topic,
+    authorizer::{AuthorizationResult, authorize_topics},
+    broker::Broker,
+    codes,
+    elr::TopicElr,
+    handlers::authorized_operations::authorized_operations_bits,
+    internal_topics::is_internal_topic,
 };
 
 context_handler! {
@@ -281,7 +286,7 @@ fn partition_response(
     // `error_code` alone for a `-1` leader here -- only `Metadata` carries
     // `LEADER_NOT_AVAILABLE` beside it -- so this row stays `NONE`. A leader
     // with no endpoint on the request's listener is `-1` as well.
-    let availability = partition_availability(
+    let availability = crate::handlers::offline_replicas::partition_availability(
         image,
         partition,
         unavailable,
@@ -334,7 +339,7 @@ fn error_topic(name: &str, error_code: i16) -> DescribeTopicPartitionsResponseTo
 fn unknown_topic_row(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
+    ctx: &crate::handlers::RequestContext<'_>,
     name: &str,
 ) -> DescribeTopicPartitionsResponseTopic {
     let error_code = if validate_topic_name(name).is_ok() {
@@ -412,7 +417,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::AllowAllAuthorizer, broker::BrokerHandle, elr::state::test_records, handlers::{RequestContext, test_support::{replicated_partition, single_replica_partition}}, test_support::{PartitionCount, TopicSetup},
+        broker::BrokerHandle,
+        test_support::{PartitionCount, TopicSetup},
     };
 
     const VERSION: i16 = krabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
@@ -468,7 +474,7 @@ mod tests {
         for index in 0..partitions.0 {
             records.push(MetadataRecord::V1Partition(PartitionRecord {
                 directories: vec![uuid::Uuid::nil()],
-                ..single_replica_partition(
+                ..crate::handlers::test_support::single_replica_partition(
                     name,
                     krabka_ids::PartitionIndex(index),
                     NodeId(1),
@@ -565,7 +571,7 @@ mod tests {
     async fn describe(
         broker: &Broker,
         request: DescribeTopicPartitionsRequest,
-        ctx: &RequestContext<'_>,
+        ctx: &crate::handlers::RequestContext<'_>,
     ) -> DescribeTopicPartitionsResponse {
         handle(broker, request, VERSION, ctx).await.expect("handle")
     }
@@ -856,7 +862,7 @@ mod tests {
     async fn budget_exhausted_at_topic_boundary_emits_no_row_for_the_next_topic() {
         for next_topic_exists in [true, false] {
             let (broker_handle, _dir) =
-                start_broker(Arc::new(AllowAllAuthorizer)).await;
+                start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
             seed_topic(
                 &broker_handle,
                 TopicSetup {
@@ -979,7 +985,7 @@ mod tests {
                 leader_epoch: krabka_metadata::LeaderEpoch(7),
                 directories: vec![uuid::Uuid::nil(); 3],
                 partition_epoch: 4,
-                ..replicated_partition(
+                ..crate::handlers::test_support::replicated_partition(
                     crate::handlers::test_support::ReplicatedPartitionSetup {
                         partition: krabka_ids::PartitionIndex(index),
                         leader: NodeId(1),
@@ -999,7 +1005,7 @@ mod tests {
             partition(0),
             partition(1),
         ];
-        records.extend(test_records("orders", elr_config));
+        records.extend(crate::elr::state::test_records("orders", elr_config));
         handle
             .broker_arc_for_test()
             .controller
@@ -1019,7 +1025,7 @@ mod tests {
     #[tokio::test]
     async fn response_partition_carries_the_elr_the_image_holds() {
         let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic_with_elr(&broker_handle, "0:2:3").await;
         let broker = broker_handle.broker_arc_for_test();
         let topic = orders_topic(&broker).await;
@@ -1054,7 +1060,7 @@ mod tests {
     #[tokio::test]
     async fn response_partition_carries_leader_epoch() {
         let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic_with_epoch(&broker_handle, LeaderEpoch(9)).await;
         let broker = broker_handle.broker_arc_for_test();
         let topic = orders_topic(&broker).await;

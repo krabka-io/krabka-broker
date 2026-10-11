@@ -11,7 +11,8 @@ use assert2::assert;
 use krabka_raft::ControllerHandle;
 
 use crate::{
-    coordinator::{GroupCoordinator, persistence::GroupMetadataValue, test_support::{OffsetRecordSetup, coordinator_with_config, default_coordinator, offset_record}, unified::{ImageMetadataProvider, actor::test_support::empty_metadata, config::NextGenConfig, offsets_log::{OffsetsLog, ProductionOffsetsLog}, persistence_next_gen::ClassicMemberMetadata}}, error::BrokerError, partition_registry::PartitionRegistry,
+    coordinator::{GroupCoordinator, persistence::GroupMetadataValue},
+    partition_registry::PartitionRegistry,
 };
 
 /// Start a controller, wait until it reports a leader, and return the
@@ -37,15 +38,15 @@ pub(super) fn test_coordinator(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     partitions: &Arc<PartitionRegistry>,
 ) -> Arc<GroupCoordinator> {
-    let offsets_log: Arc<dyn OffsetsLog> = Arc::new(
-        ProductionOffsetsLog::new(
+    let offsets_log: Arc<dyn crate::coordinator::unified::offsets_log::OffsetsLog> = Arc::new(
+        crate::coordinator::unified::offsets_log::ProductionOffsetsLog::new(
             partitions.clone(),
             controller.clone(),
             krabka_raft::NodeId(1),
         ),
     );
-    default_coordinator(
-        Arc::new(ImageMetadataProvider {
+    crate::coordinator::test_support::default_coordinator(
+        Arc::new(crate::coordinator::unified::ImageMetadataProvider {
             controller: controller.clone(),
         }),
         offsets_log,
@@ -60,7 +61,7 @@ pub(super) fn test_coordinator(
 /// and `finalize` replay path directly with it.
 pub(super) fn bare_coordinator() -> Arc<GroupCoordinator> {
     bare_coordinator_with_mailbox(
-        NextGenConfig::default().actor_mailbox_capacity,
+        crate::coordinator::unified::config::NextGenConfig::default().actor_mailbox_capacity,
     )
 }
 
@@ -70,12 +71,12 @@ pub(super) fn bare_coordinator() -> Arc<GroupCoordinator> {
 pub(super) fn bare_coordinator_with_mailbox(
     actor_mailbox_capacity: usize,
 ) -> Arc<GroupCoordinator> {
-    coordinator_with_config(
-        NextGenConfig {
+    crate::coordinator::test_support::coordinator_with_config(
+        crate::coordinator::unified::config::NextGenConfig {
             actor_mailbox_capacity,
-            ..NextGenConfig::default()
+            ..crate::coordinator::unified::config::NextGenConfig::default()
         },
-        empty_metadata(),
+        crate::coordinator::unified::actor::test_support::empty_metadata(),
         Arc::new(crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog::default()),
     )
 }
@@ -113,7 +114,7 @@ pub(super) fn classic_group_record(
 /// Group and member metadata written by an upgrade, in log order.
 pub(super) fn consumer_group_records(
     epoch: i32,
-    classic: Option<ClassicMemberMetadata>,
+    classic: Option<crate::coordinator::unified::persistence_next_gen::ClassicMemberMetadata>,
 ) -> [(bytes::Bytes, bytes::Bytes); 2] {
     use crate::coordinator::unified::persistence_next_gen as ng;
     [
@@ -231,8 +232,8 @@ pub(super) fn commit_record_for_group(
     partition: i32,
     offset: i64,
 ) -> krabka_protocol::records::Record {
-    offset_record(
-        OffsetRecordSetup {
+    crate::coordinator::test_support::offset_record(
+        crate::coordinator::test_support::OffsetRecordSetup {
             group,
             partition: krabka_ids::PartitionIndex(partition),
             offset: krabka_log::Offset(offset),
@@ -252,7 +253,7 @@ pub(super) fn replay_log(
     records: impl IntoIterator<Item = (bytes::Bytes, Option<bytes::Bytes>)>,
 ) -> (
     Arc<GroupCoordinator>,
-    Result<super::replay::Replayed, BrokerError>,
+    Result<super::replay::Replayed, crate::error::BrokerError>,
 ) {
     use krabka_protocol::records::{Record, RecordBatch};
     let coordinator = bare_coordinator();

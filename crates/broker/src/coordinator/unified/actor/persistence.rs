@@ -15,7 +15,11 @@ use super::{
     pending_records::{PartitionMetadataWrite, PendingRecords},
 };
 use crate::coordinator::unified::{
-    classic_state::ClassicGroup, consumer_state::{GroupState, MemberState}, member_records::{MemberValues, append_target_records}, offsets_log::OffsetsLog, persistence::{GroupMetadataValue, sorted_partitions}, persistence_next_gen::{
+    classic_state::ClassicGroup,
+    consumer_state::{GroupState, MemberState},
+    member_records::MemberValues,
+    offsets_log::OffsetsLog,
+    persistence_next_gen::{
         ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
         GroupMetadataValue, MemberMetadataValue, TargetAssignmentMemberValue,
         TargetAssignmentMetadataValue,
@@ -65,7 +69,7 @@ fn current_topic_partitions(
     member: &MemberState,
     partitions: &HashMap<Uuid, Vec<i32>>,
 ) -> Vec<CurrentTopicPartitions> {
-    sorted_partitions(partitions)
+    crate::coordinator::unified::persistence::sorted_partitions(partitions)
         .into_iter()
         .map(|(topic_id, partitions)| CurrentTopicPartitions {
             topic_id,
@@ -191,7 +195,7 @@ impl Recorder {
                 assignment_epoch: state.target.epoch,
                 assignment_timestamp_ms: state.assignment_timestamp_ms(),
             });
-            append_target_records(
+            crate::coordinator::unified::member_records::append_target_records(
                 &mut pending.target_per_member,
                 changed,
                 &state.target.per_member,
@@ -259,7 +263,7 @@ pub(crate) fn full_pending_records(state: &GroupState) -> PendingRecords {
 pub(crate) fn classic_group_metadata_record(
     state: &ClassicGroup,
     now_ms: i64,
-) -> GroupMetadataValue {
+) -> crate::coordinator::unified::persistence::GroupMetadataValue {
     use crate::coordinator::unified::persistence::{GroupMetadataValue, MemberMetadata};
     let members = state
         .members
@@ -328,7 +332,7 @@ mod tests {
     use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
 
     use super::*;
-    use crate::coordinator::unified::{ClientIdentity, actor::member_state::build_member};
+    use crate::coordinator::unified::actor::member_state::build_member;
 
     fn joined(member_id: &str) -> MemberState {
         super::super::test_support::subscribed_member(
@@ -523,7 +527,7 @@ mod tests {
             state.add_or_update_member(build_member(
                 member_id,
                 &ConsumerGroupHeartbeatRequest::default(),
-                ClientIdentity {
+                crate::coordinator::unified::ClientIdentity {
                     id: "client",
                     host: "host",
                 },

@@ -17,7 +17,7 @@ use super::{
 };
 // A metadata image that holds each group config in `overrides`: a group id
 // and its `share.*` entries.
-use crate::coordinator::unified::{share::actor::test_support::InitializedTopicSetup, test_support::{check_group_session_timeout, group_config_image as group_image}};
+use crate::coordinator::unified::test_support::group_config_image as group_image;
 use crate::coordinator::unified::{
     GroupCoordinator,
     share::{actor::test_support::TopicMetadataSetup, config::ShareGroupConfig},
@@ -125,7 +125,7 @@ async fn a_group_expires_a_member_by_its_own_session_timeout() {
             ],
         )],
     );
-    check_group_session_timeout(
+    crate::coordinator::unified::test_support::check_group_session_timeout(
         |id| coordinator.get_or_create_share(id),
         join,
     )
@@ -154,7 +154,7 @@ async fn a_group_assigns_no_sooner_than_its_own_assignment_interval() {
             let handle = coordinator.get_or_create_share(id);
             seed_initialized(
                 &handle,
-                InitializedTopicSetup {
+                crate::coordinator::unified::share::actor::test_support::InitializedTopicSetup {
                     topic_id,
                     partitions: vec![
                         krabka_ids::PartitionIndex(0),

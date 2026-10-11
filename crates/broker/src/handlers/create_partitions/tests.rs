@@ -9,10 +9,12 @@ use krabka_protocol::owned::create_partitions_response::CreatePartitionsResponse
 
 use super::*;
 use crate::{
-    authorizer::AllowAllAuthorizer, broker::{Broker, BrokerHandle}, handlers::{RequestContext, create_partitions::test_support::{
+    broker::Broker,
+    handlers::create_partitions::test_support::{
         PartitionMutation, PartitionTopicSetup, SeedTopicSetup, VERSION, assn, expected_response,
         expected_result, request, seed_controller_quota, seed_topic, topic_req,
-    }, test_support::{TopicPartitionCount, replica_availability}}, test_support::{DenyAll, fence_remote_broker, make_witness, peer, principal, seed_remote_broker},
+    },
+    test_support::{DenyAll, peer, principal},
 };
 
 crate::test_support::context_helper!(client_id = "admin-client");
@@ -22,7 +24,7 @@ use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 async fn drive(
     broker: &Broker,
     req: &CreatePartitionsRequest,
-    ctx: &RequestContext<'_>,
+    ctx: &crate::handlers::RequestContext<'_>,
 ) -> CreatePartitionsResponse {
     handle(broker, req.clone(), VERSION, ctx)
         .await
@@ -38,7 +40,7 @@ struct PartitionRowsCaseSetup {
 
 async fn check_topic_rows(
     broker: &Broker,
-    ctx: &RequestContext<'_>,
+    ctx: &crate::handlers::RequestContext<'_>,
     setup: PartitionRowsCaseSetup,
 ) {
     let response = drive(broker, &request(setup.topics, setup.mutation), ctx).await;
@@ -302,7 +304,7 @@ async fn strict_create_partitions_rejects_after_quota_exhaustion() {
 
 /// Commit topic `grow` with one partition on the remote brokers 3 and 4, so
 /// its replication factor is 2.
-async fn seed_remote_topic(handle: &BrokerHandle) {
+async fn seed_remote_topic(handle: &crate::broker::BrokerHandle) {
     let replicas = vec![krabka_raft::NodeId(3), krabka_raft::NodeId(4)];
     handle
         .broker_arc_for_test()
@@ -405,17 +407,17 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
 
     for (fenced, witnesses, lists, error_code, error_message, partitions) in rows {
         let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         for node_id in [2, 3, 4] {
-            seed_remote_broker(&broker_handle, krabka_raft::NodeId(node_id))
+            crate::test_support::seed_remote_broker(&broker_handle, krabka_raft::NodeId(node_id))
                 .await;
         }
         seed_remote_topic(&broker_handle).await;
         for &node_id in witnesses {
-            make_witness(&broker_handle, node_id).await;
+            crate::test_support::make_witness(&broker_handle, node_id).await;
         }
         for &node_id in fenced {
-            fence_remote_broker(&broker_handle, node_id).await;
+            crate::test_support::fence_remote_broker(&broker_handle, node_id).await;
         }
         let broker = broker_handle.broker_arc_for_test();
         let count = 1 + i32::try_from(lists.len()).expect("count");
@@ -500,14 +502,14 @@ async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_
 
     for (fenced, shutting_down, outcome) in rows {
         let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         for node_id in [3, 4] {
-            seed_remote_broker(&broker_handle, krabka_raft::NodeId(node_id))
+            crate::test_support::seed_remote_broker(&broker_handle, krabka_raft::NodeId(node_id))
                 .await;
         }
         seed_remote_topic(&broker_handle).await;
         for &node_id in fenced {
-            fence_remote_broker(&broker_handle, node_id).await;
+            crate::test_support::fence_remote_broker(&broker_handle, node_id).await;
         }
         for &node_id in shutting_down {
             crate::test_support::begin_controlled_shutdown(&broker_handle, node_id).await;
@@ -548,7 +550,7 @@ async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_
         for record in &added {
             let replicas = &record.replicas;
             let (fenced_flags, isr) =
-                replica_availability(replicas, fenced);
+                crate::handlers::test_support::replica_availability(replicas, fenced);
             check!(
                 replicas.len() == 2
                     && fenced_flags.iter().filter(|flag| **flag).count() == fenced_replicas
@@ -587,7 +589,7 @@ async fn rows_follow_kafkas_duplicate_and_count_checks() {
     }
     let duplicate = || row("t", codes::INVALID_REQUEST, Some("Duplicate topic name."));
     let four_partition_growth = topic_req(PartitionTopicSetup {
-        count: TopicPartitionCount(4),
+        count: crate::handlers::test_support::TopicPartitionCount(4),
         ..Default::default()
     });
     let duplicate_growth = vec![four_partition_growth.clone(), four_partition_growth.clone()];
@@ -668,7 +670,7 @@ async fn rows_follow_kafkas_duplicate_and_count_checks() {
     let mut expected = Vec::with_capacity(cases.len());
     for (label, topics, mutation, results) in cases {
         let (broker_handle, _dir) =
-            start_broker(Arc::new(AllowAllAuthorizer)).await;
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic(
             &broker_handle,
             crate::handlers::create_partitions::test_support::SeedTopicSetup::default(),

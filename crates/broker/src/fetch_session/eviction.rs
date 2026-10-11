@@ -118,8 +118,11 @@ mod tests {
 
     use super::*;
     use crate::fetch_session::{
-        SessionDecision, order::MIN_EVICTION, test_support::{
-            NAME_FETCH_VERSION, RequestSessionEpoch, RequestSessionId, SessionAllocationSetup, SessionPrivilege, SessionRequestSetup, SessionSlotCount, TICK, allocate_session, manual_cache, req,
+        SessionDecision,
+        order::MIN_EVICTION,
+        test_support::{
+            NAME_FETCH_VERSION, SessionAllocationSetup, SessionPrivilege, SessionRequestSetup,
+            TICK, allocate_session, manual_cache, req,
         },
     };
 
@@ -200,8 +203,8 @@ mod tests {
     /// which is what Kafka's `touch` records.
     fn use_session(
         cache: &FetchSessionCache,
-        id: RequestSessionId,
-        epoch: RequestSessionEpoch,
+        id: crate::fetch_session::test_support::RequestSessionId,
+        epoch: crate::fetch_session::test_support::RequestSessionEpoch,
     ) {
         assert!(matches!(
             cache.classify(
@@ -220,7 +223,7 @@ mod tests {
     /// displace another, so Kafka answers the newcomer sessionless instead.
     #[test]
     fn a_full_cache_refuses_a_newcomer_while_its_sessions_are_active() {
-        let (cache, clock) = manual_cache(SessionSlotCount(2));
+        let (cache, clock) = manual_cache(crate::fetch_session::test_support::SessionSlotCount(2));
         let a = allocate_session(
             &cache,
             SessionAllocationSetup {
@@ -283,7 +286,7 @@ mod tests {
         ];
         for (label, holder_is_follower, newcomer_is_follower) in cases {
             let (cache, clock) =
-                manual_cache(SessionSlotCount(2));
+                manual_cache(crate::fetch_session::test_support::SessionSlotCount(2));
             let stale = allocate_session(
                 &cache,
                 SessionAllocationSetup {
@@ -327,7 +330,7 @@ mod tests {
     /// An incremental fetch is a use, so a busy session is not the stale one.
     #[test]
     fn an_incremental_fetch_keeps_a_session_from_going_stale() {
-        let (cache, clock) = manual_cache(SessionSlotCount(2));
+        let (cache, clock) = manual_cache(crate::fetch_session::test_support::SessionSlotCount(2));
         let busy = allocate_session(
             &cache,
             SessionAllocationSetup {
@@ -350,8 +353,8 @@ mod tests {
             .expect("manual time moves forward");
         use_session(
             &cache,
-            RequestSessionId(busy),
-            RequestSessionEpoch(1),
+            crate::fetch_session::test_support::RequestSessionId(busy),
+            crate::fetch_session::test_support::RequestSessionEpoch(1),
         );
         clock
             .advance(Duration::from_secs(30))
@@ -384,7 +387,7 @@ mod tests {
         ];
         for (label, newcomer_partitions, displaces) in cases {
             let (cache, clock) =
-                manual_cache(SessionSlotCount(1));
+                manual_cache(crate::fetch_session::test_support::SessionSlotCount(1));
             let held = allocate_session(
                 &cache,
                 SessionAllocationSetup {
@@ -400,8 +403,8 @@ mod tests {
             // and it keeps the session from being stale.
             use_session(
                 &cache,
-                RequestSessionId(held),
-                RequestSessionEpoch(1),
+                crate::fetch_session::test_support::RequestSessionId(held),
+                crate::fetch_session::test_support::RequestSessionEpoch(1),
             );
 
             let newcomer = allocate_session(
@@ -432,7 +435,7 @@ mod tests {
     /// consumer's incremental session.
     #[test]
     fn a_follower_displaces_a_consumer_session_that_is_still_active() {
-        let (cache, _clock) = manual_cache(SessionSlotCount(1));
+        let (cache, _clock) = manual_cache(crate::fetch_session::test_support::SessionSlotCount(1));
         let consumer = allocate_session(
             &cache,
             SessionAllocationSetup {
@@ -486,7 +489,7 @@ mod tests {
     /// stale, or older than the minimum and smaller than the newcomer.
     #[test]
     fn a_recent_follower_session_is_not_displaced_by_another_follower() {
-        let (cache, clock) = manual_cache(SessionSlotCount(1));
+        let (cache, clock) = manual_cache(crate::fetch_session::test_support::SessionSlotCount(1));
         let first = allocate_session(
             &cache,
             SessionAllocationSetup {
@@ -519,7 +522,7 @@ mod tests {
         // from the map. If it did not, the index would still name the closed
         // session as the stale one and the next allocation into a full cache
         // would go looking for a session that is no longer there.
-        let (cache, clock) = manual_cache(SessionSlotCount(2));
+        let (cache, clock) = manual_cache(crate::fetch_session::test_support::SessionSlotCount(2));
         let closed = allocate_session(
             &cache,
             SessionAllocationSetup {
@@ -569,7 +572,7 @@ mod tests {
 
     #[test]
     fn counters_track_eviction() {
-        let (cache, clock) = manual_cache(SessionSlotCount(1));
+        let (cache, clock) = manual_cache(crate::fetch_session::test_support::SessionSlotCount(1));
         allocate_session(
             &cache,
             SessionAllocationSetup {

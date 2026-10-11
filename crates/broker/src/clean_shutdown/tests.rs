@@ -4,8 +4,6 @@
 use assert2::assert;
 use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId};
 
-use crate::test_support::broker_registration;
-
 use super::{
     FILE_NAME, FORMAT_VERSION, ProofError, UNPROVEN, decode, encode, restart_was_clean, take, write,
 };
@@ -24,7 +22,7 @@ fn image_registering_node_at(broker_epoch: i64) -> MetadataImage {
                 "broker-2", 9092,
             )],
             log_dirs: vec![uuid::Uuid::from_u128(11)],
-            ..broker_registration(NODE)
+            ..crate::test_support::broker_registration(NODE)
         },
     ));
     image

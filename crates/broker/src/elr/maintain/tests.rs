@@ -9,7 +9,8 @@ use krabka_metadata::{
 
 use super::{ElrPublisher, leaderless_partition_elr, next_partition_elr};
 use crate::{
-    config_keys::{MIN_INSYNC_REPLICAS, RETENTION_MS}, elr::state::{PartitionElr, TopicElr},
+    config_keys::{MIN_INSYNC_REPLICAS, RETENTION_MS},
+    elr::state::TopicElr,
 };
 
 const TOPIC: &str = "orders";
@@ -53,8 +54,8 @@ fn check_transition(
     image: &MetadataImage,
     before: &PartitionRecord,
     after: &PartitionRecord,
-    published: &PartitionElr,
-    expected: &PartitionElr,
+    published: &crate::elr::state::PartitionElr,
+    expected: &crate::elr::state::PartitionElr,
     label: &str,
 ) {
     let got = next_partition_elr(

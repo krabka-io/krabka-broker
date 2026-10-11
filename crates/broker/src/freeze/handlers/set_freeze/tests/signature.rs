@@ -16,7 +16,10 @@ use super::{
     ALICE, ALICE_KEY, ALICE_NAME, PROPOSAL, alice_key_configuration, freeze_request, sign,
 };
 use crate::{
-    break_glass::handlers::principal_name, codes, config::{BrokerConfig, FreezeConfig}, test_support::KafkaErrorCode, time_util::now_ms,
+    break_glass::handlers::principal_name,
+    codes,
+    config::{BrokerConfig, FreezeConfig},
+    time_util::now_ms,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -40,7 +43,7 @@ fn signature_requirement(base: &BrokerConfig, requirement: SignatureRequirement)
 enum SignatureExpectation {
     Unsigned,
     Verified,
-    Refused(KafkaErrorCode),
+    Refused(crate::test_support::KafkaErrorCode),
 }
 
 fn check_signature_outcome(
@@ -124,7 +127,7 @@ fn an_unsigned_freeze_is_accepted_by_default_and_refused_under_require_signature
         (
             "require_signature refuses one",
             SignatureRequirement::Required,
-            SignatureExpectation::Refused(KafkaErrorCode(
+            SignatureExpectation::Refused(crate::test_support::KafkaErrorCode(
                 codes::OPERATOR_SIGNATURE_REQUIRED,
             )),
         ),
@@ -208,7 +211,7 @@ fn a_signed_freeze_verifies_and_a_tampered_one_answers_one_code() {
                 signature: signature.clone(),
                 ..good.clone()
             },
-            SignatureExpectation::Refused(KafkaErrorCode(
+            SignatureExpectation::Refused(crate::test_support::KafkaErrorCode(
                 codes::OPERATOR_SIGNATURE_INVALID,
             )),
         ),
@@ -219,7 +222,7 @@ fn a_signed_freeze_verifies_and_a_tampered_one_answers_one_code() {
                 signature: signature.clone(),
                 ..good.clone()
             },
-            SignatureExpectation::Refused(KafkaErrorCode(
+            SignatureExpectation::Refused(crate::test_support::KafkaErrorCode(
                 codes::OPERATOR_SIGNATURE_INVALID,
             )),
         ),
@@ -230,7 +233,7 @@ fn a_signed_freeze_verifies_and_a_tampered_one_answers_one_code() {
                 signature: signature.clone(),
                 ..good.clone()
             },
-            SignatureExpectation::Refused(KafkaErrorCode(
+            SignatureExpectation::Refused(crate::test_support::KafkaErrorCode(
                 codes::OPERATOR_SIGNATURE_INVALID,
             )),
         ),

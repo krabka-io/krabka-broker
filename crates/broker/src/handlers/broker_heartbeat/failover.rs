@@ -6,8 +6,6 @@
 //! records the loss on the reporting broker's registration so every node —
 //! not just the controller leader — can see which replicas are offline.
 
-use crate::{config_keys::RecoveryStrategy, leader_election::compute_offline_dir_failover_changes, metadata_source::MetadataSource, metrics::BrokerMetrics};
-
 /// Run the KIP-112 offline-dir failover for `broker`'s reported offline dirs.
 /// It computes the partition changes, submits them together with the
 /// registration update that persists the loss, and returns any offset-aware
@@ -15,14 +13,14 @@ use crate::{config_keys::RecoveryStrategy, leader_election::compute_offline_dir_
 /// controller leader only, and the caller gates on leadership. A submit
 /// failure is logged and does not propagate.
 pub(crate) async fn failover_offline_dirs(
-    controller: &std::sync::Arc<dyn MetadataSource>,
+    controller: &std::sync::Arc<dyn crate::metadata_source::MetadataSource>,
     broker: krabka_raft::NodeId,
     offline: &std::collections::HashSet<uuid::Uuid>,
     liveness: &crate::heartbeat::controller_state::ControllerLivenessState,
-    metrics: &BrokerMetrics,
-) -> Vec<(String, i32, RecoveryStrategy)> {
+    metrics: &crate::metrics::BrokerMetrics,
+) -> Vec<(String, i32, crate::config_keys::RecoveryStrategy)> {
     let image = controller.current_image();
-    let plan = compute_offline_dir_failover_changes(
+    let plan = crate::leader_election::compute_offline_dir_failover_changes(
         &image, broker, offline, liveness, metrics,
     )
     .await;
@@ -87,9 +85,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{config_keys::RecoveryStrategy, handlers::broker_heartbeat::test_support::{
-        ElectionSetup, fake_source, image_with_dir_partition, liveness_with,
-    }, metrics::BrokerMetrics, test_support::{FakeMetadataSource, broker_registration}};
+    use crate::handlers::broker_heartbeat::test_support::{
+        fake_source, image_with_dir_partition, liveness_with,
+    };
 
     #[tokio::test]
     async fn failover_offline_dirs_submits_change_for_offline_leader() {
@@ -142,7 +140,7 @@ mod tests {
             incarnation_id: Uuid::from_u128(u128::from(node_id)),
             host: format!("broker-{node_id}"),
             log_dirs: dirs.to_vec(),
-            ..broker_registration(krabka_raft::NodeId(node_id))
+            ..crate::test_support::broker_registration(krabka_raft::NodeId(node_id))
         }
     }
 
@@ -193,7 +191,7 @@ mod tests {
 
     fn two_replica_image(directories: &[Uuid]) -> krabka_metadata::MetadataImage {
         image_with_dir_partition(
-            ElectionSetup {
+            crate::handlers::broker_heartbeat::test_support::ElectionSetup {
                 replicas: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
                 isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
                 dirs: directories,
@@ -206,13 +204,13 @@ mod tests {
         img: krabka_metadata::MetadataImage,
         bad: Uuid,
     ) -> (
-        Arc<FakeMetadataSource>,
-        Vec<(String, i32, RecoveryStrategy)>,
+        Arc<crate::test_support::FakeMetadataSource>,
+        Vec<(String, i32, crate::config_keys::RecoveryStrategy)>,
     ) {
         let source = fake_source(img);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
         let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
-        let metrics = BrokerMetrics::new();
+        let metrics = crate::metrics::BrokerMetrics::new();
         let recoveries = failover_offline_dirs(
             &controller,
             krabka_audit::NodeId(1),

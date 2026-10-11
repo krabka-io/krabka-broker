@@ -17,20 +17,23 @@ use krabka_protocol::records::Record;
 use super::replay::{finalize, replay_records};
 use crate::{
     coordinator::{
-        persistence::{GroupMetadataValue, Key}, test_support::{DeletionTarget, DeletionTombstonesSetup, OffsetRecordSetup, TopicDeletionTombstonesSetup, default_coordinator, deletion_tombstones, offset_record, parsed_offset_records, replay_offset_batch as batch, topic_deletion_tombstones}, unified::{GroupCoordinator, actor::test_support::empty_metadata, offsets_log::fake::InMemoryOffsetsLog},
-    }, txn::marker::{MarkerType, build_marker_batch},
+        persistence::Key,
+        test_support::{parsed_offset_records, replay_offset_batch as batch},
+        unified::{GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog},
+    },
+    txn::marker::{MarkerType, build_marker_batch},
 };
 
 fn coordinator(log: Arc<InMemoryOffsetsLog>) -> Arc<GroupCoordinator> {
-    default_coordinator(
-        empty_metadata(),
+    crate::coordinator::test_support::default_coordinator(
+        crate::coordinator::unified::actor::test_support::empty_metadata(),
         log,
     )
 }
 
 fn commit(topic: &str, partition: i32, offset: i64) -> Record {
-    offset_record(
-        OffsetRecordSetup {
+    crate::coordinator::test_support::offset_record(
+        crate::coordinator::test_support::OffsetRecordSetup {
             topic,
             partition: krabka_ids::PartitionIndex(partition),
             offset: krabka_log::Offset(offset),
@@ -58,10 +61,10 @@ struct Row {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
-    let orders_group_tombstones = topic_deletion_tombstones(
-        TopicDeletionTombstonesSetup {
+    let orders_group_tombstones = crate::coordinator::test_support::topic_deletion_tombstones(
+        crate::coordinator::test_support::TopicDeletionTombstonesSetup {
             partitions: &[krabka_ids::PartitionIndex(0), krabka_ids::PartitionIndex(1)],
-            target: DeletionTarget::Group,
+            target: crate::coordinator::test_support::DeletionTarget::Group,
             ..Default::default()
         },
     );
@@ -71,9 +74,9 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
             committed: vec![],
             transactional: vec![],
             marker_after_delete: MarkerAfterDelete::None,
-            expected_batch: deletion_tombstones(
-                DeletionTombstonesSetup {
-                    target: DeletionTarget::Group,
+            expected_batch: crate::coordinator::test_support::deletion_tombstones(
+                crate::coordinator::test_support::DeletionTombstonesSetup {
+                    target: crate::coordinator::test_support::DeletionTarget::Group,
                     ..Default::default()
                 },
             ),
@@ -83,13 +86,13 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
             committed: vec![commit("orders", 0, 10), commit("payments", 3, 30)],
             transactional: vec![],
             marker_after_delete: MarkerAfterDelete::None,
-            expected_batch: deletion_tombstones(
-                DeletionTombstonesSetup {
+            expected_batch: crate::coordinator::test_support::deletion_tombstones(
+                crate::coordinator::test_support::DeletionTombstonesSetup {
                     offsets: &[
                         ("orders", krabka_ids::PartitionIndex(0)),
                         ("payments", krabka_ids::PartitionIndex(3)),
                     ],
-                    target: DeletionTarget::Group,
+                    target: crate::coordinator::test_support::DeletionTarget::Group,
                     ..Default::default()
                 },
             ),
@@ -115,10 +118,10 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
         // A classic GroupMetadata record makes the group exist even when it has
         // no offsets.
         let (group_key, group_value) = super::test_support::classic_group_record("g", "m1");
-        let empty_group = GroupMetadataValue {
+        let empty_group = crate::coordinator::persistence::GroupMetadataValue {
             members: vec![],
             leader: None,
-            ..GroupMetadataValue::decode_value(&group_value)
+            ..crate::coordinator::persistence::GroupMetadataValue::decode_value(&group_value)
                 .unwrap()
         };
         log.append(&mut batch(

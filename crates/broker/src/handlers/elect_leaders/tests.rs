@@ -23,7 +23,13 @@ use super::{
     partition::elect_one,
 };
 use crate::{
-    break_glass::gate::tests::{APPROVED_PROPOSAL_ID, approved_proposal}, broker::{Broker, BrokerHandle}, codes, config::BreakGlassConfig, handlers::{RequestContext, encode_response, test_support::{ReplicatedPartitionSetup, replicated_partition, single_replica_partition}}, leader_election::{ElectionType, test_support::one_partition_change}, test_support::{decode_response, start_broker_no_audit_with, test_ctx},
+    break_glass::gate::tests::{APPROVED_PROPOSAL_ID, approved_proposal},
+    broker::{Broker, BrokerHandle},
+    codes,
+    config::BreakGlassConfig,
+    handlers::RequestContext,
+    leader_election::{ElectionType, test_support::one_partition_change},
+    test_support::{start_broker_no_audit_with, test_ctx},
 };
 
 const TOPIC: &str = "orders";
@@ -51,8 +57,8 @@ fn image_with(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
     image.apply(&MetadataRecord::V1Partition(PartitionRecord {
         isr: vec![NodeId(1)],
         leader_epoch: LeaderEpoch(5),
-        ..replicated_partition(
-            ReplicatedPartitionSetup {
+        ..crate::handlers::test_support::replicated_partition(
+            crate::handlers::test_support::ReplicatedPartitionSetup {
                 topic: TOPIC,
                 leader: NodeId(1),
                 replicas: &[NodeId(1), NodeId(2)],
@@ -73,8 +79,8 @@ fn elected() -> PartitionRecord {
         isr: vec![NodeId(2)],
         leader_epoch: LeaderEpoch(6),
         partition_epoch: 1,
-        ..replicated_partition(
-            ReplicatedPartitionSetup {
+        ..crate::handlers::test_support::replicated_partition(
+            crate::handlers::test_support::ReplicatedPartitionSetup {
                 topic: TOPIC,
                 leader: NodeId(2),
                 replicas: &[NodeId(1), NodeId(2)],
@@ -357,8 +363,8 @@ fn a_whole_request_refusal_sets_the_top_level_code_and_every_named_row() {
             ..Default::default()
         };
         let refusal = super::admit(&request, denied).expect_err("the request is refused");
-        let bytes = encode_response(&refusal, version).expect("encode");
-        let decoded: ElectLeadersResponse = decode_response(&bytes, version);
+        let bytes = crate::handlers::encode_response(&refusal, version).expect("encode");
+        let decoded: ElectLeadersResponse = crate::test_support::decode_response(&bytes, version);
         check!(decoded == expected, "v{version}, denied={denied}");
     }
 }
@@ -373,7 +379,7 @@ async fn seed_preferred_topic(broker: &Broker) {
         replication_factor: 1,
     })];
     records.extend((0..3).map(|partition| {
-        MetadataRecord::V1Partition(single_replica_partition(
+        MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
             TOPIC,
             krabka_ids::PartitionIndex(partition),
             NodeId(1),

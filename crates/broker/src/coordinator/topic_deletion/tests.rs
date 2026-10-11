@@ -8,13 +8,14 @@ use krabka_metadata::{DeleteTopicRecord, MetadataRecord, TopicRecord};
 use uuid::Uuid;
 
 use super::{deleted_topics, on_topics_deleted};
-use crate::{coordinator::{
-    test_support::{fetch_offset, metadata_delta_image as image, offset_entry as entry}, unified::{
+use crate::coordinator::{
+    test_support::{metadata_delta_image as image, offset_entry as entry},
+    unified::{
         classic_state::ClassicGroup,
         group::{CoordinatorGroup, GroupKind},
         test_support::make_coord_with_log,
     },
-}, handlers::{offset_commit::handle, test_support::{CreateTopicSetup, configured_topic_request}}, test_support::start_broker_with_authorizer_no_audit};
+};
 
 krabka_macros::delete_topic_request!(delete_request);
 
@@ -135,10 +136,10 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
     const FETCH_VERSION: i16 = 7;
 
     async fn fetched_offset(broker: &Broker) -> i64 {
-        fetch_offset(broker, GROUP, TOPIC, FETCH_VERSION).await
+        crate::coordinator::test_support::fetch_offset(broker, GROUP, TOPIC, FETCH_VERSION).await
     }
 
-    let (handle, _dir) = start_broker_with_authorizer_no_audit(Arc::new(
+    let (handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(Arc::new(
         crate::authorizer::AllowAllAuthorizer,
     ))
     .await;
@@ -151,8 +152,8 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         .await
         .expect("client build");
     let create = || {
-        configured_topic_request(
-            CreateTopicSetup {
+        crate::handlers::test_support::configured_topic_request(
+            crate::handlers::test_support::CreateTopicSetup {
                 topic: TOPIC,
                 ..Default::default()
             },
@@ -187,7 +188,7 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         let ctx = &ctx;
         async move {
             let committed =
-                handle(&broker, request, COMMIT_VERSION, ctx)
+                crate::handlers::offset_commit::handle(&broker, request, COMMIT_VERSION, ctx)
                     .await
                     .expect("OffsetCommit");
             committed.topics[0].partitions[0].error_code

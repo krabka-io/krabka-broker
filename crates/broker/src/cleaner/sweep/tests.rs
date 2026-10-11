@@ -12,14 +12,15 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::{
-    cleaner::test_support::{CompactionSetup, block_compaction_swap, compactable_partition, record_count, register_compactable}, metrics::{CleanerFailureLabel, CleanerFailureReason}, partition::Partition, test_support::{FrozenTopicsImageSetup, append_partition_batch, topic_thaw_record},
+    cleaner::test_support::{block_compaction_swap, compactable_partition, record_count},
+    metrics::{CleanerFailureLabel, CleanerFailureReason},
 };
 
 struct HostedCompactPartition {
     dir: TempDir,
     status: crate::log_dir_status::LogDirRegistry,
     registry: PartitionRegistry,
-    partition: Arc<Partition>,
+    partition: Arc<crate::partition::Partition>,
 }
 
 async fn hosted_compact_partition() -> HostedCompactPartition {
@@ -28,7 +29,7 @@ async fn hosted_compact_partition() -> HostedCompactPartition {
     let registry = PartitionRegistry::new();
     let partition = compactable_partition(
         &dir,
-        CompactionSetup {
+        crate::cleaner::test_support::CompactionSetup {
             log_dir_status: status.clone(),
             ..Default::default()
         },
@@ -100,12 +101,12 @@ async fn tick_all_compacts_every_hosted_compact_topic_whoever_leads_it() {
     for (topic, leader, policy, expect_compacted) in specs {
         let partition = compactable_partition(
             &dir,
-            CompactionSetup {
+            crate::cleaner::test_support::CompactionSetup {
                 topic,
                 leader: NodeId(leader),
                 cfg: krabka_log::LogConfig {
                     cleanup_policy: policy,
-                    ..CompactionSetup::default().cfg
+                    ..crate::cleaner::test_support::CompactionSetup::default().cfg
                 },
                 ..Default::default()
             },
@@ -160,7 +161,7 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
     };
     let partition = compactable_partition(
         &dir,
-        CompactionSetup {
+        crate::cleaner::test_support::CompactionSetup {
             topic: "too-clean",
             cfg: base.clone(),
             ..Default::default()
@@ -218,7 +219,7 @@ use crate::test_support::frozen_topics_image as image_with_freezes;
 /// which is what removes it from the registry.
 fn thaw(image: &mut MetadataImage, scope: &str, pattern_type: PatternType) {
     image.apply(&MetadataRecord::V1TopicFreeze(
-        topic_thaw_record(scope, pattern_type),
+        crate::test_support::topic_thaw_record(scope, pattern_type),
     ));
 }
 
@@ -232,7 +233,7 @@ async fn compactable_topics(
     let mut built = Vec::new();
     for &topic in topics {
         let (partition, before) =
-            register_compactable(dir, registry, topic).await;
+            crate::cleaner::test_support::register_compactable(dir, registry, topic).await;
         built.push((topic, partition, before));
     }
     built
@@ -256,7 +257,7 @@ async fn tick_all_skips_a_frozen_partition_and_compacts_an_unfrozen_control() {
             ("frozen-literal", PatternType::Literal),
             ("tenant-a.", PatternType::Prefixed),
         ],
-        FrozenTopicsImageSetup::default(),
+        crate::test_support::FrozenTopicsImageSetup::default(),
     );
 
     tick_all(
@@ -290,7 +291,7 @@ async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
     let (_, partition, before) = &cases[0];
     let mut image = image_with_freezes(
         &[("orders", PatternType::Literal)],
-        FrozenTopicsImageSetup::default(),
+        crate::test_support::FrozenTopicsImageSetup::default(),
     );
     let metrics = BrokerMetrics::new();
 
@@ -328,7 +329,7 @@ fn freeze_stops_compaction_reads_the_registry_the_produce_path_reads() {
             ("orders", PatternType::Literal),
             ("tenant-a.", PatternType::Prefixed),
         ],
-        FrozenTopicsImageSetup::default(),
+        crate::test_support::FrozenTopicsImageSetup::default(),
     );
 
     for (label, topic, want) in [
@@ -472,7 +473,7 @@ async fn tick_all_leaves_a_partition_uncleanable_for_a_record_above_the_decompre
             }],
             ..Default::default()
         };
-        append_partition_batch(&partition, &mut batch);
+        crate::test_support::append_partition_batch(&partition, &mut batch);
     }
     // The pass is bounded at the high watermark, so let it cover what was added.
     partition

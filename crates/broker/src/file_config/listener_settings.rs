@@ -9,8 +9,6 @@
 use krabka_security::ListenerProtocol;
 use krabka_units::Time;
 
-use crate::{SslPrincipalMapper, config::BrokerConfig, config_keys::{AUTO_CREATE_TOPICS_ENABLE, DEFAULT_REPLICATION_FACTOR, LOG_ROLL_MS, NUM_PARTITIONS}, cordoned_log_dirs::CORDONED_LOG_DIRS};
-
 use super::{FileClientAuthMode, FileConfigError, FileListener, FileTlsConfig};
 
 pub(super) struct ListenerSettings {
@@ -32,20 +30,20 @@ pub(super) struct ListenerSettings {
 /// refuses it at startup.
 fn apply_topic_creation_properties(
     properties: &std::collections::BTreeMap<String, String>,
-    cfg: &mut BrokerConfig,
+    cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     let origins = &mut cfg.static_config_origins.topic_creation;
     if !origins.num_partitions
-        && let Some(value) = properties.get(NUM_PARTITIONS)
+        && let Some(value) = properties.get(crate::config_keys::NUM_PARTITIONS)
     {
-        cfg.num_partitions = parse_positive(NUM_PARTITIONS, value)?;
+        cfg.num_partitions = parse_positive(crate::config_keys::NUM_PARTITIONS, value)?;
         origins.num_partitions = true;
     }
     if !origins.default_replication_factor
-        && let Some(value) = properties.get(DEFAULT_REPLICATION_FACTOR)
+        && let Some(value) = properties.get(crate::config_keys::DEFAULT_REPLICATION_FACTOR)
     {
         cfg.default_replication_factor =
-            parse_positive(DEFAULT_REPLICATION_FACTOR, value)?;
+            parse_positive(crate::config_keys::DEFAULT_REPLICATION_FACTOR, value)?;
         origins.default_replication_factor = true;
     }
     Ok(())
@@ -84,7 +82,7 @@ const UNSTABLE_FEATURE_VERSIONS_ENABLE: &str = "unstable.feature.versions.enable
 /// `unstable.api.versions.enable` and `unstable.feature.versions.enable`.
 fn apply_boolean_properties(
     properties: &std::collections::BTreeMap<String, String>,
-    cfg: &mut BrokerConfig,
+    cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     if let Some(enabled) = boolean_property(properties, UNSTABLE_API_VERSIONS_ENABLE)? {
         cfg.features.unstable_api_versions = enabled.into();
@@ -97,7 +95,7 @@ fn apply_boolean_properties(
         cfg.static_config_origins.topic_admin.delete_topic_enable = true;
     }
     if let Some(enabled) =
-        boolean_property(properties, AUTO_CREATE_TOPICS_ENABLE)?
+        boolean_property(properties, crate::config_keys::AUTO_CREATE_TOPICS_ENABLE)?
     {
         cfg.auto_create_topics_enable = enabled;
         cfg.static_config_origins
@@ -126,10 +124,10 @@ fn apply_boolean_properties(
 /// log directories once they are all known.
 fn apply_cordoned_log_dirs(
     properties: &std::collections::BTreeMap<String, String>,
-    cfg: &mut BrokerConfig,
+    cfg: &mut crate::config::BrokerConfig,
 ) {
     if cfg.cordoned_log_dirs.is_none()
-        && let Some(value) = properties.get(CORDONED_LOG_DIRS)
+        && let Some(value) = properties.get(crate::cordoned_log_dirs::CORDONED_LOG_DIRS)
     {
         cfg.cordoned_log_dirs = Some(value.clone());
     }
@@ -141,16 +139,16 @@ fn apply_cordoned_log_dirs(
 /// value under 1 at startup, and so does this.
 fn apply_log_roll_ms(
     properties: &std::collections::BTreeMap<String, String>,
-    cfg: &mut BrokerConfig,
+    cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     use krabka_units::convert::TimeExt as _;
 
-    if let Some(value) = properties.get(LOG_ROLL_MS) {
-        let millis: i64 = parse_positive(LOG_ROLL_MS, value)?;
+    if let Some(value) = properties.get(crate::config_keys::LOG_ROLL_MS) {
+        let millis: i64 = parse_positive(crate::config_keys::LOG_ROLL_MS, value)?;
         cfg.log_config.segment_roll_interval = Time::from_millis(millis);
         cfg.static_config_origins
             .supplied_kafka_keys
-            .insert(LOG_ROLL_MS);
+            .insert(crate::config_keys::LOG_ROLL_MS);
     }
     Ok(())
 }
@@ -161,7 +159,7 @@ fn apply_log_roll_ms(
 /// outside its four policies at startup.
 fn apply_consumer_group_migration_policy(
     properties: &std::collections::BTreeMap<String, String>,
-    cfg: &mut BrokerConfig,
+    cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     const KEY: &str = "group.consumer.migration.policy";
     if let Some(value) = properties.get(KEY) {
@@ -184,7 +182,7 @@ fn apply_consumer_group_migration_policy(
 /// refuses to start on a class it cannot load.
 fn apply_topology_description_plugin(
     properties: &std::collections::BTreeMap<String, String>,
-    cfg: &mut BrokerConfig,
+    cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     use crate::coordinator::unified::streams::description::{
         PLUGIN_CLASS_CONFIG, TopologyDescriptionPlugin,
@@ -217,8 +215,8 @@ fn parse_positive<T: std::str::FromStr + Default + PartialOrd>(
 
 pub(super) fn apply_listener_settings(
     settings: ListenerSettings,
-    cfg: &mut BrokerConfig,
-    defaults: &BrokerConfig,
+    cfg: &mut crate::config::BrokerConfig,
+    defaults: &crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     let had_file_listeners = !settings.listeners.is_empty();
     if had_file_listeners {
@@ -330,7 +328,7 @@ pub(super) fn apply_listener_settings(
         && cfg.tls_config.is_none()
     {
         use krabka_security::{ClientAuthMode, TlsConfig};
-        cfg.tls_principal_mapper = SslPrincipalMapper::parse(&tls.principal_mapping_rules)
+        cfg.tls_principal_mapper = crate::SslPrincipalMapper::parse(&tls.principal_mapping_rules)
             .map_err(|error| {
             FileConfigError::InvalidConfig(format!(
                 "invalid ssl principal mapping rule in tls_config: {error}"
@@ -355,14 +353,14 @@ pub(super) fn apply_listener_settings(
 mod tests {
     use assert2::{assert, check};
 
-    use crate::{config::BrokerConfig, file_config::{FileConfig, FileConfigError, test_support::{configured, configured_feature, configured_unwrap_parse}}};
+    use crate::file_config::FileConfig;
 
     fn file_outcome<T>(
         source: &str,
-        read: impl FnOnce(&BrokerConfig) -> T,
+        read: impl FnOnce(&crate::config::BrokerConfig) -> T,
     ) -> Result<T, String> {
         let file: FileConfig = toml::from_str(source).expect("parse");
-        let mut cfg = BrokerConfig::default();
+        let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg)
             .map(|()| read(&cfg))
             .map_err(|error| error.to_string())
@@ -370,7 +368,7 @@ mod tests {
 
     fn check_config_cases<const N: usize, S: AsRef<str>, T: std::fmt::Debug + PartialEq>(
         cases: [(&str, S, Result<T, String>); N],
-        read: impl Fn(&BrokerConfig) -> T,
+        read: impl Fn(&crate::config::BrokerConfig) -> T,
     ) {
         let mut actual = Vec::with_capacity(N);
         let mut expected = Vec::with_capacity(N);
@@ -392,7 +390,7 @@ bind_addr = "0.0.0.0:9092"
 advertised = "demo-0:9092"
 protocol = "Plaintext"
 "#;
-        let cfg = configured_unwrap_parse(src).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(src).unwrap();
 
         check!(cfg.listeners.len() == 1);
         check!(cfg.listeners[0].name.as_str() == "PLAIN");
@@ -546,7 +544,7 @@ connections_max_idle = "5s"
     #[test]
     fn boolean_keys_are_read_from_server_properties() {
         /// The value and the operator-supplied flag of one key.
-        type Read = fn(&BrokerConfig) -> (bool, bool);
+        type Read = fn(&crate::config::BrokerConfig) -> (bool, bool);
         /// A label, the key it reads, the file, and the value, flag or error.
         type Case = (
             &'static str,
@@ -837,7 +835,7 @@ connections_max_idle = "5s"
                 ),
             ),
         ] {
-            let applied = configured_feature(toml, |cfg| {
+            let applied = crate::file_config::test_support::configured_feature(toml, |cfg| {
                 cfg.features.unstable_api_versions
             });
             assert!(applied == expected, "{toml}");
@@ -869,7 +867,7 @@ connections_max_idle = "5s"
                 ),
             ),
         ] {
-            let applied = configured_feature(toml, |cfg| {
+            let applied = crate::file_config::test_support::configured_feature(toml, |cfg| {
                 cfg.features.unstable_feature_versions
             });
             assert!(applied == expected, "{toml}");
@@ -912,7 +910,7 @@ connections_max_idle = "5s"
                 .apply_to(&mut cfg)
                 .map(|()| cfg.streams_group.topology_description_plugin)
                 .map_err(|error| match error {
-                    FileConfigError::InvalidConfig(message) => message,
+                    crate::file_config::FileConfigError::InvalidConfig(message) => message,
                     other => other.to_string(),
                 });
             assert!(applied == expected, "{toml}");
@@ -928,7 +926,7 @@ connections_max_idle = "5s"
 "quota.window.num" = "6"
 "quota.window.size.seconds" = "2"
 "#;
-        let cfg = configured_unwrap_parse(toml).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         // The request-quota bound is one window: size = 2s.
         assert!(cfg.quota_throttle_max == secs(2));
         // size * num = 2 * 6 = 12s
@@ -944,7 +942,7 @@ key_path = "/k"
 client_ca_path = "/ca"
 client_auth = "Required"
 "#;
-        let cfg = configured(src, "parse").unwrap();
+        let cfg = crate::file_config::test_support::configured(src, "parse").unwrap();
         assert!(cfg.controller_listener_protocol == krabka_security::ListenerProtocol::Ssl);
         let tls = cfg.tls_config.expect("tls_config propagated");
         assert!(tls.cert_chain_path == std::path::PathBuf::from("/c"));
@@ -963,7 +961,7 @@ trust_roots_path = "/etc/krabka/cluster-ca/ca.crt"
 client_ca_path = "/etc/krabka/cluster-ca/ca.crt"
 client_auth = "Required"
 "#;
-        let cfg = configured(src, "parse").unwrap();
+        let cfg = crate::file_config::test_support::configured(src, "parse").unwrap();
         assert!(
             cfg.controller_server_name.as_deref()
                 == Some("demo-broker-headless.default.svc.cluster.local")
@@ -999,7 +997,7 @@ key_path = "/etc/krabka/tls/node.key"
         ];
         for (name, rules, expected) in cases {
             let cfg =
-                configured(&format!("{base}{rules}"), "parse")
+                crate::file_config::test_support::configured(&format!("{base}{rules}"), "parse")
                     .unwrap();
             check!(
                 cfg.tls_principal_mapper.apply(dn).as_deref() == expected,
@@ -1053,7 +1051,7 @@ bind_addr = "0.0.0.0:9092"
 advertised = "demo-0.demo-broker-headless.default.svc.cluster.local:9092"
 protocol = "Plaintext"
 "#;
-        let cfg = configured(toml, "parse").unwrap();
+        let cfg = crate::file_config::test_support::configured(toml, "parse").unwrap();
 
         assert!(
             cfg.advertised_listener == "demo-0.demo-broker-headless.default.svc.cluster.local:9092"
