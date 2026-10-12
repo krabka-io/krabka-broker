@@ -10,7 +10,9 @@
 use {
     super::{
         Log,
-        test_support::{NO_LIMIT, append_samples, configured_test_log},
+        test_support::{
+            NO_LIMIT, append_samples, assert_log_end_offset, configured_test_log, sample_batch,
+        },
     },
     crate::{
         config::{LogConfig, SegmentAllocation},

@@ -9,11 +9,12 @@ use {
         log::{
             RawRead,
             test_support::{
-                NO_LIMIT, append_samples, sample_batch, test_batch_at, test_log, tiny_segments,
+                NO_LIMIT, append_samples, configured_test_log, sample_batch, test_batch_at,
+                test_log, tiny_segments,
             },
         },
         segment::Segment,
-        test_support::segmented_log,
+        test_support::{RecordedAdvice, segmented_log},
     },
     assert2::check,
     krabka_units::prelude::{gibibytes, kibibytes, mebibytes},
