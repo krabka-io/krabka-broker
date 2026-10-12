@@ -598,33 +598,22 @@ async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
         append_first,
     };
     let candidate_directory = 7;
-    let cases: [(&str, Vec<Fetch>, bool); 5] = [
-        ("it never fetched", vec![], false),
-        (
-            "it fetched short of the end and never reached it",
-            vec![fetch(candidate_directory, Some(0), false)],
-            false,
-        ),
-        (
-            "it fetched at the log end",
-            vec![fetch(candidate_directory, None, false)],
-            true,
-        ),
-        (
-            "it kept pace with the appends between two fetches",
-            vec![
+    struct Case {
+        label: &'static str,
+        fetches: Vec<Fetch>,
+        admitted: bool,
+    }
+    let cases = [
+Case { label: "it never fetched", fetches: vec![], admitted: false },
+Case { label: "it fetched short of the end and never reached it", fetches: vec![fetch(candidate_directory, Some(0), false)], admitted: false },
+Case { label: "it fetched at the log end", fetches: vec![fetch(candidate_directory, None, false)], admitted: true },
+Case { label: "it kept pace with the appends between two fetches", fetches: vec![
                 fetch(candidate_directory, Some(0), false),
                 fetch(candidate_directory, Some(-1), true),
-            ],
-            true,
-        ),
-        (
-            "the fetches were made under another directory id",
-            vec![fetch(candidate_directory + 1, None, false)],
-            false,
-        ),
-    ];
-    for (label, fetches, admitted) in cases {
+            ], admitted: true },
+Case { label: "the fetches were made under another directory id", fetches: vec![fetch(candidate_directory + 1, None, false)], admitted: false },
+];
+    for Case { label, fetches, admitted } in cases {
         let EngineInDir { engine: mut leader, dir: _dir } = kraft_version_one_leader();
         for Fetch {
             directory,
