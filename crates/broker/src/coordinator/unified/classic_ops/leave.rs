@@ -110,11 +110,8 @@ pub(crate) fn handle_leave(
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        crate::coordinator::unified::classic_ops::test_support::{
-            handle_join, join_req, stable_two_member_group,
-        },
-        assert2::{assert, check},
+        super::{super::test_support::prelude::*, *},
+        assert2::assert,
         krabka_protocol::owned::leave_group_request::MemberIdentity,
     };
 

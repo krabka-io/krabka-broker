@@ -14,6 +14,13 @@ use {
     std::time::{Duration, Instant},
 };
 
+pub(in crate::coordinator::unified::classic_ops) mod prelude {
+    pub(in crate::coordinator::unified::classic_ops) use {
+        super::{handle_join, join_req, stable_two_member_group},
+        assert2::check,
+    };
+}
+
 /// A `JoinGroup` v5 context from client `client-a` on `client_host`.
 pub(super) fn join_ctx(client_host: &str) -> JoinContext<'_> {
     JoinContext {

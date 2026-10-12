@@ -60,6 +60,11 @@ mod group_scope;
 mod test_support;
 mod topic_scope;
 
+fn set_error_response(out: &mut AlterConfigsResourceResponse, (code, message): (i16, String)) {
+    out.error_code = code;
+    out.error_message = Some(message);
+}
+
 use {
     self::{
         broker_logger_scope::handle_broker_logger_scoped, broker_scope::handle_broker_scoped,

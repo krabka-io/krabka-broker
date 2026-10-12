@@ -3,15 +3,7 @@
 //! `TimeIndex.maybeAppend` keeps them, and the offset is the last offset of the
 //! batch that set the timestamp.
 
-use {
-    crate::{
-        error::LogError,
-        io::{IoTarget, LogIo},
-    },
-    std::{fs::File, path::Path},
-    tracing::instrument,
-    zerocopy::{BigEndian, IntoBytes, byteorder::I64},
-};
+use super::prelude::*;
 
 /// 12 bytes per entry: timestamp as i64 BE and `relative_offset` as u32 BE.
 pub const TIME_ENTRY_SIZE: usize = 12;

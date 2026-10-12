@@ -753,6 +753,18 @@ pub(crate) fn elr_model_image(
     image
 }
 
+pub(crate) mod elr_model_prelude {
+    pub(crate) use {
+        super::elr_model_image,
+        crate::{
+            config_keys::effective_min_insync_replicas,
+            elr::{maintain::next_partition_elr, state::PartitionElr},
+        },
+        krabka_metadata::{MetadataImage, PartitionRecord},
+        std::collections::BTreeSet,
+    };
+}
+
 /// A single-partition ISR proposal with epochs read explicitly by its caller.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct WireBrokerId(pub i32);

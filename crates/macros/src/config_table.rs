@@ -1,11 +1,8 @@
 //! The common schema and deserialization recipe for TOML configuration tables.
 
-use {
-    crate::meta::{item_body, mode},
-    moxy::{
-        ast::ParseError,
-        token::{TokenStream, TokenTree},
-    },
+use crate::{
+    meta::{item_body, mode},
+    prelude::*,
 };
 
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {

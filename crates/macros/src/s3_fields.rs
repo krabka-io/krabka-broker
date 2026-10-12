@@ -1,11 +1,8 @@
 //! S3 endpoint and redacted credentials, preserving each configuration's docs.
 
-use {
-    crate::meta::{mode, named_body},
-    moxy::{
-        ast::ParseError,
-        token::{Span, TokenStream, TokenTree},
-    },
+use crate::{
+    meta::{mode, named_body},
+    prelude::*,
 };
 
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {

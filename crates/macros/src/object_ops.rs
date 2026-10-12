@@ -1,11 +1,8 @@
 //! Expand the shared file-upload method signature before async trait derives.
 
-use {
-    crate::meta::{item_body, no_arguments},
-    moxy::{
-        ast::ParseError,
-        token::{Span, TokenStream, TokenTree},
-    },
+use crate::{
+    meta::{item_body, no_arguments},
+    prelude::*,
 };
 
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {

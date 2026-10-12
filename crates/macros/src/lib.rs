@@ -4,6 +4,7 @@
 //! would otherwise write out by hand two or three times. It is built on
 //! [`moxy`], which supplies the token, syntax-tree, attribute-parsing and
 //! template layers.
+
 //!
 //! # `RegisterMetrics`
 //!
@@ -363,6 +364,7 @@ mod network_fixtures;
 mod object_ops;
 mod object_store_config;
 mod object_store_delegate;
+mod prelude;
 mod primitive_cmp;
 mod produce_fixtures;
 mod projection_identity;

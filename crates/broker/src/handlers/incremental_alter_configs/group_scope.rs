@@ -82,10 +82,7 @@ pub(super) fn handle_group_scoped(
 ) {
     match group_record(resource, image, bounds, unstable) {
         Ok(record) => to_submit.push(record),
-        Err((code, message)) => {
-            out.error_code = code;
-            out.error_message = Some(message);
-        }
+        Err(error) => super::set_error_response(out, error),
     }
 }
 

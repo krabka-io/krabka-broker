@@ -6,15 +6,19 @@
 //! `MetadataObserver`, a true `KRaft` observer, plus a write-forwarding
 //! path to the controller quorum. Handlers depend only on this trait.
 
-use {
-    krabka_metadata::{MetadataImage, MetadataRecord},
-    krabka_raft::{
-        AddVoter, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError, ReconfigOutcome,
-        RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
-    },
-    std::{collections::BTreeSet, net::SocketAddr, sync::Arc},
-    tokio::sync::watch,
-};
+use self::prelude::*;
+
+pub(super) mod prelude {
+    pub(super) use {
+        krabka_metadata::{MetadataImage, MetadataRecord},
+        krabka_raft::{
+            AddVoter, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError,
+            ReconfigOutcome, RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
+        },
+        std::{collections::BTreeSet, net::SocketAddr, sync::Arc},
+        tokio::sync::watch,
+    };
+}
 
 mod controller_handle;
 mod fatal_fault;

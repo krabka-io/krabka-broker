@@ -162,12 +162,8 @@ fn sync_err(code: i16) -> SyncResult {
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        crate::coordinator::unified::classic_ops::test_support::{
-            handle_join, join_req, stable_two_member_group,
-        },
-        assert2::{assert, check},
-        krabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment,
+        super::*, crate::coordinator::unified::classic_ops::test_support::prelude::*,
+        assert2::assert, krabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment,
     };
 
     fn sync_req(member_id: &str, generation: i32) -> SyncGroupRequest {

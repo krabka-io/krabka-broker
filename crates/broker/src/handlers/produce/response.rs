@@ -19,16 +19,15 @@ pub(super) fn build_topic_error_response(
     TopicProduceResponse {
         name: topic.name.clone(),
         topic_id: topic.topic_id,
-        partition_responses: topic
-            .partition_data
-            .iter()
-            .map(|p| PartitionProduceResponse {
-                index: p.index,
+        partition_responses: crate::handlers::map_partition_rows(
+            topic.partition_data.iter().map(|p| p.index),
+            |index| PartitionProduceResponse {
+                index,
                 error_code: code,
                 base_offset: INVALID_OFFSET,
                 ..Default::default()
-            })
-            .collect(),
+            },
+        ),
         ..Default::default()
     }
 }

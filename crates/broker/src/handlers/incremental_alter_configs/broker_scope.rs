@@ -220,10 +220,7 @@ pub(super) fn handle_broker_scoped(
         unstable,
     }) {
         Ok(records) => to_submit.extend(records),
-        Err((code, message)) => {
-            out.error_code = code;
-            out.error_message = Some(message);
-        }
+        Err(error) => super::set_error_response(out, error),
     }
 }
 
