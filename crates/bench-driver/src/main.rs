@@ -230,7 +230,7 @@ async fn main() -> Result<()> {
     let yaml = tokio::fs::read_to_string(&cli.scenario)
         .await
         .with_context(|| format!("read scenario {}", cli.scenario.display()))?;
-    let scenario: Scenario = serde_yaml::from_str(&yaml).context("parse scenario yaml")?;
+    let scenario: Scenario = serde_saphyr::from_str(&yaml).context("parse scenario yaml")?;
 
     let scenario_id = hash_str(&scenario.name);
 
