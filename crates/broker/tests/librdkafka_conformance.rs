@@ -68,7 +68,10 @@ const CLIENTS: [ClientCase; 2] = [
 ];
 
 /// The librdkafka 2.x row of [`CLIENTS`].
-fn librdkafka_2x() -> &'static ClientCase { &CLIENTS[1] }
+#[rustfmt::skip]
+fn librdkafka_2x() -> &'static ClientCase {
+    &CLIENTS[1]
+}
 
 fn check_client_version(image: &str, program: &str, library: &str, marker: &str) {
     let version = run_client(image, program, &["-V"], None);
