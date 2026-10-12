@@ -473,13 +473,10 @@ struct TierCase<'a> {
     want: Result<(), String>,
 }
 
-/// Kafka's `LogConfig.validateTopicLogConfigValues` tiered-storage rules, run
-/// on the resulting map when `remote.storage.enable` is true. Each row is the
-/// broker's tier state, the map, and Kafka's result.
-#[test]
-fn tiered_storage_rules_follow_kafkas_log_config() {
+/// The tiered-storage rows: the broker's tier state, the map, and Kafka's result.
+fn tier_cases() -> Vec<TierCase<'static>> {
     let policy_message = Err(REMOTE_STORAGE_POLICY_MESSAGE.to_owned());
-    let cases: Vec<TierCase<'_>> = vec![
+    let cases: Vec<TierCase<'static>> = vec![
         TierCase {
             tier_on: false,
             pairs: vec![ConfigPair {
@@ -791,6 +788,15 @@ fn tiered_storage_rules_follow_kafkas_log_config() {
             want: Ok(()),
         },
     ];
+    cases
+}
+
+/// Kafka's `LogConfig.validateTopicLogConfigValues` tiered-storage rules, run
+/// on the resulting map when `remote.storage.enable` is true. Each row is the
+/// broker's tier state, the map, and Kafka's result.
+#[test]
+fn tiered_storage_rules_follow_kafkas_log_config() {
+    let cases = tier_cases();
     for TierCase {
         tier_on,
         pairs,
@@ -812,27 +818,24 @@ fn tiered_storage_rules_follow_kafkas_log_config() {
     }
 }
 
-/// Kafka validates a topic's map merged over the broker's effective defaults
-/// (`KafkaConfig.extractLogConfigMap`), so a key the topic leaves unset takes
-/// the cluster-wide broker default, in the topic key's unit, and not the
-/// registry default.
-#[test]
-fn cross_key_rules_read_the_cluster_broker_defaults() {
-    struct Case {
-        /// The cluster-wide broker configs.
-        cluster: Vec<ConfigPair<'static>>,
-        /// The topic's overrides.
-        topic: Vec<ConfigPair<'static>>,
-        want: Result<(), String>,
-    }
+/// One row of the cross-key table.
+struct CrossKeyCase {
+    /// The cluster-wide broker configs.
+    cluster: Vec<ConfigPair<'static>>,
+    /// The topic's overrides.
+    topic: Vec<ConfigPair<'static>>,
+    want: Result<(), String>,
+}
+
+fn cross_key_cases() -> Vec<CrossKeyCase> {
     let local_ms_over = |value: i64, total: i64| {
         Err(format!(
             "Invalid value {value} for configuration local.retention.ms: Value must not be \
              more than retention.ms property value: {total}"
         ))
     };
-    let cases: Vec<Case> = vec![
-        Case {
+    let cases: Vec<CrossKeyCase> = vec![
+        CrossKeyCase {
             cluster: vec![ConfigPair {
                 key: "log.cleanup.policy",
                 value: "compact",
@@ -843,7 +846,7 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             }],
             want: Err(REMOTE_STORAGE_POLICY_MESSAGE.to_owned()),
         },
-        Case {
+        CrossKeyCase {
             cluster: vec![ConfigPair {
                 key: "log.cleanup.policy",
                 value: "compact",
@@ -860,7 +863,7 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             ],
             want: Ok(()),
         },
-        Case {
+        CrossKeyCase {
             cluster: vec![ConfigPair {
                 key: "log.cleanup.policy",
                 value: "compact",
@@ -871,7 +874,7 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             }],
             want: Ok(()),
         },
-        Case {
+        CrossKeyCase {
             cluster: vec![ConfigPair {
                 key: "log.retention.ms",
                 value: "1000",
@@ -888,7 +891,7 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             ],
             want: local_ms_over(2000, 1000),
         },
-        Case {
+        CrossKeyCase {
             cluster: vec![ConfigPair {
                 key: "log.retention.hours",
                 value: "1",
@@ -905,7 +908,7 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             ],
             want: local_ms_over(3_600_001, 3_600_000),
         },
-        Case {
+        CrossKeyCase {
             cluster: vec![
                 ConfigPair {
                     key: "log.retention.hours",
@@ -928,7 +931,7 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             ],
             want: local_ms_over(60_001, 60_000),
         },
-        Case {
+        CrossKeyCase {
             cluster: vec![ConfigPair {
                 key: "log.retention.ms",
                 value: "-5",
@@ -945,7 +948,7 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             ],
             want: Ok(()),
         },
-        Case {
+        CrossKeyCase {
             cluster: vec![ConfigPair {
                 key: "log.local.retention.ms",
                 value: "5000",
@@ -962,7 +965,7 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             ],
             want: local_ms_over(5000, 1000),
         },
-        Case {
+        CrossKeyCase {
             cluster: vec![ConfigPair {
                 key: "log.retention.bytes",
                 value: "100",
@@ -983,7 +986,7 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
                     .to_owned(),
             ),
         },
-        Case {
+        CrossKeyCase {
             cluster: vec![ConfigPair {
                 key: "log.cleaner.min.compaction.lag.ms",
                 value: "100",
@@ -999,7 +1002,17 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
             ),
         },
     ];
-    for Case {
+    cases
+}
+
+/// Kafka validates a topic's map merged over the broker's effective defaults
+/// (`KafkaConfig.extractLogConfigMap`), so a key the topic leaves unset takes
+/// the cluster-wide broker default, in the topic key's unit, and not the
+/// registry default.
+#[test]
+fn cross_key_rules_read_the_cluster_broker_defaults() {
+    let cases = cross_key_cases();
+    for CrossKeyCase {
         cluster,
         topic,
         want,

@@ -90,9 +90,7 @@ fn a_signature_is_named_by_either_half_of_the_pair() {
 #[test]
 fn the_freeze_path_names_the_author_the_way_the_break_glass_path_does() {
     let AliceKeyConfiguration {
-        dir: _dir,
-        config,
-        ..
+        dir: _dir, config, ..
     } = alice_key_configuration();
     freeze_fixture!(image, principal, peer, ctx; &[] ; env, config);
 
