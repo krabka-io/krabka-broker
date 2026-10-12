@@ -44,18 +44,6 @@ use crate::{
 // and the sweep that runs at broker start would tombstone the offsets — and
 // the group with them — out from under a test that is asking about
 // `require_stable`.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct CommittedOffsetSetup<'a> {
-    #[default("grp")]
-    group: &'a str,
-    #[default("orders")]
-    topic: &'a str,
-    #[default(krabka_ids::PartitionIndex(0))]
-    partition: krabka_ids::PartitionIndex,
-    #[default(Offset(42))]
-    offset: Offset,
-}
-
 #[bon::builder]
 async fn seed_committed_offset(
     broker: &Broker,
@@ -65,18 +53,6 @@ async fn seed_committed_offset(
     partition: krabka_ids::PartitionIndex,
     #[builder(into, default = Offset (42))] offset: Offset,
 ) {
-    let setup = CommittedOffsetSetup {
-        group,
-        topic,
-        partition,
-        offset,
-    };
-    let CommittedOffsetSetup {
-        group,
-        topic,
-        partition,
-        offset,
-    } = setup;
     let h = broker
         .group_coordinator
         .get_or_create_group(group, GroupKindTag::Classic);
@@ -152,31 +128,8 @@ async fn named_topic_fetch_returns_committed_offset() {
 const TXN_RECORDS_AT: i64 = 10;
 const TXN_MARKER_AT: i64 = 11;
 
-#[derive(krabka_macros::FieldDefaults)]
-struct PendingTxnOffsetsSetup<'a> {
-    #[default("grp")]
-    group: &'a str,
-    #[default(krabka_ids::ProducerId(91))]
-    producer: krabka_ids::ProducerId,
-    #[default(Offset(TXN_RECORDS_AT))]
-    written_at: Offset,
-    #[default(vec![("orders".into(), krabka_ids::PartitionIndex(0))])]
-    keys: Vec<(String, krabka_ids::PartitionIndex)>,
-}
-
 #[derive(derive_more::From, derive_more::Into, Default)]
 struct TxnOffsetCommits(Vec<((String, i32), OffsetEntry)>);
-
-#[derive(krabka_macros::FieldDefaults)]
-struct ResolvedTxnOffsetsSetup<'a> {
-    #[default("grp")]
-    group: &'a str,
-    #[default(krabka_ids::ProducerId(91))]
-    producer: krabka_ids::ProducerId,
-    #[default(Offset(TXN_MARKER_AT))]
-    resolved_through: Offset,
-    committed: TxnOffsetCommits,
-}
 
 // Mark (topic, partition) keys as written by an unresolved transaction, the
 // way `TxnOffsetCommit` does once its records are durable.
@@ -190,18 +143,6 @@ async fn seed_pending_txn_offsets(
         (String, krabka_ids::PartitionIndex),
     >,
 ) {
-    let setup = PendingTxnOffsetsSetup {
-        group,
-        producer,
-        written_at,
-        keys,
-    };
-    let PendingTxnOffsetsSetup {
-        group,
-        producer,
-        written_at,
-        keys,
-    } = setup;
     let h = broker
         .group_coordinator
         .get_or_create_group(group, GroupKindTag::Classic);
@@ -235,18 +176,6 @@ async fn resolve_pending_txn_offsets(
     #[builder(into, default = Offset (TXN_MARKER_AT))] resolved_through: Offset,
     #[builder(into, default)] committed: TxnOffsetCommits,
 ) {
-    let setup = ResolvedTxnOffsetsSetup {
-        group,
-        producer,
-        resolved_through,
-        committed,
-    };
-    let ResolvedTxnOffsetsSetup {
-        group,
-        producer,
-        resolved_through,
-        committed,
-    } = setup;
     let h = broker
         .group_coordinator
         .get_or_create_group(group, GroupKindTag::Classic);

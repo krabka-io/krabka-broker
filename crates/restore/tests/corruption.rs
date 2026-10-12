@@ -15,25 +15,21 @@
 //! -- under `--continue-on-corrupt` -- the right segment skipped while
 //! everything else restores intact.
 
+#[path = "support/archive_fixture.rs"]
+mod archive_fixture;
 #[path = "support/args.rs"]
 mod cli_args;
 
 use std::path::Path as StdPath;
 
 use assert2::{assert, check};
-use bytes::Bytes;
 use clap::Parser as _;
-use krabka_ids::{LeaderEpoch, Offset};
+use krabka_ids::Offset;
 use krabka_log::{Log, LogConfig, name};
 use krabka_protocol::records::{CRC_COVERAGE_START, Record, RecordBatch};
-use krabka_remote_storage::{
-    LocalTieredStorage, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-    RemoteLogSegmentState, RemoteStorageManager as _, TopicIdPartition, kafka_uuid,
-};
+use krabka_remote_storage::{LocalTieredStorage, TopicIdPartition, kafka_uuid};
 use krabka_restore::{Cli, EXIT_BAD_ARGUMENTS, EXIT_INTEGRITY, RestoreArgs, RestoreError, restore};
 use uuid::Uuid;
-
-krabka_macros::export_segment_data_fixture!(export_segment_data);
 
 /// A `LogConfig` whose `segment_size` is shrunk to a 1-byte equivalent, so a
 /// second `append` always rolls the first batch into its own sealed segment
@@ -128,33 +124,13 @@ fn archive_segment_at(
         "the sealed segment's batch must survive the range filter"
     );
 
-    let metadata = RemoteLogSegmentMetadata::new(
-        RemoteLogSegmentId::new(
-            TopicIdPartition::new(topic_id, topic, partition),
-            segment_id,
-        ),
-        export.base_offset.0,
-        export.last_offset.0,
-        export.max_timestamp,
-        1,
-        0,
-        RemoteLogSegmentDetails::new(
-            i32::try_from(std::fs::metadata(&export.log_path).unwrap().len()).expect("fits i32"),
-            RemoteLogSegmentState::CopySegmentFinished,
-            maplit::btreemap! {LeaderEpoch(0) => export.base_offset.0},
-        ),
-    )
-    .expect("valid remote metadata");
-
     let storage = LocalTieredStorage::new(archive_root);
-    storage
-        .copy_log_segment_data(
-            &metadata,
-            &export_segment_data(&export, ProducerSnapshotExport::Include, || {
-                Bytes::from(format!("0\n1\n0 {base_offset}\n"))
-            }),
-        )
-        .expect("archive the segment");
+    archive_fixture::archive_segment(
+        &storage,
+        TopicIdPartition::new(topic_id, topic, partition),
+        segment_id,
+        &export,
+    );
 
     ArchivedSegment {
         segment_id,

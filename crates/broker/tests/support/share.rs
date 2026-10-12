@@ -117,15 +117,6 @@ impl Default for ShareRecordCount {
     }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ShareRecordsSetup<'a> {
-    #[default("t")]
-    pub topic: &'a str,
-    pub topic_id: uuid::Uuid,
-    pub partition: krabka_ids::PartitionIndex,
-    pub count: ShareRecordCount,
-}
-
 #[bon::builder]
 pub async fn produce_n(
     client: &Client,
@@ -134,21 +125,15 @@ pub async fn produce_n(
     #[builder(into, default)] partition: krabka_ids::PartitionIndex,
     #[builder(into, default)] count: ShareRecordCount,
 ) {
-    let setup = ShareRecordsSetup {
-        topic,
-        topic_id,
-        partition,
-        count,
-    };
-    let values = (0..setup.count.0)
+    let values = (0..count.0)
         .map(|i| bytes::Bytes::from(format!("v{i}")))
         .collect();
     produce_values()
         .client(client)
         .values(values)
-        .topic(setup.topic)
-        .topic_id(setup.topic_id)
-        .partition(setup.partition.0)
+        .topic(topic)
+        .topic_id(topic_id)
+        .partition(partition.0)
         .call()
         .await;
 }
@@ -979,12 +964,6 @@ pub struct ConsumptionSetup {
     pub count: ShareRecordCount,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ShareRecordSeedSetup {
-    #[default(ShareRecordCount(3))]
-    pub count: ShareRecordCount,
-}
-
 /// Owners and initialized membership for a fresh g1/t consume session.
 pub struct ConsumptionFixture {
     pub _permit: tokio::sync::OwnedSemaphorePermit,
@@ -1007,14 +986,13 @@ pub async fn consumption_fixture(
     #[builder(into, default = ShareRecordCount (3))] count: ShareRecordCount,
     initialize: impl AsyncFn(&krabka_broker::BrokerHandle, &Client, ConsumptionSetup) -> (String, i32),
 ) -> ConsumptionFixture {
-    let setup = ShareRecordSeedSetup { count };
     let (permit, broker, client, dir, tid) = Box::pin(permitted_topic_fixture().call()).await;
     let (member, _) = initialize(
         &broker,
         &client,
         ConsumptionSetup {
             topic_id: tid,
-            count: setup.count,
+            count,
         },
     )
     .await;
