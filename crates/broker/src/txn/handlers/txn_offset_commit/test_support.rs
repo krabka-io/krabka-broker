@@ -9,7 +9,7 @@ use krabka_protocol::owned::txn_offset_commit_request::{
     TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
 };
 
-#[derive(Clone, Copy, Default)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 pub(super) struct ProducerEpoch(pub i16);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -47,7 +47,19 @@ pub(super) struct TxnCommitSetup<'a> {
 }
 
 /// A transactional commit request whose remaining wire fields keep their defaults.
-pub(super) fn request_for(setup: TxnCommitSetup<'_>) -> TxnOffsetCommitRequest {
+#[bon::builder]
+pub(super) fn request_for(
+    #[builder(default = "tid" . into ())] transactional_id: String,
+    #[builder(default = "group-a")] group_id: &'_ str,
+    #[builder(default)] producer: TxnCommitProducer,
+    #[builder(default)] topics: Vec<TxnOffsetCommitRequestTopic>,
+) -> TxnOffsetCommitRequest {
+    let setup = TxnCommitSetup {
+        transactional_id,
+        group_id,
+        producer,
+        topics,
+    };
     TxnOffsetCommitRequest {
         transactional_id: setup.transactional_id,
         group_id: setup.group_id.to_owned(),

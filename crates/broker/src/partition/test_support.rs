@@ -74,9 +74,15 @@ pub(crate) struct CommitPartitionSetup {
 }
 
 /// A real temporary partition with the requested commit frontier and its own notifier.
+#[bon::builder]
 pub(crate) async fn commit_partition(
-    setup: CommitPartitionSetup,
+    #[builder(into, default)] high_watermark: krabka_log::Offset,
+    #[builder(default)] leader: CommitFixtureLeader,
 ) -> (Arc<Partition>, tempfile::TempDir, Arc<Notify>) {
+    let setup = CommitPartitionSetup {
+        high_watermark,
+        leader,
+    };
     let notify = Arc::new(Notify::new());
     let (partition, directory) = test_partition(Arc::clone(&notify));
     let partition = Arc::new(partition);
@@ -131,7 +137,10 @@ pub(crate) async fn install_three_replica_isr(partition: &Partition) {
 }
 
 pub(super) fn append_records(p: &Partition, setup: PartitionRecordsSetup) {
-    let mut batch = partition_records_batch(setup);
+    let mut batch = partition_records_batch()
+        .count(setup.count)
+        .timestamp(setup.timestamp)
+        .call();
     p.log
         .lock()
         .expect("log mutex")

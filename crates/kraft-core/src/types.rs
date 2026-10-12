@@ -5,6 +5,7 @@ pub use krabka_voters::NodeId;
 use krabka_voters::VoterSet;
 use uuid::Uuid;
 
+#[derive(derive_more::From, derive_more::Into)]
 /// A simulated or logical instant in milliseconds.
 ///
 /// The caller always injects the time. The state machine never reads the

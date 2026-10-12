@@ -57,18 +57,15 @@ pub async fn drive_list_reassignments(
         ..Default::default()
     };
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let resp: ListPartitionReassignmentsResponse = kafka_wire::exchange(
-        &mut stream,
-        &req,
-        WireExchangeSetup {
-            api_key: WireApiKey(46),
-            client_id: CLIENT_ID,
-            header: RequestHeaderEncoding::Flexible,
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("ListPartitionReassignments round-trip");
+    let resp: ListPartitionReassignmentsResponse = kafka_wire::exchange()
+        .stream(&mut stream)
+        .request(&req)
+        .api_key(46)
+        .client_id(CLIENT_ID)
+        .header(RequestHeaderEncoding::Flexible)
+        .call()
+        .await
+        .expect("ListPartitionReassignments round-trip");
 
     resp.topics
         .into_iter()
@@ -129,19 +126,16 @@ pub async fn alter_reassignments_on(
         topics,
         ..Default::default()
     };
-    let resp: AlterPartitionReassignmentsResponse = kafka_wire::exchange(
-        stream,
-        &req,
-        WireExchangeSetup {
-            api_key: WireApiKey(45),
-            version: WireApiVersion(1),
-            client_id: CLIENT_ID,
-            header: RequestHeaderEncoding::Flexible,
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("AlterPartitionReassignments round-trip");
+    let resp: AlterPartitionReassignmentsResponse = kafka_wire::exchange()
+        .stream(stream)
+        .request(&req)
+        .api_key(45)
+        .version(1)
+        .client_id(CLIENT_ID)
+        .header(RequestHeaderEncoding::Flexible)
+        .call()
+        .await
+        .expect("AlterPartitionReassignments round-trip");
 
     resp.responses
         .into_iter()

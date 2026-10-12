@@ -32,15 +32,12 @@ use crate::{
 };
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    create_topic_from_test_support(
-        broker,
-        ClientTopicSetup {
-            client_id: "offset-delete-test",
-            name,
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic_from_test_support()
+        .broker(broker)
+        .client_id("offset-delete-test")
+        .name(name)
+        .call()
+        .await;
 }
 
 use crate::coordinator::unified::actor::test_support::subscription_blob as subscription;

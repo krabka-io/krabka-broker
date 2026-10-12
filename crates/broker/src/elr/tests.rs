@@ -180,11 +180,26 @@ async fn check_partition(broker: &Arc<Broker>, expected: DescribeTopicPartitions
 }
 
 /// Expected row while both followers remain unavailable to the client listener.
-fn offline_followers_row(setup: ExpectedElrSetup<'_>) -> DescribeTopicPartitionsResponsePartition {
-    row(ExpectedElrSetup {
-        offline: &[ReportedBrokerId(2), ReportedBrokerId(3)],
-        ..setup
-    })
+#[bon::builder]
+fn offline_followers_row(
+    #[builder(default = & [ReportedBrokerId (1) , ReportedBrokerId (2) , ReportedBrokerId (3)])]
+    isr: &'_ [ReportedBrokerId],
+    #[builder(default)] eligible: &'_ [ReportedBrokerId],
+    #[builder(default)] last_known: &'_ [ReportedBrokerId],
+    #[builder(default)] offline: &'_ [ReportedBrokerId],
+) -> DescribeTopicPartitionsResponsePartition {
+    let setup = ExpectedElrSetup {
+        isr,
+        eligible,
+        last_known,
+        offline,
+    };
+    row()
+        .isr(setup.isr)
+        .eligible(setup.eligible)
+        .last_known(setup.last_known)
+        .offline(&[ReportedBrokerId(2), ReportedBrokerId(3)])
+        .call()
 }
 
 #[derive(Clone, Copy)]
@@ -212,7 +227,20 @@ impl ExpectedElrSetup<'_> {
     }
 }
 
-fn row(setup: ExpectedElrSetup<'_>) -> DescribeTopicPartitionsResponsePartition {
+#[bon::builder]
+fn row(
+    #[builder(default = & [ReportedBrokerId (1) , ReportedBrokerId (2) , ReportedBrokerId (3)])]
+    isr: &'_ [ReportedBrokerId],
+    #[builder(default)] eligible: &'_ [ReportedBrokerId],
+    #[builder(default)] last_known: &'_ [ReportedBrokerId],
+    #[builder(default)] offline: &'_ [ReportedBrokerId],
+) -> DescribeTopicPartitionsResponsePartition {
+    let setup = ExpectedElrSetup {
+        isr,
+        eligible,
+        last_known,
+        offline,
+    };
     let ExpectedElrSetup {
         isr,
         eligible,
@@ -288,21 +316,19 @@ async fn start_orders() -> (BrokerHandle, tempfile::TempDir, Arc<Broker>) {
 async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
     let (handle, _dir, broker) = start_orders().await;
 
-    check_partition(&broker, row(ExpectedElrSetup::default())).await;
+    check_partition(&broker, row().call()).await;
 
-    accepted_isr_proposal(
-        &broker,
-        LiveIsrSetup::default(),
-        IsrResponseCheck::EnvelopeAndPartition,
-    )
-    .await;
+    accepted_isr_proposal()
+        .broker(&broker)
+        .response_check(IsrResponseCheck::EnvelopeAndPartition)
+        .call()
+        .await;
     check_partition(
         &broker,
-        row(ExpectedElrSetup {
-            isr: &[ReportedBrokerId(1)],
-            eligible: &[ReportedBrokerId(2), ReportedBrokerId(3)],
-            ..Default::default()
-        }),
+        row()
+            .isr(&[ReportedBrokerId(1)])
+            .eligible(&[ReportedBrokerId(2), ReportedBrokerId(3)])
+            .call(),
     )
     .await;
 
@@ -313,16 +339,22 @@ async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
 
 /// Restore broker 2 to the ISR and check the published two-member partition row.
 async fn rejoin_follower_and_check_isr(broker: &Arc<Broker>) {
-    accepted_isr_proposal(
+    accepted_isr_proposal()
+        .broker(broker)
+        .new_isr(&[WireBrokerId(1), WireBrokerId(2)])
+        .response_check(IsrResponseCheck::EnvelopeAndPartition)
+        .call()
+        .await;
+    check_partition(
         broker,
-        LiveIsrSetup {
-            new_isr: &[WireBrokerId(1), WireBrokerId(2)],
-            ..Default::default()
-        },
-        IsrResponseCheck::EnvelopeAndPartition,
+        row()
+            .isr(ExpectedElrSetup::two_member_isr().isr)
+            .eligible(ExpectedElrSetup::two_member_isr().eligible)
+            .last_known(ExpectedElrSetup::two_member_isr().last_known)
+            .offline(ExpectedElrSetup::two_member_isr().offline)
+            .call(),
     )
     .await;
-    check_partition(broker, row(ExpectedElrSetup::two_member_isr())).await;
 }
 
 /// A shrink that stops at `min.insync.replicas` leaves nothing eligible, so
@@ -362,29 +394,32 @@ async fn assert_returning_broker_withdrawal(min_isr: &str, initial_check: Initia
     if initial_check == InitialIsrCheck::Required {
         // Broker 3 is explicitly fenced so its returning incarnation is
         // deterministic even when coverage instrumentation delays the test.
-        check_partition(&broker, offline_followers_row(ExpectedElrSetup::default())).await;
+        check_partition(&broker, offline_followers_row().call()).await;
     }
     register_broker_3(&broker, 2).await;
     check_partition(
         &broker,
-        offline_followers_row(ExpectedElrSetup::two_member_isr()),
+        offline_followers_row()
+            .isr(ExpectedElrSetup::two_member_isr().isr)
+            .eligible(ExpectedElrSetup::two_member_isr().eligible)
+            .last_known(ExpectedElrSetup::two_member_isr().last_known)
+            .offline(ExpectedElrSetup::two_member_isr().offline)
+            .call(),
     )
     .await;
     // Every later derivation still excludes broker 3 while allowing broker 2,
     // which left an ISR whose log was never called into question.
-    accepted_isr_proposal(
-        &broker,
-        LiveIsrSetup::default(),
-        IsrResponseCheck::EnvelopeAndPartition,
-    )
-    .await;
+    accepted_isr_proposal()
+        .broker(&broker)
+        .response_check(IsrResponseCheck::EnvelopeAndPartition)
+        .call()
+        .await;
     check_partition(
         &broker,
-        offline_followers_row(ExpectedElrSetup {
-            isr: &[ReportedBrokerId(1)],
-            eligible: &[ReportedBrokerId(2)],
-            ..Default::default()
-        }),
+        offline_followers_row()
+            .isr(&[ReportedBrokerId(1)])
+            .eligible(&[ReportedBrokerId(2)])
+            .call(),
     )
     .await;
     handle.shutdown().await;

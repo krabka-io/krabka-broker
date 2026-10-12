@@ -227,7 +227,21 @@ mod tests {
         secret_partitions: Vec<PartitionIndex>,
     }
 
-    fn replay_initialized_group(broker: &Broker, setup: InitializedGroupSetup<'_>) {
+    #[bon::builder]
+    fn replay_initialized_group(
+        broker: &Broker,
+        #[builder(default = "g3")] group: &'_ str,
+        #[builder(default = uuid :: Uuid :: from_u128 (1))] orders: uuid::Uuid,
+        #[builder(default = uuid :: Uuid :: from_u128 (2))] secret: uuid::Uuid,
+        #[builder(default = vec ! [PartitionIndex (0) , PartitionIndex (1)])]
+        secret_partitions: Vec<PartitionIndex>,
+    ) {
+        let setup = InitializedGroupSetup {
+            group,
+            orders,
+            secret,
+            secret_partitions,
+        };
         let InitializedGroupSetup {
             group,
             orders,
@@ -368,14 +382,11 @@ mod tests {
             .await
             .expect("seed orders state");
 
-        replay_initialized_group(
-            &broker,
-            InitializedGroupSetup {
-                orders: orders_id,
-                secret: secret_id,
-                ..Default::default()
-            },
-        );
+        replay_initialized_group()
+            .broker(&broker)
+            .orders(orders_id)
+            .secret(secret_id)
+            .call();
 
         let result = describe_initialized_as_alice(
             &broker,
@@ -536,15 +547,13 @@ mod tests {
                 .await
                 .expect("seed secret state");
 
-            replay_initialized_group(
-                &broker,
-                InitializedGroupSetup {
-                    group: "g2",
-                    orders: orders_id,
-                    secret: secret_id,
-                    secret_partitions: vec![PartitionIndex(0)],
-                },
-            );
+            replay_initialized_group()
+                .broker(&broker)
+                .group("g2")
+                .orders(orders_id)
+                .secret(secret_id)
+                .secret_partitions(vec![PartitionIndex(0)])
+                .call();
 
             let result =
                 describe_initialized_as_alice(&broker, &image, request_group("g2", None)).await;

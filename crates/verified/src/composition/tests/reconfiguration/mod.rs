@@ -5,7 +5,7 @@ use crate::reconfiguration::{
     test_support::{KraftFeatureLevel, VoterCount},
 };
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 struct RequestFlags(u16);
 
 #[derive(Clone, Copy)]
@@ -90,27 +90,42 @@ fn request_cases() -> impl Strategy<Value = RequestCase> {
                     2 => TargetMembership::PresentSameDirectory,
                     _ => TargetMembership::PresentOtherDirectory,
                 };
-                let facts = generated_request(GeneratedRequestSetup {
-                    count: VoterCount(old.len()),
-                    flags: RequestFlags(bits),
-                    kind,
-                    membership,
-                    version: KraftFeatureLevel(version),
-                    requested: KraftFeatureLevel(requested),
-                });
+                let facts = generated_request()
+                    .count(old.len())
+                    .flags(bits)
+                    .kind(kind)
+                    .membership(membership)
+                    .version(version)
+                    .requested(requested)
+                    .call();
                 (old, node, facts)
             },
         )
 }
 
+#[bon::builder]
 fn generated_request(
-    setup: GeneratedRequestSetup,
+    #[builder(into, default = GeneratedRequestSetup::default().count)] count: VoterCount,
+    #[builder(into, default = GeneratedRequestSetup::default().flags)] flags: RequestFlags,
+    #[builder(default = GeneratedRequestSetup::default().kind)] kind: VoterChangeKind,
+    #[builder(default = GeneratedRequestSetup::default().membership)] membership: TargetMembership,
+    #[builder(into, default = GeneratedRequestSetup::default().version)] version: KraftFeatureLevel,
+    #[builder(into, default = GeneratedRequestSetup::default().requested)]
+    requested: KraftFeatureLevel,
 ) -> (
     ReconfigurationLeadership,
     CurrentVoterSet,
     VoterChangeRequest,
     TargetVoter,
 ) {
+    let setup = GeneratedRequestSetup {
+        count,
+        flags,
+        kind,
+        membership,
+        version,
+        requested,
+    };
     use RequestProperty::{
         CompatibleTargetVersion, ControlsCommitted, EpochCommitted, Leader, NoPendingChange,
         TargetCaughtUp, VotersSupportVersion,

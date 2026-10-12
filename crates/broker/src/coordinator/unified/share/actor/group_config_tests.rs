@@ -40,8 +40,11 @@ fn coordinator(
     Arc<GroupCoordinator>,
     krabka_protocol::primitives::uuid::Uuid,
 ) {
-    let (coordinator, topic_id) =
-        super::test_support::topic_coordinator(TopicMetadataSetup::four_partitions(), config);
+    let (coordinator, topic_id) = super::test_support::topic_coordinator()
+        .name(TopicMetadataSetup::four_partitions().name)
+        .partitions(TopicMetadataSetup::four_partitions().partitions)
+        .share(config)
+        .call();
     coordinator.set_metadata_source(fixed_source(group_image(overrides)));
     (coordinator, topic_id)
 }
@@ -50,10 +53,11 @@ fn coordinator(
 /// arrives, not with those the actor read before it began to wait for it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_heartbeat_runs_with_the_group_config_of_the_moment_it_arrives() {
-    let (coordinator, _) = super::test_support::topic_coordinator(
-        TopicMetadataSetup::four_partitions(),
-        ShareGroupConfig::assigning_at_once(),
-    );
+    let (coordinator, _) = super::test_support::topic_coordinator()
+        .name(TopicMetadataSetup::four_partitions().name)
+        .partitions(TopicMetadataSetup::four_partitions().partitions)
+        .share(ShareGroupConfig::assigning_at_once())
+        .call();
     let source = Arc::new(FakeMetadataSource::builder().build());
     coordinator.set_metadata_source(source.clone());
     let handle = coordinator.get_or_create_share("g");
@@ -154,20 +158,17 @@ async fn a_group_assigns_no_sooner_than_its_own_assignment_interval() {
     check_group_assignment_timing(
         async |id| {
             let handle = coordinator.get_or_create_share(id);
-            seed_initialized(
-                &handle,
-                InitializedTopicSetup {
-                    topic_id,
-                    partitions: vec![
-                        krabka_ids::PartitionIndex(0),
-                        krabka_ids::PartitionIndex(1),
-                        krabka_ids::PartitionIndex(2),
-                        krabka_ids::PartitionIndex(3),
-                    ],
-                    ..Default::default()
-                },
-            )
-            .await;
+            seed_initialized()
+                .handle(&handle)
+                .topic_id(topic_id)
+                .partitions(vec![
+                    krabka_ids::PartitionIndex(0),
+                    krabka_ids::PartitionIndex(1),
+                    krabka_ids::PartitionIndex(2),
+                    krabka_ids::PartitionIndex(3),
+                ])
+                .call()
+                .await;
             handle
         },
         join,

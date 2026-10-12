@@ -20,13 +20,12 @@ use crate::{
 fn image_with_orders_freeze(freeze: Option<(&str, PatternType)>) -> MetadataImage {
     let mut image = image_with_orders_topic();
     if let Some((scope, pattern_type)) = freeze {
-        image.apply(&MetadataRecord::V1TopicFreeze(topic_freeze_record(
-            FreezeSetup {
-                scope,
-                pattern_type,
-                ..Default::default()
-            },
-        )));
+        image.apply(&MetadataRecord::V1TopicFreeze(
+            topic_freeze_record()
+                .scope(scope)
+                .pattern_type(pattern_type)
+                .call(),
+        ));
     }
     image
 }

@@ -129,14 +129,11 @@ async fn describe_max_message_bytes(client: &Client, topic: &str) -> DescribeCon
 
 /// Drive `kafka-configs --alter --add-config max.message.bytes=<value>`.
 async fn set_max_message_bytes(client: &Client, topic: &str, value: &str) -> (i16, Option<String>) {
-    alter_topic_config(
-        client,
-        TopicConfigMutationSetup {
-            topic,
-            name: MAX_MESSAGE_BYTES,
-            value: Some(value),
-            ..Default::default()
-        },
-    )
-    .await
+    alter_topic_config()
+        .client(client)
+        .topic(topic)
+        .name(MAX_MESSAGE_BYTES)
+        .maybe_value(Some(value))
+        .call()
+        .await
 }

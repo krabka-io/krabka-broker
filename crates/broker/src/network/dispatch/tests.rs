@@ -97,14 +97,11 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         version: i16,
         body: &[u8],
     ) -> Vec<u8> {
-        let frame = request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(api_key),
-            api_version: krabka_ids::ApiVersion(version),
-            correlation_id: FrameCorrelationId(7),
-            tagged: Some(&[0]),
-            body,
-            ..Default::default()
-        });
+        let frame = request_frame()
+            .api_key(api_key)
+            .api_version(version)
+            .body(body)
+            .call();
         framed.send(frame.freeze()).await.expect("send request");
         let resp = framed
             .next()
@@ -189,14 +186,7 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
         let server = tokio::spawn(serve);
 
         let mut framed = test_support::connect_framed(addr, "connect").await;
-        let req_setup = RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(api_key),
-            api_version: krabka_ids::ApiVersion(version),
-            correlation_id: FrameCorrelationId(7),
-            tagged: entry.body_flexible(version).then_some(&[0][..]),
-            ..Default::default()
-        };
-        let frame = request_frame(req_setup);
+        let frame = request_frame().api_key(api_key).api_version(version).call();
         framed.send(frame.freeze()).await.expect("send request");
         check!(
             framed.next().await.is_none(),
@@ -252,13 +242,7 @@ async fn drive_one_frame_per_connection(
             .get(api_key)
             .is_some_and(|entry| entry.body_flexible(version));
         let mut framed = test_support::connect_framed(addr, "connect").await;
-        let frame = request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(api_key),
-            api_version: krabka_ids::ApiVersion(version),
-            correlation_id: FrameCorrelationId(correlation_id),
-            tagged: flexible.then_some(&[0][..]),
-            ..Default::default()
-        });
+        let frame = request_frame().api_key(api_key).api_version(version).call();
         framed.send(frame.freeze()).await.expect("send request");
 
         outcomes.push(match framed.next().await {
@@ -553,26 +537,19 @@ async fn a_frame_that_is_not_a_request_closes_the_connection_as_a_decode_error()
 async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mechanism() {
     // Produce (api_key 0) v0: a well-formed request, and not one of the three
     // api_keys an unauthenticated connection may send.
-    let produce = || {
-        request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(0),
-            ..Default::default()
-        })
-        .freeze()
-    };
+    let produce = || request_frame().api_key(0).call().freeze();
     // SaslHandshake (api_key 17) v1 for PLAIN. The body is one non-flexible
     // STRING: an i16 length and the mechanism name.
     let handshake = || {
         let mut body = BytesMut::new();
         body.put_i16(5);
         body.put_slice(b"PLAIN");
-        request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(17),
-            api_version: krabka_ids::ApiVersion(1),
-            body: &body,
-            ..Default::default()
-        })
-        .freeze()
+        request_frame()
+            .api_key(17)
+            .api_version(1)
+            .body(&body)
+            .call()
+            .freeze()
     };
 
     let cases = [
@@ -656,22 +633,29 @@ struct EncodedFrameSetup {
     header: RequestHeader,
 }
 
+#[bon::builder]
 fn encoded_request_frame<T: krabka_protocol::Encode>(
     body: &T,
-    setup: EncodedFrameSetup,
+    #[builder(into, default = krabka_ids :: ApiKey (18))] api_key: krabka_ids::ApiKey,
+    #[builder(into, default)] api_version: krabka_ids::ApiVersion,
+    #[builder(into, default = FrameCorrelationId (1))] correlation_id: FrameCorrelationId,
+    #[builder(default)] header: RequestHeader,
 ) -> bytes::Bytes {
+    let setup = EncodedFrameSetup {
+        api_key,
+        api_version,
+        correlation_id,
+        header,
+    };
     let mut encoded = BytesMut::with_capacity(body.encoded_len(setup.api_version.0));
     body.encode(&mut encoded, setup.api_version.0)
         .expect("encode request body");
-    request_frame(RequestFrameSetup {
-        api_key: setup.api_key,
-        api_version: setup.api_version,
-        correlation_id: setup.correlation_id,
-        tagged: matches!(setup.header, RequestHeader::Flexible).then_some(&[0][..]),
-        body: &encoded,
-        ..Default::default()
-    })
-    .freeze()
+    request_frame()
+        .api_key(setup.api_key)
+        .api_version(setup.api_version)
+        .body(&encoded)
+        .call()
+        .freeze()
 }
 
 /// The response of one SASL frame that a non-SASL listener received.
@@ -711,31 +695,25 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
     const METADATA: i16 = 3;
 
     let handshake = |mechanism: &str| {
-        encoded_request_frame(
-            &SaslHandshakeRequest {
+        encoded_request_frame()
+            .body(&SaslHandshakeRequest {
                 mechanism: mechanism.to_string(),
                 ..Default::default()
-            },
-            EncodedFrameSetup {
-                api_key: krabka_ids::ApiKey(HANDSHAKE),
-                api_version: krabka_ids::ApiVersion(1),
-                ..Default::default()
-            },
-        )
+            })
+            .api_key(HANDSHAKE)
+            .api_version(1)
+            .call()
     };
     let authenticate = || {
-        encoded_request_frame(
-            &SaslAuthenticateRequest {
+        encoded_request_frame()
+            .body(&SaslAuthenticateRequest {
                 auth_bytes: bytes::Bytes::from_static(b"\0alice\0wonderland"),
                 ..Default::default()
-            },
-            EncodedFrameSetup {
-                api_key: krabka_ids::ApiKey(AUTHENTICATE),
-                api_version: krabka_ids::ApiVersion(2),
-                header: RequestHeader::Flexible,
-                ..Default::default()
-            },
-        )
+            })
+            .api_key(AUTHENTICATE)
+            .api_version(2)
+            .header(RequestHeader::Flexible)
+            .call()
     };
     let refused_handshake = SaslAnswer::Handshake(SaslHandshakeResponse {
         error_code: codes::ILLEGAL_SASL_STATE,
@@ -834,22 +812,22 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
         check!(&answer == expected_answer, "{case}");
 
         framed
-            .send(encoded_request_frame(
-                &MetadataRequest {
-                    topics: Some(vec![MetadataRequestTopic {
-                        name: Some(TOPIC.to_string()),
+            .send(
+                encoded_request_frame()
+                    .body(&MetadataRequest {
+                        topics: Some(vec![MetadataRequestTopic {
+                            name: Some(TOPIC.to_string()),
+                            ..Default::default()
+                        }]),
+                        allow_auto_topic_creation: false,
                         ..Default::default()
-                    }]),
-                    allow_auto_topic_creation: false,
-                    ..Default::default()
-                },
-                EncodedFrameSetup {
-                    api_key: krabka_ids::ApiKey(METADATA),
-                    api_version: krabka_ids::ApiVersion(12),
-                    correlation_id: FrameCorrelationId(2),
-                    header: RequestHeader::Flexible,
-                },
-            ))
+                    })
+                    .api_key(METADATA)
+                    .api_version(12)
+                    .correlation_id(2)
+                    .header(RequestHeader::Flexible)
+                    .call(),
+            )
             .await
             .expect("send Metadata");
         let response = framed
@@ -911,22 +889,17 @@ mod request_budget {
     /// An `ApiVersions` v0 request with an empty body: the smallest frame the
     /// loop answers without any authorization or metadata in the way.
     fn api_versions_frame(correlation_id: i32) -> bytes::Bytes {
-        request_frame(RequestFrameSetup {
-            correlation_id: FrameCorrelationId(correlation_id),
-            ..Default::default()
-        })
-        .freeze()
+        request_frame().call().freeze()
     }
 
     /// An `ApiVersions` request padded past [`BUDGET_BYTES`]. The body is trailing
     /// bytes the v0 decoder ignores, so what refuses the frame is the budget
     /// and not the decode.
     fn oversized_frame() -> bytes::Bytes {
-        request_frame(RequestFrameSetup {
-            body: &vec![0_u8; 2 * BUDGET_BYTES],
-            ..Default::default()
-        })
-        .freeze()
+        request_frame()
+            .body(&vec![0_u8; 2 * BUDGET_BYTES])
+            .call()
+            .freeze()
     }
 
     use crate::{
@@ -1143,7 +1116,7 @@ mod log_levels {
         let open_client = match peer {
             Peer::OneRequest => {
                 client
-                    .send(request_frame(RequestFrameSetup::default()).freeze())
+                    .send(request_frame().call().freeze())
                     .await
                     .expect("send the request");
                 client
@@ -1267,14 +1240,11 @@ mod request_limit {
         }
         .encode(&mut body, 4)
         .expect("encode DescribeConfigs");
-        request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(32),
-            api_version: krabka_ids::ApiVersion(4),
-            correlation_id: FrameCorrelationId(correlation_id),
-            tagged: Some(&[0]),
-            body: &body,
-            ..Default::default()
-        })
+        request_frame()
+            .api_key(32)
+            .api_version(4)
+            .body(&body)
+            .call()
     }
 
     /// Serves one connection on a broker whose `socket.request.max.bytes` is
@@ -1307,11 +1277,9 @@ mod request_limit {
         let small_request = describe_broker_configs(7);
         assert!(small_request.len() - 4 <= LIMIT);
         // An ApiVersions v0 request whose client id alone is over the limit.
-        let oversize_request = request_frame(RequestFrameSetup {
-            correlation_id: FrameCorrelationId(8),
-            client_id: Some(&[b'c'; LIMIT + 1]),
-            ..Default::default()
-        });
+        let oversize_request = request_frame()
+            .maybe_client_id(Some(&[b'c'; LIMIT + 1]))
+            .call();
         assert!(oversize_request.len() - 4 > LIMIT);
 
         let answer = answer_under_limit(small_request)

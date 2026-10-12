@@ -632,7 +632,7 @@ async fn writes_append_updates_then_one_snapshot_at_the_threshold() {
         ..ShareCoordinatorConfig::default()
     };
     let (coord, _reg, _clock) = configured_coordinator(dir.path(), config);
-    let image = initialize_led_group(&coord, StateSeedSetup::default()).await;
+    let image = initialize_led_group().coordinator(&coord).call().await;
     let writes = [
         (
             0,
@@ -755,7 +755,7 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
                 ..ShareCoordinatorConfig::default()
             };
             let (coord, reg, _clock) = configured_coordinator(dir.path(), config);
-            let image = initialize_led_group(&coord, StateSeedSetup::default()).await;
+            let image = initialize_led_group().coordinator(&coord).call().await;
             let state_partition = coord.state_partition_for("g", &TOPIC, 0);
             let part = reg
                 .get(SHARE_STATE_TOPIC, state_partition)

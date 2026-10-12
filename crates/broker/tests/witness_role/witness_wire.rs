@@ -36,9 +36,7 @@ pub(crate) async fn create_topic(client: &Client) -> WireUuid {
 
 fn produce_request(topic_id: WireUuid, n: i32) -> ProduceRequest {
     batch_request(
-        value_batch(ValueBatchSetup {
-            records: ValueRecordCount(n),
-        }),
+        value_batch().records(n).call(),
         SinglePartitionProduceSetup {
             topic: (TOPIC).into(),
             topic_id,

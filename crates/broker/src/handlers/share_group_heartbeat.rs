@@ -546,12 +546,14 @@ mod tests {
         let allowed_id = uuid::Uuid::from_u128(1);
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g"), describe_acl("topic-a")];
-        records.extend(topic_with_partitions(GroupTopicSetup {
-            name: "topic-a",
-            topic_id: allowed_id,
-            partitions: PartitionCount(1),
-            node,
-        }));
+        records.extend(
+            topic_with_partitions()
+                .name("topic-a")
+                .topic_id(allowed_id)
+                .partitions(1)
+                .node(node)
+                .call(),
+        );
         broker
             .controller
             .submit_change(records)

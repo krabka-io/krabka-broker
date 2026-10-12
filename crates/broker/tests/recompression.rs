@@ -57,17 +57,16 @@ async fn start_broker() -> (BrokerHandle, SocketAddr) {
 
 async fn create_topic_with_compression(addr: SocketAddr, topic: &str, codec: &str) {
     let req = CreateTopicsRequest {
-        topics: vec![crate::support::topics::creatable_topic_with_configs(
-            crate::support::topics::ConfiguredTopicSetup {
-                name: topic.into(),
-                configs: vec![CreatableTopicConfig {
+        topics: vec![
+            crate::support::topics::creatable_topic_with_configs()
+                .name(topic.into())
+                .configs(vec![CreatableTopicConfig {
                     name: "compression.type".into(),
                     value: Some(codec.into()),
                     ..Default::default()
-                }],
-                ..Default::default()
-            },
-        )],
+                }])
+                .call(),
+        ],
         timeout_ms: 5_000,
         ..Default::default()
     };
@@ -116,11 +115,10 @@ async fn produce_gzip(addr: SocketAddr, topic: &str, topic_id: Uuid, value: &[u8
 async fn fetch_first_batch(addr: SocketAddr, topic: &str, topic_id: Uuid) -> RecordBatch {
     let req = FetchRequest {
         replica_id: -1,
-        ..single_partition_fetch(SinglePartitionFetchSetup {
-            topic: topic.into(),
-            topic_id,
-            ..Default::default()
-        })
+        ..single_partition_fetch()
+            .topic(topic.into())
+            .topic_id(topic_id)
+            .call()
     };
     let version: i16 = 12;
     let (_, r): (usize, FetchResponse) =

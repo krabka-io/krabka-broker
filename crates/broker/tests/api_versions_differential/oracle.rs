@@ -104,16 +104,13 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
             },
         ],
         inter_broker_listener_name: "BROKER".to_string(),
-        ..jvm_broker_config(
-            dir.path().to_path_buf(),
-            JvmBrokerSetup {
-                listen: client_addr,
-                controller: controller_addr,
-                advertised: listeners.advertised.clone(),
-                voters: controller_voters(&[(1, controller_addr)]),
-                ..Default::default()
-            },
-        )
+        ..jvm_broker_config()
+            .log_dir(dir.path().to_path_buf())
+            .listen(client_addr)
+            .controller(controller_addr)
+            .advertised(listeners.advertised.clone())
+            .voters(controller_voters(&[(1, controller_addr)]))
+            .call()
     };
     let handle = Broker::start(config).await.expect("start broker");
     eprintln!(
@@ -126,13 +123,12 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
 /// Run the tool from a throwaway container against the krabka broker that
 /// `listeners` advertises, and return its stdout.
 pub(crate) fn krabka_api_versions(listeners: &JvmListeners) -> String {
-    let out = jvm_docker_command(JvmDockerSetup {
-        image: ORACLE_IMAGE,
-        args: &[TOOL, "--bootstrap-server", &listeners.advertised],
-        ..Default::default()
-    })
-    .output()
-    .expect("spawn docker run kafka-broker-api-versions");
+    let out = jvm_docker_command()
+        .image(ORACLE_IMAGE)
+        .args(&[TOOL, "--bootstrap-server", &listeners.advertised])
+        .call()
+        .output()
+        .expect("spawn docker run kafka-broker-api-versions");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(
         out.status.success(),

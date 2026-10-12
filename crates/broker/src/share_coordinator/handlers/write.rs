@@ -199,15 +199,13 @@ mod tests {
 
         for (index, (led, req, expected, summary)) in rows.into_iter().enumerate() {
             let dir = tempfile::TempDir::new().expect("tempdir");
-            let (coordinator, image) = super::super::test_support::initialized_state(
-                dir.path(),
-                super::super::test_support::StateFixtureSetup {
-                    topic: TOPIC,
-                    partitions: PartitionCount(8),
-                    partition: krabka_ids::PartitionIndex(4),
-                },
-            )
-            .await;
+            let (coordinator, image) = super::super::test_support::initialized_state()
+                .log_dir(dir.path())
+                .topic(TOPIC)
+                .partitions(8)
+                .partition(4)
+                .call()
+                .await;
             super::super::test_support::retain_leadership(&coordinator, led).await;
 
             let resp = write_state(&coordinator, &image, req).await;

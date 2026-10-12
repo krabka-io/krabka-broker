@@ -44,13 +44,12 @@ async fn refresher_populates_handle_then_stops_on_shutdown() {
     let handle = JwksHandle::default();
     assert!(handle.load().is_empty());
     let shutdown = CancellationToken::new();
-    let refresher = test_refresher(
-        handle.clone(),
-        shutdown.clone(),
-        RefresherSetup { endpoint: format!("http://{addr}/jwks"), timer: // The production timer, so that one test covers the real thing
-        // driving this loop. `StdTimer` needs no Tokio runtime of its own.
-        Arc::new(StdTimer::new()), ..Default::default() },
-    );
+    let refresher = test_refresher()
+        .handle(handle.clone())
+        .shutdown(shutdown.clone())
+        .endpoint(format!("http://{addr}/jwks"))
+        .timer(Arc::new(StdTimer::new()))
+        .call();
     let task = tokio::spawn(refresher.run());
 
     // Poll until the immediate first fetch lands.
@@ -69,13 +68,13 @@ async fn refresher_fetches_jwks_over_https_with_custom_trust() {
     let (addr, srv_shutdown, ca_path) = serve_jwks_https(JWKS_BODY).await;
     let handle = JwksHandle::default();
     let shutdown = CancellationToken::new();
-    let refresher = test_refresher(
-        handle.clone(),
-        shutdown.clone(),
-        RefresherSetup { endpoint: format!("https://127.0.0.1:{}/jwks", addr.port()), tls_trust: Some(ca_path), timer: // This test asserts on the t=0 fetch alone, so the periodic tick is
-        // parked rather than re-fetching over TLS every 50 ms of real time.
-        dormant_timer(), ..Default::default() },
-    );
+    let refresher = test_refresher()
+        .handle(handle.clone())
+        .shutdown(shutdown.clone())
+        .endpoint(format!("https://127.0.0.1:{}/jwks", addr.port()))
+        .maybe_tls_trust(Some(ca_path))
+        .timer(dormant_timer())
+        .call();
     let task = tokio::spawn(refresher.run());
     check_first_fetch_and_stop(
         "first HTTPS JWKS fetch populates handle",
@@ -109,16 +108,14 @@ async fn refresher_https_fetch_fails_when_custom_trust_doesnt_match_server_cert(
     let shutdown = CancellationToken::new();
     let interval = millis(50);
     let clock = ManualMonotonicClock::new_shared();
-    let refresher = test_refresher(
-        handle.clone(),
-        shutdown.clone(),
-        RefresherSetup {
-            endpoint: format!("https://127.0.0.1:{}/jwks", addr.port()),
-            interval,
-            tls_trust: Some(bogus_ca),
-            timer: clock.new_timer(),
-        },
-    );
+    let refresher = test_refresher()
+        .handle(handle.clone())
+        .shutdown(shutdown.clone())
+        .endpoint(format!("https://127.0.0.1:{}/jwks", addr.port()))
+        .interval(interval)
+        .maybe_tls_trust(Some(bogus_ca))
+        .timer(clock.new_timer())
+        .call();
     let task = tokio::spawn(refresher.run());
 
     // Drive several refresh intervals. Each round blocks (bounded real time,
@@ -434,15 +431,12 @@ fn dead_timer_refresher(
     handle: &JwksHandle,
     timer: &Arc<BrokenTimer>,
 ) -> JwksRefresher {
-    test_refresher(
-        handle.clone(),
-        CancellationToken::new(),
-        RefresherSetup {
-            endpoint: format!("http://{addr}/jwks"),
-            timer: timer.injectable(),
-            ..Default::default()
-        },
-    )
+    test_refresher()
+        .handle(handle.clone())
+        .shutdown(CancellationToken::new())
+        .endpoint(format!("http://{addr}/jwks"))
+        .timer(timer.injectable())
+        .call()
 }
 
 async fn check_first_deadline_failure(failure: TimerFailure) {

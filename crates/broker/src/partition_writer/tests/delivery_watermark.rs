@@ -95,13 +95,7 @@ async fn a_produce_to_an_immediate_topic_keeps_the_mirror_at_the_log_end() {
         },
     );
 
-    let ack_rx = queue_batch(
-        &tx,
-        sample_batch(EmptyPayloadBatchSetup {
-            count: RecordCount(3),
-        }),
-    )
-    .await;
+    let ack_rx = queue_batch(&tx, sample_batch().count(3).call()).await;
     ack_rx.await.expect("ack").expect("append ok");
 
     check!(crate::delivery::test_support::wait_until(|| delivery.watermark() == Offset(3)).await);

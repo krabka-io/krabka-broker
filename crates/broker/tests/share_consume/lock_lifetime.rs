@@ -105,14 +105,11 @@ async fn renew_extends_lock_not_redelivered() {
     // expires) to reset the deadline to renew-time + 500ms ≈ T0+700ms. Epoch
     // is now 2. This sleep proves renew timing; it is NOT a flaky state-guess.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let renew = share_renew(
-        &client,
-        ShareRenewSetup {
-            session: ShareSessionSetup::joined(&member, tid),
-            ..Default::default()
-        },
-    )
-    .await;
+    let renew = share_renew()
+        .client(&client)
+        .session(ShareSessionSetup::joined(&member, tid))
+        .call()
+        .await;
     assert!(
         renew.error_code == NONE,
         "renew must succeed for an acquired offset, got {}",
@@ -163,13 +160,14 @@ async fn lock_fixture(
     uuid::Uuid,
     String,
 ) {
-    let (permit, broker, client, dir, tid) =
-        permitted_topic_fixture(ShareTopicSetup::default(), |config| {
+    let (permit, broker, client, dir, tid) = permitted_topic_fixture()
+        .customize(|config| {
             config.share_group.record_lock_duration = lock_duration;
             if let Some(attempts) = max_delivery_attempts {
                 config.share_group.max_delivery_attempts = attempts;
             }
         })
+        .call()
         .await;
     let (member, _) = initialize_consumption(
         &broker,

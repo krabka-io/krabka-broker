@@ -53,7 +53,13 @@ pub(crate) fn open_partition(
     let partition_dir = partition_dir(dir, topic, index.0);
     std::fs::create_dir_all(&partition_dir).expect("create the partition directory");
     let log = Log::open(&partition_dir, LogConfig::default()).expect("open the log");
-    let partition = spawn_standalone_partition(dir, log, setup);
+    let partition = spawn_standalone_partition()
+        .log_dir(dir)
+        .log(log)
+        .topic(setup.topic)
+        .partition(setup.partition)
+        .storage(setup.storage)
+        .call();
     registry.insert(topic.into(), index, partition);
 }
 

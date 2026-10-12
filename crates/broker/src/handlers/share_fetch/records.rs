@@ -707,15 +707,12 @@ mod tests {
         let clock: Arc<dyn WallClock> = Arc::new(FixedWallClock::new(wall_at(NOW_MS)));
 
         let dir = tempfile::tempdir().expect("a log root");
-        let scheduled = scheduled_partition(
-            &dir,
-            &clock,
-            ScheduleSetup {
-                activations: activations.iter().copied().map(UnixMillis).collect(),
-                leader: krabka_ids::NodeId(0),
-                ..Default::default()
-            },
-        );
+        let scheduled = scheduled_partition()
+            .dir(&dir)
+            .clock(&clock)
+            .activations(activations.iter().copied().map(UnixMillis).collect())
+            .leader(0)
+            .call();
         let ranges = pending_activation_ranges(&scheduled, Offset(0), Offset(6), NOW_MS)
             .await
             .expect("scan the schedule");
@@ -730,16 +727,14 @@ mod tests {
 
         // An immediate topic answers with nothing whatever its timestamps say.
         let immediate_dir = tempfile::tempdir().expect("a log root");
-        let immediate = scheduled_partition(
-            &immediate_dir,
-            &clock,
-            ScheduleSetup {
-                topic: "immediate",
-                policy: DeliveryPolicy::Immediate,
-                activations: activations.iter().copied().map(UnixMillis).collect(),
-                leader: krabka_ids::NodeId(0),
-            },
-        );
+        let immediate = scheduled_partition()
+            .dir(&immediate_dir)
+            .clock(&clock)
+            .topic("immediate")
+            .policy(DeliveryPolicy::Immediate)
+            .activations(activations.iter().copied().map(UnixMillis).collect())
+            .leader(0)
+            .call();
         let none = pending_activation_ranges(&immediate, Offset(0), Offset(6), NOW_MS)
             .await
             .expect("scan the schedule");

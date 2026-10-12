@@ -81,10 +81,22 @@ pub(crate) struct RacingAppendLog {
     racing: StdMutex<Option<RacingAppendSetup>>,
 }
 
+#[bon::bon]
 impl RacingAppendLog {
     /// Race the setup's keyed record onto its partition, as the flusher
     /// publishes every index record.
-    pub(crate) fn new(inner: Arc<dyn MetadataEventLog>, setup: RacingAppendSetup) -> Arc<Self> {
+    #[builder]
+    pub(crate) fn build(
+        inner: Arc<dyn MetadataEventLog>,
+        #[builder(into, default)] partition: PartitionIndex,
+        #[builder(default)] key: Bytes,
+        #[builder(default)] event: Bytes,
+    ) -> Arc<Self> {
+        let setup = RacingAppendSetup {
+            partition,
+            key,
+            event,
+        };
         Arc::new(Self {
             inner,
             racing: StdMutex::new(Some(setup)),
@@ -163,7 +175,25 @@ impl WalFlushSetup<'_> {
     }
 }
 
-pub(crate) fn flush_record(setup: WalFlushSetup<'_>) -> WalFlushRecord {
+#[bon::builder]
+pub(crate) fn flush_record(
+    #[builder(default = WalFlushSetup::default().topic_id)] topic_id: uuid::Uuid,
+    #[builder(default = WalFlushSetup::default().object_key)] object_key: &'_ str,
+    #[builder(into, default = WalFlushSetup::default().first_offset)]
+    first_offset: krabka_log::Offset,
+    #[builder(into, default = WalFlushSetup::default().last_offset)]
+    last_offset: krabka_log::Offset,
+    #[builder(into, default = WalFlushSetup::default().max_timestamp)] max_timestamp: UnixMillis,
+    #[builder(default = WalFlushSetup::default().byte_len)] byte_len: krabka_units::ByteSize,
+) -> WalFlushRecord {
+    let setup = WalFlushSetup {
+        topic_id,
+        object_key,
+        first_offset,
+        last_offset,
+        max_timestamp,
+        byte_len,
+    };
     use krabka_units::convert::ByteSizeExt;
 
     use crate::diskless::wal_index::{WalFlushRecord, WalIndexEntry};

@@ -96,10 +96,9 @@ async fn client_metrics_config_alter_describe_list_round_trip() {
     let (_cluster, client) = start_n_node_client(1, "client-metrics-config-test").await;
 
     // ── Step 1: IncrementalAlterConfigs ──────────────────────────────────────
-    let alter_req = client_metrics_subscription(ClientMetricsSubscriptionSetup {
-        metrics: "org.apache.kafka.consumer.",
-        ..Default::default()
-    });
+    let alter_req = client_metrics_subscription()
+        .metrics("org.apache.kafka.consumer.")
+        .call();
 
     let alter_resp: IncrementalAlterConfigsResponse = client
         .send(alter_req)

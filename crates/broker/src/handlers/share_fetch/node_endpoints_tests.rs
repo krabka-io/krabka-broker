@@ -70,10 +70,7 @@ async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {
         .await
         .expect("client build");
     let response = client
-        .send(configured_topic_request(CreateTopicSetup {
-            topic: "local",
-            ..Default::default()
-        }))
+        .send(configured_topic_request().topic("local").call())
         .await
         .expect("CreateTopics");
     assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
@@ -92,12 +89,12 @@ fn partition(topic: &str, partition: i32, leader: i32, epoch: i32) -> MetadataRe
     let leader = NodeId(u64::try_from(leader).expect("a node id"));
     MetadataRecord::V1Partition(PartitionRecord {
         leader_epoch: LeaderEpoch(epoch),
-        ..replicated_partition(ReplicatedPartitionSetup {
-            topic,
-            partition: krabka_ids::PartitionIndex(partition),
-            leader,
-            replicas: &[leader],
-        })
+        ..replicated_partition()
+            .topic(topic)
+            .partition(partition)
+            .leader(leader)
+            .replicas(&[leader])
+            .call()
     })
 }
 
@@ -195,15 +192,12 @@ async fn share_fetch_sends_the_endpoint_of_each_remote_leader_once() {
         ..Default::default()
     };
     let version = share_fetch_response::MAX_VERSION;
-    let response = share_fetch_wire(
-        &broker,
-        &request,
-        ShareWireSetup {
-            version: krabka_ids::ApiVersion(version),
-            ..Default::default()
-        },
-    )
-    .await;
+    let response = share_fetch_wire()
+        .broker(&broker)
+        .request(&request)
+        .version(version)
+        .call()
+        .await;
 
     let expected = ShareFetchResponse {
         acquisition_lock_timeout_ms: 30_000,

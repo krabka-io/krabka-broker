@@ -337,13 +337,7 @@ mod tests {
         let client = plaintext_client();
         let partitions = std::sync::Arc::new(PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
-        let part = open_partition(
-            dir.path(),
-            StandalonePartitionSetup {
-                topic: "t",
-                ..Default::default()
-            },
-        );
+        let part = open_partition().log_dir(dir.path()).topic("t").call();
         part.install_leader_change(2, 0).await;
         partitions.insert("t".into(), PartitionIndex(0), part.clone());
         let mut entry = marker_entry();
@@ -407,13 +401,10 @@ mod tests {
         let client = plaintext_client();
         let partitions = std::sync::Arc::new(PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
-        let local_partition = open_partition(
-            dir.path(),
-            StandalonePartitionSetup {
-                topic: "local-topic",
-                ..Default::default()
-            },
-        );
+        let local_partition = open_partition()
+            .log_dir(dir.path())
+            .topic("local-topic")
+            .call();
         local_partition.install_leader_change(1, 0).await;
         partitions.insert("local-topic".into(), PIdx(0), local_partition.clone());
 
@@ -493,13 +484,7 @@ mod tests {
         for (case, catches_up, written, failure) in cases {
             let partitions = std::sync::Arc::new(PartitionRegistry::new());
             let dir = tempfile::tempdir().expect("tempdir");
-            let part = open_partition(
-                dir.path(),
-                StandalonePartitionSetup {
-                    topic: "t",
-                    ..Default::default()
-                },
-            );
+            let part = open_partition().log_dir(dir.path()).topic("t").call();
             part.install_leader_change(1, 0).await;
             // The follower has not fetched, so it holds the high watermark at
             // zero.

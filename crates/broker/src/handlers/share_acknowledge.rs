@@ -331,13 +331,11 @@ mod tests {
     #[tokio::test]
     async fn handle_disabled_feature_returns_top_level_unsupported_version() {
         let version = share_acknowledge_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_share_broker(
-            std::sync::Arc::new(AllowAllAuthorizer),
-            ShareBrokerSetup {
-                support: ShareApiSupport::Disabled,
-            },
-        )
-        .await;
+        let (broker_handle, _dir) = start_share_broker()
+            .authorizer(std::sync::Arc::new(AllowAllAuthorizer))
+            .support(ShareApiSupport::Disabled)
+            .call()
+            .await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "alice");
 
@@ -359,15 +357,12 @@ mod tests {
     use crate::handlers::test_support::{DenyTopicRead, TopicIdRef as TopicRef};
 
     async fn create_topic(broker: &BrokerHandle, name: &str) -> ProtoUuid {
-        create_topic_from_test_support(
-            broker,
-            ClientTopicSetup {
-                client_id: "share-acknowledge-resolution-test",
-                name,
-                ..Default::default()
-            },
-        )
-        .await
+        create_topic_from_test_support()
+            .broker(broker)
+            .client_id("share-acknowledge-resolution-test")
+            .name(name)
+            .call()
+            .await
     }
 
     /// Open a share session for `member` on partition 0 of `topic_id`,
@@ -471,10 +466,9 @@ mod tests {
     async fn partition_row_error_follows_topic_id() {
         initialized_share_topic!(
             (broker_handle, _dir, known),
-            crate::test_support::start_share_broker(
-                std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
-                crate::test_support::ShareBrokerSetup::default()
-            ),
+            crate::test_support::start_share_broker()
+                .authorizer(std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer))
+                .call(),
             "ack-resolution",
             "g1"
         );

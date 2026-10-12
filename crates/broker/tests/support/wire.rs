@@ -94,7 +94,20 @@ macro_rules! socket_round_trip_fixture {
             setup: $crate::support::wire::SocketExchangeSetup,
             body: &[u8],
         ) -> ::std::io::Result<Vec<u8>> {
-            $crate::kafka_wire::round_trip(stream, $crate::kafka_wire::ExchangeSetup::for_socket(setup, $client_id), body).await
+            {
+                let exchange = $crate::kafka_wire::ExchangeSetup::for_socket(setup, $client_id);
+                $crate::kafka_wire::round_trip()
+                    .stream(stream)
+                    .api_key(exchange.api_key.0)
+                    .version(exchange.version.0)
+                    .correlation(exchange.correlation.0)
+                    .client_id(exchange.client_id)
+                    .header(exchange.header)
+                    .response_header(exchange.response_header)
+                    .body(body)
+                    .call()
+                    .await
+            }
         }
     };
 }
@@ -109,7 +122,28 @@ macro_rules! flexible_round_trip_fixture {
             setup: $crate::support::wire::ApiRequestSetup,
             body: &[u8],
         ) -> ::std::io::Result<Vec<u8>> {
-            $crate::kafka_wire::round_trip(stream, $crate::kafka_wire::ExchangeSetup::for_socket($crate::support::wire::SocketExchangeSetup { api_key: setup.api_key, version: setup.version, correlation: $crate::support::wire::CorrelationId($correlation), header: $crate::support::wire::HeaderEncoding::Flexible }, $client_id), body).await
+            {
+                let exchange = $crate::kafka_wire::ExchangeSetup::for_socket(
+                    $crate::support::wire::SocketExchangeSetup {
+                        api_key: setup.api_key,
+                        version: setup.version,
+                        correlation: $crate::support::wire::CorrelationId($correlation),
+                        header: $crate::support::wire::HeaderEncoding::Flexible,
+                    },
+                    $client_id,
+                );
+                $crate::kafka_wire::round_trip()
+                    .stream(stream)
+                    .api_key(exchange.api_key.0)
+                    .version(exchange.version.0)
+                    .correlation(exchange.correlation.0)
+                    .client_id(exchange.client_id)
+                    .header(exchange.header)
+                    .response_header(exchange.response_header)
+                    .body(body)
+                    .call()
+                    .await
+            }
         }
     };
 }
@@ -160,7 +194,27 @@ pub struct WireFrameSetup<'a> {
     pub length_context: Option<&'a str>,
 }
 
-pub fn request_frame(setup: WireFrameSetup<'_>) -> bytes::BytesMut {
+#[bon::builder]
+pub fn request_frame(
+    #[builder(into, default = krabka_ids :: ApiKey (18))] api_key: krabka_ids::ApiKey,
+    #[builder(into, default)] version: krabka_ids::ApiVersion,
+    #[builder(into, default = CorrelationId (1))] correlation: CorrelationId,
+    #[builder(default)] header: HeaderEncoding,
+    #[builder(default = "test-client")] client_id: &'_ str,
+    #[builder(default)] body: &'_ [u8],
+    capacity: Option<ByteSize>,
+    length_context: Option<&'_ str>,
+) -> bytes::BytesMut {
+    let setup = WireFrameSetup {
+        api_key,
+        version,
+        correlation,
+        header,
+        client_id,
+        body,
+        capacity,
+        length_context,
+    };
     use bytes::BufMut;
     use krabka_units::convert::ByteSizeExt;
     let WireFrameSetup {

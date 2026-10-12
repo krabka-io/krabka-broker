@@ -339,12 +339,9 @@ mod tests {
     use crate::coordinator::unified::{ClientIdentity, actor::member_state::build_member};
 
     fn joined(member_id: &str) -> MemberState {
-        super::super::test_support::subscribed_member(
-            super::super::test_support::ConsumerMemberSetup {
-                member_id,
-                ..Default::default()
-            },
-        )
+        super::super::test_support::subscribed_member()
+            .member_id(member_id)
+            .call()
     }
 
     /// Kafka writes a record only where a transition changed what it holds:

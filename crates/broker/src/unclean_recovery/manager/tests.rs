@@ -46,12 +46,11 @@ fn source_with(leader: Option<u64>, image: MetadataImage) -> Arc<FakeMetadataSou
 const NODE: u64 = 10;
 
 fn image_with_partition(leader: u64, replicas: &[u64]) -> MetadataImage {
-    img_with_partition(ElectionSetup {
-        leader: krabka_raft::NodeId(leader),
-        replicas: &replica_nodes(replicas),
-        isr: &replica_nodes(replicas),
-        ..Default::default()
-    })
+    img_with_partition()
+        .leader(leader)
+        .replicas(&replica_nodes(replicas))
+        .isr(&replica_nodes(replicas))
+        .call()
 }
 
 /// Rewrite the ISR the record for partition 0 of topic `t` names, leaving

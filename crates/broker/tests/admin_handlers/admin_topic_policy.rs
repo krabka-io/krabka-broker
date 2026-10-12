@@ -33,11 +33,12 @@ use crate::{
 const POLICY_VIOLATION: i16 = 44;
 
 fn create_request(name: &str, replication_factor: i16) -> CreateTopicsRequest {
-    create_topic_request(creatable_topic(ConfiguredTopicSetup {
-        name: (name).into(),
-        replicas: TopicReplicationFactor(replication_factor),
-        ..Default::default()
-    }))
+    create_topic_request(
+        creatable_topic()
+            .name((name).into())
+            .replicas(replication_factor)
+            .call(),
+    )
 }
 
 /// A replication factor under the policy floor is refused with 44 and a
@@ -190,8 +191,8 @@ async fn altering_a_topic_to_a_forbidden_config_is_a_policy_violation() {
 }
 
 fn alter_request(topic: &str, value: &str) -> IncrementalAlterConfigsRequest {
-    incremental_request(IncrementalConfigsSetup {
-        resources: vec![incremental_resource(
+    incremental_request()
+        .resources(vec![incremental_resource(
             RESOURCE_TYPE_TOPIC,
             topic,
             vec![incremental_config(
@@ -199,7 +200,6 @@ fn alter_request(topic: &str, value: &str) -> IncrementalAlterConfigsRequest {
                 Some(value.into()),
                 ConfigOperation::Set,
             )],
-        )],
-        ..Default::default()
-    })
+        )])
+        .call()
 }

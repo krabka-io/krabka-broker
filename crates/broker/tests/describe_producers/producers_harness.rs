@@ -14,7 +14,18 @@ use crate::support::{
     records::ProducerValuesSetup,
     transactions::{InitProducerSetup, claim_idempotent_producer, new_producer_request},
 };
-pub(crate) use crate::support::{client::create_topic_named as create_topic, topic_id_for};
+pub(crate) use crate::support::topic_id_for;
+
+pub(crate) async fn create_topic(client: &krabka_client_core::Client, topic: &str) {
+    crate::support::client::create_topic_named(
+        client,
+        crate::support::topics::CreateTopicSetup {
+            topic,
+            ..Default::default()
+        },
+    )
+    .await;
+}
 
 pub(crate) async fn init_producer(p: &support::InProcess) -> (i64, i16) {
     // A null transactional id is an idempotent producer; an empty one is invalid.
@@ -47,10 +58,11 @@ pub(crate) async fn init_transactional_producer(
     loop {
         let init = p
             .client
-            .send(new_producer_request(InitProducerSetup {
-                transactional_id: Some(transactional_id.into()),
-                ..Default::default()
-            }))
+            .send(
+                new_producer_request()
+                    .maybe_transactional_id(Some(transactional_id.into()))
+                    .call(),
+            )
             .await
             .expect("transactional InitProducerId");
         if init.error_code == 0 {
@@ -66,9 +78,20 @@ pub(crate) async fn init_transactional_producer(
 
 pub(crate) use crate::support::records::producer_values_batch as batch;
 
-pub(crate) fn transactional_batch(setup: ProducerValuesSetup<'_>) -> RecordBatch {
+#[bon::builder]
+pub(crate) fn transactional_batch(
+    #[builder(into, default = krabka_ids::ProducerId(7))] pid: krabka_ids::ProducerId,
+    #[builder(into, default)] epoch: crate::support::transactions::ProducerEpoch,
+    #[builder(into, default)] base_seq: crate::support::records::ProducerSequence,
+    #[builder(default = & ["v"])] values: &'_ [&'_ str],
+) -> RecordBatch {
     RecordBatch {
         attributes: Attributes::default().with_transactional(true),
-        ..batch(setup)
+        ..batch()
+            .pid(pid.0)
+            .epoch(epoch.0)
+            .base_seq(base_seq.0)
+            .values(values)
+            .call()
     }
 }

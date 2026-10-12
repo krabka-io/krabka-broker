@@ -217,12 +217,9 @@ async fn broker_only_node_observes_and_forwards() {
     let topic = "rolesep-observed";
     let client = connect_client(broker_only.listen_addr().to_string(), None).await;
     let resp = client
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup {
-                name: (topic).into(),
-                ..Default::default()
-            },
-        )))
+        .send(create_topic_request(
+            creatable_topic().name((topic).into()).call(),
+        ))
         .await
         .unwrap();
     assert!(

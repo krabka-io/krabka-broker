@@ -474,25 +474,22 @@ mod tests {
         let now = now_ms();
         let hour = 60 * 60 * 1_000;
         let reg = std::sync::Arc::new(PartitionRegistry::new());
-        open_data_partition(
-            &reg,
-            dir.path(),
-            DataPartitionSetup {
-                batches: vec![
-                    crate::share_partition::manager::test_support::TimedValues {
-                        timestamp: crate::test_support::UnixMillis(now - 3 * hour),
-                        values: &[b"stale-0", b"stale-1"],
-                    },
-                    crate::share_partition::manager::test_support::TimedValues {
-                        timestamp: crate::test_support::UnixMillis(now - hour - hour / 2),
-                        values: &[b"recent-0", b"recent-1"],
-                    },
-                ],
-                high_watermark: Offset(4),
-                ..Default::default()
-            },
-        )
-        .await;
+        open_data_partition()
+            .reg(&reg)
+            .log_dir(dir.path())
+            .batches(vec![
+                crate::share_partition::manager::test_support::TimedValues {
+                    timestamp: crate::test_support::UnixMillis(now - 3 * hour),
+                    values: &[b"stale-0", b"stale-1"],
+                },
+                crate::share_partition::manager::test_support::TimedValues {
+                    timestamp: crate::test_support::UnixMillis(now - hour - hour / 2),
+                    values: &[b"recent-0", b"recent-1"],
+                },
+            ])
+            .high_watermark(4)
+            .call()
+            .await;
 
         // `default` carries no override at all, so the broker default decides.
         let strategies = [
@@ -575,15 +572,12 @@ mod tests {
         let now = now_ms();
         let hour = 60 * 60 * 1_000;
         let reg = Arc::new(PartitionRegistry::new());
-        open_data_partition(
-            &reg,
-            dir.path(),
-            DataPartitionSetup {
-                high_watermark: Offset(2),
-                ..Default::default()
-            },
-        )
-        .await;
+        open_data_partition()
+            .reg(&reg)
+            .log_dir(dir.path())
+            .high_watermark(2)
+            .call()
+            .await;
         let partition = reg
             .get("t", krabka_ids::PartitionIndex(0))
             .expect("partition");

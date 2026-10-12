@@ -48,25 +48,23 @@ fn assert_restart_outcome(plan: &FailoverPlan, expected_unavailable: Vec<(String
 /// batch.
 #[tokio::test]
 async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
-    let image = img_with_partition(ElectionSetup {
-        elr: ElrFinalization::Enabled,
-        configs: &[(MIN_INSYNC_REPLICAS, "3")],
-        ..Default::default()
-    });
+    let image = img_with_partition()
+        .configs(&[(MIN_INSYNC_REPLICAS, "3")])
+        .elr(ElrFinalization::Enabled)
+        .call();
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
     assert_restart_outcome(&plan, Vec::new());
     assert!(
         plan.changes
-            == vec![MetadataRecord::V1Partition(expected_partition(
-                ExpectedPartitionSetup {
-                    leader: krabka_raft::NodeId(1),
-                    isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
-                    leader_epoch: LeaderEpoch(5),
-                    ..Default::default()
-                }
-            ))]
+            == vec![MetadataRecord::V1Partition(
+                expected_partition()
+                    .leader(1)
+                    .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
+                    .leader_epoch(5)
+                    .call()
+            )]
     );
 }
 
@@ -76,12 +74,11 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
 /// entry to remove.
 #[tokio::test]
 async fn a_published_membership_is_withdrawn_without_a_partition_change() {
-    let image = img_with_partition(ElectionSetup {
-        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
-        elr: ElrFinalization::Enabled,
-        configs: &[(ELIGIBLE_LEADER_REPLICAS, "0:3:")],
-        ..Default::default()
-    });
+    let image = img_with_partition()
+        .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
+        .configs(&[(ELIGIBLE_LEADER_REPLICAS, "0:3:")])
+        .elr(ElrFinalization::Enabled)
+        .call();
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
@@ -103,12 +100,11 @@ async fn a_published_membership_is_withdrawn_without_a_partition_change() {
 /// rewritten, because a krabka record always names a leader.
 #[tokio::test]
 async fn the_only_isr_member_restarting_uncleanly_leaves_the_partition_leaderless() {
-    let image = img_with_partition(ElectionSetup {
-        leader: krabka_raft::NodeId(3),
-        isr: &[krabka_raft::NodeId(3)],
-        elr: ElrFinalization::Enabled,
-        ..Default::default()
-    });
+    let image = img_with_partition()
+        .leader(3)
+        .isr(&[krabka_raft::NodeId(3)])
+        .elr(ElrFinalization::Enabled)
+        .call();
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
@@ -130,21 +126,19 @@ async fn the_only_isr_member_restarting_uncleanly_leaves_the_partition_leaderles
 /// partition it is no longer in the ISR of.
 #[tokio::test]
 async fn a_partition_the_returning_broker_leads_is_re_elected() {
-    let image = img_with_partition(ElectionSetup {
-        leader: krabka_raft::NodeId(3),
-        ..Default::default()
-    });
+    let image = img_with_partition().leader(3).call();
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
-    let expected = vec![MetadataRecord::V1Partition(expected_partition(
-        ExpectedPartitionSetup {
-            leader: krabka_raft::NodeId(1),
-            isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
-            ..Default::default()
-        },
-    ))];
-    assert_eq!(plan.changes, expected);
+    assert!(
+        plan.changes
+            == vec![MetadataRecord::V1Partition(
+                expected_partition()
+                    .leader(1)
+                    .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
+                    .call()
+            )]
+    );
 }
 
 /// A partition the returning broker is neither leading nor in the ISR of, and
@@ -152,10 +146,9 @@ async fn a_partition_the_returning_broker_leads_is_re_elected() {
 /// tests above would pass on a scan that rewrote every partition it walked.
 #[tokio::test]
 async fn a_partition_the_returning_broker_is_not_in_costs_nothing() {
-    let image = img_with_partition(ElectionSetup {
-        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
-        ..Default::default()
-    });
+    let image = img_with_partition()
+        .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
+        .call();
 
     let plan = restart_batch(&image, &[1, 2]).await;
 

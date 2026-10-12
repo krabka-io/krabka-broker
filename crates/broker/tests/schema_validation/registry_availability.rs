@@ -51,7 +51,7 @@ async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
     apply_registry_config(&mut config, &toml);
 
     let (broker, client) = boot_config(config).await;
-    let id = create_topic(&broker, &client, SchemaTopicSetup::default()).await;
+    let id = create_topic().broker(&broker).client(&client).call().await;
 
     check_value_append(
         &broker,
@@ -67,7 +67,7 @@ async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
 }
 
 async fn expect_fail_closed(broker: &krabka_broker::BrokerHandle, client: &Client) {
-    let id = create_topic(broker, client, SchemaTopicSetup::default()).await;
+    let id = create_topic().broker(broker).client(client).call().await;
 
     check_value_append(
         broker,

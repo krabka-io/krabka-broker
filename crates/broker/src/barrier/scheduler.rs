@@ -62,11 +62,10 @@ mod tests {
         coordinator
             .create_group(
                 GROUP,
-                spec(GroupSpecSetup {
-                    interval: Some(millis(1)),
-                    retained_cuts: RetainedCutCount(5),
-                    ..Default::default()
-                }),
+                spec()
+                    .maybe_interval(Some(millis(1)))
+                    .retained_cuts(5)
+                    .call(),
             )
             .await
             .expect("create group");

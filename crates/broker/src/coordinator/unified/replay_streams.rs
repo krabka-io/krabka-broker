@@ -478,14 +478,11 @@ mod tests {
         let tombstone = replay_tombstone_constructor(key, Record::Tombstone);
         // Kafka's `StreamsGroup.createGroupTombstoneRecords` for member `m`:
         // the topology tombstone comes after the group's, and is ignored.
-        let (group, kafka_deletion) = replay_fixtures(
-            StreamsGroupSeed::new_group,
-            tombstone,
-            AssignmentDeletionSetup {
-                protocol: AssignmentDeletionProtocol::Streams,
-                ..Default::default()
-            },
-        );
+        let (group, kafka_deletion) = replay_fixtures()
+            .seed(StreamsGroupSeed::new_group)
+            .tombstone(tombstone)
+            .protocol(AssignmentDeletionProtocol::Streams)
+            .call();
         let every_record = || {
             vec![
                 Record::Group(30, Some(vec![("num.standby.replicas", "1")])),

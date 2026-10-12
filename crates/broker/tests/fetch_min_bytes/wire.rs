@@ -102,15 +102,12 @@ async fn produce_one(client: &Client, topic: &str, topic_id: WireUuid, value: &'
 /// behind.
 async fn create_topic(client: &Client, topic: &str) {
     let response = client
-        .send(create_topic_request_with_setup(
-            creatable_topic(ConfiguredTopicSetup {
-                name: (topic).into(),
-                ..Default::default()
-            }),
-            CreateTopicRequestSetup {
-                timeout: CreateTopicsTimeoutMillis(10_000),
-            },
-        ))
+        .send(
+            create_topic_request_with_setup()
+                .topic(creatable_topic().name(topic.to_owned()).call())
+                .timeout(10_000)
+                .call(),
+        )
         .await
         .expect("CreateTopics");
     let code = response.topics[0].error_code;
@@ -186,16 +183,17 @@ pub(crate) async fn min_bytes_exchange(bootstrap: &str, topic: &str) -> (Duratio
 
     let started = Instant::now();
     let fetched = client
-        .send(single_partition_fetch(SinglePartitionFetchSetup {
-            topic: topic.into(),
-            topic_id,
-            limits: FetchLimits {
-                wait: RequestWaitMillis(MAX_WAIT_MS),
-                minimum: FetchByteLimit(MIN_BYTES),
-                ..Default::default()
-            },
-            ..Default::default()
-        }))
+        .send(
+            single_partition_fetch()
+                .topic(topic.into())
+                .topic_id(topic_id)
+                .limits(FetchLimits {
+                    wait: RequestWaitMillis(MAX_WAIT_MS),
+                    minimum: FetchByteLimit(MIN_BYTES),
+                    ..Default::default()
+                })
+                .call(),
+        )
         .await
         .expect("Fetch");
     let held = started.elapsed();

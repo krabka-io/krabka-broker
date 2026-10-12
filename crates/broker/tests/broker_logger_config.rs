@@ -131,18 +131,19 @@ async fn broker_logger_alter_moves_the_live_filter_and_the_describe_agrees() {
 
     // ── Step 2: IncrementalAlterConfigs ──────────────────────────────────────
     let alter_resp: IncrementalAlterConfigsResponse = client
-        .send(incremental_request(IncrementalConfigsSetup {
-            resources: vec![incremental_resource(
-                RESOURCE_TYPE_BROKER_LOGGER,
-                node.clone(),
-                vec![incremental_config(
-                    "krabka_broker".to_owned(),
-                    Some("DEBUG".to_owned()),
-                    ConfigOperation::Set,
-                )],
-            )],
-            ..Default::default()
-        }))
+        .send(
+            incremental_request()
+                .resources(vec![incremental_resource(
+                    RESOURCE_TYPE_BROKER_LOGGER,
+                    node.clone(),
+                    vec![incremental_config(
+                        "krabka_broker".to_owned(),
+                        Some("DEBUG".to_owned()),
+                        ConfigOperation::Set,
+                    )],
+                )])
+                .call(),
+        )
         .await
         .expect("IncrementalAlterConfigs");
 

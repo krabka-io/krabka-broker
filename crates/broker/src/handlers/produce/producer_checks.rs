@@ -443,12 +443,13 @@ mod tests {
     #[tokio::test]
     async fn transactional_produce_rejects_malformed_producers() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let partition = spawn_standalone_partition(
-            directory.path(),
-            krabka_log::Log::open(directory.path(), krabka_log::LogConfig::default())
-                .expect("open log"),
-            StandalonePartitionSetup::default(),
-        );
+        let partition = spawn_standalone_partition()
+            .log_dir(directory.path())
+            .log(
+                krabka_log::Log::open(directory.path(), krabka_log::LogConfig::default())
+                    .expect("open log"),
+            )
+            .call();
 
         for producer_id in [-1, i64::MIN] {
             let refused = verify_transactional_produce(
@@ -643,10 +644,7 @@ mod tests {
         let part = fixture.partition(dir.path(), "orders", &image).await;
         // Push LEO to 3 so the HW can be clamped to 2 (one below the target).
         {
-            let mut batch = repeated_records_batch(RepeatedRecordsSetup {
-                count: RecordCount(3),
-                ..Default::default()
-            });
+            let mut batch = repeated_records_batch().count(3).call();
             part.log
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -679,10 +677,7 @@ mod tests {
             producer_id: pid,
             producer_epoch: 0,
             base_sequence: 0,
-            ..repeated_records_batch(RepeatedRecordsSetup {
-                count: RecordCount(3),
-                ..Default::default()
-            })
+            ..repeated_records_batch().count(3).call()
         });
 
         let outcome = process_partition(
@@ -906,7 +901,7 @@ mod tests {
                     producer_id: PRODUCER_ID,
                     producer_epoch: 0,
                     base_sequence,
-                    ..repeated_records_batch(RepeatedRecordsSetup::default())
+                    ..repeated_records_batch().call()
                 });
                 let fixture = &fixture;
                 let image = &image;
@@ -927,10 +922,7 @@ mod tests {
             match history {
                 History::NeverAppended => {}
                 History::HasRecords => {
-                    let mut batch = repeated_records_batch(RepeatedRecordsSetup {
-                        count: RecordCount(3),
-                        ..Default::default()
-                    });
+                    let mut batch = repeated_records_batch().count(3).call();
                     part_handle
                         .log
                         .lock()

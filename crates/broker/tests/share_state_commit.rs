@@ -96,9 +96,7 @@ async fn client(handle: &BrokerHandle) -> Client {
 /// metadata image does not hold.
 async fn create_orders(client: &Client) -> uuid::Uuid {
     let created = client
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup::default(),
-        )))
+        .send(create_topic_request(creatable_topic().call()))
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == 0, "{created:?}");

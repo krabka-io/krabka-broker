@@ -173,13 +173,10 @@ fn coordinator_with_log(directory: &std::path::Path) -> (Arc<TxnCoordinator>, Ar
         1,
         krabka_units::mebibytes(1),
     ));
-    let partition = open_partition(
-        directory,
-        StandalonePartitionSetup {
-            topic: bootstrap::TOPIC,
-            ..Default::default()
-        },
-    );
+    let partition = open_partition()
+        .log_dir(directory)
+        .topic(bootstrap::TOPIC)
+        .call();
     coordinator.partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),

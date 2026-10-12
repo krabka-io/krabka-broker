@@ -48,10 +48,11 @@ async fn await_transaction_coordinator(client: &Client) -> (i64, i16) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let response = client
-            .send(init_producer_request(InitProducerSetup {
-                transactional_id: Some(VERIFY_TID.into()),
-                ..Default::default()
-            }))
+            .send(
+                init_producer_request()
+                    .maybe_transactional_id(Some(VERIFY_TID.into()))
+                    .call(),
+            )
             .await
             .expect("InitProducerId");
         if response.error_code == 0 {
@@ -105,12 +106,13 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
         ..Default::default()
     };
     let add = client
-        .send(partitions_request(TransactionPartitionsSetup {
-            transactional_id: VERIFY_TID,
-            producer: ProducerIdentity::from_wire((pid, epoch)),
-            topics: vec![added_topic],
-            ..Default::default()
-        }))
+        .send(
+            partitions_request()
+                .transactional_id(VERIFY_TID)
+                .producer(ProducerIdentity::from_wire((pid, epoch)))
+                .topics(vec![added_topic])
+                .call(),
+        )
         .await
         .expect("AddPartitionsToTxn add");
     let expected_add = expected_partitions(VERIFY_TID, "t", &[(0, NONE)]);
@@ -127,12 +129,14 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
         ..Default::default()
     };
     let verify = client
-        .send(partitions_request(TransactionPartitionsSetup {
-            transactional_id: VERIFY_TID,
-            producer: ProducerIdentity::from_wire((pid, epoch)),
-            registration: PartitionRegistration::VerifyOnly,
-            topics: vec![verify_topic],
-        }))
+        .send(
+            partitions_request()
+                .transactional_id(VERIFY_TID)
+                .producer(ProducerIdentity::from_wire((pid, epoch)))
+                .registration(PartitionRegistration::VerifyOnly)
+                .topics(vec![verify_topic])
+                .call(),
+        )
         .await
         .expect("AddPartitionsToTxn verify-only");
     let expected_verify =

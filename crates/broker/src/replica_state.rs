@@ -1076,10 +1076,7 @@ mod tests {
     }
 
     fn policy_image() -> MetadataImage {
-        topic_image(TopicSetup {
-            topic: "t",
-            ..Default::default()
-        })
+        topic_image().topic("t").call()
     }
 
     /// The policy the ISR scan reads out of the metadata image: the topic's

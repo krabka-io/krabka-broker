@@ -274,11 +274,12 @@ mod tests {
     }
 
     fn describe_acl(topic: &str) -> MetadataRecord {
-        MetadataRecord::V1AccessControlEntry(allow_acl(AllowAclSetup {
-            resource_name: topic,
-            operation: AclOperation::Describe,
-            ..Default::default()
-        }))
+        MetadataRecord::V1AccessControlEntry(
+            allow_acl()
+                .resource_name(topic)
+                .operation(AclOperation::Describe)
+                .call(),
+        )
     }
 
     fn resolver(image: MetadataImage, authorizer: Arc<dyn Authorizer>) -> ImageTopicRegexResolver {

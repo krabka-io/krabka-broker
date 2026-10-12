@@ -43,13 +43,7 @@ struct Trust {
 }
 
 fn fresh_key(dir: &TempDir, name: &str) -> (Ed25519KeyPair, PathBuf) {
-    ed25519_public_key_file(
-        dir.path(),
-        OperatorKeyFileSetup {
-            name,
-            ..Default::default()
-        },
-    )
+    ed25519_public_key_file().dir(dir.path()).name(name).call()
 }
 
 fn trust() -> Trust {

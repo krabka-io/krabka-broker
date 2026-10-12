@@ -37,9 +37,8 @@ pub async fn retry_produce_until_allowed(
     password: &[u8],
     topic: &str,
 ) -> Result<ProduceResponse, io::Error> {
-    retry_response(
-        RetrySetup::default(),
-        || async {
+    retry_response()
+        .request(|| async {
             drive_produce_as_plain(
                 addr,
                 single_record_produce_request(topic, 0, b"hello"),
@@ -50,16 +49,16 @@ pub async fn retry_produce_until_allowed(
                 },
             )
             .await
-        },
-        |response| {
+        })
+        .ready(|response| {
             response
                 .responses
                 .first()
                 .and_then(|topic| topic.partition_responses.first())
                 .is_some_and(|partition| partition.error_code != ERR_TOPIC_AUTHORIZATION_FAILED)
-        },
-    )
-    .await
+        })
+        .call()
+        .await
 }
 
 /// Retry `drive_metadata_as_plain` until `topic` appears in the
@@ -85,9 +84,8 @@ pub async fn retry_metadata_until_topic_visible(
             })
             .collect()
     }));
-    retry_response(
-        RetrySetup::default(),
-        || async {
+    retry_response()
+        .request(|| async {
             drive_metadata_as_plain(
                 addr,
                 req.clone(),
@@ -98,15 +96,15 @@ pub async fn retry_metadata_until_topic_visible(
                 },
             )
             .await
-        },
-        |response| {
+        })
+        .ready(|response| {
             response
                 .topics
                 .iter()
                 .any(|entry| entry.name.as_deref() == Some(topic))
-        },
-    )
-    .await
+        })
+        .call()
+        .await
 }
 
 /// Ask for one named topic as Alice, retaining the commit/application retry.
@@ -134,9 +132,8 @@ pub async fn retry_join_group_until_allowed(
     password: &[u8],
     group_id: &str,
 ) -> Result<JoinGroupResponse, io::Error> {
-    retry_response(
-        RetrySetup::default(),
-        || async {
+    retry_response()
+        .request(|| async {
             drive_join_group_as_plain(
                 addr,
                 join_group_request(group_id),
@@ -147,8 +144,8 @@ pub async fn retry_join_group_until_allowed(
                 },
             )
             .await
-        },
-        |response| response.error_code != ERR_GROUP_AUTHORIZATION_FAILED,
-    )
-    .await
+        })
+        .ready(|response| response.error_code != ERR_GROUP_AUTHORIZATION_FAILED)
+        .call()
+        .await
 }

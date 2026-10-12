@@ -384,7 +384,13 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let topic_name = setup.topic;
         let version = create_topics_response::MAX_VERSION;
-        let request = configured_topic_request(setup);
+        let request = configured_topic_request()
+            .topic(setup.topic)
+            .configs(setup.configs)
+            .num_partitions(setup.num_partitions.0)
+            .replication_factor(setup.replication_factor.0)
+            .timeout(setup.timeout)
+            .call();
         let response = create_topics_handle(&broker, request, version, ctx)
             .await
             .expect("create topic");
@@ -527,8 +533,7 @@ mod tests {
                     Vec::new()
                 },
             });
-            let (broker_handle, _dir) =
-                start_share_broker(authorizer, ShareBrokerSetup::default()).await;
+            let (broker_handle, _dir) = start_share_broker().authorizer(authorizer).call().await;
             let broker = broker_handle.broker_arc_for_test();
             test_ctx!(ctx, "alice");
             if topic_exists {

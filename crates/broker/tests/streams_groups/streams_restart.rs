@@ -45,12 +45,14 @@ impl Member {
             }]
         };
         let resp = client
-            .send(follow_up(StreamsFollowUpSetup {
-                group: GROUP,
-                member_id: &self.id,
-                epoch: StreamsMemberEpoch(self.epoch),
-                active: Some(owned),
-            }))
+            .send(
+                follow_up()
+                    .group(GROUP)
+                    .member_id(&self.id)
+                    .epoch(self.epoch)
+                    .maybe_active(Some(owned))
+                    .call(),
+            )
             .await
             .expect("heartbeat");
         assert!(resp.error_code == 0, "heartbeat error: {resp:?}");

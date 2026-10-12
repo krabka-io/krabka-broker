@@ -31,9 +31,6 @@ use krabka_raft::NodeId;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(test)]
-use crate::replicator_supervisor::test_support::{SupervisorPartitionSetup, SupervisorTopicSetup};
-
 mod desired_sets;
 mod dir_assignments;
 mod local_partitions;
@@ -427,14 +424,12 @@ mod tests {
     #[tokio::test]
     async fn unchanged_metadata_recovers_an_indeterminate_share_append_and_client_retry() {
         let image = image_with(&[
-            topic_record(SupervisorTopicSetup {
-                topic: bootstrap::TOPIC,
-                ..Default::default()
-            }),
-            partition_record(SupervisorPartitionSetup::single_replica(
-                bootstrap::TOPIC,
-                NodeId(2),
-            )),
+            topic_record().topic(bootstrap::TOPIC).call(),
+            partition_record()
+                .topic(bootstrap::TOPIC)
+                .leader(2)
+                .replicas(vec![NodeId(2)])
+                .call(),
         ]);
         let (mut supervisor, partitions, _reporter, _dir) = supervisor_fixture(image);
         let coordinator = Arc::new(ShareCoordinator::new(
@@ -513,8 +508,12 @@ mod tests {
     #[tokio::test]
     async fn run_reconciles_initial_image_before_shutdown() {
         let img = image_with(&[
-            topic_record(SupervisorTopicSetup::default()),
-            partition_record(SupervisorPartitionSetup::single_replica("t", NodeId(2))),
+            topic_record().call(),
+            partition_record()
+                .topic("t")
+                .leader(2)
+                .replicas(vec![NodeId(2)])
+                .call(),
         ]);
         let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(img);
         supervisor.shutdown.cancel();

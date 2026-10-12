@@ -84,11 +84,9 @@ pub async fn start_alice_topic_grant(
     let addr = handle.listen_addr();
     create_topic_as_admin(addr, "foo", 1).await;
     handle
-        .submit_metadata_record_for_test(topic_acl_record(TopicAclSetup {
-            topic: "foo",
-            operation,
-            ..Default::default()
-        }))
+        .submit_metadata_record_for_test(
+            topic_acl_record().topic("foo").operation(operation).call(),
+        )
         .await
         .expect("seed Alice's topic operation ACL");
     (handle, dir, addr)

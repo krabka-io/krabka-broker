@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn exact_filter_matches_only_its_entry() {
-        let entry = acl(AllowAclSetup::default());
+        let entry = acl().call();
         let neighbours = [
             AclEntry {
                 pattern_type: PatternType::Prefixed,
@@ -108,18 +108,9 @@ mod tests {
                 host: "10.0.0.1".into(),
                 ..entry.clone()
             },
-            acl(AllowAclSetup {
-                operation: AclOperation::Write,
-                ..Default::default()
-            }),
-            acl(AllowAclSetup {
-                principal: "User:bob",
-                ..Default::default()
-            }),
-            acl(AllowAclSetup {
-                resource_name: "order",
-                ..Default::default()
-            }),
+            acl().operation(AclOperation::Write).call(),
+            acl().principal("User:bob").call(),
+            acl().resource_name("order").call(),
         ];
 
         let exact = exact_filter(&entry);

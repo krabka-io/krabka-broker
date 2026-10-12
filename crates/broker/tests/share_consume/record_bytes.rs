@@ -38,7 +38,7 @@ async fn acquire_past_leading_batch_returns_bytes() {
         _dir,
         tid,
         member,
-    } = consumption_fixture(ShareRecordSeedSetup::default()).await;
+    } = consumption_fixture().call().await;
     let session = acquire_three_and_acknowledge(
         &client,
         ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)).reject(),
@@ -47,30 +47,20 @@ async fn acquire_past_leading_batch_returns_bytes() {
 
     // A separate single-record batch at offset 3 (this starts a new batch; the
     // acquired range 3..3 begins past the leading 0..2 batch).
-    produce_n(
-        &client,
-        ShareRecordsSetup {
-            topic_id: tid,
-            ..Default::default()
-        },
-    )
-    .await;
+    produce_n().client(&client).topic_id(tid).call().await;
 
     // Acquire offset 3 — the payload must carry the record bytes.
     let row3 = share_fetch(&client, session.fetch_at(ShareSessionEpoch(2))).await;
-    let row3 = refetch_while_empty(
-        &client,
-        row3,
-        RefetchSetup {
-            session: ShareSessionSetup {
-                member: &member,
-                topic_id: tid,
-                ..Default::default()
-            },
+    let row3 = refetch_while_empty()
+        .client(&client)
+        .row(row3)
+        .session(ShareSessionSetup {
+            member: &member,
+            topic_id: tid,
             ..Default::default()
-        },
-    )
-    .await;
+        })
+        .call()
+        .await;
     assert!(
         acquired_count(&row3) == 1,
         "offset 3 must be acquired, got {:?}",
@@ -100,16 +90,14 @@ async fn acquire_past_leading_batch_returns_bytes() {
 /// byte-exact disjoint offsets. This helper retries while the partition is still
 /// materializing.
 async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i32, value: &str) {
-    produce_values(
-        client,
-        vec![bytes::Bytes::from(value.to_string())],
-        ShareProduceSetup {
-            topic,
-            topic_id: tid,
-            partition: krabka_ids::PartitionIndex(partition),
-        },
-    )
-    .await;
+    produce_values()
+        .client(client)
+        .values(vec![bytes::Bytes::from(value.to_string())])
+        .topic(topic)
+        .topic_id(tid)
+        .partition(partition)
+        .call()
+        .await;
 }
 
 /// F5 (fragmented window): a single share fetch that returns DISJOINT acquired
@@ -130,7 +118,7 @@ async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fragmented_window_records_match_acquired_offsets() {
     let (_permit, broker, client, _dir, tid) =
-        permitted_topic_fixture(ShareTopicSetup::default(), |_| {}).await;
+        permitted_topic_fixture().customize(|_| {}).call().await;
     bootstrap_share_state(&broker, &client, "g1").await;
     // Three separate single-record batches: offset 0=v0, 1=v1, 2=v2.
     produce_one(&client, "t", tid, 0, "v0").await;
@@ -144,21 +132,29 @@ async fn fragmented_window_records_match_acquired_offsets() {
     .await;
     acknowledge_success(
         &client,
-        ShareAck::prefix(
-            session.with_epoch(ShareSessionEpoch(2)),
-            krabka_ids::Offset(0),
-        )
-        .release(),
+        ShareAck::prefix()
+            .group(session.group)
+            .member(session.member)
+            .topic_id(session.topic_id)
+            .partition(session.partition.0)
+            .epoch(2)
+            .last(0)
+            .call()
+            .release(),
     )
     .await;
     acknowledge_success(
         &client,
-        ShareAck::prefix(
-            session.with_epoch(ShareSessionEpoch(3)),
-            krabka_ids::Offset(2),
-        )
-        .starting_at(krabka_ids::Offset(2))
-        .release(),
+        ShareAck::prefix()
+            .group(session.group)
+            .member(session.member)
+            .topic_id(session.topic_id)
+            .partition(session.partition.0)
+            .epoch(3)
+            .last(2)
+            .call()
+            .starting_at(krabka_ids::Offset(2))
+            .release(),
     )
     .await;
 

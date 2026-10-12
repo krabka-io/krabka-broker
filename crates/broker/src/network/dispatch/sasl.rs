@@ -742,7 +742,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct ParsedApiVersion(i16);
 
     #[derive(Clone, Copy, Default)]
@@ -762,7 +762,19 @@ mod tests {
         encoding: BodyEncoding,
     }
 
-    fn parsed(setup: ParsedSetup<'_>) -> ParsedRequest<'_> {
+    #[bon::builder]
+    fn parsed(
+        #[builder(default = SASL_AUTHENTICATE_KEY)] api_key: ApiKeyCode,
+        #[builder(into, default = ParsedApiVersion (2))] api_version: ParsedApiVersion,
+        #[builder(default)] body: &'_ [u8],
+        #[builder(default)] encoding: BodyEncoding,
+    ) -> ParsedRequest<'_> {
+        let setup = ParsedSetup {
+            api_key,
+            api_version,
+            body,
+            encoding,
+        };
         ParsedRequest {
             api_key: setup.api_key,
             api_version: setup.api_version.0,
@@ -805,10 +817,7 @@ mod tests {
     ) -> SaslFrameOutcome {
         try_handle_sasl_frame(
             broker,
-            &parsed(ParsedSetup {
-                body,
-                ..Default::default()
-            }),
+            &parsed().body(body).call(),
             auth,
             &sasl_listener(mechanisms),
             &mut SaslSession::default(),
@@ -861,12 +870,7 @@ mod tests {
         check!(
             try_handle_sasl_frame(
                 &broker,
-                &parsed(ParsedSetup {
-                    api_key: 3,
-                    api_version: ParsedApiVersion(12),
-                    body: &metadata,
-                    ..Default::default()
-                }),
+                &parsed().api_key(3).api_version(12).body(&metadata).call(),
                 &mut auth,
                 &sasl_listener(&mechanisms),
                 &mut SaslSession::default(),
@@ -886,12 +890,12 @@ mod tests {
         );
         let outcome = try_handle_sasl_frame(
             &broker,
-            &parsed(ParsedSetup {
-                api_key: SASL_HANDSHAKE_KEY,
-                api_version: ParsedApiVersion(1),
-                body: &handshake,
-                encoding: BodyEncoding::Legacy,
-            }),
+            &parsed()
+                .api_key(SASL_HANDSHAKE_KEY)
+                .api_version(1)
+                .body(&handshake)
+                .encoding(BodyEncoding::Legacy)
+                .call(),
             &mut auth,
             &sasl_listener(&mechanisms),
             &mut SaslSession::default(),
@@ -913,12 +917,12 @@ mod tests {
         let mut guessing = ConnectionAuth::Anonymous;
         try_handle_sasl_frame(
             &broker,
-            &parsed(ParsedSetup {
-                api_key: SASL_HANDSHAKE_KEY,
-                api_version: ParsedApiVersion(1),
-                body: &handshake,
-                encoding: BodyEncoding::Legacy,
-            }),
+            &parsed()
+                .api_key(SASL_HANDSHAKE_KEY)
+                .api_version(1)
+                .body(&handshake)
+                .encoding(BodyEncoding::Legacy)
+                .call(),
             &mut guessing,
             &sasl_listener(&mechanisms),
             &mut SaslSession::default(),
@@ -948,10 +952,7 @@ mod tests {
         let mut bare = ConnectionAuth::Anonymous;
         let outcome = try_handle_sasl_frame(
             &broker,
-            &parsed(ParsedSetup {
-                body: &good,
-                ..Default::default()
-            }),
+            &parsed().body(&good).call(),
             &mut bare,
             &sasl_listener(&mechanisms),
             &mut SaslSession::default(),
@@ -989,12 +990,12 @@ mod tests {
         );
         try_handle_sasl_frame(
             &broker,
-            &parsed(ParsedSetup {
-                api_key: SASL_HANDSHAKE_KEY,
-                api_version: ParsedApiVersion(1),
-                body: &scram_handshake,
-                encoding: BodyEncoding::Legacy,
-            }),
+            &parsed()
+                .api_key(SASL_HANDSHAKE_KEY)
+                .api_version(1)
+                .body(&scram_handshake)
+                .encoding(BodyEncoding::Legacy)
+                .call(),
             &mut scram,
             &sasl_listener(&[SaslMechanism::ScramSha512]),
             &mut SaslSession::default(),

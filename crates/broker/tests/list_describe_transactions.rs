@@ -103,12 +103,9 @@ async fn describe_transaction(
 async fn create_topic(bootstrap: &str, name: &str) {
     let client = connect_client(bootstrap, None).await;
     let cr = client
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup {
-                name: (name).into(),
-                ..Default::default()
-            },
-        )))
+        .send(create_topic_request(
+            creatable_topic().name((name).into()).call(),
+        ))
         .await
         .unwrap();
     assert!(

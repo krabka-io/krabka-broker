@@ -627,7 +627,11 @@ mod tests {
         pattern: &'a str,
     }
 
-    fn regex_join_request(setup: RegexJoinSetup<'_>) -> ConsumerGroupHeartbeatRequest {
+    #[bon::builder]
+    fn regex_join_request(
+        #[builder(default = "^orders-.*")] pattern: &'_ str,
+    ) -> ConsumerGroupHeartbeatRequest {
+        let setup = RegexJoinSetup { pattern };
         ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
             member_id: "m1".into(),
@@ -651,7 +655,7 @@ mod tests {
                 &mut state,
                 &config,
                 &metadata,
-                &regex_join_request(RegexJoinSetup { pattern }),
+                &regex_join_request().pattern(pattern).call(),
                 ClientIdentity {
                     id: "client",
                     host: "host",
@@ -735,7 +739,7 @@ mod tests {
             &mut state,
             &config,
             &metadata,
-            &regex_join_request(RegexJoinSetup::default()),
+            &regex_join_request().call(),
             ClientIdentity {
                 id: "client",
                 host: "host",

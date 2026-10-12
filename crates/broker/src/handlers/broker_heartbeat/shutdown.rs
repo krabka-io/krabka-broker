@@ -138,13 +138,12 @@ mod tests {
         ];
         for case in cases {
             let node = |id: &u64| NodeId(*id);
-            let mut image = image_with_dir_partition(ElectionSetup {
-                leader: krabka_raft::NodeId(case.leader),
-                replicas: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
-                isr: &replica_nodes(case.isr),
-                dirs: &[Uuid::nil(), Uuid::nil()],
-                ..Default::default()
-            });
+            let mut image = image_with_dir_partition()
+                .leader(case.leader)
+                .replicas(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
+                .isr(&replica_nodes(case.isr))
+                .dirs(&[Uuid::nil(), Uuid::nil()])
+                .call();
             mark_witnesses_in_image(&mut image, case.witnesses);
             let alive: Vec<NodeId> = case.alive.iter().map(node).collect();
             let liveness = liveness_with(&alive).await;

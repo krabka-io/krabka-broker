@@ -241,12 +241,12 @@ mod tests {
     };
 
     fn commit(group: &str, topic: &str, partition: i32, offset: i64) -> Record {
-        offset_record(OffsetRecordSetup {
-            group,
-            topic,
-            partition: krabka_ids::PartitionIndex(partition),
-            offset: krabka_log::Offset(offset),
-        })
+        offset_record()
+            .group(group)
+            .topic(topic)
+            .partition(partition)
+            .offset(offset)
+            .call()
     }
 
     fn tombstone(group: &str, topic: &str, partition: i32) -> Record {

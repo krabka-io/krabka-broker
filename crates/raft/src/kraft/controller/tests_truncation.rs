@@ -16,10 +16,7 @@ use crate::kraft::{
 #[tokio::test]
 async fn truncation_restores_histories_at_the_retained_batch_end() {
     for fetch_response in [false, true] {
-        let (mut engine, _dir) = build_engine_only(EngineSetup {
-            ids: &[NodeId(1), NodeId(2)],
-            ..Default::default()
-        });
+        let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1), NodeId(2)]).call();
         let voters = voter_set_to_wire(engine.controls.latest_voters());
         for version in [0, 1] {
             let mut batch = typed_control_batch(

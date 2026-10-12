@@ -67,15 +67,12 @@ fn idempotent_batch(pid: i64, base_seq: i32, values: &[&str]) -> RecordBatch {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(
-        &broker,
-        &bootstrap,
-        TopicReplicasSetup {
-            topic: "trunc",
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic()
+        .broker(&broker)
+        .bootstrap(&bootstrap)
+        .topic("trunc")
+        .call()
+        .await;
 
     let base = produce_batch(
         &bootstrap,
@@ -125,15 +122,12 @@ async fn disk_backed_restart_recovers_idempotent_producer_state() {
         .await
         .unwrap();
     let bootstrap = broker.listen_addr().to_string();
-    create_topic(
-        &broker,
-        &bootstrap,
-        TopicReplicasSetup {
-            topic: "restart-dedup",
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic()
+        .broker(&broker)
+        .bootstrap(&bootstrap)
+        .topic("restart-dedup")
+        .call()
+        .await;
     let produce_setup = BatchProduceSetup {
         topic: "restart-dedup",
         acknowledgements: ProduceAcknowledgements::AllReplicas,
@@ -172,15 +166,12 @@ async fn disk_backed_restart_recovers_idempotent_producer_state() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acks_one_returns_quickly_on_rf1_broker() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(
-        &broker,
-        &bootstrap,
-        TopicReplicasSetup {
-            topic: "ack1",
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic()
+        .broker(&broker)
+        .bootstrap(&bootstrap)
+        .topic("ack1")
+        .call()
+        .await;
     let start = Instant::now();
     let offset = produce_acks(
         &bootstrap,
@@ -204,15 +195,12 @@ async fn acks_one_returns_quickly_on_rf1_broker() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acks_all_returns_quickly_on_rf1_broker() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(
-        &broker,
-        &bootstrap,
-        TopicReplicasSetup {
-            topic: "ackall",
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic()
+        .broker(&broker)
+        .bootstrap(&bootstrap)
+        .topic("ackall")
+        .call()
+        .await;
     let start = Instant::now();
     let offset = produce_acks(
         &bootstrap,
@@ -237,15 +225,12 @@ async fn acks_all_returns_quickly_on_rf1_broker() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_clamps_at_hw_when_followers_lag() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(
-        &broker,
-        &bootstrap,
-        TopicReplicasSetup {
-            topic: "clamp",
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic()
+        .broker(&broker)
+        .bootstrap(&bootstrap)
+        .topic("clamp")
+        .call()
+        .await;
 
     let offset = produce_acks(
         &bootstrap,
@@ -269,11 +254,10 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
     let resp = client
         .send(FetchRequest {
             replica_id: -1,
-            ..single_partition_fetch(SinglePartitionFetchSetup {
-                topic: "clamp".into(),
-                topic_id,
-                ..Default::default()
-            })
+            ..single_partition_fetch()
+                .topic("clamp".into())
+                .topic_id(topic_id)
+                .call()
         })
         .await
         .expect("Fetch");
@@ -291,15 +275,12 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
 // in-flight Produce batches before `EndTxn`).
 async fn read_committed_under_rf1_unchanged() {
     let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(
-        &broker,
-        &bootstrap,
-        TopicReplicasSetup {
-            topic: "rctxn",
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic()
+        .broker(&broker)
+        .bootstrap(&bootstrap)
+        .topic("rctxn")
+        .call()
+        .await;
     // The producer does not retry COORDINATOR_NOT_AVAILABLE from
     // FindCoordinator. Bring the transaction coordinator up first.
     broker.wait_until_transaction_coordinator_ready().await;
@@ -309,11 +290,12 @@ async fn read_committed_under_rf1_unchanged() {
     for v in ["p", "q", "r"] {
         drop(
             producer
-                .enqueue(producer_record(ProducerRecordSetup {
-                    topic: ("rctxn").into(),
-                    value: Some(Bytes::from(v.to_string())),
-                    ..Default::default()
-                }))
+                .enqueue(
+                    producer_record()
+                        .topic(("rctxn").into())
+                        .value(Some(Bytes::from(v.to_string())))
+                        .call(),
+                )
                 .await
                 .expect("record is queued"),
         );
@@ -350,11 +332,7 @@ async fn read_committed_under_rf1_unchanged() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
     support::init_tracing();
-    let (mut cluster, bootstrap_1) = replicated_topic_fixture(ReplicatedTopicSetup {
-        topic: "shrink",
-        ..Default::default()
-    })
-    .await;
+    let (mut cluster, bootstrap_1) = replicated_topic_fixture().topic("shrink").call().await;
     // Wait for all 3 replicas to join the ISR before killing broker 3
     // so the scenario genuinely exercises ISR shrink rather than racing the
     // initial ISR population.
@@ -404,11 +382,7 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
     support::init_tracing();
-    let (mut cluster, bootstrap_1) = replicated_topic_fixture(ReplicatedTopicSetup {
-        topic: "phase-stall",
-        ..Default::default()
-    })
-    .await;
+    let (mut cluster, bootstrap_1) = replicated_topic_fixture().topic("phase-stall").call().await;
     cluster[0].0.wait_until_isr_len("phase-stall", 0, 3).await;
 
     let dead = cluster.pop().expect("3rd broker");
@@ -478,7 +452,15 @@ async fn create_topic_with_partitions(
 ) {
     let client = connect_client(bootstrap.to_string(), None).await;
     let resp = client
-        .send(configured_topic_request(setup))
+        .send(
+            configured_topic_request()
+                .topic(setup.topic)
+                .configs(setup.configs)
+                .num_partitions(setup.num_partitions.0)
+                .replication_factor(setup.replication_factor.0)
+                .timeout(setup.timeout)
+                .call(),
+        )
         .await
         .expect("CreateTopics");
     assert!(

@@ -52,18 +52,18 @@ pub(super) fn fixture_partition(
     topic: &str,
     partition: PartitionIndex,
 ) -> Arc<Partition> {
-    open_partition(
-        log_dir,
-        StandalonePartitionSetup {
-            topic,
-            partition: krabka_ids::PartitionIndex(partition.get()),
-            ..Default::default()
-        },
-    )
+    open_partition()
+        .log_dir(log_dir)
+        .topic(topic)
+        .partition(partition.get())
+        .call()
 }
 
 pub(super) fn append_records(part: &Arc<Partition>, setup: PartitionRecordsSetup) {
-    let mut batch = partition_records_batch(setup);
+    let mut batch = partition_records_batch()
+        .count(setup.count)
+        .timestamp(setup.timestamp)
+        .call();
     part.log
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -85,7 +85,16 @@ impl Default for FutureSourceSetup {
     }
 }
 
-pub(super) fn source_partition(primary: &Path, setup: FutureSourceSetup) -> Arc<Partition> {
+#[bon::builder]
+pub(super) fn source_partition(
+    primary: &Path,
+    #[builder(into, default = FutureSourceSetup::default().count)] count: RecordCount,
+    stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
+) -> Arc<Partition> {
+    let setup = FutureSourceSetup {
+        count,
+        stamp_source,
+    };
     let part = fixture_partition(primary, "t", PartitionIndex(0));
     if let Some(stamp_source) = setup.stamp_source {
         part.log
@@ -111,10 +120,22 @@ pub(super) struct SourceFixture {
     pub primary: tempfile::TempDir,
 }
 
-pub(super) fn source_fixture(setup: FutureSourceSetup) -> SourceFixture {
+#[bon::builder]
+pub(super) fn source_fixture(
+    #[builder(into, default = FutureSourceSetup::default().count)] count: RecordCount,
+    stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
+) -> SourceFixture {
+    let setup = FutureSourceSetup {
+        count,
+        stamp_source,
+    };
     let primary = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
-    let partition = source_partition(primary.path(), setup);
+    let partition = source_partition()
+        .primary(primary.path())
+        .count(setup.count)
+        .maybe_stamp_source(setup.stamp_source)
+        .call();
     SourceFixture {
         partition,
         target,
@@ -129,15 +150,25 @@ pub(super) struct RegisteredSourceFixture {
 }
 
 /// Publish a populated source in registries using its configured timestamp source.
+#[bon::builder]
 pub(super) fn registered_source_fixture(
     primary: &Path,
-    setup: FutureSourceSetup,
+    #[builder(into, default = FutureSourceSetup::default().count)] count: RecordCount,
+    stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 ) -> RegisteredSourceFixture {
+    let setup = FutureSourceSetup {
+        count,
+        stamp_source,
+    };
     let partitions = Arc::new(PartitionRegistry::with_stamp_source(
         setup.stamp_source.clone(),
     ));
     let future_logs = Arc::new(dashmap::DashMap::new());
-    let partition = source_partition(primary, setup);
+    let partition = source_partition()
+        .primary(primary)
+        .count(setup.count)
+        .maybe_stamp_source(setup.stamp_source)
+        .call();
     partitions.insert("t".into(), PartitionIndex(0), partition.clone());
     RegisteredSourceFixture {
         partition,
@@ -170,7 +201,7 @@ pub(super) fn plant_future_log(
     PlantedFutureLog { path, cancel }
 }
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub(super) struct RecordValueBytes(pub usize);
 
 impl Default for RecordValueBytes {
@@ -189,7 +220,16 @@ pub(super) struct FutureRecordSetup {
 pub(super) use append_epoch_batch as append_value_batch;
 
 /// Appends one repeated-value record at the selected leader epoch.
-pub(super) fn append_epoch_batch(part: &Arc<Partition>, setup: FutureRecordSetup) {
+#[bon::builder]
+pub(super) fn append_epoch_batch(
+    part: &Arc<Partition>,
+    #[builder(into, default)] value_size: RecordValueBytes,
+    #[builder(into, default = krabka_ids :: LeaderEpoch (1))] leader_epoch: krabka_ids::LeaderEpoch,
+) {
+    let setup = FutureRecordSetup {
+        value_size,
+        leader_epoch,
+    };
     let mut batch = RecordBatch {
         base_offset: 0,
         partition_leader_epoch: setup.leader_epoch.0,

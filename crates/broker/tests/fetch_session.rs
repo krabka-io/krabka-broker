@@ -35,10 +35,20 @@ async fn incremental_after_produce(
 ) -> krabka_protocol::owned::fetch_response::FetchResponse {
     process
         .client
-        .send(empty_session_fetch(
-            FetchLimits::wait_for_data(RequestWaitMillis(200)),
-            FetchSessionSetup::at_epoch(FetchSessionId(session), FetchSessionEpoch(2)),
-        ))
+        .send(
+            empty_session_fetch()
+                .limits(FetchLimits::wait_for_data(RequestWaitMillis(200)))
+                .id(FetchSessionSetup::at_epoch(FetchSessionId(session), FetchSessionEpoch(2)).id)
+                .epoch(
+                    FetchSessionSetup::at_epoch(FetchSessionId(session), FetchSessionEpoch(2))
+                        .epoch,
+                )
+                .forgotten(
+                    FetchSessionSetup::at_epoch(FetchSessionId(session), FetchSessionEpoch(2))
+                        .forgotten,
+                )
+                .call(),
+        )
         .await
         .expect("Fetch incremental after produce")
 }
@@ -92,10 +102,14 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
     // (2) Immediate incremental: nothing changed → empty response.
     let r2 = p
         .client
-        .send(empty_session_fetch(
-            FetchLimits::immediate(),
-            FetchSessionSetup::incremental(FetchSessionId(sid)),
-        ))
+        .send(
+            empty_session_fetch()
+                .limits(FetchLimits::immediate())
+                .id(FetchSessionSetup::incremental(FetchSessionId(sid)).id)
+                .epoch(FetchSessionSetup::incremental(FetchSessionId(sid)).epoch)
+                .forgotten(FetchSessionSetup::incremental(FetchSessionId(sid)).forgotten)
+                .call(),
+        )
         .await
         .expect("Fetch incremental empty");
     check!(r2.error_code == 0);
@@ -136,19 +150,19 @@ async fn forgotten_topics_drop_partitions_from_subscription() {
     // Forget t-1.
     let r2 = p
         .client
-        .send(empty_session_fetch(
-            FetchLimits::immediate(),
-            FetchSessionSetup {
-                id: FetchSessionId(sid),
-                epoch: FetchSessionEpoch(1),
-                forgotten: vec![ForgottenTopic {
+        .send(
+            empty_session_fetch()
+                .limits(FetchLimits::immediate())
+                .id(sid)
+                .epoch(1)
+                .forgotten(vec![ForgottenTopic {
                     topic: "t".into(),
                     topic_id: tid,
                     partitions: vec![1],
                     ..Default::default()
-                }],
-            },
-        ))
+                }])
+                .call(),
+        )
         .await
         .expect("forget t-1");
     assert!(r2.error_code == 0);
@@ -182,10 +196,14 @@ async fn unknown_session_id_returns_not_found() {
     let p = support::start().await;
     let r = p
         .client
-        .send(empty_session_fetch(
-            FetchLimits::immediate(),
-            FetchSessionSetup::incremental(FetchSessionId(999_999)),
-        ))
+        .send(
+            empty_session_fetch()
+                .limits(FetchLimits::immediate())
+                .id(FetchSessionSetup::incremental(FetchSessionId(999_999)).id)
+                .epoch(FetchSessionSetup::incremental(FetchSessionId(999_999)).epoch)
+                .forgotten(FetchSessionSetup::incremental(FetchSessionId(999_999)).forgotten)
+                .call(),
+        )
         .await
         .expect("Fetch unknown sid");
     check!(r.error_code == FETCH_SESSION_ID_NOT_FOUND);
@@ -204,10 +222,19 @@ async fn stale_session_epoch_returns_invalid_epoch() {
     // Broker expects epoch=1; send 99.
     let r2 = p
         .client
-        .send(empty_session_fetch(
-            default_fetch_limits(),
-            FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(99)),
-        ))
+        .send(
+            empty_session_fetch()
+                .limits(default_fetch_limits())
+                .id(FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(99)).id)
+                .epoch(
+                    FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(99)).epoch,
+                )
+                .forgotten(
+                    FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(99))
+                        .forgotten,
+                )
+                .call(),
+        )
         .await
         .expect("stale epoch");
     check!(r2.error_code == INVALID_FETCH_SESSION_EPOCH);
@@ -228,13 +255,22 @@ async fn close_session_drops_cache_entry() {
     // sessionless-style (session_id=0 in response) and removes the entry.
     let r2 = p
         .client
-        .send(session_fetch_request(
-            fetch_request_for(
-                vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
-                default_fetch_limits(),
-            ),
-            FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(-1)),
-        ))
+        .send(
+            session_fetch_request()
+                .request(fetch_request_for(
+                    vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
+                    default_fetch_limits(),
+                ))
+                .id(FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(-1)).id)
+                .epoch(
+                    FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(-1)).epoch,
+                )
+                .forgotten(
+                    FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(-1))
+                        .forgotten,
+                )
+                .call(),
+        )
         .await
         .expect("close");
     assert!(r2.error_code == 0);
@@ -243,10 +279,14 @@ async fn close_session_drops_cache_entry() {
     // Re-using sid afterwards is NOT_FOUND.
     let r3 = p
         .client
-        .send(empty_session_fetch(
-            default_fetch_limits(),
-            FetchSessionSetup::incremental(FetchSessionId(sid)),
-        ))
+        .send(
+            empty_session_fetch()
+                .limits(default_fetch_limits())
+                .id(FetchSessionSetup::incremental(FetchSessionId(sid)).id)
+                .epoch(FetchSessionSetup::incremental(FetchSessionId(sid)).epoch)
+                .forgotten(FetchSessionSetup::incremental(FetchSessionId(sid)).forgotten)
+                .call(),
+        )
         .await
         .expect("after close");
     assert!(r3.error_code == FETCH_SESSION_ID_NOT_FOUND);
@@ -261,13 +301,12 @@ async fn sessionless_zero_id_with_stray_epoch_is_session_id_not_found() {
     let p = support::start().await;
     let r = p
         .client
-        .send(empty_session_fetch(
-            default_fetch_limits(),
-            FetchSessionSetup {
-                epoch: FetchSessionEpoch(7),
-                ..Default::default()
-            },
-        ))
+        .send(
+            empty_session_fetch()
+                .limits(default_fetch_limits())
+                .epoch(7)
+                .call(),
+        )
         .await
         .expect("stray");
     assert!(r.error_code == FETCH_SESSION_ID_NOT_FOUND);
@@ -286,16 +325,15 @@ async fn sessionless_full_fetch_round_trip() {
 
     let r = p
         .client
-        .send(session_fetch_request(
-            fetch_request_for(
-                vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
-                FetchLimits::wait_for_data(RequestWaitMillis(100)),
-            ),
-            FetchSessionSetup {
-                epoch: FetchSessionEpoch(-1),
-                ..Default::default()
-            },
-        ))
+        .send(
+            session_fetch_request()
+                .request(fetch_request_for(
+                    vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
+                    FetchLimits::wait_for_data(RequestWaitMillis(100)),
+                ))
+                .epoch(-1)
+                .call(),
+        )
         .await
         .expect("sessionless");
     check!(r.error_code == 0);
@@ -318,24 +356,23 @@ async fn open_session(
     max_wait_ms: i32,
 ) -> krabka_protocol::owned::fetch_response::FetchResponse {
     client
-        .send(session_fetch_request(
-            fetch_request_for(
-                vec![fetch_topic(
-                    "t",
-                    tid,
-                    (0..partitions).map(|p| fetch_partition(p, 0)).collect(),
-                )],
-                FetchLimits {
-                    wait: RequestWaitMillis(max_wait_ms),
-                    minimum: FetchByteLimit(0),
-                    ..Default::default()
-                },
-            ),
-            FetchSessionSetup {
-                epoch: FetchSessionEpoch(0),
-                ..Default::default()
-            },
-        ))
+        .send(
+            session_fetch_request()
+                .request(fetch_request_for(
+                    vec![fetch_topic(
+                        "t",
+                        tid,
+                        (0..partitions).map(|p| fetch_partition(p, 0)).collect(),
+                    )],
+                    FetchLimits {
+                        wait: RequestWaitMillis(max_wait_ms),
+                        minimum: FetchByteLimit(0),
+                        ..Default::default()
+                    },
+                ))
+                .epoch(0)
+                .call(),
+        )
         .await
         .expect("new session")
 }

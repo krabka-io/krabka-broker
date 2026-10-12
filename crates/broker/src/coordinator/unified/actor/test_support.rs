@@ -96,15 +96,16 @@ pub(super) fn subscribed_consumer_group(
 ) -> GroupState {
     let mut state = GroupState::new(group_id);
     for member_id in member_ids {
-        state.add_or_update_member(subscribed_member(ConsumerMemberSetup {
-            member_id,
-            topics,
-            client: ClientIdentity {
-                id: "client",
-                host: "host",
-            },
-            ..Default::default()
-        }));
+        state.add_or_update_member(
+            subscribed_member()
+                .member_id(member_id)
+                .topics(topics)
+                .client(ClientIdentity {
+                    id: "client",
+                    host: "host",
+                })
+                .call(),
+        );
     }
     state
 }
@@ -122,7 +123,20 @@ pub(super) struct ConsumerMemberSetup<'a> {
     pub now: std::time::Instant,
 }
 
-pub(super) fn subscribed_member(setup: ConsumerMemberSetup<'_>) -> MemberState {
+#[bon::builder]
+pub(super) fn subscribed_member(
+    #[builder(default = "m1")] member_id: &'_ str,
+    #[builder(default = & ["t"])] topics: &'_ [&'_ str],
+    #[builder(default = crate :: coordinator :: unified :: ClientIdentity { id : "client" , host : "host" })]
+    client: ClientIdentity<'_>,
+    #[builder(default = std :: time :: Instant :: now ())] now: std::time::Instant,
+) -> MemberState {
+    let setup = ConsumerMemberSetup {
+        member_id,
+        topics,
+        client,
+        now,
+    };
     let ConsumerMemberSetup {
         member_id,
         topics,
@@ -361,13 +375,7 @@ pub(super) async fn seed_and_upgrade(
     coord: &Arc<GroupCoordinator>,
     topic: &str,
 ) -> Arc<GroupActorHandle> {
-    let handle = seed_classic_member(
-        coord,
-        ClassicMemberSetup {
-            topic,
-            ..Default::default()
-        },
-    );
+    let handle = seed_classic_member().coord(coord).topic(topic).call();
 
     upgrade_with_transient_native(&handle, topic).await;
     handle
@@ -449,10 +457,18 @@ impl<'a> ClassicMemberSetup<'a> {
     }
 }
 
+#[bon::builder]
 pub(super) fn seed_classic_member(
     coord: &Arc<GroupCoordinator>,
-    setup: ClassicMemberSetup<'_>,
+    #[builder(default = "m-classic")] member_id: &'_ str,
+    #[builder(default = "t")] topic: &'_ str,
+    instance_id: Option<&'_ str>,
 ) -> Arc<GroupActorHandle> {
+    let setup = ClassicMemberSetup {
+        member_id,
+        topic,
+        instance_id,
+    };
     use super::super::{
         classic_state::{ClassicGroup as ClassicState, Member},
         group::{CoordinatorGroup, GroupKind},
@@ -525,22 +541,25 @@ pub(super) struct BidirectionalClassicSetup<'a> {
 }
 
 /// A bidirectional coordinator whose first actor was spawned from a classic seed.
+#[bon::builder]
 pub(super) fn seeded_bidirectional_coordinator(
-    setup: BidirectionalClassicSetup<'_>,
+    #[builder(default = "m1")] member_id: &'_ str,
+    instance_id: Option<&'_ str>,
 ) -> (
     Arc<GroupCoordinator>,
     Arc<InMemoryOffsetsLog>,
     Arc<GroupActorHandle>,
 ) {
+    let setup = BidirectionalClassicSetup {
+        member_id,
+        instance_id,
+    };
     let (coordinator, log) = bidirectional_coordinator();
-    let handle = seed_classic_member(
-        &coordinator,
-        ClassicMemberSetup {
-            member_id: setup.member_id,
-            instance_id: setup.instance_id,
-            ..Default::default()
-        },
-    );
+    let handle = seed_classic_member()
+        .coord(&coordinator)
+        .member_id(setup.member_id)
+        .maybe_instance_id(setup.instance_id)
+        .call();
     (coordinator, log, handle)
 }
 
@@ -563,7 +582,7 @@ pub(super) async fn join_native_consumer(handle: &Arc<GroupActorHandle>) -> Join
 pub(super) async fn seed_classic_with_native(
     coordinator: &Arc<GroupCoordinator>,
 ) -> (Arc<GroupActorHandle>, String) {
-    let handle = seed_classic_member(coordinator, ClassicMemberSetup::default());
+    let handle = seed_classic_member().coord(coordinator).call();
     let native = join_native_consumer(&handle).await;
     (handle, native.member_id)
 }

@@ -108,9 +108,9 @@ mod tests {
     /// 0 with an eight-byte payload unless it is the default 0.
     #[test]
     fn target_assignment_metadata_bytes_match_kafka_schema() {
-        let rows = assignment_metadata_golden_cases(AssignmentMetadataGoldenSetup {
-            unknown_time_description: "a converted classic group: the time is unknown",
-        });
+        let rows = assignment_metadata_golden_cases()
+            .unknown_time_description("a converted classic group: the time is unknown")
+            .call();
         for row in rows {
             let case = row.description;
             let bytes = row.bytes;

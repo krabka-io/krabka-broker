@@ -15,11 +15,7 @@ use assert2::assert;
 use krabka_broker::{BootstrapMode, BrokerConfig, BrokerHandle, config::NodeRole};
 use tempfile::TempDir;
 
-use crate::support::{
-    NodeIndex, RoleNodeSetup,
-    client::create_topic_for_broker,
-    topics::{CreateTopicSetup, TopicReplicationFactor},
-};
+use crate::support::{NodeIndex, RoleNodeSetup, client::create_topic_for_broker};
 
 mod support;
 
@@ -119,15 +115,12 @@ async fn a_restarted_follower_rejoins_the_isr_when_the_controller_is_controller_
     support::init_tracing();
     let topic = "rolesep-isr";
     let mut cluster = start_role_separated().await;
-    create_topic_for_broker(
-        &cluster.brokers[0],
-        CreateTopicSetup {
-            topic,
-            replication_factor: TopicReplicationFactor(2),
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic_for_broker()
+        .broker(&cluster.controller)
+        .topic(topic)
+        .replication_factor(2)
+        .call()
+        .await;
     cluster.controller.wait_until_isr_len(topic, 0, 2).await;
     assert!(sorted_isr(&cluster, topic) == vec![2, 3]);
 

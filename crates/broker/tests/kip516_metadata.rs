@@ -61,12 +61,9 @@ async fn metadata_name_and_id_of_different_topics_describes_the_id() {
     let p = support::start().await;
     for n in ["m_a", "m_b"] {
         p.client
-            .send(create_topic_request(creatable_topic(
-                ConfiguredTopicSetup {
-                    name: (n).into(),
-                    ..Default::default()
-                },
-            )))
+            .send(create_topic_request(
+                creatable_topic().name((n).into()).call(),
+            ))
             .await
             .expect("create topic");
     }

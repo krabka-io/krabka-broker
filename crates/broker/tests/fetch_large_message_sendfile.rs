@@ -137,18 +137,15 @@ async fn large_message_fetch_round_trips_byte_exact() {
         .send(FetchRequest {
             session_id: 0,
             session_epoch: -1,
-            ..single_partition_fetch(SinglePartitionFetchSetup {
-                topic: "big".into(),
-                topic_id: tid,
-                partition: fetch_partition(FetchPartitionSetup {
-                    maximum: FetchByteLimit(8 * 1024 * 1024),
-                    ..Default::default()
-                }),
-                limits: FetchLimits::wait_for_data_with_maximum(
+            ..single_partition_fetch()
+                .topic("big".into())
+                .topic_id(tid)
+                .partition(fetch_partition().maximum(8 * 1024 * 1024).call())
+                .limits(FetchLimits::wait_for_data_with_maximum(
                     RequestWaitMillis(200),
                     FetchByteLimit(8 * 1024 * 1024),
-                ),
-            })
+                ))
+                .call()
         })
         .await
         .expect("Fetch");

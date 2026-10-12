@@ -98,14 +98,11 @@ async fn leader_of(handle: &BrokerHandle, topic: &str) -> u64 {
 }
 
 async fn create_topic(client: &Client, topic: AssignedTopicSetup) -> WireUuid {
-    create_assigned_topic(
-        client,
-        AssignedTransactionTopicSetup {
-            topic,
-            ..Default::default()
-        },
-    )
-    .await
+    create_assigned_topic()
+        .client(client)
+        .topic(topic)
+        .call()
+        .await
 }
 
 async fn init_producer(connection: &Connection) -> (i64, i16) {
@@ -132,27 +129,22 @@ async fn produce(
     producer: Option<(i64, i16)>,
     values: &[&'static str],
 ) {
-    produce_fixture(
-        TransactionProduceSetup {
-            transactional_id: TID,
-            topic: TOPIC,
-            topic_id,
-            producer: producer.map(ProducerIdentity::from_wire),
-            values,
-        },
-        |request| connection.send(request),
-    )
-    .await;
+    produce_fixture()
+        .transactional_id(TID)
+        .topic(TOPIC)
+        .topic_id(topic_id)
+        .maybe_producer(producer.map(ProducerIdentity::from_wire))
+        .values(values)
+        .send(|request| connection.send(request))
+        .call()
+        .await;
 }
 
 fn end_txn_request((producer_id, epoch): (i64, i16)) -> EndTxnRequest {
-    end_transaction_request(
-        TID,
-        EndTransactionSetup {
-            producer: ProducerIdentity::from_wire((producer_id, epoch)),
-            ..Default::default()
-        },
-    )
+    end_transaction_request()
+        .transactional_id(TID)
+        .producer(ProducerIdentity::from_wire((producer_id, epoch)))
+        .call()
 }
 
 /// Commit, and retry while the coordinator answers a retriable error.
@@ -263,14 +255,19 @@ impl RelayedCluster {
             support::listener_pairs(client_listeners, controller_listeners)
         {
             let dir = TempDir::new().expect("tempdir");
-            let mut config = support::broker_config(
-                dir.path(),
-                topology.node_setup(ClusterBootstrapSetup {
-                    index: NodeIndex(index),
-                    ..Default::default()
-                }),
-            )
-            .with_internal_topics_for(3);
+            let node = topology.node_setup(ClusterBootstrapSetup {
+                index: NodeIndex(index),
+                ..Default::default()
+            });
+            let mut config = support::broker_config()
+                .log_dir(dir.path())
+                .index(index)
+                .client_addrs(node.client_addrs)
+                .controller_addrs(node.controller_addrs)
+                .voters(node.voters)
+                .mode(node.mode)
+                .call()
+                .with_internal_topics_for(3);
             config.advertised_listener = relays[index].addr().to_string();
             config.directory_id = uuid::Uuid::from_u128(u128::from(config.node_id.0));
             config.auto_join = false;

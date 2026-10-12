@@ -94,7 +94,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         _dir,
         log_dir,
         topic: initial,
-    } = initialized_restart_fixture(ShareRecordSeedSetup::default()).await;
+    } = initialized_restart_fixture().call().await;
 
     let tid;
     {

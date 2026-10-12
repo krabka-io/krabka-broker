@@ -110,11 +110,7 @@ async fn quota_round_trip(case: QuotaCase<'_>) {
     } = case;
 
     let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
-        Box::pin(start_registered_sasl_cluster(SaslClusterSetup {
-            extra_users: users,
-            ..Default::default()
-        }))
-        .await;
+        Box::pin(start_registered_sasl_cluster().extra_users(users).call()).await;
 
     let admin_props = write_plain_props(ADMIN, ADMIN_PASS);
     let admin_mount = admin_props.mount_str();

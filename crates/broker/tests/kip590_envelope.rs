@@ -108,7 +108,14 @@ krabka_macros::request_frame_fixture!(request_payload);
 
 /// A Kafka request with its length prefix, nullable client ID and supplied tagged bytes.
 fn request_frame(setup: RequestFrameSetup<'_>) -> Bytes {
-    let frame = request_payload(setup);
+    let frame = request_payload()
+        .api_key(setup.api_key.0)
+        .api_version(setup.api_version.0)
+        .correlation_id(setup.correlation_id.0)
+        .maybe_client_id(setup.client_id)
+        .maybe_tagged(setup.tagged)
+        .body(setup.body)
+        .call();
     let mut out = BytesMut::with_capacity(4 + frame.len());
     out.put_i32(i32::try_from(frame.len()).expect("frame length"));
     out.put_slice(&frame);
@@ -199,10 +206,7 @@ async fn send_envelope_on(
 fn embedded_create_topics(topic: &str) -> Bytes {
     let version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
     let body = encode(
-        &create_topic_request(creatable_topic(ConfiguredTopicSetup {
-            name: (topic).into(),
-            ..Default::default()
-        })),
+        &create_topic_request(creatable_topic().name(topic.into()).call()),
         version,
     );
     // The length prefix belongs to the outer connection, not to `request_data`
@@ -434,11 +438,13 @@ async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
 
     for (principal, host) in [("User:alice", "10.1.2.3"), ("User:bob", "127.0.0.1")] {
         broker
-            .submit_metadata_record_for_test(cluster_acl_record(ClusterAclSetup {
-                principal,
-                host,
-                operation: AclOperation::Create,
-            }))
+            .submit_metadata_record_for_test(
+                cluster_acl_record()
+                    .principal(principal)
+                    .host(host)
+                    .operation(AclOperation::Create)
+                    .call(),
+            )
             .await
             .expect("seed host ACL");
     }
@@ -529,7 +535,7 @@ async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded
     let (broker, _dir) = start_forwarder().await;
     broker.wait_until_brokers_registered(1).await;
     broker
-        .submit_metadata_record_for_test(cluster_acl_record(ClusterAclSetup::default()))
+        .submit_metadata_record_for_test(cluster_acl_record().call())
         .await
         .expect("seed ClusterAction ACL");
 
@@ -659,10 +665,7 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
         client_id: Some("adminclient-1".as_bytes()),
         tagged: Some(&[0]),
         body: &encode(
-            &create_topic_request(creatable_topic(ConfiguredTopicSetup {
-                name: (TOPIC).into(),
-                ..Default::default()
-            })),
+            &create_topic_request(creatable_topic().name(TOPIC.into()).call()),
             krabka_protocol::owned::create_topics_request::MAX_VERSION,
         ),
     })

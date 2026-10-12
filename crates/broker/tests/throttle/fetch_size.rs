@@ -39,17 +39,15 @@ async fn replica_fetch_bytes(
 
     // Create topic rf=1 so this broker is always the leader, then assign
     // replica 2 as a follower so its fetch is served.
-    create_topic_plaintext(
-        addr,
-        AutomaticTopicSetup {
-            client_id: CLIENT_ID,
-            topic: ConfiguredTopicSetup {
-                name: ("bar").into(),
-                ..Default::default()
-            },
-        },
-    )
-    .await;
+    create_topic_plaintext()
+        .addr(addr)
+        .client_id(CLIENT_ID)
+        .topic(ConfiguredTopicSetup {
+            name: "bar".into(),
+            ..Default::default()
+        })
+        .call()
+        .await;
     wait_partition_exists(&handle, "bar", 0).await;
     if follower_in_isr {
         add_follower_in_isr(&handle, "bar", 2).await;
@@ -156,17 +154,15 @@ async fn unthrottled_partition_unaffected() {
     let (handle, _dir, addr) = start_single_broker_plaintext().await;
 
     // Create topic rf=1.
-    create_topic_plaintext(
-        addr,
-        AutomaticTopicSetup {
-            client_id: CLIENT_ID,
-            topic: ConfiguredTopicSetup {
-                name: ("baz").into(),
-                ..Default::default()
-            },
-        },
-    )
-    .await;
+    create_topic_plaintext()
+        .addr(addr)
+        .client_id(CLIENT_ID)
+        .topic(ConfiguredTopicSetup {
+            name: "baz".into(),
+            ..Default::default()
+        })
+        .call()
+        .await;
     wait_partition_exists(&handle, "baz", 0).await;
     add_follower(&handle, "baz", 2).await;
 

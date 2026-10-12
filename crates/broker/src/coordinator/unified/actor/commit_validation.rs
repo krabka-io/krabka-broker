@@ -264,8 +264,7 @@ mod tests {
     /// handler maps the code by version.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn upgraded_group_fences_stale_native_consumer_commit() {
-        let (_coord, _log, handle) =
-            seeded_bidirectional_coordinator(BidirectionalClassicSetup::default());
+        let (_coord, _log, handle) = seeded_bidirectional_coordinator().call();
         assert!(handle.kind == GroupKindTag::Classic);
         let joined = join_native_consumer(&handle).await;
         let native = joined.member_id;

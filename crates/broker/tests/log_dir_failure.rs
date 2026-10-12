@@ -38,7 +38,6 @@ use crate::support::{
     NodeIndex, RoleNodeSetup,
     client::create_topic_for_broker,
     producer::{ProducerRecordSetup, producer_record},
-    topics::{CreateTopicSetup, TopicReplicationFactor},
 };
 
 mod support;
@@ -249,12 +248,11 @@ async fn produce(producer: &Producer, timestamp_ms: i64) {
     producer
         .send(ProducerRecord {
             timestamp_ms: Some(timestamp_ms),
-            ..producer_record(ProducerRecordSetup {
-                topic: TOPIC.to_owned(),
-                partition: Some(krabka_ids::PartitionIndex(0)),
-                value: Some(Bytes::from_static(b"log-dir-failure")),
-                ..Default::default()
-            })
+            ..producer_record()
+                .topic(TOPIC.to_owned())
+                .maybe_partition(Some(0))
+                .maybe_value(Some(Some(Bytes::from_static(b"log-dir-failure"))))
+                .call()
         })
         .await
         .expect("the leader acknowledges the record");
@@ -264,25 +262,19 @@ async fn produce(producer: &Producer, timestamp_ms: i64) {
 async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
     support::init_tracing();
     let cluster = start_cluster().await;
-    create_topic_for_broker(
-        &cluster.brokers[0].handle,
-        CreateTopicSetup {
-            topic: FILLER,
-            replication_factor: TopicReplicationFactor(3),
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic_for_broker()
+        .broker(&cluster.controller)
+        .topic(FILLER)
+        .replication_factor(3)
+        .call()
+        .await;
     wait_until_materialized(&cluster.brokers, &format!("{FILLER}-0")).await;
-    create_topic_for_broker(
-        &cluster.brokers[0].handle,
-        CreateTopicSetup {
-            topic: TOPIC,
-            replication_factor: TopicReplicationFactor(3),
-            ..Default::default()
-        },
-    )
-    .await;
+    create_topic_for_broker()
+        .broker(&cluster.controller)
+        .topic(TOPIC)
+        .replication_factor(3)
+        .call()
+        .await;
     let target = format!("{TOPIC}-0");
     wait_until_materialized(&cluster.brokers, &target).await;
 

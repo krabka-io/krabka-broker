@@ -101,16 +101,13 @@ async fn compaction_dedupes_via_native_client() {
     for round in 0..10u32 {
         for key in ["k1", "k2", "k3"] {
             let value = format!("v{round}-{key}");
-            produce_record(
-                addr,
-                ProduceRecordSetup {
-                    topic_id,
-                    key: key.as_bytes(),
-                    value: value.as_bytes(),
-                    ..Default::default()
-                },
-            )
-            .await;
+            produce_record()
+                .addr(addr)
+                .topic_id(topic_id)
+                .key(key.as_bytes())
+                .value(value.as_bytes())
+                .call()
+                .await;
         }
     }
 
@@ -144,16 +141,13 @@ async fn compaction_dedupes_via_native_client() {
     // for the next compaction pass.
     for key in ["k1", "k2", "k3"] {
         let value = format!("v10-{key}");
-        produce_record(
-            addr,
-            ProduceRecordSetup {
-                topic_id,
-                key: key.as_bytes(),
-                value: value.as_bytes(),
-                ..Default::default()
-            },
-        )
-        .await;
+        produce_record()
+            .addr(addr)
+            .topic_id(topic_id)
+            .key(key.as_bytes())
+            .value(value.as_bytes())
+            .call()
+            .await;
     }
 
     // Push the active segment into a sealed state so the FINAL v10-* records
@@ -168,16 +162,13 @@ async fn compaction_dedupes_via_native_client() {
     // segment past `internal.segment.bytes=256`. ~8 small records is more than enough.
     for round in 0..8 {
         let value = format!("padding-{round}");
-        produce_record(
-            addr,
-            ProduceRecordSetup {
-                topic_id,
-                key: b"__pad__",
-                value: value.as_bytes(),
-                ..Default::default()
-            },
-        )
-        .await;
+        produce_record()
+            .addr(addr)
+            .topic_id(topic_id)
+            .key(b"__pad__")
+            .value(value.as_bytes())
+            .call()
+            .await;
     }
 
     // Wait for another compaction pass so the newly-sealed segments (holding

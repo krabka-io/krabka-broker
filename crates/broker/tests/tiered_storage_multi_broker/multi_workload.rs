@@ -113,14 +113,12 @@ pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &
         TOPIC,
         vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
     );
-    create_assigned_topic(
-        admin,
-        AssignedTieredTopicSetup {
-            topic: assignment,
-            segment_bytes: Some("1024"),
-        },
-    )
-    .await;
+    create_assigned_topic()
+        .client(admin)
+        .topic(assignment)
+        .maybe_segment_bytes(Some("1024"))
+        .call()
+        .await;
 
     await_tiered_replicas(
         &[b1, b2],
@@ -141,17 +139,15 @@ pub(crate) async fn produce_and_await_remote_segments(
             value: Some(bytes::Bytes::from(format!("test-record-{index}"))),
             ..Default::default()
         }]);
-        let response = produce_batch(
-            admin,
-            batch,
-            BatchProduceSetup {
-                topic: TOPIC,
-                topic_id,
-                acknowledgements: ProduceAcknowledgements::AllReplicas,
-                timeout: ProduceTimeoutMillis(10_000),
-            },
-        )
-        .await;
+        let response = produce_batch()
+            .client(admin)
+            .batch(batch)
+            .topic(TOPIC)
+            .topic_id(topic_id)
+            .acknowledgements(ProduceAcknowledgements::AllReplicas)
+            .timeout(ProduceTimeoutMillis(10_000))
+            .call()
+            .await;
         assert!(response.error_code == 0, "Produce failed: {response:?}");
     }
 

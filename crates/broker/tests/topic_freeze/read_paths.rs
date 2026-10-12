@@ -55,11 +55,12 @@ async fn scrape(addr: std::net::SocketAddr) -> String {
 /// The number of records a fetch from offset zero returns.
 async fn fetch_record_count(client: &Client, topic: &str, topic_id: WireUuid) -> usize {
     let response = client
-        .send(single_partition_fetch(SinglePartitionFetchSetup {
-            topic: topic.into(),
-            topic_id,
-            ..Default::default()
-        }))
+        .send(
+            single_partition_fetch()
+                .topic(topic.into())
+                .topic_id(topic_id)
+                .call(),
+        )
         .await
         .expect("Fetch");
     assert!(response.error_code == codes::NONE, "Fetch: {response:?}");

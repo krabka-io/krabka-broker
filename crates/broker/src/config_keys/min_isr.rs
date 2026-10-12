@@ -136,10 +136,7 @@ mod tests {
     use crate::test_support::{TopicSetup, finalize_elr_version, topic_image};
 
     fn image(topic_override: Option<&str>, cluster_default: Option<&str>) -> MetadataImage {
-        let mut image = topic_image(TopicSetup {
-            topic: "t",
-            ..Default::default()
-        });
+        let mut image = topic_image().topic("t").call();
         if let Some(value) = topic_override {
             image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: "t".into(),

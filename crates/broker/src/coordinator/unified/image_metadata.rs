@@ -166,15 +166,14 @@ mod tests {
             ));
         }
         for (partition, replicas) in [(0, vec![1, 2, 3]), (1, vec![3])] {
-            image.apply(&MetadataRecord::V1Partition(in_sync_partition(
-                InSyncPartitionSetup {
-                    topic: "input",
-                    partition: krabka_ids::PartitionIndex(partition),
-                    directories: replicas.iter().map(|_| real_uuid(1)).collect(),
-                    replicas: replicas.iter().copied().map(NodeId).collect(),
-                    ..Default::default()
-                },
-            )));
+            image.apply(&MetadataRecord::V1Partition(
+                in_sync_partition()
+                    .topic("input")
+                    .partition(partition)
+                    .replicas(replicas.iter().copied().map(NodeId).collect())
+                    .directories(replicas.iter().map(|_| real_uuid(1)).collect())
+                    .call(),
+            ));
         }
         let snapshot = ImageMetadataProvider {
             controller: fixed_source(image.clone()),

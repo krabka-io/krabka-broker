@@ -84,15 +84,13 @@ async fn create_topic_with_partitions(
     name: &str,
     partitions: i32,
 ) -> WireUuid {
-    create_topic_from_test_support(
-        broker,
-        ClientTopicSetup {
-            client_id: "share-fetch-byte-limit-test",
-            name,
-            partitions: TopicPartitionCount(partitions),
-        },
-    )
-    .await
+    create_topic_from_test_support()
+        .broker(broker)
+        .client_id("share-fetch-byte-limit-test")
+        .name(name)
+        .partitions(partitions)
+        .call()
+        .await
 }
 
 /// Appends [`BATCHES`] batches of the same size, each in its own produce.
@@ -206,17 +204,12 @@ async fn send_share_fetch(
     broker: &BrokerHandle,
     request: &ShareFetchRequest,
 ) -> ShareFetchResponse {
-    share_fetch_wire(
-        broker,
-        request,
-        ShareWireSetup {
-            version: krabka_ids::ApiVersion(
-                krabka_protocol::owned::share_fetch_request::MAX_VERSION,
-            ),
-            ..Default::default()
-        },
-    )
-    .await
+    share_fetch_wire()
+        .broker(broker)
+        .request(request)
+        .version(krabka_protocol::owned::share_fetch_request::MAX_VERSION)
+        .call()
+        .await
 }
 
 /// The one partition row of `response`. An incremental response leaves out a
@@ -470,6 +463,7 @@ async fn a_record_at_the_delivery_limit_does_not_stall_the_partition() {
     broker.shutdown().await;
 }
 
+#[derive(derive_more::From, derive_more::Into)]
 /// A `ShareFetch` of every partition of `topic_id`, with no wait.
 #[derive(Clone, Copy)]
 struct ShareResponseByteLimit(i32);
@@ -487,7 +481,21 @@ struct FetchPartitionsSetup<'a> {
     maximum: ShareResponseByteLimit,
 }
 
-fn fetch_partitions(setup: FetchPartitionsSetup<'_>) -> ShareFetchRequest {
+#[bon::builder]
+fn fetch_partitions(
+    #[builder(default = "g")] group: &'_ str,
+    #[builder(into, default = ShareSessionEpoch (0))] epoch: ShareSessionEpoch,
+    #[builder(default = WireUuid :: ZERO)] topic_id: WireUuid,
+    #[builder(into, default)] partitions: TopicPartitionCount,
+    #[builder(into, default = ShareResponseByteLimit (1 << 20))] maximum: ShareResponseByteLimit,
+) -> ShareFetchRequest {
+    let setup = FetchPartitionsSetup {
+        group,
+        epoch,
+        topic_id,
+        partitions,
+        maximum,
+    };
     let FetchPartitionsSetup {
         group,
         epoch,
@@ -599,12 +607,11 @@ async fn only_the_first_partition_may_exceed_the_byte_budget() {
         }
         let opened = send_share_fetch(
             &broker,
-            &fetch_partitions(FetchPartitionsSetup {
-                group: &group,
-                topic_id,
-                partitions: TopicPartitionCount(PARTITIONS),
-                ..Default::default()
-            }),
+            &fetch_partitions()
+                .group(&group)
+                .topic_id(topic_id)
+                .partitions(PARTITIONS)
+                .call(),
         )
         .await;
         assert!(spread(&opened).rows_with_records == 0, "{opened:?}");
@@ -615,13 +622,13 @@ async fn only_the_first_partition_may_exceed_the_byte_budget() {
 
         let limited = send_share_fetch(
             &broker,
-            &fetch_partitions(FetchPartitionsSetup {
-                group: &group,
-                epoch: ShareSessionEpoch(1),
-                topic_id,
-                partitions: TopicPartitionCount(PARTITIONS),
-                maximum: ShareResponseByteLimit(size * numerator / denominator),
-            }),
+            &fetch_partitions()
+                .group(&group)
+                .epoch(1)
+                .topic_id(topic_id)
+                .partitions(PARTITIONS)
+                .maximum(size * numerator / denominator)
+                .call(),
         )
         .await;
 
@@ -643,24 +650,34 @@ async fn release(
     (first_offset, last_offset): (i64, i64),
 ) {
     let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
-    let request = acknowledge_batches_request(AcknowledgementSetup {
-        member,
-
-        partition: AcknowledgementPartitionSetup::single_batch(
+    let request = acknowledge_batches_request()
+        .group(
+            AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
+                .group,
+        )
+        .member(member)
+        .epoch(
+            AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
+                .epoch,
+        )
+        .topic_id(
+            AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
+                .topic_id,
+        )
+        .partition(AcknowledgementPartitionSetup::single_batch(
             krabka_log::Offset(first_offset)..=krabka_log::Offset(last_offset),
             AcknowledgementCode(RELEASE),
-        ),
-        ..AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
-    });
-    let response = share_acknowledge_wire(
-        broker,
-        &request,
-        ShareWireSetup {
-            version: krabka_ids::ApiVersion(version),
-            ..Default::default()
-        },
-    )
-    .await;
+        ))
+        .mode(
+            AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id).mode,
+        )
+        .call();
+    let response = share_acknowledge_wire()
+        .broker(broker)
+        .request(&request)
+        .version(version)
+        .call()
+        .await;
     let row = &response.responses[0].partitions[0];
     assert!(
         (response.error_code, row.error_code) == (codes::NONE, codes::NONE),
@@ -704,11 +721,7 @@ async fn a_batch_acquired_over_two_passes_is_carried_once() {
     // The first pass acquires offset 0 and falls short of `MinBytes`. While
     // the request waits, `other` releases offset 1, which the last pass
     // acquires.
-    let mut request = fetch_partitions(FetchPartitionsSetup {
-        epoch: ShareSessionEpoch(1),
-        topic_id,
-        ..Default::default()
-    });
+    let mut request = fetch_partitions().epoch(1).topic_id(topic_id).call();
     request.member_id = Some("waiting".into());
     request.min_bytes = 1 << 20;
     request.max_wait_ms = 1_000;

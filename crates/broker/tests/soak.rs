@@ -246,12 +246,11 @@ fn soak_duration() -> Duration {
 
 /// One record of `PAYLOAD_BYTES` bytes on `topic`.
 fn record(topic: &str, key: String, value: Vec<u8>) -> ProducerRecord {
-    producer_record(ProducerRecordSetup {
-        topic: topic.to_owned(),
-        key: Some(key.into()),
-        value: Some(value.into()),
-        ..Default::default()
-    })
+    producer_record()
+        .topic(topic.to_owned())
+        .maybe_key(Some(key.into()))
+        .value(Some(bytes::Bytes::from(value)))
+        .call()
 }
 
 /// A producer for the load tasks.

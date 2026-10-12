@@ -168,49 +168,48 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_partial_byte_ranges() {
         let store = rsm(None);
-        seeded_blocking(
-            store,
-            SeededCopySetup::without_transaction_index(),
-            move |store, md| {
+        seeded_blocking()
+            .store(store)
+            .metadata(SeededCopySetup::without_transaction_index().metadata)
+            .transaction_index(SeededCopySetup::without_transaction_index().transaction_index)
+            .then(move |store, md| {
                 // Inclusive [2, 5] -> "2345".
                 assert!(store.fetch_log_segment(&md, 2, Some(5)).unwrap() == b"2345");
                 // Open-ended from 7 -> "789".
                 assert!(store.fetch_log_segment(&md, 7, None).unwrap() == b"789");
-            },
-        )
-        .await;
+            })
+            .call()
+            .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_single_byte_range_start_equals_end() {
         let store = rsm(None);
-        seeded_blocking(
-            store,
-            SeededCopySetup::without_transaction_index(),
-            move |store, md| {
+        seeded_blocking()
+            .store(store)
+            .metadata(SeededCopySetup::without_transaction_index().metadata)
+            .transaction_index(SeededCopySetup::without_transaction_index().transaction_index)
+            .then(move |store, md| {
                 // Inclusive [3, 3] is a valid single-byte range -> "3" (the guard
                 // is `end < start_position`, not `<=`/`==`).
                 assert!(store.fetch_log_segment(&md, 3, Some(3)).unwrap() == b"3");
-            },
-        )
-        .await;
+            })
+            .call()
+            .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_each_index_type() {
         let store = rsm(None);
         let md = sample_metadata(uuid::Uuid::from_u128(11));
-        seeded_blocking(
-            store,
-            SeededCopySetup {
-                metadata: md,
-                ..Default::default()
-            },
-            move |store, md| {
+        seeded_blocking()
+            .store(store)
+            .metadata(md)
+            .then(move |store, md| {
                 check_sample_indexes(&store, &md);
-            },
-        )
-        .await;
+            })
+            .call()
+            .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -228,18 +227,16 @@ mod tests {
     async fn missing_optional_txn_index_is_not_found() {
         let store = rsm(None);
         let md = sample_metadata(uuid::Uuid::from_u128(12));
-        seeded_blocking(
-            store,
-            SeededCopySetup {
-                metadata: md,
-                transaction_index: TransactionIndex::Omitted,
-            },
-            move |store, md| {
+        seeded_blocking()
+            .store(store)
+            .metadata(md)
+            .transaction_index(TransactionIndex::Omitted)
+            .then(move |store, md| {
                 let err = store.fetch_index(&md, IndexType::Transaction).unwrap_err();
                 assert!(matches!(err, RemoteStorageError::SegmentNotFound(_)));
-            },
-        )
-        .await;
+            })
+            .call()
+            .await;
     }
 
     /// The write-only guard must fire before a key is derived or a request is
@@ -258,19 +255,16 @@ mod tests {
         let sealed_keys = TempDir::new().unwrap();
         let readable = worm_rsm(Arc::clone(&backing), &readable_keys, WormAccess::ReadWrite);
         let write_only = worm_rsm(backing, &sealed_keys, WormAccess::WriteOnly);
-        let md = stamped_metadata(StampedMetadataSetup {
-            segment_id: uuid::Uuid::from_u128(56),
-            ..Default::default()
-        });
+        let md = stamped_metadata()
+            .segment_id(uuid::Uuid::from_u128(56))
+            .call();
 
         let readable_md = md.clone();
-        seeded_blocking(
-            readable,
-            SeededCopySetup {
-                metadata: readable_md,
-                transaction_index: TransactionIndex::Omitted,
-            },
-            move |readable, readable_md| {
+        seeded_blocking()
+            .store(readable)
+            .metadata(readable_md)
+            .transaction_index(TransactionIndex::Omitted)
+            .then(move |readable, readable_md| {
                 check!(readable.fetch_log_segment(&readable_md, 0, None).unwrap() == b"0123456789");
                 check!(
                     readable
@@ -278,9 +272,9 @@ mod tests {
                         .unwrap()
                         == b"OFFSET-IDX"
                 );
-            },
-        )
-        .await;
+            })
+            .call()
+            .await;
 
         let (segment, index) = std::thread::spawn(move || {
             (

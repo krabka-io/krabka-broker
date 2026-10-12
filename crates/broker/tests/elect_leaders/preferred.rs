@@ -118,17 +118,15 @@ async fn preferred_election_via_wire_returns_success() {
 
     // Now send ElectLeaders Preferred (election_type=0). Broker 1 is the
     // preferred replica (replicas[0]) and is now back in ISR and alive.
-    let result = drive_elect_leaders(
-        elect_addr,
-        ElectionExchangeSetup {
-            client_id: CLIENT_ID,
-            election: ElectionSetup {
-                topic: ("foo-preferred").to_string(),
-                ..Default::default()
-            },
-        },
-    )
-    .await;
+    let result = drive_elect_leaders()
+        .addr(elect_addr)
+        .client_id(CLIENT_ID)
+        .election(ElectionSetup {
+            topic: ("foo-preferred").to_string(),
+            ..Default::default()
+        })
+        .call()
+        .await;
     assert!(
         result == vec![(0, 0)],
         "expected error_code=0 for PREFERRED election; got {result:?}"
@@ -185,17 +183,15 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
     );
 
     // The same partition, named explicitly, still reports why it was skipped.
-    let named = drive_elect_leaders(
-        broker1_addr,
-        ElectionExchangeSetup {
-            client_id: CLIENT_ID,
-            election: ElectionSetup {
-                topic: ("foo-all-partitions").to_string(),
-                ..Default::default()
-            },
-        },
-    )
-    .await;
+    let named = drive_elect_leaders()
+        .addr(broker1_addr)
+        .client_id(CLIENT_ID)
+        .election(ElectionSetup {
+            topic: ("foo-all-partitions").to_string(),
+            ..Default::default()
+        })
+        .call()
+        .await;
     assert!(
         named == vec![(0, krabka_broker::codes::ELECTION_NOT_NEEDED)],
         "a named partition must still report ELECTION_NOT_NEEDED, got {named:?}"

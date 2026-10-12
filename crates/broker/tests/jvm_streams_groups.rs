@@ -137,12 +137,14 @@ async fn keepalive(client: &Client, group: &str, member_id: &str, epoch: i32) {
         ..Default::default()
     }]);
     let _ = client
-        .send(follow_up(StreamsFollowUpSetup {
-            group,
-            member_id,
-            epoch: StreamsMemberEpoch(epoch),
-            active,
-        }))
+        .send(
+            follow_up()
+                .group(group)
+                .member_id(member_id)
+                .epoch(epoch)
+                .maybe_active(active)
+                .call(),
+        )
         .await;
 }
 

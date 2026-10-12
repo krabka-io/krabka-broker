@@ -93,17 +93,16 @@ pub async fn drive_inter_broker_client_then_apiversions(
     let av_req = ApiVersionsRequest::default();
     let av_body = encode_named(&av_req, 0, "ApiVersions")?;
 
-    let frame = request_frame(WireFrameSetup {
-        correlation: CorrelationId(99),
-        client_id: "krabka-t16-test",
-        body: &av_body,
-        capacity: Some(
+    let frame = request_frame()
+        .correlation(99)
+        .client_id("krabka-t16-test")
+        .body(&av_body)
+        .maybe_capacity(Some(
             <krabka_units::ByteSize as krabka_units::convert::ByteSizeExt>::from_bytes(
                 u64::try_from(16 + av_body.len()).expect("frame capacity fits u64"),
             ),
-        ),
-        ..Default::default()
-    });
+        ))
+        .call();
 
     write_frame(&mut stream, &frame, None).await?;
 

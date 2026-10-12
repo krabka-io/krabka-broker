@@ -322,17 +322,23 @@ mod tests {
     #[test]
     fn append_after_open_active_writes_at_eof() {
         let dir = tempdir().unwrap();
-        drop(seeded_segment(
-            dir.path(),
-            SeededSegmentSetup {
-                batches: &[ONE_RECORD_BATCH, SECOND_SINGLE_RECORD_BATCH],
-                ..Default::default()
-            },
-        ));
+        drop(
+            seeded_segment()
+                .dir(dir.path())
+                .batches(&[ONE_RECORD_BATCH, SECOND_SINGLE_RECORD_BATCH])
+                .call(),
+        );
 
         let mut seg = Segment::open_active(dir.path(), Offset(0), true).unwrap();
         let position = seg
-            .append(&sample_batch(THIRD_SINGLE_RECORD_BATCH), DENSE_INDEX)
+            .append(
+                &sample_batch()
+                    .offset(THIRD_SINGLE_RECORD_BATCH.offset.0)
+                    .records(THIRD_SINGLE_RECORD_BATCH.records.0)
+                    .timestamp(THIRD_SINGLE_RECORD_BATCH.timestamp.0)
+                    .call(),
+                DENSE_INDEX,
+            )
             .unwrap();
 
         let read = seg.read(Offset(0), NO_LIMIT).unwrap();
@@ -347,13 +353,10 @@ mod tests {
     fn recover_active_tail_truncates_trailing_garbage() {
         let dir = tempdir().unwrap();
         let valid_size = {
-            let mut seg = seeded_segment(
-                dir.path(),
-                SeededSegmentSetup {
-                    batches: FIVE_OFFSET_TIMESTAMP_BATCHES,
-                    ..Default::default()
-                },
-            );
+            let mut seg = seeded_segment()
+                .dir(dir.path())
+                .batches(FIVE_OFFSET_TIMESTAMP_BATCHES)
+                .call();
             seg.flush().unwrap();
             let valid_size = seg.log_size;
             let stale_position = u32::try_from(valid_size).unwrap();
@@ -408,11 +411,7 @@ mod tests {
             let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
             for (base, timestamp) in [(0, 100), (1, 300), (2, 200)] {
                 seg.append(
-                    &sample_batch(SampleBatchSetup {
-                        offset: Offset(base),
-                        timestamp: RecordTimestamp(timestamp),
-                        ..Default::default()
-                    }),
+                    &sample_batch().offset(base).timestamp(timestamp).call(),
                     kibibytes(4),
                 )
                 .unwrap();

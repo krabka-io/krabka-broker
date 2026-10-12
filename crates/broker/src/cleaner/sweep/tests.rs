@@ -33,14 +33,11 @@ async fn hosted_compact_partition() -> HostedCompactPartition {
     let dir = tempfile::tempdir().expect("log root");
     let status = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
     let registry = PartitionRegistry::new();
-    let partition = compactable_partition(
-        &dir,
-        CompactionSetup {
-            log_dir_status: status.clone(),
-            ..Default::default()
-        },
-    )
-    .await;
+    let partition = compactable_partition()
+        .root(&dir)
+        .log_dir_status(status.clone())
+        .call()
+        .await;
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
     HostedCompactPartition {
         dir,
@@ -105,19 +102,16 @@ async fn tick_all_compacts_every_hosted_compact_topic_whoever_leads_it() {
     ];
     let mut cases = Vec::new();
     for (topic, leader, policy, expect_compacted) in specs {
-        let partition = compactable_partition(
-            &dir,
-            CompactionSetup {
-                topic,
-                leader: NodeId(leader),
-                cfg: krabka_log::LogConfig {
-                    cleanup_policy: policy,
-                    ..CompactionSetup::default().cfg
-                },
-                ..Default::default()
-            },
-        )
-        .await;
+        let partition = compactable_partition()
+            .root(&dir)
+            .topic(topic)
+            .leader(leader)
+            .cfg(krabka_log::LogConfig {
+                cleanup_policy: policy,
+                ..CompactionSetup::default().cfg
+            })
+            .call()
+            .await;
         let before = record_count(&partition);
         registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
         cases.push((topic, partition, before, expect_compacted));
@@ -165,15 +159,12 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
         min_cleanable_dirty_ratio: krabka_units::fraction(1.0),
         ..Default::default()
     };
-    let partition = compactable_partition(
-        &dir,
-        CompactionSetup {
-            topic: "too-clean",
-            cfg: base.clone(),
-            ..Default::default()
-        },
-    )
-    .await;
+    let partition = compactable_partition()
+        .root(&dir)
+        .topic("too-clean")
+        .cfg(base.clone())
+        .call()
+        .await;
     let before = record_count(&partition);
     registry.insert(
         "too-clean".into(),
@@ -258,13 +249,12 @@ async fn tick_all_skips_a_frozen_partition_and_compacts_an_unfrozen_control() {
     // One image, one sweep. The control partition is compactable in
     // exactly the same way as the two frozen ones, so a sweep that
     // compacted nothing at all could not pass this test.
-    let image = image_with_freezes(
-        &[
+    let image = image_with_freezes()
+        .scopes(&[
             ("frozen-literal", PatternType::Literal),
             ("tenant-a.", PatternType::Prefixed),
-        ],
-        FrozenTopicsImageSetup::default(),
-    );
+        ])
+        .call();
 
     tick_all(
         &registry,
@@ -295,10 +285,9 @@ async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
     let registry = PartitionRegistry::new();
     let cases = compactable_topics(&dir, &registry, &["orders"]).await;
     let (_, partition, before) = &cases[0];
-    let mut image = image_with_freezes(
-        &[("orders", PatternType::Literal)],
-        FrozenTopicsImageSetup::default(),
-    );
+    let mut image = image_with_freezes()
+        .scopes(&[("orders", PatternType::Literal)])
+        .call();
     let metrics = BrokerMetrics::new();
 
     tick_all(
@@ -330,13 +319,12 @@ async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
 
 #[test]
 fn freeze_stops_compaction_reads_the_registry_the_produce_path_reads() {
-    let image = image_with_freezes(
-        &[
+    let image = image_with_freezes()
+        .scopes(&[
             ("orders", PatternType::Literal),
             ("tenant-a.", PatternType::Prefixed),
-        ],
-        FrozenTopicsImageSetup::default(),
-    );
+        ])
+        .call();
 
     for (label, topic, want) in [
         (

@@ -129,11 +129,12 @@ fn changed_topics_are_the_created_changed_and_deleted_topics() {
 }
 
 fn describe_acl(topic: &str) -> MetadataRecord {
-    MetadataRecord::V1AccessControlEntry(allow_acl(AllowAclSetup {
-        resource_name: topic,
-        operation: krabka_metadata::AclOperation::Describe,
-        ..Default::default()
-    }))
+    MetadataRecord::V1AccessControlEntry(
+        allow_acl()
+            .resource_name(topic)
+            .operation(krabka_metadata::AclOperation::Describe)
+            .call(),
+    )
 }
 
 /// A created topic and a changed ACL can change what a regular expression
@@ -223,11 +224,10 @@ async fn a_metadata_update_refreshes_the_groups_this_broker_coordinates() {
         let handle = coordinator.get_or_create_consumer(group_id);
         let joined = heartbeat(
             &handle,
-            consumer_join_request(ConsumerJoinSetup {
-                group_id,
-                topics: &["orders"],
-                ..Default::default()
-            }),
+            consumer_join_request()
+                .group_id(group_id)
+                .topics(&["orders"])
+                .call(),
         )
         .await;
         check!(joined.member_epoch == 2, "{group_id}");

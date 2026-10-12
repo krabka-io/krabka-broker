@@ -129,11 +129,10 @@ fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> {
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
         leader_epoch: krabka_metadata::LeaderEpoch(17),
         partition_epoch: 1,
-        ..replicated_partition(ReplicatedPartitionSetup {
-            leader: krabka_audit::NodeId(2),
-            replicas: &[krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-            ..Default::default()
-        })
+        ..replicated_partition()
+            .leader(2)
+            .replicas(&[krabka_audit::NodeId(2), krabka_audit::NodeId(3)])
+            .call()
     }));
     Arc::new(img)
 }

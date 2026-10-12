@@ -70,15 +70,14 @@ async fn send_api_versions(
     // parse the error code on negotiated downgrade.
     let flexible = version >= 3;
 
-    let frame = request_frame(WireFrameSetup {
-        version: krabka_ids::ApiVersion(version),
-        correlation: CorrelationId(99),
-        header: HeaderEncoding::from_wire(flexible),
-        client_id: "krabka-kip-511-test",
-        body: &body,
-        capacity: Some(request_body_capacity(&body)),
-        ..Default::default()
-    });
+    let frame = request_frame()
+        .version(version)
+        .correlation(99)
+        .header(HeaderEncoding::from_wire(flexible))
+        .client_id("krabka-kip-511-test")
+        .body(&body)
+        .maybe_capacity(Some(request_body_capacity(&body)))
+        .call();
 
     let mut stream = TcpStream::connect(addr).await?;
     write_frame(&mut stream, &frame, None).await?;

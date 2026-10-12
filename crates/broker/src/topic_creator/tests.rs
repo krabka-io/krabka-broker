@@ -135,14 +135,12 @@ async fn without_principal_creates_a_topic_and_then_reports_that_it_exists() {
     // KIP-525 (v5+): the row carries the effective configs of the new topic.
     // The request set no overrides, so they are the defaults.
     let image = broker.controller.current_image();
-    let configs = described_creation_configs(
-        &image,
-        DescribedCreationSetup {
-            node: broker.config.node_id,
-            topic: "fresh",
-            overrides: &std::collections::BTreeMap::new(),
-        },
-    );
+    let configs = described_creation_configs()
+        .image(&image)
+        .node(broker.config.node_id)
+        .topic("fresh")
+        .overrides(&std::collections::BTreeMap::new())
+        .call();
     let created = response(CreatableTopicResult {
         name: "fresh".to_owned(),
         topic_id: committed_topic_id(&broker, "fresh"),

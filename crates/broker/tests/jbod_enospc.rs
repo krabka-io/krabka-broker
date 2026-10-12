@@ -417,18 +417,18 @@ async fn create_topic(bootstrap: &str) {
         if let Ok(client) = Client::builder().bootstrap(bootstrap).build().await {
             match client
                 .send(CreateTopicsRequest {
-                    topics: vec![crate::support::topics::creatable_topic_with_configs(
-                        crate::support::topics::ConfiguredTopicSetup {
-                            name: TOPIC.into(),
-                            partitions: crate::support::topics::TopicPartitionCount(PARTITIONS),
-                            replicas: crate::support::topics::TopicReplicationFactor(3),
-                            configs: vec![CreatableTopicConfig {
+                    topics: vec![
+                        crate::support::topics::creatable_topic_with_configs()
+                            .name(TOPIC.into())
+                            .partitions(PARTITIONS)
+                            .replicas(3)
+                            .configs(vec![CreatableTopicConfig {
                                 name: "min.insync.replicas".into(),
                                 value: Some("2".into()),
                                 ..Default::default()
-                            }],
-                        },
-                    )],
+                            }])
+                            .call(),
+                    ],
                     timeout_ms: 10_000,
                     ..Default::default()
                 })
@@ -588,12 +588,12 @@ async fn wait_isr(bootstrap: &str, partition: i32, expected: usize) {
 }
 
 fn record(partition: i32, key: String, bytes: usize) -> ProducerRecord {
-    producer_record(ProducerRecordSetup {
-        topic: (TOPIC).into(),
-        partition: Some(krabka_ids::PartitionIndex(partition)),
-        key: Some(key.into()),
-        value: Some(Bytes::from(vec![b'x'; bytes])),
-    })
+    producer_record()
+        .topic((TOPIC).into())
+        .maybe_partition(Some(partition))
+        .maybe_key(Some(key.into()))
+        .maybe_value(Some(Some(Bytes::from(vec![b'x'; bytes]))))
+        .call()
 }
 
 async fn producer(bootstrap: &str) -> Producer {
@@ -657,19 +657,21 @@ async fn read_partition_keys(cluster: &Cluster, partition: i32) -> BTreeSet<Stri
         let response = client
             .send(FetchRequest {
                 replica_id: -1,
-                ..single_partition_fetch(SinglePartitionFetchSetup {
-                    topic: TOPIC.into(),
-                    topic_id: topic.topic_id,
-                    partition: fetch_partition(FetchPartitionSetup {
-                        partition: krabka_ids::PartitionIndex(partition),
-                        offset: krabka_ids::Offset(offset),
-                        maximum: FetchByteLimit(1 << 24),
-                    }),
-                    limits: FetchLimits::wait_for_data_with_maximum(
+                ..single_partition_fetch()
+                    .topic(TOPIC.into())
+                    .topic_id(topic.topic_id)
+                    .partition(
+                        fetch_partition()
+                            .partition(partition)
+                            .offset(offset)
+                            .maximum(1 << 24)
+                            .call(),
+                    )
+                    .limits(FetchLimits::wait_for_data_with_maximum(
                         RequestWaitMillis(0),
                         FetchByteLimit(1 << 24),
-                    ),
-                })
+                    ))
+                    .call()
             })
             .await
             .expect("Fetch");

@@ -28,22 +28,15 @@ const TID: &str = "tid-moved";
 const P0: PartitionIndex = PartitionIndex(0);
 
 fn image(leader: NodeId, leader_epoch: krabka_metadata::LeaderEpoch) -> MetadataImage {
-    super::super::test_support::state_image(StateImageSetup {
-        leader,
-        leader_epoch,
-        replicas: &[NodeId(1), NodeId(2)],
-        ..Default::default()
-    })
+    super::super::test_support::state_image()
+        .leader(leader)
+        .leader_epoch(leader_epoch)
+        .replicas(&[NodeId(1), NodeId(2)])
+        .call()
 }
 
 fn open_state_partition(dir: &Path) -> Arc<Partition> {
-    open_partition(
-        dir,
-        StandalonePartitionSetup {
-            topic: bootstrap::TOPIC,
-            ..Default::default()
-        },
-    )
+    open_partition().log_dir(dir).topic(bootstrap::TOPIC).call()
 }
 
 #[derive(Clone, Copy)]

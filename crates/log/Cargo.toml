@@ -27,6 +27,8 @@ default = []
 test-helpers = []
 
 [dependencies]
+derive_more = { workspace = true }
+bon = { workspace = true }
 maplit = { workspace = true }
 assert2 = { workspace = true }
 krabka-ids = { version = "0.6.0" }

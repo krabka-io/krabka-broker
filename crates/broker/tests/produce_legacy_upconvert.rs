@@ -97,11 +97,10 @@ async fn produce_v1_message_set_is_upconverted_and_round_trips() {
             .client
             .send(FetchRequest {
                 replica_id: -1,
-                ..single_partition_fetch(SinglePartitionFetchSetup {
-                    topic: "legacy".into(),
-                    topic_id,
-                    ..Default::default()
-                })
+                ..single_partition_fetch()
+                    .topic("legacy".into())
+                    .topic_id(topic_id)
+                    .call()
             })
             .await
             .expect("Fetch");

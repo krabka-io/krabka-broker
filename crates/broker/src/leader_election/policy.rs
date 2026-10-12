@@ -534,12 +534,11 @@ mod tests {
     }
 
     fn partition_record(leader: u64, replicas: &[u64], isr: &[u64]) -> PartitionRecord {
-        seed_partition(ElectionSetup {
-            leader: krabka_raft::NodeId(leader),
-            replicas: &replica_nodes(replicas),
-            isr: &replica_nodes(isr),
-            ..Default::default()
-        })
+        seed_partition()
+            .leader(leader)
+            .replicas(&replica_nodes(replicas))
+            .isr(&replica_nodes(isr))
+            .call()
     }
 
     #[test]

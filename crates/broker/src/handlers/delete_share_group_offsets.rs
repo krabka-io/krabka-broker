@@ -315,11 +315,13 @@ mod tests {
         names: &'a [&'a str],
     }
 
+    #[bon::builder]
     async fn create_topics(
         broker_handle: &BrokerHandle,
         ctx: &RequestContext<'_>,
-        setup: ShareTopicsSetup<'_>,
+        #[builder(default = & ["t"])] names: &'_ [&'_ str],
     ) {
+        let setup = ShareTopicsSetup { names };
         let broker = broker_handle.broker_arc_for_test();
         let topic_names = setup.names;
         let version = create_topics_response::MAX_VERSION;
@@ -365,13 +367,20 @@ mod tests {
         assert!(resp == expected);
     }
 
+    #[bon::builder]
     async fn create_share_topics(
         handle: &BrokerHandle,
         ctx: &RequestContext<'_>,
-        setup: ShareTopicsSetup<'_>,
+        #[builder(default = & ["t"])] names: &'_ [&'_ str],
     ) -> Arc<SharePersister> {
+        let setup = ShareTopicsSetup { names };
         let broker = handle.broker_arc_for_test();
-        create_topics(handle, ctx, setup).await;
+        create_topics()
+            .broker_handle(handle)
+            .ctx(ctx)
+            .names(setup.names)
+            .call()
+            .await;
         lead_share_state_partitions(&broker).await;
         broker
             .group_coordinator
@@ -434,14 +443,12 @@ mod tests {
             share_allow_all,
             context(ctx, "alice")
         );
-        create_topics(
-            &broker_handle,
-            &ctx,
-            ShareTopicsSetup {
-                names: &["t", "elsewhere"],
-            },
-        )
-        .await;
+        create_topics()
+            .broker_handle(&broker_handle)
+            .ctx(&ctx)
+            .names(&["t", "elsewhere"])
+            .call()
+            .await;
         // `share-held` holds state for a topic the image has. The actor's
         // session tick drops the state of every topic the image lacks, as
         // Kafka's `maybeCleanupShareGroupState` does, and that tick can run
@@ -548,14 +555,12 @@ mod tests {
             share_allow_all,
             context(ctx, "alice")
         );
-        let persister = create_share_topics(
-            &broker_handle,
-            &ctx,
-            ShareTopicsSetup {
-                names: &["delete-topic", "kept-topic"],
-            },
-        )
-        .await;
+        let persister = create_share_topics()
+            .handle(&broker_handle)
+            .ctx(&ctx)
+            .names(&["delete-topic", "kept-topic"])
+            .call()
+            .await;
         let image = broker.controller.current_image();
         let deleted_id = image
             .topic("delete-topic")
@@ -668,21 +673,18 @@ mod tests {
 
         for (case, denied_names) in cases {
             let denied: HashSet<&'static str> = denied_names.iter().copied().collect();
-            let (broker_handle, _dir) = start_share_broker(
-                Arc::new(DenyReadOnTopics(denied.clone())),
-                ShareBrokerSetup::default(),
-            )
-            .await;
+            let (broker_handle, _dir) = start_share_broker()
+                .authorizer(Arc::new(DenyReadOnTopics(denied.clone())))
+                .call()
+                .await;
             let broker = broker_handle.broker_arc_for_test();
             test_ctx!(ctx, "alice");
-            let persister = create_share_topics(
-                &broker_handle,
-                &ctx,
-                ShareTopicsSetup {
-                    names: &["allow-topic", "deny-topic"],
-                },
-            )
-            .await;
+            let persister = create_share_topics()
+                .handle(&broker_handle)
+                .ctx(&ctx)
+                .names(&["allow-topic", "deny-topic"])
+                .call()
+                .await;
             let image = broker.controller.current_image();
             let allow_id = image.topic("allow-topic").expect("allow topic").topic_id;
             let deny_id = image.topic("deny-topic").expect("deny topic").topic_id;

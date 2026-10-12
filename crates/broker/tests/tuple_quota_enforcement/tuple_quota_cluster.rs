@@ -14,7 +14,6 @@ use krabka_broker::BrokerHandle;
 pub(crate) use crate::kafka_wire::create_configured_topic_sasl as create_topic_as_admin;
 pub use crate::support::sasl::start_single_broker_sasl_plaintext_with_users;
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: seed a dummy ACL to disable the compat shim (allow-all when no ACLs)
 // ─────────────────────────────────────────────────────────────────────────────

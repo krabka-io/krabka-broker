@@ -261,7 +261,17 @@ mod tests {
         name: Option<&'a str>,
     }
 
-    fn comp(setup: QuotaComponentSetup<'_>) -> ComponentData {
+    #[bon::builder]
+    fn comp(
+        #[builder(default = "user")] entity_type: &'_ str,
+        #[builder(default)] matching: QuotaNameMatch,
+        name: Option<&'_ str>,
+    ) -> ComponentData {
+        let setup = QuotaComponentSetup {
+            entity_type,
+            matching,
+            name,
+        };
         ComponentData {
             entity_type: setup.entity_type.into(),
             match_type: setup.matching.wire_code(),
@@ -271,11 +281,12 @@ mod tests {
     }
 
     fn exact_user_filter(name: &str) -> Vec<ComponentData> {
-        vec![comp(QuotaComponentSetup {
-            matching: QuotaNameMatch::Exact,
-            name: Some(name),
-            ..Default::default()
-        })]
+        vec![
+            comp()
+                .matching(QuotaNameMatch::Exact)
+                .maybe_name(Some(name))
+                .call(),
+        ]
     }
 
     fn key(parts: Vec<(&str, Option<&str>)>) -> EntityKey {
@@ -291,7 +302,15 @@ mod tests {
         matching: QuotaEntityScope,
     }
 
-    fn request(setup: QuotaRequestSetup) -> DescribeClientQuotasRequest {
+    #[bon::builder]
+    fn request(
+        #[builder(default)] components: Vec<ComponentData>,
+        #[builder(default)] matching: QuotaEntityScope,
+    ) -> DescribeClientQuotasRequest {
+        let setup = QuotaRequestSetup {
+            components,
+            matching,
+        };
         DescribeClientQuotasRequest {
             components: setup.components,
             strict: setup.matching == QuotaEntityScope::ExactTypes,
@@ -311,7 +330,11 @@ mod tests {
             .broker_arc_for_test()
             .controller
             .submit_change(vec![MetadataRecord::V1ClientQuota(
-                crate::quota::test_support::quota_record(setup),
+                crate::quota::test_support::quota_record()
+                    .entity(setup.entity)
+                    .key(setup.key)
+                    .value(setup.value)
+                    .call(),
             )])
             .await
             .expect("seed quota");
@@ -387,10 +410,7 @@ mod tests {
     fn default_match_type_filters_by_none_entity_name() {
         let stored_default = key(vec![("user", None)]);
         let stored_named = key(vec![("user", Some("alice"))]);
-        let filter = vec![comp(QuotaComponentSetup {
-            matching: QuotaNameMatch::DefaultEntity,
-            ..Default::default()
-        })];
+        let filter = vec![comp().matching(QuotaNameMatch::DefaultEntity).call()];
         assert!(entity_matches_filter(
             &stored_default,
             &filter,
@@ -407,7 +427,7 @@ mod tests {
     fn any_match_type_returns_all_names_of_type() {
         let stored1 = key(vec![("user", Some("alice"))]);
         let stored2 = key(vec![("user", None)]);
-        let filter = vec![comp(QuotaComponentSetup::default())];
+        let filter = vec![comp().call()];
         assert!(entity_matches_filter(
             &stored1,
             &filter,
@@ -430,10 +450,10 @@ mod tests {
 
         let resp = handle(
             &broker,
-            &request(QuotaRequestSetup {
-                components: exact_user_filter("alice"),
-                matching: QuotaEntityScope::ExactTypes,
-            }),
+            &request()
+                .components(exact_user_filter("alice"))
+                .matching(QuotaEntityScope::ExactTypes)
+                .call(),
             VERSION,
             &ctx,
         );
@@ -474,10 +494,7 @@ mod tests {
 
             let resp = handle(
                 &broker,
-                &request(QuotaRequestSetup {
-                    components: vec![comp(QuotaComponentSetup::default())],
-                    ..Default::default()
-                }),
+                &request().components(vec![comp().call()]).call(),
                 VERSION,
                 &ctx,
             );
@@ -513,10 +530,7 @@ mod tests {
 
         let resp = handle(
             &broker,
-            &request(QuotaRequestSetup {
-                components: exact_user_filter("alice"),
-                ..Default::default()
-            }),
+            &request().components(exact_user_filter("alice")).call(),
             VERSION,
             &ctx,
         );
@@ -578,21 +592,17 @@ mod tests {
         let rows: Vec<(&str, Vec<ComponentData>, DescribeClientQuotasResponse)> = vec![
             (
                 "empty entity type",
-                vec![comp(QuotaComponentSetup {
-                    entity_type: "",
-                    ..Default::default()
-                })],
+                vec![comp().entity_type("").call()],
                 error(INVALID_REQUEST, "Invalid empty entity type."),
             ),
             (
                 "repeated entity type",
                 vec![
-                    comp(QuotaComponentSetup {
-                        matching: QuotaNameMatch::Exact,
-                        name: Some("alice"),
-                        ..Default::default()
-                    }),
-                    comp(QuotaComponentSetup::default()),
+                    comp()
+                        .matching(QuotaNameMatch::Exact)
+                        .maybe_name(Some("alice"))
+                        .call(),
+                    comp().call(),
                 ],
                 error(
                     INVALID_REQUEST,
@@ -601,18 +611,12 @@ mod tests {
             ),
             (
                 "unknown entity type",
-                vec![comp(QuotaComponentSetup {
-                    entity_type: "group",
-                    ..Default::default()
-                })],
+                vec![comp().entity_type("group").call()],
                 error(UNSUPPORTED_VERSION, "Unsupported entity type group"),
             ),
             (
                 "exact with null match",
-                vec![comp(QuotaComponentSetup {
-                    matching: QuotaNameMatch::Exact,
-                    ..Default::default()
-                })],
+                vec![comp().matching(QuotaNameMatch::Exact).call()],
                 error(
                     INVALID_REQUEST,
                     "Request specified MATCH_TYPE_EXACT, but set match string to null.",
@@ -620,11 +624,12 @@ mod tests {
             ),
             (
                 "default with a match string",
-                vec![comp(QuotaComponentSetup {
-                    matching: QuotaNameMatch::DefaultEntity,
-                    name: Some("alice"),
-                    ..Default::default()
-                })],
+                vec![
+                    comp()
+                        .matching(QuotaNameMatch::DefaultEntity)
+                        .maybe_name(Some("alice"))
+                        .call(),
+                ],
                 error(
                     INVALID_REQUEST,
                     "Request specified MATCH_TYPE_DEFAULT, but also specified a match string.",
@@ -632,10 +637,7 @@ mod tests {
             ),
             (
                 "specified with a match string",
-                vec![comp(QuotaComponentSetup {
-                    name: Some("alice"),
-                    ..Default::default()
-                })],
+                vec![comp().maybe_name(Some("alice")).call()],
                 error(
                     INVALID_REQUEST,
                     "Request specified MATCH_TYPE_SPECIFIED, but also specified a match string.",
@@ -643,21 +645,16 @@ mod tests {
             ),
             (
                 "unknown match type",
-                vec![comp(QuotaComponentSetup {
-                    matching: QuotaNameMatch::Malformed(QuotaMatchCode(7)),
-                    ..Default::default()
-                })],
+                vec![
+                    comp()
+                        .matching(QuotaNameMatch::Malformed(QuotaMatchCode(7)))
+                        .call(),
+                ],
                 error(INVALID_REQUEST, "Unknown match type 7"),
             ),
             (
                 "ip with user",
-                vec![
-                    comp(QuotaComponentSetup {
-                        entity_type: "ip",
-                        ..Default::default()
-                    }),
-                    comp(QuotaComponentSetup::default()),
-                ],
+                vec![comp().entity_type("ip").call(), comp().call()],
                 error(
                     INVALID_REQUEST,
                     "Invalid entity filter component combination. IP filter component should \
@@ -667,16 +664,15 @@ mod tests {
             (
                 "client-id with ip",
                 vec![
-                    comp(QuotaComponentSetup {
-                        entity_type: "client-id",
-                        matching: QuotaNameMatch::DefaultEntity,
-                        ..Default::default()
-                    }),
-                    comp(QuotaComponentSetup {
-                        entity_type: "ip",
-                        matching: QuotaNameMatch::Exact,
-                        name: Some("1.2.3.4"),
-                    }),
+                    comp()
+                        .entity_type("client-id")
+                        .matching(QuotaNameMatch::DefaultEntity)
+                        .call(),
+                    comp()
+                        .entity_type("ip")
+                        .matching(QuotaNameMatch::Exact)
+                        .maybe_name(Some("1.2.3.4"))
+                        .call(),
                 ],
                 error(
                     INVALID_REQUEST,
@@ -691,20 +687,17 @@ mod tests {
             ),
             (
                 "valid default",
-                vec![comp(QuotaComponentSetup {
-                    matching: QuotaNameMatch::DefaultEntity,
-                    ..Default::default()
-                })],
+                vec![comp().matching(QuotaNameMatch::DefaultEntity).call()],
                 allowed_user_quota_response(None, 2048.0),
             ),
         ];
         for (name, components, expected) in rows {
             let resp = handle(
                 &broker,
-                &request(QuotaRequestSetup {
-                    components,
-                    matching: QuotaEntityScope::ExactTypes,
-                }),
+                &request()
+                    .components(components)
+                    .matching(QuotaEntityScope::ExactTypes)
+                    .call(),
                 VERSION,
                 &ctx,
             );
@@ -714,10 +707,10 @@ mod tests {
         // A valid SPECIFIED filter matches every user entity, named or default.
         let resp = handle(
             &broker,
-            &request(QuotaRequestSetup {
-                components: vec![comp(QuotaComponentSetup::default())],
-                matching: QuotaEntityScope::ExactTypes,
-            }),
+            &request()
+                .components(vec![comp().call()])
+                .matching(QuotaEntityScope::ExactTypes)
+                .call(),
             VERSION,
             &ctx,
         );
@@ -742,10 +735,10 @@ mod tests {
 
         let resp = handle(
             &broker,
-            &request(QuotaRequestSetup {
-                components: exact_user_filter("missing"),
-                matching: QuotaEntityScope::ExactTypes,
-            }),
+            &request()
+                .components(exact_user_filter("missing"))
+                .matching(QuotaEntityScope::ExactTypes)
+                .call(),
             VERSION,
             &ctx,
         );

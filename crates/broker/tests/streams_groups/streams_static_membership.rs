@@ -67,39 +67,43 @@ async fn every_static_member_request_is_refused_and_changes_nothing() {
         ),
         (
             "a heartbeat of the known member with an instance id",
-            instance(follow_up(StreamsFollowUpSetup {
-                group: "static-app",
-                member_id: &member_id,
-                epoch: StreamsMemberEpoch(epoch),
-                ..Default::default()
-            })),
+            instance(
+                follow_up()
+                    .group("static-app")
+                    .member_id(&member_id)
+                    .epoch(epoch)
+                    .call(),
+            ),
         ),
         (
             "a heartbeat with an instance id and another member id",
-            instance(follow_up(StreamsFollowUpSetup {
-                group: "static-app",
-                member_id: "another-member",
-                epoch: StreamsMemberEpoch(epoch),
-                ..Default::default()
-            })),
+            instance(
+                follow_up()
+                    .group("static-app")
+                    .member_id("another-member")
+                    .epoch(epoch)
+                    .call(),
+            ),
         ),
         (
             "a temporary leave at epoch -2",
-            instance(follow_up(StreamsFollowUpSetup {
-                group: "static-app",
-                member_id: &member_id,
-                epoch: StreamsMemberEpoch(-2),
-                ..Default::default()
-            })),
+            instance(
+                follow_up()
+                    .group("static-app")
+                    .member_id(&member_id)
+                    .epoch(-2)
+                    .call(),
+            ),
         ),
         (
             "a permanent leave at epoch -1 with an instance id",
-            instance(follow_up(StreamsFollowUpSetup {
-                group: "static-app",
-                member_id: &member_id,
-                epoch: StreamsMemberEpoch(-1),
-                ..Default::default()
-            })),
+            instance(
+                follow_up()
+                    .group("static-app")
+                    .member_id(&member_id)
+                    .epoch(-1)
+                    .call(),
+            ),
         ),
         (
             "a first join with an instance id to a group that does not exist",

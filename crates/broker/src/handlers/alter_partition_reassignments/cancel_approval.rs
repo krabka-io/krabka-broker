@@ -368,14 +368,13 @@ mod tests {
         })
         .await;
         let broker = handle.broker_arc_for_test();
-        let image = img_with(ReassignmentImageSetup {
-            assignment: ReassignmentSetup {
+        let image = img_with()
+            .assignment(ReassignmentSetup {
                 replicas: vec![krabka_ids::NodeId(1), krabka_ids::NodeId(2)],
                 isr: vec![krabka_ids::NodeId(1), krabka_ids::NodeId(2)],
                 ..Default::default()
-            },
-            ..Default::default()
-        });
+            })
+            .call();
         reassign_env_fixture!((principal, peer, ctx, env), broker, image);
 
         for (label, replicas, altered) in [

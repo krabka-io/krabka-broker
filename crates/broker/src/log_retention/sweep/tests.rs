@@ -33,12 +33,9 @@ fn failures(metrics: &BrokerMetrics, topic: &str, reason: CleanerFailureReason) 
 /// An image holding one live freeze entry for `scope`.
 fn image_with_freeze(scope: &str) -> MetadataImage {
     let mut image = MetadataImage::new(Uuid::from_u128(0x5150));
-    image.apply(&MetadataRecord::V1TopicFreeze(topic_freeze_record(
-        FreezeSetup {
-            scope,
-            ..Default::default()
-        },
-    )));
+    image.apply(&MetadataRecord::V1TopicFreeze(
+        topic_freeze_record().scope(scope).call(),
+    ));
     image
 }
 

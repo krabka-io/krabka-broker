@@ -91,7 +91,15 @@ pub struct IncrementalConfigsSetup {
     pub mutation: ConfigMutation,
 }
 
-pub fn incremental_request(setup: IncrementalConfigsSetup) -> IncrementalAlterConfigsRequest {
+#[bon::builder]
+pub fn incremental_request(
+    #[builder(default)] resources: Vec<AlterConfigsResource>,
+    #[builder(default)] mutation: ConfigMutation,
+) -> IncrementalAlterConfigsRequest {
+    let setup = IncrementalConfigsSetup {
+        resources,
+        mutation,
+    };
     IncrementalAlterConfigsRequest {
         resources: setup.resources,
         validate_only: matches!(setup.mutation, ConfigMutation::Validate),
@@ -166,10 +174,20 @@ pub async fn topic_config(
 ///
 /// # Panics
 /// Panics if the request fails or the broker omits the topic response.
+#[bon::builder]
 pub async fn alter_topic_config(
     client: &krabka_client_core::Client,
-    setup: TopicConfigMutationSetup<'_>,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(default = "cleanup.policy")] name: &'_ str,
+    #[builder(default)] operation: ConfigOperation,
+    value: Option<&'_ str>,
 ) -> (i16, Option<String>) {
+    let setup = TopicConfigMutationSetup {
+        topic,
+        name,
+        operation,
+        value,
+    };
     let TopicConfigMutationSetup {
         topic,
         name,
@@ -177,18 +195,19 @@ pub async fn alter_topic_config(
         value,
     } = setup;
     let response = client
-        .send(incremental_request(IncrementalConfigsSetup {
-            resources: vec![incremental_resource(
-                2,
-                topic.to_owned(),
-                vec![incremental_config(
-                    name.to_owned(),
-                    value.map(ToOwned::to_owned),
-                    operation,
-                )],
-            )],
-            ..Default::default()
-        }))
+        .send(
+            incremental_request()
+                .resources(vec![incremental_resource(
+                    2,
+                    topic.to_owned(),
+                    vec![incremental_config(
+                        name.to_owned(),
+                        value.map(ToOwned::to_owned),
+                        operation,
+                    )],
+                )])
+                .call(),
+        )
         .await
         .expect("IncrementalAlterConfigs");
     let row = &response.responses[0];
@@ -262,11 +281,19 @@ pub struct ClientMetricsSubscriptionSetup<'a> {
     pub interval: &'a str,
 }
 
+#[bon::builder]
 pub fn client_metrics_subscription(
-    setup: ClientMetricsSubscriptionSetup<'_>,
+    #[builder(default = "sub-a")] name: &'_ str,
+    #[builder(default = "*")] metrics: &'_ str,
+    #[builder(default = "60000")] interval: &'_ str,
 ) -> IncrementalAlterConfigsRequest {
-    incremental_request(IncrementalConfigsSetup {
-        resources: vec![incremental_resource(
+    let setup = ClientMetricsSubscriptionSetup {
+        name,
+        metrics,
+        interval,
+    };
+    incremental_request()
+        .resources(vec![incremental_resource(
             16,
             setup.name,
             vec![
@@ -281,7 +308,6 @@ pub fn client_metrics_subscription(
                     ConfigOperation::Set,
                 ),
             ],
-        )],
-        ..Default::default()
-    })
+        )])
+        .call()
 }

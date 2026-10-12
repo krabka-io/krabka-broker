@@ -734,16 +734,13 @@ mod tests {
         let mut expected = Vec::new();
         for (commit, read_committed, max_inflight, acquired) in cases {
             let dir = tempfile::tempdir().expect("a log root");
-            let partition = partition_with_batches(
-                &dir,
-                &clock,
-                DeliveryPartitionSetup {
-                    topic: "txn",
-                    batches: transaction_then_record(commit),
-                    leader: krabka_ids::NodeId(0),
-                    ..Default::default()
-                },
-            );
+            let partition = partition_with_batches()
+                .dir(&dir)
+                .clock(&clock)
+                .topic("txn")
+                .batches(transaction_then_record(commit))
+                .leader(0)
+                .call();
             let mut state = AcquisitionState::new(Offset(0));
 
             grow_readable_window(

@@ -118,7 +118,7 @@ pub(crate) struct RegisteredCluster {
 
 async fn registered_admin() -> RegisteredCluster {
     let (h1, h2, h3, cfg1, cfg2, cfg3, d1, d2, d3) =
-        Box::pin(start_registered_sasl_cluster(SaslClusterSetup::default())).await;
+        Box::pin(start_registered_sasl_cluster().call()).await;
     RegisteredCluster {
         d3,
         d2,
@@ -217,14 +217,13 @@ pub(crate) fn execute_plan(
     } else {
         "--execute"
     };
-    let out = jvm_docker_command(JvmDockerSetup {
-        image: KAFKA_IMAGE_TXN,
-        mounts: &[admin_mount, &mount],
-        args: &args,
-        ..Default::default()
-    })
-    .output()
-    .expect(context);
+    let out = jvm_docker_command()
+        .image(KAFKA_IMAGE_TXN)
+        .mounts(&[admin_mount, &mount])
+        .args(&args)
+        .call()
+        .output()
+        .expect(context);
     eprintln!(
         "KRABKA[test] {label} status={} stdout={} stderr={}",
         out.status,

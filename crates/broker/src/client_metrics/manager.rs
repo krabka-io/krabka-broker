@@ -486,12 +486,15 @@ mod tests {
         step: Step,
     }
 
+    #[bon::builder]
     fn run(
         m: &ClientMetricsManager,
         img: &MetadataImage,
         attrs: &ClientAttributes,
-        setup: TelemetryStepSetup,
+        #[builder(default = Instant :: now ())] now: Instant,
+        #[builder(default = Step :: Get)] step: Step,
     ) -> Outcome {
+        let setup = TelemetryStepSetup { now, step };
         match setup.step {
             Step::Get => Outcome::Get(m.get_subscription_at(img, attrs, setup.now)),
             Step::Push(check) => Outcome::Push(m.authorize_push_at(img, attrs, check, setup.now)),
@@ -601,15 +604,14 @@ mod tests {
         ];
         for (name, at, check, expected) in steps {
             assert!(
-                run(
-                    &m,
-                    &img,
-                    &attrs,
-                    TelemetryStepSetup {
-                        now: at,
-                        step: Step::Push(check)
-                    }
-                ) == expected,
+                run()
+                    .m(&m)
+                    .img(&img)
+                    .attrs(&attrs)
+                    .now(at)
+                    .step(Step::Push(check))
+                    .call()
+                    == expected,
                 "step {name}"
             );
         }
@@ -683,15 +685,14 @@ mod tests {
                 };
                 let at = t + Duration::from_secs(secs);
                 assert!(
-                    run(
-                        &m,
-                        &img,
-                        &attrs,
-                        TelemetryStepSetup {
-                            now: at,
-                            step: Step::Push(check)
-                        }
-                    ) == expected,
+                    run()
+                        .m(&m)
+                        .img(&img)
+                        .attrs(&attrs)
+                        .now(at)
+                        .step(Step::Push(check))
+                        .call()
+                        == expected,
                     "row {name} at {secs} s"
                 );
             }
@@ -739,15 +740,14 @@ mod tests {
         for (name, attrs, id, expected) in rows {
             let m = manager();
             assert!(
-                run(
-                    &m,
-                    &img,
-                    &attrs,
-                    TelemetryStepSetup {
-                        now: Instant::now(),
-                        step: Step::Push(push(TelemetrySubscriptionId(id)))
-                    }
-                ) == expected,
+                run()
+                    .m(&m)
+                    .img(&img)
+                    .attrs(&attrs)
+                    .now(Instant::now())
+                    .step(Step::Push(push(TelemetrySubscriptionId(id))))
+                    .call()
+                    == expected,
                 "row {name}"
             );
         }
@@ -816,7 +816,7 @@ mod tests {
         ];
         for (name, img, at, step, expected) in steps {
             assert!(
-                run(&m, img, &attrs, TelemetryStepSetup { now: at, step }) == expected,
+                run().m(&m).img(img).attrs(&attrs).now(at).step(step).call() == expected,
                 "step {name}"
             );
         }
@@ -876,7 +876,14 @@ mod tests {
         ];
         for (name, at, step, expected) in steps {
             assert!(
-                run(&m, &img, &attrs, TelemetryStepSetup { now: at, step }) == expected,
+                run()
+                    .m(&m)
+                    .img(&img)
+                    .attrs(&attrs)
+                    .now(at)
+                    .step(step)
+                    .call()
+                    == expected,
                 "step {name}"
             );
         }
@@ -978,28 +985,25 @@ mod tests {
                 ..push(TelemetrySubscriptionId(id))
             };
             assert!(
-                run(
-                    &m,
-                    &img,
-                    &attrs,
-                    TelemetryStepSetup {
-                        now: t,
-                        step: Step::Push(terminate)
-                    }
-                ) == ACCEPT
+                run()
+                    .m(&m)
+                    .img(&img)
+                    .attrs(&attrs)
+                    .now(t)
+                    .step(Step::Push(terminate))
+                    .call()
+                    == ACCEPT
             );
 
             m.evict_stale_at(3, floor, t + Duration::from_secs(idle));
 
-            let next = run(
-                &m,
-                &img,
-                &attrs,
-                TelemetryStepSetup {
-                    now: t + Duration::from_secs(idle),
-                    step: Step::Push(push(TelemetrySubscriptionId(id))),
-                },
-            );
+            let next = run()
+                .m(&m)
+                .img(&img)
+                .attrs(&attrs)
+                .now(t + Duration::from_secs(idle))
+                .step(Step::Push(push(TelemetrySubscriptionId(id))))
+                .call();
             let expected = if expired {
                 ACCEPT
             } else {
@@ -1027,15 +1031,13 @@ mod tests {
             ..push(TelemetrySubscriptionId(id))
         };
         let push_on = |connection: &str, at, check| {
-            run(
-                &m,
-                &img,
-                &attrs_on(connection),
-                TelemetryStepSetup {
-                    now: secs(at),
-                    step: Step::Push(check),
-                },
-            )
+            run()
+                .m(&m)
+                .img(&img)
+                .attrs(&attrs_on(connection))
+                .now(secs(at))
+                .step(Step::Push(check))
+                .call()
         };
 
         assert!(push_on("a", 0, terminate) == ACCEPT, "built on a");

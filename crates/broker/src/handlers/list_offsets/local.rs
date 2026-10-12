@@ -144,16 +144,14 @@ mod tests {
         policy: DeliveryPolicy,
     ) {
         let clock: Arc<dyn qubit_clock::WallClock> = Arc::new(qubit_clock::StdWallClock::new());
-        let partition = scheduled_partition(
-            logs,
-            &clock,
-            ScheduleSetup {
-                topic,
-                policy,
-                activations: ACTIVATIONS.iter().copied().map(UnixMillis).collect(),
-                leader: krabka_ids::NodeId(broker.config.node_id.get()),
-            },
-        );
+        let partition = scheduled_partition()
+            .dir(logs)
+            .clock(&clock)
+            .topic(topic)
+            .policy(policy)
+            .activations(ACTIVATIONS.iter().copied().map(UnixMillis).collect())
+            .leader(broker.config.node_id.get())
+            .call();
         register(&broker.partitions, &partition);
         install_partition_leader_record(broker_handle, topic, broker.config.node_id.get()).await;
     }
@@ -178,12 +176,11 @@ mod tests {
             .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
                 krabka_metadata::PartitionRecord {
                     directories: vec![uuid::Uuid::nil()],
-                    ..replicated_partition(ReplicatedPartitionSetup {
-                        topic,
-                        leader: krabka_audit::NodeId(leader),
-                        replicas: &[krabka_audit::NodeId(leader)],
-                        ..Default::default()
-                    })
+                    ..replicated_partition()
+                        .topic(topic)
+                        .leader(leader)
+                        .replicas(&[krabka_audit::NodeId(leader)])
+                        .call()
                 },
             ))
             .await
@@ -312,20 +309,18 @@ mod tests {
             delivery_clock_uncertainty: millis(u32::try_from(BOUND_MS).unwrap()),
             ..LogConfig::default()
         };
-        let partition = partition_with_batches(
-            logs,
-            &clock,
-            DeliveryPartitionSetup {
-                topic,
-                config: config.clone(),
-                leader,
-                batches: vec![
-                    batch_at(NOW_MS - 1_000),
-                    batch_at(NOW_MS + 10_000),
-                    batch_at(NOW_MS - 1_000),
-                ],
-            },
-        );
+        let partition = partition_with_batches()
+            .dir(logs)
+            .clock(&clock)
+            .topic(topic)
+            .config(config.clone())
+            .leader(leader.0)
+            .batches(vec![
+                batch_at(NOW_MS - 1_000),
+                batch_at(NOW_MS + 10_000),
+                batch_at(NOW_MS - 1_000),
+            ])
+            .call();
         (timeline, partition, config)
     }
 
@@ -538,19 +533,16 @@ mod tests {
         let logs = tempfile::tempdir().expect("log root");
         let timeline = qubit_clock::ManualMonotonicClock::new_shared();
         let clock: Arc<dyn qubit_clock::WallClock> = timeline.new_wall_clock(wall_at(NOW_MS));
-        let partition = scheduled_partition(
-            &logs,
-            &clock,
-            ScheduleSetup {
-                topic: TOPIC,
-                activations: vec![
-                    crate::test_support::UnixMillis(NOW_MS - 60_000),
-                    crate::test_support::UnixMillis(NOW_MS + 10_000),
-                ],
-                leader: krabka_ids::NodeId(OTHER_BROKER),
-                ..Default::default()
-            },
-        );
+        let partition = scheduled_partition()
+            .dir(&logs)
+            .clock(&clock)
+            .topic(TOPIC)
+            .activations(vec![
+                crate::test_support::UnixMillis(NOW_MS - 60_000),
+                crate::test_support::UnixMillis(NOW_MS + 10_000),
+            ])
+            .leader(OTHER_BROKER)
+            .call();
         register(&broker.partitions, &partition);
         install_partition_leader_record(&broker_handle, TOPIC, broker.config.node_id.get()).await;
         partition

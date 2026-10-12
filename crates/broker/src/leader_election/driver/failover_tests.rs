@@ -67,9 +67,7 @@ impl SweepFixture {
 
 #[tokio::test]
 async fn on_broker_dead_submits_failover_when_this_controller_is_leader() {
-    let img = img_with_partition(ElectionSetup {
-        ..Default::default()
-    });
+    let img = img_with_partition().call();
     let source = fake_source(img, Some(NodeId(7)));
     let context = failover_test_context().source(source.clone()).call().await;
 
@@ -94,7 +92,7 @@ async fn on_broker_dead_submits_failover_when_this_controller_is_leader() {
 #[tokio::test]
 async fn a_failover_plan_cannot_overwrite_an_intervening_election_or_controller() {
     for loses_leadership in [false, true] {
-        let old = img_with_partition(ElectionSetup::default());
+        let old = img_with_partition().call();
         let mut newer = old.clone();
         let expected = PartitionRecord {
             leader: NodeId(3),
@@ -152,9 +150,7 @@ async fn a_failover_plan_cannot_overwrite_an_intervening_election_or_controller(
 
 #[tokio::test(start_paused = true)]
 async fn on_broker_dead_bounds_a_stalled_commit() {
-    let img = img_with_partition(ElectionSetup {
-        ..Default::default()
-    });
+    let img = img_with_partition().call();
     let source = stalled_fake_source(img, Some(NodeId(7)));
     let context = failover_test_context().source(source.clone()).call().await;
 
@@ -178,10 +174,9 @@ async fn on_broker_dead_bounds_a_stalled_commit() {
 #[tokio::test]
 async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
     // Partition t-0: leader 1, ISR {1, 2}. Replica 3 is out of the ISR.
-    let img = img_with_partition(ElectionSetup {
-        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
-        ..Default::default()
-    });
+    let img = img_with_partition()
+        .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
+        .call();
     let source = fake_source(img, Some(NodeId(7)));
     let controller: Arc<dyn MetadataSource> = source.clone();
     let clock = TestClock::new();
@@ -243,10 +238,7 @@ async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
     .await;
     let batches = source.submitted();
     assert!(batches.len() == 1);
-    let expected = expected_partition(ExpectedPartitionSetup {
-        isr: &[krabka_raft::NodeId(2)],
-        ..Default::default()
-    });
+    let expected = expected_partition().isr(&[krabka_raft::NodeId(2)]).call();
     assert!(*one_partition_change(&batches[0]) == expected);
 }
 
@@ -263,12 +255,11 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         alive: &'static [u64],
         expected: Option<PartitionRecord>,
     }
-    let base = expected_partition(ExpectedPartitionSetup {
-        leader: krabka_raft::NodeId(1),
-        isr: &[],
-        leader_epoch: LeaderEpoch(5),
-        ..Default::default()
-    });
+    let base = expected_partition()
+        .leader(1)
+        .isr(&[])
+        .leader_epoch(5)
+        .call();
     let isr_123 = &[
         krabka_raft::NodeId(1),
         krabka_raft::NodeId(2),
@@ -321,11 +312,10 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         },
     ];
     for case in cases {
-        let img = img_with_partition(ElectionSetup {
-            leader: case.leader,
-            isr: case.isr,
-            ..Default::default()
-        });
+        let img = img_with_partition()
+            .leader(case.leader)
+            .isr(case.isr)
+            .call();
         let source = fake_source(img, case.controller_leader);
         let controller: Arc<dyn MetadataSource> = source.clone();
         let mut fixture = SweepFixture::new(case.dead, case.alive).await;
@@ -348,11 +338,10 @@ async fn sweep_walks_the_image_once_per_change_while_a_dead_broker_stays_resolve
     // Broker 1 is dead and no longer leads or sits in an ISR. The sweep
     // walks the image once, records that nothing is stuck, and skips the
     // walk on later ticks until the image or the dead set changes.
-    let mut img = img_with_partition(ElectionSetup {
-        leader: krabka_raft::NodeId(2),
-        isr: &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
-        ..Default::default()
-    });
+    let mut img = img_with_partition()
+        .leader(2)
+        .isr(&[krabka_raft::NodeId(2), krabka_raft::NodeId(3)])
+        .call();
     register_brokers(&mut img, &[1, 2, 3]);
     let source = fake_source(img, Some(NodeId(7)));
     let controller: Arc<dyn MetadataSource> = source.clone();

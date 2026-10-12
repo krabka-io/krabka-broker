@@ -31,7 +31,7 @@ pub(super) fn configured_authorizer() -> Arc<dyn Authorizer> {
 
 /// The matching orders ACL shared by live ACL handler fixtures.
 pub(super) fn alice_orders_acl() -> AclEntry {
-    allow_acl(AllowAclSetup::default())
+    allow_acl().call()
 }
 
 /// Independent wire oracle for a successful deletion of the standard orders ACL.
@@ -70,12 +70,11 @@ macro_rules! security_disabled_acl_fixture {
 pub(super) fn orders_payments_acls() -> Vec<AclEntry> {
     vec![
         alice_orders_acl(),
-        crate::test_support::allow_acl(crate::test_support::AllowAclSetup {
-            resource_name: "payments",
-            principal: "User:bob",
-            operation: krabka_metadata::AclOperation::Write,
-            ..Default::default()
-        }),
+        crate::test_support::allow_acl()
+            .resource_name("payments")
+            .principal("User:bob")
+            .operation(krabka_metadata::AclOperation::Write)
+            .call(),
     ]
 }
 

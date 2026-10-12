@@ -121,13 +121,7 @@ mod tests {
 
     fn audit_partition(path: &std::path::Path) -> (Arc<Partition>, Arc<PartitionRegistry>) {
         let partitions = Arc::new(PartitionRegistry::new());
-        let partition = fixture_partition(
-            path,
-            StandalonePartitionSetup {
-                topic: "__audit",
-                ..Default::default()
-            },
-        );
+        let partition = fixture_partition().log_dir(path).topic("__audit").call();
         partitions.insert("__audit".into(), PartitionIndex(0), Arc::clone(&partition));
         (partition, partitions)
     }

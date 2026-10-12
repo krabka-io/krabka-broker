@@ -106,10 +106,7 @@ async fn start(auto_create_topics_enable: bool) -> Fixture {
         .await
         .expect("client build");
     let response = client
-        .send(configured_topic_request(CreateTopicSetup {
-            topic: EXISTING,
-            ..Default::default()
-        }))
+        .send(configured_topic_request().topic(EXISTING).call())
         .await
         .expect("CreateTopics");
     assert!(

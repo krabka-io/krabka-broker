@@ -467,12 +467,12 @@ async fn an_unfencing_broker_takes_back_a_partition_with_no_leader() {
         isr: vec![NodeId(2)],
         leader_epoch: LeaderEpoch(4),
         directories: vec![uuid::Uuid::nil(); 2],
-        ..replicated_partition(ReplicatedPartitionSetup {
-            topic: "t",
-            partition: krabka_ids::PartitionIndex(1),
-            leader: NodeId(2),
-            replicas: &[NodeId(2), NodeId(3)],
-        })
+        ..replicated_partition()
+            .topic("t")
+            .partition(1)
+            .leader(2)
+            .replicas(&[NodeId(2), NodeId(3)])
+            .call()
     };
     cluster
         .broker

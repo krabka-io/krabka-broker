@@ -347,7 +347,7 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
         DEFAULT_BROKER_CONFIG_NODE_ID,
         &[(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
     );
-    set_topic_config(&mut image, TopicConfigSetup::default());
+    set_topic_config().image(&mut image).call();
 
     let result = describe_topic(
         &image,
@@ -379,40 +379,38 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
                 configs: vec![
                     // Set nowhere, so the key reports its default beneath
                     // the broker synonym Kafka names, `log.cleanup.policy`.
-                    expected_config_entry(ExpectedConfigSetup {
-                        name: config_keys::CLEANUP_POLICY,
-                        value: Some("delete"),
-                        synonyms: vec![synonym(
+                    expected_config_entry()
+                        .name(config_keys::CLEANUP_POLICY)
+                        .maybe_value(Some(Some("delete")))
+                        .synonyms(vec![synonym(
                             "log.cleanup.policy",
                             "delete",
                             CONFIG_SOURCE_DEFAULT
-                        )],
-                        config_type: ConfigTypeCode(ConfigType::List.wire()),
-                        documentation: Some(policy.doc.to_owned()),
-                        ..Default::default()
-                    }),
-                    expected_config_entry(ExpectedConfigSetup {
-                        name: config_keys::RETENTION_MS,
-                        value: Some("60000"),
-                        source: ConfigSourceCode(CONFIG_SOURCE_DYNAMIC_TOPIC),
-                        synonyms: vec![
+                        )])
+                        .config_type(ConfigType::List.wire())
+                        .maybe_documentation(Some(policy.doc.to_owned()))
+                        .call(),
+                    expected_config_entry()
+                        .name(config_keys::RETENTION_MS)
+                        .maybe_value(Some(Some("60000")))
+                        .source(CONFIG_SOURCE_DYNAMIC_TOPIC)
+                        .synonyms(vec![
                             synonym(
                                 config_keys::RETENTION_MS,
                                 "60000",
                                 CONFIG_SOURCE_DYNAMIC_TOPIC
                             ),
                             synonym("log.retention.hours", "168", CONFIG_SOURCE_DEFAULT),
-                        ],
-                        documentation: Some(retention.doc.to_owned()),
-                        ..Default::default()
-                    }),
+                        ])
+                        .maybe_documentation(Some(retention.doc.to_owned()))
+                        .call(),
                     // Not set on the topic, so the cluster default wins and
                     // the built-in default sits below it.
-                    expected_config_entry(ExpectedConfigSetup {
-                        name: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
-                        value: Some("true"),
-                        source: ConfigSourceCode(CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER),
-                        synonyms: vec![
+                    expected_config_entry()
+                        .name(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE)
+                        .maybe_value(Some(Some("true")))
+                        .source(CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER)
+                        .synonyms(vec![
                             synonym(
                                 config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
                                 "true",
@@ -423,11 +421,10 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
                                 "false",
                                 CONFIG_SOURCE_DEFAULT
                             ),
-                        ],
-                        config_type: ConfigTypeCode(ConfigType::Boolean.wire()),
-                        documentation: Some(unclean.doc.to_owned()),
-                        ..Default::default()
-                    }),
+                        ])
+                        .config_type(ConfigType::Boolean.wire())
+                        .maybe_documentation(Some(unclean.doc.to_owned()))
+                        .call(),
                 ],
             })
     );
@@ -443,14 +440,11 @@ fn a_topic_override_stays_at_the_head_of_the_chain_above_the_cluster_default() {
         DEFAULT_BROKER_CONFIG_NODE_ID,
         &[(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
     );
-    set_topic_config(
-        &mut image,
-        TopicConfigSetup {
-            key: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
-            value: "false",
-            ..Default::default()
-        },
-    );
+    set_topic_config()
+        .image(&mut image)
+        .key(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE)
+        .value("false")
+        .call();
 
     let result = describe_topic(
         &image,
@@ -592,24 +586,26 @@ fn the_fixed_data_path_key_is_read_only_and_typed() {
 
     assert!(
         result.configs
-            == vec![expected_config_entry(ExpectedConfigSetup {
-                name: config_keys::DISKLESS,
-                value: Some("true"),
-                mutability: ConfigMutability::ReadOnly,
-                source: ConfigSourceCode(CONFIG_SOURCE_DYNAMIC_TOPIC),
-                synonyms: vec![synonym(
-                    config_keys::DISKLESS,
-                    "true",
-                    CONFIG_SOURCE_DYNAMIC_TOPIC
-                )],
-                config_type: ConfigTypeCode(ConfigType::Boolean.wire()),
-                documentation: Some(
-                    registry::lookup(ConfigScope::Topic, config_keys::DISKLESS)
-                        .expect("krabka.diskless")
-                        .doc
-                        .to_owned()
-                )
-            })]
+            == vec![
+                expected_config_entry()
+                    .name(config_keys::DISKLESS)
+                    .maybe_value(Some(Some("true")))
+                    .mutability(ConfigMutability::ReadOnly)
+                    .source(CONFIG_SOURCE_DYNAMIC_TOPIC)
+                    .synonyms(vec![synonym(
+                        config_keys::DISKLESS,
+                        "true",
+                        CONFIG_SOURCE_DYNAMIC_TOPIC
+                    )])
+                    .config_type(ConfigType::Boolean.wire())
+                    .maybe_documentation(Some(
+                        registry::lookup(ConfigScope::Topic, config_keys::DISKLESS)
+                            .expect("krabka.diskless")
+                            .doc
+                            .to_owned()
+                    ))
+                    .call()
+            ]
     );
 }
 
@@ -639,11 +635,11 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
     assert!(
         result.configs
             == vec![
-                expected_config_entry(ExpectedConfigSetup {
-                    name: crate::throttle::LEADER_THROTTLED_RATE_KEY,
-                    value: Some("1024"),
-                    source: ConfigSourceCode(CONFIG_SOURCE_DYNAMIC_BROKER),
-                    synonyms: vec![
+                expected_config_entry()
+                    .name(crate::throttle::LEADER_THROTTLED_RATE_KEY)
+                    .maybe_value(Some(Some("1024")))
+                    .source(CONFIG_SOURCE_DYNAMIC_BROKER)
+                    .synonyms(vec![
                         synonym(
                             crate::throttle::LEADER_THROTTLED_RATE_KEY,
                             "1024",
@@ -654,8 +650,8 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
                             "512",
                             CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER
                         ),
-                    ],
-                    documentation: Some(
+                    ])
+                    .maybe_documentation(Some(
                         registry::lookup(
                             ConfigScope::Broker,
                             crate::throttle::LEADER_THROTTLED_RATE_KEY
@@ -663,23 +659,22 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
                         .expect("leader.replication.throttled.rate")
                         .doc
                         .to_owned()
-                    ),
-                    ..Default::default()
-                }),
-                expected_config_entry(ExpectedConfigSetup {
-                    name: NODE_ID,
-                    value: Some("2"),
-                    mutability: ConfigMutability::ReadOnly,
-                    source: ConfigSourceCode(CONFIG_SOURCE_STATIC_BROKER),
-                    synonyms: vec![synonym(NODE_ID, "2", CONFIG_SOURCE_STATIC_BROKER)],
-                    config_type: ConfigTypeCode(ConfigType::Int.wire()),
-                    documentation: Some(
+                    ))
+                    .call(),
+                expected_config_entry()
+                    .name(NODE_ID)
+                    .maybe_value(Some(Some("2")))
+                    .mutability(ConfigMutability::ReadOnly)
+                    .source(CONFIG_SOURCE_STATIC_BROKER)
+                    .synonyms(vec![synonym(NODE_ID, "2", CONFIG_SOURCE_STATIC_BROKER)])
+                    .config_type(ConfigType::Int.wire())
+                    .maybe_documentation(Some(
                         registry::lookup(ConfigScope::Broker, NODE_ID)
                             .expect("node.id")
                             .doc
                             .to_owned()
-                    )
-                }),
+                    ))
+                    .call(),
             ]
     );
 }
@@ -698,26 +693,27 @@ fn the_cluster_default_resource_reports_the_defaults_and_no_node_id() {
 
     assert!(
         result.configs
-            == vec![expected_config_entry(ExpectedConfigSetup {
-                name: crate::throttle::LEADER_THROTTLED_RATE_KEY,
-                value: Some("1024"),
-                source: ConfigSourceCode(CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER),
-                synonyms: vec![synonym(
-                    crate::throttle::LEADER_THROTTLED_RATE_KEY,
-                    "1024",
-                    CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER
-                )],
-                documentation: Some(
-                    registry::lookup(
-                        ConfigScope::Broker,
-                        crate::throttle::LEADER_THROTTLED_RATE_KEY
-                    )
-                    .expect("leader.replication.throttled.rate")
-                    .doc
-                    .to_owned()
-                ),
-                ..Default::default()
-            })]
+            == vec![
+                expected_config_entry()
+                    .name(crate::throttle::LEADER_THROTTLED_RATE_KEY)
+                    .maybe_value(Some(Some("1024")))
+                    .source(CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER)
+                    .synonyms(vec![synonym(
+                        crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                        "1024",
+                        CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER
+                    )])
+                    .maybe_documentation(Some(
+                        registry::lookup(
+                            ConfigScope::Broker,
+                            crate::throttle::LEADER_THROTTLED_RATE_KEY
+                        )
+                        .expect("leader.replication.throttled.rate")
+                        .doc
+                        .to_owned()
+                    ))
+                    .call()
+            ]
     );
 }
 
@@ -737,14 +733,15 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_node_id() {
 
     assert!(
         result.configs
-            == vec![expected_config_entry(ExpectedConfigSetup {
-                name: NODE_ID,
-                value: Some("7"),
-                mutability: ConfigMutability::ReadOnly,
-                source: ConfigSourceCode(CONFIG_SOURCE_STATIC_BROKER),
-                config_type: ConfigTypeCode(ConfigType::Int.wire()),
-                ..Default::default()
-            })]
+            == vec![
+                expected_config_entry()
+                    .name(NODE_ID)
+                    .maybe_value(Some(Some("7")))
+                    .mutability(ConfigMutability::ReadOnly)
+                    .source(CONFIG_SOURCE_STATIC_BROKER)
+                    .config_type(ConfigType::Int.wire())
+                    .call()
+            ]
     );
 }
 
@@ -935,7 +932,7 @@ fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
         krabka_metadata::NodeId(2),
         &[(LEADER_THROTTLED_RATE_KEY, "1024")],
     );
-    set_topic_config(&mut image, TopicConfigSetup::default());
+    set_topic_config().image(&mut image).call();
     seed_metrics_subscription(&mut image);
     image.apply(&MetadataRecord::V1GroupConfig(
         krabka_metadata::GroupConfigRecord {
@@ -1424,16 +1421,16 @@ fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
     assert!(
         result.configs
             == vec![
-                expected_config_entry(ExpectedConfigSetup {
-                    name: config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
-                    value: Some("600000"),
-                    mutability: ConfigMutability::ReadOnly,
-                    synonyms: vec![synonym(
+                expected_config_entry()
+                    .name(config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS)
+                    .maybe_value(Some(Some("600000")))
+                    .mutability(ConfigMutability::ReadOnly)
+                    .synonyms(vec![synonym(
                         config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
                         "600000",
                         CONFIG_SOURCE_DEFAULT
-                    )],
-                    documentation: Some(
+                    )])
+                    .maybe_documentation(Some(
                         registry::lookup(
                             ConfigScope::Broker,
                             config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS
@@ -1441,20 +1438,19 @@ fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
                         .expect("offsets.retention.check.interval.ms")
                         .doc
                         .to_owned()
-                    ),
-                    ..Default::default()
-                }),
-                expected_config_entry(ExpectedConfigSetup {
-                    name: config_keys::OFFSETS_RETENTION_MINUTES,
-                    value: Some("10080"),
-                    mutability: ConfigMutability::ReadOnly,
-                    synonyms: vec![synonym(
+                    ))
+                    .call(),
+                expected_config_entry()
+                    .name(config_keys::OFFSETS_RETENTION_MINUTES)
+                    .maybe_value(Some(Some("10080")))
+                    .mutability(ConfigMutability::ReadOnly)
+                    .synonyms(vec![synonym(
                         config_keys::OFFSETS_RETENTION_MINUTES,
                         "10080",
                         CONFIG_SOURCE_DEFAULT
-                    )],
-                    config_type: ConfigTypeCode(ConfigType::Int.wire()),
-                    documentation: Some(
+                    )])
+                    .config_type(ConfigType::Int.wire())
+                    .maybe_documentation(Some(
                         registry::lookup(
                             ConfigScope::Broker,
                             config_keys::OFFSETS_RETENTION_MINUTES
@@ -1462,9 +1458,8 @@ fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
                         .expect("offsets.retention.minutes")
                         .doc
                         .to_owned()
-                    ),
-                    ..Default::default()
-                }),
+                    ))
+                    .call(),
             ]
     );
 }
@@ -1494,31 +1489,36 @@ fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
 
     assert!(
         result.configs
-            == vec![expected_config_entry(ExpectedConfigSetup {
-                name: config_keys::OFFSETS_RETENTION_MINUTES,
-                value: Some("60"),
-                mutability: ConfigMutability::ReadOnly,
-                source: ConfigSourceCode(CONFIG_SOURCE_STATIC_BROKER),
-                synonyms: vec![
-                    synonym(
-                        config_keys::OFFSETS_RETENTION_MINUTES,
-                        "60",
-                        CONFIG_SOURCE_STATIC_BROKER
-                    ),
-                    synonym(
-                        config_keys::OFFSETS_RETENTION_MINUTES,
-                        "10080",
-                        CONFIG_SOURCE_DEFAULT
-                    ),
-                ],
-                config_type: ConfigTypeCode(ConfigType::Int.wire()),
-                documentation: Some(
-                    registry::lookup(ConfigScope::Broker, config_keys::OFFSETS_RETENTION_MINUTES)
+            == vec![
+                expected_config_entry()
+                    .name(config_keys::OFFSETS_RETENTION_MINUTES)
+                    .maybe_value(Some(Some("60")))
+                    .mutability(ConfigMutability::ReadOnly)
+                    .source(CONFIG_SOURCE_STATIC_BROKER)
+                    .synonyms(vec![
+                        synonym(
+                            config_keys::OFFSETS_RETENTION_MINUTES,
+                            "60",
+                            CONFIG_SOURCE_STATIC_BROKER
+                        ),
+                        synonym(
+                            config_keys::OFFSETS_RETENTION_MINUTES,
+                            "10080",
+                            CONFIG_SOURCE_DEFAULT
+                        ),
+                    ])
+                    .config_type(ConfigType::Int.wire())
+                    .maybe_documentation(Some(
+                        registry::lookup(
+                            ConfigScope::Broker,
+                            config_keys::OFFSETS_RETENTION_MINUTES
+                        )
                         .expect("offsets.retention.minutes")
                         .doc
                         .to_owned()
-                )
-            })]
+                    ))
+                    .call()
+            ]
     );
 }
 
@@ -1550,20 +1550,20 @@ fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
         CONFIG_SOURCE_DEFAULT,
     );
     let entry = |config_source, synonyms| {
-        expected_config_entry(ExpectedConfigSetup {
-            name: config_keys::OFFSETS_RETENTION_MINUTES,
-            value: Some("10080"),
-            mutability: ConfigMutability::ReadOnly,
-            source: ConfigSourceCode(config_source),
-            synonyms,
-            config_type: ConfigTypeCode(ConfigType::Int.wire()),
-            documentation: Some(
+        expected_config_entry()
+            .name(config_keys::OFFSETS_RETENTION_MINUTES)
+            .maybe_value(Some(Some("10080")))
+            .mutability(ConfigMutability::ReadOnly)
+            .source(config_source)
+            .synonyms(synonyms)
+            .config_type(ConfigType::Int.wire())
+            .maybe_documentation(Some(
                 registry::lookup(ConfigScope::Broker, config_keys::OFFSETS_RETENTION_MINUTES)
                     .expect("offsets.retention.minutes")
                     .doc
                     .to_owned(),
-            ),
-        })
+            ))
+            .call()
     };
 
     check!(
@@ -1632,12 +1632,11 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
     );
     assert!(
         *entry_named(&result, config_keys::CONNECTIONS_MAX_IDLE_MS)
-            == expected_config_entry(ExpectedConfigSetup {
-                name: config_keys::CONNECTIONS_MAX_IDLE_MS,
-                value: Some("600000"),
-                mutability: ConfigMutability::ReadOnly,
-                ..Default::default()
-            })
+            == expected_config_entry()
+                .name(config_keys::CONNECTIONS_MAX_IDLE_MS)
+                .maybe_value(Some(Some("600000")))
+                .mutability(ConfigMutability::ReadOnly)
+                .call()
     );
 }
 
@@ -1681,28 +1680,29 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
     assert!(
         result.configs
             == vec![
-                expected_config_entry(ExpectedConfigSetup {
-                    name: config_keys::CONNECTIONS_MAX_IDLE_MS,
-                    value: Some("30000"),
-                    mutability: ConfigMutability::ReadOnly,
-                    source: ConfigSourceCode(CONFIG_SOURCE_STATIC_BROKER),
-                    synonyms: vec![broker_wide_static.clone(), broker_wide_default.clone()],
-                    documentation: Some(idle_documentation()),
-                    ..Default::default()
-                }),
-                expected_config_entry(ExpectedConfigSetup {
-                    name: listener_key,
-                    value: Some("5000"),
-                    mutability: ConfigMutability::ReadOnly,
-                    source: ConfigSourceCode(CONFIG_SOURCE_STATIC_BROKER),
-                    synonyms: vec![
+                expected_config_entry()
+                    .name(config_keys::CONNECTIONS_MAX_IDLE_MS)
+                    .maybe_value(Some(Some("30000")))
+                    .mutability(ConfigMutability::ReadOnly)
+                    .source(CONFIG_SOURCE_STATIC_BROKER)
+                    .synonyms(vec![
+                        broker_wide_static.clone(),
+                        broker_wide_default.clone()
+                    ])
+                    .maybe_documentation(Some(idle_documentation()))
+                    .call(),
+                expected_config_entry()
+                    .name(listener_key)
+                    .maybe_value(Some(Some("5000")))
+                    .mutability(ConfigMutability::ReadOnly)
+                    .source(CONFIG_SOURCE_STATIC_BROKER)
+                    .synonyms(vec![
                         synonym(listener_key, "5000", CONFIG_SOURCE_STATIC_BROKER),
                         broker_wide_static,
                         broker_wide_default,
-                    ],
-                    documentation: Some(idle_documentation()),
-                    ..Default::default()
-                }),
+                    ])
+                    .maybe_documentation(Some(idle_documentation()))
+                    .call(),
             ]
     );
 }
@@ -2751,9 +2751,26 @@ pub(super) struct ExpectedConfigSetup<'a> {
     pub documentation: Option<String>,
 }
 
+#[bon::builder]
 pub(super) fn expected_config_entry(
-    setup: ExpectedConfigSetup<'_>,
+    #[builder(default = "retention.ms")] name: &'_ str,
+    #[builder(required, default = Some ("604800000"))] value: Option<&'_ str>,
+    #[builder(default)] mutability: ConfigMutability,
+    #[builder(into, default = ConfigSourceCode (CONFIG_SOURCE_DEFAULT))] source: ConfigSourceCode,
+    #[builder(default)] synonyms: Vec<DescribeConfigsSynonym>,
+    #[builder(into, default = ConfigTypeCode (ConfigType :: Long . wire ()))]
+    config_type: ConfigTypeCode,
+    documentation: Option<String>,
 ) -> DescribeConfigsResourceResult {
+    let setup = ExpectedConfigSetup {
+        name,
+        value,
+        mutability,
+        source,
+        synonyms,
+        config_type,
+        documentation,
+    };
     let ExpectedConfigSetup {
         name,
         value,
@@ -2780,14 +2797,13 @@ fn expected_plain_configs(
 ) -> Vec<DescribeConfigsResourceResult> {
     rows.iter()
         .map(|&(name, value, source, kind)| {
-            expected_config_entry(ExpectedConfigSetup {
-                name,
-                value: Some(value),
-                mutability: ConfigMutability::ReadOnly,
-                source: ConfigSourceCode(source),
-                config_type: ConfigTypeCode(kind.wire()),
-                ..Default::default()
-            })
+            expected_config_entry()
+                .name(name)
+                .maybe_value(Some(Some(value)))
+                .mutability(ConfigMutability::ReadOnly)
+                .source(source)
+                .config_type(kind.wire())
+                .call()
         })
         .collect()
 }

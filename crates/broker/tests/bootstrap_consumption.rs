@@ -161,19 +161,16 @@ async fn drive_sasl_scram_session(
         },
     )
     .await?;
-    let md_resp: MetadataResponse = kafka_wire::exchange(
-        &mut stream,
-        &MetadataRequest::default(),
-        WireExchangeSetup {
-            api_key: WireApiKey(3),
-            version: WireApiVersion(12),
-            correlation: WireCorrelationId(5),
-            client_id: CLIENT_ID,
-            header: RequestHeaderEncoding::Flexible,
-            ..Default::default()
-        },
-    )
-    .await?;
+    let md_resp: MetadataResponse = kafka_wire::exchange()
+        .stream(&mut stream)
+        .request(&MetadataRequest::default())
+        .api_key(3)
+        .version(12)
+        .correlation(5)
+        .client_id(CLIENT_ID)
+        .header(RequestHeaderEncoding::Flexible)
+        .call()
+        .await?;
     if md_resp.brokers.is_empty() {
         return Err(io::Error::other("Metadata response carried no brokers"));
     }

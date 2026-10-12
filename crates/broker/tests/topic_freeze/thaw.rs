@@ -77,17 +77,17 @@ async fn a_thaw_restores_writes() {
     let keys = tempfile::tempdir().expect("tempdir");
     let logs = tempfile::tempdir().expect("tempdir");
     let key = support::mint_operator_key(keys.path(), "alice-yubi", "User:alice");
-    let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl(
-        logs.path(),
-        OperatorSaslSetup {
-            trust: OperatorKeysSetup { keys: &[&key], approvers: // The proposer has to be in the set as well: a proposer outside it
+    let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl()
+        .dir(logs.path())
+        .trust(
+            OperatorKeysSetup { keys: &[&key], approvers: // The proposer has to be in the set as well: a proposer outside it
         // would turn a rule about three people into a rule about two people
         // and a stranger. Alice still may not approve her own proposal.
         &["User:alice", "User:bob", "User:carol"] },
-            users: &[("alice", "pw"), ("bob", "pw"), ("carol", "pw")],
-        },
-    )
-    .await;
+        )
+        .users(&[("alice", "pw"), ("bob", "pw"), ("carol", "pw")])
+        .call()
+        .await;
     let alice = support::sasl_client(&bootstrap, "alice", "pw").await;
     let frozen = create_topic(&broker, &alice, "orders").await;
     let control = create_topic(&broker, &alice, CONTROL).await;

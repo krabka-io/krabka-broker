@@ -264,7 +264,7 @@ mod tests {
         // Txn batch was the first append: start_offset = 0.
         // last_offset = abort marker's base_offset + last_offset_delta = 3 + 0 = 3.
         // (The 3-record txn batch occupies offsets 0-2; the marker lands at offset 3.)
-        assert2::assert!(entries == [aborted_txn(AbortedTxnSetup::default())]);
+        assert2::assert!(entries == [aborted_txn().call()]);
     }
 
     /// An earlier completed transaction, still held in `unreplicated`
@@ -296,11 +296,11 @@ mod tests {
         // producer 2000's own last_offset + 1.
         assert2::assert!(
             entries
-                == [aborted_txn(AbortedTxnSetup {
-                    producer: ProducerId(2000),
-                    bounds: Offset(3)..=Offset(4),
-                    stable: Offset(0)
-                })]
+                == [aborted_txn()
+                    .producer(2000)
+                    .bounds(Offset(3)..=Offset(4))
+                    .stable(0)
+                    .call()]
         );
     }
 
@@ -315,10 +315,7 @@ mod tests {
         log.append(&mut sample_batch(1)).unwrap();
         std::fs::remove_file(name::txnindex_path(dir.path(), marker_base.0)).unwrap();
 
-        assert2::assert!(
-            log.aborted_in_range(Offset(0), marker_base)
-                == [aborted_txn(AbortedTxnSetup::default())]
-        );
+        assert2::assert!(log.aborted_in_range(Offset(0), marker_base) == [aborted_txn().call()]);
     }
 
     // The aborted-txn `last_offset` is `marker.base_offset +

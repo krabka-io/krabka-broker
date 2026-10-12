@@ -391,16 +391,14 @@ mod tests {
                         error_code: response_code,
                         ..Default::default()
                     };
-                    let _ = write_response(
-                        &mut socket,
-                        &frame,
-                        &response,
-                        ResponseWireSetup {
-                            version: krabka_ids::ApiVersion(req::MAX_VERSION),
-                            header: ResponseHeaderMode::Flexible,
-                        },
-                    )
-                    .await;
+                    let _ = write_response()
+                        .socket(&mut socket)
+                        .request(&frame)
+                        .response(&response)
+                        .version(req::MAX_VERSION)
+                        .header(ResponseHeaderMode::Flexible)
+                        .call()
+                        .await;
                 }
             }
         });

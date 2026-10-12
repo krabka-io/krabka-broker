@@ -117,9 +117,19 @@ pub struct ElectionSetup {
 }
 
 /// The named-partition `ElectLeaders` fixture, with its original thirty-second timeout.
+#[bon::builder]
 pub fn election_request(
-    setup: ElectionSetup,
+    #[builder(default = "orders" . to_string ())] topic: String,
+    #[builder(default = vec ! [krabka_ids :: PartitionIndex (0)])] partitions: Vec<
+        ElectionPartitionIndex,
+    >,
+    #[builder(default)] kind: ElectionKind,
 ) -> krabka_protocol::owned::elect_leaders_request::ElectLeadersRequest {
+    let setup = ElectionSetup {
+        topic,
+        partitions,
+        kind,
+    };
     use krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions};
     ElectLeadersRequest {
         election_type: setup.kind.wire_code(),

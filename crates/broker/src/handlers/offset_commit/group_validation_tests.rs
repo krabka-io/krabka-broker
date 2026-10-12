@@ -80,11 +80,10 @@ async fn create_topic_with_partitions(broker: &Broker, num_partitions: i32) {
         principal("admin"),
         client_id = "group-validation-admin"
     );
-    let request = configured_topic_request(CreateTopicSetup {
-        topic: TOPIC,
-        num_partitions: TopicPartitionCount(num_partitions),
-        ..Default::default()
-    });
+    let request = configured_topic_request()
+        .topic(TOPIC)
+        .num_partitions(num_partitions)
+        .call();
     dispatch_context(
         broker,
         create_topics_request::API_KEY,

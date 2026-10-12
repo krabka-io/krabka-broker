@@ -45,13 +45,7 @@ fn marker_at(
 async fn an_injection_marks_every_partition_and_publishes_a_complete_cut() {
     let fixture = Fixture::new();
     let coordinator = fixture
-        .coordinator_with_group(
-            GROUP,
-            spec(GroupSpecSetup {
-                topics: &["orders", "payments"],
-                ..Default::default()
-            }),
-        )
+        .coordinator_with_group(GROUP, spec().topics(&["orders", "payments"]).call())
         .await;
 
     let outcome = coordinator
@@ -104,9 +98,7 @@ async fn an_injection_marks_every_partition_and_publishes_a_complete_cut() {
 #[tokio::test]
 async fn every_injection_takes_the_next_epoch() {
     let fixture = Fixture::new();
-    let coordinator = fixture
-        .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
-        .await;
+    let coordinator = fixture.coordinator_with_group(GROUP, spec().call()).await;
 
     let mut epochs = Vec::new();
     for _ in 0..3 {
@@ -130,9 +122,7 @@ async fn every_injection_takes_the_next_epoch() {
 #[tokio::test]
 async fn an_exhausted_group_epoch_rejects_injection() {
     let fixture = Fixture::new();
-    let coordinator = fixture
-        .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
-        .await;
+    let coordinator = fixture.coordinator_with_group(GROUP, spec().call()).await;
     let entry = coordinator
         .groups
         .get(GROUP)
@@ -151,9 +141,7 @@ async fn a_partition_that_carries_no_marker_makes_the_cut_partial() {
     // Only partition 0 of `orders` is open here, so partition 1 stays
     // unmarked until the deadline runs out.
     let fixture = Fixture::with_data_partitions(&[("orders", 1)]);
-    let coordinator = fixture
-        .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
-        .await;
+    let coordinator = fixture.coordinator_with_group(GROUP, spec().call()).await;
 
     let outcome = coordinator
         .trigger_injection(GROUP, None)
@@ -180,9 +168,7 @@ async fn a_partition_that_carries_no_marker_makes_the_cut_partial() {
 #[tokio::test]
 async fn a_topic_set_edit_applies_from_the_next_epoch() {
     let fixture = Fixture::new();
-    let coordinator = fixture
-        .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
-        .await;
+    let coordinator = fixture.coordinator_with_group(GROUP, spec().call()).await;
     let first = coordinator
         .trigger_injection(GROUP, None)
         .await
@@ -190,13 +176,7 @@ async fn a_topic_set_edit_applies_from_the_next_epoch() {
     assert!(first.cut.topics.len() == 1);
 
     coordinator
-        .update_group(
-            GROUP,
-            spec(GroupSpecSetup {
-                topics: &["orders", "payments"],
-                ..Default::default()
-            }),
-        )
+        .update_group(GROUP, spec().topics(&["orders", "payments"]).call())
         .await
         .expect("the group is updated");
     let second = coordinator
@@ -212,13 +192,7 @@ async fn a_topic_set_edit_applies_from_the_next_epoch() {
 async fn the_group_keeps_only_its_retained_cuts() {
     let fixture = Fixture::new();
     let coordinator = fixture
-        .coordinator_with_group(
-            GROUP,
-            spec(GroupSpecSetup {
-                retained_cuts: RetainedCutCount(2),
-                ..Default::default()
-            }),
-        )
+        .coordinator_with_group(GROUP, spec().retained_cuts(2).call())
         .await;
     for _ in 0..4 {
         coordinator
@@ -238,13 +212,7 @@ async fn the_group_keeps_only_its_retained_cuts() {
 async fn a_smaller_retention_drops_every_cut_below_the_new_window() {
     let fixture = Fixture::new();
     let coordinator = fixture
-        .coordinator_with_group(
-            GROUP,
-            spec(GroupSpecSetup {
-                retained_cuts: RetainedCutCount(8),
-                ..Default::default()
-            }),
-        )
+        .coordinator_with_group(GROUP, spec().retained_cuts(8).call())
         .await;
     for _ in 0..4 {
         coordinator
@@ -253,13 +221,7 @@ async fn a_smaller_retention_drops_every_cut_below_the_new_window() {
             .expect("the injection runs");
     }
     coordinator
-        .update_group(
-            GROUP,
-            spec(GroupSpecSetup {
-                retained_cuts: RetainedCutCount(1),
-                ..Default::default()
-            }),
-        )
+        .update_group(GROUP, spec().retained_cuts(1).call())
         .await
         .expect("the group is updated");
     coordinator
@@ -277,22 +239,10 @@ async fn a_smaller_retention_drops_every_cut_below_the_new_window() {
 async fn the_scheduler_injects_only_a_group_whose_interval_elapsed() {
     let fixture = Fixture::new();
     let coordinator = fixture
-        .coordinator_with_group(
-            GROUP,
-            spec(GroupSpecSetup {
-                interval: Some(millis(1_000)),
-                ..Default::default()
-            }),
-        )
+        .coordinator_with_group(GROUP, spec().maybe_interval(Some(millis(1_000))).call())
         .await;
     coordinator
-        .create_group(
-            "on-demand",
-            spec(GroupSpecSetup {
-                topics: &["payments"],
-                ..Default::default()
-            }),
-        )
+        .create_group("on-demand", spec().topics(&["payments"]).call())
         .await
         .expect("the group is created");
 
@@ -312,9 +262,7 @@ async fn the_scheduler_injects_only_a_group_whose_interval_elapsed() {
 #[tokio::test]
 async fn an_injection_holds_the_group_against_a_second_caller() {
     let fixture = Fixture::new();
-    let coordinator = fixture
-        .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
-        .await;
+    let coordinator = fixture.coordinator_with_group(GROUP, spec().call()).await;
 
     let handle = coordinator
         .live_entry(GROUP)

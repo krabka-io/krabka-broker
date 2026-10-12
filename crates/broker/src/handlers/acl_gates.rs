@@ -441,10 +441,7 @@ mod tests {
         );
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            allow_acl(AllowAclSetup {
-                operation: AclOperation::Write,
-                ..Default::default()
-            }),
+            allow_acl().operation(AclOperation::Write).call(),
         ));
         let authorizer = SimpleAclAuthorizer::new(HashSet::new());
 

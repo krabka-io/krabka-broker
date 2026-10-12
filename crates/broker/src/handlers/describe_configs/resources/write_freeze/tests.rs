@@ -19,12 +19,10 @@ use crate::{
 /// freeze never reaches a topic-config record, so the image needs no topic and
 /// no override map to answer the synthesised key.
 fn image_with_freezes(entries: &[(&str, PatternType)]) -> MetadataImage {
-    frozen_topics_image(
-        entries,
-        FrozenTopicsImageSetup {
-            cluster: Uuid::nil(),
-        },
-    )
+    frozen_topics_image()
+        .scopes(entries)
+        .cluster(Uuid::nil())
+        .call()
 }
 
 #[test]
@@ -113,7 +111,7 @@ fn topic_describe_places_write_freeze_beside_the_stored_overrides() {
 #[test]
 fn topic_describe_applies_the_key_filter_to_the_synthesised_key() {
     let mut image = image_with_freezes(&[("orders", PatternType::Literal)]);
-    set_topic_config(&mut image, TopicConfigSetup::default());
+    set_topic_config().image(&mut image).call();
 
     for (label, keys, expected) in [
         (

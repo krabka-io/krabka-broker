@@ -35,23 +35,21 @@ pub(crate) async fn await_authorized_produce(
 ) -> ProduceResponse {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let response = kafka_wire::produce_sasl_with_ids(
-            addr,
-            SaslProduceSetup {
-                authentication: PlainAuthenticationSetup {
-                    client_id: CLIENT_ID,
-                    password: (password).to_vec(),
-                    ..Default::default()
-                },
-                produce_client_id: client_id,
-                records: ZeroFilledRecordsSetup {
-                    topic: ("tuple-quota-topic").to_string(),
-                    count: ProduceRecordCount(4),
-                    ..Default::default()
-                },
-            },
-        )
-        .await;
+        let response = kafka_wire::produce_sasl_with_ids()
+            .addr(addr)
+            .authentication(PlainAuthenticationSetup {
+                client_id: CLIENT_ID,
+                password: (password).to_vec(),
+                ..Default::default()
+            })
+            .produce_client_id(client_id)
+            .records(ZeroFilledRecordsSetup {
+                topic: ("tuple-quota-topic").to_string(),
+                count: ProduceRecordCount(4),
+                ..Default::default()
+            })
+            .call()
+            .await;
         let error_code = response
             .responses
             .first()

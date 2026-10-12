@@ -56,16 +56,13 @@ pub(super) async fn start_jvm_broker(adjust: impl FnOnce(&mut BrokerConfig)) -> 
         .parse()
         .expect("an allocated controller address");
 
-    let mut config = support::jvm_broker_config(
-        dir.path().to_path_buf(),
-        JvmBrokerSetup {
-            listen,
-            controller,
-            advertised: listeners.advertised.clone(),
-            voters: controller_voters(&[(1, controller)]),
-            ..Default::default()
-        },
-    );
+    let mut config = support::jvm_broker_config()
+        .log_dir(dir.path().to_path_buf())
+        .listen(listen)
+        .controller(controller)
+        .advertised(listeners.advertised.clone())
+        .voters(controller_voters(&[(1, controller)]))
+        .call();
     adjust(&mut config);
 
     // `Broker::start` waits for a metadata leader before it returns, so the

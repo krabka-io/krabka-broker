@@ -99,18 +99,19 @@ async fn witness_role_is_a_read_only_broker_config() {
     );
 
     let altered = witness
-        .send(incremental_request(IncrementalConfigsSetup {
-            resources: vec![incremental_resource(
-                RESOURCE_TYPE_BROKER,
-                WITNESS_ID.to_string(),
-                vec![incremental_config(
-                    BROKER_WITNESS,
-                    Some("false".into()),
-                    ConfigOperation::Set,
-                )],
-            )],
-            ..Default::default()
-        }))
+        .send(
+            incremental_request()
+                .resources(vec![incremental_resource(
+                    RESOURCE_TYPE_BROKER,
+                    WITNESS_ID.to_string(),
+                    vec![incremental_config(
+                        BROKER_WITNESS,
+                        Some("false".into()),
+                        ConfigOperation::Set,
+                    )],
+                )])
+                .call(),
+        )
         .await
         .expect("IncrementalAlterConfigs round-trip");
     check!(

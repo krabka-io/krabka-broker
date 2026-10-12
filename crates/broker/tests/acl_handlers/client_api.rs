@@ -66,15 +66,17 @@ crate::plain_request_driver_fixture!(pub drive_init_producer_id_as_plain {
 pub fn join_group_request(group_id: &str) -> JoinGroupRequest {
     JoinGroupRequest {
         group_instance_id: None,
-        ..classic_join_request(ClassicJoinSetup {
-            group_id: group_id.to_string(),
-            timeouts: ClassicTimeouts {
+        ..classic_join_request()
+            .group_id(group_id.to_string())
+            .timeouts(ClassicTimeouts {
                 rebalance: krabka_units::millis(60_000),
                 ..Default::default()
-            },
-            protocol_type: "consumer".to_string(),
-            protocols: vec![join_protocol("range".to_string(), bytes::Bytes::new())],
-            ..Default::default()
-        })
+            })
+            .protocol_type("consumer".to_string())
+            .protocols(vec![join_protocol(
+                "range".to_string(),
+                bytes::Bytes::new(),
+            )])
+            .call()
     }
 }

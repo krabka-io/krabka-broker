@@ -141,12 +141,9 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
 
 async fn create_topic(client: &Client, name: &str) {
     let cr = client
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup {
-                name: (name).into(),
-                ..Default::default()
-            },
-        )))
+        .send(create_topic_request(
+            creatable_topic().name((name).into()).call(),
+        ))
         .await
         .expect("CreateTopics");
     assert!(cr.topics[0].error_code == 0, "create_topic failed: {cr:?}");

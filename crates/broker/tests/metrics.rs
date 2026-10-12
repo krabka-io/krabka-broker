@@ -55,26 +55,20 @@ async fn create_topic(addr: std::net::SocketAddr) {
 }
 
 async fn create_topic_named(addr: std::net::SocketAddr, topic: &str) {
-    let req = create_topic_request(creatable_topic(ConfiguredTopicSetup {
-        name: (topic).into(),
-        ..Default::default()
-    }));
+    let req = create_topic_request(creatable_topic().name((topic).into()).call());
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_TOPICS_VERSION).unwrap();
-    let resp = kafka_wire::round_trip(
-        &mut stream,
-        WireExchangeSetup {
-            api_key: WireApiKey(19),
-            version: WireApiVersion(CREATE_TOPICS_VERSION),
-            client_id: CLIENT_ID,
-            header: RequestHeaderEncoding::Flexible,
-            ..Default::default()
-        },
-        &body,
-    )
-    .await
-    .unwrap();
+    let resp = kafka_wire::round_trip()
+        .stream(&mut stream)
+        .api_key(19)
+        .version(CREATE_TOPICS_VERSION)
+        .client_id(CLIENT_ID)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&body)
+        .call()
+        .await
+        .unwrap();
     let mut cur: &[u8] = &resp;
     let r = CreateTopicsResponse::decode(&mut cur, CREATE_TOPICS_VERSION).unwrap();
     assert!(r.topics[0].error_code == 0, "create: {:?}", r.topics[0]);
@@ -119,11 +113,10 @@ async fn produce_to(addr: std::net::SocketAddr, topic: &str, partition: i32) -> 
 
 async fn fetch_one(addr: std::net::SocketAddr) {
     use krabka_protocol::owned::fetch_response::FetchResponse;
-    let req = single_partition_fetch(SinglePartitionFetchSetup {
-        topic: TOPIC.into(),
-        topic_id: krabka_protocol::primitives::uuid::Uuid::default(),
-        ..Default::default()
-    });
+    let req = single_partition_fetch()
+        .topic(TOPIC.into())
+        .topic_id(krabka_protocol::primitives::uuid::Uuid::default())
+        .call();
     let (_, r): (usize, FetchResponse) =
         kafka_wire::request_once(addr, &req, (1, FETCH_VERSION), CLIENT_ID, (1, true)).await;
     assert!(r.error_code == 0, "fetch top-level: {r:?}");

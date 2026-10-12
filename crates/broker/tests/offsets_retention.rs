@@ -199,15 +199,12 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
     // `OffsetDelete` resolves each partition against the metadata image, so
     // the topic has to exist for the delete to reach the log.
     let created = client
-        .send(create_topic_request_with_setup(
-            creatable_topic(ConfiguredTopicSetup {
-                name: TOPIC.to_string(),
-                ..Default::default()
-            }),
-            CreateTopicRequestSetup {
-                timeout: CreateTopicsTimeoutMillis(10_000),
-            },
-        ))
+        .send(
+            create_topic_request_with_setup()
+                .topic(creatable_topic().name(TOPIC.to_string()).call())
+                .timeout(10_000)
+                .call(),
+        )
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == codes::NONE);

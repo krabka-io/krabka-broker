@@ -17,19 +17,16 @@ use crate::harness::{
 async fn full_mode_checks_the_body_and_id_mode_does_not() {
     let (_registry, broker, client, _dir, id_mode) =
         mock_topic_fixture("validated", VALIDATED).await;
-    let full_mode = create_topic(
-        &broker,
-        &client,
-        SchemaTopicSetup {
-            name: "validated-full",
-            configs: &[
-                ("schema.validation.value", "true"),
-                ("schema.validation.mode", "full"),
-            ],
-            ..Default::default()
-        },
-    )
-    .await;
+    let full_mode = create_topic()
+        .broker(&broker)
+        .client(&client)
+        .name("validated-full")
+        .configs(&[
+            ("schema.validation.value", "true"),
+            ("schema.validation.mode", "full"),
+        ])
+        .call()
+        .await;
 
     // Framed with a bound id, but the body is not an Avro datum of the schema
     // that id names.

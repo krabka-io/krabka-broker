@@ -126,14 +126,13 @@ fn needed_metadata_partitions_covers_led_and_followed() {
         (1, 8, vec![8, 7]),
         (2, 8, vec![8, 9]),
     ] {
-        image.apply(&MetadataRecord::V1Partition(replicated_partition(
-            ReplicatedPartitionSetup {
-                partition: krabka_ids::PartitionIndex(partition),
-                leader: krabka_audit::NodeId(leader),
-                replicas: &replica_nodes(&replicas),
-                ..Default::default()
-            },
-        )));
+        image.apply(&MetadataRecord::V1Partition(
+            replicated_partition()
+                .partition(partition)
+                .leader(leader)
+                .replicas(&replica_nodes(&replicas))
+                .call(),
+        ));
     }
 
     let got = needed_metadata_partitions(&image, krabka_audit::NodeId(7), 50);
@@ -168,14 +167,13 @@ async fn topic_assignment_uses_discovered_count_after_config_changes() {
             partitions: 3,
             replication_factor: 1,
         }));
-        image.apply(&MetadataRecord::V1Partition(replicated_partition(
-            ReplicatedPartitionSetup {
-                partition: krabka_ids::PartitionIndex(partition),
-                leader: node,
-                replicas: &[node],
-                ..Default::default()
-            },
-        )));
+        image.apply(&MetadataRecord::V1Partition(
+            replicated_partition()
+                .partition(partition)
+                .leader(node.0)
+                .replicas(&[node])
+                .call(),
+        ));
         image
     };
     // The topic already exists with three partitions; the restarted broker's

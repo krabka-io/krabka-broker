@@ -49,7 +49,13 @@ macro_rules! broker_fixture {
         $partition.install_replication_target(None, $broker.config.node_id.0, 0).await;
     };
     (($handle:ident, $directory:ident, $broker:ident, $persister:ident), share_persister($authorizer:expr, $enabled:expr)) => {
-        broker_fixture!(($handle, $directory, $broker), crate::test_support::start_share_broker($authorizer, crate::test_support::ShareBrokerSetup { support: $enabled }));
+        broker_fixture!(
+            ($handle, $directory, $broker),
+            crate::test_support::start_share_broker()
+                .authorizer($authorizer)
+                .support($enabled)
+                .call()
+        );
         let $persister = $broker.group_coordinator.share_persister().cloned().expect("share persister");
     };
     ($bindings:tt, extra_log_dir($extra:ident)) => {
@@ -108,7 +114,12 @@ macro_rules! broker_fixture {
         ));
     };
     ($bindings:tt, share_allow_all) => {
-        broker_fixture!($bindings, crate::test_support::start_share_broker(std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer), crate::test_support::ShareBrokerSetup::default()));
+        broker_fixture!(
+            $bindings,
+            crate::test_support::start_share_broker()
+                .authorizer(std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer))
+                .call()
+        );
     };
     ($bindings:tt, allow_all $(, $ready:ident)?) => {
         broker_fixture!(
@@ -153,7 +164,10 @@ macro_rules! share_refusal_cases {
      $handler:ident($request:expr, $version:expr)) => {
         for ($case, $authorizer, $enabled, $($input,)* $expected) in $cases {
             broker_fixture!(($handle, $directory, $broker),
-                crate::test_support::start_share_broker($authorizer, crate::test_support::ShareBrokerSetup { support: $enabled }));
+                crate::test_support::start_share_broker()
+                    .authorizer($authorizer)
+                    .support($enabled)
+                    .call());
             test_ctx!($ctx, "alice");
             let $response = $handler(&$broker, $request, $version, &$ctx)
                 .await.expect("handle");
@@ -362,9 +376,20 @@ pub(crate) struct ReplicatedPartitionSetup<'a> {
     pub leader: krabka_metadata::NodeId,
 }
 
+#[bon::builder]
 pub(crate) fn replicated_partition(
-    setup: ReplicatedPartitionSetup<'_>,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(into, default)] partition: krabka_ids::PartitionIndex,
+    #[builder(into, default = krabka_metadata :: NodeId (1))] leader: krabka_metadata::NodeId,
+    #[builder(default = & [krabka_metadata :: NodeId (1) , krabka_metadata :: NodeId (2)])]
+    replicas: &'_ [krabka_metadata::NodeId],
 ) -> krabka_metadata::PartitionRecord {
+    let setup = ReplicatedPartitionSetup {
+        topic,
+        partition,
+        leader,
+        replicas,
+    };
     let ReplicatedPartitionSetup {
         topic,
         partition,
@@ -401,7 +426,22 @@ impl AclSetup<'_> {
     }
 }
 
-pub(crate) fn acl(setup: AclSetup<'_>) -> krabka_metadata::AclEntry {
+#[bon::builder]
+pub(crate) fn acl(
+    #[builder(default = krabka_metadata :: ResourceType :: Topic)]
+    resource_type: krabka_metadata::ResourceType,
+    #[builder(default = "orders")] resource_name: &'_ str,
+    #[builder(default = krabka_metadata :: PatternType :: Literal)]
+    pattern_type: krabka_metadata::PatternType,
+    #[builder(default = krabka_metadata :: AclOperation :: Read)]
+    operation: krabka_metadata::AclOperation,
+) -> krabka_metadata::AclEntry {
+    let setup = AclSetup {
+        resource_type,
+        resource_name,
+        pattern_type,
+        operation,
+    };
     let AclSetup {
         resource_type,
         resource_name,
@@ -459,22 +499,38 @@ pub(crate) async fn produce_wire(
 }
 
 /// Send a fixture acknowledgement using the current wire version and default principal.
+#[bon::builder]
 pub(crate) async fn send_acknowledgements(
     broker: &BrokerHandle,
-    setup: AcknowledgementSetup<'_>,
+    #[builder(default = "g")] group: &'_ str,
+    #[builder(default = "member")] member: &'_ str,
+    #[builder(into, default)] epoch: ShareSessionEpoch,
+    #[builder(default)] topic_id: WireUuid,
+    #[builder(default)] partition: AcknowledgementPartitionSetup,
+    #[builder(default)] mode: AcknowledgementMode,
 ) -> krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse {
-    let request = acknowledge_batches_request(setup);
-    share_acknowledge_wire(
-        broker,
-        &request,
-        ShareWireSetup {
-            version: krabka_ids::ApiVersion(
-                krabka_protocol::owned::share_acknowledge_request::MAX_VERSION,
-            ),
-            ..Default::default()
-        },
-    )
-    .await
+    let setup = AcknowledgementSetup {
+        group,
+        member,
+        epoch,
+        topic_id,
+        partition,
+        mode,
+    };
+    let request = acknowledge_batches_request()
+        .group(setup.group)
+        .member(setup.member)
+        .epoch(setup.epoch)
+        .topic_id(setup.topic_id)
+        .partition(setup.partition)
+        .mode(setup.mode)
+        .call();
+    share_acknowledge_wire()
+        .broker(broker)
+        .request(&request)
+        .version(krabka_protocol::owned::share_acknowledge_request::MAX_VERSION)
+        .call()
+        .await
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -485,11 +541,14 @@ pub(crate) struct ShareWireSetup<'a> {
     pub user: &'a str,
 }
 
+#[bon::builder]
 pub(crate) async fn share_acknowledge_wire(
     broker: &BrokerHandle,
     request: &krabka_protocol::owned::share_acknowledge_request::ShareAcknowledgeRequest,
-    setup: ShareWireSetup<'_>,
+    #[builder(into, default = krabka_ids :: ApiVersion (2))] version: krabka_ids::ApiVersion,
+    #[builder(default = "share-consumer")] user: &'_ str,
 ) -> krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse {
+    let setup = ShareWireSetup { version, user };
     context_wire(
         broker,
         request,
@@ -541,10 +600,23 @@ pub(crate) struct ReplicatedTopicSetup<'a> {
     pub leader_epoch: krabka_ids::LeaderEpoch,
 }
 
+#[bon::builder]
 pub(crate) async fn seed_partition_replicas(
     broker: &BrokerHandle,
-    setup: ReplicatedTopicSetup<'_>,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(default = uuid :: Uuid :: from_u128 (1))] topic_id: uuid::Uuid,
+    #[builder(into, default = krabka_metadata :: NodeId (1))] leader: krabka_metadata::NodeId,
+    #[builder(default = & [krabka_metadata :: NodeId (1) , krabka_metadata :: NodeId (2)])]
+    replicas: &'_ [krabka_metadata::NodeId],
+    #[builder(into, default)] leader_epoch: krabka_ids::LeaderEpoch,
 ) {
+    let setup = ReplicatedTopicSetup {
+        topic,
+        topic_id,
+        leader,
+        replicas,
+        leader_epoch,
+    };
     use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
     let ReplicatedTopicSetup {
         topic,
@@ -566,12 +638,11 @@ pub(crate) async fn seed_partition_replicas(
         .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
             leader_epoch,
             directories: vec![uuid::Uuid::nil(); replicas.len()],
-            ..replicated_partition(ReplicatedPartitionSetup {
-                topic,
-                leader,
-                replicas,
-                ..Default::default()
-            })
+            ..replicated_partition()
+                .topic(topic)
+                .leader(leader)
+                .replicas(replicas)
+                .call()
         }))
         .await
         .expect("submit partition record");
@@ -686,9 +757,23 @@ impl<'a> AcknowledgementSetup<'a> {
     }
 }
 
+#[bon::builder]
 pub(crate) fn acknowledge_batches_request(
-    setup: AcknowledgementSetup<'_>,
+    #[builder(default = "g")] group: &'_ str,
+    #[builder(default = "member")] member: &'_ str,
+    #[builder(into, default)] epoch: ShareSessionEpoch,
+    #[builder(default)] topic_id: WireUuid,
+    #[builder(default)] partition: AcknowledgementPartitionSetup,
+    #[builder(default)] mode: AcknowledgementMode,
 ) -> krabka_protocol::owned::share_acknowledge_request::ShareAcknowledgeRequest {
+    let setup = AcknowledgementSetup {
+        group,
+        member,
+        epoch,
+        topic_id,
+        partition,
+        mode,
+    };
     use krabka_protocol::owned::share_acknowledge_request::{
         AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch, ShareAcknowledgeRequest,
     };
@@ -722,12 +807,20 @@ pub(crate) fn acknowledge_batches_request(
 }
 
 /// Return the incremental rows for the first topic, or no rows when it is omitted.
+#[bon::builder]
 pub(crate) async fn share_fetch_partition_rows(
     broker: &BrokerHandle,
     request: &krabka_protocol::owned::share_fetch_request::ShareFetchRequest,
-    setup: ShareWireSetup<'_>,
+    #[builder(into, default = krabka_ids :: ApiVersion (2))] version: krabka_ids::ApiVersion,
+    #[builder(default = "share-consumer")] user: &'_ str,
 ) -> Vec<krabka_protocol::owned::share_fetch_response::PartitionData> {
-    share_fetch_wire(broker, request, setup)
+    let setup = ShareWireSetup { version, user };
+    share_fetch_wire()
+        .broker(broker)
+        .request(request)
+        .version(setup.version)
+        .user(setup.user)
+        .call()
         .await
         .responses
         .into_iter()
@@ -736,11 +829,14 @@ pub(crate) async fn share_fetch_partition_rows(
         .unwrap_or_default()
 }
 
+#[bon::builder]
 pub(crate) async fn share_fetch_wire(
     broker: &BrokerHandle,
     request: &krabka_protocol::owned::share_fetch_request::ShareFetchRequest,
-    setup: ShareWireSetup<'_>,
+    #[builder(into, default = krabka_ids :: ApiVersion (2))] version: krabka_ids::ApiVersion,
+    #[builder(default = "share-consumer")] user: &'_ str,
 ) -> krabka_protocol::owned::share_fetch_response::ShareFetchResponse {
+    let setup = ShareWireSetup { version, user };
     context_wire(
         broker,
         request,
@@ -844,7 +940,18 @@ pub(crate) struct ClientTopicSetup<'a> {
     pub partitions: TopicPartitionCount,
 }
 
-pub(crate) async fn create_topic(broker: &BrokerHandle, setup: ClientTopicSetup<'_>) -> WireUuid {
+#[bon::builder]
+pub(crate) async fn create_topic(
+    broker: &BrokerHandle,
+    #[builder(default = "admin-client")] client_id: &'_ str,
+    #[builder(default = "orders")] name: &'_ str,
+    #[builder(into, default = TopicPartitionCount (1))] partitions: TopicPartitionCount,
+) -> WireUuid {
+    let setup = ClientTopicSetup {
+        client_id,
+        name,
+        partitions,
+    };
     let ClientTopicSetup {
         client_id,
         name,
@@ -854,11 +961,10 @@ pub(crate) async fn create_topic(broker: &BrokerHandle, setup: ClientTopicSetup<
         (client, response),
         broker,
         client_id,
-        configured_topic_request(CreateTopicSetup {
-            topic: name,
-            num_partitions: partitions,
-            ..Default::default()
-        })
+        configured_topic_request()
+            .topic(name)
+            .num_partitions(partitions)
+            .call()
     );
     for partition in 0..partitions.0 {
         broker.wait_until_partition_present(name, partition).await;
@@ -896,7 +1002,18 @@ pub(crate) struct ProduceRecordsSetup<'a> {
     pub count: RecordCount,
 }
 
-pub(crate) async fn produce_records(broker: &BrokerHandle, setup: ProduceRecordsSetup<'_>) {
+#[bon::builder]
+pub(crate) async fn produce_records(
+    broker: &BrokerHandle,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(into, default)] partition_index: krabka_ids::PartitionIndex,
+    #[builder(into, default = RecordCount (3))] count: RecordCount,
+) {
+    let setup = ProduceRecordsSetup {
+        topic,
+        partition_index,
+        count,
+    };
     let ProduceRecordsSetup {
         topic,
         partition_index,
@@ -958,17 +1075,14 @@ pub(crate) fn partition(
         partition: index,
         storage,
     } = setup;
-    spawn_partition(
-        root,
-        PartitionSpawnSetup {
-            topic,
-            index,
-            log_dir_status: broker.log_dir_status.clone(),
-            producer_state: Arc::clone(&broker.producer_state),
-            storage,
-            ..Default::default()
-        },
-    )
+    spawn_partition()
+        .root(root)
+        .topic(topic)
+        .index(index)
+        .log_dir_status(broker.log_dir_status.clone())
+        .producer_state(Arc::clone(&broker.producer_state))
+        .storage(storage)
+        .call()
 }
 
 #[derive(krabka_macros::FieldDefaults)]
@@ -983,7 +1097,25 @@ pub(crate) struct PartitionSpawnSetup<'a> {
     pub log_config: krabka_log::LogConfig,
 }
 
-pub(crate) fn spawn_partition(root: &Path, setup: PartitionSpawnSetup<'_>) -> Arc<Partition> {
+#[bon::builder]
+pub(crate) fn spawn_partition(
+    root: &Path,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(into, default)] index: krabka_ids::PartitionIndex,
+    #[builder(default)] log_dir_status: LogDirRegistry,
+    #[builder(default = Arc :: new (crate :: producer_state :: ProducerState :: new ()))]
+    producer_state: Arc<ProducerState>,
+    #[builder(default)] storage: StorageMode,
+    #[builder(default)] log_config: krabka_log::LogConfig,
+) -> Arc<Partition> {
+    let setup = PartitionSpawnSetup {
+        topic,
+        index,
+        log_dir_status,
+        producer_state,
+        storage,
+        log_config,
+    };
     let PartitionSpawnSetup {
         topic,
         index,
@@ -1287,10 +1419,18 @@ pub(crate) struct BrokerConfigMutationSetup<'a> {
     pub unstable: UnstableApiVersions,
 }
 
+#[bon::builder]
 pub(crate) fn broker_config_context<'a>(
     image: &'a krabka_metadata::MetadataImage,
-    setup: BrokerConfigMutationSetup<'a>,
+    #[builder(into, default = krabka_metadata :: NodeId (1))] serving: krabka_metadata::NodeId,
+    #[builder(default = & [])] log_dirs: &'a [std::path::PathBuf],
+    #[builder(default = UnstableApiVersions :: Disabled)] unstable: UnstableApiVersions,
 ) -> BrokerConfigContext<'a> {
+    let setup = BrokerConfigMutationSetup {
+        serving,
+        log_dirs,
+        unstable,
+    };
     BrokerConfigContext {
         image,
         serving: setup.serving,

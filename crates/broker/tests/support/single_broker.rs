@@ -129,14 +129,11 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
     // The broker's own heartbeat is denied too, so it stays fenced: it never
     // becomes alive in the liveness registry, and nothing here needs it to.
-    let (broker, client) = start_broker_client(
-        config,
-        BrokerClientSetup {
-            client_id: "krabka-broker-test-deny",
-            ..Default::default()
-        },
-    )
-    .await;
+    let (broker, client) = start_broker_client()
+        .config(config)
+        .client_id("krabka-broker-test-deny")
+        .call()
+        .await;
     InProcess {
         broker,
         client,

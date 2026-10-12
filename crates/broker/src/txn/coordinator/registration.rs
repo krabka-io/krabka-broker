@@ -243,14 +243,11 @@ mod tests {
         transactional_id: &str,
     ) -> Arc<Partition> {
         let index = coordinator.partition_for(transactional_id);
-        let opened = open_partition(
-            directory,
-            StandalonePartitionSetup {
-                topic: bootstrap::TOPIC,
-                partition: krabka_ids::PartitionIndex(index.get()),
-                ..Default::default()
-            },
-        );
+        let opened = open_partition()
+            .log_dir(directory)
+            .topic(bootstrap::TOPIC)
+            .partition(index.get())
+            .call();
         coordinator
             .partitions
             .insert(bootstrap::TOPIC.into(), index, Arc::clone(&opened));

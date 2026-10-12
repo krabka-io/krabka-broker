@@ -133,17 +133,15 @@ use crate::{
 /// session. Admin is the super-user in both tests, so the call bypasses the OPA
 /// mock and the topic materialises whatever OPA answers.
 async fn create_topic_as_admin(addr: SocketAddr, name: &str) {
-    create_topic_as_super_user(
-        addr,
-        AutomaticTopicSetup {
-            client_id: CLIENT_ID,
-            topic: ConfiguredTopicSetup {
-                name: name.to_string(),
-                ..Default::default()
-            },
-        },
-    )
-    .await;
+    create_topic_as_super_user()
+        .addr(addr)
+        .client_id(CLIENT_ID)
+        .topic(ConfiguredTopicSetup {
+            name: name.to_string(),
+            ..Default::default()
+        })
+        .call()
+        .await;
 }
 
 /// Waits on `handle`, event-driven, until the local writer-actor of `topic`

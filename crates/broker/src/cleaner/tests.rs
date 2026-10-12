@@ -19,14 +19,11 @@ async fn run_ticks_until_shutdown() {
     use qubit_clock::{ManualMonotonicClock, MonotonicClock as _};
 
     let (dir, registry) = sweep_registry_fixture();
-    let partition = compactable_partition(
-        &dir,
-        CompactionSetup {
-            topic: "run-compact",
-            ..Default::default()
-        },
-    )
-    .await;
+    let partition = compactable_partition()
+        .root(&dir)
+        .topic("run-compact")
+        .call()
+        .await;
     let before = record_count(&partition);
     registry.insert(
         "run-compact".into(),

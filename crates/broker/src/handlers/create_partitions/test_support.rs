@@ -35,7 +35,18 @@ pub struct PartitionTopicSetup<'a> {
     pub assignments: Option<Vec<CreatePartitionsAssignment>>,
 }
 
-pub fn topic_req(setup: PartitionTopicSetup<'_>) -> CreatePartitionsTopic {
+#[bon::builder]
+pub fn topic_req(
+    #[builder(default = "t")] name: &'_ str,
+    #[builder(into, default = crate :: handlers :: test_support :: TopicPartitionCount (3))]
+    count: TopicPartitionCount,
+    assignments: Option<Vec<CreatePartitionsAssignment>>,
+) -> CreatePartitionsTopic {
+    let setup = PartitionTopicSetup {
+        name,
+        count,
+        assignments,
+    };
     CreatePartitionsTopic {
         name: setup.name.into(),
         count: setup.count.0,
@@ -83,7 +94,20 @@ impl<'a> SeedTopicSetup<'a> {
     }
 }
 
-pub async fn seed_topic(handle: &BrokerHandle, setup: SeedTopicSetup<'_>) {
+#[bon::builder]
+pub async fn seed_topic(
+    handle: &BrokerHandle,
+    #[builder(default = "t")] name: &'_ str,
+    #[builder(into, default = crate :: handlers :: test_support :: TopicPartitionCount (2))]
+    partitions: TopicPartitionCount,
+    #[builder(into, default = crate :: handlers :: test_support :: TopicReplicationFactor (1))]
+    rf: TopicReplicationFactor,
+) {
+    let setup = SeedTopicSetup {
+        name,
+        partitions,
+        rf,
+    };
     let SeedTopicSetup {
         name,
         partitions,

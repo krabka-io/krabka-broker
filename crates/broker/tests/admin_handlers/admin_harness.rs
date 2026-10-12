@@ -23,11 +23,12 @@ pub(crate) async fn create_topic_helper(
     name: &str,
     partitions: i32,
 ) {
-    let req = create_topic_request(creatable_topic(ConfiguredTopicSetup {
-        name: (name).into(),
-        partitions: TopicPartitionCount(partitions),
-        ..Default::default()
-    }));
+    let req = create_topic_request(
+        creatable_topic()
+            .name((name).into())
+            .partitions(partitions)
+            .call(),
+    );
     let resp = client.send(req).await.expect("create_topics");
     let result = &resp.topics[0];
     assert!(

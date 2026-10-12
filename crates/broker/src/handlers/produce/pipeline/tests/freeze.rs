@@ -38,7 +38,14 @@ use crate::{
 
 // Put one live entry in the registry for the resolve below to find.
 fn frozen(image: &mut MetadataImage, setup: FreezeSetup<'_>) {
-    image.apply(&MetadataRecord::V1TopicFreeze(topic_freeze_record(setup)));
+    image.apply(&MetadataRecord::V1TopicFreeze(
+        topic_freeze_record()
+            .scope(setup.scope)
+            .pattern_type(setup.pattern_type)
+            .state(setup.state)
+            .reason(setup.reason)
+            .call(),
+    ));
 }
 
 fn verdict(scope: &str, pattern_type: PatternType, reason: &str) -> FreezeVerdict {

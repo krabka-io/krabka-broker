@@ -139,12 +139,13 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     for p in 0..n_partitions {
         let v = format!("p{p}");
         let rx = producer
-            .enqueue(producer_record(ProducerRecordSetup {
-                topic: (topic).into(),
-                partition: Some(krabka_ids::PartitionIndex(p)),
-                value: Some(Bytes::from(v.clone())),
-                ..Default::default()
-            }))
+            .enqueue(
+                producer_record()
+                    .topic((topic).into())
+                    .maybe_partition(Some(p))
+                    .maybe_value(Some(Some(Bytes::from(v.clone()))))
+                    .call(),
+            )
             .await
             .expect("enqueue record");
         futs.push((p, rx));

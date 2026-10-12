@@ -75,9 +75,9 @@ async fn acks_all_survives_leader_crash() {
 
     // 4. Spawn JVM producer in background (100 records, acks=-1, long timeout
     //    so it retries through the election window).
-    let producer_child = jvm_docker_command(JvmDockerSetup {
-        image: KAFKA_IMAGE,
-        args: &[
+    let producer_child = jvm_docker_command()
+        .image(KAFKA_IMAGE)
+        .args(&[
             "bash",
             "-c",
             &format!(
@@ -88,15 +88,14 @@ async fn acks_all_survives_leader_crash() {
                    --request-required-acks -1 \
                    --request-timeout-ms 30000"
             ),
-        ],
-        input: ContainerInput::Attached,
-        ..Default::default()
-    })
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .expect("spawn kafka-console-producer");
+        ])
+        .input(ContainerInput::Attached)
+        .call()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn kafka-console-producer");
 
     // 5. After ~50ms (producer has connected), kill the partition leader.
     // intentional: this timing window — killing the leader mid-produce — is the

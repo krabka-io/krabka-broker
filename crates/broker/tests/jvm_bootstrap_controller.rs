@@ -95,19 +95,16 @@ async fn start_host_broker_with(
             krabka_broker::NodeId(1),
             controller_bootstrap().to_string(),
         )],
-        ..jvm_broker_config(
-            dir.path().to_path_buf(),
-            JvmBrokerSetup {
-                listen: listen_addr().parse().expect("allocated addr"),
-                controller: controller_listen().parse().expect("allocated addr"),
-                advertised: (advertised_addr()).to_owned(),
-                voters: controller_voters(&[(
-                    1,
-                    controller_listen().parse().expect("allocated addr"),
-                )]),
-                ..Default::default()
-            },
-        )
+        ..jvm_broker_config()
+            .log_dir(dir.path().to_path_buf())
+            .listen(listen_addr().parse().expect("allocated addr"))
+            .controller(controller_listen().parse().expect("allocated addr"))
+            .advertised((advertised_addr()).to_owned())
+            .voters(controller_voters(&[(
+                1,
+                controller_listen().parse().expect("allocated addr"),
+            )]))
+            .call()
     };
     adjust(&mut config);
     let handle = Broker::start(config).await.expect("start broker");

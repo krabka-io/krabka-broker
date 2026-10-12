@@ -161,16 +161,14 @@ mod tests {
         check!(
             batches
                 == vec![
-                    state_batch(StateBatchSetup {
-                        bounds: Offset(0)..=Offset(1),
-                        attempts: DeliveryAttemptCount(0),
-                        ..Default::default()
-                    }),
-                    state_batch(StateBatchSetup {
-                        bounds: Offset(2)..=Offset(3),
-                        attempts: DeliveryAttemptCount(0),
-                        ..Default::default()
-                    }),
+                    state_batch()
+                        .bounds(Offset(0)..=Offset(1))
+                        .attempts(DeliveryAttemptCount(0))
+                        .call(),
+                    state_batch()
+                        .bounds(Offset(2)..=Offset(3))
+                        .attempts(DeliveryAttemptCount(0))
+                        .call(),
                 ]
         );
 

@@ -91,12 +91,7 @@ async fn create_every_topic(p: &support::InProcess) {
         .send(CreateTopicsRequest {
             topics: TOPICS
                 .iter()
-                .map(|(name, _)| {
-                    creatable_topic(ConfiguredTopicSetup {
-                        name: (*name).into(),
-                        ..Default::default()
-                    })
-                })
+                .map(|(name, _)| creatable_topic().name((*name).into()).call())
                 .collect(),
             timeout_ms: 10_000,
             ..Default::default()

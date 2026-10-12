@@ -75,31 +75,25 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
 ) -> Result<TcpStream, io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
 
-    let _av_resp: ApiVersionsResponse = exchange(
-        &mut stream,
-        &ApiVersionsRequest::default(),
-        WireExchangeSetup {
-            client_id: CLIENT_ID,
-            ..Default::default()
-        },
-    )
-    .await?;
+    let _av_resp: ApiVersionsResponse = exchange()
+        .stream(&mut stream)
+        .request(&ApiVersionsRequest::default())
+        .client_id(CLIENT_ID)
+        .call()
+        .await?;
 
-    let sh_resp: SaslHandshakeResponse = exchange(
-        &mut stream,
-        &SaslHandshakeRequest {
+    let sh_resp: SaslHandshakeResponse = exchange()
+        .stream(&mut stream)
+        .request(&SaslHandshakeRequest {
             mechanism: "SCRAM-SHA-256".to_string(),
             ..Default::default()
-        },
-        WireExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            correlation: WireCorrelationId(2),
-            client_id: CLIENT_ID,
-            ..Default::default()
-        },
-    )
-    .await?;
+        })
+        .api_key(17)
+        .version(1)
+        .correlation(2)
+        .client_id(CLIENT_ID)
+        .call()
+        .await?;
     if sh_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SaslHandshake(SCRAM-SHA-256) failed: error_code={}",
@@ -110,15 +104,12 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
     let client = TokenScramClient::new(username, password);
     let client_first = client.client_first();
 
-    let r1_resp = kafka_wire::sasl_authenticate_on(
-        &mut stream,
-        bytes::Bytes::from(client_first),
-        SaslAuthenticateSetup {
-            client_id: CLIENT_ID,
-            ..Default::default()
-        },
-    )
-    .await?;
+    let r1_resp = kafka_wire::sasl_authenticate_on()
+        .stream(&mut stream)
+        .auth_bytes(bytes::Bytes::from(client_first))
+        .client_id(CLIENT_ID)
+        .call()
+        .await?;
     if r1_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SCRAM round 1 failed: code={} msg={:?}",
@@ -127,15 +118,13 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
     }
 
     let client_final = client.client_final(&r1_resp.auth_bytes)?;
-    let r2_resp = kafka_wire::sasl_authenticate_on(
-        &mut stream,
-        bytes::Bytes::from(client_final),
-        SaslAuthenticateSetup {
-            client_id: CLIENT_ID,
-            correlation: WireCorrelationId(4),
-        },
-    )
-    .await?;
+    let r2_resp = kafka_wire::sasl_authenticate_on()
+        .stream(&mut stream)
+        .auth_bytes(bytes::Bytes::from(client_final))
+        .client_id(CLIENT_ID)
+        .correlation(4)
+        .call()
+        .await?;
     if r2_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SCRAM round 2 failed: code={} msg={:?}",

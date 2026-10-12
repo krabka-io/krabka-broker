@@ -299,7 +299,22 @@ mod tests {
         }
     }
 
-    fn seg(setup: CacheSegmentSetup<'_>) -> RemoteLogSegmentMetadata {
+    #[bon::builder]
+    fn seg(
+        #[builder(default = Uuid :: from_u128 (10))] id: Uuid,
+        #[builder(default = & [(LeaderEpoch (0) , Offset (0))])] epochs: &'_ [(
+            LeaderEpoch,
+            Offset,
+        )],
+        #[builder(into, default = Offset (0))] start: Offset,
+        #[builder(into, default = Offset (99))] end: Offset,
+    ) -> RemoteLogSegmentMetadata {
+        let setup = CacheSegmentSetup {
+            id,
+            epochs,
+            start,
+            end,
+        };
         let CacheSegmentSetup {
             id,
             epochs,
@@ -348,7 +363,7 @@ mod tests {
     #[test]
     fn started_segment_is_invisible_until_finished() {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(CacheSegmentSetup::default())).unwrap();
+        c.add(seg().call()).unwrap();
         assert!(
             c.segment_for(LeaderEpoch(0), 50).is_none(),
             "started not yet readable"
@@ -362,15 +377,23 @@ mod tests {
 
     fn one_finished_segment() -> RemoteLogMetadataCache {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(CacheSegmentSetup::default())).unwrap();
+        c.add(seg().call()).unwrap();
         c.update(&finish(Uuid::from_u128(10))).unwrap();
         c
     }
 
     fn two_finished_segments() -> RemoteLogMetadataCache {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(CacheSegmentSetup::default())).unwrap();
-        c.add(seg(CacheSegmentSetup::following_segment())).unwrap();
+        c.add(seg().call()).unwrap();
+        c.add(
+            seg()
+                .id(CacheSegmentSetup::following_segment().id)
+                .epochs(CacheSegmentSetup::following_segment().epochs)
+                .start(CacheSegmentSetup::following_segment().start)
+                .end(CacheSegmentSetup::following_segment().end)
+                .call(),
+        )
+        .unwrap();
         c.update(&finish(Uuid::from_u128(10))).unwrap();
         c.update(&finish(Uuid::from_u128(11))).unwrap();
         c
@@ -399,21 +422,18 @@ mod tests {
     #[test]
     fn offset_lookup_rejects_offsets_below_segment_start_and_extreme_spans() {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(CacheSegmentSetup {
-            start: Offset(100),
-            end: Offset(199),
-            ..Default::default()
-        }))
-        .unwrap();
+        c.add(seg().start(100).end(199).call()).unwrap();
         c.update(&finish(Uuid::from_u128(10))).unwrap();
         check!(c.segment_for(LeaderEpoch(0), 50).is_none());
 
-        c.add(seg(CacheSegmentSetup {
-            id: Uuid::from_u128(11),
-            epochs: &[(LeaderEpoch(1), Offset(i64::MIN))],
-            start: Offset(i64::MIN),
-            end: Offset(i64::MAX),
-        }))
+        c.add(
+            seg()
+                .id(Uuid::from_u128(11))
+                .epochs(&[(LeaderEpoch(1), Offset(i64::MIN))])
+                .start(i64::MIN)
+                .end(i64::MAX)
+                .call(),
+        )
         .unwrap();
         c.update(&finish(Uuid::from_u128(11))).unwrap();
         check!(c.segment_for(LeaderEpoch(1), i64::MAX).is_none());
@@ -422,7 +442,7 @@ mod tests {
     #[test]
     fn list_by_epoch_returns_matching_segments() {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(CacheSegmentSetup::default())).unwrap();
+        c.add(seg().call()).unwrap();
         assert!(
             c.list_by_epoch(LeaderEpoch(0)).is_empty(),
             "copy-started is not epoch-readable"
@@ -468,17 +488,22 @@ mod tests {
     fn offset_lookup_respects_epoch() {
         let mut c = RemoteLogMetadataCache::default();
         // One segment spanning two epochs: epoch 0 owns [0,49], epoch 1 owns [50,99].
-        c.add(seg(CacheSegmentSetup {
-            epochs: &[(LeaderEpoch(0), Offset(0)), (LeaderEpoch(1), Offset(50))],
-            ..Default::default()
-        }))
+        c.add(
+            seg()
+                .epochs(&[(LeaderEpoch(0), Offset(0)), (LeaderEpoch(1), Offset(50))])
+                .call(),
+        )
         .unwrap();
         c.update(&finish(Uuid::from_u128(10))).unwrap();
         // A second segment, epoch 1 only.
-        c.add(seg(CacheSegmentSetup {
-            epochs: &[(LeaderEpoch(1), Offset(100))],
-            ..CacheSegmentSetup::following_segment()
-        }))
+        c.add(
+            seg()
+                .id(CacheSegmentSetup::following_segment().id)
+                .epochs(&[(LeaderEpoch(1), Offset(100))])
+                .start(CacheSegmentSetup::following_segment().start)
+                .end(CacheSegmentSetup::following_segment().end)
+                .call(),
+        )
         .unwrap();
         c.update(&finish(Uuid::from_u128(11))).unwrap();
 
@@ -549,7 +574,7 @@ mod tests {
     #[test]
     fn exact_update_and_absent_tombstone_retries_are_idempotent() {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(CacheSegmentSetup::default())).unwrap();
+        c.add(seg().call()).unwrap();
         let finished = finish(Uuid::from_u128(10));
         c.update(&finished).unwrap();
         c.update(&finished).expect("exact retry is a no-op");
@@ -600,7 +625,7 @@ mod tests {
     #[test]
     fn add_with_wrong_state_errors() {
         let mut c = RemoteLogMetadataCache::default();
-        let mut s = seg(CacheSegmentSetup::default());
+        let mut s = seg().call();
         s = s
             .with_update(&finish(Uuid::from_u128(10)))
             .expect("force to finished for the test");
@@ -611,8 +636,8 @@ mod tests {
     #[test]
     fn duplicate_add_errors() {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(CacheSegmentSetup::default())).unwrap();
-        let err = c.add(seg(CacheSegmentSetup::default())).unwrap_err();
+        c.add(seg().call()).unwrap();
+        let err = c.add(seg().call()).unwrap_err();
         assert!(matches!(err, RemoteStorageError::InvalidAdd { .. }));
     }
 
@@ -649,7 +674,7 @@ mod tests {
 
     #[test]
     fn repeated_seed_and_tombstone_duplicates_do_not_resurrect() {
-        let started = seg(CacheSegmentSetup::default());
+        let started = seg().call();
         let finished = started.with_update(&finish(Uuid::from_u128(10))).unwrap();
         let deleting = finished
             .with_update(&transition(
@@ -677,12 +702,8 @@ mod tests {
     #[test]
     fn index_collision_is_deterministic_and_reveals_the_remaining_finished_segment() {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(CacheSegmentSetup {
-            id: Uuid::from_u128(11),
-            ..Default::default()
-        }))
-        .unwrap();
-        c.add(seg(CacheSegmentSetup::default())).unwrap();
+        c.add(seg().id(Uuid::from_u128(11)).call()).unwrap();
+        c.add(seg().call()).unwrap();
         c.update(&finish(Uuid::from_u128(11))).unwrap();
         c.update(&finish(Uuid::from_u128(10))).unwrap();
         check!(
@@ -710,8 +731,16 @@ mod tests {
     #[test]
     fn list_is_ordered_by_start_offset() {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(seg(CacheSegmentSetup::following_segment())).unwrap();
-        c.add(seg(CacheSegmentSetup::default())).unwrap();
+        c.add(
+            seg()
+                .id(CacheSegmentSetup::following_segment().id)
+                .epochs(CacheSegmentSetup::following_segment().epochs)
+                .start(CacheSegmentSetup::following_segment().start)
+                .end(CacheSegmentSetup::following_segment().end)
+                .call(),
+        )
+        .unwrap();
+        c.add(seg().call()).unwrap();
         let listed = c.list();
         assert!(listed[0].start_offset() == 0);
         assert!(listed[1].start_offset() == 100);

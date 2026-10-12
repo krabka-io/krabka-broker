@@ -342,7 +342,19 @@ mod tests {
     }
 
     /// The responder and quorum watermarks differ while a follower catches up.
-    fn metadata_fetch_response_body(setup: MetadataFetchResponseSetup) -> Vec<u8> {
+    #[bon::builder]
+    fn metadata_fetch_response_body(
+        #[builder(into, default = krabka_ids :: NodeId (1))] leader: krabka_ids::NodeId,
+        #[builder(default)] records: Bytes,
+        #[builder(into, default)] high_watermark: krabka_ids::Offset,
+        #[builder(into, default)] quorum_high_watermark: krabka_ids::Offset,
+    ) -> Vec<u8> {
+        let setup = MetadataFetchResponseSetup {
+            leader,
+            records,
+            high_watermark,
+            quorum_high_watermark,
+        };
         let MetadataFetchResponseSetup {
             leader,
             records,
@@ -536,7 +548,7 @@ mod tests {
             krabka_raft::API_KEY_METADATA_FETCH,
             move || {
                 fetches_for_mock.fetch_add(1, Ordering::SeqCst);
-                metadata_fetch_response_body(MetadataFetchResponseSetup::default())
+                metadata_fetch_response_body().call()
             },
             api_versions_response_v0,
         )
@@ -719,7 +731,7 @@ mod tests {
         // which is what separates this exit from the unreachable-voter one.
         let mock = mock_request_broker(
             krabka_raft::API_KEY_METADATA_FETCH,
-            move || metadata_fetch_response_body(MetadataFetchResponseSetup::default()),
+            move || metadata_fetch_response_body().call(),
             api_versions_response_v0,
         )
         .await;
@@ -742,12 +754,13 @@ mod tests {
             }
             if api_key == krabka_raft::API_KEY_METADATA_FETCH {
                 let fetch = fetches.fetch_add(1, Ordering::SeqCst);
-                return Some(metadata_fetch_response_body(MetadataFetchResponseSetup {
-                    records: body(fetch),
-                    high_watermark: krabka_ids::Offset(high_watermark),
-                    quorum_high_watermark: krabka_ids::Offset(high_watermark),
-                    ..Default::default()
-                }));
+                return Some(
+                    metadata_fetch_response_body()
+                        .records(body(fetch))
+                        .high_watermark(high_watermark)
+                        .quorum_high_watermark(high_watermark)
+                        .call(),
+                );
             }
             None
         })
@@ -897,12 +910,13 @@ mod tests {
                         .unwrap()
                         .push((request.replica_id, request.replica_directory_id));
                     // Both controllers name node 2 as the leader.
-                    return Some(metadata_fetch_response_body(MetadataFetchResponseSetup {
-                        leader: krabka_ids::NodeId(2),
-                        high_watermark: krabka_ids::Offset(5),
-                        quorum_high_watermark: krabka_ids::Offset(5),
-                        ..Default::default()
-                    }));
+                    return Some(
+                        metadata_fetch_response_body()
+                            .leader(2)
+                            .high_watermark(5)
+                            .quorum_high_watermark(5)
+                            .call(),
+                    );
                 }
                 None
             }
@@ -963,11 +977,10 @@ mod tests {
             krabka_raft::API_KEY_METADATA_FETCH,
             move || {
                 // A follower holding 5 of the quorum's 10 000 records.
-                metadata_fetch_response_body(MetadataFetchResponseSetup {
-                    high_watermark: krabka_ids::Offset(5),
-                    quorum_high_watermark: krabka_ids::Offset(10_000),
-                    ..Default::default()
-                })
+                metadata_fetch_response_body()
+                    .high_watermark(5)
+                    .quorum_high_watermark(10_000)
+                    .call()
             },
             api_versions_response_v0,
         )

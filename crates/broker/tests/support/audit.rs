@@ -60,11 +60,12 @@ async fn fetch_audit(
 ) -> krabka_protocol::owned::fetch_response::FetchResponse {
     let topic_id = super::topic_id_for(client, AUDIT_TOPIC).await;
     client
-        .send(single_partition_fetch(SinglePartitionFetchSetup {
-            topic: AUDIT_TOPIC.into(),
-            topic_id,
-            ..Default::default()
-        }))
+        .send(
+            single_partition_fetch()
+                .topic(AUDIT_TOPIC.into())
+                .topic_id(topic_id)
+                .call(),
+        )
         .await
         .expect("FetchRequest for audit topic")
 }

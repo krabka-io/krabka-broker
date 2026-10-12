@@ -86,16 +86,14 @@ fn remote_segments(root: &Path) -> Vec<RemoteSegment> {
 /// Produces `count` single-record batches through `client`, one request each,
 /// so both replicas see many small batches and roll on their own byte budget.
 async fn produce_records(client: &Client, topic_id: WireUuid, prefix: &str, count: usize) {
-    produce_tiered_records(
-        client,
-        |index| bytes::Bytes::from(format!("{prefix}-record-{index}")),
-        TieredRecordsSetup {
-            topic: TOPIC,
-            topic_id,
-            count: TieredRecordCount(count),
-        },
-    )
-    .await;
+    produce_tiered_records()
+        .client(client)
+        .value(|index| bytes::Bytes::from(format!("{prefix}-record-{index}")))
+        .topic(TOPIC)
+        .topic_id(topic_id)
+        .count(count)
+        .call()
+        .await;
 }
 
 /// Creates the tiered topic, deliberately without a `segment.bytes` override,
@@ -113,14 +111,12 @@ async fn create_misaligned_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerH
         TOPIC,
         vec![krabka_metadata::NodeId(2), krabka_metadata::NodeId(1)],
     );
-    create_assigned_topic(
-        admin,
-        AssignedTieredTopicSetup {
-            topic: assignment,
-            segment_bytes: None,
-        },
-    )
-    .await;
+    create_assigned_topic()
+        .client(admin)
+        .topic(assignment)
+        .maybe_segment_bytes(None)
+        .call()
+        .await;
 
     await_tiered_replicas(
         &[b1, b2],

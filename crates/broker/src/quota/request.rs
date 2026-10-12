@@ -164,11 +164,11 @@ mod tests {
                 vec![("user", Some("alice")), ("client-id", None)],
             ]
             .map(|entity| {
-                quota_record(QuotaRecordSetup {
-                    entity,
-                    key: "request_percentage",
-                    value: QuotaValue(0.001),
-                })
+                quota_record()
+                    .entity(entity)
+                    .key("request_percentage")
+                    .value(0.001)
+                    .call()
             })
             .to_vec(),
         );

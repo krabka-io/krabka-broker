@@ -146,22 +146,19 @@ async fn produce_at(
             ..Default::default()
         })
         .collect();
-    support::share::produce_batch(
-        client,
-        RecordBatch {
+    support::share::produce_batch()
+        .client(client)
+        .batch(RecordBatch {
             last_offset_delta: i32::try_from(values.len() - 1).unwrap(),
             base_timestamp: timestamp_ms,
             max_timestamp: timestamp_ms,
             records,
             ..Default::default()
-        },
-        ShareProduceSetup {
-            topic,
-            topic_id: tid,
-            ..Default::default()
-        },
-    )
-    .await;
+        })
+        .topic(topic)
+        .topic_id(tid)
+        .call()
+        .await;
 }
 
 /// Runs a docker container against the host broker and returns its output. The

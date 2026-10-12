@@ -24,11 +24,11 @@ use tokio::{
 use super::{BrokerRaftHandshake, frame::read_kafka_request};
 use crate::{SslPrincipalMapper, authorizer::AllowAllAuthorizer};
 
-#[derive(Clone, Copy, Default)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 pub(super) struct HandshakeApiKey(pub i16);
-#[derive(Clone, Copy, Default)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 pub(super) struct HandshakeApiVersion(pub i16);
-#[derive(Clone, Copy, Default)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 pub(super) struct HandshakeCorrelationId(pub i32);
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -59,7 +59,24 @@ pub(super) struct RequestFrameSetup<'a> {
     pub body: &'a [u8],
 }
 
-pub(super) fn request_frame(setup: RequestFrameSetup<'_>) -> Vec<u8> {
+#[bon::builder]
+pub(super) fn request_frame(
+    #[builder(into, default = HandshakeApiKey (super :: API_KEY_SASL_HANDSHAKE))]
+    api_key: HandshakeApiKey,
+    #[builder(into, default = HandshakeApiVersion (1))] api_version: HandshakeApiVersion,
+    #[builder(into, default = HandshakeCorrelationId (1))] correlation: HandshakeCorrelationId,
+    #[builder(required, default = Some (b"c"))] client_id: Option<&'_ [u8]>,
+    #[builder(default)] header: HandshakeHeader,
+    #[builder(default = b"")] body: &'_ [u8],
+) -> Vec<u8> {
+    let setup = RequestFrameSetup {
+        api_key,
+        api_version,
+        correlation,
+        client_id,
+        header,
+        body,
+    };
     let RequestFrameSetup {
         api_key,
         api_version,
@@ -119,7 +136,7 @@ pub(super) async fn read_response_frame<R: tokio::io::AsyncRead + Unpin>(
 }
 
 pub(super) fn sasl_test_config() -> BrokerRaftHandshake {
-    handshake_config(HandshakeSetup::default())
+    handshake_config().call()
 }
 
 #[derive(krabka_macros::FieldDefaults)]
@@ -132,7 +149,18 @@ pub(super) struct HandshakeSetup {
     pub credentials: HashMap<String, String>,
 }
 
-pub(super) fn handshake_config(setup: HandshakeSetup) -> BrokerRaftHandshake {
+#[bon::builder]
+pub(super) fn handshake_config(
+    #[builder(default = ListenerProtocol :: SaslPlaintext)] protocol: ListenerProtocol,
+    #[builder(default = vec ! [SaslMechanism :: Plain])] mechanisms: Vec<SaslMechanism>,
+    #[builder(default = HashMap :: from ([("broker" . to_owned () , "secret" . to_owned ())]))]
+    credentials: HashMap<String, String>,
+) -> BrokerRaftHandshake {
+    let setup = HandshakeSetup {
+        protocol,
+        mechanisms,
+        credentials,
+    };
     BrokerRaftHandshake {
         tls_acceptor: None,
         plain_credentials: setup.credentials,

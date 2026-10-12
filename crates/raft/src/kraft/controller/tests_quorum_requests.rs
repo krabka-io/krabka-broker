@@ -84,7 +84,7 @@ fn encode<M: Encode>(message: &M, version: i16) -> bytes::Bytes {
 
 /// Node 1 of voters 1, 2 and 3, following node 2 in epoch 5.
 fn follower_of_2_in_epoch_5() -> (Engine, tempfile::TempDir) {
-    let (mut engine, dir) = build_engine_only(EngineSetup::default());
+    let (mut engine, dir) = build_engine_only().call();
     engine.on_event(Event::ReceiveBeginQuorumEpoch {
         leader_id: NodeId(2),
         leader_epoch: 5,
@@ -170,7 +170,7 @@ fn vote_answer_after_stepping_down_to_epoch_6(error_code: i16) -> VoteResponse {
 }
 
 fn engine_with_local_directory() -> (Engine, tempfile::TempDir) {
-    let (mut engine, dir) = build_engine_only(EngineSetup::default());
+    let (mut engine, dir) = build_engine_only().call();
     let mut voters = voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);
     let mut local = voters.get(NodeId(1)).expect("local voter").clone();
     local.directory_id = Uuid::from_u128(11);
@@ -332,7 +332,7 @@ async fn vote_runs_kafka_request_checks() {
 /// no leader.
 #[tokio::test]
 async fn vote_grant_names_the_new_epoch_and_no_leader() {
-    let (mut engine, _dir) = build_engine_only(EngineSetup::default());
+    let (mut engine, _dir) = build_engine_only().call();
     let request = vote_request(|r| vote_partition(r).replica_epoch = 1);
 
     let body = deliver(&mut engine, vote, encode(&request, VOTE_VERSION)).expect("an answer");
@@ -686,10 +686,7 @@ fn fetch_snapshot_answer(
 /// Node 1, the only voter, leading epoch 1, with checkpoints (10, 1) and the
 /// bootstrap id (0, 0) on disk.
 fn single_voter_leader_with_checkpoints() -> (Engine, tempfile::TempDir) {
-    let (mut engine, dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1)],
-        ..Default::default()
-    });
+    let (mut engine, dir) = build_engine_only().ids(&[NodeId(1)]).call();
     engine.on_event(Event::ElectionTimeout);
     assert2::assert!(
         (
@@ -825,7 +822,7 @@ async fn fetch_snapshot_to_a_follower_names_the_leader() {
 /// names is followed, and its endpoint still goes into `NodeEndpoints`.
 #[tokio::test]
 async fn a_leader_from_the_adjacent_voter_set_keeps_its_endpoint() {
-    let (mut engine, _dir) = build_engine_only(EngineSetup::default());
+    let (mut engine, _dir) = build_engine_only().call();
     let _ = engine
         .core
         .apply_voter_set(voter_set(&[NodeId(1), NodeId(2)]), SimInstant(0));

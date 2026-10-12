@@ -30,7 +30,7 @@ use crate::{
     scram::drive_sasl_scram_session,
     support::{
         acl::use_simple_acl_authorizer,
-        sasl::{ScramAlgorithm, ScramUpsertionSetup, sasl_temp_config, scram_upsertion},
+        sasl::{ScramAlgorithm, sasl_temp_config, scram_upsertion},
         wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
             SocketExchangeSetup,
@@ -92,14 +92,14 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
         scram_admin_fixture(vec![SaslMechanism::Plain, SaslMechanism::ScramSha256]).await;
 
     let (salt, salted) = pbkdf2_salt_and_salted_sha256(alice_password().as_bytes(), 4096);
-    let upsert = scram_upsertion(ScramUpsertionSetup {
-        mechanism: ScramAlgorithm::Sha256,
-        salt: bytes::Bytes::from(salt),
-        salted_password: bytes::Bytes::from(salted.to_vec()),
-        ..Default::default()
-    });
     let req = AlterUserScramCredentialsRequest {
-        upsertions: vec![upsert],
+        upsertions: vec![
+            scram_upsertion()
+                .mechanism(ScramAlgorithm::Sha256)
+                .salt(bytes::Bytes::from(salt))
+                .salted_password(bytes::Bytes::from(salted.to_vec()))
+                .call(),
+        ],
         ..Default::default()
     };
     let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion (SHA-256)").await;
@@ -168,14 +168,11 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
     let _ = round_trip(&mut stream, SocketExchangeSetup::default(), &av_body).await?;
 
     // ── 2. SaslHandshake v1.
-    sasl_handshake_on(
-        &mut stream,
-        SaslHandshakeSetup {
-            client_id: "krabka-sasl-test",
-            ..Default::default()
-        },
-    )
-    .await?;
+    sasl_handshake_on()
+        .stream(&mut stream)
+        .client_id("krabka-sasl-test")
+        .call()
+        .await?;
 
     // ── 3. SaslAuthenticate v2 (flexible). auth_bytes = \0user\0password.
     let auth_body = encode_named(
@@ -239,11 +236,12 @@ fn pbkdf2_salt_and_salted_sha256(password: &[u8], iterations: u32) -> (Vec<u8>, 
 fn alice_sha512_request() -> AlterUserScramCredentialsRequest {
     let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
     AlterUserScramCredentialsRequest {
-        upsertions: vec![scram_upsertion(ScramUpsertionSetup {
-            salt: bytes::Bytes::from(salt),
-            salted_password: bytes::Bytes::from(salted.to_vec()),
-            ..Default::default()
-        })],
+        upsertions: vec![
+            scram_upsertion()
+                .salt(bytes::Bytes::from(salt))
+                .salted_password(bytes::Bytes::from(salted.to_vec()))
+                .call(),
+        ],
         ..Default::default()
     }
 }

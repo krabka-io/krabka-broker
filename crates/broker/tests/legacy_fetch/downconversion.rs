@@ -57,8 +57,8 @@ async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {
     let resp_body = fetch_legacy_raw(addr, "legacy_fetch_basic", 3).await;
 
     // 4. Decode as LegacyFetchResponse (Fetch v3 is non-flexible).
-    let fetch_resp =
-        LegacyFetchResponse::decode(&mut resp_body.as_slice(), 3).expect("decode LegacyFetchResponse v3");
+    let fetch_resp = LegacyFetchResponse::decode(&mut resp_body.as_slice(), 3)
+        .expect("decode LegacyFetchResponse v3");
 
     assert!(
         fetch_resp.responses.len() == 1,

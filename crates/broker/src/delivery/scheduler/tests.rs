@@ -139,7 +139,14 @@ impl Harness {
     }
 
     fn scheduled(&self, dir: &tempfile::TempDir, setup: ScheduleSetup<'_>) -> Arc<Partition> {
-        let partition = scheduled_partition(dir, &self.clock, setup);
+        let partition = scheduled_partition()
+            .dir(dir)
+            .clock(&self.clock)
+            .topic(setup.topic)
+            .policy(setup.policy)
+            .activations(setup.activations)
+            .leader(setup.leader)
+            .call();
         register(&self.registry, &partition);
         partition
     }

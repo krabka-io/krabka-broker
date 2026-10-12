@@ -457,12 +457,11 @@ mod tests {
         for partition in 0..=led {
             let leader = if partition < led { 1 } else { 2 };
             image.apply(&krabka_metadata::MetadataRecord::V1Partition(
-                replicated_partition(ReplicatedPartitionSetup {
-                    topic: "stretch-topic",
-                    partition: krabka_ids::PartitionIndex(partition),
-                    leader: krabka_metadata::NodeId(leader),
-                    ..Default::default()
-                }),
+                replicated_partition()
+                    .topic("stretch-topic")
+                    .partition(partition)
+                    .leader(leader)
+                    .call(),
             ));
         }
         image

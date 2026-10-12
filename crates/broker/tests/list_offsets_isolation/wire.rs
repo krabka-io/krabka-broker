@@ -94,12 +94,9 @@ pub(super) fn latest_row(offset: i64) -> ListOffsetsPartitionResponse {
 
 pub(super) async fn create_topic(client: &Client, name: &str) {
     let response = client
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup {
-                name: (name).into(),
-                ..Default::default()
-            },
-        )))
+        .send(create_topic_request(
+            creatable_topic().name((name).into()).call(),
+        ))
         .await
         .expect("CreateTopics");
     check!(
@@ -157,11 +154,10 @@ pub(super) async fn wait_for_settled_log(broker: &BrokerHandle, topic: &str, off
 }
 
 fn record(topic: &str, value: &'static str) -> ProducerRecord {
-    producer_record(ProducerRecordSetup {
-        topic: (topic).into(),
-        value: Some(Bytes::from_static(value.as_bytes())),
-        ..Default::default()
-    })
+    producer_record()
+        .topic((topic).into())
+        .maybe_value(Some(Some(Bytes::from_static(value.as_bytes()))))
+        .call()
 }
 
 pub(super) async fn send_ok(producer: &Producer, topic: &str, value: &'static str) {

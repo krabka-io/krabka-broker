@@ -478,7 +478,7 @@ mod tests {
             extra.path().to_path_buf(),
             third.path().to_path_buf(),
         ];
-        let source = registered_source_fixture(primary.path(), FutureSourceSetup::default());
+        let source = registered_source_fixture().primary(primary.path()).call();
 
         // Plant a registry entry pointing at `extra`.
         let PlantedFutureLog {

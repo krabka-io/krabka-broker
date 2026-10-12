@@ -156,12 +156,7 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         .build()
         .await
         .expect("client build");
-    let create = || {
-        configured_topic_request(CreateTopicSetup {
-            topic: TOPIC,
-            ..Default::default()
-        })
-    };
+    let create = || configured_topic_request().topic(TOPIC).call();
 
     let created = client.send(create()).await.expect("CreateTopics");
     check!(created.topics[0].error_code == codes::NONE);

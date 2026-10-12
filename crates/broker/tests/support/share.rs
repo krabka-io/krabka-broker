@@ -78,18 +78,19 @@ pub async fn bootstrap_share_state(
 
 pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
     let resp = client
-        .send(incremental_request(IncrementalConfigsSetup {
-            resources: vec![incremental_resource(
-                RESOURCE_TYPE_GROUP,
-                group,
-                vec![incremental_config(
-                    "share.auto.offset.reset",
-                    Some("earliest".into()),
-                    crate::support::configs::ConfigOperation::Set,
-                )],
-            )],
-            ..Default::default()
-        }))
+        .send(
+            incremental_request()
+                .resources(vec![incremental_resource(
+                    RESOURCE_TYPE_GROUP,
+                    group,
+                    vec![incremental_config(
+                        "share.auto.offset.reset",
+                        Some("earliest".into()),
+                        crate::support::configs::ConfigOperation::Set,
+                    )],
+                )])
+                .call(),
+        )
         .await
         .expect("IncrementalAlterConfigs(group)");
     assert!(
@@ -107,7 +108,7 @@ pub struct ShareProduceSetup<'a> {
     pub partition: krabka_ids::PartitionIndex,
 }
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct ShareRecordCount(pub i64);
 
 impl Default for ShareRecordCount {
@@ -135,33 +136,63 @@ impl<'a> From<ShareRecordsSetup<'a>> for ShareProduceSetup<'a> {
     }
 }
 
-pub async fn produce_n(client: &Client, setup: ShareRecordsSetup<'_>) {
+#[bon::builder]
+pub async fn produce_n(
+    client: &Client,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default)] topic_id: uuid::Uuid,
+    #[builder(into, default)] partition: krabka_ids::PartitionIndex,
+    #[builder(into, default)] count: ShareRecordCount,
+) {
+    let setup = ShareRecordsSetup {
+        topic,
+        topic_id,
+        partition,
+        count,
+    };
     let values = (0..setup.count.0)
         .map(|i| bytes::Bytes::from(format!("v{i}")))
         .collect();
-    produce_values(client, values, setup.into()).await;
+    produce_values()
+        .client(client)
+        .values(values)
+        .topic(setup.topic)
+        .topic_id(setup.topic_id)
+        .partition(setup.partition.0)
+        .call()
+        .await;
 }
 
+#[bon::builder]
 pub async fn produce_values(
     client: &Client,
     values: Vec<bytes::Bytes>,
-    setup: ShareProduceSetup<'_>,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default)] topic_id: uuid::Uuid,
+    #[builder(into, default)] partition: krabka_ids::PartitionIndex,
 ) {
+    let setup = ShareProduceSetup {
+        topic,
+        topic_id,
+        partition,
+    };
     let n = i64::try_from(values.len()).unwrap();
     let records: Vec<Record> = values
         .iter()
         .enumerate()
         .map(|(i, value)| value_record(i32::try_from(i).unwrap(), Some(value.clone())))
         .collect();
-    produce_batch(
-        client,
-        RecordBatch {
+    produce_batch()
+        .client(client)
+        .batch(RecordBatch {
             last_offset_delta: i32::try_from(n - 1).unwrap(),
             ..batch_from_records(records)
-        },
-        setup,
-    )
-    .await;
+        })
+        .topic(setup.topic)
+        .topic_id(setup.topic_id)
+        .partition(setup.partition)
+        .call()
+        .await;
 }
 pub async fn join(client: &Client, group: &str, topic: &str) -> (String, i32) {
     let resp = client
@@ -181,7 +212,19 @@ pub async fn join(client: &Client, group: &str, topic: &str) -> (String, i32) {
 }
 
 /// Produce a supplied batch, preserving its timestamps and record geometry on retries.
-pub async fn produce_batch(client: &Client, batch: RecordBatch, setup: ShareProduceSetup<'_>) {
+#[bon::builder]
+pub async fn produce_batch(
+    client: &Client,
+    batch: RecordBatch,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default)] topic_id: uuid::Uuid,
+    #[builder(into, default)] partition: krabka_ids::PartitionIndex,
+) {
+    let setup = ShareProduceSetup {
+        topic,
+        topic_id,
+        partition,
+    };
     let ShareProduceSetup {
         topic,
         topic_id: tid,
@@ -245,8 +288,10 @@ impl<'a> From<ShareTopicSetup<'a>> for CreateTopicSetup<'a> {
 }
 
 /// A broker, client and materialized data topic, retaining the fixture directory.
+#[bon::builder]
 pub async fn topic_fixture(
-    setup: ShareTopicSetup<'_>,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default)] partitions: TopicPartitionCount,
     customize: impl FnOnce(&mut BrokerConfig),
 ) -> (
     krabka_broker::BrokerHandle,
@@ -254,16 +299,24 @@ pub async fn topic_fixture(
     tempfile::TempDir,
     uuid::Uuid,
 ) {
+    let setup = ShareTopicSetup { topic, partitions };
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = broker_config(dir.path().to_path_buf());
     customize(&mut config);
-    let (broker, client, tid) = start_topic(config, setup).await;
+    let (broker, client, tid) = start_topic()
+        .cfg(config)
+        .topic(setup.topic)
+        .partitions(setup.partitions)
+        .call()
+        .await;
     (broker, client, dir, tid)
 }
 
 /// A topic fixture that holds this binary's broker permit for the test's lifetime.
+#[bon::builder]
 pub async fn permitted_topic_fixture(
-    setup: ShareTopicSetup<'_>,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default)] partitions: TopicPartitionCount,
     customize: impl FnOnce(&mut BrokerConfig),
 ) -> (
     tokio::sync::OwnedSemaphorePermit,
@@ -272,30 +325,39 @@ pub async fn permitted_topic_fixture(
     tempfile::TempDir,
     uuid::Uuid,
 ) {
+    let setup = ShareTopicSetup { topic, partitions };
     let permit = broker_test_permit().await;
-    let (broker, client, dir, tid) = topic_fixture(setup, customize).await;
+    let (broker, client, dir, tid) = topic_fixture()
+        .topic(setup.topic)
+        .partitions(setup.partitions)
+        .customize(customize)
+        .call()
+        .await;
     (permit, broker, client, dir, tid)
 }
 
 pub async fn connect(bootstrap: &str) -> Arc<Client> {
     connect_client(bootstrap, "c1").await
 }
+#[bon::builder]
 pub async fn create_topic(
     broker: &krabka_broker::BrokerHandle,
     client: &Client,
-    setup: ShareTopicSetup<'_>,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default)] partitions: TopicPartitionCount,
 ) {
+    let setup = ShareTopicSetup { topic, partitions };
     create_topic_with(client, setup.into()).await;
     broker.wait_until_partition_present(setup.topic, 0).await;
 }
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct ShareSessionEpoch(pub i32);
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct FetchByteLimit(pub i32);
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct RequestWaitMillis(pub i32);
 
 #[derive(Clone, Copy)]
@@ -377,7 +439,17 @@ impl<'a> From<ShareSessionSetup<'a>> for ShareFetchSetup<'a> {
     }
 }
 
-pub fn share_fetch_req(setup: ShareFetchSetup<'_>) -> ShareFetchRequest {
+#[bon::builder]
+pub fn share_fetch_req(
+    #[builder(default)] session: ShareSessionSetup<'_>,
+    #[builder(into, default = RequestWaitMillis (0))] max_wait: RequestWaitMillis,
+    #[builder(default)] acks: Vec<FetchAckBatch>,
+) -> ShareFetchRequest {
+    let setup = ShareFetchSetup {
+        session,
+        max_wait,
+        acks,
+    };
     let ShareFetchSetup {
         session:
             ShareSessionSetup {
@@ -431,13 +503,18 @@ pub struct ShareAck<'a> {
     pub ack_type: AcknowledgementCode,
 }
 
+#[bon::bon]
 impl<'a> ShareAck<'a> {
     pub fn single_for(member: &'a str, topic_id: uuid::Uuid, offset: krabka_ids::Offset) -> Self {
         Self::prefix_for(member, topic_id, offset).starting_at(offset)
     }
 
     pub fn prefix_for(member: &'a str, topic_id: uuid::Uuid, last: krabka_ids::Offset) -> Self {
-        Self::prefix(ShareSessionSetup::joined(member, topic_id), last)
+        Self::prefix()
+            .member(member)
+            .topic_id(topic_id)
+            .last(last.0)
+            .call()
     }
 
     pub fn release(mut self) -> Self {
@@ -453,7 +530,22 @@ impl<'a> ShareAck<'a> {
         self
     }
 
-    pub fn prefix(session: ShareSessionSetup<'a>, last: krabka_ids::Offset) -> Self {
+    #[builder]
+    pub fn prefix(
+        #[builder(default = "g1")] group: &'a str,
+        #[builder(default = "member")] member: &'a str,
+        #[builder(default = uuid :: Uuid :: from_u128 (1))] topic_id: uuid::Uuid,
+        #[builder(into, default)] partition: krabka_ids::PartitionIndex,
+        #[builder(into, default = ShareSessionEpoch (1))] epoch: ShareSessionEpoch,
+        #[builder(into)] last: krabka_ids::Offset,
+    ) -> Self {
+        let session = ShareSessionSetup {
+            group,
+            member,
+            topic_id,
+            partition,
+            epoch,
+        };
         Self {
             session,
             last,
@@ -467,12 +559,12 @@ pub async fn share_ack(
     ack: ShareAck<'_>,
 ) -> krabka_protocol::owned::share_acknowledge_response::PartitionData {
     let count = usize::try_from(ack.last.0 - ack.first.0 + 1).unwrap();
-    let req = acknowledge_request(AcknowledgeRequestSetup {
-        group_id: Some(ack.session.group.into()),
-        member_id: Some(ack.session.member.into()),
-        epoch: ShareSessionEpoch(ack.session.epoch.0),
-        mode: RenewalMode::Settle,
-        topics: vec![acknowledge_topic(
+    let req = acknowledge_request()
+        .maybe_group_id(Some(Some(ack.session.group.into())))
+        .maybe_member_id(Some(Some(ack.session.member.into())))
+        .epoch(ack.session.epoch.0)
+        .mode(RenewalMode::Settle)
+        .topics(vec![acknowledge_topic(
             wire(ack.session.topic_id),
             vec![acknowledge_partition(
                 ack.session.partition.0,
@@ -482,8 +574,8 @@ pub async fn share_ack(
                     vec![ack.ack_type.0; count],
                 )],
             )],
-        )],
-    });
+        )])
+        .call();
     let resp: ShareAcknowledgeResponse = client.send(req).await.expect("ShareAcknowledge");
     assert!(
         resp.error_code == 0,
@@ -552,14 +644,23 @@ pub async fn fetch_until_acquired(
 }
 
 /// Start a data topic on a caller-owned broker config (including restart fixtures).
+#[bon::builder]
 pub async fn start_topic(
     cfg: BrokerConfig,
-    setup: ShareTopicSetup<'_>,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default)] partitions: TopicPartitionCount,
 ) -> (krabka_broker::BrokerHandle, Arc<Client>, uuid::Uuid) {
+    let setup = ShareTopicSetup { topic, partitions };
     // Keep the growing broker config inside a boxed startup future.
     let broker = Box::pin(krabka_broker::Broker::start(cfg)).await.unwrap();
     let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, setup).await;
+    create_topic()
+        .broker(&broker)
+        .client(&client)
+        .topic(setup.topic)
+        .partitions(setup.partitions)
+        .call()
+        .await;
     let tid = topic_id(&broker, setup.topic);
     (broker, client, tid)
 }
@@ -572,11 +673,21 @@ pub struct StartGroupTopicSetup<'a> {
 }
 
 /// Bootstrap the share-state topic after creating the requested data topic.
+#[bon::builder]
 pub async fn start_group_topic(
     config: BrokerConfig,
-    setup: StartGroupTopicSetup<'_>,
+    #[builder(default)] topic: ShareTopicSetup<'_>,
+    #[builder(default = "g1")] group: &'_ str,
 ) -> (krabka_broker::BrokerHandle, Arc<Client>, uuid::Uuid) {
-    let (broker, client, topic_id) = Box::pin(start_topic(config, setup.topic)).await;
+    let setup = StartGroupTopicSetup { topic, group };
+    let (broker, client, topic_id) = Box::pin(
+        start_topic()
+            .cfg(config)
+            .topic(setup.topic.topic)
+            .partitions(setup.topic.partitions)
+            .call(),
+    )
+    .await;
     bootstrap_share_state(&broker, &client, setup.group).await;
     (broker, client, topic_id)
 }
@@ -650,11 +761,14 @@ pub struct RefetchSetup<'a> {
 }
 
 /// Retry empty acquisitions over explicit session epochs, retaining 100ms spacing.
+#[bon::builder]
 pub async fn refetch_while_empty(
     client: &Client,
     mut row: krabka_protocol::owned::share_fetch_response::PartitionData,
-    setup: RefetchSetup<'_>,
+    #[builder(default)] session: ShareSessionSetup<'_>,
+    #[builder(default)] epochs: RetryEpochs,
 ) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+    let setup = RefetchSetup { session, epochs };
     for epoch in setup.epochs.start.0..setup.epochs.end.0 {
         if acquired_count(&row) > 0 {
             break;
@@ -662,7 +776,9 @@ pub async fn refetch_while_empty(
         tokio::time::sleep(Duration::from_millis(100)).await;
         row = fetch_row(
             client,
-            share_fetch_req(setup.session.fetch_at(ShareSessionEpoch(epoch))),
+            share_fetch_req()
+                .session(setup.session.fetch_at(ShareSessionEpoch(epoch)).session)
+                .call(),
             FetchSessionMode::Incremental,
         )
         .await;
@@ -684,7 +800,21 @@ pub struct EmptySessionSetup {
     pub forgotten_topics_data: Vec<ForgottenTopic>,
 }
 
-pub fn empty_session_request(setup: EmptySessionSetup) -> ShareFetchRequest {
+#[bon::builder]
+pub fn empty_session_request(
+    #[builder(default = "g1" . into ())] group: String,
+    #[builder(default = "member" . into ())] member: String,
+    #[builder(into, default = ShareSessionEpoch (1))] epoch: ShareSessionEpoch,
+    #[builder(into, default = FetchByteLimit (1 << 20))] max_bytes: FetchByteLimit,
+    #[builder(default)] forgotten_topics_data: Vec<ForgottenTopic>,
+) -> ShareFetchRequest {
+    let setup = EmptySessionSetup {
+        group,
+        member,
+        epoch,
+        max_bytes,
+        forgotten_topics_data,
+    };
     let EmptySessionSetup {
         group,
         member,
@@ -717,9 +847,9 @@ macro_rules! share_first_fetch_fixture {
         ) -> ::krabka_protocol::owned::share_fetch_response::PartitionData {
             $crate::support::share::fetch_until_acquired(
                 client,
-                $crate::support::share::share_fetch_req(
-                    $crate::support::share::ShareFetchSetup::from(session),
-                ),
+                $crate::support::share::share_fetch_req()
+                    .session(session)
+                    .call(),
                 $crate::support::share::FetchSessionMode::$mode,
             )
             .await
@@ -774,7 +904,21 @@ pub struct AcknowledgeRequestSetup {
     pub topics: Vec<AcknowledgeTopic>,
 }
 
-pub fn acknowledge_request(setup: AcknowledgeRequestSetup) -> ShareAcknowledgeRequest {
+#[bon::builder]
+pub fn acknowledge_request(
+    #[builder(required, default = Some ("g1" . into ()))] group_id: Option<String>,
+    #[builder(required, default = Some ("member" . into ()))] member_id: Option<String>,
+    #[builder(into, default = ShareSessionEpoch (1))] epoch: ShareSessionEpoch,
+    #[builder(default)] mode: RenewalMode,
+    #[builder(default)] topics: Vec<AcknowledgeTopic>,
+) -> ShareAcknowledgeRequest {
+    let setup = AcknowledgeRequestSetup {
+        group_id,
+        member_id,
+        epoch,
+        mode,
+        topics,
+    };
     let AcknowledgeRequestSetup {
         group_id,
         member_id,
@@ -877,12 +1021,14 @@ impl ConsumptionFixture {
 }
 
 /// Retain every topic owner while the suite-specific initializer joins and waits.
+#[bon::builder]
 pub async fn consumption_fixture(
-    setup: ShareRecordSeedSetup,
+    #[builder(into, default = ShareRecordCount (3))] count: ShareRecordCount,
     initialize: impl AsyncFn(&krabka_broker::BrokerHandle, &Client, ConsumptionSetup) -> (String, i32),
 ) -> ConsumptionFixture {
+    let setup = ShareRecordSeedSetup { count };
     let (permit, broker, client, dir, tid) =
-        permitted_topic_fixture(ShareTopicSetup::default(), |_| {}).await;
+        permitted_topic_fixture().customize(|_| {}).call().await;
     let (member, _) = initialize(
         &broker,
         &client,
@@ -916,7 +1062,12 @@ macro_rules! share_consumption_fixture {
         ) -> (String, i32) {
             let $tid = setup.topic_id;
             $crate::support::share::bootstrap_share_state($broker, $client, "g1").await;
-            $crate::support::share::produce_n($client, $crate::support::share::ShareRecordsSetup {topic_id: $tid, count: setup.count, ..Default::default()}).await;
+            $crate::support::share::produce_n()
+                .client($client)
+                .topic_id($tid)
+                .count(setup.count.0)
+                .call()
+                .await;
             let ($member, $epoch) = ($join)($client, "g1", "t").await;
             ($wait).await;
             ($member, $epoch)

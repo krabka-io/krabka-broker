@@ -18,12 +18,12 @@ fn image_without_topic() -> MetadataImage {
 }
 
 fn image(topic_id: Uuid, leader: NodeId, leader_epoch: LeaderEpoch) -> MetadataImage {
-    state_image(StateImageSetup {
-        topic_id,
-        leader,
-        leader_epoch,
-        replicas: &[leader],
-    })
+    state_image()
+        .topic_id(topic_id)
+        .leader(leader)
+        .leader_epoch(leader_epoch)
+        .replicas(&[leader])
+        .call()
 }
 
 #[derive(Clone, Copy)]

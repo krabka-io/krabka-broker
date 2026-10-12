@@ -84,17 +84,15 @@ pub(super) async fn boot() -> Cluster {
     let borrowed: Vec<&support::OperatorKey> = keys.iter().collect();
     let approvers: Vec<String> = APPROVERS.iter().copied().map(principal).collect();
     let approver_refs: Vec<&str> = approvers.iter().map(String::as_str).collect();
-    let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl(
-        &dir.path().join("data"),
-        OperatorSaslSetup {
-            trust: OperatorKeysSetup {
-                keys: &borrowed,
-                approvers: &approver_refs,
-            },
-            users: USERS,
-        },
-    )
-    .await;
+    let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl()
+        .dir(&dir.path().join("data"))
+        .trust(OperatorKeysSetup {
+            keys: &borrowed,
+            approvers: &approver_refs,
+        })
+        .users(USERS)
+        .call()
+        .await;
     Cluster {
         broker,
         bootstrap,

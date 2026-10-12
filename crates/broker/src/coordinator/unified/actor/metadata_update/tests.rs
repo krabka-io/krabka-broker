@@ -46,10 +46,7 @@ async fn metadata_update(handle: &GroupActorHandle, topics: &[&str]) {
 
 /// The first heartbeat of member `m1`, which subscribes to `orders`.
 fn join() -> ConsumerGroupHeartbeatRequest {
-    consumer_join_request(ConsumerJoinSetup {
-        topics: &["orders"],
-        ..Default::default()
-    })
+    consumer_join_request().topics(&["orders"]).call()
 }
 
 /// A later heartbeat of `m1`, which sends only what changed, as Kafka's

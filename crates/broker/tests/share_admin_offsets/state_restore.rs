@@ -47,10 +47,7 @@ async fn delivery_complete_count_restored_across_restart() {
         _dir,
         log_dir,
         topic: initial,
-    } = initialized_restart_fixture(ShareRecordSeedSetup {
-        count: ShareRecordCount(N),
-    })
-    .await;
+    } = initialized_restart_fixture().count(N).call().await;
 
     let tid;
     {

@@ -50,13 +50,13 @@ fn context<'a>(principal: &'a Principal, peer: &'a SocketAddr) -> RequestContext
 }
 
 fn follower_departure_partition() -> krabka_metadata::PartitionRecord {
-    replicated_partition(UnregisterPartitionSetup {
-        index: krabka_ids::PartitionIndex(0),
-        leader: NodeId(2),
-        isr: &[NodeId(2)],
-        leader_epoch: krabka_metadata::LeaderEpoch(6),
-        partition_epoch: PartitionEpoch(1),
-    })
+    replicated_partition()
+        .index(0)
+        .leader(2)
+        .isr(&[NodeId(2)])
+        .leader_epoch(6)
+        .partition_epoch(1)
+        .call()
 }
 
 #[test]
@@ -268,7 +268,12 @@ struct RegistrationSetup {
 
 /// A new registration of broker `node_id`. It carries no epoch (-1), and the
 /// controller stamps it with the offset that it commits at.
-fn registration(setup: RegistrationSetup) -> MetadataRecord {
+#[bon::builder]
+fn registration(
+    #[builder(into, default = NodeId (2))] node_id: NodeId,
+    #[builder(default)] fencing: BrokerFencing,
+) -> MetadataRecord {
+    let setup = RegistrationSetup { node_id, fencing };
     let RegistrationSetup { node_id, fencing } = setup;
     MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
         fenced: fencing == BrokerFencing::Fenced,
@@ -292,7 +297,22 @@ struct UnregisterPartitionSetup<'a> {
     partition_epoch: PartitionEpoch,
 }
 
-fn replicated_partition(setup: UnregisterPartitionSetup<'_>) -> krabka_metadata::PartitionRecord {
+#[bon::builder]
+fn replicated_partition(
+    #[builder(into, default)] index: krabka_ids::PartitionIndex,
+    #[builder(into, default = NodeId (1))] leader: NodeId,
+    #[builder(default = & [NodeId (1) , NodeId (2)])] isr: &'_ [NodeId],
+    #[builder(into, default = krabka_metadata :: LeaderEpoch (5))]
+    leader_epoch: krabka_metadata::LeaderEpoch,
+    #[builder(into, default)] partition_epoch: PartitionEpoch,
+) -> krabka_metadata::PartitionRecord {
+    let setup = UnregisterPartitionSetup {
+        index,
+        leader,
+        isr,
+        leader_epoch,
+        partition_epoch,
+    };
     let UnregisterPartitionSetup {
         index,
         leader,
@@ -304,12 +324,12 @@ fn replicated_partition(setup: UnregisterPartitionSetup<'_>) -> krabka_metadata:
         isr: isr.to_vec(),
         leader_epoch,
         partition_epoch: partition_epoch.0,
-        ..partition_fixture(ReplicatedPartitionSetup {
-            topic: "t",
-            partition: index,
-            leader,
-            replicas: &[NodeId(1), NodeId(2)],
-        })
+        ..partition_fixture()
+            .topic("t")
+            .partition(index)
+            .leader(leader)
+            .replicas(&[NodeId(1), NodeId(2)])
+            .call()
     }
 }
 
@@ -340,21 +360,23 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
     broker
         .controller
         .submit_change(vec![
-            registration(RegistrationSetup::default()),
+            registration().call(),
             topic(PartitionCount(3)),
-            MetadataRecord::V1Partition(replicated_partition(UnregisterPartitionSetup::default())),
-            MetadataRecord::V1Partition(replicated_partition(UnregisterPartitionSetup {
-                index: krabka_ids::PartitionIndex(1),
-                leader: NodeId(2),
-                isr: &[NodeId(2), NodeId(1)],
-                ..Default::default()
-            })),
-            MetadataRecord::V1Partition(replicated_partition(UnregisterPartitionSetup {
-                index: krabka_ids::PartitionIndex(2),
-                leader: NodeId(2),
-                isr: &[NodeId(2)],
-                ..Default::default()
-            })),
+            MetadataRecord::V1Partition(replicated_partition().call()),
+            MetadataRecord::V1Partition(
+                replicated_partition()
+                    .index(1)
+                    .leader(2)
+                    .isr(&[NodeId(2), NodeId(1)])
+                    .call(),
+            ),
+            MetadataRecord::V1Partition(
+                replicated_partition()
+                    .index(2)
+                    .leader(2)
+                    .isr(&[NodeId(2)])
+                    .call(),
+            ),
         ])
         .await
         .expect("seed the partitions");
@@ -370,19 +392,17 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
     // move. It was in neither of partition 2's lists, so that one is untouched.
     let expected = [
         follower_departure_partition(),
-        replicated_partition(UnregisterPartitionSetup {
-            index: krabka_ids::PartitionIndex(1),
-            leader: NodeId(2),
-            isr: &[NodeId(2)],
-            partition_epoch: PartitionEpoch(1),
-            ..Default::default()
-        }),
-        replicated_partition(UnregisterPartitionSetup {
-            index: krabka_ids::PartitionIndex(2),
-            leader: NodeId(2),
-            isr: &[NodeId(2)],
-            ..Default::default()
-        }),
+        replicated_partition()
+            .index(1)
+            .leader(2)
+            .isr(&[NodeId(2)])
+            .partition_epoch(1)
+            .call(),
+        replicated_partition()
+            .index(2)
+            .leader(2)
+            .isr(&[NodeId(2)])
+            .call(),
     ];
     for partition in expected {
         check!(

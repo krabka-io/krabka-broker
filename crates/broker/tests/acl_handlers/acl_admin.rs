@@ -64,18 +64,16 @@ pub fn describe_all_topic_acls() -> DescribeAclsRequest {
 /// for the requested topic. The T23 tests use it to materialise a
 /// partition before they produce to it or fetch from it.
 pub async fn create_topic_as_admin(addr: SocketAddr, name: &str, partitions: i32) {
-    create_topic_as_super_user(
-        addr,
-        AutomaticTopicSetup {
-            client_id: CLIENT_ID,
-            topic: ConfiguredTopicSetup {
-                name: name.to_string(),
-                partitions: TopicPartitionCount(partitions),
-                ..Default::default()
-            },
-        },
-    )
-    .await;
+    create_topic_as_super_user()
+        .addr(addr)
+        .client_id(CLIENT_ID)
+        .topic(ConfiguredTopicSetup {
+            name: name.to_string(),
+            partitions: TopicPartitionCount(partitions),
+            ..Default::default()
+        })
+        .call()
+        .await;
 }
 
 crate::plain_request_driver_fixture!(pub drive_create_acls_as_plain {

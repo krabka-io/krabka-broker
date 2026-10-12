@@ -123,10 +123,11 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
         .await
         .expect("begin_transaction");
     producer
-        .send(producer_record(ProducerRecordSetup {
-            value: Some(Bytes::from_static(b"in-flight")),
-            ..Default::default()
-        }))
+        .send(
+            producer_record()
+                .value(Some(Bytes::from_static(b"in-flight")))
+                .call(),
+        )
         .await
         .expect("the in-flight record is acknowledged");
     p.broker

@@ -171,11 +171,11 @@ pub(crate) mod test_support {
     };
 
     pub(crate) fn batch(bounds: std::ops::RangeInclusive<Offset>) -> StateBatch {
-        state_batch(StateBatchSetup {
-            bounds,
-            delivery: FixtureDeliveryState::Acknowledged,
-            attempts: DeliveryAttemptCount(3),
-        })
+        state_batch()
+            .bounds(bounds)
+            .delivery(FixtureDeliveryState::Acknowledged)
+            .attempts(DeliveryAttemptCount(3))
+            .call()
     }
 
     pub(crate) fn open_all_state_partitions(
@@ -220,10 +220,18 @@ pub(crate) mod test_support {
     }
 
     /// A led coordinator with partition state at epoch 17 and start offset 90.
+    #[bon::builder]
     pub(crate) async fn initialized_state(
         log_dir: &Path,
-        setup: StateFixtureSetup,
+        #[builder(default = uuid :: Uuid :: from_bytes ([33 ; 16]))] topic: uuid::Uuid,
+        #[builder(into, default = PartitionCount (1))] partitions: PartitionCount,
+        #[builder(into, default)] partition: PartitionIndex,
     ) -> (Arc<ShareCoordinator>, krabka_metadata::MetadataImage) {
+        let setup = StateFixtureSetup {
+            topic,
+            partitions,
+            partition,
+        };
         let StateFixtureSetup {
             topic,
             partitions,
@@ -240,14 +248,28 @@ pub(crate) mod test_support {
     }
 
     /// Stored read fixtures: leader epoch 3, start offset 101 and one terminal batch.
+    #[bon::builder]
     pub(crate) async fn stored_state(
         log_dir: &Path,
-        setup: StateFixtureSetup,
+        #[builder(default = uuid :: Uuid :: from_bytes ([33 ; 16]))] topic: uuid::Uuid,
+        #[builder(into, default = PartitionCount (1))] partitions: PartitionCount,
+        #[builder(into, default)] partition: PartitionIndex,
     ) -> (Arc<ShareCoordinator>, krabka_metadata::MetadataImage) {
+        let setup = StateFixtureSetup {
+            topic,
+            partitions,
+            partition,
+        };
         let StateFixtureSetup {
             topic, partition, ..
         } = setup;
-        let (coordinator, image) = initialized_state(log_dir, setup).await;
+        let (coordinator, image) = initialized_state()
+            .log_dir(log_dir)
+            .topic(setup.topic)
+            .partitions(setup.partitions)
+            .partition(setup.partition)
+            .call()
+            .await;
         coordinator
             .read(&image, "share-group", topic, partition.0, 3)
             .await
@@ -368,15 +390,13 @@ pub(crate) mod test_support {
         ($rows:expr, $topic:expr, ($partitions:expr, $partition:expr), $serve:ident) => {
             for (index, (led, req, expected)) in $rows.into_iter().enumerate() {
                 let dir = tempfile::TempDir::new().expect("tempdir");
-                let (coordinator, image) = super::super::test_support::stored_state(
-                    dir.path(),
-                    $crate::share_coordinator::handlers::test_support::StateFixtureSetup {
-                        topic: $topic,
-                        partitions: $crate::test_support::PartitionCount($partitions),
-                        partition: krabka_ids::PartitionIndex($partition),
-                    },
-                )
-                .await;
+                let (coordinator, image) = super::super::test_support::stored_state()
+                    .log_dir(dir.path())
+                    .topic($topic)
+                    .partitions($partitions)
+                    .partition($partition)
+                    .call()
+                    .await;
                 super::super::test_support::retain_leadership(&coordinator, led).await;
                 let resp = $serve(&coordinator, &image, req).await;
                 assert2::check!(resp == expected, "row {index}");

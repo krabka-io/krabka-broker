@@ -146,11 +146,12 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
             // recorded last epoch, so the probe below tests staleness
             // against that epoch instead of colliding with the sentinel.
             let bump = client
-                .send(init_producer_request(InitProducerSetup {
-                    transactional_id: Some(tid.clone()),
-                    producer: ProducerIdentity::from_wire((producer_id, producer_epoch)),
-                    ..Default::default()
-                }))
+                .send(
+                    init_producer_request()
+                        .maybe_transactional_id(Some(tid.clone()))
+                        .producer(ProducerIdentity::from_wire((producer_id, producer_epoch)))
+                        .call(),
+                )
                 .await
                 .unwrap();
             assert!(bump.error_code == 0, "priming bump for {name}: {bump:?}");
@@ -164,11 +165,12 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
         };
 
         let response = client
-            .send(init_producer_request(InitProducerSetup {
-                transactional_id: Some(tid.clone()),
-                producer: ProducerIdentity::from_wire((request_id, request_epoch)),
-                ..Default::default()
-            }))
+            .send(
+                init_producer_request()
+                    .maybe_transactional_id(Some(tid.clone()))
+                    .producer(ProducerIdentity::from_wire((request_id, request_epoch)))
+                    .call(),
+            )
             .await
             .unwrap();
 

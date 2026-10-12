@@ -57,9 +57,9 @@ async fn acks_all_durability() {
     ]);
 
     // Produce 100 records with --request-required-acks=-1.
-    let producer_out = jvm_docker_command(JvmDockerSetup {
-        image: KAFKA_IMAGE,
-        args: &[
+    let producer_out = jvm_docker_command()
+        .image(KAFKA_IMAGE)
+        .args(&[
             "bash",
             "-c",
             &format!(
@@ -70,14 +70,13 @@ async fn acks_all_durability() {
                    --request-required-acks -1 \
                    --request-timeout-ms 10000"
             ),
-        ],
-        input: ContainerInput::Attached,
-        ..Default::default()
-    })
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
-    .output()
-    .expect("spawn kafka-console-producer");
+        ])
+        .input(ContainerInput::Attached)
+        .call()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("spawn kafka-console-producer");
     eprintln!(
         "KRABKA[test] producer status={} stdout={} stderr={}",
         producer_out.status,

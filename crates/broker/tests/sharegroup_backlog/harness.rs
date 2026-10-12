@@ -38,14 +38,13 @@ pub async fn scrape(addr: SocketAddr) -> String {
 
 pub async fn create_topic(client: &Client, partitions: i32, replication_factor: i16) {
     let response = client
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup {
-                name: (TOPIC).into(),
-                partitions: TopicPartitionCount(partitions),
-                replicas: TopicReplicationFactor(replication_factor),
-                ..Default::default()
-            },
-        )))
+        .send(create_topic_request(
+            creatable_topic()
+                .name((TOPIC).into())
+                .partitions(partitions)
+                .replicas(replication_factor)
+                .call(),
+        ))
         .await
         .unwrap();
     assert!(response.topics[0].error_code == 0, "{response:?}");

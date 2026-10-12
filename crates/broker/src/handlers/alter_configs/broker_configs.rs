@@ -162,7 +162,7 @@ mod tests {
     ) -> Result<Vec<MetadataRecord>, (i16, String)> {
         broker_config_records(
             &broker_resource(name, configs),
-            broker_config_context(image, BrokerConfigMutationSetup::default()),
+            broker_config_context().image(image).call(),
         )
     }
 

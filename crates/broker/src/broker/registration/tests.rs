@@ -551,12 +551,11 @@ mod unclean_restart {
         config.node_id = RESTARTING;
         boot(broker, &mut config).await;
 
-        accepted_isr_proposal(
-            broker,
-            LiveIsrSetup::default(),
-            IsrResponseCheck::PartitionOnly,
-        )
-        .await;
+        accepted_isr_proposal()
+            .broker(broker)
+            .response_check(IsrResponseCheck::PartitionOnly)
+            .call()
+            .await;
         assert!(
             published_elr(broker)
                 == PartitionElr {

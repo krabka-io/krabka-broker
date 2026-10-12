@@ -70,14 +70,11 @@ fn image_with_remote_leader(topic: &str) -> MetadataImage {
 /// A partition backed by a real log under `dir`, registered as led by
 /// `LEADER` with `FOLLOWER` as its one in-sync follower.
 fn led_partition(dir: &Path, topic: &str, partition: i32) -> Arc<Partition> {
-    let part = open_partition(
-        dir,
-        StandalonePartitionSetup {
-            topic,
-            partition: krabka_ids::PartitionIndex(partition),
-            ..Default::default()
-        },
-    );
+    let part = open_partition()
+        .log_dir(dir)
+        .topic(topic)
+        .partition(partition)
+        .call();
     part.current_leader.store(LEADER.0, Ordering::Release);
     part
 }
@@ -98,10 +95,10 @@ async fn install_isr(partition: &Partition) {
 fn append_records(partition: &Partition, count: i32) {
     let mut batch = RecordBatch {
         partition_leader_epoch: -1,
-        ..repeated_records_batch(RepeatedRecordsSetup {
-            count: RecordCount(count),
-            timestamp: UnixMillis(1_700_000_000),
-        })
+        ..repeated_records_batch()
+            .count(count)
+            .timestamp(1_700_000_000)
+            .call()
     };
     partition
         .log

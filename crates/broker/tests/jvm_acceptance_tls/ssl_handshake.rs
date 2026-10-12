@@ -46,22 +46,21 @@ async fn jvm_ssl_handshake_succeeds() {
     let props_tmp = write_client_props(props);
     let ts_mount = format!("{}:/truststore.jks:ro", truststore_path.display());
 
-    let out = jvm_docker_command(JvmDockerSetup {
-        image: KAFKA_IMAGE,
-        mounts: &[&props_tmp.mount_str(), &ts_mount],
-        args: &[
+    let out = jvm_docker_command()
+        .image(KAFKA_IMAGE)
+        .mounts(&[&props_tmp.mount_str(), &ts_mount])
+        .args(&[
             "kafka-broker-api-versions",
             "--bootstrap-server",
             broker0_advertised(),
             "--command-config",
             "/client.properties",
-        ],
-        ..Default::default()
-    })
-    .stderr(Stdio::piped())
-    .stdout(Stdio::piped())
-    .output()
-    .expect("spawn kafka-broker-api-versions");
+        ])
+        .call()
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .output()
+        .expect("spawn kafka-broker-api-versions");
     eprintln!(
         "KRABKA[test] ssl api-versions status={} stdout={} stderr={}",
         out.status,

@@ -90,7 +90,7 @@ mod tests {
                 topic_id: WireUuid::ZERO,
                 partition: 0,
             } => CachedPartitionState::default()};
-        let forgotten = vec![forgotten_topic(ForgottenTopicSetup::default())];
+        let forgotten = vec![forgotten_topic().call()];
 
         apply_incremental(&mut partitions, &forgotten, &[]);
 
@@ -121,11 +121,7 @@ mod tests {
                 topic_id: other_tid,
                 partition: 0,
             } => CachedPartitionState::default()};
-        let forgotten = vec![forgotten_topic(ForgottenTopicSetup {
-            topic: String::new(),
-            topic_id: tid,
-            ..Default::default()
-        })];
+        let forgotten = vec![forgotten_topic().topic(String::new()).topic_id(tid).call()];
 
         apply_incremental(&mut partitions, &forgotten, &[]);
 
@@ -187,7 +183,11 @@ mod fuzz {
                 let forgotten = if fname == 0 && fid == 0 {
                     vec![]
                 } else {
-                    vec![forgotten_topic(ForgottenTopicSetup {topic: name_of(fname), topic_id: id_of(fid), partitions: vec![krabka_ids::PartitionIndex(fp)]})]
+                    vec![forgotten_topic()
+                        .topic(name_of(fname))
+                        .topic_id(id_of(fid))
+                        .partitions(vec![krabka_ids::PartitionIndex(fp)])
+                        .call()]
                 };
                 let subscribe = do_sub && !(sname == 0 && sid == 0);
                 let topics = if subscribe {

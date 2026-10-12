@@ -199,14 +199,13 @@ async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {
         .expect("a broker that is not the raft leader");
     let admin = client(&cluster[(position + 1) % cluster.len()].0).await;
     let created = admin
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup {
-                name: (LED_TOPIC).into(),
-                partitions: TopicPartitionCount(3),
-                replicas: TopicReplicationFactor(3),
-                ..Default::default()
-            },
-        )))
+        .send(create_topic_request(
+            creatable_topic()
+                .name((LED_TOPIC).into())
+                .partitions(3)
+                .replicas(3)
+                .call(),
+        ))
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == 0, "{created:?}");

@@ -147,12 +147,9 @@ async fn create_topic(
     name: &str,
 ) -> WireUuid {
     let response = client
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup {
-                name: name.to_owned(),
-                ..Default::default()
-            },
-        )))
+        .send(create_topic_request(
+            creatable_topic().name(name.to_owned()).call(),
+        ))
         .await
         .expect("CreateTopics");
     assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
@@ -184,16 +181,13 @@ async fn produce_as(
         base_sequence,
         ..batch_from_records(vec![value_record(0, Some(Bytes::from_static(b"frame")))])
     };
-    produce_batch(
-        client,
-        batch,
-        BatchProduceSetup {
-            topic,
-            topic_id,
-            ..Default::default()
-        },
-    )
-    .await
+    produce_batch()
+        .client(client)
+        .batch(batch)
+        .topic(topic)
+        .topic_id(topic_id)
+        .call()
+        .await
 }
 
 /// Trim partition 0 of `topic` to `offset` and hand back the whole row.

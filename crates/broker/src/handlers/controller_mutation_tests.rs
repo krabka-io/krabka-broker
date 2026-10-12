@@ -56,11 +56,12 @@ async fn stopped_observer() -> (BrokerHandle, BrokerHandle, TempDir, TempDir) {
 fn topic_records(id: u128) -> Vec<MetadataRecord> {
     vec![
         MetadataRecord::V1Topic(single_partition_topic("orders", Uuid::from_u128(id))),
-        MetadataRecord::V1Partition(replicated_partition(ReplicatedPartitionSetup {
-            topic: "orders",
-            replicas: &[NodeId(1)],
-            ..Default::default()
-        })),
+        MetadataRecord::V1Partition(
+            replicated_partition()
+                .topic("orders")
+                .replicas(&[NodeId(1)])
+                .call(),
+        ),
     ]
 }
 

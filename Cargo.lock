@@ -3057,6 +3057,7 @@ dependencies = [
  "arc-swap",
  "assert2",
  "async-trait",
+ "bon",
  "bytes",
  "clap",
  "derive_more",
@@ -3085,6 +3086,7 @@ name = "krabka-authz"
 version = "1.0.2"
 dependencies = [
  "assert2",
+ "bon",
  "krabka-metadata",
  "krabka-security",
  "krabka-verified",
@@ -3149,6 +3151,7 @@ version = "1.0.2"
 dependencies = [
  "anyhow",
  "assert2",
+ "bon",
  "bytes",
  "chrono",
  "clap",
@@ -3425,6 +3428,7 @@ version = "1.0.2"
 dependencies = [
  "assert2",
  "base64 0.23.1",
+ "bon",
  "clap",
  "derive_more",
  "krabka-broker",
@@ -3488,7 +3492,9 @@ name = "krabka-kraft-core"
 version = "1.0.2"
 dependencies = [
  "assert2",
+ "bon",
  "bytes",
+ "derive_more",
  "krabka-macros",
  "krabka-units",
  "krabka-verified",
@@ -3508,6 +3514,7 @@ dependencies = [
  "bytes",
  "codspeed-criterion-compat",
  "crc32c",
+ "derive_more",
  "krabka-compression",
  "krabka-ids",
  "krabka-macros",
@@ -3710,6 +3717,7 @@ dependencies = [
  "assert2",
  "async-trait",
  "base64 0.23.1",
+ "bon",
  "bytes",
  "clap",
  "derive_more",
@@ -3749,6 +3757,7 @@ version = "1.0.2"
 dependencies = [
  "assert2",
  "async-trait",
+ "bon",
  "bytes",
  "futures-util",
  "krabka-client-admin",

@@ -57,7 +57,7 @@ impl TickFixture {
     }
 
     fn registered_partition(leader: u64, was_leader: bool) -> Self {
-        let mut image = img_with_partition(ElectionSetup::default());
+        let mut image = img_with_partition().call();
         register_brokers(&mut image, &[1, 2, 3]);
         Self::new(image, leader, was_leader)
     }
@@ -182,9 +182,7 @@ async fn tick_leaves_the_unfence_of_a_returning_broker_to_its_heartbeat() {
     // Broker 3 is fenced in the image and alive again. Kafka unfences a
     // broker only in `processBrokerHeartbeat`, once the broker has caught up
     // to its registration, so the tick writes nothing for it.
-    let mut img = img_with_partition(ElectionSetup {
-        ..Default::default()
-    });
+    let mut img = img_with_partition().call();
     register_brokers(&mut img, &[1, 2, 3]);
     let fence = registration_change(&img, NodeId(3), RegistrationChange::FENCE)
         .expect("broker 3 is registered and unfenced");

@@ -388,7 +388,23 @@ mod tests {
         leader_epoch: LeaderEpoch,
     }
 
-    fn record(setup: PlanRecordSetup<'_>) -> PartitionRecord {
+    #[bon::builder]
+    fn record(
+        #[builder(into, default = NodeId (1))] leader: NodeId,
+        #[builder(default = & [NodeId (1) , NodeId (2) , NodeId (3)])] replicas: &'_ [NodeId],
+        #[builder(default = & [NodeId (1) , NodeId (2) , NodeId (3)])] isr: &'_ [NodeId],
+        #[builder(default)] adding: &'_ [NodeId],
+        #[builder(default)] removing: &'_ [NodeId],
+        #[builder(into, default)] leader_epoch: LeaderEpoch,
+    ) -> PartitionRecord {
+        let setup = PlanRecordSetup {
+            leader,
+            replicas,
+            isr,
+            adding,
+            removing,
+            leader_epoch,
+        };
         let PlanRecordSetup {
             leader,
             replicas,
@@ -415,12 +431,11 @@ mod tests {
 
     /// Independent completed-removal expectation shared by start and cancel rows.
     fn completed_two_replica_record() -> PartitionRecord {
-        record(PlanRecordSetup {
-            replicas: &[NodeId(1), NodeId(2)],
-            isr: &[NodeId(1), NodeId(2)],
-            leader_epoch: LeaderEpoch(6),
-            ..Default::default()
-        })
+        record()
+            .replicas(&[NodeId(1), NodeId(2)])
+            .isr(&[NodeId(1), NodeId(2)])
+            .leader_epoch(6)
+            .call()
     }
 
     #[derive(Clone, Copy)]
@@ -488,11 +503,12 @@ mod tests {
                 },
                 &[ReplicaBrokerId(3), ReplicaBrokerId(2), ReplicaBrokerId(1)],
                 ReplicationFactorPolicy::Maintain,
-                Some(record(PlanRecordSetup {
-                    replicas: &[NodeId(3), NodeId(2), NodeId(1)],
-                    leader_epoch: LeaderEpoch(5),
-                    ..Default::default()
-                })),
+                Some(
+                    record()
+                        .replicas(&[NodeId(3), NodeId(2), NodeId(1)])
+                        .leader_epoch(5)
+                        .call(),
+                ),
             ),
             (
                 "the target comes first, then the removing replicas",
@@ -501,13 +517,14 @@ mod tests {
                 },
                 &[ReplicaBrokerId(3), ReplicaBrokerId(4), ReplicaBrokerId(1)],
                 ReplicationFactorPolicy::Maintain,
-                Some(record(PlanRecordSetup {
-                    replicas: &[NodeId(3), NodeId(4), NodeId(1), NodeId(2)],
-                    adding: &[NodeId(4)],
-                    removing: &[NodeId(2)],
-                    leader_epoch: LeaderEpoch(5),
-                    ..Default::default()
-                })),
+                Some(
+                    record()
+                        .replicas(&[NodeId(3), NodeId(4), NodeId(1), NodeId(2)])
+                        .adding(&[NodeId(4)])
+                        .removing(&[NodeId(2)])
+                        .leader_epoch(5)
+                        .call(),
+                ),
             ),
             (
                 "a new target over an in-flight reassignment keeps every replica",
@@ -519,20 +536,21 @@ mod tests {
                 },
                 &[ReplicaBrokerId(5), ReplicaBrokerId(6)],
                 ReplicationFactorPolicy::PermitChange,
-                Some(record(PlanRecordSetup {
-                    replicas: &[
-                        NodeId(5),
-                        NodeId(6),
-                        NodeId(1),
-                        NodeId(2),
-                        NodeId(3),
-                        NodeId(4),
-                    ],
-                    adding: &[NodeId(5), NodeId(6)],
-                    removing: FOUR_REPLICAS,
-                    leader_epoch: LeaderEpoch(5),
-                    ..Default::default()
-                })),
+                Some(
+                    record()
+                        .replicas(&[
+                            NodeId(5),
+                            NodeId(6),
+                            NodeId(1),
+                            NodeId(2),
+                            NodeId(3),
+                            NodeId(4),
+                        ])
+                        .adding(&[NodeId(5), NodeId(6)])
+                        .removing(FOUR_REPLICAS)
+                        .leader_epoch(5)
+                        .call(),
+                ),
             ),
             (
                 "a pure removal completes at once and bumps the leader epoch",
@@ -550,13 +568,14 @@ mod tests {
                 },
                 &[ReplicaBrokerId(5), ReplicaBrokerId(4), ReplicaBrokerId(1)],
                 ReplicationFactorPolicy::Maintain,
-                Some(record(PlanRecordSetup {
-                    replicas: &[NodeId(5), NodeId(4), NodeId(1), NodeId(2), NodeId(3)],
-                    adding: &[NodeId(4), NodeId(5)],
-                    removing: &[NodeId(2), NodeId(3)],
-                    leader_epoch: LeaderEpoch(5),
-                    ..Default::default()
-                })),
+                Some(
+                    record()
+                        .replicas(&[NodeId(5), NodeId(4), NodeId(1), NodeId(2), NodeId(3)])
+                        .adding(&[NodeId(4), NodeId(5)])
+                        .removing(&[NodeId(2), NodeId(3)])
+                        .leader_epoch(5)
+                        .call(),
+                ),
             ),
             (
                 "a leader only in the old removing set stays in the union",
@@ -568,13 +587,14 @@ mod tests {
                 },
                 &[ReplicaBrokerId(5)],
                 ReplicationFactorPolicy::PermitChange,
-                Some(record(PlanRecordSetup {
-                    replicas: &[NodeId(5), NodeId(1), NodeId(2), NodeId(3), NodeId(4)],
-                    adding: &[NodeId(5)],
-                    removing: FOUR_REPLICAS,
-                    leader_epoch: LeaderEpoch(5),
-                    ..Default::default()
-                })),
+                Some(
+                    record()
+                        .replicas(&[NodeId(5), NodeId(1), NodeId(2), NodeId(3), NodeId(4)])
+                        .adding(&[NodeId(5)])
+                        .removing(FOUR_REPLICAS)
+                        .leader_epoch(5)
+                        .call(),
+                ),
             ),
             (
                 "an addition waits for the new replica to join the ISR",
@@ -585,12 +605,13 @@ mod tests {
                 },
                 &[ReplicaBrokerId(1), ReplicaBrokerId(2), ReplicaBrokerId(3)],
                 ReplicationFactorPolicy::PermitChange,
-                Some(record(PlanRecordSetup {
-                    isr: &[NodeId(1), NodeId(2)],
-                    adding: &[NodeId(3)],
-                    leader_epoch: LeaderEpoch(5),
-                    ..Default::default()
-                })),
+                Some(
+                    record()
+                        .isr(&[NodeId(1), NodeId(2)])
+                        .adding(&[NodeId(3)])
+                        .leader_epoch(5)
+                        .call(),
+                ),
             ),
             (
                 "a completion that removes the leader elects the first target in the ISR",
@@ -599,13 +620,14 @@ mod tests {
                 },
                 &[ReplicaBrokerId(2), ReplicaBrokerId(3)],
                 ReplicationFactorPolicy::PermitChange,
-                Some(record(PlanRecordSetup {
-                    leader: NodeId(2),
-                    replicas: &[NodeId(2), NodeId(3)],
-                    isr: &[NodeId(2), NodeId(3)],
-                    leader_epoch: LeaderEpoch(6),
-                    ..Default::default()
-                })),
+                Some(
+                    record()
+                        .leader(2)
+                        .replicas(&[NodeId(2), NodeId(3)])
+                        .isr(&[NodeId(2), NodeId(3)])
+                        .leader_epoch(6)
+                        .call(),
+                ),
             ),
             (
                 "an empty difference keeps the in-flight adding list and can complete",
@@ -618,12 +640,13 @@ mod tests {
                 },
                 &[ReplicaBrokerId(1), ReplicaBrokerId(3), ReplicaBrokerId(4)],
                 ReplicationFactorPolicy::Maintain,
-                Some(record(PlanRecordSetup {
-                    replicas: &[NodeId(1), NodeId(3), NodeId(4)],
-                    isr: &[NodeId(1), NodeId(3), NodeId(4)],
-                    leader_epoch: LeaderEpoch(6),
-                    ..Default::default()
-                })),
+                Some(
+                    record()
+                        .replicas(&[NodeId(1), NodeId(3), NodeId(4)])
+                        .isr(&[NodeId(1), NodeId(3), NodeId(4)])
+                        .leader_epoch(6)
+                        .call(),
+                ),
             ),
             (
                 "a decrease waits while the ISR lacks a target replica",
@@ -633,13 +656,14 @@ mod tests {
                 },
                 &[ReplicaBrokerId(1), ReplicaBrokerId(3)],
                 ReplicationFactorPolicy::PermitChange,
-                Some(record(PlanRecordSetup {
-                    replicas: &[NodeId(1), NodeId(3), NodeId(2)],
-                    isr: &[NodeId(1), NodeId(2)],
-                    removing: &[NodeId(2)],
-                    leader_epoch: LeaderEpoch(5),
-                    ..Default::default()
-                })),
+                Some(
+                    record()
+                        .replicas(&[NodeId(1), NodeId(3), NodeId(2)])
+                        .isr(&[NodeId(1), NodeId(2)])
+                        .removing(&[NodeId(2)])
+                        .leader_epoch(5)
+                        .call(),
+                ),
             ),
             (
                 "the current order is already the target",
@@ -652,10 +676,7 @@ mod tests {
             ),
         ];
         for (label, assignment, target, allow_rf, expected) in cases {
-            let image = img_with(ReassignmentImageSetup {
-                assignment,
-                partition_epoch: PartitionEpoch(11),
-            });
+            let image = img_with().assignment(assignment).partition_epoch(11).call();
             let planned = process_one_partition(
                 &image,
                 "foo",
@@ -680,11 +701,7 @@ mod tests {
                 "a leader in the adding set moves to the reverted ISR",
                 added_leader_assignment(),
                 UncleanElection::Forbidden,
-                Ok(Some(record(PlanRecordSetup {
-                    isr: &[NodeId(1)],
-                    leader_epoch: LeaderEpoch(6),
-                    ..Default::default()
-                }))),
+                Ok(Some(record().isr(&[NodeId(1)]).leader_epoch(6).call())),
             ),
             (
                 "a leader outside the reverted ISR is replaced",
@@ -694,11 +711,7 @@ mod tests {
                     ..added_leader_assignment()
                 },
                 UncleanElection::Forbidden,
-                Ok(Some(record(PlanRecordSetup {
-                    isr: &[NodeId(1)],
-                    leader_epoch: LeaderEpoch(6),
-                    ..Default::default()
-                }))),
+                Ok(Some(record().isr(&[NodeId(1)]).leader_epoch(6).call())),
             ),
             (
                 "only removing replicas keeps the leader epoch",
@@ -707,10 +720,7 @@ mod tests {
                     ..Default::default()
                 },
                 UncleanElection::Forbidden,
-                Ok(Some(record(PlanRecordSetup {
-                    leader_epoch: LeaderEpoch(5),
-                    ..Default::default()
-                }))),
+                Ok(Some(record().leader_epoch(5).call())),
             ),
             (
                 "a dropped adding replica bumps the leader epoch",
@@ -741,19 +751,17 @@ mod tests {
                     ..Default::default()
                 },
                 UncleanElection::Allowed,
-                Ok(Some(record(PlanRecordSetup {
-                    replicas: &[NodeId(1), NodeId(2)],
-                    isr: &[NodeId(1)],
-                    leader_epoch: LeaderEpoch(6),
-                    ..Default::default()
-                }))),
+                Ok(Some(
+                    record()
+                        .replicas(&[NodeId(1), NodeId(2)])
+                        .isr(&[NodeId(1)])
+                        .leader_epoch(6)
+                        .call(),
+                )),
             ),
         ];
         for (label, assignment, unclean, expected) in cases {
-            let mut image = img_with(ReassignmentImageSetup {
-                assignment,
-                partition_epoch: PartitionEpoch(11),
-            });
+            let mut image = img_with().assignment(assignment).partition_epoch(11).call();
             if matches!(unclean, UncleanElection::Allowed) {
                 image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                     topic: "foo".into(),
@@ -875,7 +883,7 @@ mod tests {
                 (NO_REASSIGNMENT_IN_PROGRESS, NO_REASSIGNMENT_MESSAGE.into()),
             ),
         ];
-        let image = img_with(ReassignmentImageSetup::default());
+        let image = img_with().call();
         for (label, topic, partition, target, allow_rf, expected) in cases {
             let planned = process_one_partition(
                 &image,
@@ -894,8 +902,8 @@ mod tests {
     #[test]
     fn the_replication_factor_check_counts_the_set_the_partition_is_headed_for() {
         // replicas [1,2,3,4], adding [4], removing [2]: headed for [1,3,4].
-        let image = img_with(ReassignmentImageSetup {
-            assignment: ReassignmentSetup {
+        let image = img_with()
+            .assignment(ReassignmentSetup {
                 replicas: vec![
                     krabka_ids::NodeId(1),
                     krabka_ids::NodeId(2),
@@ -910,9 +918,8 @@ mod tests {
                 adding: vec![krabka_ids::NodeId(4)],
                 removing: vec![krabka_ids::NodeId(2)],
                 ..Default::default()
-            },
-            ..Default::default()
-        });
+            })
+            .call();
 
         let error = process_one_partition(&image, "foo", 0, Some(&[1, 3]), false, true)
             .expect_err("a two-replica target changes the factor");
@@ -928,10 +935,7 @@ mod tests {
 
     #[test]
     fn start_rejects_an_exhausted_partition_epoch() {
-        let image = img_with(ReassignmentImageSetup {
-            partition_epoch: PartitionEpoch(i32::MAX),
-            ..Default::default()
-        });
+        let image = img_with().partition_epoch(i32::MAX).call();
         let error = process_one_partition(&image, "foo", 0, Some(&[1, 4]), true, true)
             .expect_err("exhausted epoch must fail closed");
         assert!(error.0 == INVALID_REQUEST);
@@ -955,10 +959,7 @@ mod tests {
         ] {
             let leader = state.leader;
             let assignment = state;
-            let mut image = img_with(ReassignmentImageSetup {
-                assignment,
-                ..Default::default()
-            });
+            let mut image = img_with().assignment(assignment).call();
             let mut seeded = image.partition("foo", 0).expect("seeded partition").clone();
             seeded.leader_epoch = LeaderEpoch(i32::MAX);
             image.apply(&MetadataRecord::V1Partition(seeded));
@@ -984,10 +985,7 @@ mod tests {
                 "a reassignment is in progress",
                 pending_reassignment_image(),
             ),
-            (
-                "nothing to cancel",
-                img_with(ReassignmentImageSetup::default()),
-            ),
+            ("nothing to cancel", img_with().call()),
         ];
         for (label, img) in cases {
             let err = process_one_partition(&img, "foo", 0, None, true, false).unwrap_err();
@@ -1006,7 +1004,7 @@ mod tests {
 
     #[test]
     fn a_start_is_never_gated() {
-        let img = img_with(ReassignmentImageSetup::default());
+        let img = img_with().call();
         let res = process_one_partition(&img, "foo", 0, Some(&[1, 2, 4]), true, false)
             .expect("a start needs no approval")
             .expect("Some");

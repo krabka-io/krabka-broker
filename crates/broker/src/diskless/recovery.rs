@@ -72,10 +72,7 @@ mod tests {
             producer_id: 42,
             producer_epoch: 3,
             base_sequence,
-            ..repeated_records_batch(RepeatedRecordsSetup {
-                count: RecordCount(count),
-                ..Default::default()
-            })
+            ..repeated_records_batch().count(count).call()
         }
     }
 

@@ -175,16 +175,13 @@ mod tests {
     #[tokio::test]
     async fn expire_drops_empty_partition_and_topic_slots() {
         let s = ProducerState::new();
-        commit_fixture(
-            &s,
-            ProducerCommitSetup {
-                producer: krabka_log::ProducerId(1),
-                delta: SequenceDelta(0),
-                timestamp: UnixMillis(0),
-                ..Default::default()
-            },
-        )
-        .await;
+        commit_fixture()
+            .state(&s)
+            .producer(1)
+            .delta(0)
+            .timestamp(0)
+            .call()
+            .await;
         let evicted = s.expire_older_than(1_000_000, millis(1)).await;
         // The empty partition and topic maps are pruned (the empty topic slot
         // must be removed), and a subsequent produce still works after pruning.

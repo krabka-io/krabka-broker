@@ -115,12 +115,11 @@ fn completion_decision_accepts_only_the_exact_prepared_snapshot() {
 }
 
 fn image(leader: NodeId, leader_epoch: krabka_metadata::LeaderEpoch) -> MetadataImage {
-    super::super::test_support::state_image(StateImageSetup {
-        leader,
-        leader_epoch,
-        replicas: &[leader],
-        ..Default::default()
-    })
+    super::super::test_support::state_image()
+        .leader(leader)
+        .leader_epoch(leader_epoch)
+        .replicas(&[leader])
+        .call()
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]

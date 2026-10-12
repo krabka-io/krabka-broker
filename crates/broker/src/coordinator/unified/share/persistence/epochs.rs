@@ -127,7 +127,7 @@ mod tests {
     /// the default 0.
     #[test]
     fn target_assignment_metadata_bytes_match_kafka_schema() {
-        let rows = assignment_metadata_golden_cases(AssignmentMetadataGoldenSetup::default());
+        let rows = assignment_metadata_golden_cases().call();
         for row in rows {
             let case = row.description;
             let bytes = row.bytes;

@@ -24,16 +24,13 @@ async fn start_configured(
     adjust: impl Fn(&mut krabka_broker::BrokerConfig),
 ) -> TwoSaslBrokers {
     let ([first, second], _, [first_dir, second_dir]) =
-        super::three_broker_cluster::start_sasl_cluster(
-            super::ports::cluster_listeners(),
-            SaslClusterSetup {
-                admin,
-                admin_pass: password,
-                ..Default::default()
-            },
-            adjust,
-        )
-        .await;
+        super::three_broker_cluster::start_sasl_cluster()
+            .listeners(super::ports::cluster_listeners())
+            .admin(admin)
+            .admin_pass(password)
+            .adjust(adjust)
+            .call()
+            .await;
     (first, second, first_dir, second_dir)
 }
 

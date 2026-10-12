@@ -242,15 +242,14 @@ mod tests {
         let metadata = empty_metadata();
         let mut state = GroupState::new("g");
         for member_id in ["m1", "m2"] {
-            let mut m = subscribed_member(ConsumerMemberSetup {
-                member_id,
-                client: ClientIdentity {
+            let mut m = subscribed_member()
+                .member_id(member_id)
+                .client(ClientIdentity {
                     id: "client-a",
                     host: "h",
-                },
-                now: Instant::now(),
-                ..Default::default()
-            });
+                })
+                .now(Instant::now())
+                .call();
             m.last_seen = expired_session_last_seen();
             state.add_or_update_member(m);
         }

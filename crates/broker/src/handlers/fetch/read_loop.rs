@@ -781,11 +781,14 @@ mod tests {
         payload: &'static [u8],
     }
 
+    #[bon::builder]
     async fn nonempty_local_partition(
         broker: &Broker,
         dir: &std::path::Path,
-        setup: NonemptyPartitionSetup<'_>,
+        #[builder(default = "orders")] topic: &'_ str,
+        #[builder(default = b"v")] payload: &'static [u8],
     ) -> std::sync::Arc<Partition> {
+        let setup = NonemptyPartitionSetup { topic, payload };
         let NonemptyPartitionSetup { topic, payload } = setup;
         let part = spawn_fixture_partition(
             broker,
@@ -825,24 +828,20 @@ mod tests {
             crate::handlers::test_support::start_broker()
         );
 
-        let part_a = nonempty_local_partition(
-            &broker,
-            dir.path(),
-            NonemptyPartitionSetup {
-                topic: TOPIC_A,
-                payload: PAYLOAD,
-            },
-        )
-        .await;
-        let part_b = nonempty_local_partition(
-            &broker,
-            dir.path(),
-            NonemptyPartitionSetup {
-                topic: TOPIC_B,
-                payload: PAYLOAD,
-            },
-        )
-        .await;
+        let part_a = nonempty_local_partition()
+            .broker(&broker)
+            .dir(dir.path())
+            .topic(TOPIC_A)
+            .payload(PAYLOAD)
+            .call()
+            .await;
+        let part_b = nonempty_local_partition()
+            .broker(&broker)
+            .dir(dir.path())
+            .topic(TOPIC_B)
+            .payload(PAYLOAD)
+            .call()
+            .await;
 
         let request = super::EffectivePartition {
             partition: 0,
@@ -882,24 +881,20 @@ mod tests {
             (broker_handle, dir, broker),
             crate::handlers::test_support::start_broker()
         );
-        let first = nonempty_local_partition(
-            &broker,
-            dir.path(),
-            NonemptyPartitionSetup {
-                topic: "budget-fitting-first",
-                payload: b"small",
-            },
-        )
-        .await;
-        let second = nonempty_local_partition(
-            &broker,
-            dir.path(),
-            NonemptyPartitionSetup {
-                topic: "budget-oversized-second",
-                payload: &[b'x'; 512],
-            },
-        )
-        .await;
+        let first = nonempty_local_partition()
+            .broker(&broker)
+            .dir(dir.path())
+            .topic("budget-fitting-first")
+            .payload(b"small")
+            .call()
+            .await;
+        let second = nonempty_local_partition()
+            .broker(&broker)
+            .dir(dir.path())
+            .topic("budget-oversized-second")
+            .payload(&[b'x'; 512])
+            .call()
+            .await;
         let request = super::EffectivePartition {
             partition: 0,
             current_leader_epoch: 0,
@@ -1400,7 +1395,7 @@ mod tests {
         .expect("append new-epoch record");
 
         let phases = RequestPhases::default();
-        let mut state = state_for(&pending, PollStateSetup::default());
+        let mut state = state_for().pending(&pending).call();
         super::long_poll_then_reread(&broker, &mut pending, Vec::new(), &mut state, &phases).await;
 
         assert!(pending[0].out.error_code == crate::codes::FENCED_LEADER_EPOCH);
@@ -1434,16 +1429,13 @@ mod tests {
         // Nothing will ever append, and the floor is unreachable: only the
         // error can end this wait before its 30-second deadline.
         let waits = super::arm_waits(&pending);
-        check_blocked_poll_completes(
-            &broker,
-            &mut pending,
-            waits,
-            BlockedPollSetup {
-                failure: "the error completes the long poll",
-                ..Default::default()
-            },
-        )
-        .await;
+        check_blocked_poll_completes()
+            .broker(&broker)
+            .pending(&mut pending)
+            .waits(waits)
+            .failure("the error completes the long poll")
+            .call()
+            .await;
 
         assert!(pending[0].out.error_code == crate::codes::OFFSET_OUT_OF_RANGE);
         broker_handle.shutdown().await;
@@ -1481,16 +1473,13 @@ mod tests {
                 .install_replication_target(None, node_id + 1, 0)
                 .await;
         });
-        check_blocked_poll_completes(
-            &broker,
-            &mut pending,
-            waits,
-            BlockedPollSetup {
-                failure: "the leader change completes the long poll",
-                ..Default::default()
-            },
-        )
-        .await;
+        check_blocked_poll_completes()
+            .broker(&broker)
+            .pending(&mut pending)
+            .waits(waits)
+            .failure("the leader change completes the long poll")
+            .call()
+            .await;
         demote.await.expect("demote task");
 
         assert!(
@@ -1516,7 +1505,7 @@ mod tests {
             let (part, _part_dir) = consumer_partition(Vec::new()).await;
             let mut pending = [consumer_read("reread", &part, read_committed)];
             let phases = RequestPhases::default();
-            let mut state = state_for(&pending, PollStateSetup::default());
+            let mut state = state_for().pending(&pending).call();
             super::reread_woken(&broker, &mut pending, 0, &mut state, &phases).await;
 
             assert!(
@@ -1589,9 +1578,9 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    #[derive(Clone, Copy, Default)]
+    #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
     struct FetchMinimumBytes(usize);
-    #[derive(Clone, Copy, Default)]
+    #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
     struct FetchWaitMillis(i32);
     #[derive(Clone, Copy, Default)]
     struct PollStateSetup {
@@ -1609,20 +1598,26 @@ mod tests {
         failure: &'a str,
     }
 
+    #[bon::builder]
     async fn check_blocked_poll_completes(
         broker: &Broker,
         pending: &mut [super::PendingRead],
         waits: Vec<super::WaitFut>,
-        setup: BlockedPollSetup<'_>,
+        #[builder(into, default = FetchMinimumBytes (4096))] minimum: FetchMinimumBytes,
+        #[builder(into, default = FetchWaitMillis (30_000))] wait: FetchWaitMillis,
+        #[builder(default = "the long poll completes promptly")] failure: &'_ str,
     ) {
+        let setup = BlockedPollSetup {
+            minimum,
+            wait,
+            failure,
+        };
         let phases = RequestPhases::default();
-        let mut state = state_for(
-            pending,
-            PollStateSetup {
-                minimum: setup.minimum,
-                wait: setup.wait,
-            },
-        );
+        let mut state = state_for()
+            .pending(pending)
+            .minimum(setup.minimum)
+            .wait(setup.wait)
+            .call();
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
             super::long_poll_then_reread(broker, pending, waits, &mut state, &phases),
@@ -1633,7 +1628,13 @@ mod tests {
 
     /// The accumulator a fetch carries into the long poll, for a pending set
     /// that has just been read and produced `bytes` bytes in total.
-    fn state_for(pending: &[super::PendingRead], setup: PollStateSetup) -> super::LongPollState {
+    #[bon::builder]
+    fn state_for(
+        pending: &[super::PendingRead],
+        #[builder(into, default)] minimum: FetchMinimumBytes,
+        #[builder(into, default)] wait: FetchWaitMillis,
+    ) -> super::LongPollState {
+        let setup = PollStateSetup { minimum, wait };
         super::LongPollState {
             min_bytes: setup.minimum.0,
             max_wait_ms: setup.wait.0,
@@ -1752,13 +1753,7 @@ mod tests {
         // What `execute_pending_reads` does in this order: arm the waiters,
         // read (the log is empty, so the read finds nothing), then park.
         let waits = super::arm_waits(&pending);
-        let mut state = state_for(
-            &pending,
-            PollStateSetup {
-                minimum: FetchMinimumBytes(1),
-                wait: FetchWaitMillis(60_000),
-            },
-        );
+        let mut state = state_for().pending(&pending).minimum(1).wait(60_000).call();
 
         // The race the arming closes: the append lands between the read and
         // the park.

@@ -59,16 +59,13 @@ macro_rules! seeded_token_fixture {
         let $hmac = crate::handlers::delegation_token_test_support::hmac_for(&$token_id);
         let $seeded_at = crate::time_util::now_ms();
         let $maximum = $seeded_at + seed_setup.maximum_delta.0;
-        crate::handlers::delegation_token_test_support::seed_token(
-            $controller,
-            crate::handlers::delegation_token_test_support::TokenSetup {
-                token_id: &$token_id,
-                expires_at: crate::test_support::UnixMillis($seeded_at + seed_setup.expiry_delta.0),
-                max_expires_at: crate::test_support::UnixMillis($maximum),
-                ..crate::handlers::delegation_token_test_support::TokenSetup::for_mutation()
-            },
-        )
-        .await;
+        crate::handlers::delegation_token_test_support::seed_token()
+            .controller($controller)
+            .token_id(&$token_id)
+            .expires_at($seeded_at + seed_setup.expiry_delta.0)
+            .max_expires_at($maximum)
+            .call()
+            .await;
     };
 }
 
@@ -119,7 +116,7 @@ impl SecretProvision {
     }
 }
 
-#[derive(Clone, Copy, derive_more::Display, derive_more::From, derive_more::Into)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub(super) struct TokenPeriodMillis(pub i64);
 
 #[derive(krabka_macros::FieldDefaults)]
@@ -146,10 +143,18 @@ pub(super) struct OwnershipRefusalSetup {
     pub period: TokenPeriodMillis,
 }
 
+#[bon::builder]
 pub(super) fn ownership_refusal(
     hmac: &[u8],
-    setup: OwnershipRefusalSetup,
+    #[builder(default = "foreign caller")] name: &'static str,
+    #[builder(default = "eve")] caller: &'static str,
+    #[builder(into, default = TokenPeriodMillis (- 1))] period: TokenPeriodMillis,
 ) -> TokenMutationRefusalSetup {
+    let setup = OwnershipRefusalSetup {
+        name,
+        caller,
+        period,
+    };
     TokenMutationRefusalSetup {
         name: setup.name,
         authentication: authed(setup.caller),
@@ -183,14 +188,11 @@ const ORDINARY_OWNERSHIP_REFUSALS: [OwnershipRefusalIdentity; 3] = [
 
 pub(super) fn ordinary_ownership_refusals(hmac: &[u8]) -> [TokenMutationRefusalSetup; 3] {
     ORDINARY_OWNERSHIP_REFUSALS.map(|identity| {
-        ownership_refusal(
-            hmac,
-            OwnershipRefusalSetup {
-                name: identity.name,
-                caller: identity.caller,
-                ..Default::default()
-            },
-        )
+        ownership_refusal()
+            .hmac(hmac)
+            .name(identity.name)
+            .caller(identity.caller)
+            .call()
     })
 }
 
@@ -359,7 +361,26 @@ impl TokenSetup<'_> {
     }
 }
 
-pub(super) async fn seed_token(controller: &ControllerHandle, setup: TokenSetup<'_>) {
+#[bon::builder]
+pub(super) async fn seed_token(
+    controller: &ControllerHandle,
+    #[builder(default = TokenSetup::default().token_id)] token_id: &'_ str,
+    #[builder(default = TokenSetup::default().owner)] owner: KafkaPrincipal,
+    requester: Option<KafkaPrincipal>,
+    #[builder(into, default = TokenSetup::default().issued_at)] issued_at: UnixMillis,
+    #[builder(into, default = TokenSetup::default().expires_at)] expires_at: UnixMillis,
+    #[builder(into, default = TokenSetup::default().max_expires_at)] max_expires_at: UnixMillis,
+    #[builder(default = TokenSetup::default().renewers)] renewers: Vec<KafkaPrincipal>,
+) {
+    let setup = TokenSetup {
+        token_id,
+        owner,
+        requester,
+        issued_at,
+        expires_at,
+        max_expires_at,
+        renewers,
+    };
     let TokenSetup {
         token_id,
         owner,
@@ -392,16 +413,17 @@ pub(super) async fn refusal_tokens(
     let live = (hmac_for("live"), now + 60_000);
     let expired = (hmac_for("expired"), now - 1);
     for (token_id, (_, expiry)) in [("live", &live), ("expired", &expired)] {
-        seed_token(
-            controller,
-            TokenSetup {
-                token_id,
-                expires_at: UnixMillis(*expiry),
-                max_expires_at: UnixMillis(now + DAY_MS),
-                ..TokenSetup::for_mutation()
-            },
-        )
-        .await;
+        seed_token()
+            .controller(controller)
+            .token_id(token_id)
+            .owner(TokenSetup::for_mutation().owner)
+            .maybe_requester(TokenSetup::for_mutation().requester)
+            .issued_at(TokenSetup::for_mutation().issued_at)
+            .expires_at(*expiry)
+            .max_expires_at(now + DAY_MS)
+            .renewers(TokenSetup::for_mutation().renewers)
+            .call()
+            .await;
     }
     (live, expired)
 }
@@ -473,11 +495,18 @@ pub(super) struct TokenMutationOutcome {
 }
 
 /// The expiry lies in the independently pinned clock window, or equals the lifetime cap.
+#[bon::builder]
 pub(super) fn check_expiry_window(
     case: &str,
     outcome: TokenMutationOutcome,
-    setup: TokenExpirySetup,
+    #[builder(default)] window: TokenMutationWindow,
+    #[builder(default = ExpiryExpectation :: LifetimeCap (crate :: test_support :: UnixMillis (0)))]
+    expectation: ExpiryExpectation,
 ) {
+    let setup = TokenExpirySetup {
+        window,
+        expectation,
+    };
     assert!(outcome.error.0 == crate::codes::NONE, "{case}");
     match setup.expectation {
         ExpiryExpectation::RelativeToMutation(delta) => {
@@ -497,14 +526,17 @@ pub(super) fn check_expiry_window(
 
 macro_rules! check_token_expiry {
     ($case:expr, $response:expr, $setup:expr) => {
-        crate::handlers::delegation_token_test_support::check_expiry_window(
-            $case,
-            crate::handlers::delegation_token_test_support::TokenMutationOutcome {
-                error: crate::test_support::KafkaErrorCode($response.error_code),
-                expiry: crate::test_support::UnixMillis($response.expiry_timestamp_ms),
-            },
-            $setup,
-        );
+        crate::handlers::delegation_token_test_support::check_expiry_window()
+            .case($case)
+            .outcome(
+                crate::handlers::delegation_token_test_support::TokenMutationOutcome {
+                    error: crate::test_support::KafkaErrorCode($response.error_code),
+                    expiry: crate::test_support::UnixMillis($response.expiry_timestamp_ms),
+                },
+            )
+            .window($setup.window)
+            .expectation($setup.expectation)
+            .call();
     };
 }
 

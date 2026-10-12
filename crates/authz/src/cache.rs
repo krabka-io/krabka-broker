@@ -108,32 +108,16 @@ mod tests {
         // A representative ACL set: literal exact, the literal "*" wildcard,
         // a prefixed entry, an unrelated topic, and a different resource type.
         let entries = vec![
-            entry(AclSetup::default()),
-            entry(AclSetup {
-                op: AclOperation::Write,
-                name: "*",
-                ..Default::default()
-            }),
-            entry(AclSetup {
-                pattern: PatternType::Prefixed,
-                name: "team-",
-                ..Default::default()
-            }),
-            entry(AclSetup {
-                name: "bar",
-                ..Default::default()
-            }),
-            entry(AclSetup {
-                rt: ResourceType::Group,
-                name: "cg-1",
-                ..Default::default()
-            }),
-            entry(AclSetup {
-                rt: ResourceType::Group,
-                pattern: PatternType::Prefixed,
-                name: "app-",
-                ..Default::default()
-            }),
+            entry().call(),
+            entry().op(AclOperation::Write).name("*").call(),
+            entry().pattern(PatternType::Prefixed).name("team-").call(),
+            entry().name("bar").call(),
+            entry().rt(ResourceType::Group).name("cg-1").call(),
+            entry()
+                .rt(ResourceType::Group)
+                .pattern(PatternType::Prefixed)
+                .name("app-")
+                .call(),
         ];
 
         // Build the same set into a MetadataImage (broker side) ...
@@ -183,7 +167,7 @@ mod tests {
 
         let range_allow = AclEntry {
             host: "10.0.0.0/8".into(),
-            ..entry(AclSetup::default())
+            ..entry().call()
         };
         let alice = Principal {
             name: "alice".into(),
@@ -252,7 +236,7 @@ mod tests {
         assert2::assert!(empty.is_empty());
         assert2::assert!(empty.len() == 0);
 
-        let cache = AclCache::new(vec![entry(AclSetup::default())]);
+        let cache = AclCache::new(vec![entry().call()]);
         assert2::assert!(!cache.is_empty());
         assert2::assert!(cache.len() == 1);
     }

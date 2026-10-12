@@ -324,26 +324,25 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
     )
     .await;
     let fetched: FetchResponse = data_client
-        .send(single_partition_fetch(SinglePartitionFetchSetup {
-            topic: TOPIC.into(),
-            topic_id: WireUuid(*topic_id.as_bytes()),
-            partition: FetchPartition {
-                current_leader_epoch: leader_epoch.0,
-                ..fetch_partition(FetchPartitionSetup {
-                    partition: krabka_ids::PartitionIndex(data_partition),
-                    // The probe uses a valid position before the five
-                    // uncommitted records, so Fetch reports the committed
-                    // high-watermark without reading their payload.
-                    offset: krabka_ids::Offset(0),
+        .send(
+            single_partition_fetch()
+                .topic(TOPIC.into())
+                .topic_id(WireUuid(*topic_id.as_bytes()))
+                .partition(FetchPartition {
+                    current_leader_epoch: leader_epoch.0,
+                    ..fetch_partition()
+                        .partition(data_partition)
+                        .offset(i64::MAX)
+                        .maximum(0)
+                        .call()
+                })
+                .limits(FetchLimits {
+                    wait: RequestWaitMillis(0),
+                    minimum: FetchByteLimit(0),
                     maximum: FetchByteLimit(0),
                 })
-            },
-            limits: FetchLimits {
-                wait: RequestWaitMillis(0),
-                minimum: FetchByteLimit(0),
-                maximum: FetchByteLimit(0),
-            },
-        }))
+                .call(),
+        )
         .await
         .unwrap();
     let partition = &fetched.responses[0].partitions[0];

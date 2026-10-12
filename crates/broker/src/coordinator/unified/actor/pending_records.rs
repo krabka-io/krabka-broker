@@ -601,14 +601,13 @@ mod tests {
         state.group_epoch = 7;
         state.target.epoch = 6;
 
-        let mut m = subscribed_member(ConsumerMemberSetup {
-            client: ClientIdentity {
+        let mut m = subscribed_member()
+            .client(ClientIdentity {
                 id: "client-a",
                 host: "h",
-            },
-            now: Instant::now(),
-            ..Default::default()
-        });
+            })
+            .now(Instant::now())
+            .call();
         m.member_epoch = 7;
         m.previous_member_epoch = 6;
         m.assigned_partitions.insert(topic, vec![0, 1]);

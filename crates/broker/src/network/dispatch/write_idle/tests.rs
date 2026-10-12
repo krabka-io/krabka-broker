@@ -121,7 +121,7 @@ async fn stalled_connection_returns_broker_queue_permits_and_other_requests_proc
         "127.0.0.1:1234".parse().expect("peer"),
         None,
     ));
-    let request = request_frame(RequestFrameSetup::default()).freeze();
+    let request = request_frame().call().freeze();
     client
         .write_i32(i32::try_from(request.len()).expect("small request"))
         .await

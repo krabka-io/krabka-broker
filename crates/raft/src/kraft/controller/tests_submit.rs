@@ -171,7 +171,7 @@ fn guarded_config_rejects_stale_maps_and_accepts_a_fresh_merge() {
 /// from its old authority must still be discarded before append.
 #[tokio::test]
 async fn guarded_change_rejects_old_authority_after_a_term_cycle_without_metadata_changes() {
-    let (mut engine, _dir) = build_engine_only(EngineSetup::default());
+    let (mut engine, _dir) = build_engine_only().call();
     let elect = |engine: &mut Engine| {
         engine.on_event(Event::ElectionTimeout);
         for _ in 0..2 {
@@ -747,10 +747,7 @@ async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
 
 #[test]
 fn try_resolve_waiters_resolves_at_exact_hwm_and_keeps_future_waiter() {
-    let (mut engine, _dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1)],
-        ..Default::default()
-    });
+    let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1)]).call();
     for offset in 0..5 {
         let mut batch = one_offset_batch(offset, 1, b"x");
         engine.log.append(&mut batch, 0).expect("append");
@@ -768,10 +765,7 @@ fn try_resolve_waiters_resolves_at_exact_hwm_and_keeps_future_waiter() {
 
 #[test]
 fn fail_waiters_reached_by_fails_only_waiters_at_or_below_target_hwm() {
-    let (mut engine, _dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(1)],
-        ..Default::default()
-    });
+    let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1)]).call();
     let mut ready_rx = park_waiter(&mut engine, 4, 5);
     let mut future_rx = park_waiter(&mut engine, 5, 6);
 
@@ -857,7 +851,7 @@ async fn submit_waiter_fails_on_leadership_loss() {
 
 #[tokio::test]
 async fn submit_change_on_non_leader_rejects() {
-    let (ctrl, _dir) = build(ControllerSetup::default());
+    let (ctrl, _dir) = build().call();
     // Never elected; node 1 is Unattached → not leader.
     let r = ctrl.submit_change(topic_record("t")).await;
     assert2::assert!(matches!(r, Err(RaftError::NotLeader { .. })));
@@ -962,7 +956,7 @@ fn elect_three_voter_engine(engine: &mut super::Engine, epoch: u32) {
 }
 
 fn elected_three_voter_engine() -> (Engine, tempfile::TempDir) {
-    let (mut engine, dir) = build_engine_only(EngineSetup::default());
+    let (mut engine, dir) = build_engine_only().call();
     elect_three_voter_engine(&mut engine, 0);
     (engine, dir)
 }

@@ -28,16 +28,13 @@ pub async fn admin_client(bootstrap: &str) -> Client {
 }
 
 pub async fn create_topic(client: &Client, name: &str, partitions: TopicPartitionCount) {
-    create_transaction_topic(
-        client,
-        TransactionTopicSetup {
-            name,
-            partitions,
-            context: "create_topic",
-            ..Default::default()
-        },
-    )
-    .await;
+    create_transaction_topic()
+        .client(client)
+        .name(name)
+        .partitions(partitions)
+        .context("create_topic")
+        .call()
+        .await;
 }
 
 /// Downgrade the finalized `transaction.version` to `level` with a

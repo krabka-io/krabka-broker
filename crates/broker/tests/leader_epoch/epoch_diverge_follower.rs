@@ -52,12 +52,13 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
     // (the same placement the replication tests use).
     let leader_addr = cluster[0].1.listen_addr.to_string();
     let admin = connect_client(leader_addr.clone(), None).await;
-    let topic_id = support::topics::create_assigned_partition(
-        &admin,
-        AssignedTopicSetup::three_replicas("divtrunc"),
-        cluster.iter().map(|(broker, _, _)| broker),
-    )
-    .await;
+    let topic_id = support::topics::create_assigned_partition()
+        .client(&admin)
+        .name(AssignedTopicSetup::three_replicas("divtrunc").name)
+        .replicas(AssignedTopicSetup::three_replicas("divtrunc").replicas)
+        .brokers(cluster.iter().map(|(broker, _, _)| broker))
+        .call()
+        .await;
 
     // Produce k = 8 records to the leader at epoch 0 (acks=-1 so it lands
     // on the followers too). One record per batch keeps offsets dense.

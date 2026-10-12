@@ -84,20 +84,19 @@ async fn tuple_quota_throttles_only_matching_client_id() {
     // Seed ACL entries so the authorizer engages (compat shim disabled) and
     // alice can Write to the topic.
     seed_compat_shim_disable_acl(&handle).await;
-    create_topic_as_admin(
-        addr,
-        kafka_wire::SaslTopicSetup {
-            client_id: CLIENT_ID,
-            password: admin_password.as_bytes(),
-            topic: support::topics::ConfiguredTopicSetup {
-                name: "tuple-quota-topic".into(),
-                ..Default::default()
-            },
+    create_topic_as_admin()
+        .addr(addr)
+        .client_id(CLIENT_ID)
+        .password(admin_password.as_bytes())
+        .topic(support::topics::ConfiguredTopicSetup {
+            name: "tuple-quota-topic".into(),
             ..Default::default()
-        },
-    )
-    .await;
-    handle.wait_until_partition_present("tuple-quota-topic", 0).await;
+        })
+        .call()
+        .await;
+    handle
+        .wait_until_partition_present("tuple-quota-topic", 0)
+        .await;
     seed_alice_write_acl(&handle, "tuple-quota-topic").await;
 
     // Set tuple quota: (user=alice, client-id=app-x) producer_byte_rate=1024.

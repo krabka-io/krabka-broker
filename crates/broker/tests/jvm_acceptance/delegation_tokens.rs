@@ -37,20 +37,17 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
 ) {
     use krabka_security::{SaslMechanism, SecretBytes};
 
-    super::three_broker_cluster::start_three_broker_sasl_plaintext_jvm_cluster_configured(
-        SaslClusterSetup {
-            admin,
-            admin_pass,
-            ..Default::default()
-        },
-        |config| {
+    super::three_broker_cluster::start_three_broker_sasl_plaintext_jvm_cluster_configured()
+        .admin(admin)
+        .admin_pass(admin_pass)
+        .adjust(|config| {
             config
                 .enabled_sasl_mechanisms
                 .push(SaslMechanism::ScramSha256);
             config.delegation_token_secret_key = Some(SecretBytes::new(secret_key.to_vec()));
-        },
-    )
-    .await
+        })
+        .call()
+        .await
 }
 
 /// Parse the JVM `kafka-delegation-tokens --create` stdout for a line

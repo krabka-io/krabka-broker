@@ -33,9 +33,7 @@ pub async fn create_topic(client: &Client) -> WireUuid {
 pub async fn produce_once(client: &Client, topic_id: WireUuid, timeout_ms: i32) -> i16 {
     let resp = client
         .send(batch_request(
-            value_batch(ValueBatchSetup {
-                records: ValueRecordCount(N_RECORDS),
-            }),
+            value_batch().records(N_RECORDS).call(),
             SinglePartitionProduceSetup {
                 topic: (TOPIC).into(),
                 topic_id,

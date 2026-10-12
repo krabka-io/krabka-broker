@@ -461,13 +461,10 @@ mod tests {
                     leader_epoch,
                     directories: vec![uuid::Uuid::nil()],
                     partition_epoch: 3,
-                    ..crate::handlers::test_support::replicated_partition(
-                        crate::handlers::test_support::ReplicatedPartitionSetup {
-                            leader: NodeId(1),
-                            replicas: &[NodeId(1)],
-                            ..Default::default()
-                        },
-                    )
+                    ..crate::handlers::test_support::replicated_partition()
+                        .leader(1)
+                        .replicas(&[NodeId(1)])
+                        .call()
                 }),
             ])
             .await
@@ -520,7 +517,7 @@ mod tests {
         }
     });
 
-    #[derive(Clone, Copy)]
+    #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct ResponsePartitionLimit(i32);
 
     #[derive(krabka_macros::FieldDefaults)]
@@ -543,7 +540,18 @@ mod tests {
         }
     }
 
-    fn request(setup: DescribeTopicsSetup) -> DescribeTopicPartitionsRequest {
+    #[bon::builder]
+    fn request(
+        #[builder(default = vec ! ["a" . to_owned ()])] topics: Vec<String>,
+        #[builder(into, default = ResponsePartitionLimit (2000))]
+        response_partition_limit: ResponsePartitionLimit,
+        cursor: Option<RequestCursor>,
+    ) -> DescribeTopicPartitionsRequest {
+        let setup = DescribeTopicsSetup {
+            topics,
+            response_partition_limit,
+            cursor,
+        };
         let DescribeTopicsSetup {
             topics,
             response_partition_limit,
@@ -635,7 +643,13 @@ mod tests {
         // Budget of 1: "a" fills it, "b" is truncated with no row (the
         // partition-budget-at-topic-boundary rule), "c" is denied. Without
         // the fix, "c" would vanish instead of appearing after "b".
-        let req = request(DescribeTopicsSetup::one_partition(&["a", "b", "c"]));
+        let req = request()
+            .topics(DescribeTopicsSetup::one_partition(&["a", "b", "c"]).topics)
+            .response_partition_limit(
+                DescribeTopicsSetup::one_partition(&["a", "b", "c"]).response_partition_limit,
+            )
+            .maybe_cursor(DescribeTopicsSetup::one_partition(&["a", "b", "c"]).cursor)
+            .call();
 
         let resp = describe(&broker, req, &ctx).await;
 
@@ -702,11 +716,10 @@ mod tests {
             partition_index: 2,
             ..Default::default()
         });
-        let req = request(DescribeTopicsSetup {
-            topics: vec!["a", "b"].into_iter().map(str::to_owned).collect(),
-            cursor,
-            ..Default::default()
-        });
+        let req = request()
+            .topics(vec!["a", "b"].into_iter().map(str::to_owned).collect())
+            .maybe_cursor(cursor)
+            .call();
 
         let resp = describe(&broker, req, &ctx).await;
 
@@ -750,13 +763,14 @@ mod tests {
             Arc::new(crate::authorizer::AllowAllAuthorizer),
             ordered_a_b_topics()
         );
-        let req = request(DescribeTopicsSetup {
-            topics: vec!["b", "a", "b", "a"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-            ..Default::default()
-        });
+        let req = request()
+            .topics(
+                vec!["b", "a", "b", "a"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            )
+            .call();
 
         let resp = describe(&broker, req, &ctx).await;
 
@@ -800,10 +814,7 @@ mod tests {
                     ..TopicSetup::single_replica()
                 }]
             );
-            let req = request(DescribeTopicsSetup {
-                cursor,
-                ..Default::default()
-            });
+            let req = request().maybe_cursor(cursor).call();
 
             let resp = describe(&broker, req, &ctx).await;
 
@@ -835,10 +846,7 @@ mod tests {
                 ..TopicSetup::single_replica()
             }]
         );
-        let req = request(DescribeTopicsSetup {
-            response_partition_limit: ResponsePartitionLimit(0),
-            ..Default::default()
-        });
+        let req = request().response_partition_limit(0).call();
 
         let resp = describe(&broker, req, &ctx).await;
 
@@ -892,7 +900,13 @@ mod tests {
             }
             let broker = broker_handle.broker_arc_for_test();
             test_ctx!(ctx, "admin");
-            let req = request(DescribeTopicsSetup::one_partition(&["a", "b"]));
+            let req = request()
+                .topics(DescribeTopicsSetup::one_partition(&["a", "b"]).topics)
+                .response_partition_limit(
+                    DescribeTopicsSetup::one_partition(&["a", "b"]).response_partition_limit,
+                )
+                .maybe_cursor(DescribeTopicsSetup::one_partition(&["a", "b"]).cursor)
+                .call();
 
             let resp = describe(&broker, req, &ctx).await;
 
@@ -944,10 +958,9 @@ mod tests {
         );
 
         for (name, error_code, is_internal) in cases {
-            let req = request(DescribeTopicsSetup {
-                topics: vec![name].into_iter().map(str::to_owned).collect(),
-                ..Default::default()
-            });
+            let req = request()
+                .topics(vec![name].into_iter().map(str::to_owned).collect())
+                .call();
             let resp = describe(&broker, req, &ctx).await;
 
             let expected_ops = authorized_operations_bits(
@@ -993,12 +1006,11 @@ mod tests {
                 leader_epoch: krabka_metadata::LeaderEpoch(7),
                 directories: vec![uuid::Uuid::nil(); 3],
                 partition_epoch: 4,
-                ..replicated_partition(ReplicatedPartitionSetup {
-                    partition: krabka_ids::PartitionIndex(index),
-                    leader: NodeId(1),
-                    replicas: &[NodeId(1), NodeId(2), NodeId(3)],
-                    ..Default::default()
-                })
+                ..replicated_partition()
+                    .partition(index)
+                    .leader(1)
+                    .replicas(&[NodeId(1), NodeId(2), NodeId(3)])
+                    .call()
             })
         };
         let mut records = vec![

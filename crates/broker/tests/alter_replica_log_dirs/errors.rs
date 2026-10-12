@@ -17,11 +17,7 @@ use crate::{
 
 #[tokio::test]
 async fn alter_replica_log_dirs_rejects_unknown_target() {
-    let (handle, _primary, _extra, addr) = start(Setup {
-        client_id: CLIENT_ID,
-        ..Default::default()
-    })
-    .await;
+    let (handle, _primary, _extra, addr) = start().client_id(CLIENT_ID).call().await;
 
     let bogus = tempfile::tempdir().unwrap();
     let resp = alter_replica_log_dirs(addr, bogus.path(), "t", vec![0]).await;

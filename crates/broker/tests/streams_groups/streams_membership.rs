@@ -75,12 +75,13 @@ async fn leave_removes_member() {
 
     // Leave: member_epoch == -1.
     let leave = client
-        .send(follow_up(StreamsFollowUpSetup {
-            group: "streams-app-4",
-            member_id: &member_id,
-            epoch: StreamsMemberEpoch(-1),
-            ..Default::default()
-        }))
+        .send(
+            follow_up()
+                .group("streams-app-4")
+                .member_id(&member_id)
+                .epoch(-1)
+                .call(),
+        )
         .await
         .expect("leave heartbeat");
     assert!(leave.error_code == 0, "leave failed: {leave:?}");

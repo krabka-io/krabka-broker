@@ -248,7 +248,7 @@ mod tests {
         });
         assert!(err == expected_err);
 
-        let desc = acl_description(&acl(AllowAclSetup::default()));
+        let desc = acl_description(&acl().call());
         let expected_desc = tagged_wire!(AclDescription {
             principal: "User:alice".into(),
             host: "*".into(),
@@ -406,10 +406,7 @@ mod tests {
                 .iter()
                 .map(|(name, pattern_type)| AclEntry {
                     pattern_type: *pattern_type,
-                    ..acl(AllowAclSetup {
-                        resource_name: name,
-                        ..Default::default()
-                    })
+                    ..acl().resource_name(name).call()
                 })
                 .collect(),
         )
@@ -581,12 +578,13 @@ mod tests {
 
     #[test]
     fn acl_description_preserves_non_read_operations() {
-        let desc = acl_description(&acl(AllowAclSetup {
-            resource_name: "payments",
-            principal: "User:bob",
-            operation: AclOperation::Write,
-            ..Default::default()
-        }));
+        let desc = acl_description(
+            &acl()
+                .resource_name("payments")
+                .principal("User:bob")
+                .operation(AclOperation::Write)
+                .call(),
+        );
 
         assert!(desc.principal == "User:bob");
         assert!(desc.operation == OPERATION_WRITE);

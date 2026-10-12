@@ -26,7 +26,7 @@ enum ListenerUsability {
     Unusable,
 }
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 struct VoterApiVersion(i16);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -107,11 +107,14 @@ fn wire_listeners_must_be_usable_and_uniquely_named() {
     }
 }
 
+#[bon::builder]
 async fn add_response(
     request: AddRaftVoterRequest,
     engine: &KraftController,
-    setup: VoterResponseSetup<'_>,
+    #[builder(into, default = VoterApiVersion (remove_raft_voter_request :: MAX_VERSION))] version: VoterApiVersion,
+    #[builder(default = "response")] context: &'_ str,
 ) -> AddRaftVoterResponse {
+    let setup = VoterResponseSetup { version, context };
     let version = setup.version.0;
     let mut body = BytesMut::new();
     krabka_protocol::Encode::encode(&request, &mut body, version).expect("encode");
@@ -121,11 +124,14 @@ async fn add_response(
     decoded::<AddRaftVoterResponse>(&response, version)
 }
 
+#[bon::builder]
 async fn remove_response(
     request: &RemoveRaftVoterRequest,
     engine: &KraftController,
-    setup: VoterResponseSetup<'_>,
+    #[builder(into, default = VoterApiVersion (remove_raft_voter_request :: MAX_VERSION))] version: VoterApiVersion,
+    #[builder(default = "response")] context: &'_ str,
 ) -> RemoveRaftVoterResponse {
+    let setup = VoterResponseSetup { version, context };
     let version = setup.version.0;
     let mut body = BytesMut::new();
     request.encode(&mut body, version).expect("encode request");
@@ -204,15 +210,13 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
             voter_directory_id,
             ..Default::default()
         };
-        let response = remove_response(
-            &request,
-            &engine,
-            VoterResponseSetup {
-                context: "a refusal is still a response",
-                ..response_setup
-            },
-        )
-        .await;
+        let response = remove_response()
+            .request(&request)
+            .engine(&engine)
+            .version(response_setup.version)
+            .context("a refusal is still a response")
+            .call()
+            .await;
         check!(response == expected, "{what}");
     }
 
@@ -224,7 +228,13 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         voter_directory_id: real_directory,
         ..Default::default()
     };
-    let response = remove_response(&request, &engine, response_setup).await;
+    let response = remove_response()
+        .request(&request)
+        .engine(&engine)
+        .version(response_setup.version)
+        .context(response_setup.context)
+        .call()
+        .await;
     check!(
         response.error_code != INVALID_REQUEST,
         "a well-formed request reaches the quorum, got {}",
@@ -238,7 +248,13 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         voter_directory_id: real_directory,
         ..Default::default()
     };
-    let response = remove_response(&request, &engine, response_setup).await;
+    let response = remove_response()
+        .request(&request)
+        .engine(&engine)
+        .version(response_setup.version)
+        .context(response_setup.context)
+        .call()
+        .await;
     check!(
         response.error_code != INVALID_REQUEST,
         "voter_id 0 reaches the quorum, got {}",
@@ -334,22 +350,49 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
         listeners: vec![good_listener()],
         ..Default::default()
     };
-
-    // Foreign cluster_id is refused with INCONSISTENT_CLUSTER_ID (104)
-    let request = build_candidate_request(Some("00000000-0000-0000-0000-0000000000ff".to_owned()));
-    let response = add_response(request, &engine, response_setup).await;
+    let response = add_response()
+        .request(build_candidate_request(None))
+        .engine(&engine)
+        .version(response_setup.version)
+        .context(response_setup.context)
+        .call()
+        .await;
     check!(response.error_code == 104);
 
     // Matching cluster_id is accepted (does not return INVALID_REQUEST)
-    let request = build_candidate_request(Some(engine.current_image().cluster_id().to_string()));
-    let response = add_response(request, &engine, response_setup).await;
+    let request = AddRaftVoterRequest {
+        cluster_id: Some(engine.current_image().cluster_id().to_string()),
+        voter_id: 2,
+        voter_directory_id: directory,
+        listeners: vec![good_listener()],
+        ..Default::default()
+    };
+    let response = add_response()
+        .request(request)
+        .engine(&engine)
+        .version(response_setup.version)
+        .context(response_setup.context)
+        .call()
+        .await;
     check!(response.error_code != INVALID_REQUEST);
 
     // At kraft.version >= 1, AddRaftVoter probes the candidate listeners.
     // Unreachable candidate fails probe with code 7.
     activate_dynamic_membership(&engine).await;
-    let request = build_candidate_request(None);
-    let response = add_response(request, &engine, response_setup).await;
+    let request = AddRaftVoterRequest {
+        cluster_id: None,
+        voter_id: 2,
+        voter_directory_id: directory,
+        listeners: vec![good_listener()],
+        ..Default::default()
+    };
+    let response = add_response()
+        .request(request)
+        .engine(&engine)
+        .version(response_setup.version)
+        .context(response_setup.context)
+        .call()
+        .await;
     check!(
         response.error_code == 7,
         "ApiVersions probe failed on unreachable candidate"

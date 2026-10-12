@@ -127,21 +127,19 @@ impl MixedQuorum {
             .collect();
         let configs: [BrokerConfig; 2] = std::array::from_fn(|index| {
             let bind = SocketAddr::from(([0, 0, 0, 0], self.ports[index]));
-            let mut config = krabka_controller_config(
-                dirs[index].path(),
-                JvmStaticVoterSetup {
-                    broker: JvmBrokerSetup {
-                        node: krabka_broker::NodeId(
-                            u64::try_from((index) + 1).expect("one-based node id"),
-                        ),
-                        listen: self.clients[index],
-                        advertised: (self.clients[index]).to_string(),
-                        controller: bind,
-                        voters: controller_voters(&voters),
-                    },
-                    cluster_id,
-                },
-            );
+            let mut config = krabka_controller_config()
+                .log_dir(dirs[index].path())
+                .broker(JvmBrokerSetup {
+                    node: krabka_broker::NodeId(
+                        u64::try_from((index) + 1).expect("one-based node id"),
+                    ),
+                    listen: self.clients[index],
+                    advertised: (self.clients[index]).to_string(),
+                    controller: bind,
+                    voters: controller_voters(&voters),
+                })
+                .cluster_id(cluster_id)
+                .call();
             if let Some(timeout) = election_timeout {
                 config.controller_election_timeout = timeout;
             }

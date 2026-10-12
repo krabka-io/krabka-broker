@@ -60,9 +60,9 @@ async fn compressed_round_trip(topic: &str, compression: &str) {
     }
 
     // Produce via legacy with gzip.
-    let mut child_command = jvm_docker_command(JvmDockerSetup {
-        image: KAFKA_IMAGE_LEGACY,
-        args: &[
+    let mut child_command = jvm_docker_command()
+        .image(KAFKA_IMAGE_LEGACY)
+        .args(&[
             "kafka-console-producer",
             "--broker-list",
             broker0_advertised(),
@@ -74,10 +74,9 @@ async fn compressed_round_trip(topic: &str, compression: &str) {
             "batch.size=131072", // 128 KiB — enough to batch all 50 records together
             "--producer-property",
             "linger.ms=100", // give the producer time to batch
-        ],
-        input: ContainerInput::Attached,
-        ..Default::default()
-    });
+        ])
+        .input(ContainerInput::Attached)
+        .call();
     let producer_out = jvm_stdin_output(&mut child_command, input.as_bytes());
     assert!(
         producer_out.status.success(),

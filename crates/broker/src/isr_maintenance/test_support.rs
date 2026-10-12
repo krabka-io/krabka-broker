@@ -61,7 +61,26 @@ pub(super) struct IsrSetup<'a> {
     pub stale_followers: &'a [(NodeId, Duration)],
 }
 
-pub(super) async fn set_replica_state(part: &Partition, setup: IsrSetup<'_>) {
+#[bon::builder]
+pub(super) async fn set_replica_state(
+    part: &Partition,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default = & [NodeId (1) , NodeId (2)])] isr: &'_ [NodeId],
+    #[builder(default = & [NodeId (1) , NodeId (2)])] replicas: &'_ [NodeId],
+    #[builder(into, default = NodeId (1))] leader: NodeId,
+    #[builder(into, default)] leader_epoch: LeaderEpoch,
+    #[builder(into, default)] partition_epoch: PartitionEpoch,
+    #[builder(default)] stale_followers: &'_ [(NodeId, Duration)],
+) {
+    let setup = IsrSetup {
+        topic,
+        isr,
+        replicas,
+        leader,
+        leader_epoch,
+        partition_epoch,
+        stale_followers,
+    };
     let IsrSetup {
         isr,
         replicas,
@@ -93,7 +112,25 @@ pub(super) async fn set_replica_state(part: &Partition, setup: IsrSetup<'_>) {
 }
 
 /// Partition 0 of `topic` as the metadata image holds it.
-pub(super) fn partition(setup: IsrSetup<'_>) -> MetadataRecord {
+#[bon::builder]
+pub(super) fn partition(
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default = & [NodeId (1) , NodeId (2)])] isr: &'_ [NodeId],
+    #[builder(default = & [NodeId (1) , NodeId (2)])] replicas: &'_ [NodeId],
+    #[builder(into, default = NodeId (1))] leader: NodeId,
+    #[builder(into, default)] leader_epoch: LeaderEpoch,
+    #[builder(into, default)] partition_epoch: PartitionEpoch,
+    #[builder(default)] stale_followers: &'_ [(NodeId, Duration)],
+) -> MetadataRecord {
+    let setup = IsrSetup {
+        topic,
+        isr,
+        replicas,
+        leader,
+        leader_epoch,
+        partition_epoch,
+        stale_followers,
+    };
     let IsrSetup {
         topic,
         isr,

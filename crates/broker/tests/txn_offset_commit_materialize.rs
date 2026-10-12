@@ -73,12 +73,9 @@ const TOPIC: &str = "src";
 /// by name.
 async fn create_topic(client: &krabka_client_core::Client) {
     let resp = client
-        .send(create_topic_request(creatable_topic(
-            ConfiguredTopicSetup {
-                name: (TOPIC).into(),
-                ..Default::default()
-            },
-        )))
+        .send(create_topic_request(
+            creatable_topic().name((TOPIC).into()).call(),
+        ))
         .await
         .expect("create topic");
     assert!(resp.topics[0].error_code == 0, "create topic: {resp:?}");
@@ -145,10 +142,11 @@ async fn begin_and_commit_offsets(
     let deadline = Instant::now() + Duration::from_secs(30);
     let (pid, epoch) = loop {
         let init = client
-            .send(init_producer_request(InitProducerSetup {
-                transactional_id: Some(tid.into()),
-                ..Default::default()
-            }))
+            .send(
+                init_producer_request()
+                    .maybe_transactional_id(Some(tid.into()))
+                    .call(),
+            )
             .await
             .expect("init producer id");
         if init.error_code == 0 {
@@ -493,7 +491,13 @@ async fn finish_transaction(
         TransactionOutcome::Abort => "abort",
     };
     let end = client
-        .send(end_transaction_request(tid, setup))
+        .send(
+            end_transaction_request()
+                .transactional_id(tid)
+                .producer(setup.producer)
+                .outcome(setup.outcome)
+                .call(),
+        )
         .await
         .expect("end transaction");
     assert!(end.error_code == 0, "EndTxn({label}): {end:?}");

@@ -129,7 +129,28 @@ struct ExpectedTopicSetup<'a> {
     topic_config_error_code: KafkaErrorCode,
 }
 
-fn expected_topic(setup: ExpectedTopicSetup<'_>) -> CreatableTopicResult {
+#[bon::builder]
+fn expected_topic(
+    #[builder(default = "orders")] name: &'_ str,
+    #[builder(default)] topic_id: ProtoUuid,
+    #[builder(into, default)] error_code: KafkaErrorCode,
+    error_message: Option<String>,
+    #[builder(into, default = TopicPartitionCount (- 1))] num_partitions: TopicPartitionCount,
+    #[builder(into, default = TopicReplicationFactor (- 1))]
+    replication_factor: TopicReplicationFactor,
+    #[builder(default)] configs: Vec<CreatableTopicConfigs>,
+    #[builder(into, default)] topic_config_error_code: KafkaErrorCode,
+) -> CreatableTopicResult {
+    let setup = ExpectedTopicSetup {
+        name,
+        topic_id,
+        error_code,
+        error_message,
+        num_partitions,
+        replication_factor,
+        configs,
+        topic_config_error_code,
+    };
     let ExpectedTopicSetup {
         name,
         topic_id,
@@ -167,14 +188,15 @@ fn check_created_topic_response(
 ) {
     assert!(response.topics.len() == 1);
     let expected = unthrottled_wire!(CreateTopicsResponse {
-        topics: vec![expected_topic(ExpectedTopicSetup {
-            name: setup.name,
-            topic_id: response.topics[0].topic_id,
-            num_partitions: setup.partitions,
-            replication_factor: TopicReplicationFactor(1),
-            configs: expected_configs(setup.configs),
-            ..Default::default()
-        })],
+        topics: vec![
+            expected_topic()
+                .name(setup.name)
+                .topic_id(response.topics[0].topic_id)
+                .num_partitions(setup.partitions)
+                .replication_factor(1)
+                .configs(expected_configs(setup.configs))
+                .call()
+        ],
     });
     assert!(*response == expected);
 }
@@ -184,12 +206,11 @@ fn expected_empty_topic(
     error_code: i16,
     error_message: Option<String>,
 ) -> CreatableTopicResult {
-    expected_topic(ExpectedTopicSetup {
-        name,
-        error_code: KafkaErrorCode(error_code),
-        error_message,
-        ..Default::default()
-    })
+    expected_topic()
+        .name(name)
+        .error_code(error_code)
+        .maybe_error_message(error_message)
+        .call()
 }
 
 fn topic(name: &str, partitions: i32, rf: i16) -> CreatableTopic {
@@ -411,22 +432,23 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
         let image = broker_handle.controller_image_for_test();
         let created_ok = error_code == codes::NONE;
         let expected = unthrottled_wire!(CreateTopicsResponse {
-            topics: vec![expected_topic(ExpectedTopicSetup {
-                name: &name,
-                topic_id: image.topic(&name).map_or(ProtoUuid([0; 16]), |topic| {
-                    ProtoUuid(topic.topic_id.into_bytes())
-                }),
-                error_code: KafkaErrorCode(error_code),
-                error_message: error_message.map(str::to_owned),
-                num_partitions: TopicPartitionCount(created),
-                replication_factor: TopicReplicationFactor(created_rf),
-                configs: if created_ok {
-                    expected_configs(&[])
-                } else {
-                    Vec::new()
-                },
-                ..Default::default()
-            })],
+            topics: vec![
+                expected_topic()
+                    .name(&name)
+                    .topic_id(image.topic(&name).map_or(ProtoUuid([0; 16]), |topic| {
+                        ProtoUuid(topic.topic_id.into_bytes())
+                    }))
+                    .error_code(error_code)
+                    .maybe_error_message(error_message.map(str::to_owned))
+                    .num_partitions(created)
+                    .replication_factor(created_rf)
+                    .configs(if created_ok {
+                        expected_configs(&[])
+                    } else {
+                        Vec::new()
+                    })
+                    .call()
+            ],
         });
         check!(resp == expected, "requested ({partitions}, {rf})");
 
@@ -454,14 +476,13 @@ async fn handle_success_persists_topic_config_and_success_fields() {
     let expected = unthrottled_wire!(CreateTopicsResponse {
         topics: vec![
             // Randomly generated per create; the non-nil assertion above pins it.
-            expected_topic(ExpectedTopicSetup {
-                name: "configured",
-                topic_id: resp.topics[0].topic_id,
-                num_partitions: TopicPartitionCount(2),
-                replication_factor: TopicReplicationFactor(1),
-                configs: expected_configs(&[("retention.ms", "60000")]),
-                ..Default::default()
-            })
+            expected_topic()
+                .name("configured")
+                .topic_id(resp.topics[0].topic_id)
+                .num_partitions(2)
+                .replication_factor(1)
+                .configs(expected_configs(&[("retention.ms", "60000")]))
+                .call()
         ],
     });
     assert!(resp == expected);
@@ -1037,14 +1058,12 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
     let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
 
     let image = broker_handle.controller_image_for_test();
-    let described = described_creation_configs(
-        &image,
-        DescribedCreationSetup {
-            node: broker.config.node_id,
-            topic: "mirrored",
-            overrides: image.topic_config("mirrored").expect("stored overrides"),
-        },
-    );
+    let described = described_creation_configs()
+        .image(&image)
+        .node(broker.config.node_id)
+        .topic("mirrored")
+        .overrides(image.topic_config("mirrored").expect("stored overrides"))
+        .call();
     assert!(resp.topics[0].configs.clone().expect("configs") == described);
     broker_handle.shutdown().await;
 }
@@ -1066,12 +1085,13 @@ async fn create_without_describe_configs_withholds_the_configs_but_creates_the_t
     let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
 
     let expected = unthrottled_wire!(CreateTopicsResponse {
-        topics: vec![expected_topic(ExpectedTopicSetup {
-            name: "undescribable",
-            topic_id: resp.topics[0].topic_id,
-            topic_config_error_code: KafkaErrorCode(codes::TOPIC_AUTHORIZATION_FAILED),
-            ..Default::default()
-        })],
+        topics: vec![
+            expected_topic()
+                .name("undescribable")
+                .topic_id(resp.topics[0].topic_id)
+                .topic_config_error_code(codes::TOPIC_AUTHORIZATION_FAILED)
+                .call()
+        ],
     });
     assert!(resp == expected);
     // The create itself went through: only the disclosure was withheld.
@@ -1589,18 +1609,21 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
 
     use crate::handlers::test_support::acl;
 
-    let cluster_create = acl(AclSetup::cluster(AclOperation::Create));
-    let literal_a = acl(AclSetup {
-        resource_name: "a",
-        operation: AclOperation::Create,
-        ..Default::default()
-    });
-    let prefixed_app = acl(AclSetup {
-        resource_name: "app-",
-        pattern_type: PatternType::Prefixed,
-        operation: AclOperation::Create,
-        ..Default::default()
-    });
+    let cluster_create = acl()
+        .resource_type(AclSetup::cluster(AclOperation::Create).resource_type)
+        .resource_name(AclSetup::cluster(AclOperation::Create).resource_name)
+        .pattern_type(AclSetup::cluster(AclOperation::Create).pattern_type)
+        .operation(AclSetup::cluster(AclOperation::Create).operation)
+        .call();
+    let literal_a = acl()
+        .resource_name("a")
+        .operation(AclOperation::Create)
+        .call();
+    let prefixed_app = acl()
+        .resource_name("app-")
+        .pattern_type(PatternType::Prefixed)
+        .operation(AclOperation::Create)
+        .call();
 
     let cases = [
         (
@@ -1657,12 +1680,11 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
         };
         let row = |name: &str| -> CreatableTopicResult {
             if case.created.contains(&name) {
-                expected_topic(ExpectedTopicSetup {
-                    name,
-                    topic_id: id_of(name),
-                    topic_config_error_code: KafkaErrorCode(codes::TOPIC_AUTHORIZATION_FAILED),
-                    ..Default::default()
-                })
+                expected_topic()
+                    .name(name)
+                    .topic_id(id_of(name))
+                    .topic_config_error_code(codes::TOPIC_AUTHORIZATION_FAILED)
+                    .call()
             } else {
                 expected_empty_topic(
                     name,
@@ -1746,11 +1768,10 @@ fn topic_with_nullable_configs(name: &str, configs: &[(&str, Option<&str>)]) -> 
 async fn cluster_create_and_describe_configs_probes_leave_no_denial_behind() {
     use crate::metrics::AuthorizationDeniedLabel;
 
-    let literal_a = allow_acl(AllowAclSetup {
-        resource_name: "a",
-        operation: AclOperation::Create,
-        ..Default::default()
-    });
+    let literal_a = allow_acl()
+        .resource_name("a")
+        .operation(AclOperation::Create)
+        .call();
     let denied = |operation: &str, resource_type: &str| AuthorizationDeniedLabel {
         operation: operation.into(),
         resource_type: resource_type.into(),

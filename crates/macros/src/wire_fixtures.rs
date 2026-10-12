@@ -37,13 +37,13 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
         }
     };
     Ok(moxy::template! {
-        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ::derive_more::From, ::derive_more::Into)]
         pub(crate) struct BatchProducerEpoch(pub i16);
-        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ::derive_more::From, ::derive_more::Into)]
         pub(crate) struct BatchSequence(pub i32);
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, ::derive_more::From, ::derive_more::Into)]
         pub(crate) struct BatchRecordCount(pub i32);
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, ::derive_more::From, ::derive_more::Into)]
         pub(crate) struct BatchTimestamp(pub i64);
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub(crate) struct BatchProducer {
@@ -62,21 +62,14 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
             Ordinary,
             Transactional,
         }
-        #[derive(Clone, Copy)]
-        pub(crate) struct ProducerBatchSetup {
-            pub producer: BatchProducer,
-            pub base_sequence: BatchSequence,
-            pub records: BatchRecordCount,
-            pub max_timestamp: BatchTimestamp,
-            pub transaction: BatchTransactionMode,
-        }
-        impl Default for ProducerBatchSetup {
-            fn default() -> Self {
-                Self { producer: BatchProducer::from_wire((7, 0)), base_sequence: BatchSequence::default(), records: BatchRecordCount(1), max_timestamp: BatchTimestamp(1_000), transaction: BatchTransactionMode::Ordinary }
-            }
-        }
-        pub(crate) fn {{ name }}(setup: ProducerBatchSetup) -> ::krabka_protocol::records::RecordBatch {
-            let ProducerBatchSetup { producer, base_sequence, records, max_timestamp, transaction } = setup;
+        #[bon::builder]
+        pub(crate) fn {{ name }}(
+            #[builder(default = BatchProducer::from_wire((7, 0)))] producer: BatchProducer,
+            #[builder(into, default = BatchSequence(0))] base_sequence: BatchSequence,
+            #[builder(into, default = BatchRecordCount(1))] records: BatchRecordCount,
+            #[builder(into, default = BatchTimestamp(1_000))] max_timestamp: BatchTimestamp,
+            #[builder(default = BatchTransactionMode::Ordinary)] transaction: BatchTransactionMode,
+        ) -> ::krabka_protocol::records::RecordBatch {
             let producer_id = producer.id.0;
             let producer_epoch = producer.epoch.0;
             let base_sequence = base_sequence.0;
@@ -121,9 +114,15 @@ pub(crate) fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError
                     Self { topic: "orders", configs: &[], num_partitions: TopicPartitionCount(1), replication_factor: TopicReplicationFactor(1), timeout: ::krabka_units::millis(5_000) }
                 }
             }
-            pub(crate) fn {{ name }}(setup: CreateTopicSetup<'_>) -> ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+            #[bon::builder]
+            pub(crate) fn {{ name }}(
+                #[builder(default = "orders")] topic: &'_ str,
+                #[builder(default = &[])] configs: &'_ [(&'_ str, &'_ str)],
+                #[builder(into, default = TopicPartitionCount(1))] num_partitions: TopicPartitionCount,
+                #[builder(into, default = TopicReplicationFactor(1))] replication_factor: TopicReplicationFactor,
+                #[builder(default = ::krabka_units::millis(5_000))] timeout: ::krabka_units::Time,
+            ) -> ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
                 use ::krabka_units::convert::TimeExt as _;
-                let CreateTopicSetup { topic, configs, num_partitions, replication_factor, timeout } = setup;
                 ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
                     topics: vec![::krabka_protocol::owned::create_topics_request::CreatableTopic {
                         name: topic.to_owned(), num_partitions: num_partitions.0, replication_factor: replication_factor.0,

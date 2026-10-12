@@ -1165,7 +1165,7 @@ mod tests {
     #[tokio::test]
     async fn a_read_needs_the_installed_role_and_the_image_to_name_this_node() {
         let image = stretch_image(&[]);
-        let (_dir, partition) = temporary_partition(StandalonePartitionSetup::default());
+        let (_dir, partition) = temporary_partition().call();
         let refused = |leader_id| super::PartitionData {
             current_leader: super::LeaderIdAndEpoch {
                 leader_id,
@@ -1213,14 +1213,11 @@ mod tests {
     }
 
     fn epoch_checks_partition(dir: &std::path::Path) -> Arc<Partition> {
-        spawn_standalone_partition(
-            dir,
-            Log::open(dir, LogConfig::default()).expect("open partition log"),
-            StandalonePartitionSetup {
-                topic: "diverge",
-                ..Default::default()
-            },
-        )
+        spawn_standalone_partition()
+            .log_dir(dir)
+            .log(Log::open(dir, LogConfig::default()).expect("open partition log"))
+            .topic("diverge")
+            .call()
     }
 
     fn read_role(partition: &Partition) -> super::ReadRole<'_> {

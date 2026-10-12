@@ -219,16 +219,13 @@ fn rewrite_both_commit_markers_survive_when_data_survives() {
     let dir = tempfile::tempdir().unwrap();
     // pid 1000: data batch at offset 0 (key k1), commit marker at offset 1.
     // pid 2000: data batch at offset 2 (key k2), commit marker at offset 3.
-    let data1 = transactional_record(TransactionalRecordSetup {
-        payload: (b"k1", b"v1"),
-        ..Default::default()
-    });
+    let data1 = transactional_record().payload((b"k1", b"v1")).call();
     let marker1 = control_batch(1, 1000, 1 /* COMMIT */);
-    let data2 = transactional_record(TransactionalRecordSetup {
-        offset: Offset(2),
-        producer: ProducerId(2000),
-        payload: (b"k2", b"v2"),
-    });
+    let data2 = transactional_record()
+        .offset(2)
+        .producer(2000)
+        .payload((b"k2", b"v2"))
+        .call();
     let marker2 = control_batch(3, 2000, 1 /* COMMIT */);
     let expected = vec![
         data1.clone(),

@@ -111,13 +111,12 @@ async fn produce_to_partition_on_offline_dir_returns_storage_error() {
     // both dirs under the least-loaded placement algorithm.
     const N: i32 = 6;
 
-    let (handle, primary, extra, addr) = start(Setup {
-        client_id: CLIENT_ID,
-        topic: TOPIC,
-        partitions: TopicPartitionCount(N),
-        ..Default::default()
-    })
-    .await;
+    let (handle, primary, extra, addr) = start()
+        .client_id(CLIENT_ID)
+        .topic(TOPIC)
+        .partitions(N)
+        .call()
+        .await;
 
     // Confirm spread: both dirs must hold at least one partition of the topic.
     let in_extra = partitions_in_dir(extra.path(), TOPIC);
@@ -242,17 +241,14 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
     // Use a single-dir broker so the broker IS the controller leader.
     let (_primary, handle, addr) = single_directory_broker().await;
 
-    create_and_wait(
-        &handle,
-        addr,
-        Setup {
-            client_id: CLIENT_ID,
-            topic: TOPIC,
-            partitions: TopicPartitionCount(N),
-            ..Default::default()
-        },
-    )
-    .await;
+    create_and_wait()
+        .handle(&handle)
+        .address(addr)
+        .client_id(CLIENT_ID)
+        .topic(TOPIC)
+        .partitions(N)
+        .call()
+        .await;
 
     // Look up the topic UUID from the controller image so we can reference
     // the partition correctly in the request.

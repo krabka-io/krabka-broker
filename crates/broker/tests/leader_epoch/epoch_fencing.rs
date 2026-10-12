@@ -29,15 +29,15 @@ async fn fetch_with_epoch(
     client
         .send(FetchRequest {
             replica_id: 99,
-            ..single_partition_fetch(SinglePartitionFetchSetup {
-                topic: topic.into(),
-                topic_id,
-                partition: FetchPartition {
+            ..single_partition_fetch()
+                .topic(topic.into())
+                .topic_id(topic_id)
+                .partition(FetchPartition {
                     current_leader_epoch: epoch,
-                    ..fetch_partition(FetchPartitionSetup::default())
-                },
-                limits: FetchLimits::one_mebibyte(RequestWaitMillis(100)),
-            })
+                    ..fetch_partition().call()
+                })
+                .limits(FetchLimits::one_mebibyte(RequestWaitMillis(100)))
+                .call()
         })
         .await
         .expect("fetch")

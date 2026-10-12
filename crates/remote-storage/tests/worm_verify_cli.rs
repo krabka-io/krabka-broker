@@ -13,6 +13,7 @@ use std::{
 
 use assert2::check;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use bon::bon;
 use krabka_audit::signing::FileEd25519Signer;
 use krabka_remote_storage::{
     ChainHead, ChainStamp, EpochId, MANIFEST_SUFFIX, ManifestSeq, ObjectEntry, Sha256Digest,
@@ -85,17 +86,22 @@ struct Fixture {
     entries: Vec<Vec<ObjectEntry>>,
 }
 
+#[bon]
 impl Fixture {
     /// A signed archive whose second manifest uses the rotated key.
     fn rotated() -> Self {
-        Self::build(ArchiveSetup {
-            key: SigningKey::RotatedAfterFirstSegment,
-            ..Default::default()
-        })
+        Self::build()
+            .key(SigningKey::RotatedAfterFirstSegment)
+            .call()
     }
 
     /// Write a two-segment archive, signed with the original key by default.
-    fn build(setup: ArchiveSetup) -> Self {
+    #[builder]
+    fn build(
+        #[builder(default)] signing: ManifestSigning,
+        #[builder(default)] key: SigningKey,
+    ) -> Self {
+        let setup = ArchiveSetup { signing, key };
         let root = TempDir::new().unwrap();
         let keys = TempDir::new().unwrap();
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
@@ -267,7 +273,7 @@ fn run(args: &[String]) -> Run {
 
 #[test]
 fn a_clean_archive_verifies_and_prints_its_tip() {
-    let fixture = Fixture::build(ArchiveSetup::default());
+    let fixture = Fixture::build().call();
 
     let result = run(&fixture.base_args());
 
@@ -292,7 +298,7 @@ fn a_clean_archive_verifies_and_prints_its_tip() {
 
 #[test]
 fn the_printed_tip_satisfies_expect_head_on_the_next_run() {
-    let fixture = Fixture::build(ArchiveSetup::default());
+    let fixture = Fixture::build().call();
     let mut args = fixture.base_args();
     args.push("--expect-head".to_string());
     args.push(fixture.tip.to_string());
@@ -304,7 +310,7 @@ fn the_printed_tip_satisfies_expect_head_on_the_next_run() {
 
 #[test]
 fn a_truncated_object_is_reported_as_tampering() {
-    let fixture = Fixture::build(ArchiveSetup::default());
+    let fixture = Fixture::build().call();
     let victim = fixture.root().join(&fixture.log_keys[1]);
     let body = std::fs::read(&victim).unwrap();
     std::fs::write(&victim, &body[..body.len() - 1]).unwrap();
@@ -319,7 +325,7 @@ fn a_truncated_object_is_reported_as_tampering() {
 
 #[test]
 fn a_same_length_body_edit_needs_deep_to_be_seen() {
-    let fixture = Fixture::build(ArchiveSetup::default());
+    let fixture = Fixture::build().call();
     let victim = fixture.root().join(&fixture.log_keys[1]);
     let mut body = std::fs::read(&victim).unwrap();
     body[0] ^= 0xff;
@@ -339,10 +345,7 @@ fn a_same_length_body_edit_needs_deep_to_be_seen() {
 
 #[test]
 fn an_unsigned_archive_is_an_incomplete_attestation() {
-    let fixture = Fixture::build(ArchiveSetup {
-        signing: ManifestSigning::Unsigned,
-        ..Default::default()
-    });
+    let fixture = Fixture::build().signing(ManifestSigning::Unsigned).call();
 
     let result = run(&fixture.base_args());
 
@@ -353,7 +356,7 @@ fn an_unsigned_archive_is_an_incomplete_attestation() {
 
 #[test]
 fn a_tip_that_differs_from_expect_head_is_a_head_mismatch() {
-    let fixture = Fixture::build(ArchiveSetup::default());
+    let fixture = Fixture::build().call();
     let mut args = fixture.base_args();
     let expected = ChainHead([0x5a; 32]);
     args.push("--expect-head".to_string());
@@ -376,7 +379,7 @@ fn a_tip_that_differs_from_expect_head_is_a_head_mismatch() {
 /// can act on is one they stop reading.
 #[test]
 fn an_object_no_manifest_names_is_reported_but_does_not_fail_the_run() {
-    let fixture = Fixture::build(ArchiveSetup::default());
+    let fixture = Fixture::build().call();
     let stray = fixture.add_orphan();
 
     let result = run(&fixture.base_args());
@@ -402,7 +405,7 @@ fn an_object_no_manifest_names_is_reported_but_does_not_fail_the_run() {
 /// bucket to hold nothing but the archive.
 #[test]
 fn strict_orphans_grades_an_orphan_as_a_failure() {
-    let fixture = Fixture::build(ArchiveSetup::default());
+    let fixture = Fixture::build().call();
     fixture.add_orphan();
 
     let mut args = fixture.base_args();
@@ -439,7 +442,7 @@ fn naming_neither_a_bucket_nor_a_directory_is_a_usage_error() {
 
 #[test]
 fn a_chain_restart_is_an_incomplete_attestation_that_names_its_fix() {
-    let fixture = Fixture::build(ArchiveSetup::default());
+    let fixture = Fixture::build().call();
     fixture.restart_chain();
 
     let result = run(&fixture.base_args());
@@ -458,7 +461,7 @@ fn a_chain_restart_is_an_incomplete_attestation_that_names_its_fix() {
 
 #[test]
 fn allow_epoch_restarts_accepts_a_restarted_chain() {
-    let fixture = Fixture::build(ArchiveSetup::default());
+    let fixture = Fixture::build().call();
     fixture.restart_chain();
     let mut args = fixture.base_args();
     args.push("--allow-epoch-restarts".to_string());

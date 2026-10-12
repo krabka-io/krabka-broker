@@ -305,12 +305,11 @@ mod tests {
                     c.resource_name = "User:bob".into();
                     c.operation = 13;
                 },
-                allow_acl(AllowAclSetup {
-                    resource_type: ResourceType::User,
-                    resource_name: "User:bob",
-                    operation: AclOperation::CreateTokens,
-                    ..Default::default()
-                }),
+                allow_acl()
+                    .resource_type(ResourceType::User)
+                    .resource_name("User:bob")
+                    .operation(AclOperation::CreateTokens)
+                    .call(),
             ),
         ];
         for (shape, expected) in cases {
