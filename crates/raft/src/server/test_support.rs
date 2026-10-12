@@ -19,7 +19,7 @@ use crate::{
 pub(super) fn begin_quorum_epoch_request(
     voter_id: NodeId,
     leader_id: NodeId,
-    leader_epoch: i32,
+    leader_epoch: u32,
 ) -> PeerRequest {
     PeerRequest::BeginQuorumEpoch {
         cluster_id: None,
