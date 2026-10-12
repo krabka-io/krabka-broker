@@ -500,32 +500,29 @@ pub(super) async fn resolve_partition(
         Ok(measured) => measured,
         Err(error_code) => return error_response(index, error_code),
     };
+    let earliest_context = || EarliestContext {
+        broker,
+        topic_name,
+        index,
+        partition: &partition,
+        remote_timeout,
+        remote_topic_id,
+        topic_id,
+        local_start,
+        deleted_below,
+        local_log_start,
+    };
     let (offset, timestamp) = match kind {
-        ListOffsetsKind::Earliest => {
-            match resolve_earliest(EarliestContext {
-                broker,
-                topic_name,
-                index,
-                partition: &partition,
-                remote_timeout,
-                remote_topic_id,
-                topic_id,
-                local_start,
-                deleted_below,
-                local_log_start,
-            })
-            .await
-            {
-                Ok(ResolvedOffset {
-                    offset: earliest,
-                    leader_epoch,
-                }) => {
-                    response.leader_epoch = leader_epoch;
-                    (earliest, UNKNOWN_TIMESTAMP)
-                }
-                Err(error_code) => return error_response(index, error_code),
+        ListOffsetsKind::Earliest => match resolve_earliest(earliest_context()).await {
+            Ok(ResolvedOffset {
+                offset: earliest,
+                leader_epoch,
+            }) => {
+                response.leader_epoch = leader_epoch;
+                (earliest, UNKNOWN_TIMESTAMP)
             }
-        }
+            Err(error_code) => return error_response(index, error_code),
+        },
         ListOffsetsKind::Latest => {
             // Kafka answers LATEST with the partition's live leader epoch,
             // not the epoch recorded for whatever offset the log end
@@ -591,20 +588,7 @@ pub(super) async fn resolve_partition(
             }
         }
         ListOffsetsKind::EarliestPendingUpload => {
-            match resolve_earliest_pending_upload(EarliestContext {
-                broker,
-                topic_name,
-                index,
-                partition: &partition,
-                remote_timeout,
-                remote_topic_id,
-                topic_id,
-                local_start,
-                deleted_below,
-                local_log_start,
-            })
-            .await
-            {
+            match resolve_earliest_pending_upload(earliest_context()).await {
                 Ok(None) => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
                 Ok(Some(ResolvedOffset {
                     offset,
