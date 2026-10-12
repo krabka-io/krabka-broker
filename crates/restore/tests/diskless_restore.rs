@@ -71,7 +71,7 @@ fn fixture_with_second_base(
         )
         .unwrap();
     }
-    let capture = DisklessWalCapture {
+    DisklessWalCapture {
         format_version: 1,
         captured_at_ms: 42,
         source_cutoffs: vec![9],
@@ -98,8 +98,7 @@ fn fixture_with_second_base(
         rlmm_snapshot_sha256: None,
         group_offsets_sha256: None,
         authentication: None,
-    };
-    capture
+    }
 }
 
 fn capture_args(

@@ -250,16 +250,16 @@ mod tests {
             log_dirs: Vec<PathBuf>,
         }
         type Parsed = Result<Dirs, ErrorKind>;
-        let path = PathBuf::from;
-        let dirs = |metadata_log_dir, log_dirs| Dirs {
-            metadata_log_dir,
-            log_dirs,
-        };
         /// An argv after the program name, and what it parses to.
         struct Case<'a> {
             argv: &'a [&'a str],
             want: Parsed,
         }
+        let path = PathBuf::from;
+        let dirs = |metadata_log_dir, log_dirs| Dirs {
+            metadata_log_dir,
+            log_dirs,
+        };
         let cases = [
             Case {
                 argv: &["--log-dir", "/a"],

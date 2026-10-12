@@ -165,14 +165,15 @@ impl QuorumStateMachine {
     /// leader validated, with node id order among equals. A voter that has not
     /// fetched in this term sorts last. Empty for a replica that does not lead.
     pub(super) fn preferred_successors(&self) -> Vec<NodeId> {
-        let Role::Leader { replicas, .. } = &self.role else {
-            return Vec::new();
-        };
         /// A voter and the offset it last fetched, or -1 if it has not fetched.
         struct Successor {
             fetch_offset: i64,
             id: NodeId,
         }
+
+        let Role::Leader { replicas, .. } = &self.role else {
+            return Vec::new();
+        };
         let mut voters: Vec<Successor> = self
             .state
             .voters

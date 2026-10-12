@@ -173,6 +173,13 @@ mod tests {
     /// previous fetch when it reaches the log end that fetch saw.
     #[test]
     fn a_fetch_updates_the_caught_up_time_by_kafkas_two_branch_rule() {
+        /// A run of fetches and the progress the last of them leaves.
+        struct Case {
+            label: &'static str,
+            fetches: Vec<Fetch>,
+            expected: ReplicaProgress,
+        }
+
         /// One fetch of the run.
         struct Fetch {
             now: u64,
@@ -184,12 +191,6 @@ mod tests {
             offset,
             log_end,
         };
-        /// A run of fetches and the progress the last of them leaves.
-        struct Case {
-            label: &'static str,
-            fetches: Vec<Fetch>,
-            expected: ReplicaProgress,
-        }
         let progress =
             |fetch_offset, last_fetch, last_caught_up, last_fetch_leader_log_end| ReplicaProgress {
                 fetch_offset,

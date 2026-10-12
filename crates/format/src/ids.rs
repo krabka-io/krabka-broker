@@ -329,14 +329,14 @@ mod tests {
     /// it, and every input Kafka refuses is refused.
     #[test]
     fn parse_and_render_match_kafka_uuid() {
-        let a20 = "A".repeat(20);
-        let a21 = "A".repeat(21);
-        let a22 = "A".repeat(22);
         /// An input, and Kafka's rendering of it or the error this parser gives.
         struct Case {
             input: String,
             want: Result<&'static str, &'static str>,
         }
+        let a20 = "A".repeat(20);
+        let a21 = "A".repeat(21);
+        let a22 = "A".repeat(22);
         let cases: Vec<Case> = vec![
             Case {
                 input: "AQIDBAUGBwgJCgsMDQ4PEA".into(),

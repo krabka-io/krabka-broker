@@ -83,15 +83,15 @@ fn reconcile_with_snapshot_policy(
 ) -> Result<(), RestoreError> {
     let mut dumps: HashMap<&TopicIdPartition, &PartitionDump> = HashMap::new();
     for dump in &snapshot.dump.partitions {
-        if args.selects_topic(&dump.topic_id_partition.topic) {
-            if dumps.insert(&dump.topic_id_partition, dump).is_some() {
-                return Err(RestoreError::MetadataDisagreement {
-                    topic: dump.topic_id_partition.topic.clone(),
-                    partition: dump.topic_id_partition.partition,
-                    scanned: "duplicate partition entries in RLMM snapshot".to_owned(),
-                    snapshot: summarize_dump(Some(dump)),
-                });
-            }
+        if args.selects_topic(&dump.topic_id_partition.topic)
+            && dumps.insert(&dump.topic_id_partition, dump).is_some()
+        {
+            return Err(RestoreError::MetadataDisagreement {
+                topic: dump.topic_id_partition.topic.clone(),
+                partition: dump.topic_id_partition.partition,
+                scanned: "duplicate partition entries in RLMM snapshot".to_owned(),
+                snapshot: summarize_dump(Some(dump)),
+            });
         }
     }
 

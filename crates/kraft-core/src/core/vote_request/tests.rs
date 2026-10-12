@@ -323,6 +323,17 @@ fn leader_of_three() -> QuorumStateMachine {
 /// replica grants a binding vote.
 #[test]
 fn each_state_grants_pre_votes_and_votes_by_its_own_rule() {
+    struct Case {
+        label: &'static str,
+        build: Build,
+        /// The machine's epoch.
+        epoch: u32,
+        /// Whether a pre-vote is granted when the candidate is up to date.
+        pre_vote_granted: bool,
+        /// Whether a vote is granted when the candidate is up to date.
+        vote_granted: bool,
+    }
+
     let unattached = three_voter_machine;
     let candidate = || {
         let mut m = leader_of_three();
@@ -347,16 +358,6 @@ fn each_state_grants_pre_votes_and_votes_by_its_own_rule() {
         assert2::assert!(matches!(m.role(), Role::Resigned));
         m
     };
-    struct Case {
-        label: &'static str,
-        build: Build,
-        /// The machine's epoch.
-        epoch: u32,
-        /// Whether a pre-vote is granted when the candidate is up to date.
-        pre_vote_granted: bool,
-        /// Whether a vote is granted when the candidate is up to date.
-        vote_granted: bool,
-    }
     let cases = vec![
         Case {
             label: "leader",
@@ -530,14 +531,15 @@ fn grants_vote_to(m: &mut QuorumStateMachine, candidate: NodeId, epoch: u32) -> 
 /// leaders could hold that epoch.
 #[test]
 fn a_vote_survives_following_the_leader_of_its_epoch() {
-    let end_epoch = SuccessorRank {
-        position: 1,
-        successors: 1,
-    };
     struct Case {
         label: &'static str,
         event: Event,
     }
+
+    let end_epoch = SuccessorRank {
+        position: 1,
+        successors: 1,
+    };
     let cases = vec![
         Case {
             label: "the leader resigns",

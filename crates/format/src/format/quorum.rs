@@ -239,10 +239,6 @@ mod tests {
     /// Kafka's upper-case form. Without the flag the name is `CONTROLLER`.
     #[test]
     fn the_voter_endpoints_carry_the_controller_listener_name() {
-        use clap::Parser as _;
-
-        let directory = DirectoryId(Uuid::from_u128(3));
-        let controllers = "3@host:9093:00000000-0000-0000-0000-000000000003";
         /// The quorum flags, the listener name flag, and the endpoint name
         /// written.
         struct Case<'a> {
@@ -250,6 +246,10 @@ mod tests {
             name: &'a [&'a str],
             written: &'a str,
         }
+        use clap::Parser as _;
+
+        let directory = DirectoryId(Uuid::from_u128(3));
+        let controllers = "3@host:9093:00000000-0000-0000-0000-000000000003";
         let cases = [
             Case {
                 quorum: &["--standalone", "--controller-listener", "host:9093"],

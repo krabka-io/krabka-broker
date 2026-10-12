@@ -340,6 +340,12 @@ fn files_under(dir: &Path) -> Vec<String> {
 /// Spells the `--log-dir` flags for two directories.
 type Spelling = fn(&str, &str) -> Vec<String>;
 
+/// What it is, and how it spells the `--log-dir` flags.
+struct SpellingCase {
+    what: &'static str,
+    spell: Spelling,
+}
+
 /// Repeated and comma-separated `--log-dir` format every directory in one
 /// run, as `kafka-storage format` formats every entry of `log.dirs`. The set
 /// shares one cluster id, and each directory has its own id. Only the first
@@ -351,11 +357,6 @@ fn every_log_dir_is_formatted_in_one_run() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let seed_records = standalone_seed_records(tmp.path());
 
-    /// What it is, and how it spells the `--log-dir` flags.
-    struct SpellingCase {
-        what: &'static str,
-        spell: Spelling,
-    }
     let spellings = [
         SpellingCase {
             what: "repeated",

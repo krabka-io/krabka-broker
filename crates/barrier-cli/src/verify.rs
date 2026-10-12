@@ -333,6 +333,11 @@ mod tests {
     /// reported rather than passed over.
     #[test]
     fn a_cut_that_the_log_does_not_back_is_reported() {
+        struct RejectedCase<'a> {
+            case: &'a str,
+            batch: Option<&'a RecordBatch>,
+            expected: &'a str,
+        }
         let good = marker_batch("orders-cut", 7, 42);
         let other_group = marker_batch("payments-cut", 7, 42);
         let other_epoch = marker_batch("orders-cut", 8, 42);
@@ -347,11 +352,6 @@ mod tests {
             ..RecordBatch::default()
         };
 
-        struct RejectedCase<'a> {
-            case: &'a str,
-            batch: Option<&'a RecordBatch>,
-            expected: &'a str,
-        }
 
         let cases = [
             RejectedCase {

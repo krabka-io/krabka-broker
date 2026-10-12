@@ -823,15 +823,15 @@ fn the_metadata_log_directory_leads_the_directory_set() {
 /// from the log directories. A data directory gets another id.
 #[test]
 fn the_directory_id_belongs_to_the_metadata_log_directory() {
-    const ID: &str = "00000000-0000-0000-0000-000000000064";
-    let id = DirectoryId(uuid::Uuid::from_u128(0x64));
-    let controllers = format!("1@controller-1:9093:{ID}");
     /// What it is, the flags that name the id, and the metadata directory's kind.
     struct Case<'a> {
         what: &'a str,
         extra: Vec<&'a str>,
         kind: DirectoryKind,
     }
+    const ID: &str = "00000000-0000-0000-0000-000000000064";
+    let id = DirectoryId(uuid::Uuid::from_u128(0x64));
+    let controllers = format!("1@controller-1:9093:{ID}");
     let cases = [
         Case {
             what: "--directory-id",

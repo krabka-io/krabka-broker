@@ -142,7 +142,7 @@ fn format_seeds_krabka_version_only_when_overridden() {
                     _ => None,
                 });
             Case {
-                flags: *flags,
+                flags,
                 seeded,
             }
         })
