@@ -5,14 +5,14 @@
 //! log end offset, and that a `kafka-console-consumer` then recovers. Its
 //! divergence recipe is specific to this direction, so it has its own file.
 
-use std::time::{Duration, Instant};
-
-use krabka_metadata::{LeaderEpoch, MetadataRecord};
-
-use crate::{
-    docker::{KAFKA_IMAGE, docker_run_kafka_tool_with_image},
-    dump_log::grep_base_offsets,
-    test_support::truncation::*,
+use {
+    crate::{
+        docker::{KAFKA_IMAGE, docker_run_kafka_tool_with_image},
+        dump_log::grep_base_offsets,
+        test_support::truncation::*,
+    },
+    krabka_metadata::{LeaderEpoch, MetadataRecord},
+    std::time::{Duration, Instant},
 };
 
 /// Recreates a shorter Krabka-led suffix, then verifies the JVM follower
@@ -77,15 +77,12 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     // the assignment and directory vector intact so this record changes only
     // leadership/epoch state.
     let parked_epoch = LeaderEpoch(jvm_epoch.0 + 1);
-    let forged = MetadataRecord::V1Partition(single_leader_record(
-        &pr,
-        SingleLeaderSetup {
-            topic: TOPIC,
-            leader: krabka_broker::NodeId(99),
-            epoch: parked_epoch,
-            partition_epoch_delta: PartitionEpochDelta(2),
-        },
-    ));
+    let forged = MetadataRecord::V1Partition(single_leader_record(&pr, SingleLeaderSetup {
+        topic: TOPIC,
+        leader: krabka_broker::NodeId(99),
+        epoch: parked_epoch,
+        partition_epoch_delta: PartitionEpochDelta(2),
+    }));
     c1.submit_metadata_record_for_test(forged)
         .await
         .expect("inject dead-leader PartitionRecord");
@@ -126,15 +123,12 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     // Restore Krabka broker 1 as the leader at the next epoch with the JVM
     // follower (3) back in the replica set so it re-fetches and detects
     // divergence.
-    let restore = MetadataRecord::V1Partition(single_leader_record(
-        &pr,
-        SingleLeaderSetup {
-            topic: TOPIC,
-            epoch: LeaderEpoch(parked_epoch.0 + 1),
-            partition_epoch_delta: PartitionEpochDelta(3),
-            ..Default::default()
-        },
-    ));
+    let restore = MetadataRecord::V1Partition(single_leader_record(&pr, SingleLeaderSetup {
+        topic: TOPIC,
+        epoch: LeaderEpoch(parked_epoch.0 + 1),
+        partition_epoch_delta: PartitionEpochDelta(3),
+        ..Default::default()
+    }));
     c1.submit_metadata_record_for_test(restore)
         .await
         .expect("restore Krabka leader");
@@ -181,23 +175,20 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     // 7. ASSERTION (b): a kafka-console-consumer recovers — it reads the
     //    truncated/converged log to completion without a fatal
     //    LogTruncationException / RecordDeserializationException.
-    let consume = docker_run_kafka_tool_with_image(
-        KAFKA_IMAGE,
-        &[
-            "kafka-console-consumer",
-            "--bootstrap-server",
-            &bootstrap_all,
-            "--topic",
-            TOPIC,
-            "--partition",
-            "0",
-            "--from-beginning",
-            "--max-messages",
-            "1",
-            "--timeout-ms",
-            "20000",
-        ],
-    );
+    let consume = docker_run_kafka_tool_with_image(KAFKA_IMAGE, &[
+        "kafka-console-consumer",
+        "--bootstrap-server",
+        &bootstrap_all,
+        "--topic",
+        TOPIC,
+        "--partition",
+        "0",
+        "--from-beginning",
+        "--max-messages",
+        "1",
+        "--timeout-ms",
+        "20000",
+    ]);
     let cstdout = String::from_utf8_lossy(&consume.stdout);
     let cstderr = String::from_utf8_lossy(&consume.stderr);
     eprintln!("KRABKA[kip320] consumer recover stdout={cstdout} stderr={cstderr}");

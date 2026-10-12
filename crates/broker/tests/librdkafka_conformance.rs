@@ -13,17 +13,17 @@
 mod jvm_acceptance;
 mod support;
 
-use std::{
-    io::Write,
-    process::{Command, Output, Stdio},
-};
-
-use assert2::assert;
-use krabka_client_admin::AdminClient;
-
-use crate::{
-    jvm_acceptance::{broker0_advertised, start_host_broker, start_host_broker_with},
-    support::admin::topic_spec,
+use {
+    crate::{
+        jvm_acceptance::{broker0_advertised, start_host_broker, start_host_broker_with},
+        support::admin::topic_spec,
+    },
+    assert2::assert,
+    krabka_client_admin::AdminClient,
+    std::{
+        io::Write,
+        process::{Command, Output, Stdio},
+    },
 };
 
 /// One librdkafka client this suite runs the whole round trip against.
@@ -68,9 +68,7 @@ const CLIENTS: [ClientCase; 2] = [
 ];
 
 /// The librdkafka 2.x row of [`CLIENTS`].
-fn librdkafka_2x() -> &'static ClientCase {
-    &CLIENTS[1]
-}
+fn librdkafka_2x() -> &'static ClientCase { &CLIENTS[1] }
 
 fn check_client_version(image: &str, program: &str, library: &str, marker: &str) {
     let version = run_client(image, program, &["-V"], None);

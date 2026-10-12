@@ -1,11 +1,12 @@
 //! Shared retry and HTTP timeout fields of object-store configurations.
 
-use moxy::{
-    ast::ParseError,
-    token::{TokenStream, TokenTree},
+use {
+    crate::meta::{named_body, no_arguments},
+    moxy::{
+        ast::ParseError,
+        token::{TokenStream, TokenTree},
+    },
 };
-
-use crate::meta::{named_body, no_arguments};
 
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     no_arguments(meta, "object_store_config")?;

@@ -5,12 +5,13 @@
 //! pure functions over request fields, so they sit apart from the coordinator
 //! that calls them.
 
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
+use {
+    krabka_protocol::primitives::uuid::Uuid,
+    std::{
+        collections::HashMap,
+        time::{Duration, Instant},
+    },
 };
-
-use krabka_protocol::primitives::uuid::Uuid;
 
 /// Query expiration consistently across group protocols.
 macro_rules! expired_members_method {
@@ -117,9 +118,8 @@ macro_rules! assignment_delay_method {
         }
     };
 }
-pub(crate) use assignment_delay_method;
-
 use crate::coordinator::unified::consumer_state::same_assignment;
+pub(crate) use assignment_delay_method;
 
 /// An absent heartbeat field keeps the stored value; allocate only when it changes.
 pub(crate) fn update_present<T: Clone + PartialEq>(
@@ -268,9 +268,10 @@ pub(crate) fn new_target_assignment<'a>(
 
 #[cfg(test)]
 mod helper_tests {
-    use assert2::{assert, check};
-
-    use super::*;
+    use {
+        super::*,
+        assert2::{assert, check},
+    };
 
     /// The cases of Kafka's `GroupMetadataManagerTest`
     /// `testCanComputeNextTargetAssignment*`: no previous assignment, a zero

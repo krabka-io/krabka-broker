@@ -9,34 +9,34 @@
 
 mod support;
 
-use std::{
-    collections::BTreeSet,
-    process::Command,
-    time::{Duration, Instant},
-};
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_client_core::Client;
-use krabka_client_producer::{Producer, ProducerRecord};
-use krabka_protocol::owned::{
-    assign_replicas_to_dirs_request::{
-        AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
+use {
+    crate::support::{
+        client::connect_with_context,
+        discovery::named_topic_metadata,
+        fetch::{
+            FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
+            SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
+        },
+        producer::{ProducerRecordSetup, no_retry_acks_all_producer, producer_record},
+        remove_container_with_volumes,
     },
-    create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
-    describe_log_dirs_request::DescribeLogDirsRequest,
-    fetch_request::FetchRequest,
-};
-
-use crate::support::{
-    client::connect_with_context,
-    discovery::named_topic_metadata,
-    fetch::{
-        FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
-        SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
+    assert2::assert,
+    bytes::Bytes,
+    krabka_client_core::Client,
+    krabka_client_producer::{Producer, ProducerRecord},
+    krabka_protocol::owned::{
+        assign_replicas_to_dirs_request::{
+            AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
+        },
+        create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
+        describe_log_dirs_request::DescribeLogDirsRequest,
+        fetch_request::FetchRequest,
     },
-    producer::{ProducerRecordSetup, no_retry_acks_all_producer, producer_record},
-    remove_container_with_volumes,
+    std::{
+        collections::BTreeSet,
+        process::Command,
+        time::{Duration, Instant},
+    },
 };
 
 const BROKER_IMAGE: &str = "docker.io/krabka-io/krabka-broker:dev";
@@ -178,26 +178,19 @@ struct BrokerProcess {
 }
 
 impl BrokerProcess {
+    #[cfg(unix)]
     fn user(&self) -> String {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            let metadata = std::fs::metadata(self.root.path()).expect("stat broker root");
-            format!("{}:{}", metadata.uid(), metadata.gid())
-        }
-        #[cfg(not(unix))]
-        {
-            "0:0".to_string()
-        }
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = std::fs::metadata(self.root.path()).expect("stat broker root");
+        format!("{}:{}", metadata.uid(), metadata.gid())
     }
 
-    fn bootstrap(&self) -> String {
-        format!("127.0.0.1:{}", self.client_port)
-    }
+    #[cfg(not(unix))]
+    fn user() -> String { "0:0".to_string() }
 
-    fn metrics_url(&self) -> String {
-        format!("http://127.0.0.1:{}/metrics", self.metrics_port)
-    }
+    fn bootstrap(&self) -> String { format!("127.0.0.1:{}", self.client_port) }
+
+    fn metrics_url(&self) -> String { format!("http://127.0.0.1:{}/metrics", self.metrics_port) }
 
     fn advertised_controller(&self) -> String {
         format!("host.docker.internal:{}", self.controller_port)
@@ -214,7 +207,10 @@ impl BrokerProcess {
 
     fn format(&self, cluster_id: &str, voters: &str, primary: Option<&TinyFs>) {
         let mount = format!("{}:{ROOT}", self.root.path().display());
+        #[cfg(unix)]
         let user = self.user();
+        #[cfg(not(unix))]
+        let user = Self::user();
         let broker_image = image();
         let log_dir = format!("--log-dir={PRIMARY}");
         let cluster = format!("--cluster-id={cluster_id}");
@@ -268,7 +264,10 @@ impl BrokerProcess {
 
     fn run(&self, cluster_id: &str, primary: Option<&TinyFs>, extra: Option<&TinyFs>) {
         let root_mount = format!("{}:{ROOT}", self.root.path().display());
+        #[cfg(unix)]
         let user = self.user();
+        #[cfg(not(unix))]
+        let user = Self::user();
         let client = format!("{}:9092", self.client_port);
         let controller = format!("{}:9093", self.controller_port);
         let metrics = format!("{}:9404", self.metrics_port);
@@ -315,9 +314,7 @@ impl BrokerProcess {
         docker(&args);
     }
 
-    fn start_existing(&self) {
-        docker(&["start", &self.name]);
-    }
+    fn start_existing(&self) { docker(&["start", &self.name]); }
 
     fn is_running(&self) -> bool {
         docker(&["inspect", "--format", "{{.State.Running}}", &self.name]) == "true"
@@ -341,9 +338,7 @@ impl BrokerProcess {
 }
 
 impl Drop for BrokerProcess {
-    fn drop(&mut self) {
-        remove_container_with_volumes(&self.name);
-    }
+    fn drop(&mut self) { remove_container_with_volumes(&self.name); }
 }
 
 struct Cluster {
@@ -480,9 +475,7 @@ fn partitions_in(
 /// The metadata directory id that `node_id` is formatted with: fixed, so the
 /// voter set can name it, and outside the 100 lowest ids, which Kafka reserves
 /// and the broker refuses at startup.
-fn directory_uuid(node_id: u32) -> uuid::Uuid {
-    uuid::Uuid::from_u64_pair(1, u64::from(node_id))
-}
+fn directory_uuid(node_id: u32) -> uuid::Uuid { uuid::Uuid::from_u64_pair(1, u64::from(node_id)) }
 
 fn directory_id(fs: &TinyFs) -> uuid::Uuid {
     let raw = docker(&["exec", &fs.holder, "/bin/cat", "/fs/meta.properties"]);
