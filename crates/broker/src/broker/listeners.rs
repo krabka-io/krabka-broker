@@ -202,7 +202,7 @@ pub(super) fn spawn_listener_tasks(
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::assert;
     use krabka_security::ListenerProtocol;
 
     use super::*;

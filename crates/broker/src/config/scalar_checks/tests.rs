@@ -342,7 +342,6 @@ enum AcceptedZeroScalar {
         AcceptedZeroScalar::ClassicGroupInitialRebalanceDelay
     },
 )]
-#[test]
 fn accepted_zero_valued_runtime_scalars_validate(case: AcceptedZeroScalar) {
     let config = match case {
         // A zero cadence disables the sweep, and the default expiry must pass

@@ -247,9 +247,9 @@ async fn handle_reports_entry_results_and_obeys_validate_only(validate_only: boo
     let resp = handle(&broker, request(entries, validate_only), version, &ctx)
         .await
         .expect("handle");
-    assert!(resp == expected_response(expected_entries));
+    assert2::assert!(resp == expected_response(expected_entries));
     for (user, quota_key, want) in stored {
-        assert!(
+        assert2::assert!(
             quota_value(&broker_handle, user, quota_key) == want,
             "user {user}"
         );

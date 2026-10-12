@@ -21,7 +21,7 @@ use super::{
 };
 use crate::{
     authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
-    config::{BrokerConfig, InterBrokerCredentials, NodeRole},
+    config::{BrokerConfig, InterBrokerCredentials, NodeRole, validate_oauthbearer_token_file},
     network::auth::GssapiConfig,
     schema_validation::SchemaValidator,
 };
@@ -179,7 +179,7 @@ pub(super) fn apply_config_tail(
                 kdc_url,
             },
             FileInterBrokerCredentials::OAuthBearer { token_path } => {
-                crate::config::validate_oauthbearer_token_file(&token_path)
+                validate_oauthbearer_token_file(&token_path)
                     .map_err(FileConfigError::InvalidConfig)?;
                 InterBrokerCredentials::OAuthBearer { token_path }
             }

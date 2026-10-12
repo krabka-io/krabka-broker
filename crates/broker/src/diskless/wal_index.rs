@@ -433,7 +433,7 @@ mod tests {
         below_object_floor = { FetchRangeBoundary::BelowObjectFloor },
     )]
     fn fetch_range_obeys_offset_boundaries(boundary: FetchRangeBoundary) {
-        let (entries, offset, expected): (Vec<_>, i64, Option<(String, u64, u32)>) = match boundary
+        let (entries, offset, expected): (Vec<_>, i64, Option<(String, u64, u64)>) = match boundary
         {
             FetchRangeBoundary::OffsetGap => {
                 let mut first = entry(0, 0, 0);
