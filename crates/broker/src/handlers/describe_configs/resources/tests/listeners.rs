@@ -203,6 +203,7 @@ fn protocol_map(value: &str) -> DescribeConfigsResourceResult {
     named()
         .name("listener.security.protocol.map")
         .value(value)
+        .config_type(ConfigType::String)
         .maybe_builtin_default(Some(DEFAULT_PROTOCOL_MAP))
         .call()
 }
@@ -220,6 +221,7 @@ fn inter_broker(value: &str) -> DescribeConfigsResourceResult {
         .name("inter.broker.listener.name")
         .value(value)
         .mutability(ConfigMutability::ReadOnly)
+        .config_type(ConfigType::String)
         .call()
 }
 

@@ -734,10 +734,22 @@ mod tests {
             .log
             .lock()
             .expect("log lock")
-            .append(&mut data_batch().call())
+            .append(
+                &mut data_batch()
+                    .producer(BatchProducer::from_wire((10, 0)))
+                    .records(3)
+                    .call(),
+            )
             .expect("append on the leader");
         follows
-            .replicate_batch(data_batch().call())
+            .replicate_batch(
+                data_batch()
+                    .producer(BatchProducer::from_wire((20, 3)))
+                    .records(2)
+                    .max_timestamp(2_000)
+                    .transaction(BatchTransactionMode::Transactional)
+                    .call(),
+            )
             .await
             .expect("replicate a transactional batch");
         let mut marker = build_marker_batch(
@@ -754,7 +766,14 @@ mod tests {
             .await
             .expect("replicate the commit marker");
         follows
-            .replicate_batch(data_batch().call())
+            .replicate_batch(
+                data_batch()
+                    .producer(BatchProducer::from_wire((21, 0)))
+                    .max_timestamp(4_000)
+                    .transaction(BatchTransactionMode::Transactional)
+                    .base_offset(3)
+                    .call(),
+            )
             .await
             .expect("replicate an open transaction");
 

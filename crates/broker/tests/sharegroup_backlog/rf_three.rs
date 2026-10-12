@@ -332,7 +332,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
                     current_leader_epoch: leader_epoch.0,
                     ..fetch_partition()
                         .partition(data_partition)
-                        .offset(i64::MAX)
+                        .offset(0)
                         .maximum(0)
                         .call()
                 })

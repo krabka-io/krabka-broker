@@ -68,12 +68,13 @@ mod tests {
     use bytes::{BufMut, BytesMut};
 
     use super::*;
-    use crate::network::test_support::{FrameCorrelationId, RequestFrameSetup, request_frame};
+    use crate::network::test_support::request_frame;
 
     fn legacy_metadata_frame() -> BytesMut {
         request_frame()
             .api_key(3)
             .api_version(8)
+            .correlation_id(42)
             .maybe_client_id(Some(b"client-a"))
             .body(b"body")
             .call()
@@ -103,7 +104,9 @@ mod tests {
     fn parse_request_flexible_header_consumes_tagged_fields_byte() {
         let frame = request_frame()
             .api_version(3)
+            .correlation_id(7)
             .maybe_client_id(Some(b"client-a"))
+            .maybe_tagged(Some(&[0]))
             .body(b"body")
             .call();
 
@@ -118,9 +121,12 @@ mod tests {
 
     #[test]
     fn parse_request_flexible_header_skips_non_empty_tagged_fields() {
+        let tagged_bytes = [1, 1, 3, b't', b'a', b'g'];
         let frame = request_frame()
             .api_version(3)
+            .correlation_id(7)
             .maybe_client_id(Some(b"client-a"))
+            .maybe_tagged(Some(&tagged_bytes))
             .body(b"body")
             .call();
 

@@ -100,6 +100,8 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         let frame = request_frame()
             .api_key(api_key)
             .api_version(version)
+            .correlation_id(7)
+            .maybe_tagged(Some(&[0]))
             .body(body)
             .call();
         framed.send(frame.freeze()).await.expect("send request");
@@ -167,7 +169,7 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
             .find(|a| a.api_key == api_key)
             .unwrap_or_else(|| panic!("api_catalog carries api_key {api_key}"))
             .max_version;
-        let entry = registry
+        registry
             .get(api_key)
             .unwrap_or_else(|| panic!("registry carries api_key {api_key}"));
 
@@ -242,7 +244,12 @@ async fn drive_one_frame_per_connection(
             .get(api_key)
             .is_some_and(|entry| entry.body_flexible(version));
         let mut framed = test_support::connect_framed(addr, "connect").await;
-        let frame = request_frame().api_key(api_key).api_version(version).call();
+        let frame = request_frame()
+            .api_key(api_key)
+            .api_version(version)
+            .correlation_id(correlation_id)
+            .maybe_tagged(flexible.then_some(&[0][..]))
+            .call();
         framed.send(frame.freeze()).await.expect("send request");
 
         outcomes.push(match framed.next().await {
@@ -650,9 +657,12 @@ fn encoded_request_frame<T: krabka_protocol::Encode>(
     let mut encoded = BytesMut::with_capacity(body.encoded_len(setup.api_version.0));
     body.encode(&mut encoded, setup.api_version.0)
         .expect("encode request body");
+    let tagged = matches!(setup.header, RequestHeader::Flexible).then_some(&[0][..]);
     request_frame()
         .api_key(setup.api_key)
         .api_version(setup.api_version)
+        .correlation_id(setup.correlation_id)
+        .maybe_tagged(tagged)
         .body(&encoded)
         .call()
         .freeze()
@@ -889,7 +899,10 @@ mod request_budget {
     /// An `ApiVersions` v0 request with an empty body: the smallest frame the
     /// loop answers without any authorization or metadata in the way.
     fn api_versions_frame(correlation_id: i32) -> bytes::Bytes {
-        request_frame().call().freeze()
+        request_frame()
+            .correlation_id(correlation_id)
+            .call()
+            .freeze()
     }
 
     /// An `ApiVersions` request padded past [`BUDGET_BYTES`]. The body is trailing
@@ -1243,6 +1256,8 @@ mod request_limit {
         request_frame()
             .api_key(32)
             .api_version(4)
+            .correlation_id(correlation_id)
+            .maybe_tagged(Some(&[0]))
             .body(&body)
             .call()
     }

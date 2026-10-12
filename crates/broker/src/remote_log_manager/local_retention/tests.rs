@@ -344,10 +344,6 @@ fn local_retention_target_time_based_eviction() {
 /// segments and a 50-byte active segment make a 350-byte local log.
 #[test]
 fn local_retention_target_size_based_eviction() {
-    let base_export_setup = fixtures::SegmentExportSetup {
-        size: bytes(100),
-        ..Default::default()
-    };
     let exports = vec![
         synth_export().size(bytes(100)).call(),
         synth_export()

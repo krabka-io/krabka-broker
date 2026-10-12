@@ -351,7 +351,9 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
         ..Default::default()
     };
     let response = add_response()
-        .request(build_candidate_request(None))
+        .request(build_candidate_request(Some(
+            "00000000-0000-0000-0000-0000000000ff".to_owned(),
+        )))
         .engine(&engine)
         .version(response_setup.version)
         .context(response_setup.context)

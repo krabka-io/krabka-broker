@@ -27,11 +27,7 @@ use tokio_util::codec::Framed;
 use super::request_frame;
 use crate::{
     BrokerHandle,
-    network::{
-        codec::KafkaCodec,
-        dispatch::test_support::plaintext_loop,
-        test_support::{FrameCorrelationId, RequestFrameSetup},
-    },
+    network::{codec::KafkaCodec, dispatch::test_support::plaintext_loop},
     test_support::start_broker_with,
 };
 
@@ -150,6 +146,7 @@ async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
 async fn send_api_versions(framed: &mut Framed<TcpStream, KafkaCodec>, correlation_id: i32) {
     let frame = request_frame()
         .api_key(super::API_VERSIONS_KEY)
+        .correlation_id(correlation_id)
         .call()
         .freeze();
     framed.send(frame).await.expect("send ApiVersions");
@@ -167,6 +164,8 @@ async fn send_request(
     let frame = request_frame()
         .api_key(api_key)
         .api_version(version)
+        .correlation_id(correlation_id)
+        .maybe_tagged(Some(&[0]))
         .body(body)
         .call()
         .freeze();
@@ -442,6 +441,7 @@ async fn produce_charges_the_whole_request_frame_once() {
     let frame_len = request_frame()
         .api_key(PRODUCE_KEY)
         .api_version(PRODUCE_VERSION)
+        .maybe_tagged(Some(&[0]))
         .body(&body)
         .call()
         .len();
@@ -618,6 +618,8 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
         let frame = super::request_frame()
             .api_key(case.api_key)
             .api_version(case.version)
+            .correlation_id(1)
+            .maybe_tagged(case.flexible.then_some(&[0][..]))
             .body(&case.body)
             .call()
             .freeze();
