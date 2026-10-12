@@ -42,6 +42,23 @@ struct Trust {
     _dir: TempDir,
 }
 
+struct SigningFixture {
+    trust: Trust,
+    good: TopicFreezeRecord,
+    replaced: TopicFreezeRecord,
+}
+
+fn signing_fixture() -> SigningFixture {
+    SigningFixture {
+        trust: trust(),
+        good: record(),
+        replaced: TopicFreezeRecord {
+            set_at_ms: NOW_MS,
+            ..record()
+        },
+    }
+}
+
 fn fresh_key(dir: &TempDir, name: &str) -> (Ed25519KeyPair, PathBuf) {
     ed25519_public_key_file().dir(dir.path()).name(name).call()
 }

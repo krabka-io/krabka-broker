@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use assert2::{assert, check};
 
@@ -182,6 +182,16 @@ fn coordinator_with_log(directory: &std::path::Path) -> (Arc<TxnCoordinator>, Ar
     (coordinator, partition)
 }
 
+async fn coordinator_with_led_state_partition(
+    directory: &Path,
+) -> (Arc<TxnCoordinator>, Arc<Partition>) {
+    let (coordinator, partition) = coordinator_with_log(directory);
+    coordinator
+        .lead_state_partition_for_test(PartitionIndex(0))
+        .await;
+    (coordinator, partition)
+}
+
 /// The coordinator answers each case with Kafka's code, and appends only when
 /// the partition set or the state changes (#889).
 #[tokio::test]
@@ -300,10 +310,7 @@ async fn add_offsets_answers_kafka_codes_and_appends_only_a_change() {
 #[tokio::test]
 async fn a_caller_already_holding_the_handle_sees_the_durable_state() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let (coordinator, _partition) = coordinator_with_log(directory.path());
-    coordinator
-        .lead_state_partition_for_test(PartitionIndex(0))
-        .await;
+    let (coordinator, _partition) = coordinator_with_led_state_partition(directory.path()).await;
     coordinator
         .put(entry(TxnState::Ongoing, &[]), TxnVersion::Verified)
         .await
@@ -343,10 +350,7 @@ enum Outcome {
 #[tokio::test]
 async fn the_reaper_does_not_abort_a_transaction_that_add_offsets_just_opened() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let (coordinator, _partition) = coordinator_with_log(directory.path());
-    coordinator
-        .lead_state_partition_for_test(PartitionIndex(0))
-        .await;
+    let (coordinator, _partition) = coordinator_with_led_state_partition(directory.path()).await;
     // The previous transaction started and completed long ago.
     let mut completed = entry(TxnState::CompleteCommit, &[]);
     completed.start_ms = 0;

@@ -13,8 +13,9 @@ use crate::{
         actor::{
             member_state::build_member,
             test_support::{
-                StaticMetadata, classic_member_for_topic, coordinator_with_log, empty_metadata,
-                make_coordinator, make_coordinator_with_topic, make_coordinator_with_topic_policy,
+                StaticMetadata, classic_member_for_topic, consumer_native_join_request,
+                coordinator_with_log, empty_metadata, make_coordinator,
+                make_coordinator_with_topic, make_coordinator_with_topic_policy,
                 rpc::{self, consumer_request},
                 seed_classic_member,
             },
@@ -48,14 +49,9 @@ async fn first_join_adopts_client_member_id() {
     let handle = coord.get_or_create_consumer("g");
     let resp = rpc::consumer_request(
         &handle,
-        ConsumerGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "client-uuid-1".into(),
-            member_epoch: 0,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            rebalance_timeout_ms: 60_000,
-            ..Default::default()
-        },
+        consumer_native_join_request()
+            .member_id("client-uuid-1")
+            .call(),
     )
     .await;
     // The join must succeed, echo the client-supplied member id, and
@@ -973,14 +969,7 @@ async fn failed_upgrade_append_keeps_the_atomic_batch_unpublished() {
 
     let response = consumer_request(
         &handle,
-        ConsumerGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "native".into(),
-            member_epoch: 0,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            rebalance_timeout_ms: 60_000,
-            ..Default::default()
-        },
+        consumer_native_join_request().member_id("native").call(),
     )
     .await;
     check!(response.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);

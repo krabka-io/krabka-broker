@@ -8,11 +8,12 @@
 
 use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
-    describe_share_group_offsets_request::{
-        DescribeShareGroupOffsetsRequestGroup, DescribeShareGroupOffsetsRequestTopic,
-    },
+    describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestGroup,
     describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup,
 };
+
+#[cfg(test)]
+use krabka_protocol::owned::describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestTopic;
 
 use super::{
     end_offsets::NetworkLatestOffsets,

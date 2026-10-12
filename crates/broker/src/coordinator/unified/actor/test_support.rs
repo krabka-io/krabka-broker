@@ -19,6 +19,18 @@ use crate::coordinator::unified::{
 
 pub(crate) mod rpc;
 
+#[bon::builder]
+pub(super) fn consumer_native_join_request(member_id: &str) -> ConsumerGroupHeartbeatRequest {
+    ConsumerGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: member_id.into(),
+        member_epoch: 0,
+        subscribed_topic_names: Some(vec!["t".into()]),
+        rebalance_timeout_ms: 60_000,
+        ..Default::default()
+    }
+}
+
 use super::{GroupActorHandle, MetadataProvider};
 use crate::{
     codes,

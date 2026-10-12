@@ -21,12 +21,11 @@ use crate::{
 /// has to be reachable and each one has to name its own check.
 #[test]
 fn each_refusal_names_its_own_check_under_one_code() {
-    let trust = trust();
-    let good = record();
-    let replaced = TopicFreezeRecord {
-        set_at_ms: NOW_MS,
-        ..record()
-    };
+    let SigningFixture {
+        trust,
+        good,
+        replaced,
+    } = signing_fixture();
 
     let cases: Vec<(
         &str,

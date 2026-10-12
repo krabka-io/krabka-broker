@@ -23,12 +23,11 @@ use crate::{
 /// row's code says which check it failed.
 #[test]
 fn every_forged_or_replayed_record_is_refused_with_one_code() {
-    let trust = trust();
-    let good = record();
-    let replaced = TopicFreezeRecord {
-        set_at_ms: NOW_MS,
-        ..record()
-    };
+    let SigningFixture {
+        trust,
+        good,
+        replaced,
+    } = signing_fixture();
 
     // Each case builds the record the broker sees and the check it runs.
     let cases: Vec<(&str, TopicFreezeRecord, FreezeSignatureCheck<'_>)> = vec![
