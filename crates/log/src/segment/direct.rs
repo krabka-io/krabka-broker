@@ -872,14 +872,14 @@ mod tests {
 
     #[test]
     fn tail_cache_reads_across_chunk_boundaries() {
-        let ThreeChunks { cache, all } = three_chunks(1 << 20);
-        check!((cache.start(), cache.end()) == (1000, 1060));
         /// A position, a length, and the expected window slice.
         struct Case {
             pos: u64,
             len: usize,
             range: Option<std::ops::Range<usize>>,
         }
+        let ThreeChunks { cache, all } = three_chunks(1 << 20);
+        check!((cache.start(), cache.end()) == (1000, 1060));
         let cases = [
             Case {
                 pos: 1000,

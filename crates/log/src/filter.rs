@@ -292,12 +292,12 @@ mod tests {
 
     #[test]
     fn filtered_batches_round_trip_through_the_wire() {
-        let offset_deltas: &[i32] = &[0, 1, 2, 3];
         struct Case {
             dropped: &'static [i32],
             survivors: &'static [i32],
             last_offset_delta: i32,
         }
+        let offset_deltas: &[i32] = &[0, 1, 2, 3];
         let cases = [
             Case {
                 dropped: &[1],

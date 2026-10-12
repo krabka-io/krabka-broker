@@ -1144,8 +1144,8 @@ mod tests {
                 0,
                 &[KeyedRecord {
                     offset_delta: 0,
-                    key: key,
-                    value: value,
+                    key,
+                    value,
                 }],
             );
             batch.attributes = batch.attributes.with_compression(codec);

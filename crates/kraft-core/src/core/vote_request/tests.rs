@@ -414,7 +414,7 @@ fn each_state_grants_pre_votes_and_votes_by_its_own_rule() {
             vote_answer(&mut m, epoch, true, true)
                 == VoteAnswer {
                     granted: pre_vote_granted,
-                    epoch: epoch,
+                    epoch,
                 },
             "{label}: pre-vote"
         );
@@ -423,7 +423,7 @@ fn each_state_grants_pre_votes_and_votes_by_its_own_rule() {
             vote_answer(&mut m, epoch, false, true)
                 == VoteAnswer {
                     granted: vote_granted,
-                    epoch: epoch,
+                    epoch,
                 },
             "{label}: vote"
         );
@@ -432,7 +432,7 @@ fn each_state_grants_pre_votes_and_votes_by_its_own_rule() {
             vote_answer(&mut m, epoch, true, false)
                 == VoteAnswer {
                     granted: false,
-                    epoch: epoch,
+                    epoch,
                 },
             "{label}: pre-vote with a log that is behind"
         );
@@ -465,7 +465,7 @@ fn a_pre_vote_from_a_higher_epoch_steps_down_a_stale_leader_or_follower() {
             vote_answer(&mut m, epoch, true, true)
                 == VoteAnswer {
                     granted: true,
-                    epoch: epoch,
+                    epoch,
                 },
             "{label}: grants at the new epoch"
         );

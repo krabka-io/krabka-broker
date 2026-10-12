@@ -56,6 +56,15 @@ fn header_and_whole(
     .collect()
 }
 
+/// A case name, its batches, whether the producers expire first, and the
+/// kept batches.
+struct ProducerCase<'a> {
+    name: &'static str,
+    batches: &'a [RecordBatch],
+    expired: bool,
+    want: Vec<Kept>,
+}
+
 /// Kafka's cleaner keeps the last record of each producer in the producer
 /// state of the log. That record is the last data batch of the producer at
 /// its epoch, or a marker at its epoch when a marker at a new epoch has
@@ -81,14 +90,6 @@ fn compaction_keeps_the_last_record_of_each_producer_in_the_log() {
         record(None, false, ("a", "a-2"), 0),
         record(None, false, ("c", "c-3"), 0),
     ];
-    /// A case name, its batches, whether the producers expire first, and the
-    /// kept batches.
-    struct ProducerCase<'a> {
-        name: &'static str,
-        batches: &'a [RecordBatch],
-        expired: bool,
-        want: Vec<Kept>,
-    }
     let cases = vec![
         ProducerCase {
             name: "the last batch of an idempotent producer",

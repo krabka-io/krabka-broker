@@ -327,13 +327,13 @@ fn recovery_rebuilds_the_indexes_the_append_wrote() {
 /// offsets that get an entry)`, over five one-record batches of one size.
 #[test]
 fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
-    let size = u64::try_from(sample_batch(ONE_RECORD_BATCH).encoded_len()).unwrap();
     /// An interval and the relative last offsets that get an entry under it.
     struct IntervalCase {
         label: &'static str,
         interval: u64,
         expected: Vec<u32>,
     }
+    let size = u64::try_from(sample_batch(ONE_RECORD_BATCH).encoded_len()).unwrap();
     let cases = [
         IntervalCase {
             label: "an interval of one batch skips a batch exactly that far",

@@ -287,11 +287,14 @@ mod tests {
         EpochStart { epoch, start }
     }
 
+    const FIRST_SEGMENT_EPOCHS: &[EpochStart] = &[epoch_start(LeaderEpoch(0), Offset(0))];
+    const FOLLOWING_SEGMENT_EPOCHS: &[EpochStart] = &[epoch_start(LeaderEpoch(0), Offset(100))];
+
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct CacheSegmentSetup<'a> {
         #[default(Uuid::from_u128(10))]
         id: Uuid,
-        #[default(&[epoch_start(LeaderEpoch(0), Offset(0))])]
+        #[default(FIRST_SEGMENT_EPOCHS)]
         epochs: &'a [EpochStart],
         #[default(Offset(0))]
         start: Offset,
@@ -303,7 +306,7 @@ mod tests {
         fn following_segment() -> Self {
             Self {
                 id: Uuid::from_u128(11),
-                epochs: &[epoch_start(LeaderEpoch(0), Offset(100))],
+                epochs: FOLLOWING_SEGMENT_EPOCHS,
                 start: Offset(100),
                 end: Offset(199),
             }

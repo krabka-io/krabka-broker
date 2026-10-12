@@ -38,8 +38,8 @@ fn transactional_keyed(setup: KeyedTransactionSetup<'_>) -> RecordBatch {
         0,
         &[KeyedRecord {
             offset_delta: 0,
-            key: key,
-            value: value,
+            key,
+            value,
         }],
     );
     batch.producer_id = setup.producer.0;

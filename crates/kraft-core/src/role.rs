@@ -176,12 +176,12 @@ mod tests {
         /// One fetch of the run.
         struct Fetch {
             now: u64,
-            fetch_offset: i64,
+            offset: i64,
             log_end: i64,
         }
-        let fetch = |now, fetch_offset, log_end| Fetch {
+        let fetch = |now, offset, log_end| Fetch {
             now,
-            fetch_offset,
+            offset,
             log_end,
         };
         /// A run of fetches and the progress the last of them leaves.
@@ -233,11 +233,11 @@ mod tests {
             let mut actual = ReplicaProgress::default();
             for Fetch {
                 now,
-                fetch_offset,
+                offset,
                 log_end,
             } in fetches
             {
-                actual.record_fetch(SimInstant(now), fetch_offset, log_end);
+                actual.record_fetch(SimInstant(now), offset, log_end);
             }
             assert2::assert!(actual == expected, "{label}");
         }

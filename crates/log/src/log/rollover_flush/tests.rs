@@ -57,7 +57,7 @@ struct Gate {
 }
 
 impl GatedIo {
-    fn new(fail: bool) -> Gate {
+    fn gate(fail: bool) -> Gate {
         let (tx, rx) = mpsc::channel();
         Gate {
             io: Arc::new(Self {
@@ -115,7 +115,7 @@ fn first_append(dir: &std::path::Path, strict: bool) -> Log {
 }
 
 fn install_gate(log: &mut Log, fail: bool) -> Gate {
-    let gate = GatedIo::new(fail);
+    let gate = GatedIo::gate(fail);
     log.test_set_io(gate.io.clone());
     gate
 }
