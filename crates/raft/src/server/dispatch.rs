@@ -9,6 +9,8 @@ use tokio::sync::oneshot;
 use super::metadata_rpc::{
     dispatch_delegation_token_mutation, dispatch_metadata_fetch, dispatch_submit_change,
 };
+#[cfg(test)]
+use crate::server::test_support::begin_quorum_epoch_request as begin_quorum_epoch_request_setup;
 use crate::{
     RaftShardRouter,
     error::RaftError,
@@ -210,7 +212,7 @@ mod tests {
             Some(PeerResponse::FetchSnapshot { error_code: 98, .. })
         ));
 
-        let begin = crate::server::test_support::begin_quorum_epoch_request()
+        let begin = begin_quorum_epoch_request_setup()
             .voter_id(NodeId(2))
             .leader_id(NodeId(1))
             .leader_epoch(1)

@@ -2,15 +2,14 @@
 
 use std::{collections::BTreeSet, path::PathBuf};
 
-use assert2::assert;
-use krabka_protocol::owned::api_versions_response::ApiVersion;
-
 use crate::{
     divergence::DivergenceReport,
     oracle::{ORACLE_IMAGE, OracleBroker, krabka_api_versions, start_krabka},
     parse::{advertised, parse_single_broker},
-    support::{JvmListeners, manifest_dir},
+    support::{JvmListeners, api_versions::supported_client_apis, manifest_dir},
 };
+use assert2::assert;
+use krabka_protocol::owned::api_versions_response::ApiVersion;
 
 /// Where the checked-in report lives.
 fn expectation_path() -> PathBuf {
@@ -40,13 +39,7 @@ fn regenerating() -> bool {
 /// withholds them, and so is every key in
 /// `api_catalog::INTER_BROKER_ONLY_APIS`.
 fn catalog_sorted_by_key() -> Vec<ApiVersion> {
-    let mut apis = krabka_broker::api_catalog::supported_apis(
-        krabka_broker::api_catalog::ListenerKind::Client,
-        krabka_broker::api_catalog::ClientMetricsReceiver::Absent,
-        krabka_broker::api_catalog::VersionGates::default(),
-    );
-    apis.sort_by_key(|api| api.api_key);
-    apis
+    supported_client_apis()
 }
 
 /// Decode the stock broker's table, retaining its container until the case ends.

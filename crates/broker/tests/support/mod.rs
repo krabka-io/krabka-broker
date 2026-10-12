@@ -44,6 +44,7 @@ use crate::support::{discovery::topic_metadata_request, topics::metadata_topic};
 
 pub mod acl;
 pub mod admin;
+pub mod api_versions;
 mod audit;
 pub mod classic;
 pub mod client;

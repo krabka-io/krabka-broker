@@ -11,8 +11,8 @@ use crate::{
     ControllerFetchMissLimit, MetadataLogConfig, MetadataRaftCommandQueueCapacity,
     MetadataRaftFetchMax,
     error::RaftError,
-    kraft::{Activation, KraftController, NullPeerSender},
-    test_support::single_partition_topic,
+    kraft::{Activation, KraftController, NullPeerSender, transport::wire::PeerRequest},
+    test_support::{encode, single_partition_topic},
 };
 
 #[bon::builder]
@@ -20,8 +20,8 @@ pub(super) fn begin_quorum_epoch_request(
     voter_id: NodeId,
     leader_id: NodeId,
     leader_epoch: i32,
-) -> crate::kraft::transport::wire::PeerRequest {
-    crate::kraft::transport::wire::PeerRequest::BeginQuorumEpoch {
+) -> PeerRequest {
+    PeerRequest::BeginQuorumEpoch {
         cluster_id: None,
         voter_id,
         voter_directory_id: Uuid::nil(),
@@ -135,7 +135,7 @@ pub(super) fn topic_record(name: &str) -> krabka_metadata::MetadataRecord {
 
 /// Encodes `message` at `version`.
 pub(super) fn encoded(message: &impl krabka_protocol::Encode, version: i16) -> bytes::Bytes {
-    crate::test_support::encode(message, version)
+    encode(message, version)
 }
 
 /// Decodes a `T` at `version` from the front of `bytes`.

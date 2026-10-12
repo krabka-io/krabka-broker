@@ -15,6 +15,17 @@ use crate::config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE};
 #[cfg(not(target_family = "wasm"))]
 use crate::oauth_introspection::ReqwestIntrospectionClient;
 
+macro_rules! apply_jws_claim_options {
+    ($validator:expr, $oauth:expr) => {{
+        if let Some(name) = $oauth.principal_claim_name.clone() {
+            $validator.principal_claim_name = name;
+        }
+        if let Some(skew) = $oauth.allowable_clock_skew_ms {
+            $validator.allowable_clock_skew = Time::from_millis(skew);
+        }
+    }};
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn configure_introspection_validator(
     oauth: &FileOAuthBearerConfig,
@@ -173,12 +184,7 @@ pub(super) fn apply_oauthbearer(
             );
 
             let mut v = krabka_security::SignedJwsValidator::new(handle);
-            if let Some(name) = oauth.principal_claim_name {
-                v.principal_claim_name = name;
-            }
-            if let Some(skew) = oauth.allowable_clock_skew_ms {
-                v.allowable_clock_skew = Time::from_millis(skew);
-            }
+            apply_jws_claim_options!(v, oauth);
             v.valid_issuer = oauth.valid_issuer_uri;
             v.expected_audience = oauth.expected_audience;
             // JsonPath custom_claim_check + JWT typ check.
@@ -248,12 +254,7 @@ pub(super) fn apply_oauthbearer(
                 ));
             }
             let mut v = krabka_security::UnsecuredJwsValidator::default();
-            if let Some(name) = oauth.principal_claim_name {
-                v.principal_claim_name = name;
-            }
-            if let Some(skew) = oauth.allowable_clock_skew_ms {
-                v.allowable_clock_skew = Time::from_millis(skew);
-            }
+            apply_jws_claim_options!(v, oauth);
             // JsonPath custom_claim_check + JWT typ check.
             v.custom_claim_check = custom_claim_check_compiled;
             v.valid_token_type.clone_from(&oauth.valid_token_type);

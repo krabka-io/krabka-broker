@@ -20,11 +20,10 @@ use super::{
     topics::initialized_topics,
 };
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     coordinator::GroupCoordinator,
-    handlers::{RequestContext, group_coordinator_error, group_describe_denied},
+    handlers::{RequestContext, allowed_topics, group_coordinator_error, group_describe_denied},
 };
 
 /// Resolve one requested group into its response row.
@@ -89,7 +88,13 @@ pub(super) async fn describe_group(
     // cannot describe with no row at all, the same way Kafka hides topic
     // existence from such a caller.
     let (requested, unauthorized) = if let Some(topics) = group.topics {
-        let allowed = allowed_topics(broker, image, ctx, &topics);
+        let allowed = allowed_topics(
+            broker.config.authorizer.as_ref(),
+            image,
+            ctx,
+            AclOperation::Describe,
+            topics.iter().map(|topic| topic.topic_name.as_str()),
+        );
         let (requested, denied): (Vec<_>, Vec<_>) = topics
             .into_iter()
             .partition(|topic| allowed.contains(topic.topic_name.as_str()));
@@ -100,7 +105,13 @@ pub(super) async fn describe_group(
     } else {
         let metadata = ng.and_then(|ng| ng.share_state_partition_metadata(&gid));
         let initialized = initialized_topics(metadata.as_ref(), image);
-        let allowed = allowed_topics(broker, image, ctx, &initialized);
+        let allowed = allowed_topics(
+            broker.config.authorizer.as_ref(),
+            image,
+            ctx,
+            AclOperation::Describe,
+            initialized.iter().map(|topic| topic.topic_name.as_str()),
+        );
         let requested = initialized
             .into_iter()
             .filter(|topic| allowed.contains(topic.topic_name.as_str()))
@@ -128,27 +139,6 @@ pub(super) async fn describe_group(
             ..Default::default()
         },
     }
-}
-
-/// The names among `topics` the caller may `Describe`.
-fn allowed_topics(
-    broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    topics: &[DescribeShareGroupOffsetsRequestTopic],
-) -> std::collections::HashSet<String> {
-    authorize_topics(
-        broker.config.authorizer.as_ref(),
-        image,
-        ctx.principal,
-        ctx.peer,
-        AclOperation::Describe,
-        topics.iter().map(|topic| topic.topic_name.as_str()),
-    )
-    .into_iter()
-    .filter(|(_, result)| *result == AuthorizationResult::Allow)
-    .map(|(name, _)| name.to_string())
-    .collect()
 }
 
 #[cfg(test)]

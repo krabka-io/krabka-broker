@@ -13,7 +13,12 @@ use std::{collections::HashSet, path::Path};
 use tracing::instrument;
 
 pub use self::swap::swap_orphan_recover;
-use crate::{error::LogError, io::LogIo, name, retention::DELETED_SUFFIX};
+use crate::{
+    error::LogError,
+    io::LogIo,
+    name,
+    retention::{DELETED_SUFFIX, remove_optional_counted},
+};
 
 pub mod swap;
 
@@ -63,7 +68,7 @@ pub fn deleted_orphan_recover(io: &dyn LogIo, dir: &Path) -> Result<(), LogError
         if !is_deleted_tombstone(&name) && !is_stranded_sidecar(&name, &log_bases) {
             continue;
         }
-        if crate::retention::remove_optional_counted(io, &dir.join(&name))? {
+        if remove_optional_counted(io, &dir.join(&name))? {
             reclaimed += 1;
         }
     }

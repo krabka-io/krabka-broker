@@ -8,6 +8,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
+    StampEntry,
     log::test_support::{
         abort_marker, append_transaction, check_stamps, commit_marker, install_stamps,
         rolling_test_log, sample_batch, stamp_entries, stamped_test_log, test_log,
@@ -16,7 +17,7 @@ use crate::{
     test_support::{open_log, stamp_entry},
 };
 
-fn assert_stamp_entries(dir: &std::path::Path, expected: &[crate::StampEntry]) {
+fn assert_stamp_entries(dir: &std::path::Path, expected: &[StampEntry]) {
     assert2::assert!(stamp_entries(dir, 0) == expected);
 }
 
