@@ -148,6 +148,13 @@ fn replay_around(odd: Record, framing: Framing) -> Option<ReplayView> {
 
 #[test]
 fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
+    struct Case {
+        name: &'static str,
+        odd: Record,
+        framing: Framing,
+        expected: Option<ReplayView>,
+    }
+
     let record = |key: Option<Bytes>, value: Option<Bytes>| Record {
         key,
         value,
@@ -159,12 +166,6 @@ fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
     let unsupported_version = Bytes::from(unsupported_version);
     let truncated = offset_value(12).slice(..6);
 
-    struct Case {
-        name: &'static str,
-        odd: Record,
-        framing: Framing,
-        expected: Option<ReplayView>,
-    }
     let case = |name, odd, framing, expected| Case {
         name,
         odd,

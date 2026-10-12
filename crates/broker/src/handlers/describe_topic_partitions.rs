@@ -947,7 +947,6 @@ mod tests {
     /// creates it at startup, so it is `UNKNOWN_TOPIC_OR_PARTITION` here.
     #[tokio::test]
     async fn missing_topic_row_follows_topic_validate() {
-        let too_long = "a".repeat(250);
         /// A requested name, the error code its row carries, and whether the
         /// topic is internal.
         struct MissingTopicCase<'a> {
@@ -956,6 +955,7 @@ mod tests {
             is_internal: bool,
         }
 
+        let too_long = "a".repeat(250);
         let cases: [MissingTopicCase<'_>; 5] = [
             MissingTopicCase {
                 name: "__transaction_state",

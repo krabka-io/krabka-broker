@@ -372,13 +372,13 @@ fn honored_assignments_pass_through_verbatim() {
 /// these messages, on brokers 0 to 2 and a topic of replication factor 2.
 #[test]
 fn invalid_explicit_assignments_answer_kafkas_messages() {
-    let brokers = plain_brokers(&[0, 1, 2]);
     /// The replica lists of an explicit assignment, and the message that refuses it.
     struct RefusalCase {
         lists: &'static [&'static [i32]],
         message: &'static str,
     }
 
+    let brokers = plain_brokers(&[0, 1, 2]);
     let cases: [RefusalCase; 5] = [
         RefusalCase {
             lists: &[&[0, 1, 2]],

@@ -314,7 +314,7 @@ fn kafka_topic_key_types_and_defaults_match() {
         let expected_default = DEFAULT_DIVERGENCES
             .iter()
             .find(|divergence| divergence.name == row.name)
-            .map_or(row.default, |divergence| Some(&divergence.krabka_default));
+            .map_or(row.default, |divergence| Some(divergence.krabka_default));
 
         check!(
             (krabka_row.config_type, krabka_row.default) == (row.config_type, expected_default),

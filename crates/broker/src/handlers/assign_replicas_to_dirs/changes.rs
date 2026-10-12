@@ -310,6 +310,13 @@ mod tests {
     /// first partition gives a record, and each row carries Kafka's code.
     #[test]
     fn plan_answers_each_partition_with_kafkas_error_code() {
+        /// The error code the plan answers for one partition of a topic.
+        #[derive(Clone, Copy)]
+        struct PartitionAnswer {
+            partition_index: i32,
+            error_code: i16,
+        }
+
         let known = uuid::Uuid::from_u128(0x42);
         let elsewhere = uuid::Uuid::from_u128(0x43);
         let unknown = uuid::Uuid::from_u128(0x44);
@@ -354,13 +361,6 @@ mod tests {
             }],
             ..Default::default()
         };
-
-        /// The error code the plan answers for one partition of a topic.
-        #[derive(Clone, Copy)]
-        struct PartitionAnswer {
-            partition_index: i32,
-            error_code: i16,
-        }
 
         let answer = |topic_id: uuid::Uuid, partitions: &[PartitionAnswer]| RespTopicData {
             topic_id: ProtocolUuid(topic_id.into_bytes()),

@@ -254,6 +254,13 @@ mod tests {
     /// back as its own topic, under its own id.
     #[test]
     fn nameless_cached_topics_do_not_collapse_into_one() {
+        /// A partition and the offset the session cached for it.
+        #[derive(Debug, PartialEq, Eq)]
+        struct PartitionOffset {
+            partition: i32,
+            fetch_offset: i64,
+        }
+
         let cached = vec![
             (key(1, "", 0), state(10)),
             (key(2, "", 0), state(20)),
@@ -261,13 +268,6 @@ mod tests {
         ];
 
         let grouped = group_cached_into_effective_topics(&cached);
-
-        /// A partition and the offset the session cached for it.
-        #[derive(Debug, PartialEq, Eq)]
-        struct PartitionOffset {
-            partition: i32,
-            fetch_offset: i64,
-        }
 
         /// A topic's id and its partitions.
         #[derive(Debug, PartialEq, Eq)]
@@ -321,6 +321,13 @@ mod tests {
     /// One topic's partitions still group together, in first-seen order.
     #[test]
     fn one_topic_s_partitions_group_under_it() {
+        /// A topic's name and the partition indexes it groups.
+        #[derive(Debug, PartialEq, Eq)]
+        struct NameShape {
+            topic: String,
+            partitions: Vec<i32>,
+        }
+
         let cached = vec![
             (key(1, "orders", 2), state(10)),
             (key(2, "", 0), state(20)),
@@ -328,13 +335,6 @@ mod tests {
         ];
 
         let grouped = group_cached_into_effective_topics(&cached);
-
-        /// A topic's name and the partition indexes it groups.
-        #[derive(Debug, PartialEq, Eq)]
-        struct NameShape {
-            topic: String,
-            partitions: Vec<i32>,
-        }
 
         let shape: Vec<NameShape> = grouped
             .iter()

@@ -151,11 +151,12 @@ mod tests {
 
     #[test]
     fn a_change_to_any_signed_field_changes_the_bytes() {
-        let baseline = approval_signing_bytes(&proposal());
         struct Case {
             label: &'static str,
             changed: BreakGlassProposalRecord,
         }
+
+        let baseline = approval_signing_bytes(&proposal());
         let cases: [Case; 6] = [
             Case {
                 label: "another proposal id",

@@ -350,17 +350,18 @@ mod tests {
     /// coordinator comes back with a fresh image.
     #[tokio::test]
     async fn a_stale_expected_leader_epoch_is_fenced() {
+        struct Case {
+            label: &'static str,
+            expected_epoch: i32,
+            code: i16,
+        }
+
         let LedOrders {
             dir: _dir,
             registry,
             image,
         } = led_orders_fixture().await;
 
-        struct Case {
-            label: &'static str,
-            expected_epoch: i32,
-            code: i16,
-        }
         let cases = [
             Case {
                 label: "the epoch the coordinator saw is older",

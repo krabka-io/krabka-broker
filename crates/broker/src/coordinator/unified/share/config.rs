@@ -150,15 +150,16 @@ mod tests {
     /// leave it.
     #[test]
     fn for_group_applies_each_share_override() {
+        struct Row {
+            entries: Vec<ConfigEntry<'static>>,
+            config: ShareGroupConfig,
+        }
+
         let broker = ShareGroupConfig::default();
         let with = |entries: &[ConfigEntry<'_>]| {
             let overrides: BTreeMap<String, String> = config_map(entries);
             broker.for_group(Some(&overrides)).into_owned()
         };
-        struct Row {
-            entries: Vec<ConfigEntry<'static>>,
-            config: ShareGroupConfig,
-        }
         let rows: Vec<Row> = vec![
             Row {
                 entries: vec![],

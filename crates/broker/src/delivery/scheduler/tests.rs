@@ -192,7 +192,7 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
     let HarnessWithPartition {
         dir: _dir,
         harness,
-        partition: partition,
+        partition,
     } = Harness::with_partition(ScheduleSetup {
         activations: active_and_delayed_activations(),
         ..Default::default()
@@ -293,7 +293,7 @@ async fn the_scheduler_adopts_a_leader_partition_so_a_produce_can_rearm_it() {
     let HarnessWithPartition {
         dir: _dir,
         harness,
-        partition: partition,
+        partition,
     } = Harness::with_partition(ScheduleSetup {
         topic: "adopted",
         activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
@@ -386,7 +386,7 @@ async fn a_sweep_with_no_metrics_of_its_own_still_advances_the_watermark() {
     let HarnessWithPartition {
         dir: _dir,
         harness,
-        partition: partition,
+        partition,
     } = Harness::with_partition(ScheduleSetup {
         topic: "quiet",
         activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
@@ -449,7 +449,7 @@ async fn the_scheduler_sweeps_once_and_stops_when_the_next_sleep_cannot_be_armed
     let HarnessWithPartition {
         dir: _dir,
         harness,
-        partition: partition,
+        partition,
     } = Harness::with_partition(ScheduleSetup {
         topic: "unrearmable",
         activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],

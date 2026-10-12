@@ -334,6 +334,12 @@ fn read(start_offset: i64) -> Response {
 
 #[tokio::test]
 async fn share_state_rpcs_need_cluster_action() {
+    struct Step {
+        caller: &'static str,
+        request: Request,
+        expected: Response,
+    }
+
     let (handle, _dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(ControllerPeerAllowed(GrantsInPrincipalName));
     })
@@ -413,11 +419,6 @@ async fn share_state_rpcs_need_cluster_action() {
         ))
     };
 
-    struct Step {
-        caller: &'static str,
-        request: Request,
-        expected: Response,
-    }
     let steps: Vec<Step> = vec![
         Step {
             caller: "none",

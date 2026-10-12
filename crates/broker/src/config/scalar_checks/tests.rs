@@ -163,9 +163,9 @@ fn rejects_non_positive_runtime_scalars() {
     }
 }
 
-#[test]
-fn rejects_invalid_additional_runtime_scalars() {
-    let cases: &[RuntimeInvalidator] = &[
+/// The additional runtime scalars, each with the change that `validate` refuses.
+fn additional_scalar_cases() -> Vec<RuntimeInvalidator> {
+    vec![
         RuntimeInvalidator {
             expected: "self_registration_max_attempts must be positive",
             invalidate: |c| {
@@ -446,7 +446,12 @@ fn rejects_invalid_additional_runtime_scalars() {
                 c.share_coordinator.state_topic_segment_bytes = krabka_units::kibibytes(1);
             },
         },
-    ];
+    ]
+}
+
+#[test]
+fn rejects_invalid_additional_runtime_scalars() {
+    let cases = additional_scalar_cases();
 
     assert_invalid_runtime_cases(cases.iter().copied());
 }

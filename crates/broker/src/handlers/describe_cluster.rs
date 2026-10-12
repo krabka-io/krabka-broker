@@ -492,6 +492,13 @@ mod tests {
     /// itself, which serves `PLAINTEXT` only.
     #[tokio::test]
     async fn brokers_without_an_endpoint_on_the_request_listener_are_left_out() {
+        /// A listener name, the broker rows it must answer with, and the controller ids.
+        struct ListenerCase {
+            listener: &'static str,
+            expected_brokers: Vec<DescribeClusterBroker>,
+            controllers: &'static [i32],
+        }
+
         let broker_row = |node_id: i32, listener: &str, port: i32| {
             tagged_wire!(DescribeClusterBroker {
                 broker_id: node_id,
@@ -501,13 +508,6 @@ mod tests {
                 is_fenced: false,
             })
         };
-        /// A listener name, the broker rows it must answer with, and the controller ids.
-        struct ListenerCase {
-            listener: &'static str,
-            expected_brokers: Vec<DescribeClusterBroker>,
-            controllers: &'static [i32],
-        }
-
         let cases: [ListenerCase; 3] = [
             ListenerCase {
                 listener: "EXTERNAL",

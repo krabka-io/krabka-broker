@@ -288,6 +288,11 @@ mod tests {
 
     #[test]
     fn header_bytes_matches_requested_key_and_preserves_value() {
+        struct Case<'a> {
+            key: &'a str,
+            want: Option<&'a [u8]>,
+        }
+
         let rec = Record {
             headers: vec![
                 header("other", Bytes::from_static(&[0])),
@@ -296,10 +301,6 @@ mod tests {
             ..Default::default()
         };
 
-        struct Case<'a> {
-            key: &'a str,
-            want: Option<&'a [u8]>,
-        }
         let cases = [
             Case {
                 key: "target",

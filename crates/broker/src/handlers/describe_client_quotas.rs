@@ -584,6 +584,13 @@ mod tests {
     /// match, with `entries = null` (#674). Valid filters still match.
     #[tokio::test]
     async fn invalid_filters_answer_kafkas_top_level_error() {
+        /// A case label, the filter components, and the whole response they must answer with.
+        struct RefusalRow {
+            label: &'static str,
+            components: Vec<ComponentData>,
+            expected: DescribeClientQuotasResponse,
+        }
+
         let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_alice_quota(&broker_handle).await;
         seed_quota(
@@ -605,13 +612,6 @@ mod tests {
                 entries: None,
             })
         };
-        /// A case label, the filter components, and the whole response they must answer with.
-        struct RefusalRow {
-            label: &'static str,
-            components: Vec<ComponentData>,
-            expected: DescribeClientQuotasResponse,
-        }
-
         let rows: Vec<RefusalRow> = vec![
             RefusalRow {
                 label: "empty entity type",

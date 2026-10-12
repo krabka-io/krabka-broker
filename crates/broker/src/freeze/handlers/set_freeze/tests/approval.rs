@@ -26,7 +26,7 @@ use crate::{
 fn a_thaw_with_no_proposal_needs_a_break_glass_approval() {
     let AliceKeyConfiguration {
         dir: _dir,
-        config: config,
+        config,
         ..
     } = alice_key_configuration();
     freeze_fixture!(image, principal, peer, ctx; &[("orders", PatternType::Literal)] ; env, config);
@@ -49,7 +49,7 @@ fn a_thaw_with_no_proposal_needs_a_break_glass_approval() {
 fn a_freeze_needs_no_proposal() {
     let AliceKeyConfiguration {
         dir: _dir,
-        config: config,
+        config,
         ..
     } = alice_key_configuration();
     freeze_fixture!(image, principal, peer, ctx; &[] ; env, config);

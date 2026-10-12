@@ -167,16 +167,16 @@ mod tests {
     /// `GROUP_AUTHORIZATION_FAILED` rows after the coordinator's rows.
     #[tokio::test]
     async fn handle_deduplicates_ids_and_appends_denied_rows() {
-        let (broker_handle, _dir) =
-            start_group_broker_no_audit(Arc::new(DenyGroupNamedDenied)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        request_identity!((p, peer), principal("alice"));
         /// A group id and the error code its result row carries.
         struct GroupRow {
             group_id: &'static str,
             error_code: i16,
         }
 
+        let (broker_handle, _dir) =
+            start_group_broker_no_audit(Arc::new(DenyGroupNamedDenied)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        request_identity!((p, peer), principal("alice"));
         let response = |rows: &[GroupRow]| DeleteGroupsResponse {
             results: rows
                 .iter()

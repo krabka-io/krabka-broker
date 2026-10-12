@@ -334,33 +334,33 @@ mod tests {
     #[test]
     fn share_group_keys_follow_kafkas_ranges_and_order() {
         struct Row {
-            row: &'static str,
+            label: &'static str,
             body: &'static str,
             want: Result<ShareGroupConfig, String>,
         }
         let rows: Vec<Row> = vec![
             Row {
-                row: "defaults",
+                label: "defaults",
                 body: "",
                 want: Ok(ShareGroupConfig::default()),
             },
             Row {
-                row: "record lock limit at its floor",
+                label: "record lock limit at its floor",
                 body: "share_group_partition_max_record_locks = 100",
                 want: with(|c| c.max_inflight_records = 100),
             },
             Row {
-                row: "record lock limit below 100",
+                label: "record lock limit below 100",
                 body: "share_group_partition_max_record_locks = 99",
                 want: refused("share_group_partition_max_record_locks: must be within 100..=10000"),
             },
             Row {
-                row: "record lock limit above 10000",
+                label: "record lock limit above 10000",
                 body: "share_group_partition_max_record_locks = 10001",
                 want: refused("share_group_partition_max_record_locks: must be within 100..=10000"),
             },
             Row {
-                row: "record lock limit above its maximum",
+                label: "record lock limit above its maximum",
                 body: "share_group_partition_max_record_locks = 5000",
                 want: refused(
                     "share_group_max_partition_max_record_locks: must be greater than or equal \
@@ -368,7 +368,7 @@ mod tests {
                 ),
             },
             Row {
-                row: "record lock limit raised with its maximum",
+                label: "record lock limit raised with its maximum",
                 body: "share_group_partition_max_record_locks = 5000\n\
                  share_group_max_partition_max_record_locks = 5000",
                 want: with(|c| {
@@ -377,7 +377,7 @@ mod tests {
                 }),
             },
             Row {
-                row: "record lock limit below its minimum",
+                label: "record lock limit below its minimum",
                 body: "share_group_partition_max_record_locks = 200\n\
                  share_group_min_partition_max_record_locks = 300",
                 want: refused(
@@ -386,17 +386,17 @@ mod tests {
                 ),
             },
             Row {
-                row: "delivery count limit of 1",
+                label: "delivery count limit of 1",
                 body: "share_group_delivery_count_limit = 1",
                 want: refused("share_group_delivery_count_limit: must be within 2..=10"),
             },
             Row {
-                row: "delivery count limit of 11",
+                label: "delivery count limit of 11",
                 body: "share_group_delivery_count_limit = 11",
                 want: refused("share_group_delivery_count_limit: must be within 2..=10"),
             },
             Row {
-                row: "delivery count limit above its maximum",
+                label: "delivery count limit above its maximum",
                 body: "share_group_delivery_count_limit = 8\nshare_group_max_delivery_count_limit = 6",
                 want: refused(
                     "share_group_max_delivery_count_limit: must be greater than or equal to \
@@ -404,19 +404,19 @@ mod tests {
                 ),
             },
             Row {
-                row: "maximum delivery count limit of 25",
+                label: "maximum delivery count limit of 25",
                 body: "share_group_max_delivery_count_limit = 25",
                 want: with(|c| c.max_delivery_count_limit = 25),
             },
             Row {
-                row: "record lock duration below 1s",
+                label: "record lock duration below 1s",
                 body: "share_group_record_lock_duration = \"999ms\"",
                 want: refused(
                     "share_group_record_lock_duration: must be within 1000ms..=3600000ms",
                 ),
             },
             Row {
-                row: "record lock duration above its maximum",
+                label: "record lock duration above its maximum",
                 body: "share_group_record_lock_duration = \"90s\"",
                 want: refused(
                     "share_group_max_record_lock_duration: must be greater than or equal to \
@@ -424,7 +424,7 @@ mod tests {
                 ),
             },
             Row {
-                row: "record lock duration below its minimum",
+                label: "record lock duration below its minimum",
                 body: "share_group_record_lock_duration = \"10s\"",
                 want: refused(
                     "share_group_record_lock_duration: must be greater than or equal to \
@@ -432,7 +432,7 @@ mod tests {
                 ),
             },
             Row {
-                row: "record lock duration and its minimum lowered",
+                label: "record lock duration and its minimum lowered",
                 body: "share_group_record_lock_duration = \"10s\"\n\
                  share_group_min_record_lock_duration = \"5s\"",
                 want: with(|c| {
@@ -441,14 +441,14 @@ mod tests {
                 }),
             },
             Row {
-                row: "minimum record lock duration above 30s",
+                label: "minimum record lock duration above 30s",
                 body: "share_group_min_record_lock_duration = \"31s\"",
                 want: refused(
                     "share_group_min_record_lock_duration: must be within 1000ms..=30000ms",
                 ),
             },
             Row {
-                row: "session timeout above its maximum",
+                label: "session timeout above its maximum",
                 body: "share_group_session_timeout = \"61s\"",
                 want: refused(
                     "share_group_session_timeout: must be less than or equal to \
@@ -456,7 +456,7 @@ mod tests {
                 ),
             },
             Row {
-                row: "session bounds widened",
+                label: "session bounds widened",
                 body: "share_group_min_session_timeout = \"10s\"\n\
                  share_group_max_session_timeout = \"2min\"\n\
                  share_group_session_timeout = \"90s\"",
@@ -467,7 +467,7 @@ mod tests {
                 }),
             },
             Row {
-                row: "heartbeat interval below its minimum",
+                label: "heartbeat interval below its minimum",
                 body: "share_group_heartbeat_interval = \"4s\"",
                 want: refused(
                     "share_group_heartbeat_interval: must be greater than or equal to \
@@ -475,7 +475,7 @@ mod tests {
                 ),
             },
             Row {
-                row: "heartbeat bounds inverted",
+                label: "heartbeat bounds inverted",
                 body: "share_group_min_heartbeat_interval = \"20s\"",
                 want: refused(
                     "share_group_max_heartbeat_interval: must be greater than or equal to \
@@ -483,7 +483,7 @@ mod tests {
                 ),
             },
             Row {
-                row: "heartbeat interval not below the session timeout",
+                label: "heartbeat interval not below the session timeout",
                 body: "share_group_min_session_timeout = \"10s\"\n\
                  share_group_session_timeout = \"15s\"\n\
                  share_group_heartbeat_interval = \"15s\"",
@@ -493,17 +493,17 @@ mod tests {
                 ),
             },
             Row {
-                row: "share group of 1001 members",
+                label: "share group of 1001 members",
                 body: "share_group_max_size = 1001",
                 want: refused("share_group_max_size: must be within 1..=1000"),
             },
         ];
         let mut actual = Vec::new();
         let mut expected = Vec::new();
-        for Row { row, body, want } in rows {
+        for Row { label, body, want } in rows {
             let applied = applied_runtime(body).map(|cfg| (*cfg.share_group).clone());
-            actual.push((row, applied));
-            expected.push((row, want));
+            actual.push((label, applied));
+            expected.push((label, want));
         }
         assert!(actual == expected);
     }
@@ -525,14 +525,14 @@ mod tests {
             max_heartbeat_interval: Duration,
         }
         struct Row {
-            row: &'static str,
+            label: &'static str,
             body: &'static str,
             want: Result<Timings, &'static str>,
         }
         let secs = Duration::from_secs;
         let rows: [Row; 4] = [
             Row {
-                row: "the defaults",
+                label: "the defaults",
                 body: "",
                 want: Ok(Timings {
                     session_timeout: secs(45),
@@ -544,7 +544,7 @@ mod tests {
                 }),
             },
             Row {
-                row: "session timeout lowered with its minimum",
+                label: "session timeout lowered with its minimum",
                 body: "streams_group_min_session_timeout = \"10s\"\n\
                  streams_group_session_timeout = \"10s\"",
                 want: Ok(Timings {
@@ -557,7 +557,7 @@ mod tests {
                 }),
             },
             Row {
-                row: "heartbeat bounds widened",
+                label: "heartbeat bounds widened",
                 body: "streams_group_min_heartbeat_interval = \"1s\"\n\
                  streams_group_max_heartbeat_interval = \"30s\"\n\
                  streams_group_heartbeat_interval = \"20s\"",
@@ -571,7 +571,7 @@ mod tests {
                 }),
             },
             Row {
-                row: "session timeout lowered alone",
+                label: "session timeout lowered alone",
                 body: "streams_group_session_timeout = \"10s\"",
                 want: Err(
                     "invalid config: invalid runtime configuration: streams group session \
@@ -579,7 +579,7 @@ mod tests {
                 ),
             },
         ];
-        for Row { row, body, want } in rows {
+        for Row { label, body, want } in rows {
             let applied = applied_runtime(body).map(|cfg| {
                 let streams = &cfg.streams_group;
                 Timings {
@@ -591,7 +591,7 @@ mod tests {
                     max_heartbeat_interval: streams.max_heartbeat_interval,
                 }
             });
-            assert!(applied == want.map_err(str::to_owned), "{row}");
+            assert!(applied == want.map_err(str::to_owned), "{label}");
         }
     }
 

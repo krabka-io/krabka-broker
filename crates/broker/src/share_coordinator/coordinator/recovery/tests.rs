@@ -956,6 +956,12 @@ type Loaded = HashMap<ShareStateKey3, SharePartitionState>;
 /// unsupported value version and a corrupt value fail the load.
 #[tokio::test]
 async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
+    struct Case {
+        name: &'static str,
+        odd: RecordBatch,
+        expected: Option<Loaded>,
+    }
+
     use crate::txn::marker::{MarkerType, build_marker_batch};
 
     let topic_id = uuid::Uuid::from_bytes([48; 16]);
@@ -1009,11 +1015,6 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
         ),
     ]);
 
-    struct Case {
-        name: &'static str,
-        odd: RecordBatch,
-        expected: Option<Loaded>,
-    }
     let cases: Vec<Case> = vec![
         Case {
             name: "unknown type 2 with a value",

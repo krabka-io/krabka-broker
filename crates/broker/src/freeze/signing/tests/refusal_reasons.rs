@@ -21,6 +21,13 @@ use crate::{
 /// has to be reachable and each one has to name its own check.
 #[test]
 fn each_refusal_names_its_own_check_under_one_code() {
+    struct Case<'a> {
+        label: &'static str,
+        record: TopicFreezeRecord,
+        check: FreezeSignatureCheck<'a>,
+        expected: SignatureRefusal,
+    }
+
     let trust = trust();
     let good = record();
     let replaced = TopicFreezeRecord {
@@ -28,12 +35,6 @@ fn each_refusal_names_its_own_check_under_one_code() {
         ..record()
     };
 
-    struct Case<'a> {
-        label: &'static str,
-        record: TopicFreezeRecord,
-        check: FreezeSignatureCheck<'a>,
-        expected: SignatureRefusal,
-    }
     let cases: Vec<Case<'_>> = vec![
         Case {
             label: "an unknown key_id",

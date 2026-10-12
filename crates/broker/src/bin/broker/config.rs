@@ -207,12 +207,13 @@ mod tests {
 
     #[test]
     fn the_controller_listener_defaults_to_port_9093_and_yields_to_its_flag() {
-        let _guard = env_guard();
         struct Case {
             name: &'static str,
             flags: &'static [&'static str],
             expected: &'static str,
         }
+
+        let _guard = env_guard();
         let cases: [Case; 5] = [
             Case {
                 name: "default",

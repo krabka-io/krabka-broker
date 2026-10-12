@@ -381,13 +381,13 @@ fn static_boolean_keys_report_their_provenance() {
 /// default value.
 #[test]
 fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
-    let base = static_settings(&BrokerConfig::default());
     /// A static setting beyond the base: its key and value.
     struct ExtraSetting {
         key: &'static str,
         value: &'static str,
     }
 
+    let base = static_settings(&BrokerConfig::default());
     let with = |extra: &[ExtraSetting]| {
         let mut settings = base.clone();
         settings.extend(

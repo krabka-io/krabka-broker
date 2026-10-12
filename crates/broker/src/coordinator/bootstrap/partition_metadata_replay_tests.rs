@@ -68,6 +68,12 @@ fn replay(records: Vec<LogRecord>) -> Outcome {
 
 #[test]
 fn partition_metadata_replays_as_kafka_4_3_1_does() {
+    struct Case {
+        name: &'static str,
+        records: Vec<LogRecord>,
+        expected: Outcome,
+    }
+
     let epoch = |epoch: i32| {
         GroupMetadataValue {
             epoch,
@@ -86,11 +92,6 @@ fn partition_metadata_replays_as_kafka_4_3_1_does() {
     version_1[1] = 1;
     let truncated = value().slice(..5);
 
-    struct Case {
-        name: &'static str,
-        records: Vec<LogRecord>,
-        expected: Outcome,
-    }
     let cases = vec![
         Case {
             name: "a value creates an empty consumer group that holds the record",

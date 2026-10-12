@@ -568,6 +568,11 @@ mod tests {
     /// Kafka's defaults. A value that is refused names its field.
     #[test]
     fn metadata_log_keys_take_kafkas_domains() {
+        struct Case {
+            line: &'static str,
+            expected: Result<krabka_raft::MetadataLogConfig, &'static str>,
+        }
+
         use krabka_units::{bytes, days, mebibytes, millis};
 
         let base = krabka_raft::MetadataLogConfig::default();
@@ -601,10 +606,6 @@ mod tests {
                 ..base
             })
         };
-        struct Case {
-            line: &'static str,
-            expected: Result<krabka_raft::MetadataLogConfig, &'static str>,
-        }
         let cases: [Case; 26] = [
             // `INT` with `atLeast(8388608)`.
             Case {

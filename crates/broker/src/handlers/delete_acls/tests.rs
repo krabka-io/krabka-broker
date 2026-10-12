@@ -198,6 +198,13 @@ fn sorted(mut acls: Vec<AclEntry>) -> Vec<AclEntry> {
 /// value, not a wildcard.
 #[tokio::test]
 async fn handle_deletes_exactly_what_kafka_matches() {
+    /// A case name, the filter, and the ACLs it must delete.
+    struct DeleteCase {
+        name: &'static str,
+        filter: DeleteAclsFilter,
+        want_deleted: Vec<AclEntry>,
+    }
+
     broker_fixture!(
         (broker_handle, _dir, broker),
         start_broker(configured_authorizer())
@@ -237,13 +244,6 @@ async fn handle_deletes_exactly_what_kafka_matches() {
         prefixed_bar.clone(),
         literal_food.clone(),
     ];
-
-    /// A case name, the filter, and the ACLs it must delete.
-    struct DeleteCase {
-        name: &'static str,
-        filter: DeleteAclsFilter,
-        want_deleted: Vec<AclEntry>,
-    }
 
     let cases: Vec<DeleteCase> = vec![
         DeleteCase {
@@ -381,6 +381,13 @@ async fn handle_lists_an_acl_under_every_filter_that_matches_it() {
 /// still run.
 #[tokio::test]
 async fn handle_refuses_a_filter_with_an_undefined_byte_and_runs_the_rest() {
+    /// An edit that gives a filter an undefined byte, and the message Kafka
+    /// answers with, if the byte is refused.
+    struct UndefinedByteCase {
+        edit: Edit,
+        message: Option<&'static str>,
+    }
+
     type Edit = fn(&mut DeleteAclsFilter);
 
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
@@ -388,13 +395,6 @@ async fn handle_refuses_a_filter_with_an_undefined_byte_and_runs_the_rest() {
     seed_acls(&broker_handle, vec![doomed.clone()]).await;
     let broker = broker_handle.broker_arc_for_test();
     test_ctx!(ctx, "admin");
-
-    /// An edit that gives a filter an undefined byte, and the message Kafka
-    /// answers with, if the byte is refused.
-    struct UndefinedByteCase {
-        edit: Edit,
-        message: Option<&'static str>,
-    }
 
     let cases: [UndefinedByteCase; 7] = [
         UndefinedByteCase {

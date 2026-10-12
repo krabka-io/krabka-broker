@@ -246,6 +246,14 @@ barrier_max_topics_per_group = 16
     /// coordinator keys: `Some` is the applied value, `None` a refusal.
     #[test]
     fn share_coordinator_keys_follow_kafka_defaults_and_bounds() {
+        struct Row {
+            row: &'static str,
+            /// The `[runtime]` body.
+            body: &'static str,
+            /// The expected share coordinator config.
+            expected: Option<ShareCoordinatorConfig>,
+        }
+
         use std::time::Duration;
 
         use krabka_compression::CompressionType;
@@ -257,13 +265,6 @@ barrier_max_topics_per_group = 16
             f(&mut config);
             Some(config)
         };
-        struct Row {
-            row: &'static str,
-            /// The `[runtime]` body.
-            body: &'static str,
-            /// The expected share coordinator config.
-            expected: Option<ShareCoordinatorConfig>,
-        }
         let rows: [Row; 20] = [
             Row {
                 row: "defaults",

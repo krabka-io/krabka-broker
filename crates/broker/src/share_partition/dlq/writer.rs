@@ -1141,16 +1141,17 @@ mod tests {
     /// failed write and an attempt for each try.
     #[tokio::test(start_paused = true)]
     async fn a_write_that_runs_out_of_attempts_counts_one_failure() {
+        struct Case {
+            broker: FakeBroker,
+            reason: &'static str,
+        }
+
         let not_leader = |index, request: &ProduceRequest| {
             Ok(answer_rows(request, index, |_, _, _| {
                 codes::NOT_LEADER_OR_FOLLOWER
             }))
         };
         let no_response = |_, _: &ProduceRequest| Err("connection refused".to_owned());
-        struct Case {
-            broker: FakeBroker,
-            reason: &'static str,
-        }
         let cases: [Case; 2] = [
             Case {
                 broker: FakeBroker::answering(not_leader),

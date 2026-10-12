@@ -352,12 +352,13 @@ mod tests {
     /// with `log.dirs=/tmp/d1,/tmp/d2`.
     #[test]
     fn values_resolve_as_kafka_validates_them() {
-        let d1 = PathBuf::from("/d1");
-        let d2 = PathBuf::from("/d2");
         struct Case {
             value: &'static str,
             want: Result<Vec<PathBuf>, &'static str>,
         }
+
+        let d1 = PathBuf::from("/d1");
+        let d2 = PathBuf::from("/d2");
         let cases: [Case; 10] = [
             Case {
                 value: "",
@@ -565,13 +566,14 @@ mod tests {
     /// resolve keeps the set that was in force.
     #[test]
     fn the_set_follows_the_dynamic_value_and_keeps_the_last_good_one() {
-        let cordoned = CordonedLogDirs::new(dirs(), Some("/d2".into()));
-        check!(cordoned.cordoned() == vec![PathBuf::from("/d2")]);
-
         struct Step {
             value: Option<&'static str>,
             want: Vec<PathBuf>,
         }
+
+        let cordoned = CordonedLogDirs::new(dirs(), Some("/d2".into()));
+        check!(cordoned.cordoned() == vec![PathBuf::from("/d2")]);
+
         let steps: [Step; 5] = [
             Step {
                 value: Some("/d1"),

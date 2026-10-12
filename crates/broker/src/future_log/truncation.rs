@@ -203,6 +203,13 @@ mod tests {
     /// end (15), and the truncation it makes.
     #[test]
     fn the_truncation_state_follows_kafkas_getoffsettruncationstate() {
+        struct Case {
+            label: &'static str,
+            current: EpochEnd,
+            offset: Offset,
+            completed: bool,
+        }
+
         let CheckpointInDir {
             dir: _dir,
             checkpoint: future,
@@ -213,12 +220,6 @@ mod tests {
                 start: 10,
             },
         ]);
-        struct Case {
-            label: &'static str,
-            current: EpochEnd,
-            offset: Offset,
-            completed: bool,
-        }
         let epoch_end = |epoch, end| EpochEnd { epoch, end };
         let cases = [
             Case {

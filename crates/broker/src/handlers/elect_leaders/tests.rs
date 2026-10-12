@@ -428,6 +428,12 @@ async fn seed_preferred_topic(broker: &Broker) {
 /// `ELECTION_NOT_NEEDED`; and the row messages are Kafka's.
 #[tokio::test]
 async fn the_handler_elects_exactly_the_partitions_the_request_names() {
+    /// The topic list of a request and the topic rows it must answer with.
+    struct ElectCase {
+        topic_partitions: Option<Vec<TopicPartitions>>,
+        expected: Vec<ReplicaElectionResult>,
+    }
+
     const NOT_NEEDED: &str = "Leader election not needed for topic partition.";
     let StartedBroker {
         handle: broker_handle,
@@ -436,12 +442,6 @@ async fn the_handler_elects_exactly_the_partitions_the_request_names() {
     let broker = broker_handle.broker_arc_for_test();
     seed_preferred_topic(&broker).await;
     test_ctx!(ctx, "admin");
-    /// The topic list of a request and the topic rows it must answer with.
-    struct ElectCase {
-        topic_partitions: Option<Vec<TopicPartitions>>,
-        expected: Vec<ReplicaElectionResult>,
-    }
-
     let cases: Vec<ElectCase> = vec![
         ElectCase {
             topic_partitions: Some(vec![named(TOPIC, &[])]),

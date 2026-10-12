@@ -558,44 +558,45 @@ mod tests {
     /// identity to authorize the embedded request against.
     #[test]
     fn a_principal_kafka_would_refuse_is_a_deserialization_failure() {
+        struct Case {
+            label: &'static str,
+            bytes: Option<Vec<u8>>,
+        }
+
         let valid = JVM_USER_ALICE;
         let mut wrong_version = valid.to_vec();
         wrong_version[1] = 1;
         let mut truncated_body = valid.to_vec();
         truncated_body.truncate(4);
 
-        struct Case {
-            case: &'static str,
-            bytes: Option<Vec<u8>>,
-        }
         let cases: [Case; 5] = [
             Case {
-                case: "null principal",
+                label: "null principal",
                 bytes: None,
             },
             Case {
-                case: "empty principal",
+                label: "empty principal",
                 bytes: Some(Vec::new()),
             },
             Case {
-                case: "version prefix only",
+                label: "version prefix only",
                 bytes: Some(vec![0x00]),
             },
             Case {
-                case: "schema version above the supported range",
+                label: "schema version above the supported range",
                 bytes: Some(wrong_version),
             },
             Case {
-                case: "body truncated mid-string",
+                label: "body truncated mid-string",
                 bytes: Some(truncated_body),
             },
         ];
 
-        for Case { case, bytes } in cases {
+        for Case { label, bytes } in cases {
             check!(
                 deserialize_principal(bytes.as_deref())
                     == Err(EnvelopeError::PrincipalDeserializationFailure),
-                "case: {case}"
+                "label: {label}"
             );
         }
     }
@@ -624,6 +625,12 @@ mod tests {
     /// `UnknownHostException` `EnvelopeUtils` reports as an invalid request.
     #[test]
     fn a_client_host_address_decodes_the_way_inet_address_get_by_address_does() {
+        struct Case<'a> {
+            label: &'static str,
+            bytes: &'a [u8],
+            want: Result<std::net::IpAddr, EnvelopeError>,
+        }
+
         let mapped_v4 = {
             let mut octets = [0u8; 16];
             octets[10] = 0xff;
@@ -631,48 +638,43 @@ mod tests {
             octets[12..].copy_from_slice(&[10, 1, 2, 3]);
             octets
         };
-        struct Case<'a> {
-            case: &'static str,
-            bytes: &'a [u8],
-            want: Result<std::net::IpAddr, EnvelopeError>,
-        }
         let cases: [Case<'_>; 6] = [
             Case {
-                case: "four octets are an IPv4 address",
+                label: "four octets are an IPv4 address",
                 bytes: &[10, 1, 2, 3],
                 want: { Ok(std::net::IpAddr::from([10, 1, 2, 3])) },
             },
             Case {
-                case: "sixteen octets are an IPv6 address",
+                label: "sixteen octets are an IPv6 address",
                 bytes: &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
                 want: Ok("2001:db8::1".parse().expect("literal IPv6 address")),
             },
             Case {
-                case: "an IPv4-mapped IPv6 address folds to its IPv4 form",
+                label: "an IPv4-mapped IPv6 address folds to its IPv4 form",
                 bytes: &mapped_v4,
                 want: Ok(std::net::IpAddr::from([10, 1, 2, 3])),
             },
             Case {
-                case: "an empty address",
+                label: "an empty address",
                 bytes: &[],
                 want: Err(EnvelopeError::InvalidRequest),
             },
             Case {
-                case: "three octets",
+                label: "three octets",
                 bytes: &[10, 1, 2],
                 want: Err(EnvelopeError::InvalidRequest),
             },
             Case {
-                case: "five octets",
+                label: "five octets",
                 bytes: &[10, 1, 2, 3, 4],
                 want: Err(EnvelopeError::InvalidRequest),
             },
         ];
 
-        for Case { case, bytes, want } in cases {
+        for Case { label, bytes, want } in cases {
             check!(
                 deserialize_client_host_address(bytes) == want,
-                "case: {case}"
+                "label: {label}"
             );
         }
     }
@@ -712,26 +714,26 @@ mod tests {
     #[test]
     fn a_client_host_address_round_trips_as_inet_address_get_address_writes_it() {
         struct Case {
-            case: &'static str,
+            label: &'static str,
             ip: std::net::IpAddr,
             octets: &'static [u8],
             decoded: std::net::IpAddr,
         }
         let cases: [Case; 3] = [
             Case {
-                case: "an IPv4 address is four octets",
+                label: "an IPv4 address is four octets",
                 ip: std::net::IpAddr::from([10, 1, 2, 3]),
                 octets: &[10, 1, 2, 3],
                 decoded: std::net::IpAddr::from([10, 1, 2, 3]),
             },
             Case {
-                case: "an IPv6 address is sixteen octets",
+                label: "an IPv6 address is sixteen octets",
                 ip: std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
                 octets: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
                 decoded: std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
             },
             Case {
-                case: "an IPv4-mapped IPv6 address is the four IPv4 octets",
+                label: "an IPv4-mapped IPv6 address is the four IPv4 octets",
                 ip: "::ffff:10.1.2.3".parse().expect("literal IPv6 address"),
                 octets: &[10, 1, 2, 3],
                 decoded: std::net::IpAddr::from([10, 1, 2, 3]),
@@ -739,7 +741,7 @@ mod tests {
         ];
 
         for Case {
-            case,
+            label,
             ip,
             octets,
             decoded,
@@ -747,10 +749,10 @@ mod tests {
         {
             let bytes = serialize_client_host_address(ip);
 
-            check!(bytes.as_ref() == octets, "case: {case}");
+            check!(bytes.as_ref() == octets, "label: {label}");
             check!(
                 deserialize_client_host_address(&bytes) == Ok(decoded),
-                "case: {case}"
+                "label: {label}"
             );
         }
     }
@@ -887,32 +889,32 @@ mod tests {
     #[test]
     fn a_response_too_short_for_its_header_is_refused() {
         struct Case {
-            case: &'static str,
+            label: &'static str,
             data: &'static [u8],
             flexible: bool,
         }
         let cases: [Case; 2] = [
             Case {
-                case: "three bytes",
+                label: "three bytes",
                 data: &[0, 0, 1],
                 flexible: false,
             },
             Case {
-                case: "a tagged-fields count with no fields after it",
+                label: "a tagged-fields count with no fields after it",
                 data: &[0, 0, 0, 1, 1],
                 flexible: true,
             },
         ];
 
         for Case {
-            case,
+            label,
             data,
             flexible,
         } in cases
         {
             check!(
                 unwrap_response(19, flexible, &Bytes::copy_from_slice(data)).is_err(),
-                "case: {case}"
+                "label: {label}"
             );
         }
     }
@@ -1104,6 +1106,13 @@ mod tests {
     ///   `InvalidRequestException` of `RequestContext.parseRequest`.
     #[test]
     fn an_embedded_request_kafka_would_refuse_gets_the_code_kafka_gives() {
+        struct Case {
+            label: &'static str,
+            frame: Bytes,
+            unstable: crate::api_catalog::UnstableApiVersions,
+            want: Result<(), EnvelopeError>,
+        }
+
         use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
 
         let create_topics =
@@ -1112,21 +1121,15 @@ mod tests {
             krabka_protocol::owned::unregister_controller_request::UnregisterControllerRequest,
         >(0);
         let truncated = &create_topics[..create_topics.len() - 1];
-        struct Case {
-            case: &'static str,
-            frame: Bytes,
-            unstable: crate::api_catalog::UnstableApiVersions,
-            want: Result<(), EnvelopeError>,
-        }
         let cases: [Case; 14] = [
             Case {
-                case: "a frame too short to hold a header",
+                label: "a frame too short to hold a header",
                 frame: Bytes::from_static(&[0, 19, 0]),
                 unstable: Disabled,
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
-                case: "Produce is not forwardable",
+                label: "Produce is not forwardable",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(0),
                     api_version: krabka_ids::ApiVersion(9),
@@ -1137,7 +1140,7 @@ mod tests {
                 want: Err(EnvelopeError::InvalidRequest),
             },
             Case {
-                case: "a nested Envelope is not forwardable",
+                label: "a nested Envelope is not forwardable",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(58),
                     api_version: krabka_ids::ApiVersion(0),
@@ -1148,7 +1151,7 @@ mod tests {
                 want: Err(EnvelopeError::InvalidRequest),
             },
             Case {
-                case: "a non-forwardable key is refused before its body is read",
+                label: "a non-forwardable key is refused before its body is read",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(3),
                     api_version: krabka_ids::ApiVersion(12),
@@ -1159,7 +1162,7 @@ mod tests {
                 want: Err(EnvelopeError::InvalidRequest),
             },
             Case {
-                case: "the removed LeaderAndIsr has no valid version",
+                label: "the removed LeaderAndIsr has no valid version",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(4),
                     api_version: krabka_ids::ApiVersion(0),
@@ -1170,7 +1173,7 @@ mod tests {
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
-                case: "the removed ControlledShutdown has no valid version",
+                label: "the removed ControlledShutdown has no valid version",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(7),
                     api_version: krabka_ids::ApiVersion(0),
@@ -1181,7 +1184,7 @@ mod tests {
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
-                case: "an api key past the release's last is unknown",
+                label: "an api key past the release's last is unknown",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(93),
                     api_version: krabka_ids::ApiVersion(0),
@@ -1192,7 +1195,7 @@ mod tests {
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
-                case: "a negative api key is unknown",
+                label: "a negative api key is unknown",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(-1),
                     api_version: krabka_ids::ApiVersion(0),
@@ -1203,7 +1206,7 @@ mod tests {
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
-                case: "trunk's UnregisterController is unknown to 4.3.1",
+                label: "trunk's UnregisterController is unknown to 4.3.1",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(94),
                     api_version: krabka_ids::ApiVersion(0),
@@ -1214,7 +1217,7 @@ mod tests {
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
-                case: "trunk's UnregisterController is known under the flag",
+                label: "trunk's UnregisterController is known under the flag",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(94),
                     api_version: krabka_ids::ApiVersion(0),
@@ -1225,7 +1228,7 @@ mod tests {
                 want: Ok(()),
             },
             Case {
-                case: "a body that does not decode",
+                label: "a body that does not decode",
                 frame: request_frame(EmbeddedFrameSetup {
                     body: b"garbage",
                     ..Default::default()
@@ -1234,7 +1237,7 @@ mod tests {
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
-                case: "a body cut short",
+                label: "a body cut short",
                 frame: request_frame(EmbeddedFrameSetup {
                     body: truncated,
                     ..Default::default()
@@ -1243,7 +1246,7 @@ mod tests {
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
-                case: "a version the request type does not have",
+                label: "a version the request type does not have",
                 frame: request_frame(EmbeddedFrameSetup {
                     api_version: krabka_ids::ApiVersion(99),
                     body: &create_topics,
@@ -1253,7 +1256,7 @@ mod tests {
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
-                case: "a body that decodes",
+                label: "a body that decodes",
                 frame: request_frame(EmbeddedFrameSetup {
                     body: &create_topics,
                     ..Default::default()
@@ -1264,7 +1267,7 @@ mod tests {
         ];
 
         for Case {
-            case,
+            label,
             frame,
             unstable,
             want,
@@ -1272,7 +1275,7 @@ mod tests {
         {
             check!(
                 unwrap_request(&frame, |_, _| true, unstable).map(|_| ()) == want,
-                "case: {case}"
+                "label: {label}"
             );
         }
     }

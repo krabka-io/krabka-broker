@@ -431,18 +431,19 @@ mod tests {
     /// initializing.
     #[test]
     fn partitions_to_initialize_skip_initialized_and_fresh_initializing() {
-        let orders = Uuid([1; 16]);
-        let input = ReconcileInput {
-            topic_id_by_name: HashMap::from([("orders".to_owned(), orders)]),
-            partitions_per_topic: HashMap::from([(orders, 4)]),
-            ..ReconcileInput::default()
-        };
         struct Row {
             row: &'static str,
             /// When initializing partition 1 was recorded.
             recorded_at: i64,
             expected: Vec<i32>,
         }
+
+        let orders = Uuid([1; 16]);
+        let input = ReconcileInput {
+            topic_id_by_name: HashMap::from([("orders".to_owned(), orders)]),
+            partitions_per_topic: HashMap::from([(orders, 4)]),
+            ..ReconcileInput::default()
+        };
         let rows = [
             Row {
                 row: "fresh initializing entry is covered",
@@ -667,15 +668,6 @@ mod tests {
     /// loaded yet deletes nothing.
     #[test]
     fn a_topic_missing_from_the_image_leaves_every_set() {
-        let kept = Uuid([5; 16]);
-        let gone = Uuid([6; 16]);
-        let image = || {
-            TopicImage::Snapshot(ReconcileInput {
-                topic_id_by_name: HashMap::from([("kept".to_owned(), kept)]),
-                partitions_per_topic: HashMap::from([(kept, 2)]),
-                ..ReconcileInput::default()
-            })
-        };
         struct Row {
             row: &'static str,
             image: TopicImage,
@@ -687,6 +679,16 @@ mod tests {
             deleting: Vec<Uuid>,
             changed: bool,
         }
+
+        let kept = Uuid([5; 16]);
+        let gone = Uuid([6; 16]);
+        let image = || {
+            TopicImage::Snapshot(ReconcileInput {
+                topic_id_by_name: HashMap::from([("kept".to_owned(), kept)]),
+                partitions_per_topic: HashMap::from([(kept, 2)]),
+                ..ReconcileInput::default()
+            })
+        };
         let rows = [
             Row {
                 row: "a deleted topic goes",

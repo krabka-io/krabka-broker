@@ -81,12 +81,13 @@ mod tests {
     /// advertises the host name, and loopback only when there is no name.
     #[test]
     fn a_wildcard_bind_advertises_the_host_name() {
-        let name = || Some("ducker02".to_owned());
-        let nameless = || None;
         struct Case {
             want: &'static str,
             advertised: String,
         }
+
+        let name = || Some("ducker02".to_owned());
+        let nameless = || None;
         let cases = [
             Case {
                 want: "192.0.2.10",

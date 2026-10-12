@@ -797,6 +797,14 @@ mod tests {
 
     #[test]
     fn keyed_events_replay_as_latest_value_per_range() {
+        struct Row {
+            what: &'static str,
+            /// The events in partition order.
+            events: &'static [Event],
+            /// The object the range resolves to.
+            resolves_to: Option<&'static str>,
+        }
+
         use Event::{Malformed, Tombstone, Value};
 
         let expected = entry(0, 0, 4);
@@ -806,13 +814,6 @@ mod tests {
             format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry],
         };
-        struct Row {
-            what: &'static str,
-            /// The events in partition order.
-            events: &'static [Event],
-            /// The object the range resolves to.
-            resolves_to: Option<&'static str>,
-        }
         let rows: [Row; 6] = [
             Row {
                 what: "a value is stored",

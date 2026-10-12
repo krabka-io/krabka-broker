@@ -578,14 +578,15 @@ mod tests {
 
     #[test]
     fn only_witnesses_alive_is_unavailable_whatever_the_unclean_flag_says() {
-        // Leader 1 and data replica 3 are dead. Only witness 2 is alive, and
-        // it holds every committed record. Electing 3 would discard them, so
-        // the answer is Unavailable: never Recover, never an unclean Elect.
-        let pr = partition_record(1, &[1, 2, 3], &[1, 2, 3]);
         struct Case {
             strategy: RecoveryStrategy,
             unclean_enabled: bool,
         }
+
+        // Leader 1 and data replica 3 are dead. Only witness 2 is alive, and
+        // it holds every committed record. Electing 3 would discard them, so
+        // the answer is Unavailable: never Recover, never an unclean Elect.
+        let pr = partition_record(1, &[1, 2, 3], &[1, 2, 3]);
         let cases = [
             Case {
                 strategy: RecoveryStrategy::None,
@@ -783,12 +784,13 @@ mod tests {
     /// election of the one replica that is left.
     #[test]
     fn an_elr_member_that_cannot_lead_falls_through_to_the_unclean_election() {
-        let pr = partition_record(1, &[1, 2, 3], &[1]);
         struct Case {
             label: &'static str,
             alive: &'static [u64],
             witness_ids: &'static [u64],
         }
+
+        let pr = partition_record(1, &[1, 2, 3], &[1]);
         let cases = [
             Case {
                 label: "the only ELR member is dead",

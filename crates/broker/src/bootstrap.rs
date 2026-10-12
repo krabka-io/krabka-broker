@@ -863,6 +863,12 @@ mod tests {
 
     #[test]
     fn a_missing_or_unknown_version_is_refused() {
+        struct Case {
+            what: &'static str,
+            bytes: Vec<u8>,
+            want: BootstrapRecordsVersionError,
+        }
+
         let mut pre_1_0 = Vec::new();
         for record in golden_records() {
             use wincode::Serialize as _;
@@ -873,11 +879,6 @@ mod tests {
         let pre_1_0_version = i16::from_be_bytes([pre_1_0[0], pre_1_0[1]]);
         let mut version_one = GOLDEN_BYTES.to_vec();
         version_one[..2].copy_from_slice(&1_i16.to_be_bytes());
-        struct Case {
-            what: &'static str,
-            bytes: Vec<u8>,
-            want: BootstrapRecordsVersionError,
-        }
         let cases: [Case; 5] = [
             Case {
                 what: "empty",
@@ -925,13 +926,14 @@ mod tests {
     /// body that does not decode are each refused with their own message.
     #[test]
     fn malformed_framing_after_the_header_is_refused() {
-        let header = BOOTSTRAP_RECORDS_VERSION.to_be_bytes();
-        let framed = |tail: &[u8]| [&header[..], tail].concat();
         struct Case {
             what: &'static str,
             bytes: Vec<u8>,
             want: &'static str,
         }
+
+        let header = BOOTSTRAP_RECORDS_VERSION.to_be_bytes();
+        let framed = |tail: &[u8]| [&header[..], tail].concat();
         let cases: [Case; 4] = [
             Case {
                 what: "a truncated length",

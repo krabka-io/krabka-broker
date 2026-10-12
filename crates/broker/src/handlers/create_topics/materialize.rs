@@ -158,11 +158,6 @@ mod tests {
     /// nor the ISR.
     #[tokio::test]
     async fn a_new_partition_leader_records_its_epoch_before_publishing_the_role() {
-        const LOCAL: NodeId = NodeId(1);
-        let leadership = |leader| InitialLeadership {
-            leader,
-            isr: vec![NodeId(1), NodeId(2)],
-        };
         /// A case name, the leader, whether the topic is diskless, whether the
         /// epoch checkpoint fails, whether the install succeeds, and the role left behind.
         struct InstallCase {
@@ -174,6 +169,11 @@ mod tests {
             expected: InstalledRole,
         }
 
+        const LOCAL: NodeId = NodeId(1);
+        let leadership = |leader| InitialLeadership {
+            leader,
+            isr: vec![NodeId(1), NodeId(2)],
+        };
         let cases = [
             InstallCase {
                 name: "local disk-backed leader",

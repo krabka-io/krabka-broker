@@ -25,6 +25,12 @@ use crate::{
 /// row's code says which check it failed.
 #[test]
 fn every_forged_or_replayed_record_is_refused_with_one_code() {
+    struct Case<'a> {
+        label: &'static str,
+        record: TopicFreezeRecord,
+        check: FreezeSignatureCheck<'a>,
+    }
+
     let trust = trust();
     let good = record();
     let replaced = TopicFreezeRecord {
@@ -33,11 +39,6 @@ fn every_forged_or_replayed_record_is_refused_with_one_code() {
     };
 
     // Each case builds the record the broker sees and the check it runs.
-    struct Case<'a> {
-        label: &'static str,
-        record: TopicFreezeRecord,
-        check: FreezeSignatureCheck<'a>,
-    }
     let cases: Vec<Case<'_>> = vec![
         Case {
             label: "a signature over frozen: true presented as the thaw",
