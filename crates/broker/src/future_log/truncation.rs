@@ -42,6 +42,7 @@ struct TruncationState {
 
 /// A current log's answer about an epoch: the epoch it names and where that
 /// epoch ends.
+#[derive(Clone, Copy)]
 struct EpochEnd {
     epoch: LeaderEpoch,
     end: Offset,

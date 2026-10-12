@@ -186,18 +186,21 @@ pub(crate) async fn run(
 }
 
 /// The partitions a sweep walks, and the node whose leadership it follows.
+#[derive(Clone, Copy)]
 struct SweepRegistry<'a> {
     partitions: &'a PartitionRegistry,
     node_id: NodeId,
 }
 
 /// The instant a sweep runs at, and whether it recomputes every partition.
+#[derive(Clone, Copy)]
 struct SweepClock {
     now_ms: i64,
     advance_all: bool,
 }
 
 /// Where a sweep reports what it did.
+#[derive(Clone, Copy)]
 struct SweepReporting<'a> {
     metrics: &'a dyn DeliveryMetrics,
     waker: &'a Arc<DeliveryWaker>,

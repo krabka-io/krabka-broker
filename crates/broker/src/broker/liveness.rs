@@ -172,6 +172,7 @@ pub(super) struct LivenessStartup {
 /// The two places the liveness subsystem reports to: the metric families, and
 /// the audit log that a bypassed background unclean recovery writes its
 /// evidence to.
+#[derive(Clone, Copy)]
 pub(super) struct LivenessReporting<'a> {
     pub(super) metrics: &'a BrokerMetrics,
     pub(super) audit_log: &'a Arc<krabka_audit::AuditLog>,
@@ -179,6 +180,7 @@ pub(super) struct LivenessReporting<'a> {
 
 /// The log-dir registries the liveness subsystem reads: health, identity, and
 /// the cordoned set.
+#[derive(Clone, Copy)]
 pub(super) struct LivenessLogDirs<'a> {
     pub(super) log_dir_status: &'a LogDirRegistry,
     pub(super) log_dir_ids: &'a LogDirIds,

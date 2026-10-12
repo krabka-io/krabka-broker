@@ -290,6 +290,7 @@ fn parse_loaded_key(
 }
 
 /// Where a replayed record sits: its log offset, and the snapshot threshold.
+#[derive(Clone, Copy)]
 struct ReplayPosition {
     rec_offset: Offset,
     updates_per_snapshot: u32,

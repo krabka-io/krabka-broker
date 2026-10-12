@@ -43,6 +43,7 @@ struct PartitionWal {
 }
 
 /// The topic and partition a WAL serves.
+#[derive(Clone, Copy)]
 struct PartitionIdentity<'a> {
     topic: &'a str,
     topic_id: Option<uuid::Uuid>,
