@@ -141,10 +141,7 @@ fn format_seeds_krabka_version_only_when_overridden() {
                     }
                     _ => None,
                 });
-            Case {
-                flags,
-                seeded,
-            }
+            Case { flags, seeded }
         })
         .collect();
     let expected: Vec<_> = cases.to_vec();

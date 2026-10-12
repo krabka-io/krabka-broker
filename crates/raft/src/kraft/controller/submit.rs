@@ -1040,34 +1040,35 @@ mod tests {
 
     #[test]
     fn created_topic_names_lists_only_names_absent_from_the_image() {
+        struct Scenario {
+            case: &'static str,
+            records: Vec<MetadataRecord>,
+            expected: Vec<&'static str>,
+        }
+
         let topic = |name: &str, id: u128| {
             MetadataRecord::V1Topic(single_partition_topic(name, Uuid::from_u128(id)))
         };
         let mut image = MetadataImage::default();
         image.apply(&topic("existing", 1));
 
-        struct Case {
-            case: &'static str,
-            records: Vec<MetadataRecord>,
-            expected: Vec<&'static str>,
-        }
         let cases = [
-            Case {
+            Scenario {
                 case: "new topic",
                 records: vec![topic("new", 2)],
                 expected: vec!["new"],
             },
-            Case {
+            Scenario {
                 case: "existing topic",
                 records: vec![topic("existing", 1)],
                 expected: vec![],
             },
-            Case {
+            Scenario {
                 case: "name repeated in one batch",
                 records: vec![topic("new", 2), topic("new", 3), topic("other", 4)],
                 expected: vec!["new", "other"],
             },
-            Case {
+            Scenario {
                 case: "no topic records",
                 records: vec![MetadataRecord::V1DeleteTopic(
                     krabka_metadata::DeleteTopicRecord {
@@ -1077,7 +1078,7 @@ mod tests {
                 expected: vec![],
             },
         ];
-        for Case {
+        for Scenario {
             case,
             records,
             expected,

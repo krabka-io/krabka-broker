@@ -582,6 +582,12 @@ fn add_request(id: u64, directory: u128) -> AddVoter {
 /// admitted.
 #[tokio::test]
 async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
+    struct Case {
+        label: &'static str,
+        fetches: Vec<Fetch>,
+        admitted: bool,
+    }
+
     use crate::reconfig::{ReconfigOutcome, VoterChange};
 
     /// One fetch by the candidate: its directory, the offset it asks for
@@ -598,11 +604,6 @@ async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
         append_first,
     };
     let candidate_directory = 7;
-    struct Case {
-        label: &'static str,
-        fetches: Vec<Fetch>,
-        admitted: bool,
-    }
     let cases = [
         Case {
             label: "it never fetched",

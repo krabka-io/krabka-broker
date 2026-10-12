@@ -192,15 +192,16 @@ fn engine_with_local_directory() -> EngineInDir {
 
 #[tokio::test]
 async fn vote_runs_kafka_request_checks() {
-    let top_level = |error_code| VoteResponse {
-        error_code,
-        ..Default::default()
-    };
     struct Row {
         label: &'static str,
         request: VoteRequest,
         expected: VoteResponse,
     }
+
+    let top_level = |error_code| VoteResponse {
+        error_code,
+        ..Default::default()
+    };
     let rows = vec![
         Row {
             label: "foreign cluster id",
@@ -451,15 +452,16 @@ fn begin_answer(error_code: i16, leader_id: i32, leader_epoch: i32) -> BeginQuor
 
 #[tokio::test]
 async fn begin_quorum_epoch_runs_kafka_request_checks() {
-    let top_level = |error_code| BeginQuorumEpochResponse {
-        error_code,
-        ..Default::default()
-    };
     struct Row {
         label: &'static str,
         request: BeginQuorumEpochRequest,
         expected: BeginQuorumEpochResponse,
     }
+
+    let top_level = |error_code| BeginQuorumEpochResponse {
+        error_code,
+        ..Default::default()
+    };
     let rows = vec![
         Row {
             label: "foreign cluster id",
@@ -556,6 +558,13 @@ fn candidates(ids: &[i32]) -> Vec<eqe_req::ReplicaInfo> {
 
 #[tokio::test]
 async fn end_quorum_epoch_runs_kafka_request_checks() {
+    struct Row {
+        label: &'static str,
+        request: EndQuorumEpochRequest,
+        expected: EndQuorumEpochResponse,
+        role: &'static str,
+    }
+
     let top_level = |error_code| EndQuorumEpochResponse {
         error_code,
         ..Default::default()
@@ -584,12 +593,6 @@ async fn end_quorum_epoch_runs_kafka_request_checks() {
         ..Default::default()
     };
     // (label, request, response, the role name after the request)
-    struct Row {
-        label: &'static str,
-        request: EndQuorumEpochRequest,
-        expected: EndQuorumEpochResponse,
-        role: &'static str,
-    }
     let rows = vec![
         Row {
             label: "foreign cluster id",
@@ -618,7 +621,7 @@ async fn end_quorum_epoch_runs_kafka_request_checks() {
         Row {
             label: "first preferred candidate elects at once",
             request: end_request(|r| {
-                r.topics[0].partitions[0].preferred_candidates = candidates(&[1, 3])
+                r.topics[0].partitions[0].preferred_candidates = candidates(&[1, 3]);
             }),
             expected: answer(0, -1),
             role: "Prospective",
@@ -632,7 +635,7 @@ async fn end_quorum_epoch_runs_kafka_request_checks() {
         Row {
             label: "second preferred candidate waits",
             request: end_request(|r| {
-                r.topics[0].partitions[0].preferred_candidates = candidates(&[3, 1])
+                r.topics[0].partitions[0].preferred_candidates = candidates(&[3, 1]);
             }),
             expected: answer(0, -1),
             role: "Unattached",
@@ -640,7 +643,7 @@ async fn end_quorum_epoch_runs_kafka_request_checks() {
         Row {
             label: "a replica the list does not name waits",
             request: end_request(|r| {
-                r.topics[0].partitions[0].preferred_candidates = candidates(&[3])
+                r.topics[0].partitions[0].preferred_candidates = candidates(&[3]);
             }),
             expected: answer(0, -1),
             role: "Unattached",
@@ -712,6 +715,7 @@ struct AnsweredLeader {
 
 /// The chunk that an answer carries: the snapshot's size, the chunk's
 /// position and its bytes.
+#[derive(Clone, Copy)]
 struct AnsweredChunk {
     size: i64,
     position: i64,
@@ -796,6 +800,12 @@ fn single_voter_leader_with_checkpoints() -> EngineInDir {
 
 #[tokio::test]
 async fn fetch_snapshot_runs_kafka_request_checks() {
+    struct Row {
+        label: &'static str,
+        request: FetchSnapshotRequest,
+        expected: FetchSnapshotResponse,
+    }
+
     let top_level = |error_code| FetchSnapshotResponse {
         error_code,
         ..Default::default()
@@ -805,11 +815,6 @@ async fn fetch_snapshot_runs_kafka_request_checks() {
         index: 0,
     };
     let leader = Some(AnsweredLeader { id: 1, epoch: 1 });
-    struct Row {
-        label: &'static str,
-        request: FetchSnapshotRequest,
-        expected: FetchSnapshotResponse,
-    }
     let rows = vec![
         Row {
             label: "foreign cluster id",

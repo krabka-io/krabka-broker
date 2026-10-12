@@ -28,6 +28,7 @@ fn raw_vote_body(request: &VoteRequest) -> Bytes {
 }
 
 /// The directory ids of the two replicas in a Vote.
+#[derive(Clone, Copy)]
 struct VoteDirectories {
     voter: uuid::Uuid,
     candidate: uuid::Uuid,

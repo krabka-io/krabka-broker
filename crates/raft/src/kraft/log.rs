@@ -972,23 +972,23 @@ mod tests {
     /// is merely damaged is a cache miss, and the log start is used.
     #[test]
     fn open_refuses_an_unknown_high_watermark_version_and_drops_a_damaged_one() {
-        struct Case {
+        struct Scenario {
             case: &'static str,
             contents: &'static [u8],
             want: Result<Offset, PersistedFormatError>,
         }
         let cases = [
-            Case {
+            Scenario {
                 case: "current version",
                 contents: HIGH_WATERMARK_V0_FIXTURE,
                 want: Ok(Offset(3)),
             },
-            Case {
+            Scenario {
                 case: "0.x layout",
                 contents: b"3",
                 want: Err(PersistedFormatError::MissingVersion),
             },
-            Case {
+            Scenario {
                 case: "future version",
                 contents: b"7\n3\n",
                 want: Err(PersistedFormatError::UnsupportedVersion {
@@ -997,18 +997,18 @@ mod tests {
                     max: 0,
                 }),
             },
-            Case {
+            Scenario {
                 case: "empty after a crash",
                 contents: b"",
                 want: Ok(Offset(0)),
             },
-            Case {
+            Scenario {
                 case: "not utf-8",
                 contents: b"0\n\xff\n",
                 want: Ok(Offset(0)),
             },
         ];
-        for Case {
+        for Scenario {
             case,
             contents,
             want,

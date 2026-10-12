@@ -117,7 +117,7 @@ fn reserved_marker_report(count: u64, relabel: bool) -> VerifyReport {
 }
 
 /// The counts a verification report is expected to carry.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VerifySummary {
     ok: bool,
     checkpoints: u64,

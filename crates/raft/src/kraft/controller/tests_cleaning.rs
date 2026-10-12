@@ -210,6 +210,12 @@ fn a_leader_appends_kip835_no_ops_that_change_nothing() {
 /// a `NoOpRecord` carrier is not one, and neither is any other record.
 #[test]
 fn only_an_empty_no_op_record_is_a_kip835_no_op() {
+    struct Case<'a> {
+        what: &'static str,
+        value: &'a [u8],
+        want: bool,
+    }
+
     let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     let carried = krabka_metadata::to_kraft_values(
         &krabka_metadata::MetadataRecord::V1FeaturesEpoch(krabka_metadata::FeaturesEpochRecord {
@@ -220,11 +226,6 @@ fn only_an_empty_no_op_record_is_a_kip835_no_op() {
     .expect("encode a carried record");
     let topic = krabka_metadata::to_kraft_values(&topic_record_named("t", 1)[0], &image)
         .expect("encode a topic record");
-    struct Case<'a> {
-        what: &'static str,
-        value: &'a [u8],
-        want: bool,
-    }
     let cases = [
         Case {
             what: "an empty no-op",

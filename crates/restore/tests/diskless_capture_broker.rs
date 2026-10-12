@@ -218,6 +218,11 @@ async fn await_flushed(broker: &BrokerHandle) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_freezes_a_live_diskless_index_without_producing_to_it() {
+    #[derive(Debug)]
+    struct CoveredRange {
+        first_offset: i64,
+        last_offset: i64,
+    }
     let broker = start_diskless_broker().await;
     let topic_id = create_diskless_topic(&broker.bootstrap).await;
     produce(&broker.bootstrap, topic_id).await;
@@ -255,11 +260,6 @@ async fn capture_freezes_a_live_diskless_index_without_producing_to_it() {
     check!(capture.source_cutoffs[0] > 0);
     // Every committed offset is covered once, in order, by the captured
     // ranges. The object keys are the flusher's to choose.
-    #[derive(Debug)]
-    struct CoveredRange {
-        first_offset: i64,
-        last_offset: i64,
-    }
     let covered: Vec<CoveredRange> = capture
         .partitions
         .iter()

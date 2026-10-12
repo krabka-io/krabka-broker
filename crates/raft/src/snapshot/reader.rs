@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn byte_range_returns_expected_slice() {
-        struct Case<'a> {
+        struct Scenario<'a> {
             case: &'a str,
             position: usize,
             max: usize,
@@ -410,28 +410,28 @@ mod tests {
         let buf: Vec<u8> = (0u8..=255).collect();
         let cases = [
             // In-range read.
-            Case {
+            Scenario {
                 case: "in-range read",
                 position: 10,
                 max: 5,
                 want: &buf[10..15],
             },
             // Position past EOF → empty.
-            Case {
+            Scenario {
                 case: "position past EOF",
                 position: 1000,
                 max: 5,
                 want: &[],
             },
             // Length clamps to buffer end.
-            Case {
+            Scenario {
                 case: "length clamped to end",
                 position: 250,
                 max: 100,
                 want: &buf[250..],
             },
         ];
-        for Case {
+        for Scenario {
             case,
             position,
             max,

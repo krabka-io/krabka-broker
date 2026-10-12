@@ -161,16 +161,17 @@ fn guarded_delete_rejects_a_recreated_topic() {
 /// disjoint change. A fresh rebuild commits both settings.
 #[test]
 fn guarded_config_rejects_stale_maps_and_accepts_a_fresh_merge() {
+    struct Override {
+        key: &'static str,
+        value: &'static str,
+    }
+
     let TopicSubmitFixture {
         mut engine,
         _directory,
         _images,
         expected_image,
     } = topic_submit_fixture(&topic_record("orders"));
-    struct Override {
-        key: &'static str,
-        value: &'static str,
-    }
     let over = |key, value| Override { key, value };
     let config = |entries: &[Override]| {
         MetadataRecord::V1TopicConfig(TopicConfigRecord {

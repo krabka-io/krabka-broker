@@ -212,23 +212,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     };
     if let Some(CaptureAuthentication { head, .. }) = &diskless_authentication {
         let count = trusted.as_ref().map_or(0, |trusted| trusted.count);
-        let source = authenticated.get_or_insert_with(|| SourceAuthentication {
-            archive: None,
-            report: AuthenticationReport {
-                partitions: 0,
-                manifests: 0,
-                objects: 0,
-                trusted_keys: count,
-                chain_heads: std::collections::BTreeMap::new(),
-                tail_truncation_protected: true,
-            },
-        });
-        source.report.partitions += 1;
-        source.report.manifests += 1;
-        source
-            .report
-            .chain_heads
-            .insert(CAPTURE_HEAD_NAME.to_owned(), head.clone());
+        record_capture_head(&mut authenticated, head, count);
     }
     let AuthenticatedSnapshots {
         metadata: metadata_bytes,
@@ -440,6 +424,28 @@ async fn authenticate_captured_snapshot(
         });
     }
     Ok(Some(bytes))
+}
+
+/// Count the diskless capture's signed boundary in the authentication report,
+/// creating the report when the archive held no classic segments.
+fn record_capture_head(authenticated: &mut Option<SourceAuthentication>, head: &str, count: usize) {
+    let source = authenticated.get_or_insert_with(|| SourceAuthentication {
+        archive: None,
+        report: AuthenticationReport {
+            partitions: 0,
+            manifests: 0,
+            objects: 0,
+            trusted_keys: count,
+            chain_heads: std::collections::BTreeMap::new(),
+            tail_truncation_protected: true,
+        },
+    });
+    source.report.partitions += 1;
+    source.report.manifests += 1;
+    source
+        .report
+        .chain_heads
+        .insert(CAPTURE_HEAD_NAME.to_owned(), head.to_owned());
 }
 
 /// The trusted WORM manifest keys and how many the operator supplied.

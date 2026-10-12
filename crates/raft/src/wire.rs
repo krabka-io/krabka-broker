@@ -468,6 +468,12 @@ mod tests {
     /// one of them is a change to the 1.x rolling-upgrade contract.
     #[test]
     fn v0_bodies_match_their_golden_bytes() {
+        struct Scenario {
+            case: &'static str,
+            encoded: Vec<u8>,
+            golden: &'static [u8],
+        }
+
         let mut submit_request_bytes = Vec::new();
         submit_request()
             .encode_v0(&mut submit_request_bytes)
@@ -483,34 +489,29 @@ mod tests {
             .encode_v0(&mut fetch_response_bytes)
             .unwrap();
 
-        struct Case {
-            case: &'static str,
-            encoded: Vec<u8>,
-            golden: &'static [u8],
-        }
         let cases = [
-            Case {
+            Scenario {
                 case: "SubmitChange request",
                 encoded: submit_request_bytes,
                 golden: SUBMIT_REQUEST_V0,
             },
-            Case {
+            Scenario {
                 case: "SubmitChange response",
                 encoded: submit_response_bytes,
                 golden: SUBMIT_RESPONSE_V0,
             },
-            Case {
+            Scenario {
                 case: "MetadataFetch request",
                 encoded: fetch_request_bytes,
                 golden: FETCH_REQUEST_V0,
             },
-            Case {
+            Scenario {
                 case: "MetadataFetch response",
                 encoded: fetch_response_bytes,
                 golden: FETCH_RESPONSE_V0,
             },
         ];
-        for Case {
+        for Scenario {
             case,
             encoded,
             golden,
@@ -648,6 +649,12 @@ mod tests {
     /// this build's maximum sends this build's highest version.
     #[test]
     fn sender_version_follows_the_finalized_krabka_version() {
+        struct Row {
+            case: &'static str,
+            image: Option<MetadataImage>,
+            want: [i16; 3],
+        }
+
         use krabka_metadata::{
             FeatureLevelRecord, MetadataRecord, krabka_version::KRABKA_VERSION_FEATURE,
         };
@@ -662,11 +669,6 @@ mod tests {
             }
             image
         };
-        struct Row {
-            case: &'static str,
-            image: Option<MetadataImage>,
-            want: [i16; 3],
-        }
         let rows = [
             Row {
                 case: "no image",

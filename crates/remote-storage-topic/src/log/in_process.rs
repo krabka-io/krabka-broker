@@ -443,6 +443,12 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_delivers_only_assigned_partitions_from_start_offset() {
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+        struct Delivered {
+            partition: i32,
+            offset: i64,
+            payload: Vec<u8>,
+        }
         let log = InProcessMetadataEventLog::new(3);
         // partition 0: a,b,c ; partition 1: x,y ; partition 2: z
         for p0 in [b"a".as_slice(), b"b", b"c"] {
@@ -458,12 +464,6 @@ mod tests {
         let (mut stream, _h) =
             log.subscribe(vec![PartitionStart::new(0, 1), PartitionStart::new(1, 0)]);
 
-        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-        struct Delivered {
-            partition: i32,
-            offset: i64,
-            payload: Vec<u8>,
-        }
         let delivered = |partition, offset, payload: &[u8]| Delivered {
             partition,
             offset,

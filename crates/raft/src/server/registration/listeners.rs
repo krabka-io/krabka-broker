@@ -125,17 +125,18 @@ mod tests {
     /// name, and an empty set is rejected outright.
     #[test]
     fn registration_listeners_must_be_usable_and_uniquely_named() {
+        struct Row<'a> {
+            what: &'a str,
+            listeners: Vec<WireListener<'a>>,
+            accepted: bool,
+        }
+
         let listener = |name, host, port, protocol| WireListener {
             name,
             host,
             port,
             protocol,
         };
-        struct Row<'a> {
-            what: &'a str,
-            listeners: Vec<WireListener<'a>>,
-            accepted: bool,
-        }
         let cases = vec![
             Row {
                 what: "one usable listener",

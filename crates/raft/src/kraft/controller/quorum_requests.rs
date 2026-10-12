@@ -60,22 +60,22 @@ struct RequestedTopic<'a> {
     partitions: Vec<i32>,
 }
 
-/// The leader id and epoch that a Begin or EndQuorumEpoch request carries, raw
-/// off the wire.
+/// The leader id and epoch that a `BeginQuorumEpoch` or `EndQuorumEpoch` request
+/// carries, raw off the wire.
 struct RequestedLeader {
     id: i32,
     epoch: i32,
 }
 
-/// The leader and epoch of a Begin or EndQuorumEpoch request that passed the
-/// request checks.
+/// The leader and epoch of a `BeginQuorumEpoch` or `EndQuorumEpoch` request that
+/// passed the request checks.
 struct EpochRequestLeader {
     id: NodeId,
     epoch: Epoch,
 }
 
-/// The error codes that answer a Begin or EndQuorumEpoch request that failed a
-/// check.
+/// The error codes that answer a `BeginQuorumEpoch` or `EndQuorumEpoch` request
+/// that failed a check.
 struct EpochRequestRefusal {
     top_level: i16,
     partition: i16,

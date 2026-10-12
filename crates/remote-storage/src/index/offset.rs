@@ -126,17 +126,17 @@ mod tests {
 
     #[test]
     fn position_for_relative_offset_returns_floor() {
+        struct FloorCase<'a> {
+            entries: &'a [OffsetIndexEntry],
+            rel: u32,
+            want: u32,
+        }
         let entries = offset_entries(&[
             offset_at(0, 0),
             offset_at(10, 256),
             offset_at(20, 512),
             offset_at(30, 1024),
         ]);
-        struct FloorCase<'a> {
-            entries: &'a [OffsetIndexEntry],
-            rel: u32,
-            want: u32,
-        }
         let floor = |entries, rel, want| FloorCase { entries, rel, want };
         let cases = [
             floor(&entries[..], 10, 256),   // exact

@@ -486,6 +486,13 @@ mod tests {
 
     #[test]
     fn add_voter_checks_run_in_kafka_order() {
+        struct Row {
+            label: &'static str,
+            request: AddRaftVoterRequest,
+            is_leader: bool,
+            expected: Option<Refusal>,
+        }
+
         let listener = |name: &str| AddListener {
             name: name.into(),
             host: "host-3".into(),
@@ -508,12 +515,6 @@ mod tests {
             INVALID_REQUEST,
             Some("Add voter request didn't include a valid voter".into()),
         ));
-        struct Row {
-            label: &'static str,
-            request: AddRaftVoterRequest,
-            is_leader: bool,
-            expected: Option<Refusal>,
-        }
         let rows = vec![
             Row {
                 label: "foreign cluster id, on a follower",
@@ -646,6 +647,13 @@ mod tests {
 
     #[test]
     fn update_voter_checks_run_in_kafka_order() {
+        struct Row {
+            label: &'static str,
+            request: UpdateRaftVoterRequest,
+            is_leader: bool,
+            expected: Option<i16>,
+        }
+
         let request = |edit: fn(&mut UpdateRaftVoterRequest)| {
             let mut request = UpdateRaftVoterRequest {
                 // A request with no cluster id skips Kafka's cluster check.
@@ -669,12 +677,6 @@ mod tests {
             edit(&mut request);
             request
         };
-        struct Row {
-            label: &'static str,
-            request: UpdateRaftVoterRequest,
-            is_leader: bool,
-            expected: Option<i16>,
-        }
         let rows = vec![
             Row {
                 label: "foreign cluster id",
@@ -778,12 +780,13 @@ mod tests {
 
     #[test]
     fn reconfiguration_outcomes_get_kafka_codes() {
-        let key = "ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ)";
         struct Row {
             label: &'static str,
             outcome: Result<ReconfigOutcome, RaftError>,
             expected: Refusal,
         }
+
+        let key = "ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ)";
         let rows = vec![
             Row {
                 label: "committed",

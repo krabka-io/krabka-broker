@@ -205,18 +205,18 @@ fn elected_replay_engine() -> ElectedReplayEngine {
 
 #[test]
 fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
-    struct Case {
+    struct Scenario {
         case: &'static str,
         value: Vec<u8>,
         want: Want,
     }
     let cases = [
-        Case {
+        Scenario {
             case: "unknown apiKey",
             value: patched_topic_value(1, 99),
             want: Want::Stop,
         },
-        Case {
+        Scenario {
             case: "value version above the highest supported",
             value: patched_topic_value(2, 99),
             want: Want::Stop,
@@ -224,39 +224,39 @@ fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
         // `krabka-metadata` checks the KIP-631 frame version from the
         // revision that versions the private records on. Before it, the
         // decoder reads the bytes and replay applies them.
-        Case {
+        Scenario {
             case: "frame version other than 1",
             value: patched_topic_value(0, 2),
             want: Want::AsTheDecoderSays,
         },
-        Case {
+        Scenario {
             case: "undecodable krabka-private record",
             value: undecodable_private_value(),
             want: Want::Stop,
         },
-        Case {
+        Scenario {
             case: "unknown topic id",
             value: unknown_topic_removal_value(),
             want: Want::Skip,
         },
-        Case {
+        Scenario {
             case: "validate failure",
             value: unknown_topic_config_value(),
             want: Want::Skip,
         },
-        Case {
+        Scenario {
             case: "invalid reference: unknown partition of a known topic",
             value: unknown_partition_change_value(),
             want: Want::Skip,
         },
-        Case {
+        Scenario {
             case: "invalid value: unknown fenced value",
             value: unknown_fenced_change_value(),
             want: Want::StopWith(unknown_fenced_error()),
         },
     ];
 
-    for Case { case, value, want } in cases {
+    for Scenario { case, value, want } in cases {
         let ElectedReplayEngine {
             mut engine,
             dir: _dir,

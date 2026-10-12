@@ -263,6 +263,14 @@ mod tests {
     /// does not decode, and the connection closes.
     #[tokio::test]
     async fn each_peer_api_is_answered_at_the_request_version() {
+        struct Case {
+            name: &'static str,
+            key: i16,
+            version: i16,
+            body: Bytes,
+            decodes: Decodes,
+        }
+
         use krabka_protocol::owned::{
             begin_quorum_epoch_request::{self as bqe_req, BeginQuorumEpochRequest},
             begin_quorum_epoch_response::BeginQuorumEpochResponse,
@@ -342,13 +350,6 @@ mod tests {
             ..Default::default()
         };
 
-        struct Case {
-            name: &'static str,
-            key: i16,
-            version: i16,
-            body: Bytes,
-            decodes: Decodes,
-        }
         let mut cases: Vec<Case> = Vec::new();
         for version in -1..=vote_request::MAX_VERSION {
             let body = encoded(&vote, version.max(0));

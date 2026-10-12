@@ -352,7 +352,6 @@ mod tests {
             ..RecordBatch::default()
         };
 
-
         let cases = [
             RejectedCase {
                 case: "no batch at the offset",

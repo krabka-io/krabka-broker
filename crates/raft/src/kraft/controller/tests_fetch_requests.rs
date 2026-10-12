@@ -135,6 +135,12 @@ fn top_level(error_code: i16) -> FetchResponse {
 /// in Kafka's order.
 #[tokio::test]
 async fn a_fetch_is_checked_as_handle_fetch_request_checks_it() {
+    struct Case {
+        name: &'static str,
+        edit: Edit,
+        expected: FetchResponse,
+    }
+
     type Edit = fn(&mut FetchRequest, i32);
     let LeaderOf0And1 {
         mut engine,
@@ -142,11 +148,6 @@ async fn a_fetch_is_checked_as_handle_fetch_request_checks_it() {
         epoch,
     } = leader_of_0_and_1();
     let refused = |engine: &Engine, code| answer(engine, code, -1, bytes::Bytes::new());
-    struct Case {
-        name: &'static str,
-        edit: Edit,
-        expected: FetchResponse,
-    }
     let cases = vec![
         Case {
             name: "a cluster id of another cluster",

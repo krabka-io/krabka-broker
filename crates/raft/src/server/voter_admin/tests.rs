@@ -44,17 +44,18 @@ struct VoterResponseSetup<'a> {
 /// and on a real port, no name repeats, and there is at least one.
 #[test]
 fn wire_listeners_must_be_usable_and_uniquely_named() {
+    struct Row<'a> {
+        what: &'a str,
+        listeners: Vec<Listener<'a>>,
+        usable: ListenerUsability,
+    }
+
     struct Listener<'a> {
         name: &'a str,
         host: &'a str,
         port: ListenerPort,
     }
     let listener = |name, host, port| Listener { name, host, port };
-    struct Row<'a> {
-        what: &'a str,
-        listeners: Vec<Listener<'a>>,
-        usable: ListenerUsability,
-    }
     let cases = vec![
         Row {
             what: "one usable listener",
@@ -161,6 +162,14 @@ async fn remove_response(
 /// zero directory id in particular names no real incarnation.
 #[tokio::test]
 async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
+    struct Case {
+        what: &'static str,
+        request_cluster_id: Option<String>,
+        voter_id: i32,
+        voter_directory_id: krabka_protocol::primitives::uuid::Uuid,
+        expected: RemoveRaftVoterResponse,
+    }
+
     const INVALID_REQUEST: i16 = 42;
     let version = remove_raft_voter_request::MAX_VERSION;
     let response_setup = VoterResponseSetup {
@@ -177,13 +186,6 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         error_message: Some("Remove voter request didn't include a valid voter".into()),
         ..Default::default()
     };
-    struct Case {
-        what: &'static str,
-        request_cluster_id: Option<String>,
-        voter_id: i32,
-        voter_directory_id: krabka_protocol::primitives::uuid::Uuid,
-        expected: RemoveRaftVoterResponse,
-    }
     let cases = vec![
         Case {
             what: "another cluster's id",
@@ -400,6 +402,14 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
 /// malformed request lands on one of the generic ones.
 #[tokio::test]
 async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
+    struct Case {
+        what: &'static str,
+        request_cluster_id: Option<String>,
+        current_leader_epoch: i32,
+        k_raft_version_feature: KRaftVersionFeature,
+        want: i16,
+    }
+
     use krabka_protocol::{
         Encode as _,
         owned::{
@@ -451,13 +461,6 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
         decoded::<UpdateRaftVoterResponse>(&bytes, version).error_code
     };
 
-    struct Case {
-        what: &'static str,
-        request_cluster_id: Option<String>,
-        current_leader_epoch: i32,
-        k_raft_version_feature: KRaftVersionFeature,
-        want: i16,
-    }
     let cases = vec![
         Case {
             what: "another cluster's id",
