@@ -1,5 +1,7 @@
 //! Exact single-partition requests for replication and durability scenarios.
 
+use std::time::{Duration, Instant};
+
 use assert2::assert;
 use bytes::Bytes;
 use krabka_broker::BrokerHandle;
@@ -7,7 +9,8 @@ use krabka_protocol::records::RecordBatch;
 
 use super::topic_id_for;
 use crate::support::{
-    client::connect_client,
+    client::{BatchProduceSetup, connect_client},
+    produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
     records::value_record,
     registered_cluster,
     topics::{TopicReplicationFactor, create_topic_request},
@@ -138,4 +141,28 @@ pub async fn produce_acks(
     setup: super::client::BatchProduceSetup<'_>,
 ) -> Result<i64, i16> {
     produce_batch(bootstrap, record_batch_with_values(values), setup).await
+}
+
+/// Time the acks-all request that waits for ISR shrink after a follower stops.
+#[bon::builder]
+pub async fn produce_acks_after_isr_shrink(
+    bootstrap: &str,
+    topic: &str,
+    values: &[&str],
+    #[builder(default = ProduceTimeoutMillis(10_000))] timeout: ProduceTimeoutMillis,
+) -> (i64, Duration) {
+    let start = Instant::now();
+    let offset = produce_acks(
+        bootstrap,
+        values,
+        BatchProduceSetup {
+            topic,
+            acknowledgements: ProduceAcknowledgements::AllReplicas,
+            timeout,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("acks-all succeeds after ISR shrink");
+    (offset, start.elapsed())
 }

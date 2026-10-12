@@ -15,17 +15,16 @@ use assert2::assert;
 use bytes::Bytes;
 use krabka_compression::CompressionType;
 use krabka_metadata::{BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord};
-use krabka_protocol::{
-    owned::produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    records::{Attributes, Record, RecordBatch, RecordsPayload},
-};
+use krabka_protocol::records::{Attributes, Record, RecordBatch, RecordsPayload};
 
 use crate::{
     api_catalog::UnstableApiVersions,
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
-    handlers::test_support::{create_topic as create_topic_from_test_support, produce_wire},
+    handlers::test_support::{
+        create_topic as create_topic_from_test_support, produce_partition_request, produce_wire,
+    },
     test_support::{start_broker_no_audit_with, start_broker_with_authorizer_no_audit},
 };
 
@@ -88,28 +87,18 @@ async fn produce_error_code_compressed(
     value_bytes: usize,
     codec: CompressionType,
 ) -> i16 {
-    let request = ProduceRequest {
-        transactional_id: None,
-        acks: 1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(RecordsPayload::V2(vec![RecordBatch {
-                    attributes: Attributes::default().with_compression(codec),
-                    records: vec![Record {
-                        value: Some(Bytes::from(vec![0_u8; value_bytes])),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }])),
+    let request = produce_partition_request()
+        .topic(topic.to_owned())
+        .partition(0)
+        .records(RecordsPayload::V2(vec![RecordBatch {
+            attributes: Attributes::default().with_compression(codec),
+            records: vec![Record {
+                value: Some(Bytes::from(vec![0_u8; value_bytes])),
                 ..Default::default()
             }],
             ..Default::default()
-        }],
-        ..Default::default()
-    };
+        }]))
+        .call();
     let response = produce_wire(broker, VERSION, &request).await;
     response.responses[0].partition_responses[0].error_code
 }

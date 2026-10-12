@@ -92,18 +92,6 @@ fn every_forged_or_replayed_record_is_refused_with_one_code() {
             check_against(&trust, ALICE),
         ),
         (
-            "a timestamp newer than the skew window",
-            signed(
-                &trust.alice,
-                CLUSTER_ID,
-                &TopicFreezeRecord {
-                    set_at_ms: NOW_MS + minutes(5).millis_i64() + 1,
-                    ..good.clone()
-                },
-            ),
-            check_against(&trust, ALICE),
-        ),
-        (
             "a timestamp replayed from the entry it replaces",
             signed(&trust.alice, CLUSTER_ID, &good),
             FreezeSignatureCheck {

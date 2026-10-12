@@ -3146,6 +3146,7 @@ dependencies = [
  "proptest",
  "tracing",
  "uuid",
+ "yare",
 ]
 
 [[package]]
@@ -3557,6 +3558,7 @@ dependencies = [
  "serde",
  "tracing",
  "uuid",
+ "yare",
 ]
 
 [[package]]

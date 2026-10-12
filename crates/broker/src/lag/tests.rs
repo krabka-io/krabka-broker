@@ -30,6 +30,7 @@ use crate::{
             streams::config::StreamsGroupConfig,
         },
     },
+    handlers::test_support::replicated_partition,
     metrics::PartitionLabel,
     partition::Partition,
     test_support::{
@@ -50,6 +51,16 @@ fn lag_metadata(image: MetadataImage) -> Arc<dyn MetadataSource> {
             .leader(Some(LEADER))
             .build(),
     )
+}
+
+fn local_partition_record(topic: &str) -> PartitionRecord {
+    let mut record = replicated_partition()
+        .topic(topic)
+        .leader(LEADER)
+        .replicas(&[LEADER])
+        .call();
+    record.leader_epoch = LeaderEpoch(1);
+    record
 }
 
 fn image_with_remote_leader(topic: &str) -> MetadataImage {
@@ -342,15 +353,7 @@ fn coordinator_image() -> MetadataImage {
             name,
             uuid::Uuid::from_u128(topic_id),
         )));
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: name.into(),
-            partition: 0,
-            leader: LEADER,
-            replicas: vec![LEADER],
-            isr: vec![LEADER],
-            leader_epoch: LeaderEpoch(1),
-            ..Default::default()
-        }));
+        image.apply(&MetadataRecord::V1Partition(local_partition_record(name)));
     }
     image
 }
@@ -724,15 +727,7 @@ async fn remote_watermark_probe_resolves_a_valid_fetch_boundary() {
         .controller
         .submit_change(vec![
             MetadataRecord::V1Topic(single_partition_topic(TOPIC, uuid::Uuid::from_u128(1))),
-            MetadataRecord::V1Partition(PartitionRecord {
-                topic: TOPIC.into(),
-                partition: 0,
-                leader: LEADER,
-                replicas: vec![LEADER],
-                isr: vec![LEADER],
-                leader_epoch: LeaderEpoch(1),
-                ..Default::default()
-            }),
+            MetadataRecord::V1Partition(local_partition_record(TOPIC)),
         ])
         .await
         .expect("publish probed partition");

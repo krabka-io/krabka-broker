@@ -8,20 +8,19 @@ use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::{
+    BootstrapMode, Broker, BrokerConfig, BrokerHandle, testing::produce_partitions_request,
+};
 use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
 use krabka_protocol::{
-    owned::{
-        fetch_request::FetchRequest,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
+    owned::{fetch_request::FetchRequest, produce_request::PartitionProduceData},
     records::RecordBatch,
 };
 use support::{
     client::metric_value,
     durability::{
-        create_topic_on_replicas as create_topic, produce_acks, produce_batch,
-        record_batch_with_values,
+        create_topic_on_replicas as create_topic, produce_acks, produce_acks_after_isr_shrink,
+        produce_batch, record_batch_with_values,
     },
     topic_id_for,
 };
@@ -341,20 +340,13 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
     let dead = cluster.pop().expect("3rd broker");
     dead.0.shutdown().await;
 
-    let start = Instant::now();
-    let offset = produce_acks(
-        &bootstrap_1,
-        &["x", "y", "z"],
-        BatchProduceSetup {
-            topic: "shrink",
-            acknowledgements: ProduceAcknowledgements::AllReplicas,
-            timeout: ProduceTimeoutMillis(10_000),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("acks=-1 success after shrink");
-    let elapsed = start.elapsed();
+    let (offset, elapsed) = produce_acks_after_isr_shrink()
+        .bootstrap(&bootstrap_1)
+        .topic("shrink")
+        .values(&["x", "y", "z"])
+        .timeout(ProduceTimeoutMillis(10_000))
+        .call()
+        .await;
     check!(offset == 0);
     check!(
         elapsed >= Duration::from_millis(1_500),
@@ -469,23 +461,23 @@ async fn produce_every_partition(
     let client = connect_client(bootstrap.to_string(), None).await;
     let topic_id = topic_id_for(&client, topic).await;
     let resp = client
-        .send(ProduceRequest {
-            acks,
-            timeout_ms,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: (0..partitions)
-                    .map(|index| PartitionProduceData {
-                        index,
-                        records: Some(record_batch_with_values(&["a"]).into()),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(
+            produce_partitions_request()
+                .acks(acks)
+                .timeout_ms(timeout_ms)
+                .topic(topic.into())
+                .topic_id(topic_id)
+                .partitions(
+                    (0..partitions)
+                        .map(|index| PartitionProduceData {
+                            index,
+                            records: Some(record_batch_with_values(&["a"]).into()),
+                            ..Default::default()
+                        })
+                        .collect(),
+                )
+                .call(),
+        )
         .await
         .expect("Produce");
     resp.responses[0]

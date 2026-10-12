@@ -2,10 +2,10 @@
 
 use moxy::{
     ast::ParseError,
-    token::{LitStr, Span, TokenStream, TokenTree},
+    token::{LitStr, Span, TokenStream},
 };
 
-use crate::meta::{mode, named_body};
+use crate::meta::{edit_named_body, mode};
 
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let [prefix_doc, path_doc, key_doc, adc_doc, endpoint_doc] = match mode(meta, ["file", "runtime"])? {
@@ -26,10 +26,6 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
         _ => unreachable!(),
     }
     .map(|doc| LitStr::new(doc, Span::call_site()));
-    let (mut tokens, body) = named_body(item, "gcs_fields")?;
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
     let fields = moxy::template! {
         /// GCS bucket name.
         pub bucket: String,
@@ -47,6 +43,7 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
         #[doc = {{ endpoint_doc }}]
         pub endpoint: Option<String>,
     };
-    group.tokens = fields.into_iter().chain(group.tokens.clone()).collect();
-    Ok(tokens.into())
+    edit_named_body(item, "gcs_fields", |body| {
+        Ok(fields.into_iter().chain(body).collect())
+    })
 }

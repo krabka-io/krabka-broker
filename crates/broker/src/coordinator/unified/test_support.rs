@@ -30,6 +30,17 @@ use crate::{
 
 pub(crate) type AppendedRecords = Vec<(Option<Bytes>, Option<Bytes>)>;
 
+pub(crate) fn assert_group_epoch_exhaustion<State>(
+    mut state: State,
+    exhaust: impl FnOnce(&mut State),
+    bump_epoch: impl FnOnce(&mut State) -> bool,
+    epoch: impl FnOnce(&State) -> i32,
+) {
+    exhaust(&mut state);
+    ::assert2::assert!(!bump_epoch(&mut state));
+    ::assert2::assert!(epoch(&state) == i32::MAX);
+}
+
 pub(crate) async fn appended_offsets_records(log: &InMemoryOffsetsLog) -> AppendedRecords {
     log.batches()
         .await

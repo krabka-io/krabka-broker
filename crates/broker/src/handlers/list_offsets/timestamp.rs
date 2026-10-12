@@ -225,6 +225,17 @@ mod tests {
         remote_reader::RemoteReader,
     };
 
+    fn successful_remote_hit() -> ListOffsetsPartitionResponse {
+        ListOffsetsPartitionResponse {
+            partition_index: 0,
+            error_code: codes::NONE,
+            timestamp: 1_600,
+            offset: 2,
+            leader_epoch: 0,
+            ..Default::default()
+        }
+    }
+
     struct BrokerPartition {
         broker: std::sync::Arc<Broker>,
         partition: std::sync::Arc<Partition>,
@@ -487,17 +498,7 @@ mod tests {
         assert!(reopened.established_log_start().is_none());
         *partition.log.lock().unwrap() = reopened;
         partition.replica_state.lock().await.hw = Offset(6);
-        assert!(
-            list_one(client, TOPIC, 1_500).await
-                == ListOffsetsPartitionResponse {
-                    partition_index: 0,
-                    error_code: codes::NONE,
-                    timestamp: 1_600,
-                    offset: 2,
-                    leader_epoch: 0,
-                    ..ListOffsetsPartitionResponse::default()
-                }
-        );
+        assert!(list_one(client, TOPIC, 1_500).await == successful_remote_hit());
 
         // A real DeleteRecords floor is durable and still bounds remote hits.
         partition
@@ -624,20 +625,9 @@ mod tests {
         // Publish the exclusive committed end of the seven produced records.
         partition.replica_state.lock().await.hw = krabka_log::Offset(7);
 
-        assert!(
-            list_one(client, TOPIC, 1_500).await
-                == ListOffsetsPartitionResponse {
-                    partition_index: 0,
-                    error_code: codes::NONE,
-                    timestamp: 1_600,
-                    offset: 2,
-                    // The partition's leader recorded epoch 0 at promotion,
-                    // and the remote segment's epoch index agrees: epoch 0
-                    // covers offset 2.
-                    leader_epoch: 0,
-                    ..Default::default()
-                }
-        );
+        // The partition's leader recorded epoch 0 at promotion, and the
+        // remote segment's epoch index agrees: epoch 0 covers offset 2.
+        assert!(list_one(client, TOPIC, 1_500).await == successful_remote_hit());
 
         // A failed earlier copy can leave only a later segment finished.
         // Local records still cover the gap; the remote hit at 4 must not

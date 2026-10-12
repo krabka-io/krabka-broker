@@ -524,10 +524,10 @@ async fn a_denied_request_never_reaches_the_engine() {
         1,
     );
 
-    let cases: [Case; 6] = [
+    let denied_submit_change = |name: &'static str, grants: &'static [&'static str]| -> Case {
         (
-            "SubmitChange without a grant",
-            &[],
+            name,
+            grants,
             API_KEY_SUBMIT_CHANGE,
             0,
             submit_change("denied-topic"),
@@ -537,19 +537,14 @@ async fn a_denied_request_never_reaches_the_engine() {
                 result: Bytes::new(),
             })),
             None,
-        ),
-        (
+        )
+    };
+
+    let cases: [Case; 6] = [
+        denied_submit_change("SubmitChange without a grant", &[]),
+        denied_submit_change(
             "SubmitChange with Alter and Describe only",
             &["Alter", "Describe"],
-            API_KEY_SUBMIT_CHANGE,
-            0,
-            submit_change("denied-topic"),
-            Some(Refusal::SubmitChange(KrabkaSubmitChangeResponse {
-                error_code: 31,
-                leader_hint: -1,
-                result: Bytes::new(),
-            })),
-            None,
         ),
         (
             "SubmitChange with ClusterAction",

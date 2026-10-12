@@ -682,43 +682,24 @@ mod tests {
         assert!(timer.registrations() == 1);
     }
 
-    #[tokio::test]
-    async fn the_loop_stops_when_a_voterless_park_cannot_be_armed() {
-        // No voters: the loop's only move is to park, and the park cannot be
-        // armed, so it stops instead of spinning through a poll that no longer
-        // waits.
-        let dir = tempfile::tempdir().unwrap();
-        let timer = BrokenTimer::dead(TimerFailure::Registration);
-        let observer = run_until_it_stops(config_on(vec![], timer.injectable(), dir.path())).await;
-
-        check_unanswered_shutdown(&observer, &timer);
-    }
-
-    #[tokio::test]
-    async fn the_loop_stops_when_a_voterless_park_is_armed_but_never_completes() {
-        // The other half of the park: the deadline registers and then fails,
-        // which ends the loop the same way a refused registration does.
-        let dir = tempfile::tempdir().unwrap();
-        let timer = BrokenTimer::dead(TimerFailure::Completion);
-        let observer = run_until_it_stops(config_on(vec![], timer.injectable(), dir.path())).await;
-
-        assert!(observer.current_metadata_offset() == -1);
-        assert!(timer.registrations() == 1);
-    }
-
-    #[tokio::test]
-    async fn the_loop_stops_when_the_back_off_after_an_unreachable_voter_cannot_be_armed() {
-        // The fetch fails, so the loop rotates to the next voter and backs off
-        // — and the back-off is the park that cannot be armed. It leaves no
-        // leader hint, because no voter answered.
-        let dir = tempfile::tempdir().unwrap();
-        let timer = BrokenTimer::dead(TimerFailure::Registration);
-        let observer = run_until_it_stops(config_on(
+    #[yare::parameterized(
+        voterless_registration_fails = { vec![], TimerFailure::Registration },
+        voterless_completion_fails = { vec![], TimerFailure::Completion },
+        unreachable_voter_registration_fails = {
             vec![(NodeId(1), UNREACHABLE.to_string())],
-            timer.injectable(),
-            dir.path(),
-        ))
-        .await;
+            TimerFailure::Registration
+        },
+    )]
+    #[tokio::test]
+    async fn the_loop_stops_when_it_cannot_wait_for_a_voter(
+        targets: Vec<(NodeId, String)>,
+        failure: TimerFailure,
+    ) {
+        // With no voters the loop parks; after an unreachable voter it backs
+        // off before trying the next one. In all cases a failed park stops it.
+        let dir = tempfile::tempdir().unwrap();
+        let timer = BrokenTimer::dead(failure);
+        let observer = run_until_it_stops(config_on(targets, timer.injectable(), dir.path())).await;
 
         check_unanswered_shutdown(&observer, &timer);
     }

@@ -135,6 +135,31 @@ pub(crate) fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError
                     }], timeout_ms: i32::try_from(timeout.millis_i64()).expect("fixture timeout fits Kafka field"), ..Default::default()
                 }
             }
+            pub(crate) fn configured_topic_request_from(
+                setup: CreateTopicSetup<'_>,
+            ) -> ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+                configured_topic_request()
+                    .topic(setup.topic)
+                    .configs(setup.configs)
+                    .num_partitions(setup.num_partitions.0)
+                    .replication_factor(setup.replication_factor.0)
+                    .timeout(setup.timeout)
+                    .call()
+            }
+        }
+    })
+}
+
+pub(crate) fn ephemeral_port(input: TokenStream) -> Result<TokenStream, ParseError> {
+    named_items(input, |name| {
+        moxy::template! {
+            /// Bind and release a loopback port for a test container, so
+            /// concurrent suites do not collide on a fixed port.
+            fn {{ name }}() -> u16 {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                    .expect("bind an ephemeral port");
+                listener.local_addr().expect("the bound listener has an address").port()
+            }
         }
     })
 }

@@ -6,14 +6,10 @@
 //! append carries both -- spells the target that a proposal must name, and
 //! reads back the proposal that list spends.
 
-use krabka_metadata::{
-    BreakGlassAction, MetadataImage, MetadataRecord, NodeId, UnregisterBrokerRecord,
-};
+use krabka_metadata::{NodeId, UnregisterBrokerRecord};
 
-pub(super) use crate::break_glass::gate::consumed_proposal_id;
-use crate::{
-    break_glass::gate::{self, BreakGlassDenial},
-    config::BreakGlassConfig,
+use crate::break_glass::gate::{
+    self, BreakGlassAction, BreakGlassConfig, BreakGlassDenial, MetadataImage, MetadataRecord,
 };
 
 /// The records one unregistration appends.
@@ -45,17 +41,14 @@ pub(super) fn unregister_records(
         node_id,
         broker_epoch,
     });
-    if !gate::is_gated(config) {
-        return Ok(vec![record]);
-    }
-    let consumed = gate::authorize(
+    gate::records_with_consume(
         image,
         config,
         BreakGlassAction::UnregisterBroker,
         &broker_target(node_id),
         now_ms,
-    )?;
-    Ok(vec![consumed, record])
+        record,
+    )
 }
 
 /// `records` with the partition changes in `leaves` placed ahead of the

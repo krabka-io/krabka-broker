@@ -26,7 +26,7 @@ use crate::{
         },
         test_support::{assert_single_member_limit, heartbeat_write_failures},
     },
-    test_support::streams_join_request,
+    test_support::{FakeMetadataSource, streams_join_request},
 };
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
@@ -35,6 +35,14 @@ fn epoch_five_member() -> StreamsMemberState {
     let mut member = StreamsMemberState::joining("m1", "client", "/127.0.0.1");
     member.member_epoch = 5;
     member
+}
+
+fn input_topic_source(partitions: u32) -> Arc<FakeMetadataSource> {
+    Arc::new(
+        FakeMetadataSource::builder()
+            .image(image_of(None, &[("in", 1, partitions)]))
+            .build(),
+    )
 }
 
 #[test]
@@ -718,16 +726,9 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
 /// replay pairs the new assignment epoch with old member targets.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_new_target_persists_the_target_of_every_member() {
-    use crate::{
-        coordinator::unified::{persistence::Key, streams::persistence::StreamsGroupKey},
-        test_support::FakeMetadataSource,
-    };
+    use crate::coordinator::unified::{persistence::Key, streams::persistence::StreamsGroupKey};
 
-    let source = Arc::new(
-        FakeMetadataSource::builder()
-            .image(image_of(None, &[("in", 1, 2)]))
-            .build(),
-    );
+    let source = input_topic_source(2);
     let (coord, log) = make_coordinator();
     coord.set_metadata_source(source.clone());
     let handle = coord.get_or_create_streams("g");
@@ -1223,11 +1224,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
     ];
 
     for row in rows {
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[("in", 1, 1)]))
-                .build(),
-        );
+        let source = input_topic_source(1);
         let (coord, _log) = make_coordinator();
         coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
@@ -1520,11 +1517,7 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
     ];
 
     for (name, rebalance_timeout_ms, revokes, expected_m1, expected_m2) in rows {
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[("in", 1, 2)]))
-                .build(),
-        );
+        let source = input_topic_source(2);
         let (coord, _log) = make_coordinator();
         coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
@@ -1792,11 +1785,7 @@ async fn a_static_member_follows_kafka_static_membership() {
     ];
 
     for (name, beats, expected, members) in rows {
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[("in", 1, 1)]))
-                .build(),
-        );
+        let source = input_topic_source(1);
         let coord = coordinator_with_log(config.clone(), Arc::new(InMemoryOffsetsLog::default()));
         coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
@@ -2126,11 +2115,7 @@ async fn a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1
             },
             log,
         );
-        coord.set_metadata_source(Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[("in", 1, 1)]))
-                .build(),
-        ));
+        coord.set_metadata_source(input_topic_source(1));
         let handle = coord.get_or_create_streams("g");
         let mut epoch = 0;
         let mut last = None;

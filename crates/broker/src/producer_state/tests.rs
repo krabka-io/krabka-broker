@@ -187,27 +187,18 @@ async fn truncate_drops_dedup_entry_above_offset_so_retry_reappends() {
     );
 }
 
-#[tokio::test]
-async fn truncate_keeps_dedup_entry_below_offset() {
-    // A batch whose records survive the truncation (last_offset < offset)
-    // must stay deduplicated.
+#[yare::parameterized(
+    survives = { 200, Decision::Duplicate { base_offset: 100 } },
+    exact_boundary = { 104, Decision::Append },
+)]
+#[test_macro(tokio::test)]
+async fn truncate_dedup_entry(truncate_offset: i64, expected: Decision) {
+    // The retained batch ends at offset 104, so it stays deduplicated only
+    // when truncation keeps that complete entry below the cut.
     let s = ProducerState::new();
     commit_fixture().state(&s).offset(100).call().await; // last_offset 104
-    s.truncate("t", PartitionIndex(0), 200).await;
-    assert!(
-        s.check("t", PartitionIndex(0), 1000, 0, 0, 4).await
-            == Decision::Duplicate { base_offset: 100 }
-    );
-}
-
-#[tokio::test]
-async fn truncate_drops_dedup_entry_at_exact_offset_boundary() {
-    // Truncating at an entry's last_offset removes that entry: the last
-    // accepted record is no longer below the log end being retained.
-    let s = ProducerState::new();
-    commit_fixture().state(&s).offset(100).call().await; // last_offset 104
-    s.truncate("t", PartitionIndex(0), 104).await;
-    assert!(s.check("t", PartitionIndex(0), 1000, 0, 0, 4).await == Decision::Append);
+    s.truncate("t", PartitionIndex(0), truncate_offset).await;
+    assert!(s.check("t", PartitionIndex(0), 1000, 0, 0, 4).await == expected);
 }
 
 #[tokio::test]

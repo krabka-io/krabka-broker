@@ -20,7 +20,7 @@ use krabka_protocol::{
 use crate::{
     control_plane::{cluster_id, freeze_request, set_freeze, wait_for_registry_len},
     signing::{SignedFreeze, signed_request, verifies_locally},
-    support::{self, OperatorKey, client::connect_owned},
+    support::{self, OperatorKey, client::connect_to_broker},
     wire::{
         CONTROL, accepted, create_controlled_topic, create_topic, now_ms, refused,
         wait_controlled_partitions,
@@ -51,12 +51,7 @@ async fn start_requiring_signatures(dir: &Path, key: &OperatorKey) -> (BrokerHan
     config.break_glass.approvers = vec![support::ANONYMOUS.to_owned()];
     config.freeze.require_signature = true;
     let broker = Broker::start(config).await.expect("broker start");
-    let client = connect_owned(
-        broker.listen_addr().to_string(),
-        "krabka-broker-test",
-        "client build",
-    )
-    .await;
+    let client = connect_to_broker(&broker).await;
     (broker, client)
 }
 
@@ -110,9 +105,7 @@ async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted(requir
 async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {
     let (_keys, _logs, broker, client, key, frozen, control) = operator_case(false).await;
 
-    let cluster = cluster_id(&client).await;
-    let set_at_ms = now_ms();
-    let request = incident_request(&key, &cluster, set_at_ms);
+    let (cluster, set_at_ms, request) = fresh_incident_request(&client, &key).await;
     let signature = request.signature.clone();
     let response = set_freeze(&client, request).await;
     check!(
@@ -200,9 +193,7 @@ async fn an_unsigned_thaw_is_refused_whatever_require_signature_says(require_sig
 async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
     let (_keys, _logs, broker, client, key, frozen, control) = operator_case(false).await;
 
-    let cluster = cluster_id(&client).await;
-    let set_at_ms = now_ms();
-    let freeze = incident_request(&key, &cluster, set_at_ms);
+    let (_cluster, set_at_ms, freeze) = fresh_incident_request(&client, &key).await;
     let captured = freeze.signature.clone();
     check!(set_freeze(&client, freeze).await.error_code == codes::NONE);
     wait_for_registry_len(&client, 1).await;
@@ -317,6 +308,16 @@ fn incident_request(key: &OperatorKey, cluster: &str, set_at_ms: i64) -> SetTopi
         set_at_ms,
         proposal_id: uuid::Uuid::nil(),
     })
+}
+
+async fn fresh_incident_request(
+    client: &Client,
+    key: &OperatorKey,
+) -> (String, i64, SetTopicFreezeRequest) {
+    let cluster = cluster_id(client).await;
+    let set_at_ms = now_ms();
+    let request = incident_request(key, &cluster, set_at_ms);
+    (cluster, set_at_ms, request)
 }
 
 /// Keep the signing keys and persistent broker logs alive for the whole case.

@@ -5,6 +5,34 @@ use crate::reconfiguration::{
     test_support::{KraftFeatureLevel, VoterCount},
 };
 
+type KnownControlCase = (VoterChangeKind, u64, TargetMembership, u16, usize);
+
+fn known_control_cases(node: u64) -> [KnownControlCase; 3] {
+    [
+        (
+            VoterChangeKind::Update,
+            node,
+            TargetMembership::PresentSameDirectory,
+            1,
+            1,
+        ),
+        (
+            VoterChangeKind::Update,
+            node,
+            TargetMembership::PresentUnknownDirectory,
+            0,
+            0,
+        ),
+        (
+            VoterChangeKind::FinalizeKraftVersion,
+            node,
+            TargetMembership::Absent,
+            0,
+            2,
+        ),
+    ]
+}
+
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 struct RequestFlags(u16);
 

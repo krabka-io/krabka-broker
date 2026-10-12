@@ -37,6 +37,14 @@ struct VoterResponseSetup<'a> {
     context: &'a str,
 }
 
+#[bon::builder]
+fn voter_response_setup(
+    version: VoterApiVersion,
+    #[builder(default = "response")] context: &str,
+) -> VoterResponseSetup<'_> {
+    VoterResponseSetup { version, context }
+}
+
 async fn remove_response_for(
     request: &RemoveRaftVoterRequest,
     engine: &KraftController,
@@ -181,10 +189,7 @@ async fn remove_response(
 async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     const INVALID_REQUEST: i16 = 42;
     let version = remove_raft_voter_request::MAX_VERSION;
-    let response_setup = VoterResponseSetup {
-        version: VoterApiVersion(version),
-        ..Default::default()
-    };
+    let response_setup = voter_response_setup().version(version.into()).call();
     let (engine, _dir) = single_voter_engine();
     wait_for_leader(&engine).await;
     let cluster_id = engine.current_image().cluster_id().to_string();
@@ -302,10 +307,7 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
 
     const INVALID_REQUEST: i16 = 42;
     let version = add_raft_voter_request::MAX_VERSION;
-    let response_setup = VoterResponseSetup {
-        version: VoterApiVersion(version),
-        ..Default::default()
-    };
+    let response_setup = voter_response_setup().version(version.into()).call();
     let (engine, _dir) = single_voter_engine();
     wait_for_leader(&engine).await;
 

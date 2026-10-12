@@ -49,24 +49,19 @@ pub(super) fn unknown_partitions(
 mod tests {
     use assert2::check;
     use krabka_metadata::NodeId;
-    use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequestPartition;
     use uuid::Uuid;
 
     use super::*;
-    use crate::coordinator::test_support::single_replica_partition;
+    use crate::{
+        coordinator::test_support::single_replica_partition,
+        txn::handlers::txn_offset_commit::test_support::request_topic,
+    };
 
     fn topic(name: &str, partitions: &[i32]) -> TxnOffsetCommitRequestTopic {
-        TxnOffsetCommitRequestTopic {
-            name: name.into(),
-            partitions: partitions
-                .iter()
-                .map(|&partition_index| TxnOffsetCommitRequestPartition {
-                    partition_index,
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        }
+        request_topic()
+            .name(name)
+            .partitions(partitions.to_vec())
+            .call()
     }
 
     fn image_with_topic(name: &str, partitions: i32, leader: NodeId) -> MetadataImage {

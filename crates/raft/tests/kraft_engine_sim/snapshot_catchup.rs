@@ -60,6 +60,31 @@ async fn elected_snapshot_pair(
     (dirs, leader, epoch)
 }
 
+async fn snapshot_test_pair(
+    net: &SimNet,
+    ids: &[NodeId],
+    cluster_id: u128,
+) -> (
+    HashMap<NodeId, tempfile::TempDir>,
+    NodeId,
+    u32,
+    [NodeId; 2],
+    u64,
+    uuid::Uuid,
+) {
+    const INTERVAL: u64 = 5;
+    let cluster_id = uuid::Uuid::from_u128(cluster_id);
+    let (dirs, leader, epoch) = elected_snapshot_pair(net, ids, cluster_id, INTERVAL).await;
+    (
+        dirs,
+        leader,
+        epoch,
+        [NodeId(1), NodeId(2)],
+        INTERVAL,
+        cluster_id,
+    )
+}
+
 fn fetch_from_zero(epoch: u32) -> bytes::Bytes {
     wire::PeerRequest::Fetch {
         cluster_id: None,
@@ -207,11 +232,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_leader() {
     let (net, ids) = three_voter_network();
-    let cid = uuid::Uuid::from_u128(501);
-    let interval = 5u64;
-
-    let (dirs, leader, epoch) = elected_snapshot_pair(&net, &ids, cid, interval).await;
-    let live = [NodeId(1), NodeId(2)];
+    let (dirs, leader, epoch, live, interval, cid) = snapshot_test_pair(&net, &ids, 501).await;
     assert2::assert!(leader == NodeId(1));
     let follower = NodeId(2);
 
@@ -325,11 +346,7 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpoint() {
     let (net, ids) = three_voter_network();
-    let cid = uuid::Uuid::from_u128(502);
-    let interval = 5u64;
-
-    let (dirs, leader, epoch) = elected_snapshot_pair(&net, &ids, cid, interval).await;
-    let live = [NodeId(1), NodeId(2)];
+    let (dirs, leader, epoch, live, interval, cid) = snapshot_test_pair(&net, &ids, 502).await;
     let leader_dir = dirs[&leader].path().to_path_buf();
 
     let submit = async |name: String, id: u128| {

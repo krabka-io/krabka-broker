@@ -235,20 +235,29 @@ fn inbound_fetch(
     let (reply, receiver) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
         version: FETCH_VERSION,
-        req: wire::PeerRequest::Fetch {
-            cluster_id: None,
-            max_wait_ms: 0,
-            high_watermark: -1,
-            from: peer,
-            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
-            fetch_epoch,
-            fetch_offset,
-            replica_directory_id: directory,
-        }
-        .encode(),
+        req: fetch_from_engine(engine, peer, fetch_epoch, fetch_offset, directory).encode(),
         reply,
     });
     receiver
+}
+
+fn fetch_from_engine(
+    engine: &Engine,
+    from: NodeId,
+    fetch_epoch: u32,
+    fetch_offset: i64,
+    directory_id: uuid::Uuid,
+) -> wire::PeerRequest {
+    wire::PeerRequest::Fetch {
+        cluster_id: None,
+        max_wait_ms: 0,
+        high_watermark: -1,
+        from,
+        current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
+        fetch_epoch,
+        fetch_offset,
+        replica_directory_id: directory_id,
+    }
 }
 
 /// A Fetch response from a newer epoch moves a follower or an observer to the
@@ -1240,17 +1249,7 @@ fn fetch_at(
     let (reply, _rx) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
         version: FETCH_VERSION,
-        req: wire::PeerRequest::Fetch {
-            cluster_id: None,
-            max_wait_ms: 0,
-            high_watermark: -1,
-            from,
-            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
-            fetch_epoch,
-            fetch_offset,
-            replica_directory_id: directory_id,
-        }
-        .encode(),
+        req: fetch_from_engine(engine, from, fetch_epoch, fetch_offset, directory_id).encode(),
         reply,
     });
 }

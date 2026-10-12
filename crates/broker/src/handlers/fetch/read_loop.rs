@@ -20,6 +20,8 @@ use super::{
     request::EffectivePartition,
     response::group_into_topic_responses,
 };
+#[cfg(test)]
+use crate::handlers::fetch::test_support::append_epoch_batches;
 use crate::{
     broker::Broker, codes, diskless::read::try_diskless_read, metrics::RequestPhases,
     partition::Partition,
@@ -1556,14 +1558,7 @@ mod tests {
         broker_fixture!((broker_handle, dir, broker, part), local_partition(TOPIC));
         {
             let mut log = part.log.lock().expect("log mutex poisoned");
-            for epoch in [0, 0, 1, 1] {
-                let mut batch = RecordBatch {
-                    partition_leader_epoch: epoch,
-                    records: vec![Record::default()],
-                    ..Default::default()
-                };
-                log.append(&mut batch).expect("append");
-            }
+            append_epoch_batches(&mut log, &[0, 0, 1, 1]);
         }
         // Epoch 3 starts at offset 4, so epoch 2, which this log never saw,
         // ends there.

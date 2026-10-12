@@ -8,9 +8,9 @@
 //! and these tests need to pin v0 and v3 exactly.
 
 use assert2::assert;
-use bytes::{Buf, BytesMut};
+use bytes::Buf;
 use krabka_protocol::{
-    Decode, Encode,
+    Decode,
     kafka_3_6_2::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
     owned::produce_response::ProduceResponse,
     records::{RecordBatch, RecordsPayload},
@@ -21,7 +21,7 @@ use tokio::{
 };
 
 use crate::support::{
-    produce::{SinglePartitionProduceSetup, batch_request},
+    produce::encode_batch_request,
     topics::{creatable_topic, create_topic_request},
     wire::{HeaderEncoding, request_frame},
 };
@@ -95,17 +95,7 @@ pub async fn produce_batch_to(
     batch: RecordBatch,
 ) {
     const PRODUCE_VERSION: i16 = 9;
-    let req = batch_request(
-        batch,
-        SinglePartitionProduceSetup {
-            topic: (topic).into(),
-            partition: krabka_ids::PartitionIndex(partition),
-            ..Default::default()
-        },
-    );
-    let mut body = BytesMut::new();
-    req.encode(&mut body, PRODUCE_VERSION)
-        .expect("encode ProduceRequest v9");
+    let body = encode_batch_request(batch, topic, partition, PRODUCE_VERSION);
 
     let mut stream = TcpStream::connect(addr).await.expect("connect for produce");
     stream.set_nodelay(true).ok();

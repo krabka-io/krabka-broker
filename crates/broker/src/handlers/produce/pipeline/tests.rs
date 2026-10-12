@@ -15,6 +15,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 use super::*;
 use crate::{
     handlers::{
+        partition::Partition,
         produce::{
             framing::PartitionPayload,
             test_support::{PipelineFixture, encode_batch, image_with_topic, pipeline_input},
@@ -23,6 +24,15 @@ use crate::{
     },
     schema_validation::{SchemaGate, SchemaValidator, ValidationMode},
 };
+
+fn append_seed_batch(partition: &Partition) {
+    partition
+        .log
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .append(&mut seed_batch())
+        .expect("seed the partition");
+}
 
 #[tokio::test]
 async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint() {

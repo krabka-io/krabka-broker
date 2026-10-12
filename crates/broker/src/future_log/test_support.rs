@@ -12,7 +12,7 @@ use std::{
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
-use krabka_protocol::records::{Attributes, Record, RecordBatch};
+use krabka_protocol::records::RecordBatch;
 use krabka_units::{mebibytes, millis};
 
 use super::MovePolicy;
@@ -21,6 +21,7 @@ use crate::{
     partition::Partition,
     partition_registry::PartitionRegistry,
     test_support::{PartitionRecordsSetup, RecordCount, open_partition, partition_records_batch},
+    testing::single_value_batch,
     throttle::TokenBucket,
 };
 
@@ -227,25 +228,11 @@ pub(super) fn append_epoch_batch(
         value_size,
         leader_epoch,
     };
-    let mut batch = RecordBatch {
-        base_offset: 0,
-        partition_leader_epoch: setup.leader_epoch.0,
-        attributes: Attributes::default(),
-        last_offset_delta: 0,
-        base_timestamp: 1_700_000_000,
-        max_timestamp: 1_700_000_000,
-        producer_id: -1,
-        producer_epoch: -1,
-        base_sequence: -1,
-        records: vec![Record {
-            attributes: 0,
-            offset_delta: 0,
-            timestamp_delta: 0,
-            key: None,
-            value: Some(Bytes::from(vec![b'x'; setup.value_size.0])),
-            headers: vec![],
-        }],
-    };
+    let mut batch = single_value_batch()
+        .leader_epoch(setup.leader_epoch.0)
+        .timestamp_ms(1_700_000_000)
+        .value(Bytes::from(vec![b'x'; setup.value_size.0]))
+        .call();
     part.log
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

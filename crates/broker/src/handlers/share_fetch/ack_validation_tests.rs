@@ -37,7 +37,7 @@ use crate::{
         share_acknowledge_wire, share_fetch_wire, share_record_states,
     },
     share_partition::state::RecordState::{self, Acquired},
-    test_support::start_broker_no_audit_with,
+    test_support::start_broker_with_authorizer_no_audit,
 };
 
 const TOPIC: &str = "ack-order";
@@ -73,7 +73,7 @@ test_authorizer!(DenyOnePrincipal, (self, _source, request), {
 });
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(DenyOnePrincipal)).await
+    start_broker_with_authorizer_no_audit(Arc::new(DenyOnePrincipal)).await
 }
 
 async fn create_topic(broker: &BrokerHandle) -> WireUuid {

@@ -258,14 +258,11 @@ mod tests {
             (
                 "begin quorum epoch",
                 api_key::BEGIN_QUORUM_EPOCH,
-                PeerRequest::BeginQuorumEpoch {
-                    cluster_id: None,
-                    voter_id: NodeId(2),
-                    voter_directory_id: uuid::Uuid::nil(),
-                    leader_endpoints: Vec::new(),
-                    leader_id: NodeId(1),
-                    leader_epoch: 4,
-                },
+                crate::server::test_support::begin_quorum_epoch_request()
+                    .voter_id(NodeId(2))
+                    .leader_id(NodeId(1))
+                    .leader_epoch(4)
+                    .call(),
                 decodes_whole::<BeginQuorumEpochRequest>,
             ),
             (

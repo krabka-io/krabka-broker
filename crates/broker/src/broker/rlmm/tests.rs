@@ -11,6 +11,24 @@ use crate::{
     test_support::replica_nodes,
 };
 
+#[bon::builder]
+fn topic_image(
+    topic_id: uuid::Uuid,
+    #[builder(default = 3)] partitions: i32,
+    replication_factor: i16,
+) -> krabka_metadata::MetadataImage {
+    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
+
+    let mut image = MetadataImage::new(uuid::Uuid::from_u128(1));
+    image.apply(&MetadataRecord::V1Topic(TopicRecord {
+        name: "orders".into(),
+        topic_id,
+        partitions,
+        replication_factor,
+    }));
+    image
+}
+
 #[test]
 fn loopback_bootstrap_maps_wildcard_to_loopback() {
     use std::net::SocketAddr;
@@ -107,19 +125,16 @@ async fn rlmm_reconciler_applies_initial_and_changed_assignments() {
 
 #[test]
 fn needed_metadata_partitions_covers_led_and_followed() {
-    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_metadata::MetadataRecord;
     use krabka_remote_storage::TopicIdPartition;
     use krabka_remote_storage_topic::metadata_partition_for;
     use uuid::Uuid;
 
     let topic_id = Uuid::from_u128(0xABCD);
-    let mut image = MetadataImage::new(Uuid::from_u128(1));
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: "orders".into(),
-        topic_id,
-        partitions: 3,
-        replication_factor: 2,
-    }));
+    let mut image = topic_image()
+        .topic_id(topic_id)
+        .replication_factor(2)
+        .call();
     // node 7 leads p0, follows p1 (replica), is absent from p2.
     for (partition, leader, replicas) in [
         (0_i32, 7_u64, vec![7_u64, 8]),
@@ -151,7 +166,7 @@ fn needed_metadata_partitions_covers_led_and_followed() {
 
 #[tokio::test]
 async fn topic_assignment_uses_discovered_count_after_config_changes() {
-    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_metadata::MetadataRecord;
     use krabka_remote_storage_topic::{
         InProcessMetadataEventLog, TopicBasedRemoteLogMetadataManager,
     };
@@ -160,13 +175,10 @@ async fn topic_assignment_uses_discovered_count_after_config_changes() {
     let topic_id = Uuid::from_u128(0xABCD);
     let node = krabka_audit::NodeId(7);
     let image_for = |partition| {
-        let mut image = MetadataImage::new(Uuid::from_u128(1));
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "orders".into(),
-            topic_id,
-            partitions: 3,
-            replication_factor: 1,
-        }));
+        let mut image = topic_image()
+            .topic_id(topic_id)
+            .replication_factor(1)
+            .call();
         image.apply(&MetadataRecord::V1Partition(
             replicated_partition()
                 .partition(partition)

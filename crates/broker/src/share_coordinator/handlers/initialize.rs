@@ -160,6 +160,19 @@ mod tests {
     super::super::test_support::response_fixture!(InitializeShareGroupStateResponse, InitializeStateResult, PartitionResult; keyed);
 
     #[bon::builder]
+    fn unknown_topic_response(
+        #[builder(into, default)] partition: PartitionIndex,
+        #[builder(default = TOPIC)] topic: uuid::Uuid,
+    ) -> InitializeShareGroupStateResponse {
+        response(StateResponseSetup {
+            topic,
+            partition,
+            code: KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
+            message: Some("This server does not host this topic-partition."),
+        })
+    }
+
+    #[bon::builder]
     fn snapshot(
         #[builder(into, default)] snapshot_epoch: SnapshotEpoch,
         #[builder(into, default = InitializationEpoch (1))] state_epoch: InitializationEpoch,
@@ -301,12 +314,7 @@ mod tests {
                 name: "a partition past the partition count",
                 leadership: StateLeadership::Led,
                 request: request().partition(3).call(),
-                response: response(StateResponseSetup {
-                    partition: PartitionIndex(3),
-                    code: KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
-                    message: Some(unknown),
-                    ..Default::default()
-                }),
+                response: unknown_topic_response().partition(3).call(),
                 summary: None,
                 appended: vec![],
             },
@@ -314,12 +322,7 @@ mod tests {
                 name: "a topic id the image does not hold",
                 leadership: StateLeadership::Led,
                 request: request().topic(UNKNOWN_TOPIC).call(),
-                response: response(StateResponseSetup {
-                    topic: UNKNOWN_TOPIC,
-                    code: KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
-                    message: Some(unknown),
-                    ..Default::default()
-                }),
+                response: unknown_topic_response().topic(UNKNOWN_TOPIC).call(),
                 summary: None,
                 appended: vec![],
             },

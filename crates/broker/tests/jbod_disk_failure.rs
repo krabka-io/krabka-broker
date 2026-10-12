@@ -22,11 +22,10 @@ mod two_dir_topic;
 use std::net::SocketAddr;
 
 use assert2::{assert, check};
-use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
-    Decode, Encode,
+    Decode,
     owned::{
         assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
         broker_heartbeat_request::BrokerHeartbeatRequest,
@@ -38,7 +37,7 @@ use tokio::net::TcpStream;
 
 use crate::{
     support::{
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::encode_batch_request,
         records::{batch_from_records, value_record},
         topics::TopicPartitionCount,
         wire::ApiRequestSetup,
@@ -78,16 +77,7 @@ async fn produce_and_get_error(addr: SocketAddr, topic: &str, partition: i32) ->
         0,
         Some(bytes::Bytes::from_static(b"kip-112-test")),
     )]);
-    let req = batch_request(
-        batch,
-        SinglePartitionProduceSetup {
-            topic: topic.to_string(),
-            partition: krabka_ids::PartitionIndex(partition),
-            ..Default::default()
-        },
-    );
-    let mut body = BytesMut::new();
-    req.encode(&mut body, PRODUCE_VERSION).unwrap();
+    let body = encode_batch_request(batch, topic, partition, PRODUCE_VERSION);
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let resp_bytes = round_trip(
         &mut stream,

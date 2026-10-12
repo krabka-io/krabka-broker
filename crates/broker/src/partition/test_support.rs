@@ -59,6 +59,14 @@ pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, temp
     (p, dir)
 }
 
+/// Update a test partition's log configuration without copying the log-lock boilerplate.
+pub(crate) fn update_log_config(partition: &Partition, update: impl FnOnce(&mut LogConfig)) {
+    let log = partition.log.lock().expect("partition log lock");
+    let mut config = log.config_snapshot();
+    update(&mut config);
+    log.set_config(config);
+}
+
 /// Whether a commit fixture keeps the partition's initial leader or installs the test term.
 #[derive(Clone, Copy, Default)]
 pub(crate) enum CommitFixtureLeader {

@@ -453,6 +453,26 @@ mod tests {
         ClientMetricsManager::new(krabka_units::kibibytes(1), INTERVAL_MS_DEFAULT)
     }
 
+    #[bon::builder]
+    fn instance_fixture(
+        #[builder(default = "60000")] interval: &'_ str,
+    ) -> (
+        ClientMetricsManager,
+        MetadataImage,
+        super::ClientAttributes,
+        i32,
+        Instant,
+    ) {
+        let manager = manager();
+        let image = img_with("all", &[("metrics", "*"), ("interval.ms", interval)]);
+        let attributes = attrs();
+        let id = subscription_id(
+            &compute_subscription(&image, &attributes, INTERVAL_MS_DEFAULT),
+            attributes.client_instance_id,
+        );
+        (manager, image, attributes, id, Instant::now())
+    }
+
     #[derive(Clone, Copy, Default)]
     struct TelemetrySubscriptionId(i32);
 
@@ -990,14 +1010,7 @@ mod tests {
             ("at three intervals", "60000", 180, true),
         ];
         for (name, interval, idle, expired) in rows {
-            let m = manager();
-            let img = img_with("all", &[("metrics", "*"), ("interval.ms", interval)]);
-            let attrs = attrs();
-            let id = subscription_id(
-                &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
-                attrs.client_instance_id,
-            );
-            let t = Instant::now();
+            let (m, img, attrs, id, t) = instance_fixture().interval(interval).call();
             let terminate = PushCheck {
                 terminating: true,
                 ..push(TelemetrySubscriptionId(id))
@@ -1035,14 +1048,7 @@ mod tests {
     /// old connection later does not drop the instance built since.
     #[test]
     fn an_expired_instances_connection_does_not_own_its_successor() {
-        let m = manager();
-        let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
-        let attrs = attrs();
-        let id = subscription_id(
-            &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
-            attrs.client_instance_id,
-        );
-        let t = Instant::now();
+        let (m, img, attrs, id, t) = instance_fixture().call();
         let secs = |s| t + Duration::from_secs(s);
         let terminate = PushCheck {
             terminating: true,

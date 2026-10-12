@@ -163,6 +163,8 @@ fn election_timeout_starts_prevote_prospective() {
 }
 
 #[test]
+/// A JVM voter's `VoteResponse` has no pre-vote flag; while Prospective, a
+/// grant still counts as a pre-vote and promotes to Candidate at epoch 1.
 fn prevote_majority_promotes_to_candidate_and_bumps_epoch() {
     let (mut m, log) = start_election(&[NodeId(1), NodeId(2), NodeId(3)]); // Prospective
     // 1 (self) + grant from 2 = majority of 3
@@ -218,25 +220,6 @@ fn observer_never_starts_election() {
             .iter()
             .any(|a| matches!(a, Action::SendVoteRequest { .. }))
     );
-}
-
-#[test]
-fn prospective_counts_grant_with_no_wire_prevote_signal() {
-    // A JVM voter's `VoteResponse` carries no pre-vote flag. The candidate
-    // must still count the grant as a PRE-VOTE because it is Prospective —
-    // this is the KIP-996 interop fix (was dropped by the old echo-tag path).
-    let (mut m, log) = prospective_three_voter(); // Prospective, epoch 0
-    let actions = vote_response().m(&mut m).log(&log).call();
-    // Pre-vote majority (self + 2) → promote to Candidate and bump the epoch.
-    assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
-    check!(m.quorum_state().leader_epoch == 1);
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::SendVoteRequest {
-            pre_vote: false,
-            epoch: 1
-        }
-    )));
 }
 
 #[test]

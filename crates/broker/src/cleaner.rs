@@ -22,7 +22,6 @@ use std::{sync::Arc, time::Duration};
 
 use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 
 use self::sweep::{UncleanablePartitions, tick_all};
 use crate::{metrics::BrokerMetrics, partition_registry::PartitionRegistry, time_util};
@@ -59,18 +58,17 @@ pub(crate) async fn run(
     let timer = Arc::clone(&cfg.timer);
     // Failed partitions persist across sweeps until compaction succeeds.
     let mut uncleanable = UncleanablePartitions::default();
-    time_util::run_sweeps!(
+    time_util::run_metadata_sweeps!(
         &*timer,
-        (Duration::ZERO, cfg.interval.to_std()),
+        Duration::ZERO,
+        cfg.interval.to_std(),
         &shutdown,
         TASK,
+        cfg,
+        image,
         {
-            // Read one image at the start of a sweep, including its current freezes.
-            let image = cfg.current_image();
             tick_all(&partitions, image.as_deref(), &metrics, &mut uncleanable).await;
         },
-        {
-            debug!("cleaner task shutting down");
-        },
+        "cleaner task shutting down",
     );
 }

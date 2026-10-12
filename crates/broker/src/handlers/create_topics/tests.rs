@@ -233,17 +233,13 @@ fn topic_with_config(name: &str) -> CreatableTopic {
 }
 
 fn topic_with_configs(name: &str, configs: &[(&str, &str)]) -> CreatableTopic {
-    CreatableTopic {
-        configs: configs
+    topic_with_nullable_configs(
+        name,
+        &configs
             .iter()
-            .map(|(key, value)| CreatableTopicConfig {
-                name: (*key).into(),
-                value: Some((*value).into()),
-                ..Default::default()
-            })
-            .collect(),
-        ..topic(name, 1, 1)
-    }
+            .map(|(key, value)| (*key, Some(*value)))
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn request(topics: Vec<CreatableTopic>) -> CreateTopicsRequest {

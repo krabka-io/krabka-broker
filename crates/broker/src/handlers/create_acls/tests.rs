@@ -38,6 +38,16 @@ fn committed() -> AclCreationResult {
     })
 }
 
+async fn check_no_acls_created(
+    broker: &BrokerHandle,
+    response: CreateAclsResponse,
+    expected: CreateAclsResponse,
+) {
+    assert!(response == expected);
+    assert!(all_acls(broker).is_empty());
+    broker.shutdown().await;
+}
+
 /// Kafka puts no length limit on an ACL's resource name or principal, so a
 /// binding far past any fixed ceiling is accepted and stored as sent.
 #[tokio::test]
@@ -93,9 +103,7 @@ async fn handle_denies_cluster_alter_for_each_creation() {
     let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![denied.clone(), denied],
     });
-    assert!(resp == expected);
-    assert!(all_acls(&broker_handle).is_empty());
-    broker_handle.shutdown().await;
+    check_no_acls_created(&broker_handle, resp, expected).await;
 }
 
 #[tokio::test]
@@ -160,9 +168,7 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
     let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![disabled.clone(), disabled],
     });
-    assert!(resp == expected);
-    assert!(all_acls(&broker_handle).is_empty());
-    broker_handle.shutdown().await;
+    check_no_acls_created(&broker_handle, resp, expected).await;
 }
 
 /// A broker with `unstable.feature.versions.enable`, the mode in which

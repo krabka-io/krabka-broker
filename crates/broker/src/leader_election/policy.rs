@@ -488,6 +488,14 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+
+    fn clean_election(leader: u64, isr: &[u64]) -> super::FailoverDecision {
+        super::FailoverDecision::Elect {
+            leader: NodeId(leader),
+            isr: isr.iter().copied().map(NodeId).collect(),
+            unclean: false,
+        }
+    }
     use crate::leader_election::test_support::{seed_partition, witnesses};
 
     /// The full failover decision for one partition, with `witnesses` and the
@@ -949,11 +957,7 @@ mod tests {
                 dead: 1,
                 alive: &[2],
                 unclean_enabled: false,
-                expected: super::FailoverDecision::Elect {
-                    leader: NodeId(2),
-                    isr: vec![NodeId(2), NodeId(3)],
-                    unclean: false,
-                },
+                expected: clean_election(2, &[2, 3]),
             },
             KafkaCase {
                 label: "the clean pick walks the assignment, not the ISR",
@@ -1013,11 +1017,7 @@ mod tests {
                 alive: &[2, 3],
                 strategy: RecoveryStrategy::None,
                 unclean_enabled: false,
-                expected: super::FailoverDecision::Elect {
-                    leader: NodeId(2),
-                    isr: vec![NodeId(2), NodeId(3)],
-                    unclean: false,
-                },
+                expected: clean_election(2, &[2, 3]),
             },
             // Non-leader death shrinks the ISR and keeps the leader.
             FailoverCase {

@@ -19,6 +19,7 @@ use crate::{
     log_dir_status::LogDirRegistry,
     metrics::{CleanerFailureLabel, CleanerFailureReason},
     partition::Partition,
+    partition::test_support::update_log_config,
     test_support::{append_partition_batch, topic_thaw_record},
 };
 
@@ -437,15 +438,9 @@ async fn tick_all_leaves_a_partition_uncleanable_for_a_record_above_the_decompre
 
     // A gzip record with a 1000-byte value under a key the log already holds,
     // then a plain one that seals its segment.
-    let with_limit = |limit| {
-        let log = partition.log.lock().expect("partition log lock");
-        let config = krabka_log::LogConfig {
-            max_decompressed_record: limit,
-            ..log.config_snapshot()
-        };
-        log.set_config(config);
-    };
-    with_limit(Some(krabka_units::bytes(100)));
+    update_log_config(&partition, |config| {
+        config.max_decompressed_record = Some(krabka_units::bytes(100));
+    });
     // Pseudo-random bytes, so the gzip batch stays wider than a segment and the
     // append after it seals its segment.
     let mut state = 12_345_u32;

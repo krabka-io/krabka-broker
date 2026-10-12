@@ -210,15 +210,12 @@ mod tests {
             Some(PeerResponse::FetchSnapshot { error_code: 98, .. })
         ));
 
-        let begin = PeerRequest::BeginQuorumEpoch {
-            cluster_id: None,
-            voter_id: NodeId(2),
-            voter_directory_id: uuid::Uuid::nil(),
-            leader_endpoints: Vec::new(),
-            leader_id: NodeId(1),
-            leader_epoch: 1,
-        }
-        .encode();
+        let begin = crate::server::test_support::begin_quorum_epoch_request()
+            .voter_id(NodeId(2))
+            .leader_id(NodeId(1))
+            .leader_epoch(1)
+            .call()
+            .encode();
         let begin_resp = super::dispatch(
             ApiKey(api_key::BEGIN_QUORUM_EPOCH),
             wire::QUORUM_EPOCH_VERSION,

@@ -5,19 +5,22 @@
 //! openraft and `tokio` scheduling on Windows runners cause flakes that have
 //! nothing to do with the protocol under test.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use assert2::assert;
 use krabka_broker::{BrokerConfig, BrokerHandle};
 use krabka_metadata::{LeaderRecoveryState, MetadataRecord, TopicConfigRecord};
-use support::{cluster_lock, durability::produce_acks};
+use support::{
+    cluster_lock,
+    durability::{produce_acks, produce_acks_after_isr_shrink},
+};
 use tempfile::TempDir;
 
 use crate::support::{
     client::{BatchProduceSetup, connect_client},
     discovery::named_topic_metadata,
     durability::replicated_topic_fixture,
-    produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
+    produce::ProduceTimeoutMillis,
     shutdown_cluster,
 };
 
@@ -178,20 +181,13 @@ async fn acks_all_completes_after_isr_shrink() {
     // Produce acks=-1. ISR should shrink to {1,2} within
     // replica_lag_time_max (2s on CI) + heartbeat_timeout (2s); produce
     // completes after.
-    let start = Instant::now();
-    let offset = produce_acks(
-        &bootstrap_1,
-        &["a", "b", "c"],
-        BatchProduceSetup {
-            topic: "shrink2",
-            acknowledgements: ProduceAcknowledgements::AllReplicas,
-            timeout: ProduceTimeoutMillis(15_000),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("acks=-1 after shrink");
-    let elapsed = start.elapsed();
+    let (offset, elapsed) = produce_acks_after_isr_shrink()
+        .bootstrap(&bootstrap_1)
+        .topic("shrink2")
+        .values(&["a", "b", "c"])
+        .timeout(ProduceTimeoutMillis(15_000))
+        .call()
+        .await;
     assert!(offset == 0);
     assert!(
         elapsed < Duration::from_secs(10),

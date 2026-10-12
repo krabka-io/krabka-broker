@@ -51,8 +51,11 @@ fn empty_image_with_no_super_users_defaults_to_deny() {
     check_topic_access(&img, "foo", AclOperation::Read, AuthorizationResult::Deny);
 }
 
-#[test]
-fn super_user_bypass_grants_everything_even_with_acls() {
+#[yare::parameterized(
+    default_flag = { None::<bool> },
+    allow_everyone_disabled = { Some(false) },
+)]
+fn super_user_bypass_grants_everything_even_with_acls(allow_everyone: Option<bool>) {
     let mut img = img();
     // A DENY ACL that would otherwise reject.
     img.apply(&MetadataRecord::V1AccessControlEntry(
@@ -61,6 +64,9 @@ fn super_user_bypass_grants_everything_even_with_acls() {
     let a = alice();
     let h = addr();
     let auth = SimpleAclAuthorizer::new(one_super("alice"));
+    let auth = allow_everyone.map_or(auth, |flag| {
+        SimpleAclAuthorizer::new(one_super("alice")).with_allow_everyone_if_no_acl_found(flag)
+    });
     assert2::assert!(
         auth.authorize(&img, &req().p(&a).host(&h).call()) == AuthorizationResult::Allow
     );
@@ -81,31 +87,21 @@ fn deny_by_default_when_super_user_set_but_principal_mismatches() {
     );
 }
 
-#[test]
-fn literal_allow_matches_exact_name() {
-    let img = acl_image([topic_acl().call()]);
+#[yare::parameterized(
+    literal_match = { PatternType::Literal, "foo", "foo", AuthorizationResult::Allow },
+    literal_mismatch = { PatternType::Literal, "foo", "foobar", AuthorizationResult::Deny },
+    prefix_match = { PatternType::Prefixed, "team-", "team-foo", AuthorizationResult::Allow },
+    prefix_mismatch = { PatternType::Prefixed, "team-", "other", AuthorizationResult::Deny },
+)]
+fn allow_pattern_matches_only_matching_name(
+    pattern: PatternType,
+    acl_name: &str,
+    resource: &str,
+    expected: AuthorizationResult,
+) {
+    let img = acl_image([topic_acl().pattern(pattern).name(acl_name).call()]);
     let caller = AliceAuthorizer::default();
-    for (_name, resource, expected) in [
-        ("exact match", "foo", AuthorizationResult::Allow),
-        ("literal mismatch", "foobar", AuthorizationResult::Deny),
-    ] {
-        assert2::assert!(caller.authorize(&img, resource, AclOperation::Read) == expected);
-    }
-}
-
-#[test]
-fn prefixed_allow_matches_prefix() {
-    let img = acl_image([topic_acl()
-        .pattern(PatternType::Prefixed)
-        .name("team-")
-        .call()]);
-    let caller = AliceAuthorizer::default();
-    for (_name, resource, expected) in [
-        ("prefix match", "team-foo", AuthorizationResult::Allow),
-        ("prefix mismatch", "other", AuthorizationResult::Deny),
-    ] {
-        assert2::assert!(caller.authorize(&img, resource, AclOperation::Read) == expected);
-    }
+    assert2::assert!(caller.authorize(&img, resource, AclOperation::Read) == expected);
 }
 
 #[test]
@@ -665,19 +661,4 @@ fn allow_everyone_if_no_acl_found_applies_only_when_no_acl_touches_the_resource(
             "{name}"
         );
     }
-}
-
-/// The super-user bypass still wins even with
-/// `allow.everyone.if.no.acl.found` set, and it does not need the flag to
-/// grant access.
-#[test]
-fn allow_everyone_if_no_acl_found_does_not_change_super_user_bypass() {
-    let img = acl_image([topic_acl().permission(PermissionType::Deny).call()]);
-    let a = alice();
-    let h = addr();
-    let auth =
-        SimpleAclAuthorizer::new(one_super("alice")).with_allow_everyone_if_no_acl_found(false);
-    assert2::assert!(
-        auth.authorize(&img, &req().p(&a).host(&h).call()) == AuthorizationResult::Allow
-    );
 }

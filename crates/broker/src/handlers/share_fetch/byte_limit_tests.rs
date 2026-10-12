@@ -14,7 +14,6 @@ use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
 use krabka_protocol::{
     owned::{
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
         share_fetch_request::{
             AcknowledgementBatch, FetchPartition, FetchTopic, ShareFetchRequest,
@@ -36,7 +35,7 @@ use crate::{
             AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup,
             ShareSessionEpoch, TopicPartitionCount, acknowledge_batches_request,
             acquired_share_records, create_topic as create_topic_from_test_support,
-            share_acknowledge_wire, share_fetch_wire,
+            produce_partition_request, share_acknowledge_wire, share_fetch_wire,
         },
     },
     test_support::{
@@ -107,30 +106,22 @@ async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
         principal("producer"),
         client_id = "producer-client"
     );
-    let request = ProduceRequest {
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: partition,
-                records: Some(RecordsPayload::V2(vec![RecordBatch {
-                    last_offset_delta: i32::try_from(RECORDS_PER_BATCH - 1).expect("small batch"),
-                    records: (0..RECORDS_PER_BATCH)
-                        .map(|delta| Record {
-                            offset_delta: i32::try_from(delta).expect("small batch"),
-                            value: Some(Bytes::from(vec![b'v'; 256])),
-                            ..Default::default()
-                        })
-                        .collect(),
+    let request = produce_partition_request()
+        .topic(topic.to_owned())
+        .partition(partition)
+        .records(RecordsPayload::V2(vec![RecordBatch {
+            last_offset_delta: i32::try_from(RECORDS_PER_BATCH - 1).expect("small batch"),
+            records: (0..RECORDS_PER_BATCH)
+                .map(|delta| Record {
+                    offset_delta: i32::try_from(delta).expect("small batch"),
+                    value: Some(Bytes::from(vec![b'v'; 256])),
                     ..Default::default()
-                }])),
-                ..Default::default()
-            }],
+                })
+                .collect(),
             ..Default::default()
-        }],
-        ..Default::default()
-    };
+        }]))
+        .acks(-1)
+        .call();
     let request_bytes = encode_request(&request, PRODUCE_VERSION);
     let response_bytes = handle(
         &shared,

@@ -228,6 +228,14 @@ mod tests {
         }
     }
 
+    fn store_dead_entry(coordinator: &TxnCoordinator) {
+        let mut entry = TxnEntry::new_empty("tid-a".into(), ProducerId(7), i16::MAX, 60_000, 0);
+        entry.state = TxnState::Dead;
+        coordinator
+            .state
+            .insert("tid-a".into(), Arc::new(Mutex::new(entry)));
+    }
+
     async fn install_entry(coordinator: &TxnCoordinator, entry: TxnEntry) {
         let coordinator_partition = coordinator.partition_for(&entry.transactional_id);
         coordinator
@@ -322,15 +330,8 @@ mod tests {
 
         // A producer-epoch mismatch is PRODUCER_FENCED at request version 2
         // and above, downgraded to the legacy INVALID_PRODUCER_EPOCH below.
-        let dead = || {
-            let mut entry = TxnEntry::new_empty("tid-a".into(), ProducerId(7), i16::MAX, 60_000, 0);
-            entry.state = TxnState::Dead;
-            entry
-        };
         for (ver, expected_code) in [(1, INVALID_PRODUCER_EPOCH), (3, PRODUCER_FENCED)] {
-            coordinator
-                .state
-                .insert("tid-a".into(), Arc::new(Mutex::new(dead())));
+            store_dead_entry(&coordinator);
             check!(
                 register_fixture(
                     &coordinator,
@@ -357,9 +358,7 @@ mod tests {
         // Matching identity but a state that cannot move to Ongoing (Dead)
         // is CONCURRENT_TRANSACTIONS, matching Kafka's PrepareCommit /
         // PrepareAbort retriable answer rather than a fatal one.
-        coordinator
-            .state
-            .insert("tid-a".into(), Arc::new(Mutex::new(dead())));
+        store_dead_entry(&coordinator);
         check!(
             register_fixture(&coordinator, (ProducerId(7), i16::MAX), requested, 3).await
                 == crate::codes::CONCURRENT_TRANSACTIONS

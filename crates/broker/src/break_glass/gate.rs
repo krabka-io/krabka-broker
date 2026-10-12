@@ -4,7 +4,8 @@
 //! the metadata record that spends it. Every gated handler goes through this
 //! one function, so one set of rules decides what an approval authorizes.
 
-use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataImage, MetadataRecord};
+use krabka_metadata::BreakGlassProposalRecord;
+pub(crate) use krabka_metadata::{BreakGlassAction, MetadataImage, MetadataRecord};
 use uuid::Uuid;
 
 use self::{denial::nearer_reason, selection::covers, usability::unusable_because};
@@ -12,7 +13,8 @@ pub(crate) use self::{
     denial::{BreakGlassDenial, DenialReason},
     usability::distinct_approvers,
 };
-use crate::{break_glass::config::BreakGlassPolicy, config::BreakGlassConfig};
+use crate::break_glass::config::BreakGlassPolicy;
+pub(crate) use crate::config::BreakGlassConfig;
 
 mod denial;
 mod selection;
@@ -30,6 +32,25 @@ pub(crate) mod tests;
 /// it to return, so a caller that skips this test refuses every transition.
 pub(crate) fn is_gated(config: &BreakGlassConfig) -> bool {
     BreakGlassPolicy::new(config).is_enabled()
+}
+
+/// Place a consumed proposal before the metadata record it authorizes.
+///
+/// An ungated broker gets the action record alone. A gated broker persists the
+/// consume and action together, so the approval cannot be spent twice.
+pub(crate) fn records_with_consume(
+    image: &MetadataImage,
+    config: &BreakGlassConfig,
+    action: BreakGlassAction,
+    target: &str,
+    now_ms: i64,
+    record: MetadataRecord,
+) -> Result<Vec<MetadataRecord>, BreakGlassDenial> {
+    if !is_gated(config) {
+        return Ok(vec![record]);
+    }
+    let consumed = authorize(image, config, action, target, now_ms)?;
+    Ok(vec![consumed, record])
 }
 
 /// Find the approved proposal that authorizes `action` on `target`, and return

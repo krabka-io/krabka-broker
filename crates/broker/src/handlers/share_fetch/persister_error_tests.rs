@@ -11,7 +11,7 @@
 
 use assert2::assert;
 use krabka_log::Offset;
-use krabka_metadata::{MetadataRecord, NodeId, TopicRecord};
+use krabka_metadata::{MetadataRecord, NodeId};
 use krabka_protocol::{
     owned::{
         share_fetch_request::{
@@ -29,8 +29,9 @@ use crate::{
     error::BrokerError,
     handlers::test_support::{
         AcknowledgementCode, AcknowledgementPartitionSetup, acknowledge_batches_request,
-        create_topic as create_topic_from_test_support, produce_records, send_acknowledgements,
-        share_fetch_partition_rows, share_fetch_wire, single_replica_partition,
+        create_topic as create_topic_from_test_support, metadata_topic_record, produce_records,
+        send_acknowledgements, share_fetch_partition_rows, share_fetch_wire,
+        single_replica_partition,
     },
     share_coordinator::bootstrap::TOPIC,
     test_support::initialize_share_state,
@@ -267,12 +268,12 @@ async fn a_fenced_state_write_fails_the_acknowledgement_and_drops_the_partition(
 async fn state_topic_led_by_an_unknown_broker(broker: &BrokerHandle) {
     let shared = broker.broker_arc_for_test();
     let partitions = shared.config.share_coordinator.state_topic_num_partitions;
-    let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
-        name: crate::share_coordinator::bootstrap::TOPIC.to_string(),
-        topic_id: uuid::Uuid::new_v4(),
+    let mut records = vec![MetadataRecord::V1Topic(metadata_topic_record(
+        TOPIC,
+        uuid::Uuid::new_v4(),
         partitions,
-        replication_factor: 1,
-    })];
+        1,
+    ))];
     records.extend((0..partitions).map(|partition| {
         MetadataRecord::V1Partition(single_replica_partition(
             TOPIC,

@@ -297,11 +297,10 @@ mod tests {
         ];
         for case in cases {
             let cache = FetchSessionCache::new(10);
-            let key = FetchSessionKey {
-                topic_name: "t".into(),
-                topic_id: WireUuid([1; 16]),
-                partition: 0,
-            };
+            let key = session_key()
+                .topic_id(WireUuid([1; 16]))
+                .partition(0)
+                .call();
             let id = allocate_session()
                 .cache(&cache)
                 .addressing(case.created_with_topic_ids)
@@ -419,11 +418,7 @@ mod tests {
     fn incremental_merges_request_topics_and_bumps_epoch() {
         let cache = FetchSessionCache::new(10);
         let initial = vec![(
-            FetchSessionKey {
-                topic_name: "t".into(),
-                topic_id: WireUuid::ZERO,
-                partition: 0,
-            },
+            session_key().partition(0).call(),
             CachedPartitionState {
                 fetch_offset: 100,
                 max_bytes: 1024,
@@ -516,14 +511,7 @@ mod tests {
         topic_id: WireUuid,
         state: CachedPartitionState,
     ) -> Vec<(FetchSessionKey, CachedPartitionState)> {
-        vec![(
-            FetchSessionKey {
-                topic_name: "t".into(),
-                topic_id,
-                partition: 0,
-            },
-            state,
-        )]
+        vec![(session_key().topic_id(topic_id).partition(0).call(), state)]
     }
 
     fn check_resolved_incremental(
@@ -583,27 +571,15 @@ mod tests {
         let cache = FetchSessionCache::new(10);
         let initial = vec![
             (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: 0,
-                },
+                session_key().partition(0).call(),
                 CachedPartitionState::default(),
             ),
             (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: 1,
-                },
+                session_key().partition(1).call(),
                 CachedPartitionState::default(),
             ),
             (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: 2,
-                },
+                session_key().partition(2).call(),
                 CachedPartitionState::default(),
             ),
         ];

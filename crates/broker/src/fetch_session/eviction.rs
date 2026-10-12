@@ -213,6 +213,14 @@ mod tests {
         ));
     }
 
+    fn allocate_newcomer(cache: &FetchSessionCache) -> i32 {
+        allocate_session()
+            .cache(cache)
+            .principal("newcomer".into())
+            .partitions(partitions(1))
+            .call()
+    }
+
     /// A full cache hands a newcomer nothing while its sessions are in use.
     /// Displacing one would make its client reconnect with a full fetch and
     /// displace another, so Kafka answers the newcomer sessionless instead.
@@ -326,11 +334,7 @@ mod tests {
             .advance(Duration::from_secs(30))
             .expect("manual time moves forward");
         // `idle` has gone 130 s unused and `busy` 30 s.
-        let newcomer = allocate_session()
-            .cache(&cache)
-            .principal("newcomer".into())
-            .partitions(partitions(1))
-            .call();
+        let newcomer = allocate_newcomer(&cache);
 
         check!(cache.evictions_total() == 1);
         check!(live_ids(&cache) == vec![busy, newcomer]);
@@ -479,11 +483,7 @@ mod tests {
         clock
             .advance(PAST_MIN_EVICTION)
             .expect("manual time moves forward");
-        let newcomer = allocate_session()
-            .cache(&cache)
-            .principal("newcomer".into())
-            .partitions(partitions(1))
-            .call();
+        let newcomer = allocate_newcomer(&cache);
 
         // The cache refilled to {oldest_live, refill}; both are stale by now,
         // and `newcomer` displaced `oldest_live`, the one unused the longest.

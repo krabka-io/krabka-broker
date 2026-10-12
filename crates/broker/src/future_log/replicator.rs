@@ -362,12 +362,11 @@ mod tests {
         _primary: tempfile::TempDir,
     }
 
-    async fn truncated_copied_future() -> TruncatedFutureFixture {
+    async fn copied_future() -> TruncatedFutureFixture {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
         let (part, future_log, future_path) =
             partition_with_copied_future_log(primary.path(), target.path());
-        part.truncate_to(Offset(3)).await.unwrap();
         TruncatedFutureFixture {
             future_path,
             future_log,
@@ -375,6 +374,12 @@ mod tests {
             target,
             _primary: primary,
         }
+    }
+
+    async fn truncated_copied_future() -> TruncatedFutureFixture {
+        let fixture = copied_future().await;
+        fixture.part.truncate_to(Offset(3)).await.unwrap();
+        fixture
     }
 
     /// The value size of each record of `log` from offset 0.
@@ -454,10 +459,11 @@ mod tests {
     /// refuses a swap until it has.
     #[tokio::test]
     async fn a_swap_waits_for_the_cut_the_writer_has_not_reported() {
-        let primary = tempdir().unwrap();
-        let target = tempdir().unwrap();
-        let (part, future_log, future_path) =
-            partition_with_copied_future_log(primary.path(), target.path());
+        let fixture = copied_future().await;
+        let part = fixture.part;
+        let target = fixture.target;
+        let future_log = fixture.future_log;
+        let future_path = fixture.future_path;
         assert!(part.take_future_truncation().await.unwrap() == None);
         part.truncate_to(Offset(4)).await.unwrap();
         part.truncate_to(Offset(2)).await.unwrap();

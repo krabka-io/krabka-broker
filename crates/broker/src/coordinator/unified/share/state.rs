@@ -492,6 +492,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::coordinator::unified::test_support::assert_group_epoch_exhaustion;
 
     #[test]
     fn add_member_bumps_nothing() {
@@ -511,11 +512,12 @@ mod tests {
 
     #[test]
     fn bump_epoch_rejects_exhaustion() {
-        let mut group = ShareGroupState::new("g");
-        group.group_epoch = i32::MAX;
-
-        assert!(!group.bump_epoch());
-        assert!(group.group_epoch == i32::MAX);
+        assert_group_epoch_exhaustion(
+            ShareGroupState::new("g"),
+            |group| group.group_epoch = i32::MAX,
+            |group| group.bump_epoch(),
+            |group| group.group_epoch,
+        );
     }
 
     #[test]

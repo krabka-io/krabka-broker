@@ -381,6 +381,14 @@ mod tests {
         segment_at, test_segment,
     };
 
+    fn one_record_batch() -> RecordBatch {
+        sample_batch()
+            .offset(ONE_RECORD_BATCH.offset.0)
+            .records(ONE_RECORD_BATCH.records.0)
+            .timestamp(ONE_RECORD_BATCH.timestamp.0)
+            .call()
+    }
+
     #[test]
     fn first_record_timestamp_survives_appends_and_reloads_after_truncation() {
         use krabka_compression::CompressionType;
@@ -503,16 +511,7 @@ mod tests {
     #[test]
     fn malformed_or_stale_time_index_floor_fails_closed() {
         let (_dir, mut stale) = test_segment();
-        stale
-            .append(
-                &sample_batch()
-                    .offset(ONE_RECORD_BATCH.offset.0)
-                    .records(ONE_RECORD_BATCH.records.0)
-                    .timestamp(ONE_RECORD_BATCH.timestamp.0)
-                    .call(),
-                DENSE_INDEX,
-            )
-            .unwrap();
+        stale.append(&one_record_batch(), DENSE_INDEX).unwrap();
         stale.time_index.append(200, u32::MAX).unwrap();
         assert2::assert!(stale.offset_for_timestamp(200).is_none());
 
@@ -611,15 +610,7 @@ mod tests {
         // `base_offset + offset_delta = 1 + 2 = 3` — a value that only a
         // correct `+` reproduces (`1 - 2` or `1 * 2` both differ), so this
         // pins the returned offset arithmetic.
-        seg.append(
-            &sample_batch()
-                .offset(ONE_RECORD_BATCH.offset.0)
-                .records(ONE_RECORD_BATCH.records.0)
-                .timestamp(ONE_RECORD_BATCH.timestamp.0)
-                .call(),
-            DENSE_INDEX,
-        )
-        .unwrap();
+        seg.append(&one_record_batch(), DENSE_INDEX).unwrap();
         seg.append(
             &sample_batch().offset(1).records(3).timestamp(200).call(),
             DENSE_INDEX,

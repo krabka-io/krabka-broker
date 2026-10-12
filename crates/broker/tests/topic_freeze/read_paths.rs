@@ -20,7 +20,7 @@ use crate::{
     control_plane::freeze_scope,
     support::{
         self,
-        client::{connect_owned, scrape_metrics},
+        client::{connect_to_broker, scrape_metrics},
         discovery::named_topic_metadata,
         fetch::single_partition_fetch,
         offsets::{offset_commit_partition, offset_commit_topic},
@@ -38,12 +38,7 @@ async fn start_with_metrics() -> (BrokerHandle, Client, tempfile::TempDir) {
     let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
     config.metrics_listen_addr = Some("127.0.0.1:0".parse().expect("a loopback address"));
     let broker = Broker::start(config).await.expect("broker start");
-    let client = connect_owned(
-        broker.listen_addr().to_string(),
-        "krabka-broker-test",
-        "client build",
-    )
-    .await;
+    let client = connect_to_broker(&broker).await;
     (broker, client, tempdir)
 }
 

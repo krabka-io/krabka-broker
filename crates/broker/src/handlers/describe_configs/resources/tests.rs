@@ -543,12 +543,11 @@ fn an_internal_topic_key_is_reported_only_when_the_topic_sets_it() {
     );
 
     let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: "orders".into(),
-        overrides: maplit::btreemap! {
-            config_keys::INTERNAL_SEGMENT_BYTES.to_string() => "4096".to_string(),
-        },
-    }));
+    set_topic_config()
+        .image(&mut image)
+        .key(config_keys::INTERNAL_SEGMENT_BYTES)
+        .value("4096")
+        .call();
     let set = describe_topic(&image, "orders", None);
     let entry = set
         .configs
@@ -2125,12 +2124,11 @@ fn a_topic_reports_the_static_synonyms_the_broker_was_started_with() {
         "min.insync.replicas" => "1".to_owned(),
     };
     let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: "orders".into(),
-        overrides: maplit::btreemap! {
-            "segment.bytes".to_string() => "1048576".to_string(),
-        },
-    }));
+    set_topic_config()
+        .image(&mut image)
+        .key("segment.bytes")
+        .value("1048576")
+        .call();
     let result = describe_at(
         settings_for((RESOURCE_TYPE_TOPIC, "orders"), &settings),
         &with_topic(&image, RESOURCE_TYPE_TOPIC, "orders"),

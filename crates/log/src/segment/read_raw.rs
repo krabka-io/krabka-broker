@@ -191,6 +191,19 @@ mod tests {
     use krabka_units::prelude::{bytes, mebibytes};
 
     use super::*;
+
+    fn assert_read_offsets(read: &RawSegmentRead, start: i64, last: i64) {
+        check!(
+            read.start_offset == Offset(start),
+            "start {:?}",
+            read.start_offset
+        );
+        check!(
+            read.last_offset == Offset(last),
+            "last {:?}",
+            read.last_offset
+        );
+    }
     use crate::segment::test_support::{
         DENSE_INDEX, NO_LIMIT, SECOND_TWO_RECORD_BATCH, THIRD_TWO_RECORD_BATCH, THREE_RECORD_BATCH,
         TWO_RECORD_BATCH, sample_batch, seeded_fixture, test_batch_at, test_segment,
@@ -286,12 +299,7 @@ mod tests {
                 DEFAULT_READ_AHEAD_MAX,
             )
             .unwrap();
-        check!(
-            read.start_offset == Offset(4),
-            "start {:?}",
-            read.start_offset
-        );
-        check!(read.last_offset == Offset(5), "last {:?}", read.last_offset);
+        assert_read_offsets(&read, 4, 5);
     }
 
     /// A batch that will not fit the first read is fetched on its own, from
@@ -308,12 +316,7 @@ mod tests {
         // A one-byte budget makes the first read header-sized, so the batch
         // cannot fit it and takes the read-one-batch path.
         let read = seg.read_raw(Offset(4), Offset(99), bytes(1)).unwrap();
-        check!(
-            read.start_offset == Offset(4),
-            "start {:?}",
-            read.start_offset
-        );
-        check!(read.last_offset == Offset(5), "last {:?}", read.last_offset);
+        assert_read_offsets(&read, 4, 5);
         check!(!read.is_empty());
     }
 

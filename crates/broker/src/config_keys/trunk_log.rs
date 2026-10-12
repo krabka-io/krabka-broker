@@ -120,7 +120,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::test_support::single_partition_topic;
+    use crate::{
+        config_keys::test_support::topic_config_record, test_support::single_partition_topic,
+    };
 
     const NODE: NodeId = NodeId(1);
 
@@ -132,13 +134,9 @@ mod tests {
             "t",
             uuid::Uuid::from_u128(1),
         )));
-        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: "t".into(),
-            overrides: overrides
-                .iter()
-                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                .collect(),
-        }));
+        image.apply(&MetadataRecord::V1TopicConfig(
+            topic_config_record().overrides(overrides).call(),
+        ));
         for (node, key, value) in broker {
             image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
                 node_id: *node,

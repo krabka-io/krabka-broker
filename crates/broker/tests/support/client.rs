@@ -22,7 +22,7 @@ use crate::support::{
     records::{batch_from_records, value_record},
     topics::{
         CreateTopicRequestSetup, CreateTopicSetup, CreateTopicsTimeoutMillis, TopicPartitionCount,
-        TopicReplicationFactor, configured_topic_request, create_topic_request_with_setup,
+        TopicReplicationFactor, configured_topic_request_from, create_topic_request_with_setup,
     },
 };
 pub async fn connect(bootstrap: &str, client_id: &str) -> Arc<Client> {
@@ -35,6 +35,16 @@ pub async fn connect(bootstrap: &str, client_id: &str) -> Arc<Client> {
 /// Panics if the client cannot connect to the bootstrap broker.
 pub async fn connect_client(bootstrap: impl AsRef<str>, client_id: Option<&str>) -> Client {
     build_client(bootstrap.as_ref(), client_id).await.unwrap()
+}
+
+/// Connect the shared integration-test client to a running broker.
+pub async fn connect_to_broker(broker: &BrokerHandle) -> Client {
+    connect_owned(
+        broker.listen_addr().to_string(),
+        "krabka-broker-test",
+        "client build",
+    )
+    .await
 }
 
 async fn build_client(
@@ -419,11 +429,5 @@ pub async fn send_topic_creation(
 fn configured_request(
     setup: CreateTopicSetup<'_>,
 ) -> krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
-    configured_topic_request()
-        .topic(setup.topic)
-        .configs(setup.configs)
-        .num_partitions(setup.num_partitions.0)
-        .replication_factor(setup.replication_factor.0)
-        .timeout(setup.timeout)
-        .call()
+    configured_topic_request_from(setup)
 }

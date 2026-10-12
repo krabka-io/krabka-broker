@@ -36,6 +36,7 @@ use crate::{
         start_broker_no_audit_with, start_broker_with as start_test_broker_with,
         try_dispatch_context,
     },
+    topic_policy::TopicPolicy,
 };
 
 pub(crate) mod transaction_admin_tests {
@@ -434,16 +435,7 @@ krabka_macros::create_topic_fixture!(configured_topic_request);
 krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
 macro_rules! configured_topic_request_from {
-    ($setup:expr) => {{
-        let setup = $setup;
-        $crate::handlers::test_support::configured_topic_request()
-            .topic(setup.topic)
-            .configs(setup.configs)
-            .num_partitions(setup.num_partitions.0)
-            .replication_factor(setup.replication_factor.0)
-            .timeout(setup.timeout)
-            .call()
-    }};
+    ($setup:expr) => {{ $crate::handlers::test_support::configured_topic_request_from($setup) }};
 }
 
 pub(crate) use configured_topic_request_from;
@@ -598,6 +590,30 @@ pub(crate) async fn produce_wire(
     .await
     .expect("handle produce");
     decode_response(&response_bytes, version)
+}
+
+/// Build the shared envelope for tests that Produce one partition directly.
+#[bon::builder]
+pub(crate) fn produce_partition_request(
+    topic: String,
+    partition: i32,
+    records: RecordsPayload,
+    #[builder(default = 1)] acks: i16,
+) -> ProduceRequest {
+    ProduceRequest {
+        acks,
+        timeout_ms: 5_000,
+        topic_data: vec![TopicProduceData {
+            name: topic,
+            partition_data: vec![PartitionProduceData {
+                index: partition,
+                records: Some(records),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
 }
 
 /// Send a fixture acknowledgement using the current wire version and default principal.
@@ -1011,6 +1027,48 @@ pub(crate) struct ClientTopicSetup<'a> {
     #[default(TopicPartitionCount(1))]
     pub partitions: TopicPartitionCount,
 }
+
+pub(crate) fn metadata_topic_record(
+    name: &str,
+    topic_id: uuid::Uuid,
+    partitions: i32,
+    replication_factor: i16,
+) -> krabka_metadata::TopicRecord {
+    krabka_metadata::TopicRecord {
+        name: name.to_owned(),
+        topic_id,
+        partitions,
+        replication_factor,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn build_topic_config_record_with_default_policy<Resource>(
+    resource: &Resource,
+    image: &krabka_metadata::MetadataImage,
+    build: impl FnOnce(
+        &Resource,
+        &krabka_metadata::MetadataImage,
+        &TopicPolicy,
+        bool,
+        UnstableApiVersions,
+    ) -> Result<krabka_metadata::MetadataRecord, (i16, String)>,
+) -> Result<krabka_metadata::MetadataRecord, (i16, String)> {
+    build(
+        resource,
+        image,
+        &TopicPolicy::default(),
+        true,
+        UnstableApiVersions::Disabled,
+    )
+}
+
+macro_rules! topic_config_record_with_default_policy {
+    ($resource:expr, $image:expr, $build:path $(,)?) => {
+        build_topic_config_record_with_default_policy($resource, $image, $build)
+    };
+}
+pub(crate) use topic_config_record_with_default_policy;
 
 #[bon::builder]
 pub(crate) async fn create_topic(

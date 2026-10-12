@@ -1,5 +1,6 @@
 //! Wire and socket fixtures shared by network unit tests.
 
+use bytes::{BufMut as _, BytesMut};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::config::BrokerConfig;
@@ -7,6 +8,20 @@ use crate::config::BrokerConfig;
 // Build request headers independently of the parser under test. Arbitrary
 // tagged bytes let malformed-header cases exercise the same path.
 krabka_macros::request_frame_fixture!(request_frame);
+
+pub(crate) fn raw_request_frame(
+    api_key: i16,
+    version: i16,
+    correlation_id: i32,
+    body: &[u8],
+) -> BytesMut {
+    let mut frame = BytesMut::new();
+    frame.put_i16(api_key);
+    frame.put_i16(version);
+    frame.put_i32(correlation_id);
+    frame.put_slice(body);
+    frame
+}
 
 pub(crate) async fn tcp_pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0")

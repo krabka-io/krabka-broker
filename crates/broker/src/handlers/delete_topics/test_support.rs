@@ -8,18 +8,10 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use crate::config::BreakGlassConfig;
+pub(super) use crate::test_support::gated_break_glass_config as gated_config;
 
 /// The topic every KFC-9 test asks the broker to delete.
 pub(super) const DOOMED: &str = "doomed";
-
-/// A broker configuration that names an approver set, so the gate is active.
-pub(super) fn gated_config() -> BreakGlassConfig {
-    BreakGlassConfig {
-        approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
-        ..BreakGlassConfig::default()
-    }
-}
 
 /// A `DeleteTopicState` that names its topic and leaves the id zeroed.
 pub(super) fn named_state(name: &str) -> DeleteTopicState {

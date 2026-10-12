@@ -73,7 +73,7 @@ proptest! {
 fn complete_control_batches_need_both_actual_prefix_majorities() {
     for n in 1..=5 {
         let old: Vec<_> = (0..n).rev().map(|i| u64::try_from(i).unwrap()).collect();
-        for (kind, node, member, version, count) in [
+        let cases = [
             (
                 VoterChangeKind::Add,
                 u64::MAX,
@@ -88,28 +88,10 @@ fn complete_control_batches_need_both_actual_prefix_majorities() {
                 1,
                 1,
             ),
-            (
-                VoterChangeKind::Update,
-                0,
-                TargetMembership::PresentSameDirectory,
-                1,
-                1,
-            ),
-            (
-                VoterChangeKind::Update,
-                0,
-                TargetMembership::PresentUnknownDirectory,
-                0,
-                0,
-            ),
-            (
-                VoterChangeKind::FinalizeKraftVersion,
-                0,
-                TargetMembership::Absent,
-                0,
-                2,
-            ),
-        ] {
+        ]
+        .into_iter()
+        .chain(super::known_control_cases(0));
+        for (kind, node, member, version, count) in cases {
             let end = 13 + count;
             for mask in 0..(1usize << (2 * (n + 1))) {
                 let reports: Vec<_> = (0..=n)

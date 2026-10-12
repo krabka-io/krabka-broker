@@ -11,7 +11,7 @@ use krabka_protocol::owned::{
 use super::sentinels::UNKNOWN_EPOCH;
 use crate::{
     broker::BrokerHandle, codes, config::RemoteStorageBackend,
-    test_support::start_broker_no_audit_with,
+    test_support::start_broker_no_audit_with, testing::list_offsets_request,
 };
 
 crate::test_support::wire_helpers!(
@@ -107,21 +107,14 @@ pub(super) async fn list_one_at_epoch(
     current_leader_epoch: i32,
 ) -> ListOffsetsPartitionResponse {
     client
-        .send(ListOffsetsRequest {
-            replica_id: -1,
-            topics: vec![ListOffsetsTopic {
-                name: topic.to_string(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: 0,
-                    current_leader_epoch,
-                    timestamp,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(
+            list_offsets_request()
+                .topic(topic.to_owned())
+                .partition_index(0)
+                .current_leader_epoch(current_leader_epoch)
+                .timestamp(timestamp)
+                .call(),
+        )
         .await
         .expect("ListOffsets")
         .topics

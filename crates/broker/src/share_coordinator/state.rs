@@ -254,6 +254,14 @@ mod tests {
         Vec<StateBatch>,
     );
 
+    #[bon::builder]
+    fn acknowledged_batch(start: i64, end: i64) -> StateBatch {
+        batch()
+            .bounds(Offset(start)..=Offset(end))
+            .delivery(FixtureDeliveryState::Acknowledged)
+            .call()
+    }
+
     struct CombinerBatches {
         available_first_ten: StateBatch,
         available_at_100: StateBatch,
@@ -265,7 +273,7 @@ mod tests {
             Self {
                 available_first_ten: batch().call(),
                 available_at_100: batch().bounds(Offset(100)..=Offset(109)).call(),
-                acknowledged_first_ten: batch().delivery(FixtureDeliveryState::Acknowledged).call(),
+                acknowledged_first_ten: acknowledged_batch().start(0).end(9).call(),
             }
         }
     }
@@ -283,18 +291,10 @@ mod tests {
             (
                 "disjoint batches stay apart and sort",
                 vec![batch().bounds(Offset(110)..=Offset(119)).call()],
-                vec![
-                    batch()
-                        .bounds(Offset(100)..=Offset(104))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
-                ],
+                vec![acknowledged_batch().start(100).end(104).call()],
                 Offset(-1),
                 vec![
-                    batch()
-                        .bounds(Offset(100)..=Offset(104))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
+                    acknowledged_batch().start(100).end(104).call(),
                     batch().bounds(Offset(110)..=Offset(119)).call(),
                 ],
             ),
@@ -326,20 +326,10 @@ mod tests {
             ),
             (
                 "the higher state wins at an equal count",
-                vec![
-                    batch()
-                        .bounds(Offset(100)..=Offset(109))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
-                ],
+                vec![acknowledged_batch().start(100).end(109).call()],
                 vec![batches.available_at_100.clone()],
                 Offset(-1),
-                vec![
-                    batch()
-                        .bounds(Offset(100)..=Offset(109))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
-                ],
+                vec![acknowledged_batch().start(100).end(109).call()],
             ),
             (
                 "the start offset drops and clips",
@@ -347,18 +337,10 @@ mod tests {
                     batch().bounds(Offset(90)..=Offset(99)).call(),
                     batches.available_at_100.clone(),
                 ],
-                vec![
-                    batch()
-                        .bounds(Offset(95)..=Offset(104))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
-                ],
+                vec![acknowledged_batch().start(95).end(104).call()],
                 Offset(103),
                 vec![
-                    batch()
-                        .bounds(Offset(103)..=Offset(104))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
+                    acknowledged_batch().start(103).end(104).call(),
                     batch().bounds(Offset(105)..=Offset(109)).call(),
                 ],
             ),
@@ -371,19 +353,11 @@ mod tests {
             (
                 "a later batch splits the stored one",
                 vec![batches.available_first_ten.clone()],
-                vec![
-                    batch()
-                        .bounds(Offset(5)..=Offset(9))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
-                ],
+                vec![acknowledged_batch().start(5).end(9).call()],
                 Offset(0),
                 vec![
                     batch().bounds(Offset(0)..=Offset(4)).call(),
-                    batch()
-                        .bounds(Offset(5)..=Offset(9))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
+                    acknowledged_batch().start(5).end(9).call(),
                 ],
             ),
             (
@@ -409,18 +383,8 @@ mod tests {
             ),
             (
                 "adjacent equal batches coalesce at start offset 0",
-                vec![
-                    batch()
-                        .bounds(Offset(0)..=Offset(4))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
-                ],
-                vec![
-                    batch()
-                        .bounds(Offset(5)..=Offset(9))
-                        .delivery(FixtureDeliveryState::Acknowledged)
-                        .call(),
-                ],
+                vec![acknowledged_batch().start(0).end(4).call()],
+                vec![acknowledged_batch().start(5).end(9).call()],
                 Offset(0),
                 vec![batches.acknowledged_first_ten.clone()],
             ),

@@ -23,6 +23,8 @@
 
 pub(crate) mod paused_audit;
 
+use crate::config::BreakGlassConfig;
+
 use std::{
     collections::BTreeSet,
     io,
@@ -33,6 +35,15 @@ use std::{
     },
     time::Duration,
 };
+
+/// A break-glass test config that requires approval from the two named users.
+#[cfg(test)]
+pub(crate) fn gated_break_glass_config() -> BreakGlassConfig {
+    BreakGlassConfig {
+        approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
+        ..BreakGlassConfig::default()
+    }
+}
 
 use bytes::{Bytes, BytesMut};
 use krabka_metadata::{
@@ -2949,6 +2960,34 @@ pub(crate) async fn committed_partition(
 }
 
 /// Finalize ELR and seed a topic, its partition and minimum ISR together.
+#[bon::builder]
+pub(crate) fn metadata_partition_record(
+    topic: String,
+    replica_ids: Vec<u64>,
+    isr_ids: Vec<u64>,
+    #[builder(default = "0")] partition: i32,
+    #[builder(default = "1")] leader_id: u64,
+    #[builder(default = "1")] leader_epoch: i32,
+    #[builder(default = "4")] partition_epoch: i32,
+) -> PartitionRecord {
+    let directories = vec![uuid::Uuid::nil(); replica_ids.len()];
+    PartitionRecord {
+        topic,
+        partition,
+        leader: krabka_metadata::NodeId(leader_id),
+        replicas: replica_ids
+            .into_iter()
+            .map(krabka_metadata::NodeId)
+            .collect(),
+        isr: isr_ids.into_iter().map(krabka_metadata::NodeId).collect(),
+        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        directories,
+        partition_epoch,
+    }
+}
+
 pub(crate) fn elr_topic_records(
     partition: PartitionRecord,
     topic_id: uuid::Uuid,

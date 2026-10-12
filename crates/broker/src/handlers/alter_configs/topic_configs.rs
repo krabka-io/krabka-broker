@@ -24,6 +24,9 @@ use crate::{
     topic_policy::{TopicPolicy, check},
 };
 
+#[cfg(test)]
+use crate::handlers::test_support::topic_config_record_with_default_policy;
+
 /// Build the authoritative `V1TopicConfig` record for a topic resource. The
 /// request carries the *complete* set of non-default values, so the map this
 /// builds is the whole override map and the cross-key rules apply to it.
@@ -120,13 +123,7 @@ mod tests {
         resource: &AlterConfigsResource,
         image: &krabka_metadata::MetadataImage,
     ) -> Result<MetadataRecord, (i16, String)> {
-        super::topic_config_record(
-            resource,
-            image,
-            &TopicPolicy::default(),
-            true,
-            UnstableApiVersions::Disabled,
-        )
+        topic_config_record_with_default_policy!(resource, image, super::topic_config_record,)
     }
 
     #[test]

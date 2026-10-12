@@ -8,6 +8,7 @@ use krabka_ids::ProducerId;
 use krabka_protocol::owned::txn_offset_commit_request::{
     TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
 };
+use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 pub(super) struct ProducerEpoch(pub i16);
@@ -66,6 +67,27 @@ pub(super) fn request_for(
         producer_id: setup.producer.id.0,
         producer_epoch: setup.producer.epoch.0,
         topics: setup.topics,
+        ..Default::default()
+    }
+}
+
+/// A request topic whose partition rows keep their wire defaults.
+#[bon::builder]
+pub(super) fn request_topic(
+    #[builder(into)] name: String,
+    partitions: Vec<i32>,
+    #[builder(default)] topic_id: WireUuid,
+) -> TxnOffsetCommitRequestTopic {
+    TxnOffsetCommitRequestTopic {
+        name,
+        topic_id,
+        partitions: partitions
+            .into_iter()
+            .map(|partition_index| TxnOffsetCommitRequestPartition {
+                partition_index,
+                ..Default::default()
+            })
+            .collect(),
         ..Default::default()
     }
 }

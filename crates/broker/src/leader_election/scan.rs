@@ -175,6 +175,39 @@ fn push_checked_isr_shrink(
     true
 }
 
+fn push_election_change(
+    changes: &mut Vec<MetadataRecord>,
+    pr: &PartitionRecord,
+    leader: NodeId,
+    isr: Vec<NodeId>,
+    partition_epoch: i32,
+    leader_epoch: krabka_metadata::LeaderEpoch,
+    unclean: bool,
+) {
+    push_partition_change(
+        changes,
+        pr,
+        leader,
+        isr,
+        partition_epoch,
+        leader_epoch,
+        unclean,
+    );
+}
+
+fn shrink_or_mark_unavailable(
+    changes: &mut Vec<MetadataRecord>,
+    unavailable: &mut Vec<(String, i32)>,
+    pr: &PartitionRecord,
+    isr: Vec<NodeId>,
+    exhausted_message: &str,
+    applied: impl FnOnce(&[NodeId]),
+) {
+    if !push_checked_isr_shrink(changes, pr, isr, exhausted_message, applied) {
+        unavailable.push((pr.topic.clone(), pr.partition));
+    }
+}
+
 /// Compute the failover `MetadataRecord` changes for `dead` against
 /// `image`. Pure: no I/O beyond `liveness.is_alive` lookups. This function is
 /// separate so the failover policy, including the KIP-841 unclean toggle, is
@@ -236,7 +269,7 @@ pub(crate) async fn compute_failover_changes(
                     unclean,
                     "failover: re-electing partition leader (triggered by dead broker)"
                 );
-                push_partition_change(
+                push_election_change(
                     &mut changes,
                     pr,
                     leader,
@@ -247,15 +280,14 @@ pub(crate) async fn compute_failover_changes(
                 );
             }
             FailoverDecision::ShrinkIsr { isr } => {
-                if !push_checked_isr_shrink(
+                shrink_or_mark_unavailable(
                     &mut changes,
+                    &mut unavailable,
                     pr,
                     isr,
                     "ISR shrink skipped because the partition epoch is exhausted",
                     |_| {},
-                ) {
-                    unavailable.push((pr.topic.clone(), pr.partition));
-                }
+                );
             }
             FailoverDecision::Recover(strategy) => {
                 // KIP-966: defer to the offset-aware Unclean Recovery Manager —
@@ -337,7 +369,7 @@ pub(crate) async fn compute_offline_dir_failover_changes(
                     );
                     metrics.record_unclean_leader_election();
                 }
-                push_partition_change(
+                push_election_change(
                     &mut changes,
                     pr,
                     leader,
@@ -485,8 +517,9 @@ pub(crate) async fn compute_unclean_restart_changes(
                 );
             }
             FailoverDecision::ShrinkIsr { isr } => {
-                if !push_checked_isr_shrink(
+                shrink_or_mark_unavailable(
                     &mut changes,
+                    &mut unavailable,
                     pr,
                     isr,
                     "unclean-restart ISR shrink skipped because the partition epoch is exhausted",
@@ -495,9 +528,7 @@ pub(crate) async fn compute_unclean_restart_changes(
                             returning = returning.0, old_isr = ?pr.isr, new_isr = ?isr,
                             "unclean restart: dropping returning broker from ISR");
                     },
-                ) {
-                    unavailable.push((pr.topic.clone(), pr.partition));
-                }
+                );
             }
             FailoverDecision::Recover(strategy) => {
                 record_recovery(&mut recoveries, &mut publisher, pr, returning, strategy);

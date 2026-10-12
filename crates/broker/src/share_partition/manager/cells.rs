@@ -365,7 +365,7 @@ mod tests {
         codes,
         coordinator::unified::streams::config::KEY_SHARE_AUTO_OFFSET_RESET,
         handlers::list_offsets::timestamp::resolve_timestamp_with_sources,
-        partition::test_support::test_partition,
+        partition::test_support::{test_partition, update_log_config},
         partition_registry::PartitionRegistry,
         remote_reader::test_support::{sparse_remote_segment_reader_with_max_timestamp, tp},
         share_partition::{
@@ -624,14 +624,9 @@ mod tests {
             ),
             ("no limit", "two-hours", None, Ok(Offset(1))),
         ] {
-            {
-                let log = partition.log.lock().expect("partition log lock");
-                let config = krabka_log::LogConfig {
-                    max_decompressed_record: limit,
-                    ..log.config_snapshot()
-                };
-                log.set_config(config);
-            }
+            update_log_config(&partition, |config| {
+                config.max_decompressed_record = limit;
+            });
             let got = mgr.initial_start_offset(group, tid, 0).await;
             assert!(got == want, "{name}: got {got:?}, want {want:?}");
         }

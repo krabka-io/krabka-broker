@@ -274,46 +274,44 @@ fn single_segment_fixture(
     (archive, target_parent)
 }
 
-#[tokio::test]
-async fn a_flipped_crc_byte_fails_the_whole_restore_and_names_the_object() {
-    let (archive, target_parent) = single_segment_fixture(1, 0xC12C);
-
-    let log_path = find_one_file(archive.path(), |p| has_extension(p, "log"));
-    let expected_key = relative_key(archive.path(), &log_path);
-    corrupt_crc_covered_byte(&log_path);
-
-    let args = restore_args(archive.path(), &target_parent.path().join("restored"), &[]);
-    let error = restore(&args)
-        .await
-        .expect_err("a flipped CRC byte must fail the restore");
-
-    let exit_code = error.exit_code();
-    let RestoreError::ChecksumMismatch { key, .. } = &error else {
-        panic!("expected ChecksumMismatch, got {error:?}");
-    };
-    check!(*key == expected_key);
-    check!(exit_code == EXIT_INTEGRITY);
+#[derive(Clone, Copy)]
+enum SegmentCorruption {
+    Crc,
+    Truncated,
 }
 
-#[tokio::test]
-async fn a_log_truncated_mid_batch_fails_the_whole_restore_and_names_the_object() {
-    let (archive, target_parent) = single_segment_fixture(2, 0x7ecc);
+#[yare::parameterized(
+    crc = { 1, 0xC12C, SegmentCorruption::Crc },
+    truncated = { 2, 0x7ecc, SegmentCorruption::Truncated },
+)]
+#[test_macro(tokio::test)]
+async fn corrupt_segment_fails_the_whole_restore_and_names_the_object(
+    topic_id: u128,
+    segment_id: u128,
+    corruption: SegmentCorruption,
+) {
+    let (archive, target_parent) = single_segment_fixture(topic_id, segment_id);
 
     let log_path = find_one_file(archive.path(), |p| has_extension(p, "log"));
     let expected_key = relative_key(archive.path(), &log_path);
-    truncate_log_mid_batch(&log_path);
+    match corruption {
+        SegmentCorruption::Crc => corrupt_crc_covered_byte(&log_path),
+        SegmentCorruption::Truncated => truncate_log_mid_batch(&log_path),
+    }
 
     let args = restore_args(archive.path(), &target_parent.path().join("restored"), &[]);
     let error = restore(&args)
         .await
-        .expect_err("a log truncated mid-batch must fail the restore");
+        .expect_err("a corrupted segment must fail the restore");
 
-    let exit_code = error.exit_code();
-    let RestoreError::TruncatedSegment { key, .. } = &error else {
-        panic!("expected TruncatedSegment, got {error:?}");
-    };
-    check!(*key == expected_key);
-    check!(exit_code == EXIT_INTEGRITY);
+    check!(error.exit_code() == EXIT_INTEGRITY);
+    match (&corruption, &error) {
+        (SegmentCorruption::Crc, RestoreError::ChecksumMismatch { key, .. })
+        | (SegmentCorruption::Truncated, RestoreError::TruncatedSegment { key, .. }) => {
+            check!(*key == expected_key);
+        }
+        _ => panic!("unexpected restore error for the corruption case: {error:?}"),
+    }
 }
 
 #[tokio::test]

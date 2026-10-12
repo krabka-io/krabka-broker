@@ -2,9 +2,11 @@
 
 use assert2::assert;
 use krabka_ids::{ApiVersion, Offset, PartitionIndex};
+use krabka_log::Log;
 use krabka_protocol::{
     Decode,
     owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
+    records::{Record, RecordBatch},
 };
 
 use crate::{
@@ -13,6 +15,26 @@ use crate::{
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     test_support::{KafkaErrorCode, encode_request},
 };
+
+#[bon::builder]
+pub(super) fn epoch_record_batch(epoch: i32) -> RecordBatch {
+    RecordBatch {
+        partition_leader_epoch: epoch,
+        records: vec![Record::default()],
+        ..Default::default()
+    }
+}
+
+pub(super) fn append_epoch_batch(log: &mut Log, epoch: i32) -> i64 {
+    let mut batch = epoch_record_batch().epoch(epoch).call();
+    log.append(&mut batch).expect("append").0.0
+}
+
+pub(super) fn append_epoch_batches(log: &mut Log, epochs: &[i32]) {
+    for &epoch in epochs {
+        append_epoch_batch(log, epoch);
+    }
+}
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(super) struct FetchWireSetup<'a> {

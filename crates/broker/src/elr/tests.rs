@@ -30,8 +30,9 @@ use crate::{
     heartbeat::controller_state::BrokerControlState,
     test_support::{
         IsrResponseCheck, WireBrokerId, broker_registration, elr_topic_records,
-        end_heartbeat_session, finalized_broker_features, peer, principal, propose_isr,
-        request_context, started_controller_broker, topic_partitions_request,
+        end_heartbeat_session, finalized_broker_features, metadata_partition_record, peer,
+        principal, propose_isr, request_context, started_controller_broker,
+        topic_partitions_request,
     },
 };
 
@@ -43,18 +44,12 @@ const DESCRIBE_VERSION: i16 =
 const REGISTER_VERSION: i16 = krabka_protocol::owned::broker_registration_request::MAX_VERSION;
 
 fn partition_record(isr: &[NodeId]) -> PartitionRecord {
-    PartitionRecord {
-        topic: TOPIC.into(),
-        partition: 0,
-        leader: NodeId(1),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: isr.to_vec(),
-        leader_epoch: LeaderEpoch(LEADER_EPOCH),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![uuid::Uuid::nil(); 3],
-        partition_epoch: 4,
-    }
+    metadata_partition_record()
+        .topic(TOPIC.to_owned())
+        .replica_ids(vec![1, 2, 3])
+        .isr_ids(isr.iter().map(|node| node.0).collect())
+        .leader_epoch(LEADER_EPOCH)
+        .call()
 }
 
 /// The records that put topic `orders` in the image: one RF=3 partition whose

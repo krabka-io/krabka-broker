@@ -29,6 +29,12 @@ async fn acknowledge_tip(ctrl: &KraftController, follower: NodeId) {
     commit_pending(ctrl, follower).await;
 }
 
+async fn create_committed_topic(ctrl: &KraftController, name: &str) {
+    let create = super::test_support::spawn_submit(ctrl, topic_record(name));
+    acknowledge_tip(ctrl, NodeId(2)).await;
+    create.await.unwrap().unwrap();
+}
+
 fn waiter_offsets(engine: &super::Engine) -> Vec<Offset> {
     engine
         .commit_waiters
@@ -316,13 +322,8 @@ fn offset_advance_submit_rejects_counts_outside_verified_domain() {
 async fn pending_offset_reservations_are_contiguous_before_commit() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
 
-    let create = super::test_support::spawn_submit(&ctrl, topic_record("topic"));
-    acknowledge_tip(&ctrl, NodeId(2)).await;
-    create.await.unwrap().unwrap();
-
-    let create_other = super::test_support::spawn_submit(&ctrl, topic_record("other"));
-    acknowledge_tip(&ctrl, NodeId(2)).await;
-    create_other.await.unwrap().unwrap();
+    create_committed_topic(&ctrl, "topic").await;
+    create_committed_topic(&ctrl, "other").await;
 
     let first_ctrl = ctrl.clone();
     let first =
@@ -746,9 +747,7 @@ async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
     assert!(matches!(result, Err(RaftError::UncommittedTail)));
     assert!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
 
-    let create = super::test_support::spawn_submit(&ctrl, topic_record("topic"));
-    acknowledge_tip(&ctrl, NodeId(2)).await;
-    create.await.unwrap().unwrap();
+    create_committed_topic(&ctrl, "topic").await;
 
     let retry_ctrl = ctrl.clone();
     let retry = tokio::spawn(async move {
@@ -967,6 +966,18 @@ fn check_first_topic_only(engine: &Engine) {
     );
 }
 
+fn check_topic_already_exists(
+    receiver: &mut oneshot::Receiver<Result<SubmitChangeResult, RaftError>>,
+    expected: &str,
+) {
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(Err(RaftError::Metadata(
+            krabka_metadata::MetadataError::TopicExists(name)
+        ))) if name == expected
+    ));
+}
+
 fn elect_three_voter_engine(engine: &mut super::Engine, epoch: u32) {
     engine.on_event(Event::ElectionTimeout);
     for vote_epoch in [epoch, epoch + 1] {
@@ -1003,12 +1014,7 @@ async fn second_create_of_uncommitted_topic_is_refused_before_append() {
 
     let mut second_rx =
         super::test_support::submit_on_engine(&mut engine, &topic_record_named("first", 2));
-    assert!(matches!(
-        second_rx.try_recv(),
-        Ok(Err(RaftError::Metadata(
-            krabka_metadata::MetadataError::TopicExists(name)
-        ))) if name == "first"
-    ));
+    check_topic_already_exists(&mut second_rx, "first");
     check!(engine.log.log_end_offset() == end_after_first);
     check!(
         engine
@@ -1061,12 +1067,7 @@ async fn create_of_a_name_left_uncommitted_by_an_earlier_epoch_is_refused() {
     let end_before_retry = engine.log.log_end_offset();
     let mut retry_rx =
         super::test_support::submit_on_engine(&mut engine, &topic_record_named("first", 2));
-    assert!(matches!(
-        retry_rx.try_recv(),
-        Ok(Err(RaftError::Metadata(
-            krabka_metadata::MetadataError::TopicExists(name)
-        ))) if name == "first"
-    ));
+    check_topic_already_exists(&mut retry_rx, "first");
     check!(engine.log.log_end_offset() == end_before_retry);
 
     // A create of another name is not held back by the pending tail.

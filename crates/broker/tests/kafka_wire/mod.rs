@@ -204,6 +204,19 @@ pub struct PlainAuthenticationSetup<'a> {
     pub password: Vec<u8>,
 }
 
+#[bon::builder]
+pub fn plain_authentication_setup<'a>(
+    #[builder(default = "\"krabka-broker-test\"")] client_id: &'a str,
+    #[builder(default = "\"alice\"")] user: &'a str,
+    #[builder(default = crate::support::sasl::alice_password().into_bytes())] password: Vec<u8>,
+) -> PlainAuthenticationSetup<'a> {
+    PlainAuthenticationSetup {
+        client_id,
+        user,
+        password,
+    }
+}
+
 impl<'a> PlainAuthenticationSetup<'a> {
     /// Bind a named test password to a suite's client ID.
     pub fn with_password(client_id: &'a str, password: &[u8]) -> Self {

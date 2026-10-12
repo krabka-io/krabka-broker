@@ -6,6 +6,7 @@ use crate::{
     config::{NodeRole, StretchProfile},
     file_config::FileConfig,
     host_port::local_host_name,
+    test_support::metadata_partition_record,
 };
 
 /// The gap `wait_for_self_registration_published` closes: a `submit_change`
@@ -493,26 +494,16 @@ mod unclean_restart {
     /// The restarting broker. Node 1 is the controller and stays up.
     const RESTARTING: NodeId = NodeId(2);
 
-    fn nodes(ids: &[u64]) -> Vec<NodeId> {
-        ids.iter().copied().map(NodeId).collect()
-    }
-
     /// One RF=3 partition with a full ISR, and a `min.insync.replicas` of 2,
     /// which is what gives the partition an ELR to fall below.
     fn seed_records() -> Vec<MetadataRecord> {
         elr_topic_records(
-            PartitionRecord {
-                topic: TOPIC.into(),
-                partition: 0,
-                leader: NodeId(1),
-                replicas: nodes(&[1, 2, 3]),
-                isr: nodes(&[1, 2, 3]),
-                leader_epoch: LeaderEpoch(LEADER_EPOCH),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![uuid::Uuid::nil(); 3],
-                partition_epoch: 4,
-            },
+            metadata_partition_record()
+                .topic(TOPIC.to_owned())
+                .replica_ids(vec![1, 2, 3])
+                .isr_ids(vec![1, 2, 3])
+                .leader_epoch(LEADER_EPOCH)
+                .call(),
             uuid::Uuid::from_bytes(TOPIC_ID_BYTES),
             "2",
         )

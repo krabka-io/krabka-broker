@@ -10,10 +10,15 @@ use super::*;
 use crate::{
     log::test_support::{
         abort_marker, append_transaction, check_stamps, commit_marker, install_stamps,
-        rolling_test_log, sample_batch, stamped_test_log, test_log, transactional_batch,
+        rolling_test_log, sample_batch, stamp_entries, stamped_test_log, test_log,
+        transactional_batch,
     },
     test_support::{open_log, stamp_entry},
 };
+
+fn assert_stamp_entries(dir: &std::path::Path, expected: &[crate::StampEntry]) {
+    assert2::assert!(stamp_entries(dir, 0) == expected);
+}
 
 // ---- .stampindex append-path wiring tests ----
 
@@ -46,13 +51,13 @@ fn stampindex_records_appended_batches_and_resolves_offsets() {
     );
 
     // The durable on-disk sidecar holds exactly one entry per data batch.
-    assert2::assert!(
-        crate::log::test_support::stamp_entries(dir.path(), 0)
-            == [
-                crate::test_support::stamp_entry(0, 1, 1_000),
-                crate::test_support::stamp_entry(2, 2, 1_010),
-                crate::test_support::stamp_entry(3, 5, 1_020),
-            ]
+    assert_stamp_entries(
+        dir.path(),
+        &[
+            stamp_entry(0, 1, 1_000),
+            stamp_entry(2, 2, 1_010),
+            stamp_entry(3, 5, 1_020),
+        ],
     );
 }
 
@@ -92,13 +97,7 @@ fn control_markers_are_not_stamped() {
         ],
     );
 
-    assert2::assert!(
-        crate::log::test_support::stamp_entries(dir.path(), 0)
-            == [
-                crate::test_support::stamp_entry(0, 1, 1),
-                crate::test_support::stamp_entry(3, 3, 2),
-            ]
-    );
+    assert_stamp_entries(dir.path(), &[stamp_entry(0, 1, 1), stamp_entry(3, 3, 2)]);
 }
 
 #[test]

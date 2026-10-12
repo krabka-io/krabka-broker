@@ -103,6 +103,12 @@ async fn create_topic(client: &Client, topic: AssignedTopicSetup) -> WireUuid {
         .await
 }
 
+fn other_node(coordinator: u64) -> u64 {
+    (1..=3)
+        .find(|node| *node != coordinator)
+        .expect("another broker")
+}
+
 async fn init_producer(connection: &Connection) -> (i64, i16) {
     initialized_identity(
         || async {
@@ -413,9 +419,7 @@ async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
         .await;
     // The data partition lives on another broker, so its markers do not go
     // through the coordinator's relay, and it survives the coordinator.
-    let data_node = (1..=3)
-        .find(|node| *node != coordinator)
-        .expect("another broker");
+    let data_node = other_node(coordinator);
     let topic_id = create_topic(
         &admin,
         AssignedTopicSetup::on_replicas(TOPIC, vec![krabka_metadata::NodeId(data_node)]),
@@ -515,9 +519,7 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
         config.isr_scan_interval = krabka_units::hours(1);
     })
     .await;
-    let follower = (1..=3)
-        .find(|node| *node != coordinator)
-        .expect("another broker");
+    let follower = other_node(coordinator);
     let topic_id = create_topic(
         &admin,
         AssignedTopicSetup::on_replicas(

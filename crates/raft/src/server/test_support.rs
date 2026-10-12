@@ -15,6 +15,22 @@ use crate::{
     test_support::single_partition_topic,
 };
 
+#[bon::builder]
+pub(super) fn begin_quorum_epoch_request(
+    voter_id: NodeId,
+    leader_id: NodeId,
+    leader_epoch: i32,
+) -> crate::kraft::transport::wire::PeerRequest {
+    crate::kraft::transport::wire::PeerRequest::BeginQuorumEpoch {
+        cluster_id: None,
+        voter_id,
+        voter_directory_id: Uuid::nil(),
+        leader_endpoints: Vec::new(),
+        leader_id,
+        leader_epoch,
+    }
+}
+
 /// Read a complete length-prefixed listener response.
 pub(super) async fn read_frame<R: AsyncReadExt + Unpin>(stream: &mut R) -> Vec<u8> {
     let mut len = [0u8; 4];

@@ -118,7 +118,10 @@ fn start_broker_with_opa_authorizer(
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::{
-    kafka_wire::{PlainAuthenticationSetup, create_topic_as_super_user, drive_produce_as_plain},
+    kafka_wire::{
+        PlainAuthenticationSetup, create_topic_as_super_user, drive_produce_as_plain,
+        plain_authentication_setup,
+    },
     support::{
         produce::single_partition_response,
         sasl::{sasl_temp_config, start_broker},
@@ -204,11 +207,10 @@ async fn produce_blocked_by_opa_returns_topic_authorization_failed() {
     let resp = drive_produce_as_plain(
         addr,
         single_record_produce_request("blocked-topic", 0, b"hello"),
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            password: alice_password(),
-            ..Default::default()
-        },
+        &plain_authentication_setup()
+            .client_id(CLIENT_ID)
+            .password(alice_password())
+            .call(),
     )
     .await
     .expect("Produce must round-trip");

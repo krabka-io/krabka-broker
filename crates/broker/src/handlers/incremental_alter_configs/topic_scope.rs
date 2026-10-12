@@ -28,6 +28,9 @@ use crate::{
     topic_policy::{TopicPolicy, check as check_topic_policy},
 };
 
+#[cfg(test)]
+use crate::handlers::test_support::topic_config_record_with_default_policy;
+
 /// Kafka's `ConfigurationControlManager` APPEND and SUBTRACT: a `LIST` key's
 /// current value (or its default) split on commas, with each item of the
 /// operation's value added when absent or removed.
@@ -178,13 +181,7 @@ mod tests {
         resource: &AlterConfigsResource,
         image: &MetadataImage,
     ) -> Result<MetadataRecord, (i16, String)> {
-        super::topic_config_record(
-            resource,
-            image,
-            &TopicPolicy::default(),
-            true,
-            UnstableApiVersions::Disabled,
-        )
+        topic_config_record_with_default_policy!(resource, image, super::topic_config_record,)
     }
 
     #[test]

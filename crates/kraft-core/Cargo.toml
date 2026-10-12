@@ -44,3 +44,4 @@ tracing = { workspace = true }
 serde = { workspace = true, features = ["derive"], optional = true }
 
 [dev-dependencies]
+yare = { workspace = true }
