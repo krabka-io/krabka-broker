@@ -162,6 +162,7 @@ macro_rules! impl_resource_error_row {
                 Self {
                     resource_type,
                     resource_name,
+                    error_message: None,
                     ..Self::default()
                 }
             }
