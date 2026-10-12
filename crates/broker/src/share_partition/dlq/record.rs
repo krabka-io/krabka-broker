@@ -494,12 +494,12 @@ mod tests {
             ((5, 1), 0),
         ];
 
-        assert!(
-            projected_cases_match(
-                cases.iter().map(|((source, count), _)| destination_partition(*source, *count)),
-                cases.iter().map(|(_, want)| *want),
-            )
-        );
+        assert!(projected_cases_match(
+            cases
+                .iter()
+                .map(|((source, count), _)| destination_partition(*source, *count)),
+            cases.iter().map(|(_, want)| *want),
+        ));
     }
 }
 

@@ -206,20 +206,6 @@ fn bench_append_handoff(c: &mut Criterion) {
 
 #[cfg(unix)]
 fn bench_file_write_shapes(c: &mut Criterion) {
-    fn write_all_vectored(
-        mut writer: impl Write,
-        mut bufs: &mut [IoSlice<'_>],
-    ) -> std::io::Result<()> {
-        while !bufs.is_empty() {
-            let written = writer.write_vectored(bufs)?;
-            if written == 0 {
-                return Err(std::io::ErrorKind::WriteZero.into());
-            }
-            IoSlice::advance_slices(&mut bufs, written);
-        }
-        Ok(())
-    }
-
     let mut group = c.benchmark_group("log/file_write_shapes");
     let header = [0xABu8; 61];
     let body = vec![0xCDu8; (100 * 1024) - header.len()];
@@ -255,8 +241,10 @@ fn bench_file_write_shapes(c: &mut Criterion) {
 
 #[cfg(unix)]
 fn write_file_payload_vectored(file: &std::fs::File, header: &[u8], body: &[u8]) {
-    let mut bufs = [IoSlice::new(header), IoSlice::new(body)];
-    write_all_vectored(file, &mut bufs).unwrap();
+    let bufs = [IoSlice::new(header), IoSlice::new(body)];
+    let mut writer = file;
+    let bytes_written = writer.write_vectored(&bufs).unwrap();
+    assert_eq!(bytes_written, header.len() + body.len());
 }
 
 #[cfg(not(unix))]

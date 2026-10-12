@@ -122,10 +122,9 @@ mod tests {
     use crate::{
         codes::{DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH},
         handlers::delegation_token_test_support::{
-            DAY_MS, MutationSeedSetup, OwnershipRefusalSetup, TokenExpiryRule, TokenExpirySetup,
-            TokenMutationIndex, TokenMutationRefusalSetup, TokenPeriodMillis, TokenPersistence,
-            authed, in_mutation_window, mutation_credential_refusals,
-            ordinary_ownership_refusals, ownership_refusal,
+            DAY_MS, MutationSeedSetup, TokenExpiryRule, TokenExpirySetup, TokenMutationIndex,
+            TokenMutationRefusalSetup, TokenPeriodMillis, TokenPersistence, authed,
+            in_mutation_window, mutation_credential_refusals, ordinary_ownership_refusals,
             stored_expiry, test_controller,
         },
         test_support::{KafkaErrorCode, UnixMillis},

@@ -36,9 +36,7 @@
 
 use std::path::{Path, PathBuf};
 
-use krabka_broker::operator_keys::{
-    OperatorKeyEntry, OperatorKeys, freeze_signing_input,
-};
+use krabka_broker::operator_keys::{OperatorKeyEntry, OperatorKeys, freeze_signing_input};
 use krabka_protocol::krabka::freeze::DescribedTopicFreeze;
 
 use crate::signing::freeze_signing_bytes;

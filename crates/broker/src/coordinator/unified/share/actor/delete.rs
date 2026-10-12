@@ -184,7 +184,6 @@ mod tests {
     use std::collections::HashMap;
 
     use assert2::check;
-    use bytes::Bytes;
 
     use super::*;
     use crate::{
@@ -196,22 +195,13 @@ mod tests {
                     DeletingTopic, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
                 },
             },
-            test_support::{fixed_source, make_coord_with_log, make_share_persister, share_member},
+            test_support::{
+                AppendedRecords as Appended, appended_offsets_records as appended_records,
+                fixed_source, make_coord_with_log, make_share_persister, share_member,
+            },
         },
         metrics::{BrokerMetrics, ShareGroupIdLabel},
     };
-
-    /// `(key, value)` of every record appended to `__consumer_offsets`.
-    type Appended = Vec<(Option<Bytes>, Option<Bytes>)>;
-
-    async fn appended_records(log: &dyn OffsetsLog) -> Appended {
-        log.batches()
-            .await
-            .into_iter()
-            .flat_map(|batch| batch.records)
-            .map(|record| (record.key, record.value))
-            .collect()
-    }
 
     /// `(share group seed, persister wired, expected result, group kept,
     /// expected appended records)`.

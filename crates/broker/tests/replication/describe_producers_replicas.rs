@@ -32,14 +32,19 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
     records::RecordBatch,
 };
-use crate::cluster_lock;
-use crate::support::client::connect_with_context;
-use crate::support::produce::{batch_request, SinglePartitionProduceSetup};
-use crate::support::shutdown_cluster;
-use crate::support::topics::CreateTopicRequestSetup;
-use crate::support::transactions::{ProducerIdentity, TransactionOutcome};
-use crate::support::{self};
 use tempfile::TempDir;
+
+use crate::{
+    cluster_lock,
+    support::{
+        client::connect_with_context,
+        produce::{SinglePartitionProduceSetup, batch_request},
+        shutdown_cluster,
+        topics::CreateTopicRequestSetup,
+        transactions::{ProducerIdentity, TransactionOutcome},
+        {self},
+    },
+};
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 

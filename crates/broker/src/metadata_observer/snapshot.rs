@@ -247,7 +247,10 @@ mod tests {
     }
 
     #[bon::builder]
-    async fn assert_snapshot_fetch_was_not_applied(cluster_id: Uuid, address: std::net::SocketAddr) {
+    async fn assert_snapshot_fetch_was_not_applied(
+        cluster_id: Uuid,
+        address: std::net::SocketAddr,
+    ) {
         let mut fixture = SnapshotFixture::new(cluster_id, address);
         assert!(fixture.fetch().await.is_none());
         assert!(fixture.image.borrow().topics().next().is_none());

@@ -525,10 +525,14 @@ async fn assert_dry_run_error(setup: DryRunErrorSetup<'_>) {
     write_capture(setup.capture_path, setup.capture);
     let error = dry_run_error(setup.archive, setup.target, setup.capture_path).await;
     match setup.expectation {
-        DryRunExpectation::Integrity => check!(matches!(error, RestoreError::Integrity(_))),
-        DryRunExpectation::IntegrityOrRecords => check!(matches!(
-            error,
-            RestoreError::Integrity(_) | RestoreError::Records(_)
-        )),
+        DryRunExpectation::Integrity => {
+            check!(matches!(error, RestoreError::Integrity(_)));
+        }
+        DryRunExpectation::IntegrityOrRecords => {
+            check!(matches!(
+                error,
+                RestoreError::Integrity(_) | RestoreError::Records(_)
+            ));
+        }
     }
 }

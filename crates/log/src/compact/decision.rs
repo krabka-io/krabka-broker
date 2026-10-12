@@ -30,18 +30,15 @@ pub(crate) struct RetentionMetadata {
     pub(crate) batch: BatchMeta,
 }
 
-#[cfg(test)]
 #[bon::builder]
+#[cfg(test)]
 pub(crate) fn data_retention_metadata(
     has_key: bool,
     has_value: bool,
-    #[builder(default)] existing_horizon: Option<i64>,
+    existing_horizon: Option<i64>,
 ) -> RetentionMetadata {
     RetentionMetadata {
-        record: RecordMeta {
-            has_key,
-            has_value,
-        },
+        record: RecordMeta { has_key, has_value },
         batch: BatchMeta {
             is_control: false,
             producer_id: ProducerId(-1),
@@ -50,11 +47,11 @@ pub(crate) fn data_retention_metadata(
     }
 }
 
-#[cfg(test)]
 #[bon::builder]
+#[cfg(test)]
 pub(crate) fn marker_retention_metadata(
     producer_id: i64,
-    #[builder(default)] existing_horizon: Option<i64>,
+    existing_horizon: Option<i64>,
 ) -> RetentionMetadata {
     RetentionMetadata {
         record: RecordMeta {

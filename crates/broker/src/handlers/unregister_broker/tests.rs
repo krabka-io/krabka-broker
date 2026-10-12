@@ -50,12 +50,12 @@ fn context<'a>(principal: &'a Principal, peer: &'a SocketAddr) -> RequestContext
 }
 
 fn follower_departure_partition() -> krabka_metadata::PartitionRecord {
-    partition_fixture(ReplicatedPartitionSetup {
+    replicated_partition(UnregisterPartitionSetup {
+        index: krabka_ids::PartitionIndex(0),
         leader: NodeId(2),
         isr: &[NodeId(2)],
         leader_epoch: krabka_metadata::LeaderEpoch(6),
         partition_epoch: PartitionEpoch(1),
-        ..Default::default()
     })
 }
 

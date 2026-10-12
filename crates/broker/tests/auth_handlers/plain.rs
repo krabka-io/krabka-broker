@@ -4,12 +4,12 @@
 
 use std::{io, net::SocketAddr};
 
-use crate::harness::common_imports::*;
+use assert2::assert;
 
 use crate::{
     harness::{
-        alice_password, alice_plain_config, metadata_probe, round_trip, start_alice_plain,
-        start_reauth_broker, wrong_scram_password,
+        alice_password, alice_plain_config, common_imports::*, metadata_probe, round_trip,
+        start_alice_plain, start_reauth_broker, wrong_scram_password,
     },
     kafka_wire::{
         PlainAuthenticationSetup, sasl_plain_authenticate_on, sasl_plain_reauthenticate_on,

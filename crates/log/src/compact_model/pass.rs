@@ -28,7 +28,7 @@ pub(super) fn compact_pass(log: &[Entry], clock: i64, cleaner: Cleaner) -> Vec<E
                 data_retention_metadata()
                     .has_key(entry.key.is_some())
                     .has_value(value.is_some())
-                    .existing_horizon(entry.horizon)
+                    .maybe_existing_horizon(entry.horizon)
                     .call(),
                 TxnDataState::NotTransactional,
             ),
@@ -36,7 +36,7 @@ pub(super) fn compact_pass(log: &[Entry], clock: i64, cleaner: Cleaner) -> Vec<E
             EntryKind::Marker { producer_id, .. } => (
                 marker_retention_metadata()
                     .producer_id(i64::from(producer_id))
-                    .existing_horizon(entry.horizon)
+                    .maybe_existing_horizon(entry.horizon)
                     .call(),
                 marker_states[&idx],
             ),

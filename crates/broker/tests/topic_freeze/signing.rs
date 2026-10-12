@@ -7,11 +7,11 @@
 //! and [`verifies_locally`] re-checks a registry entry with it on the reader's
 //! own machine. A drift between the two layouts fails both directions at once.
 
+use krabka_broker::operator_keys::freeze_signing_input;
 use krabka_protocol::{
     krabka::freeze::{DescribedTopicFreeze, SetTopicFreezeRequest},
     primitives::uuid::Uuid as WireUuid,
 };
-use krabka_broker::operator_keys::freeze_signing_input;
 
 use crate::support::OperatorKey;
 
@@ -66,7 +66,7 @@ pub(super) struct SignedFreeze<'a> {
 /// and only the `key_id` and the detached signature go on the wire.
 pub(super) fn signed_request(signed: &SignedFreeze<'_>) -> SetTopicFreezeRequest {
     let proposal_id = *signed.proposal_id.as_bytes();
-    let bytes = signing_bytes(&SigningInput {
+    let bytes = signing_bytes(&krabka_broker::operator_keys::FreezeSigningInput {
         cluster_id: signed.cluster_id,
         pattern_type: signed.pattern_type,
         scope: signed.scope,

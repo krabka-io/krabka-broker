@@ -76,7 +76,7 @@ impl UserQuotaSetup<'_> {
 
     fn alteration_options(&self) -> QuotaAlterSetup<'_> {
         QuotaAlterSetup {
-            authentication: self.authentication,
+            authentication: self.authentication.clone(),
             ..Default::default()
         }
     }

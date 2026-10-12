@@ -442,9 +442,7 @@ mod tests {
             .collect()
     }
 
-    fn expected_with_fixed_first_two_members(
-        third_member: &[(Uuid, &[i32])],
-    ) -> Assignment {
+    fn expected_with_fixed_first_two_members(third_member: &[(Uuid, &[i32])]) -> Assignment {
         let mut assignment = expected(&[("A", &[(T1, &[0])]), ("B", &[(T2, &[0])])]);
         assignment.insert(
             "C".to_owned(),

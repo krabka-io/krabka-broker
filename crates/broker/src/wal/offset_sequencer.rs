@@ -161,9 +161,7 @@ mod tests {
         )]]
     }
 
-    async fn assign_topic_zero(
-        source: Arc<dyn MetadataSource>,
-    ) -> Result<Offset, BrokerError> {
+    async fn assign_topic_zero(source: Arc<dyn MetadataSource>) -> Result<Offset, BrokerError> {
         ControllerSequencer::new(source)
             .assign("topic", PartitionIndex(0), 3)
             .await

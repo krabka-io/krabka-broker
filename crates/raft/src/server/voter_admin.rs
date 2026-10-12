@@ -24,11 +24,13 @@ use crate::{
 
 macro_rules! voter_endpoints {
     ($listeners:expr) => {
-        $listeners.into_iter().map(|listener| krabka_metadata::VoterEndpoint {
-            name: listener.name,
-            host: listener.host,
-            port: listener.port,
-        })
+        $listeners
+            .into_iter()
+            .map(|listener| krabka_metadata::VoterEndpoint {
+                name: listener.name,
+                host: listener.host,
+                port: listener.port,
+            })
     };
 }
 

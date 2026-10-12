@@ -11,18 +11,26 @@
 //! it elects again for such a partition when a broker unfences, which is what
 //! Kafka's `handleBrokerUnfenced` does over `partitionsWithNoLeader`.
 
-use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
 #[cfg(test)]
 use krabka_metadata::{
     LeaderEpoch, LeaderRecoveryState, PartitionElrRecord, PartitionRecoveryRecord,
     PartitionUpdateRecord,
 };
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
 use krabka_raft::NodeId;
 use tracing::warn;
 
 use super::policy::{
     FailoverDecision, FailoverPlan, Ladder, elect_leaderless_one, failover_one,
     push_partition_change, unclean_restart_one,
+};
+#[cfg(test)]
+use crate::{
+    config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
+    leader_election::test_support::{
+        ElectionSetup, ElrFinalization, ExpectedPartitionSetup, expected_partition,
+        img_with_partition,
+    },
 };
 use crate::{
     config_keys::{
@@ -33,15 +41,6 @@ use crate::{
     heartbeat::controller_state::ControllerLivenessState,
     metadata_epoch::next_partition_change,
     metrics::BrokerMetrics,
-};
-
-#[cfg(test)]
-use crate::{
-    config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
-    leader_election::test_support::{
-        ElectionSetup, ElrFinalization, ExpectedPartitionSetup, expected_partition,
-        img_with_partition,
-    },
 };
 
 #[cfg(test)]

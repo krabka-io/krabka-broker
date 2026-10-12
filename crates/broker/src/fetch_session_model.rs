@@ -316,11 +316,11 @@ fn fetch_session_basic() {
     // One partition; the core rename/half-identity churn alphabet.
     run(
         one_partition_model(vec![
-                Ref::Both(NAME_A, 1),
-                Ref::NameOnly(NAME_A),
-                Ref::IdOnly(1),
-                Ref::Both(NAME_B, 1),
-            ]),
+            Ref::Both(NAME_A, 1),
+            Ref::NameOnly(NAME_A),
+            Ref::IdOnly(1),
+            Ref::Both(NAME_B, 1),
+        ]),
         "fetch_session_basic",
         PINNED_UNIQUE_STATES_BASIC,
     );
@@ -336,14 +336,14 @@ fn fetch_session_wide() {
     // identity topics coexisting on the one partition.
     run(
         one_partition_model(vec![
-                Ref::Both(NAME_A, 1),
-                Ref::NameOnly(NAME_A),
-                Ref::IdOnly(1),
-                Ref::Both(NAME_B, 1),
-                Ref::NameOnly(NAME_B),
-                Ref::Both(NAME_A, 2),
-                Ref::IdOnly(2),
-            ]),
+            Ref::Both(NAME_A, 1),
+            Ref::NameOnly(NAME_A),
+            Ref::IdOnly(1),
+            Ref::Both(NAME_B, 1),
+            Ref::NameOnly(NAME_B),
+            Ref::Both(NAME_A, 2),
+            Ref::IdOnly(2),
+        ]),
         "fetch_session_wide",
         PINNED_UNIQUE_STATES_WIDE,
     );

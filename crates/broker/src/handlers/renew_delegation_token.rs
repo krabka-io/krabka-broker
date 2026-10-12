@@ -178,10 +178,9 @@ mod tests {
     use crate::{
         codes::DELEGATION_TOKEN_EXPIRED,
         handlers::delegation_token_test_support::{
-            DAY_MS, ExpiryExpectation, MutationSeedSetup, OwnershipRefusalSetup, TokenExpirySetup,
-            TokenMutationIndex, TokenMutationRefusalSetup, TokenPeriodMillis, authed,
-            in_mutation_window, mutation_credential_refusals, ordinary_ownership_refusals,
-            ownership_refusal,
+            DAY_MS, ExpiryExpectation, MutationSeedSetup, TokenExpirySetup, TokenMutationIndex,
+            TokenMutationRefusalSetup, TokenPeriodMillis, authed, in_mutation_window,
+            mutation_credential_refusals, ordinary_ownership_refusals,
             stored_expiry as stored_expiry_fixture, test_controller,
         },
         test_support::{KafkaErrorCode, UnixMillis},
@@ -203,19 +202,19 @@ mod tests {
         let cases = mutation_credential_refusals(&live.0)
             .into_iter()
             .chain([
-            TokenMutationRefusalSetup {
-                name: "expired token, foreign caller",
-                authentication: authed("eve"),
-                hmac: expired.0.clone(),
-                error: KafkaErrorCode(DELEGATION_TOKEN_EXPIRED),
-                ..Default::default()
-            },
-            TokenMutationRefusalSetup {
-                name: "expired token, owner",
-                hmac: expired.0.clone(),
-                error: KafkaErrorCode(DELEGATION_TOKEN_EXPIRED),
-                ..Default::default()
-            },
+                TokenMutationRefusalSetup {
+                    name: "expired token, foreign caller",
+                    authentication: authed("eve"),
+                    hmac: expired.0.clone(),
+                    error: KafkaErrorCode(DELEGATION_TOKEN_EXPIRED),
+                    ..Default::default()
+                },
+                TokenMutationRefusalSetup {
+                    name: "expired token, owner",
+                    hmac: expired.0.clone(),
+                    error: KafkaErrorCode(DELEGATION_TOKEN_EXPIRED),
+                    ..Default::default()
+                },
             ])
             .chain(ordinary_ownership_refusals(&live.0));
         for case in cases {

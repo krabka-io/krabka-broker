@@ -19,7 +19,7 @@ use krabka_protocol::owned::{
     init_producer_id_request::InitProducerIdRequest,
 };
 
-use super::{*, test_support::one_transactional_batch};
+use super::{test_support::one_transactional_batch, *};
 use crate::{
     broker::{Broker, BrokerHandle},
     codes,

@@ -237,10 +237,7 @@ pub(crate) fn failover_one(
 /// and it can lead once `alive` names it: from the ELR when the fence put it
 /// there, and as the last known leader when an unclean restart kept it out.
 /// A partition that is not marked leaderless is [`FailoverDecision::NoChange`].
-pub(crate) fn elect_leaderless_one(
-    pr: &PartitionRecord,
-    ladder: &Ladder<'_>,
-) -> FailoverDecision {
+pub(crate) fn elect_leaderless_one(pr: &PartitionRecord, ladder: &Ladder<'_>) -> FailoverDecision {
     if !ladder.elr.is_leaderless(pr.leader) {
         return FailoverDecision::NoChange;
     }

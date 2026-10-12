@@ -164,11 +164,7 @@ pub(super) fn do_failover(image: Option<&MetadataImage>, s: &mut DpState, dead: 
         .strategy(strategy)
         .unclean_enabled(unclean)
         .build();
-    let changed = match failover_one(
-        &pr,
-        krabka_audit::NodeId(node(dead)),
-        &ladder,
-    ) {
+    let changed = match failover_one(&pr, krabka_audit::NodeId(node(dead)), &ladder) {
         FailoverDecision::Elect {
             leader,
             isr,

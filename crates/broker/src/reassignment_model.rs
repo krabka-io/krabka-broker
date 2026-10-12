@@ -79,9 +79,7 @@ impl ReassignModel {
     }
 
     fn leader_handoff() -> Self {
-        Self::builder()
-            .leader(krabka_audit::NodeId(2))
-            .build()
+        Self::builder().leader(krabka_audit::NodeId(2)).build()
     }
 
     /// A replication factor decrease with nothing to add: broker 2, a target

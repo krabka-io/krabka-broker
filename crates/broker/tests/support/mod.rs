@@ -133,8 +133,8 @@ pub use self::{
     single_broker::{
         GroupCoordinatorBoot, InProcess, boot_single, standalone_broker, start, start_configured,
         start_group_coordinator, start_group_coordinator_with_config, start_legacy,
-        start_ready_group, start_with_audit_key,
-        start_with_bound_listeners, start_with_deny_all_authz, start_with_dir,
+        start_ready_group, start_with_audit_key, start_with_bound_listeners,
+        start_with_deny_all_authz, start_with_dir,
     },
 };
 

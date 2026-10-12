@@ -142,7 +142,11 @@ pub(super) async fn run_offset_aware_recovery(
 }
 
 #[bon::builder]
-fn consumed_transition<'a>(target: &'a str, proposal_id: Uuid, reason: &'a str) -> GatedTransition<'a> {
+fn consumed_transition<'a>(
+    target: &'a str,
+    proposal_id: Uuid,
+    reason: &'a str,
+) -> GatedTransition<'a> {
     GatedTransition {
         action: BreakGlassAction::UncleanElectLeaders,
         target,

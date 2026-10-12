@@ -87,7 +87,7 @@ fn compact(log: &[Entry], clock: i64, ret_ms: i64) -> Vec<Entry> {
                 data_retention_metadata()
                     .has_key(e.key.is_some())
                     .has_value(value.is_some())
-                    .existing_horizon(e.horizon)
+                    .maybe_existing_horizon(e.horizon)
                     .call(),
                 e.key.is_some_and(|k| map.get(&k).copied() == Some(idx)),
                 TxnDataState::NotTransactional,
@@ -95,7 +95,7 @@ fn compact(log: &[Entry], clock: i64, ret_ms: i64) -> Vec<Entry> {
             EntryKind::Marker { producer_id, .. } => (
                 marker_retention_metadata()
                     .producer_id(i64::from(*producer_id))
-                    .existing_horizon(e.horizon)
+                    .maybe_existing_horizon(e.horizon)
                     .call(),
                 false,
                 if held.contains(&idx) {

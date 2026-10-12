@@ -253,10 +253,7 @@ mod tests {
     }
 
     #[bon::builder]
-    fn two_partition_session(
-        principal: &str,
-        partition_ids: [i32; 2],
-    ) -> SessionAllocationSetup {
+    fn two_partition_session(principal: &str, partition_ids: [i32; 2]) -> SessionAllocationSetup {
         SessionAllocationSetup {
             principal: principal.into(),
             partitions: partition_ids

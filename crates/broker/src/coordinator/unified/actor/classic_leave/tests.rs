@@ -25,7 +25,7 @@ async fn classic_leave_last_member_persists_empty_generation() {
     let seeded = seed_stable_classic(&coord, &["m1"]);
     let result = rpc::classic_leave_member(&seeded.handle, "m1").await;
     rpc::check_successful_classic_leave(&result);
-    let view = rpc::classic_inspect(&handle).await;
+    let view = rpc::classic_inspect(&seeded.handle).await;
     check!(view.state == ClassicGroupState::Empty);
     check!(view.generation_id == seeded.generation + 1);
     let persisted = last_classic_metadata(&log).await;
@@ -41,7 +41,7 @@ async fn classic_leave_with_members_remaining_does_not_commit_empty_generation()
     let seeded = seed_stable_classic(&coord, &["m1", "m2"]);
     let result = rpc::classic_leave_member(&seeded.handle, "m1").await;
     rpc::check_successful_classic_leave(&result);
-    let view = rpc::classic_inspect(&handle).await;
+    let view = rpc::classic_inspect(&seeded.handle).await;
     check!(view.generation_id == seeded.generation);
     check!(view.members.len() == 1);
     check!(view.members[0].member_id == "m2");

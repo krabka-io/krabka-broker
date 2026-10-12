@@ -125,10 +125,12 @@ async fn drive(
     // the membership check passes.
     let request = OffsetCommitRequest {
         group_id: group.clone(),
-        topics: vec![super::test_topic_row()
-            .name(name.to_string())
-            .topic_id(topic_id.0)
-            .call()],
+        topics: vec![
+            super::test_topic_row()
+                .name(name.to_string())
+                .topic_id(topic_id.0)
+                .call(),
+        ],
         ..Default::default()
     };
 

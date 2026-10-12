@@ -30,13 +30,12 @@ use super::codec::{
 use crate::kraft::types::{Epoch, NodeId};
 
 macro_rules! singleton_metadata_topic {
-    ($topic:ty, $partition:expr) => {
-        $topic {
-            topic_name: METADATA_TOPIC.to_string(),
-            partitions: vec![$partition],
-            ..Default::default()
-        }
-    };
+    ($topic:ty, $partition:expr) => {{
+        let mut topic: $topic = Default::default();
+        topic.topic_name = METADATA_TOPIC.to_string();
+        topic.partitions = vec![$partition];
+        topic
+    }};
 }
 
 #[cfg(test)]

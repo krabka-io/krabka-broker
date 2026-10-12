@@ -73,9 +73,10 @@ pub(crate) fn prepare_batch(
         .predicates
         .decide_batch(setup.partition_ref, setup.batch)?
     {
-        BatchDecision::Keep if setup.batch.attributes().is_control_batch() => {
-            Ok((prepare_owned_batch(setup.batch.to_owned()?)?, BatchTally::Kept))
-        }
+        BatchDecision::Keep if setup.batch.attributes().is_control_batch() => Ok((
+            prepare_owned_batch(setup.batch.to_owned()?)?,
+            BatchTally::Kept,
+        )),
         BatchDecision::Keep => {
             let verbatim = VerbatimBatch::from_header(header, setup.batch_bytes);
             Ok((PreparedBatch::Verbatim(verbatim), BatchTally::Kept))
@@ -93,8 +94,7 @@ fn prepare_filtered_batch(
     setup: PrepareBatchSetup<'_, '_>,
 ) -> Result<(PreparedBatch, BatchTally), RestoreError> {
     let header = setup.batch.header();
-    let mut keep_flags =
-        Vec::with_capacity(usize::try_from(setup.records_in_batch).unwrap_or(0));
+    let mut keep_flags = Vec::with_capacity(usize::try_from(setup.records_in_batch).unwrap_or(0));
     for record in setup.batch {
         let record = record?;
         let (record_offset, timestamp_ms) = record_coordinates(header, &record)?;
@@ -125,7 +125,7 @@ fn prepare_filtered_batch(
         }
         FilteredBatch::Filtered(rewritten) => {
             let kept = u64::try_from(rewritten.records.len()).unwrap_or(0);
-            let dropped = records_in_batch.saturating_sub(kept);
+            let dropped = setup.records_in_batch.saturating_sub(kept);
             // The generic record filter shrinks the span to its survivors.
             // Restore preserves the archived span instead, as Kafka's
             // MemoryRecords.buildRetainedRecordsInto does with overrideLastOffset:
@@ -250,8 +250,9 @@ mod tests {
     use krabka_protocol::records::{Attributes, Record, TimestampType};
 
     use super::{
-        BatchTally, Bytes, BytesMut, PartitionRef, Predicates, PreparedBatch, RecordBatch,
-        RecordBatchBorrowed, prepare_batch, prepare_owned_batch, validate_one_v2_batch,
+        BatchTally, Bytes, BytesMut, PartitionRef, Predicates, PrepareBatchSetup, PreparedBatch,
+        RecordBatch, RecordBatchBorrowed, prepare_batch, prepare_owned_batch,
+        validate_one_v2_batch,
     };
     use crate::materialize::test_support::args_from;
 

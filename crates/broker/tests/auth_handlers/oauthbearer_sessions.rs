@@ -408,10 +408,9 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     assert!(sh_resp.error_code == 0, "PLAIN handshake must succeed");
 
     let auth_body = plain_authentication_body("alice", alice_password().as_bytes());
-    let auth_resp_bytes =
-        crate::harness::sasl_authenticate_round_trip(&mut stream, &auth_body)
-    .await
-    .expect("SaslAuthenticate round-trip");
+    let auth_resp_bytes = crate::harness::sasl_authenticate_round_trip(&mut stream, &auth_body)
+        .await
+        .expect("SaslAuthenticate round-trip");
     let mut cur: &[u8] = &auth_resp_bytes;
     let auth_resp =
         sasl_authenticate_response::SaslAuthenticateResponse::decode(&mut cur, 2).unwrap();

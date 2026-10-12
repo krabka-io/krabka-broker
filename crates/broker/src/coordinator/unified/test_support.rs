@@ -7,6 +7,8 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+use bytes::Bytes;
+
 use super::{
     actor::MetadataProvider,
     config::NextGenConfig,
@@ -28,6 +30,17 @@ use crate::{
     },
     test_support::{FakeMetadataSource, KafkaErrorCode, UnixMillis, string_pairs},
 };
+
+pub(crate) type AppendedRecords = Vec<(Option<Bytes>, Option<Bytes>)>;
+
+pub(crate) async fn appended_offsets_records(log: &InMemoryOffsetsLog) -> AppendedRecords {
+    log.batches()
+        .await
+        .into_iter()
+        .flat_map(|batch| batch.records)
+        .map(|record| (record.key, record.value))
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct MemberEpoch(pub i32);

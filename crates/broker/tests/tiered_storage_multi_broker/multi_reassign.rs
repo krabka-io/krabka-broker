@@ -36,17 +36,19 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use crate::multi_client::topic_id_for;
-use crate::multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes};
-use crate::multi_workload::local_segment_bases;
-use crate::support::{
-    client::connect_owned,
-    storage::{local_log_segment_metadata, topic_remote_log_files},
-    topics::AssignedTopicSetup,
-};
-use crate::topic_fixture::{
-    AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup, create_assigned_topic,
-    produce_records as produce_tiered_records,
+use crate::{
+    multi_client::topic_id_for,
+    multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes},
+    multi_workload::local_segment_bases,
+    support::{
+        client::connect_owned,
+        storage::{local_log_segment_metadata, topic_remote_log_files},
+        topics::AssignedTopicSetup,
+    },
+    topic_fixture::{
+        AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup, create_assigned_topic,
+        produce_records as produce_tiered_records,
+    },
 };
 
 /// The topic this suite produces into.

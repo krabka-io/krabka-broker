@@ -14,9 +14,7 @@ use assert2::assert;
 use bytes::Bytes;
 use krabka_protocol::{
     owned::{
-        share_fetch_request::{
-            AcknowledgementBatch, ShareFetchRequest,
-        },
+        share_fetch_request::{AcknowledgementBatch, ShareFetchRequest},
         share_fetch_response::{PartitionData, ShareFetchResponse, ShareFetchableTopicResponse},
     },
     primitives::uuid::Uuid as WireUuid,

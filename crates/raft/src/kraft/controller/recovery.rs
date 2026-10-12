@@ -4,8 +4,7 @@
 
 use krabka_ids::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord};
-use krabka_protocol::records::metadata::control::ControlRecord;
-use krabka_protocol::records::RecordBatch;
+use krabka_protocol::records::{RecordBatch, metadata::control::ControlRecord};
 use krabka_verified::recovery::{
     ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
     should_capture_first_downgrade,

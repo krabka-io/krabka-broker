@@ -9,6 +9,7 @@
 //! it out (`0::1`).
 
 use assert2::assert;
+
 use super::*;
 
 /// The image of a partition `t-0` with replicas `[1, 2, 3]`, led by broker 1

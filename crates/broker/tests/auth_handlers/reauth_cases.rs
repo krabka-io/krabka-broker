@@ -2,10 +2,9 @@
 
 use std::ops::RangeInclusive;
 
-use crate::harness::common_imports::*;
-
 use crate::{
     harness,
+    harness::common_imports::*,
     kafka_wire::{
         ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup, ScramAuthenticationSetup,
         exchange,

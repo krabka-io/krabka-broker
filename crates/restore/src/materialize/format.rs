@@ -12,6 +12,8 @@ use std::{
 };
 
 use krabka_ids::LeaderEpoch;
+#[cfg(test)]
+use krabka_metadata::FeatureLevelRecord;
 use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 use krabka_remote_storage::{
     ArchiveVerifyReport, ChainHead, ChainStamp, RemoteLogSegmentState, WormChainRecord,
@@ -34,7 +36,8 @@ pub struct FormatTargetOutcome {
     pub metadata: MetadataRestoreReport,
 }
 
-fn feature_level_records(excluded: &[&str]) -> impl Iterator<Item = MetadataRecord> + '_ {
+#[cfg(test)]
+fn feature_level_records<'a>(excluded: &'a [&str]) -> impl Iterator<Item = MetadataRecord> + 'a {
     krabka_metadata::feature_registry()
         .iter()
         .filter(|registered| !excluded.contains(&registered.name()))

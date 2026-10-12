@@ -64,11 +64,13 @@ pub(super) fn test_topic_row(
     OffsetCommitRequestTopic {
         name,
         topic_id: WireUuid(topic_id),
-        partitions: vec![krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition {
-            partition_index: 0,
-            committed_offset: 42,
-            ..Default::default()
-        }],
+        partitions: vec![
+            krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition {
+                partition_index: 0,
+                committed_offset: 42,
+                ..Default::default()
+            },
+        ],
         ..Default::default()
     }
 }

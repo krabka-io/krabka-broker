@@ -110,6 +110,7 @@ impl BrokerMetrics {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use prometheus_client::metrics::{counter::Counter, family::Family};
 
     use super::*;
 
@@ -118,9 +119,7 @@ mod tests {
         Arc::from(name)
     }
 
-    fn assert_topic_counters(
-        cases: &[(&str, &Family<TopicLabel, Counter>, &TopicLabel, u64)],
-    ) {
+    fn assert_topic_counters(cases: &[(&str, &Family<TopicLabel, Counter>, &TopicLabel, u64)]) {
         for (family_name, family, label, want) in cases {
             let got = family.get_or_create(label).get();
             assert!(got == *want, "{family_name} for {:?}", label.topic);

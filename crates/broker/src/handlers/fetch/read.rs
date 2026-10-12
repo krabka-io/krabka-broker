@@ -670,7 +670,7 @@ mod tests {
         (dir, log)
     }
 
-    fn locked_raw_log(log: Log) -> (Mutex<Log>, Vec<u8>, Offset) {
+    fn locked_raw_log(log: Log) -> (Mutex<Log>, Bytes, Offset) {
         let limit = log.log_end_offset();
         let raw = log
             .read_raw(Offset(0), limit, UNBOUNDED)
@@ -805,7 +805,7 @@ mod tests {
     #[test]
     fn read_committed_reports_the_aborted_ranges_beside_the_same_bytes() {
         let (_dir, log) = aborted_transaction_log();
-        let (log, raw, _limit) = locked_raw_log(log);
+        let (log, raw, limit) = locked_raw_log(log);
 
         let read_committed = super::read_records(
             &log,

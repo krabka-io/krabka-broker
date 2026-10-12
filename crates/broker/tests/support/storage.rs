@@ -11,7 +11,13 @@ pub fn local_log_segment_metadata(directory: &std::path::Path) -> Vec<std::fs::M
     };
     entries
         .flatten()
-        .filter(|entry| entry.path().extension().and_then(|extension| extension.to_str()) == Some("log"))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("log")
+        })
         .filter_map(|entry| entry.metadata().ok())
         .collect()
 }

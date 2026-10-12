@@ -70,10 +70,7 @@ async fn on_broker_dead_submits_failover_when_this_controller_is_leader() {
         ..Default::default()
     });
     let source = fake_source(img, Some(NodeId(7)));
-    let context = failover_test_context()
-        .source(source.clone())
-        .call()
-        .await;
+    let context = failover_test_context().source(source.clone()).call().await;
 
     on_broker_dead(
         &context.controller,
@@ -99,10 +96,7 @@ async fn on_broker_dead_bounds_a_stalled_commit() {
         ..Default::default()
     });
     let source = stalled_fake_source(img, Some(NodeId(7)));
-    let context = failover_test_context()
-        .source(source.clone())
-        .call()
-        .await;
+    let context = failover_test_context().source(source.clone()).call().await;
 
     // Paused time: the runtime auto-advances past the bound as soon as
     // the only pending future is the timeout itself.

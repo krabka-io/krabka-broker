@@ -186,10 +186,10 @@ mod tests {
             ClientIdentity, GroupCoordinator,
             actor::{
                 GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution,
-            test_support::{
-                    ConsumerMemberSetup, completing_classic_group, empty_metadata,
-                actor_services_with, last_classic_metadata, make_coordinator, parked_follower,
-                rpc, subscribed_member,
+                test_support::{
+                    ConsumerMemberSetup, actor_services_with, completing_classic_group,
+                    empty_metadata, last_classic_metadata, make_coordinator, parked_follower, rpc,
+                    subscribed_member,
                 },
             },
             classic_state::GroupState as ClassicGroupState,

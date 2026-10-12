@@ -7,6 +7,7 @@
 //! implemented.
 
 use assert2::assert;
+
 use super::*;
 
 /// Liveness where each of `alive` heartbeated inside the current window.

@@ -30,12 +30,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+use krabka_protocol::owned::share_fetch_request::{AcknowledgementBatch, FetchTopic};
 use krabka_protocol::owned::{
     share_fetch_request::{FetchPartition, ShareFetchRequest},
     share_fetch_response::{LeaderIdAndEpoch, ShareFetchResponse},
 };
-#[cfg(test)]
-use krabka_protocol::owned::share_fetch_request::{AcknowledgementBatch, FetchTopic};
 use krabka_units::convert::ByteSizeExt as _;
 
 mod acknowledge;

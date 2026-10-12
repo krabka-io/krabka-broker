@@ -101,7 +101,11 @@ async fn handle_unknown_name_and_id_preserve_error_rows() {
 
     let expected = response(vec![
         row(None, bogus_id, codes::UNKNOWN_TOPIC_ID),
-        row(Some("missing"), WireUuid::ZERO, codes::UNKNOWN_TOPIC_OR_PARTITION),
+        row(
+            Some("missing"),
+            WireUuid::ZERO,
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+        ),
     ]);
     assert!(resp == expected);
     broker_handle.shutdown().await;

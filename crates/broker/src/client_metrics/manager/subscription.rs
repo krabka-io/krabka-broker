@@ -106,8 +106,6 @@ fn uuid_hashcode(id: Uuid) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::{assert, check};
     use krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord};
     use uuid::Uuid;
@@ -199,7 +197,11 @@ mod tests {
     #[test]
     fn min_interval_and_metric_union_across_subs() {
         let mut img = img_with("s1", &[("metrics", "a."), ("interval.ms", "60000")]);
-        apply_config(&mut img, "s2", &[("metrics", "b."), ("interval.ms", "30000")]);
+        apply_config(
+            &mut img,
+            "s2",
+            &[("metrics", "b."), ("interval.ms", "30000")],
+        );
         let m = compute_subscription(&img, &attrs());
         let mut got = m.metrics.clone();
         got.sort();

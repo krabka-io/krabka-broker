@@ -85,19 +85,21 @@ impl BatchSender for krabka_client_core::Connection {
     }
 }
 
-impl<T> BatchSender for T
-where
-    T: std::ops::Deref + Sync,
-    T::Target: BatchSender,
-{
-    fn send_produce_request(
-        &self,
-        request: krabka_protocol::owned::produce_request::ProduceRequest,
-    ) -> impl std::future::Future<Output = krabka_protocol::owned::produce_response::ProduceResponse>
-    + Send {
-        std::ops::Deref::deref(self).send_produce_request(request)
-    }
+macro_rules! impl_batch_sender_for_reference {
+    ($transport:ty, $diagnostic:literal) => {
+        impl BatchSender for &$transport {
+            async fn send_produce_request(
+                &self,
+                request: krabka_protocol::owned::produce_request::ProduceRequest,
+            ) -> krabka_protocol::owned::produce_response::ProduceResponse {
+                (**self).send(request).await.expect($diagnostic)
+            }
+        }
+    };
 }
+
+impl_batch_sender_for_reference!(krabka_client_core::Client, "Produce");
+impl_batch_sender_for_reference!(krabka_client_core::Connection, "Connection Produce");
 
 /// Send one batch with the default Produce diagnostic; callers keep their response oracles.
 pub async fn send_batch(

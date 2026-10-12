@@ -263,11 +263,8 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
             .is_some_and(|stored| stored.consumed_at_ms == i64::MAX)
     );
 
-    assert_rejected_change_and_shutdown(
-        &ctrl,
-        MetadataRecord::V1BreakGlassProposal(consumed),
-    )
-    .await;
+    assert_rejected_change_and_shutdown(&ctrl, MetadataRecord::V1BreakGlassProposal(consumed))
+        .await;
 }
 
 /// A new leader refuses a break-glass consume with the retriable

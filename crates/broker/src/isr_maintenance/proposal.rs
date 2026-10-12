@@ -281,12 +281,8 @@ mod tests {
     #[test]
     fn a_scan_proposes_the_isr_kafkas_rules_select() {
         let now = Instant::now() + Duration::from_secs(60);
-        let follower_pair = |candidate| {
-            vec![
-                (2, follower(now, 100, Some(10), Some(10))),
-                (3, candidate),
-            ]
-        };
+        let follower_pair =
+            |candidate| vec![(2, follower(now, 100, Some(10), Some(10))), (3, candidate)];
         let cases: [ScanCase<'_>; 10] = [
             (
                 "every follower caught up recently",
