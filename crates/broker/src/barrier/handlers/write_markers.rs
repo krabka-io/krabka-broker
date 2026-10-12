@@ -263,7 +263,7 @@ mod tests {
     use crate::{
         barrier::{
             marker::BarrierMarker,
-            test_support::{check_control_marker, open_partition, topic_records},
+            test_support::{check_control_marker, marker, open_partition, topic_records},
         },
         codes,
         coordinator::unified::persistence::MAX_STRING_BYTES,
@@ -288,14 +288,6 @@ mod tests {
             leader_epoch,
         )
         .await
-    }
-
-    fn marker() -> BarrierMarker {
-        BarrierMarker {
-            group: "orders-cut".to_owned(),
-            epoch: 4,
-            triggered_at: 1_724_500_000_000,
-        }
     }
 
     fn image(records: &[MetadataRecord]) -> MetadataImage {

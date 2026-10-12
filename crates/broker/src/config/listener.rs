@@ -2,7 +2,10 @@
 //! advertises, what it authenticates outbound connections with, and the
 //! check that the two agree.
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
 
@@ -12,6 +15,25 @@ use crate::{
     config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE},
     network::auth::SslPrincipalMapper,
 };
+
+/// Validate that an inter-broker OAUTHBEARER token file is readable and
+/// contains a token accepted by RFC 7628's SASL framing.
+pub(crate) fn validate_oauthbearer_token_file(path: &Path) -> Result<(), String> {
+    let token = std::fs::read(path).map_err(|error| {
+        format!(
+            "cannot read inter-broker OAUTHBEARER token {}: {error}",
+            path.display()
+        )
+    })?;
+    let token = token.trim_ascii();
+    if token.is_empty() || token.contains(&b'\x01') {
+        return Err(
+            "inter-broker OAUTHBEARER token must be non-empty and contain no RFC 7628 separator"
+                .into(),
+        );
+    }
+    Ok(())
+}
 
 /// A single named listener: the port the broker binds and the address it
 /// gives to clients.
@@ -278,19 +300,8 @@ impl BrokerConfig {
             )));
         }
         if let InterBrokerCredentials::OAuthBearer { token_path } = credentials {
-            let token = std::fs::read(token_path).map_err(|error| {
-                BrokerError::InvalidRuntimeConfig(format!(
-                    "cannot read inter-broker OAUTHBEARER token {}: {error}",
-                    token_path.display()
-                ))
-            })?;
-            let token = token.trim_ascii();
-            if token.is_empty() || token.contains(&b'\x01') {
-                return Err(BrokerError::InvalidRuntimeConfig(
-                    "inter-broker OAUTHBEARER token must be non-empty and contain no RFC 7628 separator"
-                        .into(),
-                ));
-            }
+            validate_oauthbearer_token_file(token_path)
+                .map_err(BrokerError::InvalidRuntimeConfig)?;
         }
         Ok(())
     }
@@ -306,6 +317,18 @@ mod tests {
         config::test_support::base,
         test_support::{OAuthTokenContents, oauth_token_file},
     };
+
+    fn sasl_listener(name: &str, mechanisms: Vec<SaslMechanism>) -> ListenerSpec {
+        ListenerSpec {
+            name: name.into(),
+            bind_addr: "127.0.0.1:9094".parse().unwrap(),
+            advertised: "broker:9094".into(),
+            protocol: ListenerProtocol::SaslPlaintext,
+            tls_config: None,
+            sasl_mechanisms: Some(mechanisms),
+            principal_mapper: SslPrincipalMapper::default(),
+        }
+    }
 
     #[test]
     fn accepts_distinct_listener_bind_addresses() {
@@ -425,17 +448,8 @@ mod tests {
     fn outbound_oauthbearer_credentials_validate_for_data_and_controller_listeners() {
         let (_dir, token_path) = oauth_token_file(OAuthTokenContents::Nonempty);
         let credentials = Some(InterBrokerCredentials::OAuthBearer { token_path });
-        let data_listener = ListenerSpec {
-            name: "OAUTH".into(),
-            bind_addr: "127.0.0.1:9094".parse().unwrap(),
-            advertised: "broker:9094".into(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            tls_config: None,
-            sasl_mechanisms: Some(vec![SaslMechanism::OAuthBearer]),
-            principal_mapper: SslPrincipalMapper::default(),
-        };
         let data = BrokerConfig {
-            listeners: vec![data_listener],
+            listeners: vec![sasl_listener("OAUTH", vec![SaslMechanism::OAuthBearer])],
             inter_broker_listener_name: "OAUTH".into(),
             inter_broker_credentials: credentials.clone(),
             ..BrokerConfig::default()
@@ -454,15 +468,7 @@ mod tests {
     #[test]
     fn rejects_outbound_credential_mechanism_not_enabled_on_sasl_targets() {
         let data = BrokerConfig {
-            listeners: vec![ListenerSpec {
-                name: "INTERNAL".into(),
-                bind_addr: "127.0.0.1:9094".parse().unwrap(),
-                advertised: "broker:9094".into(),
-                protocol: ListenerProtocol::SaslPlaintext,
-                tls_config: None,
-                sasl_mechanisms: Some(vec![SaslMechanism::Plain]),
-                principal_mapper: crate::SslPrincipalMapper::default(),
-            }],
+            listeners: vec![sasl_listener("INTERNAL", vec![SaslMechanism::Plain])],
             inter_broker_listener_name: "INTERNAL".into(),
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer {
                 token_path: "/unused/token".into(),

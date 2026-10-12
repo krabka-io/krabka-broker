@@ -8,25 +8,17 @@ use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
 use krabka_units::millis;
 
-use crate::barrier::{
-    persistence::{
-        CutStatus, CutValue, GroupValue, InjectionStartValue, PartitionOffset, TopicOffsets,
-        TopicTarget,
-    },
-    state::TargetPartition,
+use crate::barrier::persistence::{
+    CutStatus, CutValue, GroupValue, InjectionStartValue, PartitionOffset, TopicOffsets,
+    TopicTarget,
 };
+
+pub(super) use crate::barrier::test_support::at;
 
 pub(super) fn target(topic: &str, count: i32) -> TopicTarget {
     TopicTarget {
         topic: topic.to_owned(),
         partition_count: count,
-    }
-}
-
-pub(super) fn at(topic: &str, partition: i32) -> TargetPartition {
-    TargetPartition {
-        topic: topic.to_owned(),
-        partition: PartitionIndex(partition),
     }
 }
 

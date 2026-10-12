@@ -5,16 +5,35 @@
 
 use std::path::Path;
 
+use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig};
 use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 use uuid::Uuid;
 
 use crate::{
     barrier::marker::BarrierMarker,
+    barrier::state::TargetPartition,
     log_dir::partition_dir,
     partition_registry::PartitionRegistry,
     test_support::{FakeMetadataSource, StandalonePartitionSetup, spawn_standalone_partition},
 };
+
+/// A target partition in the barrier tests.
+pub(crate) fn at(topic: &str, partition: i32) -> TargetPartition {
+    TargetPartition {
+        topic: topic.to_owned(),
+        partition: PartitionIndex(partition),
+    }
+}
+
+/// The fixed marker shared by the barrier handler and injection tests.
+pub(crate) fn marker() -> BarrierMarker {
+    BarrierMarker {
+        group: "orders-cut".to_owned(),
+        epoch: 4,
+        triggered_at: 1_724_500_000_000,
+    }
+}
 
 /// The topic and partition records of one topic, with one leader for every
 /// partition and a leader epoch of 3.

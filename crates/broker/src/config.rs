@@ -29,6 +29,7 @@ mod tiered_storage;
 mod validate;
 
 pub(crate) use self::kafka_static_keys::KAFKA_STATIC_KEYS;
+pub(crate) use self::listener::validate_oauthbearer_token_file;
 pub use self::{
     break_glass::{BackgroundUncleanRecovery, BreakGlassConfig},
     broker_config::{BrokerConfig, PlainCredentials},

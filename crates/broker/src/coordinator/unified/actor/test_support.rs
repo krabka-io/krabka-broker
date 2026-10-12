@@ -265,13 +265,17 @@ pub(super) fn bidirectional_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemor
 
 /// One classic member using the common retention/dispatch test identity.
 pub(crate) fn classic_member(member_id: &str) -> Member {
+    classic_member_with_subscription(member_id, Bytes::new())
+}
+
+fn classic_member_with_subscription(member_id: impl Into<String>, subscription: Bytes) -> Member {
     Member::new(
         member_id,
         "client",
         "127.0.0.1",
         Duration::from_secs(30),
         Duration::from_mins(1),
-        vec![("range".into(), bytes::Bytes::new())],
+        vec![("range".into(), subscription)],
     )
 }
 
@@ -497,14 +501,7 @@ pub(super) fn seed_classic_member(
 }
 
 pub(super) fn classic_member_for_topic(member_id: impl Into<String>, topic: &str) -> Member {
-    Member::new(
-        member_id,
-        "client",
-        "127.0.0.1",
-        Duration::from_secs(30),
-        Duration::from_mins(1),
-        vec![("range".into(), subscription_blob(&[topic]))],
-    )
+    classic_member_with_subscription(member_id, subscription_blob(&[topic]))
 }
 
 /// Seed a stable classic group and report the generation before a leave.

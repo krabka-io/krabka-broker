@@ -17,8 +17,7 @@ use crate::txn::{
 #[tokio::test]
 async fn reaper_retries_an_existing_prepare_abort() {
     let coordinator = test_coordinator();
-    let mut prepared = TxnEntry::new_empty("tid-retry".to_string(), ProducerId(1000), 2, 60_000, 0);
-    prepared.state = TxnState::PrepareAbort;
+    let prepared = prepared_entry("tid-retry", 1000, 2);
     coordinator.state.insert(
         prepared.transactional_id.clone(),
         Arc::new(Mutex::new(prepared.clone())),
@@ -42,9 +41,7 @@ async fn reaper_retries_an_existing_prepare_abort() {
 #[tokio::test]
 async fn reaper_never_retries_a_prepared_two_phase_transaction() {
     let coordinator = test_coordinator();
-    let mut prepared =
-        TxnEntry::new_empty("tid-2pc".to_string(), ProducerId(1000), 2, NO_TIMEOUT_MS, 0);
-    prepared.state = TxnState::PrepareAbort;
+    let prepared = prepared_entry_with_timeout("tid-2pc", 1000, 2, NO_TIMEOUT_MS);
     coordinator.state.insert(
         prepared.transactional_id.clone(),
         Arc::new(Mutex::new(prepared.clone())),
@@ -251,7 +248,11 @@ async fn replaced_entry_handle_is_rejected_as_stale() {
 // ── Orchestration loop, driven against a mock backend ─────────────────
 
 fn prepared_entry(tid: &str, pid: i64, epoch: i16) -> TxnEntry {
-    let mut e = TxnEntry::new_empty(tid.to_owned(), ProducerId(pid), epoch, 60_000, 0);
+    prepared_entry_with_timeout(tid, pid, epoch, 60_000)
+}
+
+fn prepared_entry_with_timeout(tid: &str, pid: i64, epoch: i16, timeout_ms: i32) -> TxnEntry {
+    let mut e = TxnEntry::new_empty(tid.to_owned(), ProducerId(pid), epoch, timeout_ms, 0);
     e.state = TxnState::PrepareAbort;
     e
 }

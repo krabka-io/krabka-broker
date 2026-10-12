@@ -6,29 +6,15 @@
 
 use std::sync::Arc;
 
-use krabka_ids::PartitionIndex;
 use krabka_metadata::MetadataRecord;
 use krabka_units::millis;
 
 use crate::{
-    barrier::{config::BarrierConfig, marker::BarrierMarker, state::TargetPartition, test_support},
+    barrier::{config::BarrierConfig, test_support},
     metadata_source::MetadataSource,
 };
 
-pub(super) fn at(topic: &str, partition: i32) -> TargetPartition {
-    TargetPartition {
-        topic: topic.to_owned(),
-        partition: PartitionIndex(partition),
-    }
-}
-
-pub(super) fn marker() -> BarrierMarker {
-    BarrierMarker {
-        group: "orders-cut".to_owned(),
-        epoch: 4,
-        triggered_at: 1_724_500_000_000,
-    }
-}
+pub(super) use crate::barrier::test_support::{at, marker};
 
 pub(super) fn fast_config() -> BarrierConfig {
     BarrierConfig {

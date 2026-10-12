@@ -179,19 +179,8 @@ pub(super) fn apply_config_tail(
                 kdc_url,
             },
             FileInterBrokerCredentials::OAuthBearer { token_path } => {
-                let token = std::fs::read(&token_path).map_err(|error| {
-                    FileConfigError::InvalidConfig(format!(
-                        "cannot read inter-broker OAUTHBEARER token {}: {error}",
-                        token_path.display()
-                    ))
-                })?;
-                let token = token.trim_ascii();
-                if token.is_empty() || token.contains(&b'\x01') {
-                    return Err(FileConfigError::InvalidConfig(
-                        "inter-broker OAUTHBEARER token must be non-empty and contain no RFC 7628 separator"
-                            .into(),
-                    ));
-                }
+                crate::config::validate_oauthbearer_token_file(&token_path)
+                    .map_err(FileConfigError::InvalidConfig)?;
                 InterBrokerCredentials::OAuthBearer { token_path }
             }
         });
