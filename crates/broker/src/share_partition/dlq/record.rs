@@ -168,6 +168,14 @@ pub(super) fn build_round(
 }
 
 #[cfg(test)]
+pub(super) fn projected_cases_match<T: PartialEq>(
+    actual: impl IntoIterator<Item = T>,
+    expected: impl IntoIterator<Item = T>,
+) -> bool {
+    actual.into_iter().eq(expected)
+}
+
+#[cfg(test)]
 mod tests {
     use assert2::assert;
 
@@ -501,11 +509,4 @@ mod tests {
             cases.iter().map(|(_, want)| *want),
         ));
     }
-}
-
-pub(super) fn projected_cases_match<T: PartialEq>(
-    actual: impl IntoIterator<Item = T>,
-    expected: impl IntoIterator<Item = T>,
-) -> bool {
-    actual.into_iter().eq(expected)
 }

@@ -141,6 +141,19 @@ fn checked_epochs(
     })
 }
 
+/// A failover whose metadata epochs cannot advance is reported as unavailable.
+fn checked_election_epochs(
+    unavailable: &mut Vec<(String, i32)>,
+    pr: &PartitionRecord,
+    exhausted_message: &str,
+) -> Option<(i32, krabka_metadata::LeaderEpoch)> {
+    let epochs = checked_epochs(pr, true, exhausted_message);
+    if epochs.is_none() {
+        unavailable.push((pr.topic.clone(), pr.partition));
+    }
+    epochs
+}
+
 /// Check the partition epoch before publishing a clean ISR shrink.
 fn push_checked_isr_shrink(
     changes: &mut Vec<MetadataRecord>,
@@ -194,12 +207,11 @@ pub(crate) async fn compute_failover_changes(
                 isr,
                 unclean,
             } => {
-                let Some((partition_epoch, new_leader_epoch)) = checked_epochs(
+                let Some((partition_epoch, new_leader_epoch)) = checked_election_epochs(
+                    &mut unavailable,
                     pr,
-                    true,
                     "failover skipped because a metadata epoch is exhausted",
                 ) else {
-                    unavailable.push((pr.topic.clone(), pr.partition));
                     continue;
                 };
                 if unclean {
@@ -439,16 +451,12 @@ pub(crate) async fn compute_unclean_restart_changes(
                 isr,
                 unclean,
             } => {
-                let (partition_epoch, new_leader_epoch) = match checked_epochs(
+                let Some((partition_epoch, new_leader_epoch)) = checked_election_epochs(
+                    &mut unavailable,
                     pr,
-                    true,
                     "unclean-restart failover skipped because a metadata epoch is exhausted",
-                ) {
-                    Some(pair) => pair,
-                    None => {
-                        unavailable.push((pr.topic.clone(), pr.partition));
-                        continue;
-                    }
+                ) else {
+                    continue;
                 };
                 if unclean {
                     warn!(

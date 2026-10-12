@@ -8,7 +8,7 @@ pub fn replicated_topic_produce_setup(
     topic_id: [u8; 16],
 ) -> SinglePartitionProduceSetup {
     SinglePartitionProduceSetup {
-        topic: topic.into(),
+        topic,
         topic_id: krabka_protocol::primitives::uuid::Uuid(topic_id),
         ..SinglePartitionProduceSetup::replicated()
     }

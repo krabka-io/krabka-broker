@@ -76,7 +76,6 @@ use krabka_protocol::{
         sasl_handshake_request::SaslHandshakeRequest,
         sasl_handshake_response::SaslHandshakeResponse,
         unregister_controller_request::UnregisterControllerRequest,
-        unregister_controller_response::UnregisterControllerResponse,
         update_features_request::UpdateFeaturesRequest,
     },
     primitives::uuid::Uuid as WireUuid,
@@ -643,8 +642,6 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
 /// `unstable.*.enable` settings on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_listener_serves_unregister_controller() {
-    const CONTROLLER_ID_NOT_REGISTERED: i16 = 136;
-
     let (broker, _dir) = start_trunk_broker().await;
     broker
         .submit_metadata_record_for_test(controller_registration(NodeId(7)))

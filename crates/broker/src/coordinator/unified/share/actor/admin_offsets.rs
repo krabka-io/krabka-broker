@@ -345,6 +345,7 @@ mod tests {
     use std::collections::HashSet;
 
     use assert2::check;
+
     use super::{DeleteTopicOutcome, ResetPartition, delete_offsets, reset_offsets};
     use crate::{
         codes,

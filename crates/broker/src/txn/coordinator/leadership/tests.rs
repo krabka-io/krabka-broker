@@ -151,7 +151,7 @@ fn an_election_loads_and_a_resignation_unloads() {
         Step {
             name: "the same image again changes nothing",
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(0)),
-            after: loaded_epoch_0.clone(),
+            after: loaded_epoch_0,
             ..Default::default()
         },
         Step {

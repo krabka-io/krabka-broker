@@ -10,7 +10,7 @@ use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
 use krabka_broker::Broker;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
+use krabka_ids::ApiKey as WireApiKey;
 use krabka_protocol::owned::{
     alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
     alter_user_scram_credentials_response::AlterUserScramCredentialsResponse,
@@ -22,7 +22,8 @@ use tokio::net::TcpStream;
 
 use crate::{
     harness::{
-        admin_plain_password, alice_password, round_trip, scram_admin_fixture, wrong_scram_password,
+        admin_plain_password, alice_password, round_trip, sasl_authenticate_round_trip,
+        scram_admin_fixture, wrong_scram_password,
     },
     kafka_wire::{
         SaslHandshakeSetup, decode_named, encode_named, plain_payload, sasl_handshake_on,
@@ -183,8 +184,7 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
         2,
         "SaslAuthenticate",
     )?;
-    let auth_resp_bytes =
-        crate::harness::sasl_authenticate_round_trip(&mut stream, &auth_body).await?;
+    let auth_resp_bytes = sasl_authenticate_round_trip(&mut stream, &auth_body).await?;
     let auth_resp =
         decode_named::<SaslAuthenticateResponse>(&auth_resp_bytes, 2, "SaslAuthenticate")?;
     if auth_resp.error_code != 0 {

@@ -1,3 +1,4 @@
+#[cfg(creusot)]
 use creusot_std::prelude::*;
 
 use super::*;

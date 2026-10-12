@@ -49,7 +49,10 @@ pub use topics::creatable_topic as topic;
 use crate::support::{
     admin::{ElectionSetup, election_partition_errors, election_request},
     produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
-    topics::{self, AssignedTopicSetup, ConfiguredTopicSetup, assigned_topic},
+    topics::{
+        self, AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicSetup, assigned_topic,
+        configured_topic_request,
+    },
     wire::{self as frames, ApiRequestSetup, CorrelationId},
 };
 
@@ -169,6 +172,15 @@ pub struct PlainAuthenticationSetup<'a> {
 }
 
 impl<'a> PlainAuthenticationSetup<'a> {
+    /// Bind a named test password to a suite's client ID.
+    pub fn with_password(client_id: &'a str, password: &[u8]) -> Self {
+        Self {
+            client_id,
+            password: password.to_vec(),
+            ..Default::default()
+        }
+    }
+
     /// The admin fixture's super-user credentials, bound to a suite's client ID.
     pub fn admin(client_id: &'a str) -> Self {
         Self {
@@ -930,7 +942,7 @@ pub async fn create_topic_plaintext(
 pub async fn create_topic_from_setup(
     addr: SocketAddr,
     client_id: &str,
-    setup: crate::support::topics::CreateTopicSetup<'_>,
+    setup: CreateTopicSetup<'_>,
 ) {
     let mut req = crate::support::topics::configured_topic_request()
         .topic(setup.topic)

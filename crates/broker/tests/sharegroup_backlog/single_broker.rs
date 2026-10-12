@@ -66,7 +66,7 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
         ..Default::default()
     };
     let joined = client.send(join_req).await.unwrap();
-    assert_eq!(joined.error_code, 0, "{joined:?}");
+    assert!(joined.error_code == 0, "{joined:?}");
     broker
         .wait_for_share_state_summary(GROUP, topic_id, 0)
         .await;
@@ -107,12 +107,16 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
     );
     assert!(scrape(metrics_addr).await.contains(&expected));
 
-    let mut alter_part = AlterShareGroupOffsetsRequestPartition::default();
-    alter_part.partition_index = 0;
-    alter_part.start_offset = 5;
-    let mut alter_topic = AlterShareGroupOffsetsRequestTopic::default();
-    alter_topic.topic_name = TOPIC.into();
-    alter_topic.partitions = vec![alter_part];
+    let alter_part = AlterShareGroupOffsetsRequestPartition {
+        partition_index: 0,
+        start_offset: 5,
+        ..Default::default()
+    };
+    let alter_topic = AlterShareGroupOffsetsRequestTopic {
+        topic_name: TOPIC.into(),
+        partitions: vec![alter_part],
+        ..Default::default()
+    };
     let alter_req = AlterShareGroupOffsetsRequest {
         group_id: GROUP.into(),
         topics: vec![alter_topic],

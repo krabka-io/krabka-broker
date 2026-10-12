@@ -32,6 +32,7 @@ use self::{
 use crate::{
     core::QuorumStateMachine,
     role::Role,
+    simulation_support::partition_node,
     types::{Epoch, NodeId, QuorumState, SimInstant},
 };
 
@@ -166,7 +167,7 @@ impl Sim {
     // ---- public scenario surface ---------------------------------------------
 
     pub fn partition(&mut self, node: NodeId) {
-        crate::simulation_support::partition_node(&mut self.partitioned, &mut self.queue, node);
+        partition_node(&mut self.partitioned, &mut self.queue, node);
         self.record(
             TraceAction::Partition { node: node.0 },
             format!("N{node} is isolated from the cluster"),

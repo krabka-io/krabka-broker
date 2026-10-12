@@ -15,9 +15,7 @@ use super::{
     runner::{PINNED_UNIQUE_STATES_RED_LEGACY_ELECT, PINNED_UNIQUE_STATES_RED_MIN_INSYNC_ONE, run},
 };
 use crate::{
-    config_keys::RecoveryStrategy,
-    elr::state::PartitionElr,
-    leader_election::FailoverDecision,
+    config_keys::RecoveryStrategy, elr::state::PartitionElr, leader_election::FailoverDecision,
 };
 
 /// The pre-witness controller decision. It is the same shape as

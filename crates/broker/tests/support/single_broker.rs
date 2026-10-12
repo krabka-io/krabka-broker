@@ -169,11 +169,13 @@ pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
 pub async fn start_group_coordinator() -> (BrokerHandle, String, TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    let started = start_group_coordinator_with_config()
-        .config(config)
-        .directory(tempdir)
-        .call()
-        .await;
+    let started = Box::pin(
+        start_group_coordinator_with_config()
+            .config(config)
+            .directory(tempdir)
+            .call(),
+    )
+    .await;
     (started.broker, started.bootstrap, started.directory)
 }
 

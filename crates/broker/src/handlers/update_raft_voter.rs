@@ -59,8 +59,16 @@ crate::handlers::raft_voter::handler!(broker, version, req_bytes, ctx, {
         code
     } else {
         let kraft_version = krabka_metadata::KRaftVersionRange {
-            min: req.k_raft_version_feature.min_supported_version.max(0) as u16,
-            max: req.k_raft_version_feature.max_supported_version.max(0) as u16,
+            min: req
+                .k_raft_version_feature
+                .min_supported_version
+                .max(0)
+                .cast_unsigned(),
+            max: req
+                .k_raft_version_feature
+                .max_supported_version
+                .max(0)
+                .cast_unsigned(),
         };
         let (voter_id, directory_id) = (req.voter_id, req.voter_directory_id);
         let voter = Voter {

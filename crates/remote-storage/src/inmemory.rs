@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::Mutex};
 use krabka_ids::LeaderEpoch;
 
 use crate::{
-    cache::RemoteLogMetadataCache,
+    cache::{RemoteLogMetadataCache, sort_by_start_offset},
     dump::{PartitionDump, RlmmCacheDump},
     error::RemoteStorageError,
     metadata::{
@@ -65,7 +65,7 @@ impl InmemoryRemoteLogMetadataManager {
         // Within a partition, sort segments by (start_offset, id) so the
         // dump is canonical regardless of HashMap iteration order.
         for p in &mut partitions {
-            crate::cache::sort_by_start_offset(&mut p.segments);
+            sort_by_start_offset(&mut p.segments);
         }
         RlmmCacheDump { partitions }
     }

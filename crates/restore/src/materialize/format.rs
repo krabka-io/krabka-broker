@@ -453,6 +453,16 @@ mod tests {
         materialize::test_support::{args_from, partition_inventory},
     };
 
+    fn delete_marked_dump() -> RlmmCacheDump {
+        RlmmCacheDump {
+            partitions: vec![PartitionDump {
+                topic_id_partition: TopicIdPartition::new(uuid::Uuid::from_u128(7), "orders", 0),
+                segments: Vec::new(),
+                delete_state: Some(RemotePartitionDeleteState::DeletePartitionMarked),
+            }],
+        }
+    }
+
     #[test]
     fn seed_metadata_records_emits_every_topic_before_any_partition() {
         let orders_id = Uuid::new_v4();
@@ -512,13 +522,7 @@ mod tests {
         let source = tempfile::tempdir().expect("source tempdir");
         let target = tempfile::tempdir().expect("target tempdir");
         let source_path = source.path().join("snapshot");
-        let dump = RlmmCacheDump {
-            partitions: vec![PartitionDump {
-                topic_id_partition: TopicIdPartition::new(Uuid::from_u128(7), "orders", 0),
-                segments: Vec::new(),
-                delete_state: Some(RemotePartitionDeleteState::DeletePartitionMarked),
-            }],
-        };
+        let dump = delete_marked_dump();
         Snapshot {
             committed_offsets: vec![19],
             dump: dump.clone(),
@@ -559,13 +563,7 @@ mod tests {
             krabka_raft::serialize_metadata_snapshot(&image, 42).expect("metadata");
         let snapshot = Snapshot {
             committed_offsets: vec![19],
-            dump: RlmmCacheDump {
-                partitions: vec![PartitionDump {
-                    topic_id_partition: TopicIdPartition::new(Uuid::from_u128(7), "orders", 0),
-                    segments: Vec::new(),
-                    delete_state: Some(RemotePartitionDeleteState::DeletePartitionMarked),
-                }],
-            },
+            dump: delete_marked_dump(),
         };
         let rlmm_bytes = snapshot.encode();
         std::fs::write(&metadata_path, &metadata_bytes).unwrap();

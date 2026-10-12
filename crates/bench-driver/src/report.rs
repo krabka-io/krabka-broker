@@ -1203,7 +1203,7 @@ mod tests {
     // Spare default impl scoped to tests.
     impl RunOutput {
         fn default_placeholder() -> Self {
-            let output = Self {
+            Self {
                 scenario: short_scenario(1),
                 stack: Stack::Krabka,
                 topology: Topology {
@@ -1224,8 +1224,7 @@ mod tests {
                 notes: Vec::new(),
                 samples: Vec::new(),
                 broker_samples: Vec::new(),
-            };
-            output
+            }
         }
     }
 

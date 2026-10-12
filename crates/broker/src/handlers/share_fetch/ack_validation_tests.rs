@@ -14,12 +14,17 @@ use std::sync::Arc;
 
 use assert2::assert;
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse;
-use krabka_protocol::owned::share_fetch_request::{
-    AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic, ShareFetchRequest,
+use krabka_protocol::{
+    owned::{
+        share_acknowledge_response::ShareAcknowledgeResponse,
+        share_fetch_request::{
+            AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic,
+            ShareFetchRequest,
+        },
+        share_fetch_response::ShareFetchResponse,
+    },
+    primitives::uuid::Uuid as WireUuid,
 };
-use krabka_protocol::owned::share_fetch_response::ShareFetchResponse;
-use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 use crate::{
     authorizer::AuthorizationResult,

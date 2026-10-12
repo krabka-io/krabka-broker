@@ -182,13 +182,10 @@ mod tests {
     use krabka_ids::{Offset, PartitionIndex};
     use krabka_log::Log;
     use krabka_protocol::records::{Record, RecordBatch};
-    use krabka_security::ListenerProtocol;
 
     use super::*;
     use crate::{
-        config::ReplicationRuntimeConfig,
-        network::client::InterBrokerClient,
-        replicator::ReplicationConnectionConfig,
+        replicator::replication_connection_for_test,
         wal::{
             WalStore as _,
             quorum::{
@@ -214,12 +211,7 @@ mod tests {
             storage: LogConfig::default(),
             client_id: "wal-follower-test".into(),
             shutdown,
-            connection: ReplicationConnectionConfig {
-                inter_broker_client: Arc::new(InterBrokerClient::new(None, None)),
-                inter_broker_listener_protocol: ListenerProtocol::Plaintext,
-                inter_broker_server_name: "localhost".into(),
-                replication: ReplicationRuntimeConfig::default(),
-            },
+            connection: replication_connection_for_test().call(),
         }
     }
 

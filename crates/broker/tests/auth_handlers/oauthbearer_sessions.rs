@@ -31,7 +31,7 @@ use krabka_security::SaslMechanism;
 use tokio::{io::AsyncReadExt, net::TcpStream};
 
 use crate::{
-    harness::{alice_password, round_trip},
+    harness::{alice_password, round_trip, sasl_authenticate_round_trip, start_broker_stream},
     kafka_wire::{ExchangeSetup as WireExchangeSetup, exchange},
     oauthbearer::{
         drive_inband_reauth, drive_sasl_oauthbearer_session_open, now_unix_secs,
@@ -366,7 +366,7 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("alice".to_string(), alice_password());
-    let broker_stream = crate::harness::start_broker_stream(cfg).await;
+    let broker_stream = start_broker_stream(cfg).await;
     let handle = broker_stream.broker;
 
     // Inline a full PLAIN handshake (mirrors `drive_sasl_plain_session`)
@@ -405,7 +405,7 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     assert!(sh_resp.error_code == 0, "PLAIN handshake must succeed");
 
     let auth_body = plain_authentication_body("alice", alice_password().as_bytes());
-    let auth_resp_bytes = crate::harness::sasl_authenticate_round_trip(&mut stream, &auth_body)
+    let auth_resp_bytes = sasl_authenticate_round_trip(&mut stream, &auth_body)
         .await
         .expect("SaslAuthenticate round-trip");
     let mut cur: &[u8] = &auth_resp_bytes;

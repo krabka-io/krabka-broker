@@ -45,9 +45,7 @@ async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     let reg_url = registry.uri();
-    let toml = format!(
-        "[schema_registry]\nurl = \"{reg_url}\"\nfail_open = true\n"
-    );
+    let toml = format!("[schema_registry]\nurl = \"{reg_url}\"\nfail_open = true\n");
     apply_registry_config(&mut config, &toml);
 
     let (broker, client) = boot_config(config).await;

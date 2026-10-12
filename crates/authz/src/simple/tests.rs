@@ -11,10 +11,35 @@ use super::*;
 use crate::{
     authorize_topics,
     simple::test_support::{
-        AliceAuthorizer, QuerySetup, acl_image, addr, alice, check_resource_type_access,
+        AclSetup, AliceAuthorizer, QuerySetup, acl_image, addr, alice, check_resource_type_access,
         check_topic_access, img, no_super, one_super, req, topic_acl,
     },
 };
+
+fn prefixed_topic_write_allowed_when(denial: AclSetup) {
+    let image = acl_image([
+        topic_acl()
+            .op(AclOperation::Write)
+            .pattern(PatternType::Prefixed)
+            .name("ord")
+            .call(),
+        topic_acl()
+            .permission(denial.permission)
+            .op(denial.op)
+            .principal(denial.principal)
+            .host(denial.host)
+            .rt(denial.rt)
+            .pattern(denial.pattern)
+            .name(denial.name)
+            .call(),
+    ]);
+    check_resource_type_access(
+        &image,
+        ResourceType::Topic,
+        AclOperation::Write,
+        AuthorizationResult::Allow,
+    );
+}
 
 #[test]
 fn empty_image_with_no_super_users_defaults_to_deny() {
@@ -243,24 +268,12 @@ mod authorize_by_resource_type {
     /// prefix string itself, taken as a literal resource name, is denied.
     #[test]
     fn literal_deny_on_the_bare_prefix_string_does_not_shadow_the_prefixed_allow() {
-        let img = acl_image([
-            topic_acl()
-                .op(AclOperation::Write)
-                .pattern(PatternType::Prefixed)
-                .name("ord")
-                .call(),
-            topic_acl()
-                .permission(PermissionType::Deny)
-                .op(AclOperation::Write)
-                .name("ord")
-                .call(),
-        ]);
-        check_resource_type_access(
-            &img,
-            ResourceType::Topic,
-            AclOperation::Write,
-            AuthorizationResult::Allow,
-        );
+        prefixed_topic_write_allowed_when(AclSetup {
+            permission: PermissionType::Deny,
+            op: AclOperation::Write,
+            name: "ord",
+            ..Default::default()
+        });
     }
 
     #[test]
@@ -429,42 +442,31 @@ mod authorize_by_resource_type {
     #[test]
     fn resource_type_denials_match_the_caller_host_operation_and_type() {
         for excluded in [
-            (
-                Some("User:bob"),
-                None,
-                AclOperation::Write,
-                ResourceType::Topic,
-            ),
-            (
-                None,
-                Some("192.0.2.1"),
-                AclOperation::Write,
-                ResourceType::Topic,
-            ),
-            (None, None, AclOperation::Read, ResourceType::Topic),
-            (None, None, AclOperation::Write, ResourceType::Group),
+            AclSetup {
+                principal: "User:bob",
+                op: AclOperation::Write,
+                ..Default::default()
+            },
+            AclSetup {
+                host: "192.0.2.1",
+                op: AclOperation::Write,
+                ..Default::default()
+            },
+            AclSetup {
+                op: AclOperation::Read,
+                ..Default::default()
+            },
+            AclSetup {
+                rt: ResourceType::Group,
+                op: AclOperation::Write,
+                ..Default::default()
+            },
         ] {
-            let image = acl_image([
-                topic_acl()
-                    .op(AclOperation::Write)
-                    .pattern(PatternType::Prefixed)
-                    .name("ord")
-                    .call(),
-                topic_acl()
-                    .permission(PermissionType::Deny)
-                    .principal(excluded.0.unwrap_or("User:alice"))
-                    .host(excluded.1.unwrap_or("*"))
-                    .op(excluded.2)
-                    .rt(excluded.3)
-                    .name("*")
-                    .call(),
-            ]);
-            check_resource_type_access(
-                &image,
-                ResourceType::Topic,
-                AclOperation::Write,
-                AuthorizationResult::Allow,
-            );
+            prefixed_topic_write_allowed_when(AclSetup {
+                permission: PermissionType::Deny,
+                name: "*",
+                ..excluded
+            });
         }
     }
 

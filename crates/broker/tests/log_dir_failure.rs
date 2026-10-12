@@ -17,13 +17,13 @@
 //! cannot do it in this test, because the nodes wait ten minutes before they
 //! call a follower slow.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
 
 use assert2::assert;
 use bytes::Bytes;

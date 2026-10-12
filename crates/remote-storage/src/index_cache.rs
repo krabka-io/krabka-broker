@@ -156,10 +156,10 @@ impl RemoteIndexCache {
     /// emptied or created.
     pub fn new(log_dir: &Path, max_bytes: u64) -> Result<Self, RemoteStorageError> {
         let root = log_dir.join(REMOTE_INDEX_CACHE_DIR);
-        if let Err(e) = std::fs::remove_dir_all(&root) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                return Err(RemoteStorageError::Io(e));
-            }
+        if let Err(e) = std::fs::remove_dir_all(&root)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(RemoteStorageError::Io(e));
         }
         std::fs::create_dir_all(&root).map_err(RemoteStorageError::Io)?;
         Ok(Self::empty(Some(root), max_bytes))

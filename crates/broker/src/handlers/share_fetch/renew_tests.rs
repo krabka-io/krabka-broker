@@ -16,10 +16,7 @@ use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 use krabka_protocol::{
     owned::{
         share_acknowledge_response::ShareAcknowledgeResponse,
-        share_fetch_request::{
-            AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic,
-            ShareFetchRequest,
-        },
+        share_fetch_request::{AcknowledgementBatch as FetchAcknowledgeBatch, ShareFetchRequest},
         share_fetch_response::ShareFetchResponse,
     },
     primitives::uuid::Uuid as WireUuid,
@@ -423,9 +420,10 @@ test_authorizer!(DenyTopicReadToOne, (self, _source, request), {
     let denied = request.principal.name == NO_TOPIC_READ
         && request.resource_type == krabka_metadata::ResourceType::Topic
         && request.operation == krabka_metadata::AclOperation::Read;
-    match denied {
-        true => crate::authorizer::AuthorizationResult::Deny,
-        false => crate::authorizer::AuthorizationResult::Allow,
+    if denied {
+        crate::authorizer::AuthorizationResult::Deny
+    } else {
+        crate::authorizer::AuthorizationResult::Allow
     }
 });
 

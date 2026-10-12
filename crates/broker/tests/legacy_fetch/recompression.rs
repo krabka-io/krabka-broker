@@ -32,7 +32,7 @@ async fn fetch_v3_recompresses_zstd_as_snappy() {
     let cr = p
         .client
         .send(create_topic_request(
-            creatable_topic().name(("legacy_fetch_zstd").into()).call(),
+            creatable_topic().name("legacy_fetch_zstd".into()).call(),
         ))
         .await
         .expect("CreateTopics");

@@ -103,11 +103,7 @@ impl ControllerMutationQuota {
         let Some(limit) = &self.limit else {
             return Ok(());
         };
-        let mut bucket = limit
-            .bucket
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        refresh_bucket(&mut bucket, limit);
+        let mut bucket = refilled_bucket(limit);
 
         let refill = |tokens: f64| Time::from_secs_f64((-tokens / limit.rate).max(0.0));
         if self.strict && bucket.tokens < 0.0 {
@@ -149,11 +145,7 @@ impl ControllerMutationQuota {
         let Some(limit) = &self.limit else {
             return Ok(());
         };
-        let mut bucket = limit
-            .bucket
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        refresh_bucket(&mut bucket, limit);
+        let mut bucket = refilled_bucket(limit);
         bucket.tokens = (bucket.tokens + super::u64_to_f64(previous - current))
             .min(limit.rate * limit.window_secs);
         if current > 0 && !self.strict && bucket.tokens < 0.0 {
@@ -179,6 +171,15 @@ impl ControllerMutationQuota {
         });
         super::QuotaDelay::new(self.delay, user, client_id)
     }
+}
+
+fn refilled_bucket(limit: &Limit) -> std::sync::MutexGuard<'_, ControllerMutationBucket> {
+    let mut bucket = limit
+        .bucket
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    refresh_bucket(&mut bucket, limit);
+    bucket
 }
 
 /// Refill at the previous rate before applying a new rate/capacity. Existing

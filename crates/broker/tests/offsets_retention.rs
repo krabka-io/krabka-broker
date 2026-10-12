@@ -140,8 +140,10 @@ async fn describe_configs_reports_a_named_knob_as_static() {
         OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_string(),
     ];
     let res = describe_resource(RESOURCE_TYPE_BROKER, "1".to_string(), Some(target_keys));
-    let mut req = DescribeConfigsRequest::default();
-    req.resources = vec![res];
+    let req = DescribeConfigsRequest {
+        resources: vec![res],
+        ..Default::default()
+    };
     let described = client.send(req).await.expect("DescribeConfigs");
 
     let result = &described.results[0];

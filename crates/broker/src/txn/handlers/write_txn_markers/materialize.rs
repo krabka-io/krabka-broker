@@ -764,7 +764,10 @@ mod tests {
         .expect("retried marker");
         assert!(part.log_end_offset() == after_marker);
 
-        let coord_actor = broker.group_coordinator.find(group_id).expect("offset home actor");
+        let coord_actor = broker
+            .group_coordinator
+            .find(group_id)
+            .expect("offset home actor");
         let committed = rpc::fetch_offsets(&coord_actor).await;
         assert!(
             committed

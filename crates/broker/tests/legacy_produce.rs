@@ -70,7 +70,7 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
     let cr = p
         .client
         .send(create_topic_request(
-            creatable_topic().name(("legacy_v0").into()).call(),
+            creatable_topic().name("legacy_v0".into()).call(),
         ))
         .await
         .expect("CreateTopics");

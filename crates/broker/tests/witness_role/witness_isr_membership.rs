@@ -15,7 +15,7 @@ use krabka_broker::codes;
 use krabka_protocol::owned::metadata_request::MetadataRequest;
 
 use crate::{
-    LEADER_ID, SITE_A, SITE_B, SITE_C, TOPIC, WITNESS_ID, cluster_lock, within,
+    LEADER_ID, SITE_A, SITE_B, SITE_C, TOPIC, WITNESS_ID, cluster_lock,
     witness_cluster::{client_at, shutdown, start_stretch_cluster, wait_for_witness_isr},
     witness_wire::{PartitionView, consumer_fetch, create_topic, partition_view},
 };

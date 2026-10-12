@@ -168,7 +168,7 @@ async fn follower_forwards_create_topic() {
     let c = connect_client(cluster[follower_idx].1.listen_addr.to_string(), None).await;
     let resp = c
         .send(create_topic_request(
-            creatable_topic().name(("via-follower").into()).call(),
+            creatable_topic().name("via-follower".into()).call(),
         ))
         .await
         .unwrap();

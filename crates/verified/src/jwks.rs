@@ -25,8 +25,10 @@ model_types! {
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
-#[logic]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open(crate))]
 pub fn jwks_cache_facts_admissible_at(facts: JwksCacheFacts, now_ms: i64) -> bool {
     pearlite! {
         facts.generation_before@ % 2 == 0

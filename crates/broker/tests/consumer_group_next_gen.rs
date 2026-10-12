@@ -27,16 +27,24 @@ use crate::support::{
     topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
 };
 
-async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().unwrap();
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.heartbeat_timeout = krabka_units::secs(30);
-    let started = support::start_group_coordinator_with_config()
-        .config(config)
-        .directory(dir)
-        .call()
+fn boot() -> std::pin::Pin<
+    Box<
+        impl std::future::Future<Output = (krabka_broker::BrokerHandle, String, tempfile::TempDir)>,
+    >,
+> {
+    Box::pin(async {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.heartbeat_timeout = krabka_units::secs(30);
+        let started = Box::pin(
+            support::start_group_coordinator_with_config()
+                .config(config)
+                .directory(dir)
+                .call(),
+        )
         .await;
-    (started.broker, started.bootstrap, started.directory)
+        (started.broker, started.bootstrap, started.directory)
+    })
 }
 
 async fn create_topic(client: &Client, topic: &str, partitions: i32) {
@@ -546,13 +554,21 @@ async fn a_group_config_overrides_the_heartbeat_interval_of_its_group() {
     check!(intervals == [("g-tuned", 7_000), ("g-plain", 5_000)]);
 }
 
-async fn consumer_case(
+fn consumer_case(
     topic: &str,
     partitions: i32,
     client_id: &str,
-) -> (krabka_broker::BrokerHandle, tempfile::TempDir, Arc<Client>) {
-    let (broker, bootstrap, dir) = boot().await;
-    let client = Arc::new(connect_client(bootstrap.as_str(), Some(client_id)).await);
-    create_topic(&client, topic, partitions).await;
-    (broker, dir, client)
+) -> std::pin::Pin<
+    Box<
+        impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir, Arc<Client>)>,
+    >,
+> {
+    let topic = topic.to_owned();
+    let client_id = client_id.to_owned();
+    Box::pin(async move {
+        let (broker, bootstrap, dir) = boot().await;
+        let client = Arc::new(connect_client(bootstrap.as_str(), Some(&client_id)).await);
+        create_topic(&client, &topic, partitions).await;
+        (broker, dir, client)
+    })
 }

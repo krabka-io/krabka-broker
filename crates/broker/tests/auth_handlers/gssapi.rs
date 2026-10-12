@@ -8,7 +8,6 @@
 
 use assert2::assert;
 use bytes::BytesMut;
-use krabka_broker::Broker;
 use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
@@ -19,10 +18,9 @@ use krabka_protocol::{
     },
 };
 use krabka_security::SaslMechanism;
-use tokio::net::TcpStream;
 
 use crate::{
-    harness::round_trip,
+    harness::{round_trip, start_broker_stream},
     inter_broker::run_inter_broker_auth_test,
     support::{
         manifest_dir,
@@ -53,7 +51,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
         max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
 
-    let broker_stream = crate::harness::start_broker_stream(cfg).await;
+    let broker_stream = start_broker_stream(cfg).await;
     let handle = broker_stream.broker;
     let mut stream = broker_stream.stream;
     let mut corr = 0;

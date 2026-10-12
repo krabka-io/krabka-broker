@@ -34,7 +34,7 @@ use super::*;
 use crate::{
     api_catalog::UnstableApiVersions,
     metadata_source::MetadataSource,
-    metrics::TopicLabel,
+    metrics::{BrokerMetrics, TopicLabel},
     remote_log_manager::test_support::{
         self as fixtures, TEST_COPY_TIMEOUT, copy_exports, partition_snapshot,
         rolled_tiered_partition_with_config,
@@ -52,7 +52,7 @@ const SHORT_COPY_DEADLINE: Time = millis(150);
 struct CopyExportContext {
     rsm: Arc<dyn RemoteStorageManager>,
     rlmm: Arc<dyn krabka_remote_storage::RemoteLogMetadataManager>,
-    metrics: crate::metrics::BrokerMetrics,
+    metrics: BrokerMetrics,
     index_cache: Arc<krabka_remote_storage::RemoteIndexCache>,
 }
 
@@ -68,7 +68,7 @@ impl CopyExportContext {
         Self {
             rsm,
             rlmm: Arc::new(krabka_remote_storage::InmemoryRemoteLogMetadataManager::new()),
-            metrics: crate::metrics::BrokerMetrics::new(),
+            metrics: BrokerMetrics::new(),
             index_cache: Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
         }
     }
