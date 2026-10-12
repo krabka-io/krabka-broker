@@ -40,6 +40,7 @@ use crate::{
     support::{
         produce::{SinglePartitionProduceSetup, batch_request},
         records::{batch_from_records, value_record},
+        topics::TopicPartitionCount,
         wire::ApiRequestSetup,
     },
     two_dir_topic::{Setup, create_and_wait, start},
@@ -246,7 +247,7 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
         Setup {
             client_id: CLIENT_ID,
             topic: TOPIC,
-            partitions: crate::support::topics::TopicPartitionCount(N),
+            partitions: TopicPartitionCount(N),
             ..Default::default()
         },
     )

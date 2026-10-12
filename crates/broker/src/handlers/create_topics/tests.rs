@@ -25,7 +25,7 @@ use crate::{
         RequestContext,
         describe_configs::effective_topic_configs,
         test_support::{
-            TopicPartitionCount, TopicReplicationFactor, acl, replica_availability,
+            TopicPartitionCount, TopicReplicationFactor, acl, cluster_acl, replica_availability,
             replica_nodes_from_partitions, seed_controller_quota as seed_controller_quota_helper,
         },
     },
@@ -1603,7 +1603,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
         created: &'static [&'static str],
     }
 
-    let cluster_create = crate::handlers::test_support::cluster_acl(AclOperation::Create);
+    let cluster_create = cluster_acl(AclOperation::Create);
     let literal_a = acl()
         .resource_name("a")
         .operation(AclOperation::Create)

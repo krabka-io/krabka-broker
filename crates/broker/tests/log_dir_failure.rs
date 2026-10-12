@@ -36,6 +36,7 @@ use tempfile::TempDir;
 
 use crate::support::{
     NodeIndex, RoleNodeSetup, client::create_topic_for_broker, producer::producer_record,
+    topics::configured_topic_request,
 };
 
 mod support;
@@ -262,7 +263,7 @@ async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
     let cluster = start_cluster().await;
     create_topic_for_broker(
         &cluster.controller,
-        crate::support::topics::configured_topic_request()
+        configured_topic_request()
             .topic(FILLER)
             .replication_factor(3)
             .call(),
@@ -271,7 +272,7 @@ async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
     wait_until_materialized(&cluster.brokers, &format!("{FILLER}-0")).await;
     create_topic_for_broker(
         &cluster.controller,
-        crate::support::topics::configured_topic_request()
+        configured_topic_request()
             .topic(TOPIC)
             .replication_factor(3)
             .call(),

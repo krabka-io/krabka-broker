@@ -26,7 +26,7 @@ use crate::{
         RequestContext,
         acl_wire::CLUSTER_RESOURCE_NAME,
         create_topics::handle as create_topics_handle,
-        test_support::{AclSetup, CreateTopicSetup, acl},
+        test_support::{AclSetup, CreateTopicSetup, acl, cluster_acl},
     },
     metrics::AuthorizationDeniedLabel,
     test_support::{
@@ -356,7 +356,7 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
         deleted: &'static [&'static str],
     }
 
-    let cluster_create = crate::handlers::test_support::cluster_acl(AclOperation::Create);
+    let cluster_create = cluster_acl(AclOperation::Create);
     let cluster_delete = acl()
         .resource_type(AclSetup::cluster(AclOperation::Delete).resource_type)
         .resource_name(AclSetup::cluster(AclOperation::Delete).resource_name)

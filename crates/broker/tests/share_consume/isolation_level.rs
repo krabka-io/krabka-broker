@@ -21,8 +21,8 @@ use crate::{
     support::{
         producer::{producer_record, transactional_producer},
         share::{
-            ShareFetchSetup, ShareSessionEpoch, join_consume_member, permitted_topic_fixture,
-            record_values,
+            ShareBrokerFixture, ShareFetchSetup, ShareSessionEpoch, join_consume_member,
+            permitted_topic_fixture, record_values,
         },
     },
 };
@@ -52,7 +52,7 @@ async fn set_isolation_level(broker: &BrokerHandle, group: &str, level: &str) {
 }
 
 /// Prepare a transaction-ready empty share group with its exact isolation override.
-async fn isolation_fixture(level: Option<&str>) -> crate::support::share::ShareBrokerFixture {
+async fn isolation_fixture(level: Option<&str>) -> ShareBrokerFixture {
     let (permit, broker, client, dir, tid) = Box::pin(permitted_topic_fixture().call()).await;
     let bootstrap = broker.listen_addr().to_string();
     bootstrap_share_state(&broker, &client, "g1").await;

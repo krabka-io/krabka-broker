@@ -16,8 +16,8 @@ use crate::{
         share_renew,
     },
     support::share::{
-        ConsumptionSetup, ShareFetchSetup, ShareRecordCount, ShareSessionEpoch, ShareSessionSetup,
-        permitted_topic_fixture,
+        ConsumptionSetup, ShareBrokerFixture, ShareFetchSetup, ShareRecordCount, ShareSessionEpoch,
+        ShareSessionSetup, permitted_topic_fixture,
     },
 };
 
@@ -147,7 +147,7 @@ async fn no_renew_redelivers_after_lock_expiry() {
 async fn lock_fixture(
     lock_duration: Duration,
     max_delivery_attempts: Option<i16>,
-) -> crate::support::share::ShareBrokerFixture {
+) -> ShareBrokerFixture {
     let (permit, broker, client, dir, tid) = Box::pin(
         permitted_topic_fixture()
             .customize(Box::new(move |config| {
