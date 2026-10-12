@@ -223,40 +223,45 @@ mod tests {
         let c2 = ClusterId(Uuid::from_u128(0xc2));
         // With --node-id 1.
         let cases: Vec<Case> = vec![
-            ("nothing formatted", formatted(vec![]), None, Ok(None)),
-            (
-                "nothing formatted, id given",
-                formatted(vec![]),
-                Some(c1),
-                Ok(Some(c1)),
-            ),
-            (
-                "the set supplies the id",
-                formatted(vec![
+            Case {
+                what: "nothing formatted",
+                ensemble: formatted(vec![]),
+                expected: None,
+                want: Ok(None),
+            },
+            Case {
+                what: "nothing formatted, id given",
+                ensemble: formatted(vec![]),
+                expected: Some(c1),
+                want: Ok(Some(c1)),
+            },
+            Case {
+                what: "the set supplies the id",
+                ensemble: formatted(vec![
                     directory("/a", meta(0xc1, 1, 0x1000)),
                     directory("/b", meta(0xc1, 1, 0x2000)),
                 ]),
-                None,
-                Ok(Some(c1)),
-            ),
-            (
-                "the given id disagrees",
-                formatted(vec![directory("/a", meta(0xc1, 1, 0x1000))]),
-                Some(c2),
-                Err(format!(
+                expected: None,
+                want: Ok(Some(c1)),
+            },
+            Case {
+                what: "the given id disagrees",
+                ensemble: formatted(vec![directory("/a", meta(0xc1, 1, 0x1000))]),
+                expected: Some(c2),
+                want: Err(format!(
                     "Invalid cluster.id in: /a/meta.properties. Expected {c2}, but read {c1}"
                 )),
-            ),
-            (
-                "another node's directory",
-                formatted(vec![directory("/a", meta(0xc1, 2, 0x1000))]),
-                Some(c1),
-                Err(node_id_mismatch_message()
+            },
+            Case {
+                what: "another node's directory",
+                ensemble: formatted(vec![directory("/a", meta(0xc1, 2, 0x1000))]),
+                expected: Some(c1),
+                want: Err(node_id_mismatch_message()
                     .stored(2)
                     .previous(1)
                     .path(Path::new("/a/meta.properties"))
                     .call()),
-            ),
+            },
         ];
         for Case {
             what,
@@ -285,33 +290,41 @@ mod tests {
             empty: bool,
         }
         let cases = [
-            ("nothing", |_| vec![], true),
-            (
-                "the bootstrap files",
-                |d| vec![d.join("bootstrap.json"), d.join("bootstrap.records.bin")],
-                true,
-            ),
-            (
-                "a half-written marker",
-                |d| vec![d.join(META_PROPERTIES_TMP)],
-                true,
-            ),
-            ("the offset-zero checkpoint", |d| vec![checkpoint(d)], true),
-            (
-                "someone else's file",
-                |d| vec![d.join("orders-0").join("0.log")],
-                false,
-            ),
-            (
-                "a metadata log",
-                |d| vec![d.join(CLUSTER_METADATA).join("00000000000000000000.log")],
-                false,
-            ),
-            (
-                "a stray top-level file",
-                |d| vec![d.join("notes.txt")],
-                false,
-            ),
+            LayoutCase {
+                what: "nothing",
+                layout: |_| vec![],
+                empty: true,
+            },
+            LayoutCase {
+                what: "the bootstrap files",
+                layout: |d| vec![d.join("bootstrap.json"), d.join("bootstrap.records.bin")],
+                empty: true,
+            },
+            LayoutCase {
+                what: "a half-written marker",
+                layout: |d| vec![d.join(META_PROPERTIES_TMP)],
+                empty: true,
+            },
+            LayoutCase {
+                what: "the offset-zero checkpoint",
+                layout: |d| vec![checkpoint(d)],
+                empty: true,
+            },
+            LayoutCase {
+                what: "someone else's file",
+                layout: |d| vec![d.join("orders-0").join("0.log")],
+                empty: false,
+            },
+            LayoutCase {
+                what: "a metadata log",
+                layout: |d| vec![d.join(CLUSTER_METADATA).join("00000000000000000000.log")],
+                empty: false,
+            },
+            LayoutCase {
+                what: "a stray top-level file",
+                layout: |d| vec![d.join("notes.txt")],
+                empty: false,
+            },
         ];
         for LayoutCase {
             what,

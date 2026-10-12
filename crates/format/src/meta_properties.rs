@@ -781,87 +781,95 @@ mod tests {
             directory_id: Some(DirectoryId(Uuid::from_u128(directory))),
         };
         let cases: Vec<EnsembleCase> = vec![
-            ("nothing formatted", vec![], None, Some(1), Ok(None)),
-            (
-                "one cluster, one node",
-                vec![
+            EnsembleCase {
+                what: "nothing formatted",
+                set: vec![],
+                cluster_id: None,
+                node_id: Some(1),
+                want: Ok(None),
+            },
+            EnsembleCase {
+                what: "one cluster, one node",
+                set: vec![
                     directory("/a", file(c1, 1, 0x1000)),
                     directory("/b", file(c1, 1, 0x2000)),
                 ],
-                None,
-                Some(1),
-                Ok(Some(c1)),
-            ),
-            (
-                "the set supplies the node id",
-                vec![
+                cluster_id: None,
+                node_id: Some(1),
+                want: Ok(Some(c1)),
+            },
+            EnsembleCase {
+                what: "the set supplies the node id",
+                set: vec![
                     directory("/a", file(c1, 4, 0x1000)),
                     directory("/b", file(c1, 4, 0x2000)),
                 ],
-                Some(c1),
-                None,
-                Ok(Some(c1)),
-            ),
-            (
-                "the given cluster id disagrees",
-                vec![directory("/a", file(c1, 1, 0x1000))],
-                Some(c2),
-                Some(1),
-                Err(format!(
+                cluster_id: Some(c1),
+                node_id: None,
+                want: Ok(Some(c1)),
+            },
+            EnsembleCase {
+                what: "the given cluster id disagrees",
+                set: vec![directory("/a", file(c1, 1, 0x1000))],
+                cluster_id: Some(c2),
+                node_id: Some(1),
+                want: Err(format!(
                     "Invalid cluster.id in: /a/meta.properties. Expected {c2}, but read {c1}"
                 )),
-            ),
-            (
-                "the configured node id disagrees",
-                vec![directory("/a", file(c1, 2, 0x1000))],
-                None,
-                Some(1),
-                Err(node_id_mismatch_message()
+            },
+            EnsembleCase {
+                what: "the configured node id disagrees",
+                set: vec![directory("/a", file(c1, 2, 0x1000))],
+                cluster_id: None,
+                node_id: Some(1),
+                want: Err(node_id_mismatch_message()
                     .stored(2)
                     .previous(1)
                     .path(Path::new("/a/meta.properties"))
                     .call()),
-            ),
-            (
-                "two directories disagree on the node id",
-                vec![
+            },
+            EnsembleCase {
+                what: "two directories disagree on the node id",
+                set: vec![
                     directory("/a", file(c1, 3, 0x1000)),
                     directory("/b", file(c1, 4, 0x2000)),
                 ],
-                None,
-                None,
-                Err(
+                cluster_id: None,
+                node_id: None,
+                want: Err(
                     "Stored node id 4 doesn't match previous node id 3 in /b/meta.properties. \
                      If you moved your data, make sure your configured node id matches. If you \
                      intend to create a new node, you should remove all data in your data \
                      directories."
                         .to_owned(),
                 ),
-            ),
-            (
-                "a reserved directory id",
-                vec![directory("/a", file(c1, 1, 2))],
-                None,
-                Some(1),
-                Err("Invalid reserved directory ID AAAAAAAAAAAAAAAAAAAAAg found in /a".to_owned()),
-            ),
-            (
-                "a shared directory id",
-                vec![
+            },
+            EnsembleCase {
+                what: "a reserved directory id",
+                set: vec![directory("/a", file(c1, 1, 2))],
+                cluster_id: None,
+                node_id: Some(1),
+                want: Err(
+                    "Invalid reserved directory ID AAAAAAAAAAAAAAAAAAAAAg found in /a".to_owned(),
+                ),
+            },
+            EnsembleCase {
+                what: "a shared directory id",
+                set: vec![
                     directory("/a", file(c1, 1, 0x1000)),
                     directory("/b", file(c1, 1, 0x1000)),
                 ],
-                None,
-                Some(1),
-                Err(format!(
+                cluster_id: None,
+                node_id: Some(1),
+                want: Err(format!(
                     "Duplicate directory ID Optional[{}] found. It was the ID of /a, but also of \
                      /b",
                     DirectoryId(Uuid::from_u128(0x1000))
                 )),
-            ),
-            (
-                "no directory id is no conflict",
-                vec![
+            },
+            EnsembleCase {
+                what: "no directory id is no conflict",
+                set: vec![
                     directory(
                         "/a",
                         MetaProperties {
@@ -877,10 +885,10 @@ mod tests {
                         },
                     ),
                 ],
-                None,
-                Some(1),
-                Ok(Some(c1)),
-            ),
+                cluster_id: None,
+                node_id: Some(1),
+                want: Ok(Some(c1)),
+            },
         ];
         for EnsembleCase {
             what,

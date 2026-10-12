@@ -988,7 +988,14 @@ async fn only_the_metadata_log_directory_gets_the_bootstrap_files() {
             ],
         },
     ];
-    for (what, metadata, log_dirs, extra, want) in cases {
+    for DirectoryCase {
+        what,
+        metadata,
+        log_dirs,
+        extra,
+        want,
+    } in cases
+    {
         let tmp = tempfile::tempdir().expect("tempdir");
         let code = run_from_args(argv_under(
             tmp.path(),

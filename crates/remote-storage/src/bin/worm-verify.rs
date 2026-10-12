@@ -208,6 +208,7 @@ fn trusted_keys(args: &VerifyArgs) -> Result<TrustedManifestKeys, String> {
 }
 
 /// The opened archive and, for a bucket, the config to list its uploads with.
+#[derive(Debug)]
 struct OpenedStore {
     store: Arc<dyn object_store::ObjectStore>,
     s3: Option<S3Config>,
