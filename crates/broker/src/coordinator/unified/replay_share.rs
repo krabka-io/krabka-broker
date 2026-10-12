@@ -344,7 +344,6 @@ mod tests {
         },
     };
 
-
     /// One record of the replayed log.
     #[derive(Clone)]
     enum Record {
