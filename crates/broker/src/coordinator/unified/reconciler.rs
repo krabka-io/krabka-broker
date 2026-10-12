@@ -551,28 +551,24 @@ mod tests {
         assert!(assigned == [vec!["a1", "a2"], vec!["a1", "a2"], vec!["b1"]]);
     }
 
-    /// Kafka's metadata hash covers the id, the name, the partition count and
-    /// the partition racks of every topic that the group subscribes to, by
-    /// name or through a resolved regex, and nothing else.
-    #[test]
-    fn the_metadata_hash_moves_with_the_subscribed_topics_only() {
-        /// A topic of a snapshot: the id is the byte that fills its `Uuid`.
-        #[derive(Clone, Copy)]
-        struct SnapshotTopic {
-            name: &'static str,
-            id: u8,
-            partitions: i32,
-        }
+    /// A topic of a snapshot: the id is the byte that fills its `Uuid`.
+    #[derive(Clone, Copy)]
+    struct SnapshotTopic {
+        name: &'static str,
+        id: u8,
+        partitions: i32,
+    }
 
-        /// The rack of one partition of a snapshot topic.
-        #[derive(Clone, Copy)]
-        struct RackEntry {
-            id: u8,
-            partition: i32,
-            rack: &'static str,
-        }
+    /// The rack of one partition of a snapshot topic.
+    #[derive(Clone, Copy)]
+    struct RackEntry {
+        id: u8,
+        partition: i32,
+        rack: &'static str,
+    }
 
-        let snapshot = |topics: &[SnapshotTopic], racks: &[RackEntry]| ReconcileInput {
+    fn snapshot(topics: &[SnapshotTopic], racks: &[RackEntry]) -> ReconcileInput {
+        ReconcileInput {
             topic_id_by_name: topics
                 .iter()
                 .map(|topic| (topic.name.to_string(), Uuid([topic.id; 16])))
@@ -593,47 +589,36 @@ mod tests {
                     )
                 })
                 .collect(),
-        };
-        let base: &[SnapshotTopic] = &[
-            SnapshotTopic {
-                name: "orders",
-                id: 1,
-                partitions: 2,
-            },
-            SnapshotTopic {
-                name: "payments",
-                id: 2,
-                partitions: 1,
-            },
-            SnapshotTopic {
-                name: "payouts",
-                id: 3,
-                partitions: 1,
-            },
-            SnapshotTopic {
-                name: "audit",
-                id: 4,
-                partitions: 1,
-            },
-        ];
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(fresh_member("m1", "orders"));
-        g.add_or_update_member(member_with_regex("m2", &[], Some("^pay.*")));
-        resolve(&mut g, "^pay.*", &["payments"]);
-        let before = metadata_hash(
-            &g,
-            &snapshot(
-                base,
-                &[RackEntry {
-                    id: 1,
-                    partition: 0,
-                    rack: "rack-a",
-                }],
-            ),
-        );
+        }
+    }
 
-        // (name, the snapshot after, whether the hash moves)
-        let rows = [
+    const BASE: &[SnapshotTopic] = &[
+        SnapshotTopic {
+            name: "orders",
+            id: 1,
+            partitions: 2,
+        },
+        SnapshotTopic {
+            name: "payments",
+            id: 2,
+            partitions: 1,
+        },
+        SnapshotTopic {
+            name: "payouts",
+            id: 3,
+            partitions: 1,
+        },
+        SnapshotTopic {
+            name: "audit",
+            id: 4,
+            partitions: 1,
+        },
+    ];
+
+    /// The snapshots after a change, and whether the metadata hash moves.
+    fn hash_rows() -> Vec<(&'static str, ReconcileInput, bool)> {
+        let base = BASE;
+        vec![
             (
                 "nothing changes",
                 snapshot(
@@ -791,7 +776,30 @@ mod tests {
                 ),
                 true,
             ),
-        ];
+        ]
+    }
+
+    /// Kafka's metadata hash covers the id, the name, the partition count and
+    /// the partition racks of every topic that the group subscribes to, by
+    /// name or through a resolved regex, and nothing else.
+    #[test]
+    fn the_metadata_hash_moves_with_the_subscribed_topics_only() {
+        let mut g = GroupState::new("g");
+        g.add_or_update_member(fresh_member("m1", "orders"));
+        g.add_or_update_member(member_with_regex("m2", &[], Some("^pay.*")));
+        resolve(&mut g, "^pay.*", &["payments"]);
+        let before = metadata_hash(
+            &g,
+            &snapshot(
+                BASE,
+                &[RackEntry {
+                    id: 1,
+                    partition: 0,
+                    rack: "rack-a",
+                }],
+            ),
+        );
+        let rows = hash_rows();
         let mut found = Vec::new();
         let mut expected = Vec::new();
         for (name, after, moves) in rows {

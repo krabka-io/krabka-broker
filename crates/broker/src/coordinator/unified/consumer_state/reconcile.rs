@@ -1128,6 +1128,11 @@ mod tests {
                 }),
                 ..Default::default()
             },
+        ]
+    }
+
+    fn departed_topic_rows() -> Vec<SubscriptionRow> {
+        vec![
             SubscriptionRow {
                 name: "the target of a topic the member left grants nothing",
                 before: stable_5_4_input(),
@@ -1243,7 +1248,7 @@ mod tests {
             NamedTopic { name: "t", id: T },
             NamedTopic { name: "u", id: U },
         ]);
-        for r in subscription_rows() {
+        for r in subscription_rows().into_iter().chain(departed_topic_rows()) {
             let mut g = GroupState::new("g");
             g.group_epoch = TARGET_EPOCH;
             let mut a = subscribed_member("a", r.names);

@@ -219,6 +219,70 @@ mod tests {
         let _ = s.acquire("m1", 10, Offset(i64::MAX), t0(), LOCK, 5);
     }
 
+    /// Loads a mixed window: one Available batch and two terminal ones.
+    fn load_terminal_batches_above_the_spso(s: &mut AcquisitionState) {
+        s.load_from(
+            Offset(2),
+            1,
+            0,
+            &[
+                persisted(StateBatchSetup {
+                    bounds: Offset(2)..=Offset(3),
+                    ..Default::default()
+                }),
+                persisted(StateBatchSetup {
+                    bounds: Offset(4)..=Offset(5),
+                    delivery: FixtureDeliveryState::Acknowledged,
+                    ..Default::default()
+                }),
+                persisted(StateBatchSetup {
+                    bounds: Offset(6)..=Offset(6),
+                    delivery: FixtureDeliveryState::Archived,
+                    attempts: DeliveryAttemptCount(2),
+                }),
+            ],
+        );
+    }
+
+    /// Loads a window that opens with a terminal prefix.
+    fn load_a_terminal_prefix(s: &mut AcquisitionState) {
+        s.load_from(
+            Offset(0),
+            1,
+            0,
+            &[
+                persisted(StateBatchSetup {
+                    bounds: Offset(0)..=Offset(1),
+                    delivery: FixtureDeliveryState::Acknowledged,
+                    ..Default::default()
+                }),
+                persisted(StateBatchSetup {
+                    bounds: Offset(2)..=Offset(3),
+                    ..Default::default()
+                }),
+                persisted(StateBatchSetup {
+                    bounds: Offset(4)..=Offset(4),
+                    delivery: FixtureDeliveryState::Archived,
+                    ..Default::default()
+                }),
+            ],
+        );
+    }
+
+    /// Loads a window whose batches are all terminal.
+    fn load_an_all_terminal_window(s: &mut AcquisitionState) {
+        s.load_from(
+            Offset(0),
+            1,
+            0,
+            &[persisted(StateBatchSetup {
+                bounds: Offset(0)..=Offset(3),
+                delivery: FixtureDeliveryState::Acknowledged,
+                ..Default::default()
+            })],
+        );
+    }
+
     /// Kafka's `SharePartition.deliveryCompleteCount`: the number of
     /// Acknowledged and Archived records in the window at or above the SPSO.
     /// A record adds to it when it becomes terminal, and leaves it when the
@@ -376,29 +440,7 @@ mod tests {
             },
             Case {
                 name: "initialization counts the persisted terminal batches",
-                setup: |s| {
-                    s.load_from(
-                        Offset(2),
-                        1,
-                        0,
-                        &[
-                            persisted(StateBatchSetup {
-                                bounds: Offset(2)..=Offset(3),
-                                ..Default::default()
-                            }),
-                            persisted(StateBatchSetup {
-                                bounds: Offset(4)..=Offset(5),
-                                delivery: FixtureDeliveryState::Acknowledged,
-                                ..Default::default()
-                            }),
-                            persisted(StateBatchSetup {
-                                bounds: Offset(6)..=Offset(6),
-                                delivery: FixtureDeliveryState::Archived,
-                                attempts: DeliveryAttemptCount(2),
-                            }),
-                        ],
-                    );
-                },
+                setup: load_terminal_batches_above_the_spso,
                 want: Expected {
                     spso: 2,
                     speo: 7,
@@ -407,29 +449,7 @@ mod tests {
             },
             Case {
                 name: "initialization moves the SPSO past a terminal prefix",
-                setup: |s| {
-                    s.load_from(
-                        Offset(0),
-                        1,
-                        0,
-                        &[
-                            persisted(StateBatchSetup {
-                                bounds: Offset(0)..=Offset(1),
-                                delivery: FixtureDeliveryState::Acknowledged,
-                                ..Default::default()
-                            }),
-                            persisted(StateBatchSetup {
-                                bounds: Offset(2)..=Offset(3),
-                                ..Default::default()
-                            }),
-                            persisted(StateBatchSetup {
-                                bounds: Offset(4)..=Offset(4),
-                                delivery: FixtureDeliveryState::Archived,
-                                ..Default::default()
-                            }),
-                        ],
-                    );
-                },
+                setup: load_a_terminal_prefix,
                 want: Expected {
                     spso: 2,
                     speo: 5,
@@ -438,18 +458,7 @@ mod tests {
             },
             Case {
                 name: "initialization of an all-terminal window empties it",
-                setup: |s| {
-                    s.load_from(
-                        Offset(0),
-                        1,
-                        0,
-                        &[persisted(StateBatchSetup {
-                            bounds: Offset(0)..=Offset(3),
-                            delivery: FixtureDeliveryState::Acknowledged,
-                            ..Default::default()
-                        })],
-                    );
-                },
+                setup: load_an_all_terminal_window,
                 want: Expected {
                     spso: 4,
                     speo: 4,

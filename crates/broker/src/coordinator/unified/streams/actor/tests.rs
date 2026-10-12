@@ -569,43 +569,39 @@ fn one_subtopology(
     }
 }
 
-/// Kafka refreshes the topic metadata of a streams group on the next
-/// heartbeat after a change (`onMetadataUpdate`, `hasMetadataExpired`,
-/// `computeMetadataHash`) and bumps the group epoch when the hash or the
-/// member metadata changed (`hasStreamsMemberMetadataChanged`). Each row joins
-/// one member, applies one change, sends one heartbeat at the member epoch, and
-/// compares the whole response.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() {
+enum HeartbeatChange {
+    Image(Box<krabka_metadata::MetadataImage>),
+    Rack(&'static str),
+    Process(&'static str),
+}
+
+struct HeartbeatRow {
+    name: &'static str,
+    initial: krabka_metadata::MetadataImage,
+    storage: TopologyStorage,
+    change: HeartbeatChange,
+    /// The owned active tasks of the heartbeat, when it reports them.
+    owned_active: Option<Vec<i32>>,
+    epoch: i32,
+    /// The active tasks, when the response sends the task lists.
+    active: Option<Vec<i32>>,
+    status: Option<
+        Vec<krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status>,
+    >,
+}
+
+/// Rows for [`a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment`].
+fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
     use krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status;
 
-    use crate::{
-        coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
-    };
+    use crate::coordinator::unified::streams::topology::status;
 
-    enum Change {
-        Image(Box<krabka_metadata::MetadataImage>),
-        Rack(&'static str),
-        Process(&'static str),
-    }
-    struct Row {
-        name: &'static str,
-        initial: krabka_metadata::MetadataImage,
-        storage: TopologyStorage,
-        change: Change,
-        /// The owned active tasks of the heartbeat, when it reports them.
-        owned_active: Option<Vec<i32>>,
-        epoch: i32,
-        /// The active tasks, when the response sends the task lists.
-        active: Option<Vec<i32>>,
-        status: Option<Vec<Status>>,
-    }
-    let rows = [
-        Row {
+    vec![
+        HeartbeatRow {
             name: "the missing source topic is created",
             initial: image_of(None, &[]),
             storage: TopologyStorage::Stateless,
-            change: Change::Image(Box::new(image_of(
+            change: HeartbeatChange::Image(Box::new(image_of(
                 None,
                 &[ImageTopic {
                     name: "in",
@@ -618,7 +614,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             active: Some(vec![0, 1]),
             status: Some(vec![]),
         },
-        Row {
+        HeartbeatRow {
             name: "partitions are added to the source topic",
             initial: image_of(
                 None,
@@ -629,7 +625,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
                 }],
             ),
             storage: TopologyStorage::Stateless,
-            change: Change::Image(Box::new(image_of(
+            change: HeartbeatChange::Image(Box::new(image_of(
                 None,
                 &[ImageTopic {
                     name: "in",
@@ -642,7 +638,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             active: Some(vec![0, 1]),
             status: Some(vec![]),
         },
-        Row {
+        HeartbeatRow {
             name: "the source topic is deleted",
             initial: image_of(
                 None,
@@ -653,7 +649,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
                 }],
             ),
             storage: TopologyStorage::Stateless,
-            change: Change::Image(Box::new(image_of(None, &[]))),
+            change: HeartbeatChange::Image(Box::new(image_of(None, &[]))),
             owned_active: Some(vec![]),
             epoch: 3,
             active: Some(vec![]),
@@ -663,7 +659,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
                 ..Default::default()
             }]),
         },
-        Row {
+        HeartbeatRow {
             name: "the member sends a new rack id",
             initial: image_of(
                 None,
@@ -674,13 +670,13 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
                 }],
             ),
             storage: TopologyStorage::Stateless,
-            change: Change::Rack("rack-b"),
+            change: HeartbeatChange::Rack("rack-b"),
             owned_active: Some(vec![0]),
             epoch: 3,
             active: None,
             status: Some(vec![]),
         },
-        Row {
+        HeartbeatRow {
             name: "the member sends a new process id",
             initial: image_of(
                 None,
@@ -691,13 +687,13 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
                 }],
             ),
             storage: TopologyStorage::Stateless,
-            change: Change::Process("process-b"),
+            change: HeartbeatChange::Process("process-b"),
             owned_active: Some(vec![0]),
             epoch: 3,
             active: None,
             status: Some(vec![]),
         },
-        Row {
+        HeartbeatRow {
             name: "the internal topic is created",
             initial: image_of(
                 None,
@@ -708,7 +704,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
                 }],
             ),
             storage: TopologyStorage::StoreChangelog,
-            change: Change::Image(Box::new(image_of(
+            change: HeartbeatChange::Image(Box::new(image_of(
                 None,
                 &[
                     ImageTopic {
@@ -728,7 +724,20 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             active: Some(vec![0]),
             status: Some(vec![]),
         },
-    ];
+    ]
+}
+
+/// Kafka refreshes the topic metadata of a streams group on the next
+/// heartbeat after a change (`onMetadataUpdate`, `hasMetadataExpired`,
+/// `computeMetadataHash`) and bumps the group epoch when the hash or the
+/// member metadata changed (`hasStreamsMemberMetadataChanged`). Each row joins
+/// one member, applies one change, sends one heartbeat at the member epoch, and
+/// compares the whole response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() {
+    use crate::test_support::FakeMetadataSource;
+
+    let rows = heartbeat_change_rows();
 
     for row in rows {
         let source = Arc::new(FakeMetadataSource::builder().image(row.initial).build());
@@ -757,12 +766,12 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         check!(joined.member_epoch == 2, "{}", row.name);
 
         let (rack, process) = match row.change {
-            Change::Image(image) => {
+            HeartbeatChange::Image(image) => {
                 source.set_image(*image);
                 ("rack-a", "process-a")
             }
-            Change::Rack(rack) => (rack, "process-a"),
-            Change::Process(process) => ("rack-a", process),
+            HeartbeatChange::Rack(rack) => (rack, "process-a"),
+            HeartbeatChange::Process(process) => ("rack-a", process),
         };
         let owned = row.owned_active.map(|partitions| {
             vec![

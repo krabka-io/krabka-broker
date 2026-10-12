@@ -329,7 +329,9 @@ mod tests {
                 .await
                 .expect_err("the controller refused the reservation");
             let got = match error {
-                BrokerError::Raft(RaftError::NotLeader { current_leader }) => Answer::NotLeader(current_leader),
+                BrokerError::Raft(RaftError::NotLeader { current_leader }) => {
+                    Answer::NotLeader(current_leader)
+                }
                 _ => Answer::Other,
             };
 

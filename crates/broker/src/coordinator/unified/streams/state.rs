@@ -746,7 +746,7 @@ mod tests {
     }
 
     fn builder_rows() -> Vec<BuilderRow> {
-        use StreamsMemberAssignmentState::{Stable, UnreleasedTasks, UnrevokedTasks};
+        use StreamsMemberAssignmentState::{Stable, UnrevokedTasks};
 
         vec![
             BuilderRow {
@@ -875,6 +875,13 @@ mod tests {
                     standby_pending: &[],
                 },
             },
+        ]
+    }
+
+    fn held_back_builder_rows() -> Vec<BuilderRow> {
+        use StreamsMemberAssignmentState::{Stable, UnreleasedTasks, UnrevokedTasks};
+
+        vec![
             BuilderRow {
                 name: "an active task that another member still owns is held back",
                 m1: stable("m1", "p1", 1),
@@ -977,7 +984,7 @@ mod tests {
     /// reconciliation state of `m1` afterwards.
     #[test]
     fn reconcile_member_follows_kafka_current_assignment_builder() {
-        let rows = builder_rows();
+        let rows = builder_rows().into_iter().chain(held_back_builder_rows());
         for BuilderRow {
             name,
             m1,
