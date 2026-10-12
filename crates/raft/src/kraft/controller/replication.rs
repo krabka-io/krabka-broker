@@ -312,7 +312,9 @@ impl Engine {
     /// the response's leader endpoints. Without one, the transport keeps
     /// using the leader's voter-set listener.
     fn remember_leader_endpoint(&self, leader: &wire::QuorumLeader) {
-        if let (Some(leader_id), Some((host, port))) = (leader.leader_id, &leader.endpoint) {
+        if let (Some(leader_id), Some(wire::LeaderEndpoint { host, port })) =
+            (leader.leader_id, &leader.endpoint)
+        {
             self.peers
                 .remember_leader_endpoint(leader_id, format!("{host}:{port}"));
         }

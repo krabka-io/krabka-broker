@@ -282,11 +282,9 @@ impl Engine {
         if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
             return refuse(self, INCONSISTENT_CLUSTER_ID, 0);
         }
-        if !names_only_the_metadata_partition(request.topics.iter().map(|topic| {
-            (
-                topic.topic_name.as_str(),
-                topic.partitions.iter().map(|p| p.partition_index).collect(),
-            )
+        if !names_only_the_metadata_partition(request.topics.iter().map(|topic| RequestedTopic {
+            name: topic.topic_name.as_str(),
+            partitions: topic.partitions.iter().map(|p| p.partition_index).collect(),
         })) {
             return refuse(self, INVALID_REQUEST, 0);
         }

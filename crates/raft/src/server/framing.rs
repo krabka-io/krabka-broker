@@ -587,7 +587,7 @@ mod tests {
             client.write_all(&frame).await.unwrap();
         });
 
-        let (_, _, _, _, body, flexible) =
+        let RequestFrame { body, flexible, .. } =
             super::read_one_request(&mut server, None, MAX_REQUEST_BYTES)
                 .await
                 .expect("decode");

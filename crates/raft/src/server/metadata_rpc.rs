@@ -9,7 +9,7 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use crate::{
     DelegationTokenMutation, NodeId, SubmitChangeResult,
     error::RaftError,
-    kraft::{KraftController, QuorumStateSnapshot, ReplicaKey},
+    kraft::{Epoch, KraftController, ReplicaKey},
     wire::{
         KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
         KrabkaSubmitChangeResponse, SUBMIT_CHANGE_UNCOMMITTED_TAIL,
@@ -155,19 +155,25 @@ pub(super) async fn dispatch_delegation_token_mutation(
 
 /// Serve a committed `__cluster_metadata` slice to a broker-only observer (1004)
 /// from the engine's `KraftLog`.
-fn quorum_metadata_leader(quorum: Option<&QuorumStateSnapshot>) -> MetadataLeader {
+fn quorum_metadata_leader(quorum: Option<LeaderClaim>) -> MetadataLeader {
     let hint: i64 = quorum
-        .and_then(|quorum| quorum.leader_id)
+        .and_then(|quorum| quorum.id)
         .and_then(|l| i64::try_from(l.0).ok())
         .unwrap_or(LEADER_HINT_UNKNOWN);
-    let epoch = quorum.map_or(-1, |quorum| {
-        i32::try_from(quorum.leader_epoch).unwrap_or(i32::MAX)
-    });
+    let epoch = quorum.map_or(-1, |quorum| i32::try_from(quorum.epoch).unwrap_or(i32::MAX));
     MetadataLeader { hint, epoch }
+}
+
+/// The leader and epoch that a quorum state names.
+#[derive(Clone, Copy)]
+struct LeaderClaim {
+    id: Option<NodeId>,
+    epoch: Epoch,
 }
 
 /// The leader a `MetadataFetch` response names: its id, or `-1` while unknown,
 /// and the epoch, or `-1` when the quorum state is unavailable.
+#[derive(Debug, PartialEq, Eq)]
 struct MetadataLeader {
     hint: i64,
     epoch: i32,
@@ -196,7 +202,10 @@ pub(super) async fn dispatch_metadata_fetch(
     let MetadataLeader {
         hint: leader_hint,
         epoch: leader_epoch,
-    } = quorum_metadata_leader(quorum.as_ref());
+    } = quorum_metadata_leader(quorum.as_ref().map(|qs| LeaderClaim {
+        id: qs.leader_id,
+        epoch: qs.leader_epoch,
+    }));
 
     let resp = KrabkaMetadataFetchResponse {
         error_code: 0,
@@ -534,20 +543,19 @@ mod tests {
 
     #[test]
     fn quorum_metadata_leader_defaults_on_missing_or_overflow_quorum() {
-        let (hint, epoch) = quorum_metadata_leader(None);
-        check!(hint == -1);
-        check!(epoch == -1);
-
-        let (hint, epoch) = quorum_metadata_leader(Some((Some(NodeId(42)), 5)));
-        check!(hint == 42);
-        check!(epoch == 5);
-
-        let (hint, epoch) = quorum_metadata_leader(Some((None, 0)));
-        check!(hint == -1);
-        check!(epoch == 0);
-
-        let (hint, epoch) = quorum_metadata_leader(Some((Some(NodeId(1)), u32::MAX)));
-        check!(hint == 1);
-        check!(epoch == i32::MAX);
+        let claim = |id, epoch| Some(LeaderClaim { id, epoch });
+        let leader = |hint, epoch| MetadataLeader { hint, epoch };
+        for (what, quorum, want) in [
+            ("no quorum state", None, leader(-1, -1)),
+            ("a leader", claim(Some(NodeId(42)), 5), leader(42, 5)),
+            ("no leader", claim(None, 0), leader(-1, 0)),
+            (
+                "an epoch past i32",
+                claim(Some(NodeId(1)), u32::MAX),
+                leader(1, i32::MAX),
+            ),
+        ] {
+            check!(quorum_metadata_leader(quorum) == want, "{what}");
+        }
     }
 }

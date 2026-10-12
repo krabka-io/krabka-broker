@@ -371,7 +371,7 @@ mod tests {
         let IndexFixture {
             dir: _dir,
             path: _path,
-            index: index,
+            index,
         } = ranged_index(RangedIndexSetup {
             name: "00000000000000000000.txnindex",
         });
@@ -419,7 +419,7 @@ mod tests {
         let IndexFixture {
             dir: _dir,
             path,
-            index: mut index,
+            mut index,
         } = populated_index("00.txnindex", &[entry]);
         index.append(entry).unwrap();
         assert2::assert!(index.entries() == [entry]);
@@ -437,7 +437,7 @@ mod tests {
         let IndexFixture {
             dir: _dir,
             path,
-            index: mut index,
+            mut index,
         } = populated_index("00.txnindex", &[original]);
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
@@ -457,7 +457,7 @@ mod tests {
         let IndexFixture {
             dir: _dir,
             path: _path,
-            index: index,
+            index,
         } = ranged_index(RangedIndexSetup::default());
         assert2::assert!(index.aborted_in_range(Offset(10), Offset(10)).count() == 0);
         assert2::assert!(index.aborted_in_range(Offset(20), Offset(10)).count() == 0);

@@ -147,6 +147,7 @@ fn direct_writes_cover_whole_blocks_and_read_back_as_written() {
     let writes = disk.writes.lock().unwrap().clone();
     assert2::assert!(writes.len() == 4);
     assert2::assert!(writes[0].offset == 0);
+    assert2::assert!(writes.iter().all(|write| write.len % BLOCK == 0));
 
     assert2::assert!(log.roll().unwrap());
     assert2::assert!(log_len(dir.path(), 0) == written);

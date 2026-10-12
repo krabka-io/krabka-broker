@@ -105,7 +105,7 @@ struct EndpointRecorder {
 }
 
 /// The address a transport was told a leader is reached at.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct LearnedEndpoint {
     leader: NodeId,
     address: String,
@@ -476,8 +476,14 @@ async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
                     leader_id: NodeId(1),
                     leader_epoch: 4,
                     preferred_candidates: vec![
-                        (NodeId(3), uuid::Uuid::nil()),
-                        (NodeId(2), uuid::Uuid::nil())
+                        wire::PreferredCandidate {
+                            id: NodeId(3),
+                            directory_id: uuid::Uuid::nil()
+                        },
+                        wire::PreferredCandidate {
+                            id: NodeId(2),
+                            directory_id: uuid::Uuid::nil()
+                        }
                     ],
                 })
         );
@@ -526,7 +532,11 @@ async fn broadcast_begin_quorum_epoch_names_each_recipient_and_the_leader_endpoi
             voter_directory_id: uuid::Uuid::nil(),
             leader_id: NodeId(1),
             leader_epoch: 4,
-            leader_endpoints: vec![("CONTROLLER".into(), "127.0.0.1".into(), 9_093)],
+            leader_endpoints: vec![krabka_metadata::VoterEndpoint {
+                name: "CONTROLLER".into(),
+                host: "127.0.0.1".into(),
+                port: 9_093,
+            }],
         })
     };
     assert2::assert!(

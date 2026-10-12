@@ -7,12 +7,16 @@ use assert2::check;
 use krabka_units::prelude::{bytes, days, gibibytes, millis};
 
 use super::*;
-use crate::kraft::controller::{
-    checkpoint::{checkpoint_ids, write_checkpoint},
-    records::{is_kip835_noop, noop_record_value},
-    test_support::{
-        EngineInDir, EngineSetup, build_engine_only, elect_single_voter_engine, topic_record_named,
+use crate::kraft::{
+    controller::{
+        checkpoint::{checkpoint_ids, write_checkpoint},
+        records::{is_kip835_noop, noop_record_value},
+        test_support::{
+            EngineInDir, EngineSetup, build_engine_only, elect_single_voter_engine,
+            topic_record_named,
+        },
     },
+    snapshot_fetch::SnapshotId,
 };
 
 /// A metadata log whose every batch gets its own segment, so a cleaning that
@@ -216,9 +220,9 @@ fn only_an_empty_no_op_record_is_a_kip835_no_op() {
     .expect("encode a carried record");
     let topic = krabka_metadata::to_kraft_values(&topic_record_named("t", 1)[0], &image)
         .expect("encode a topic record");
-    struct Case {
+    struct Case<'a> {
         what: &'static str,
-        value: &'static [u8],
+        value: &'a [u8],
         want: bool,
     }
     let cases = [
