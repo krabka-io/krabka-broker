@@ -1631,17 +1631,19 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
     );
 }
 
-/// A window the operator set, and the per-listener override beside it, both
-/// report at `STATIC_BROKER_CONFIG` with the chain `kafka-configs --all`
-/// renders after the value.
-#[test]
-fn a_configured_idle_window_and_its_listener_override_report_as_static() {
+/// A named broker reports its idle window and per-listener override; the
+/// cluster-default resource has no node-level idle window to report.
+#[yare::parameterized(
+    named_broker = { "7", true },
+    cluster_default = { "", false },
+)]
+fn idle_window_is_reported_only_for_a_named_broker(resource_name: &str, named: bool) {
     let listener_key = "listener.name.external.connections.max.idle.ms";
     let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
 
     let result = describe_at(
         (
-            serving_node_for(RESOURCE_TYPE_BROKER, "7"),
+            serving_node_for(RESOURCE_TYPE_BROKER, resource_name),
             StaticBrokerConfigs {
                 connections_max_idle: Some(krabka_units::secs(30)),
                 connections_max_idle_overrides: &overrides,
@@ -1650,13 +1652,20 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
         ),
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
-        "7",
-        Some(vec![
-            config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
-            listener_key.to_owned(),
-        ]),
+        resource_name,
+        named.then(|| {
+            vec![
+                config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
+                listener_key.to_owned(),
+            ]
+        }),
         EVERYTHING,
     );
+
+    if !named {
+        assert2::assert!(result.configs == Vec::new());
+        return;
+    }
 
     let broker_wide_static = synonym(
         config_keys::CONNECTIONS_MAX_IDLE_MS,
@@ -1668,7 +1677,7 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
         "600000",
         CONFIG_SOURCE_DEFAULT,
     );
-    assert!(
+    assert2::assert!(
         result.configs
             == vec![
                 expected_config_entry()
@@ -1696,32 +1705,6 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
                     .call(),
             ]
     );
-}
-
-/// The cluster-default broker resource describes the cluster, not a node, so
-/// the idle window has no place in it — the same rule that keeps `node.id`
-/// and the retention keys out.
-#[test]
-fn the_cluster_default_resource_reports_no_idle_window() {
-    let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
-
-    let result = describe_at(
-        (
-            serving_node_for(RESOURCE_TYPE_BROKER, ""),
-            StaticBrokerConfigs {
-                connections_max_idle: Some(krabka_units::secs(30)),
-                connections_max_idle_overrides: &overrides,
-                ..untuned()
-            },
-        ),
-        &MetadataImage::new(Uuid::nil()),
-        RESOURCE_TYPE_BROKER,
-        "",
-        None,
-        EVERYTHING,
-    );
-
-    assert!(result.configs == Vec::new());
 }
 
 /// A topic with a stored config map, for the synonym-chain rows below.

@@ -451,26 +451,51 @@ async fn missing_mandatory_artifacts_are_torn_copies_in_written_order() {
     }
 }
 
-#[tokio::test]
-async fn a_flipped_crc_covered_byte_is_a_checksum_mismatch() {
+#[derive(Clone, Copy)]
+enum CorruptedArtifact {
+    Log,
+    Snapshot,
+}
+
+#[yare::parameterized(
+    log = { CorruptedArtifact::Log },
+    snapshot = { CorruptedArtifact::Snapshot },
+)]
+#[test_macro(tokio::test)]
+async fn a_corrupted_crc_covered_artifact_is_a_checksum_mismatch(artifact: CorruptedArtifact) {
     let (dir, store, partition) = verification_context();
     let mut fixture = valid_segment_bytes();
 
-    // Byte 62 sits inside the first batch's body, well past its 61-byte
-    // header and the CRC field it carries.
-    let mut corrupted = fixture.log.to_vec();
-    corrupted[62] ^= 0xFF;
-    fixture.log = Bytes::from(corrupted);
+    match artifact {
+        CorruptedArtifact::Log => {
+            // Byte 62 sits in the first batch body, past its header and CRC.
+            let mut corrupted = fixture.log.to_vec();
+            corrupted[62] ^= 0xFF;
+            fixture.log = Bytes::from(corrupted);
+        }
+        CorruptedArtifact::Snapshot => {
+            let mut corrupted = fixture.snapshot.to_vec();
+            corrupted[2] ^= 0xFF;
+            fixture.snapshot = Bytes::from(corrupted);
+        }
+    }
 
     let segment = write_segment(dir.path(), &fixture, &[]);
     let error = verify_segment(&store, &partition, &segment)
         .await
         .expect_err("checksum mismatch");
-    let RestoreError::ChecksumMismatch { key, position, .. } = error else {
-        panic!("expected ChecksumMismatch, got {error:?}");
-    };
-    check!(key == "orders-0/seg.log");
-    check!(position == 0);
+    match artifact {
+        CorruptedArtifact::Log => {
+            let RestoreError::ChecksumMismatch { key, position, .. } = error else {
+                panic!("expected ChecksumMismatch, got {error:?}");
+            };
+            check!(key == "orders-0/seg.log");
+            check!(position == 0);
+        }
+        CorruptedArtifact::Snapshot => {
+            check!(matches!(error, RestoreError::ChecksumMismatch { .. }));
+        }
+    }
 }
 
 #[tokio::test]
@@ -641,22 +666,6 @@ async fn transaction_index_accepts_kafka_marker_order() {
         let verified = verify_segment(&store, &partition, &segment).await;
         check!(verified.is_ok(), "{name}: {:?}", verified.as_ref().err());
     }
-}
-
-#[tokio::test]
-async fn a_corrupt_snapshot_crc_is_rejected() {
-    let (dir, store, partition) = verification_context();
-    let mut fixture = valid_segment_bytes();
-
-    let mut corrupted = fixture.snapshot.to_vec();
-    corrupted[2] ^= 0xFF;
-    fixture.snapshot = Bytes::from(corrupted);
-
-    let segment = write_segment(dir.path(), &fixture, &[]);
-    let error = verify_segment(&store, &partition, &segment)
-        .await
-        .expect_err("corrupt snapshot CRC");
-    check!(matches!(error, RestoreError::ChecksumMismatch { .. }));
 }
 
 #[tokio::test]

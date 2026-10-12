@@ -287,100 +287,23 @@ async fn fetch(
 // the offset the transaction is replacing. `require_stable = true` turns
 // `orders-0` into the UNSTABLE_OFFSET_COMMIT row Kafka sends — the invalid
 // offset sentinels with an empty, not null, metadata string — while
-// `orders-1` still answers normally. Once the transaction's marker resolves,
-// the same request reads the new offset.
-#[tokio::test]
-async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
-    const VERSION: i16 = 7;
-    let request = |require_stable| OffsetFetchRequest {
-        group_id: "grp".into(),
-        topics: Some(vec![
-            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
-                name: "orders".into(),
-                partition_indexes: vec![0, 1],
-                ..Default::default()
-            },
-        ]),
-        require_stable,
-        ..Default::default()
-    };
-    let row = |partition_index, committed_offset, committed_leader_epoch, error_code| {
-        OffsetFetchResponsePartition {
-            partition_index,
-            committed_offset,
-            committed_leader_epoch,
-            metadata: Some(String::new()),
-            error_code,
-            ..Default::default()
-        }
-    };
-    let expect = |partitions| OffsetFetchResponse {
-        throttle_time_ms: 0,
-        topics: vec![OffsetFetchResponseTopic {
-            name: "orders".into(),
-            partitions,
-            ..Default::default()
-        }],
-        error_code: codes::NONE,
-        groups: Vec::new(),
-        ..Default::default()
-    };
-
-    require_stable(VERSION, request, row, expect).await;
+// `orders-1` still answers normally. Both wire shapes must behave identically.
+#[derive(Clone, Copy)]
+enum RequireStableShape {
+    Legacy,
+    Groups,
 }
 
-// The same three phases on the KIP-516 `groups[]` shape. `require_stable` is a
-// top-level request field there too, so it governs every group the request
-// names.
-#[tokio::test]
-async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
-    const VERSION: i16 = 9;
-    let request = |require_stable| OffsetFetchRequest {
-        groups: vec![
-            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestGroup {
-                group_id: "grp".into(),
-                topics: Some(vec![
-                    krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopics {
-                        name: "orders".into(),
-                        partition_indexes: vec![0, 1],
-                        ..Default::default()
-                    },
-                ]),
-                ..Default::default()
-            },
-        ],
-        require_stable,
-        ..Default::default()
-    };
-    let row = |partition_index, committed_offset, committed_leader_epoch, error_code| {
-        OffsetFetchResponsePartitions {
-            partition_index,
-            committed_offset,
-            committed_leader_epoch,
-            metadata: Some(String::new()),
-            error_code,
-            ..Default::default()
-        }
-    };
-    let expect = |partitions| OffsetFetchResponse {
-        throttle_time_ms: 0,
-        topics: Vec::new(),
-        error_code: codes::NONE,
-        groups: vec![OffsetFetchResponseGroup {
-            group_id: "grp".into(),
-            topics: vec![OffsetFetchResponseTopics {
-                name: "orders".into(),
-                topic_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
-                partitions,
-                ..Default::default()
-            }],
-            error_code: codes::NONE,
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-
-    require_stable(VERSION, request, row, expect).await;
+#[yare::parameterized(
+    legacy = { 7, RequireStableShape::Legacy },
+    groups = { 9, RequireStableShape::Groups },
+)]
+#[test_macro(tokio::test)]
+async fn require_stable_reports_unstable_offsets_on_each_wire_shape(
+    version: i16,
+    shape: RequireStableShape,
+) {
+    require_stable(version, shape).await;
 }
 
 // A `TxnOffsetCommit` records its KIP-447 mark only after its records are
@@ -1151,12 +1074,7 @@ async fn legacy_offset_fetch_creates_no_group() {
 }
 
 /// Exercise the same transaction phases against both KIP-447 wire shapes.
-async fn require_stable<R>(
-    version: i16,
-    request: impl Fn(bool) -> OffsetFetchRequest,
-    row: impl Fn(i32, i64, i32, i16) -> R,
-    expect: impl Fn(Vec<R>) -> OffsetFetchResponse,
-) {
+async fn require_stable(version: i16, shape: RequireStableShape) {
     const PRODUCER_ID: i64 = 91;
     broker_fixture!((broker_handle, _dir, broker), group_allow_all);
     seed_committed_offset().broker(&broker).call().await;
@@ -1167,26 +1085,142 @@ async fn require_stable<R>(
         .call()
         .await;
     seed_default_pending_txn_offsets(&broker).await;
-    let stable_row = |partition_index, offset| row(partition_index, offset, 5, codes::NONE);
-    let relaxed = fetch(&broker, version, &request(false)).await;
-    assert!(relaxed == expect(vec![stable_row(0, 42), stable_row(1, 11)]));
-    let strict = fetch(&broker, version, &request(true)).await;
+    let relaxed_request = request(shape, false);
+    let relaxed = fetch(&broker, version, &relaxed_request).await;
     assert!(
-        strict
-            == expect(vec![
-                row(0, -1, -1, codes::UNSTABLE_OFFSET_COMMIT),
-                stable_row(1, 11)
-            ])
+        relaxed
+            == expected_response(
+                shape,
+                vec![(0, 42, 5, codes::NONE), (1, 11, 5, codes::NONE)]
+            )
     );
+    let strict_request = request(shape, true);
+    let strict = fetch(&broker, version, &strict_request).await;
+    let expected_strict = expected_response(
+        shape,
+        vec![
+            (0, -1, -1, codes::UNSTABLE_OFFSET_COMMIT),
+            (1, 11, 5, codes::NONE),
+        ],
+    );
+    assert!(strict == expected_strict);
     resolve_pending_txn_offsets()
         .broker(&broker)
         .producer(PRODUCER_ID)
         .committed(vec![(("orders".to_string(), 0), committed_entry(77))])
         .call()
         .await;
-    let resolved = fetch(&broker, version, &request(true)).await;
-    assert!(resolved == expect(vec![stable_row(0, 77), stable_row(1, 11)]));
+    let resolved = fetch(&broker, version, &strict_request).await;
+    assert!(
+        resolved
+            == expected_response(
+                shape,
+                vec![(0, 77, 5, codes::NONE), (1, 11, 5, codes::NONE)]
+            )
+    );
     broker_handle.shutdown().await;
+}
+
+fn request(shape: RequireStableShape, require_stable: bool) -> OffsetFetchRequest {
+    match shape {
+        RequireStableShape::Legacy => OffsetFetchRequest {
+            group_id: "grp".into(),
+            topics: Some(vec![
+                krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
+                    name: "orders".into(),
+                    partition_indexes: vec![0, 1],
+                    ..Default::default()
+                },
+            ]),
+            require_stable,
+            ..Default::default()
+        },
+        RequireStableShape::Groups => OffsetFetchRequest {
+            groups: vec![OffsetFetchRequestGroup {
+                group_id: "grp".into(),
+                topics: Some(vec![OffsetFetchRequestTopics {
+                    name: "orders".into(),
+                    partition_indexes: vec![0, 1],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }],
+            require_stable,
+            ..Default::default()
+        },
+    }
+}
+
+fn expected_response(
+    shape: RequireStableShape,
+    rows: Vec<(i32, i64, i32, i16)>,
+) -> OffsetFetchResponse {
+    match shape {
+        RequireStableShape::Legacy => OffsetFetchResponse {
+            throttle_time_ms: 0,
+            topics: vec![OffsetFetchResponseTopic {
+                name: "orders".into(),
+                partitions: rows
+                    .into_iter()
+                    .map(
+                        |(
+                            partition_index,
+                            committed_offset,
+                            committed_leader_epoch,
+                            error_code,
+                        )| {
+                            OffsetFetchResponsePartition {
+                                partition_index,
+                                committed_offset,
+                                committed_leader_epoch,
+                                metadata: Some(String::new()),
+                                error_code,
+                                ..Default::default()
+                            }
+                        },
+                    )
+                    .collect(),
+                ..Default::default()
+            }],
+            error_code: codes::NONE,
+            groups: Vec::new(),
+            ..Default::default()
+        },
+        RequireStableShape::Groups => OffsetFetchResponse {
+            throttle_time_ms: 0,
+            topics: Vec::new(),
+            error_code: codes::NONE,
+            groups: vec![OffsetFetchResponseGroup {
+                group_id: "grp".into(),
+                topics: vec![OffsetFetchResponseTopics {
+                    name: "orders".into(),
+                    topic_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
+                    partitions: rows
+                        .into_iter()
+                        .map(
+                            |(
+                                partition_index,
+                                committed_offset,
+                                committed_leader_epoch,
+                                error_code,
+                            )| OffsetFetchResponsePartitions {
+                                partition_index,
+                                committed_offset,
+                                committed_leader_epoch,
+                                metadata: Some(String::new()),
+                                error_code,
+                                ..Default::default()
+                            },
+                        )
+                        .collect(),
+                    ..Default::default()
+                }],
+                error_code: codes::NONE,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    }
 }
 
 fn committed_entry(offset: i64) -> OffsetEntry {
