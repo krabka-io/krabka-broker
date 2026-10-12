@@ -596,23 +596,6 @@ fn build_samples(
 /// guess whether the schedule ran at all.
 /// Spawn one producer task per `scenario.producers`.
 ///
-/// The three shared handles travel as a tuple because they are one thing: the
-/// run-phase signal, the first-ack stamp, and the kill marker every task reads.
-macro_rules! task_common_fields {
-    ($idx:ident, $scenario:ident, $cfg:ident, $stop:ident, $security:ident, $grid:ident) => {
-        idx: $idx,
-        scenario: $scenario.clone(),
-        bootstrap: $cfg.bootstrap.clone(),
-        topic: $cfg.topic.clone(),
-        scenario_id: $cfg.scenario_id,
-        stop: Arc::clone($stop),
-        security: $security.cloned(),
-        grid: $grid,
-        dispatch_queue_capacity: $cfg.client_dispatch_queue_capacity,
-        frame_max: $cfg.client_frame_max,
-    };
-}
-
 fn spawn_producers(
     tasks: &mut JoinSet<ProducerOut>,
     scenario: &Scenario,
@@ -624,11 +607,20 @@ fn spawn_producers(
     let (stop, first_ack, kill_at) = shared;
     for idx in 0..scenario.producers {
         tasks.spawn(run_producer(ProducerTask {
-            task_common_fields!(idx, scenario, cfg, stop, security, grid)
+            idx,
+            scenario: scenario.clone(),
+            bootstrap: cfg.bootstrap.clone(),
+            topic: cfg.topic.clone(),
+            scenario_id: cfg.scenario_id,
+            stop: Arc::clone(stop),
             first_ack: Arc::clone(first_ack),
             kill_at: Arc::clone(kill_at),
+            security: security.cloned(),
+            grid,
             request_timeout: cfg.producer_request_timeout,
             final_drain_timeout: cfg.producer_final_drain_timeout,
+            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
+            frame_max: cfg.client_frame_max,
         }));
     }
 }
@@ -644,11 +636,20 @@ fn spawn_consumers(
 ) {
     for idx in 0..scenario.consumers {
         tasks.spawn(run_consumer(ConsumerTask {
-            task_common_fields!(idx, scenario, cfg, stop, security, grid)
+            idx,
+            scenario: scenario.clone(),
+            bootstrap: cfg.bootstrap.clone(),
+            topic: cfg.topic.clone(),
+            scenario_id: cfg.scenario_id,
+            stop: Arc::clone(stop),
+            security: security.cloned(),
+            grid,
             request_timeout: cfg.consumer_request_timeout,
             build_retry_policy: cfg.consumer_build_retry_policy,
             poll_timeout: cfg.consumer_poll_timeout,
             poll_error_backoff: cfg.consumer_poll_error_backoff,
+            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
+            frame_max: cfg.client_frame_max,
         }));
     }
 }
