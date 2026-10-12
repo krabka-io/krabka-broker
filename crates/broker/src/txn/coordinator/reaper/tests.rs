@@ -109,68 +109,75 @@ fn apply_complete_abort_records_prev_only_on_a_pid_roll() {
     );
 }
 
-#[test]
-fn complete_abort_decision_rejects_any_prepared_snapshot_drift() {
+#[derive(Clone, Copy)]
+enum PreparedSnapshotCase {
+    Exact,
+    ProducerIdChanged,
+    ProducerEpochChanged,
+    StateChanged,
+    LatePartitionRegistered,
+    StagedIdentityChanged,
+    AlreadyComplete,
+    MalformedEpoch,
+}
+
+#[yare::parameterized(
+    exact = { PreparedSnapshotCase::Exact },
+    producer_id_changed = { PreparedSnapshotCase::ProducerIdChanged },
+    producer_epoch_changed = { PreparedSnapshotCase::ProducerEpochChanged },
+    state_changed = { PreparedSnapshotCase::StateChanged },
+    late_partition_registered = { PreparedSnapshotCase::LatePartitionRegistered },
+    staged_identity_changed = { PreparedSnapshotCase::StagedIdentityChanged },
+    already_complete = { PreparedSnapshotCase::AlreadyComplete },
+    malformed_epoch = { PreparedSnapshotCase::MalformedEpoch },
+)]
+fn complete_abort_decision_checks_the_prepared_snapshot(case: PreparedSnapshotCase) {
     let mut prepared = entry().call();
     prepared.producer_epoch = 7;
     prepared.state = TxnState::PrepareAbort;
 
-    // Exact match → ok.
     let mut current = prepared.clone();
-    assert!(complete_abort_decision(&current, &prepared) == CompletionDecision::Proceed);
+    let expected = match case {
+        PreparedSnapshotCase::Exact => CompletionDecision::Proceed,
+        PreparedSnapshotCase::ProducerIdChanged => {
+            current.producer_id = ProducerId(9999);
+            CompletionDecision::RejectStaleIdentity
+        }
+        PreparedSnapshotCase::ProducerEpochChanged => {
+            current.producer_epoch = 8;
+            CompletionDecision::RejectStaleIdentity
+        }
+        PreparedSnapshotCase::StateChanged => {
+            current.state = TxnState::Ongoing;
+            CompletionDecision::RejectChangedPreparedState
+        }
+        // A partition registered after preparation must not be cleared by
+        // completion, even when identity and state are unchanged.
+        PreparedSnapshotCase::LatePartitionRegistered => {
+            current.partitions.insert(TopicPartition {
+                topic: "late-registration".into(),
+                partition: PartitionIndex(4),
+            });
+            CompletionDecision::RejectChangedPreparedState
+        }
+        // A staged recovery identity changed while markers were in flight.
+        PreparedSnapshotCase::StagedIdentityChanged => {
+            current.next_producer_id = ProducerId(2000);
+            current.next_producer_epoch = 0;
+            CompletionDecision::RejectChangedPreparedState
+        }
+        // Completed is an idempotent success, not a second completion write.
+        PreparedSnapshotCase::AlreadyComplete => {
+            current.state = TxnState::CompleteAbort;
+            CompletionDecision::AlreadyComplete
+        }
+        PreparedSnapshotCase::MalformedEpoch => {
+            current.producer_epoch = -1;
+            CompletionDecision::RejectMalformed
+        }
+    };
 
-    // pid changed → reject.
-    current = prepared.clone();
-    current.producer_id = ProducerId(9999);
-    assert!(
-        complete_abort_decision(&current, &prepared) == CompletionDecision::RejectStaleIdentity
-    );
-
-    // epoch changed → reject.
-    current = prepared.clone();
-    current.producer_epoch = 8;
-    assert!(
-        complete_abort_decision(&current, &prepared) == CompletionDecision::RejectStaleIdentity
-    );
-
-    // state advanced past PrepareAbort → reject.
-    current = prepared.clone();
-    current.state = TxnState::Ongoing;
-    assert!(
-        complete_abort_decision(&current, &prepared)
-            == CompletionDecision::RejectChangedPreparedState
-    );
-
-    // A partition registration with the same identity and state is still a
-    // different prepared snapshot and must not be cleared by completion.
-    current = prepared.clone();
-    current.partitions.insert(TopicPartition {
-        topic: "late-registration".into(),
-        partition: PartitionIndex(4),
-    });
-    assert!(
-        complete_abort_decision(&current, &prepared)
-            == CompletionDecision::RejectChangedPreparedState
-    );
-
-    // A staged recovery identity changed while markers were in flight.
-    current = prepared.clone();
-    current.next_producer_id = ProducerId(2000);
-    current.next_producer_epoch = 0;
-    assert!(
-        complete_abort_decision(&current, &prepared)
-            == CompletionDecision::RejectChangedPreparedState
-    );
-
-    // The exact completed identity is an idempotent success, not a second
-    // completion write.
-    current = prepared.clone();
-    current.state = TxnState::CompleteAbort;
-    assert!(complete_abort_decision(&current, &prepared) == CompletionDecision::AlreadyComplete);
-
-    current = prepared.clone();
-    current.producer_epoch = -1;
-    assert!(complete_abort_decision(&current, &prepared) == CompletionDecision::RejectMalformed);
+    assert2::assert!(complete_abort_decision(&current, &prepared) == expected);
 }
 
 #[tokio::test]
