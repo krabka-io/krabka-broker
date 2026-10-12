@@ -11,8 +11,8 @@ use crate::support::{
     client::create_topic as create_support_topic,
     fetch::{
         FetchByteLimit, FetchLimits, FetchSessionEpoch, FetchSessionId, FetchSessionSetup,
-        RequestWaitMillis, default_fetch_limits, empty_session_fetch, fetch_request_for,
-        fetch_topic_row, session_fetch_request,
+        RequestWaitMillis, build_fetch_session_request, default_fetch_limits, fetch_request_for,
+        fetch_topic_row, incremental_session_fetch,
     },
     produce::{SinglePartitionProduceSetup, batch_request},
 };
@@ -36,7 +36,7 @@ async fn incremental_after_produce(
     process
         .client
         .send(
-            empty_session_fetch()
+            build_fetch_session_request()
                 .limits(FetchLimits::wait_for_data(RequestWaitMillis(200)))
                 .id(FetchSessionSetup::at_epoch(FetchSessionId(session), FetchSessionEpoch(2)).id)
                 .epoch(
@@ -103,11 +103,9 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
     let r2 = p
         .client
         .send(
-            empty_session_fetch()
+            incremental_session_fetch()
+                .id(sid)
                 .limits(FetchLimits::immediate())
-                .id(FetchSessionSetup::incremental(FetchSessionId(sid)).id)
-                .epoch(FetchSessionSetup::incremental(FetchSessionId(sid)).epoch)
-                .forgotten(FetchSessionSetup::incremental(FetchSessionId(sid)).forgotten)
                 .call(),
         )
         .await
@@ -151,7 +149,7 @@ async fn forgotten_topics_drop_partitions_from_subscription() {
     let r2 = p
         .client
         .send(
-            empty_session_fetch()
+            build_fetch_session_request()
                 .limits(FetchLimits::immediate())
                 .id(sid)
                 .epoch(1)
@@ -197,7 +195,7 @@ async fn unknown_session_id_returns_not_found() {
     let r = p
         .client
         .send(
-            empty_session_fetch()
+            build_fetch_session_request()
                 .limits(FetchLimits::immediate())
                 .id(FetchSessionSetup::incremental(FetchSessionId(999_999)).id)
                 .epoch(FetchSessionSetup::incremental(FetchSessionId(999_999)).epoch)
@@ -223,7 +221,7 @@ async fn stale_session_epoch_returns_invalid_epoch() {
     let r2 = p
         .client
         .send(
-            empty_session_fetch()
+            build_fetch_session_request()
                 .limits(default_fetch_limits())
                 .id(FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(99)).id)
                 .epoch(
@@ -256,7 +254,7 @@ async fn close_session_drops_cache_entry() {
     let r2 = p
         .client
         .send(
-            session_fetch_request()
+            build_fetch_session_request()
                 .request(fetch_request_for(
                     vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
                     default_fetch_limits(),
@@ -280,11 +278,9 @@ async fn close_session_drops_cache_entry() {
     let r3 = p
         .client
         .send(
-            empty_session_fetch()
+            incremental_session_fetch()
+                .id(sid)
                 .limits(default_fetch_limits())
-                .id(FetchSessionSetup::incremental(FetchSessionId(sid)).id)
-                .epoch(FetchSessionSetup::incremental(FetchSessionId(sid)).epoch)
-                .forgotten(FetchSessionSetup::incremental(FetchSessionId(sid)).forgotten)
                 .call(),
         )
         .await
@@ -302,7 +298,7 @@ async fn sessionless_zero_id_with_stray_epoch_is_session_id_not_found() {
     let r = p
         .client
         .send(
-            empty_session_fetch()
+            build_fetch_session_request()
                 .limits(default_fetch_limits())
                 .epoch(7)
                 .call(),
@@ -326,7 +322,7 @@ async fn sessionless_full_fetch_round_trip() {
     let r = p
         .client
         .send(
-            session_fetch_request()
+            build_fetch_session_request()
                 .request(fetch_request_for(
                     vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
                     FetchLimits::wait_for_data(RequestWaitMillis(100)),
@@ -357,7 +353,7 @@ async fn open_session(
 ) -> krabka_protocol::owned::fetch_response::FetchResponse {
     client
         .send(
-            session_fetch_request()
+            build_fetch_session_request()
                 .request(fetch_request_for(
                     vec![fetch_topic(
                         "t",

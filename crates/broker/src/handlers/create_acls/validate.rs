@@ -249,7 +249,7 @@ mod tests {
     use crate::{
         codes::{self, INVALID_REQUEST, UNSUPPORTED_VERSION},
         handlers::create_acls::test_support::{OPERATION_READ, creation, validate},
-        test_support::{AllowAclSetup, allow_acl},
+        test_support::allow_acl,
     };
 
     #[test]

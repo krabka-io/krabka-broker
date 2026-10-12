@@ -17,8 +17,8 @@ use crate::{
     BROKER_WITNESS, CONFIG_SOURCE_DYNAMIC_BROKER, CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
     RESOURCE_TYPE_BROKER, SITE_A, STRETCH_PREFERRED_LEADER_SITE, WITNESS_ID, cluster_lock,
     support::configs::{
-        ConfigOperation, IncrementalConfigsSetup, describe_resource, incremental_config,
-        incremental_request, incremental_resource,
+        ConfigOperation, describe_resource, incremental_config, incremental_request,
+        incremental_resource,
     },
     witness_cluster::{client_at, shutdown, start_stretch_cluster},
 };

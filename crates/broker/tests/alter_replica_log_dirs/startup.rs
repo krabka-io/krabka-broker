@@ -35,12 +35,15 @@ async fn startup_resumes_move_for_existing_partition() {
     let cfg = two_dir_config(primary.path(), extra.path());
     let handle = Broker::start(cfg).await.expect("first boot");
     let addr = handle.listen_addr();
-    create_and_wait()
-        .handle(&handle)
-        .address(addr)
-        .client_id(CLIENT_ID)
-        .call()
-        .await;
+    create_and_wait(
+        &handle,
+        addr,
+        Setup {
+            client_id: CLIENT_ID,
+            ..Default::default()
+        },
+    )
+    .await;
 
     let producer = Producer::builder()
         .bootstrap(addr.to_string())

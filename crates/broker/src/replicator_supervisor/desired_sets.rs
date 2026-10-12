@@ -80,12 +80,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{
-        replicator_supervisor::test_support::{
-            SupervisorPartitionSetup, SupervisorTopicSetup, broker_record, image_with,
-            partition_record, three_replica_image, topic_record,
-        },
-        test_support::PartitionCount,
+    use crate::replicator_supervisor::test_support::{
+        broker_record, image_with, partition_record, three_replica_image, topic_record,
     };
 
     #[test]

@@ -34,10 +34,9 @@ use crate::{
         produce::handle,
         test_support::{
             AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup,
-            ClientTopicSetup, ShareSessionEpoch, ShareWireSetup, TopicPartitionCount,
-            acknowledge_batches_request, acquired_share_records,
-            create_topic as create_topic_from_test_support, share_acknowledge_wire,
-            share_fetch_wire,
+            ShareSessionEpoch, TopicPartitionCount, acknowledge_batches_request,
+            acquired_share_records, create_topic as create_topic_from_test_support,
+            share_acknowledge_wire, share_fetch_wire,
         },
     },
     test_support::{

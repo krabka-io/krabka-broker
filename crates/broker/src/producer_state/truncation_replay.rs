@@ -3,15 +3,9 @@ use assert2::assert;
 use super::{
     Decision, RetainedBatch,
     snapshot_tail::{check, check_duplicate, rebuilt},
-    test_support::{
-        ProducerBatchSetup, ProducerEpoch, ProducerSequence, RecordOffsets, SequenceDelta,
-        producer_batch,
-    },
+    test_support::{RecordOffsets, producer_batch},
 };
-use crate::{
-    producer_state::test_support::opened_log,
-    test_support::{EmptyPayloadBatchSetup, default_records_batch},
-};
+use crate::{producer_state::test_support::opened_log, test_support::default_records_batch};
 
 #[tokio::test]
 async fn rebuilt_producer_retries_never_name_a_truncated_batch() {

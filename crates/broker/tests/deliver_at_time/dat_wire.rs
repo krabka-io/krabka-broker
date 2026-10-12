@@ -21,9 +21,7 @@ use crate::{
     support::{
         self,
         client::create_configured_topic,
-        fetch::{
-            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
-        },
+        fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
         offsets::{list_offset_partition, single_partition_list_offsets},
         produce::{SinglePartitionProduceSetup, send_batch},
         topics::CreateTopicSetup,

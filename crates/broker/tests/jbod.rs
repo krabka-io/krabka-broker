@@ -19,7 +19,6 @@ mod two_dir_topic;
 use std::net::SocketAddr;
 
 use assert2::assert;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::owned::{
     describe_log_dirs_request::DescribeLogDirsRequest,
     describe_log_dirs_response::DescribeLogDirsResponse,
@@ -27,12 +26,8 @@ use krabka_protocol::owned::{
 use tokio::net::TcpStream;
 
 use crate::{
-    kafka_wire::ExchangeSetup as WireExchangeSetup,
-    support::{
-        storage::count_partition_dirs, topics::TopicPartitionCount,
-        wire::HeaderEncoding as RequestHeaderEncoding,
-    },
-    two_dir_topic::{PartitionReadiness, Setup, start},
+    support::{storage::count_partition_dirs, wire::HeaderEncoding as RequestHeaderEncoding},
+    two_dir_topic::{PartitionReadiness, start},
 };
 
 const CLIENT_ID: &str = "krabka-jbod-test";

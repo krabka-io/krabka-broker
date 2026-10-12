@@ -9,9 +9,7 @@
 use assert2::{assert, check};
 
 use crate::support::{
-    classic::{
-        ClassicJoinSetup, ClassicTimeouts, classic_join_request, join_protocol, required_member_id,
-    },
+    classic::{ClassicTimeouts, classic_join_request, join_protocol, required_member_id},
     client::create_topic as create_support_topic,
     offsets::{
         offset_commit_partition, offset_commit_topic, offset_delete_partition,

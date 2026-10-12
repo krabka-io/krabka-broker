@@ -34,10 +34,7 @@ use crate::{
             group::{CoordinatorGroup, GroupKind},
         },
     },
-    handlers::{
-        offset_commit::handle,
-        test_support::{CreateTopicSetup, configured_topic_request},
-    },
+    handlers::{offset_commit::handle, test_support::configured_topic_request},
     test_support::{
         UnixMillis, dispatch_context, encode_request, peer, principal, request_context,
         start_broker_with_authorizer_no_audit,

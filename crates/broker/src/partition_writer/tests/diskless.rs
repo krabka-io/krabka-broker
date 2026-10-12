@@ -18,7 +18,7 @@ use crate::{
     partition_writer::test_support::{
         GatedWal, observed_single_replica_writer, sample_batch, test_sequencer,
     },
-    test_support::{EmptyPayloadBatchSetup, FakeMetadataSource, RecordCount},
+    test_support::FakeMetadataSource,
     wal::{ControllerSequencer, LocalFsyncWal, OffsetSequencer, SharedWal},
 };
 

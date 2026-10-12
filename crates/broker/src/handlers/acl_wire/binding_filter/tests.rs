@@ -1,10 +1,7 @@
 use assert2::check;
 
 use super::*;
-use crate::{
-    handlers::acl_wire::PATTERN_MATCHING_FIXTURE,
-    test_support::{AllowAclSetup, allow_acl},
-};
+use crate::{handlers::acl_wire::PATTERN_MATCHING_FIXTURE, test_support::allow_acl};
 
 const TOPIC: i8 = 2;
 const LITERAL: i8 = 3;

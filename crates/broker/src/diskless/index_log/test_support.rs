@@ -186,6 +186,10 @@ pub(crate) fn flush_record(
     #[builder(into, default = WalFlushSetup::default().max_timestamp)] max_timestamp: UnixMillis,
     #[builder(default = WalFlushSetup::default().byte_len)] byte_len: krabka_units::ByteSize,
 ) -> WalFlushRecord {
+    use krabka_units::convert::ByteSizeExt;
+
+    use crate::diskless::wal_index::WalIndexEntry;
+
     let setup = WalFlushSetup {
         topic_id,
         object_key,
@@ -194,9 +198,6 @@ pub(crate) fn flush_record(
         max_timestamp,
         byte_len,
     };
-    use krabka_units::convert::ByteSizeExt;
-
-    use crate::diskless::wal_index::{WalFlushRecord, WalIndexEntry};
     let WalFlushSetup {
         topic_id,
         object_key,
@@ -219,4 +220,28 @@ pub(crate) fn flush_record(
             max_timestamp_ms: max_timestamp.0,
         }],
     }
+}
+
+pub(crate) fn second_object_flush_record(topic_id: uuid::Uuid) -> WalFlushRecord {
+    let setup = WalFlushSetup::second_object(topic_id);
+    flush_record()
+        .topic_id(setup.topic_id)
+        .object_key(setup.object_key)
+        .first_offset(setup.first_offset)
+        .last_offset(setup.last_offset)
+        .max_timestamp(setup.max_timestamp)
+        .byte_len(setup.byte_len)
+        .call()
+}
+
+pub(crate) fn three_record_flush(topic_id: uuid::Uuid, object_key: &str) -> WalFlushRecord {
+    let setup = WalFlushSetup::three_records();
+    flush_record()
+        .topic_id(topic_id)
+        .object_key(object_key)
+        .first_offset(setup.first_offset)
+        .last_offset(setup.last_offset)
+        .max_timestamp(setup.max_timestamp)
+        .byte_len(setup.byte_len)
+        .call()
 }

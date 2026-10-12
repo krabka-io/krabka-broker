@@ -170,24 +170,13 @@ mod tests {
 
     use super::{super::bucket_rate, *};
     use crate::{
-        quota::test_support::{
-            QuotaRecordSetup, QuotaValue, UserBucketSetup, alice_app1_producer_quota, alice_bucket,
-            app1_producer_quota, image_with_quota as quota_image,
-        },
+        quota::test_support::{alice_app1_producer_quota, alice_bucket, app1_producer_quota},
         throttle::TokenBucket,
     };
 
-    #[bon::builder]
-    fn img_with_quota(
-        #[builder(default = vec ! [("user", Some("alice"))])] entity: Vec<(
-            &'_ str,
-            Option<&'_ str>,
-        )>,
-        #[builder(default = "producer_byte_rate")] key: &'_ str,
-        #[builder(into, default = QuotaValue (1_000.0))] value: QuotaValue,
-    ) -> Arc<MetadataImage> {
-        Arc::new(quota_image().entity(entity).key(key).value(value.0).call())
-    }
+    crate::quota_record_builder!(
+        img_with_quota -> Arc<MetadataImage> = crate::quota::test_support::shared_image_from_quota_setup
+    );
 
     /// A refresh keeps each bucket at the rate its consumer created it with
     /// (#692). A `request_percentage` of 50 is 500 000 microseconds of handler

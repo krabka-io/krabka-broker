@@ -23,7 +23,6 @@ use crate::{
         dispatch::test_support::{plaintext_loop, serve_loop},
         request::peek_api_key,
         response_header_len,
-        test_support::RequestFrameSetup,
     },
     test_support::start_broker_with,
 };
@@ -875,7 +874,7 @@ mod request_budget {
     use assert2::{assert, check};
     use futures_util::{SinkExt as _, StreamExt as _};
 
-    use super::{KafkaCodec, RequestFrameSetup, active_closes, request_frame};
+    use super::{KafkaCodec, active_closes, request_frame};
     use crate::{BrokerHandle, broker::Broker, network::dispatch::test_support::plaintext_loop};
 
     /// One connection served by the loop, and the client end already framed.
@@ -915,9 +914,7 @@ mod request_budget {
             .freeze()
     }
 
-    use crate::{
-        network::test_support::FrameCorrelationId, test_support::start_broker_with as broker_with,
-    };
+    use crate::test_support::start_broker_with as broker_with;
 
     async fn byte_budget_broker() -> (BrokerHandle, tempfile::TempDir) {
         broker_with(|cfg| cfg.queued_max_request_bytes = Some(budget())).await
@@ -1082,7 +1079,7 @@ mod log_levels {
     use futures_util::{SinkExt as _, StreamExt as _};
     use tracing::{Instrument as _, Level};
 
-    use super::{DEFAULT_MAX_FRAME_BYTES, RequestFrameSetup, request_frame};
+    use super::{DEFAULT_MAX_FRAME_BYTES, request_frame};
     use crate::{
         broker::Broker,
         network::{codec, dispatch::test_support::serve_loop, test_support::broker_config},
@@ -1223,13 +1220,10 @@ mod request_limit {
         owned::describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
     };
 
-    use super::{RequestFrameSetup, request_frame};
+    use super::request_frame;
     use crate::{
         broker::Broker,
-        network::{
-            dispatch::test_support::plaintext_loop,
-            test_support::{FrameCorrelationId, broker_config},
-        },
+        network::{dispatch::test_support::plaintext_loop, test_support::broker_config},
     };
 
     /// The limit of the broker under test: well over its own requests to

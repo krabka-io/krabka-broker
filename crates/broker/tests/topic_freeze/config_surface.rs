@@ -28,7 +28,7 @@ use crate::{
     control_plane::freeze_scope,
     support::{
         self,
-        configs::{ConfigOperation, TopicConfigMutationSetup, alter_topic_config, topic_config},
+        configs::{ConfigOperation, alter_topic_config, topic_config},
     },
     wire::{CONTROL, accepted, controlled_fixture, create_topic, refused},
 };

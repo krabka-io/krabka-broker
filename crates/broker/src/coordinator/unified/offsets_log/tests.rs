@@ -15,7 +15,7 @@ use crate::{
     coordinator::test_support::{offsets_partition_image, read_batch_epochs as read_epochs},
     error::BrokerError,
     metadata_source::MetadataSource,
-    partition::test_support::{CommitPartitionSetup, commit_partition, test_partition_with_writer},
+    partition::test_support::{commit_partition, test_partition_with_writer},
     partition_registry::PartitionRegistry,
     test_support::FakeMetadataSource,
 };

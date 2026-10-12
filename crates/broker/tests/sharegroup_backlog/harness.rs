@@ -17,10 +17,7 @@ use crate::support::{
     client::http_get,
     produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},
-    topics::{
-        ConfiguredTopicSetup, TopicPartitionCount, TopicReplicationFactor, creatable_topic,
-        create_topic_request,
-    },
+    topics::{creatable_topic, create_topic_request},
 };
 
 pub const TOPIC: &str = "backlog-itest";

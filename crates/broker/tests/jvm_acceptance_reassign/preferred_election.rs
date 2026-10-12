@@ -195,7 +195,7 @@ async fn jvm_kafka_leader_election_preferred() {
 
 use crate::{
     oracle::{Side, ToolFile},
-    support::{JvmDockerSetup, jvm_docker_command},
+    support::jvm_docker_command,
     tool_output::{ElectionOutcome, TopicPartition, election_json, parse_election},
 };
 

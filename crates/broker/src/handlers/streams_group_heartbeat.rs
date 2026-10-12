@@ -159,14 +159,13 @@ mod tests {
         handlers::{
             RequestContext, encode_response,
             group_heartbeat_test_support::{
-                GroupAclSetup, GroupTopicSetup, check_group_read_denied, streams_request,
-                topic_with_partitions,
+                check_group_read_denied, streams_request, topic_with_partitions,
             },
         },
         task_util::ask,
         test_support::{
-            ControllerPeerAllowed, GrantsInPrincipalName, PartitionCount, dispatch_wire, peer,
-            principal, request_context, start_group_broker_with,
+            ControllerPeerAllowed, GrantsInPrincipalName, dispatch_wire, peer, principal,
+            request_context, start_group_broker_with,
         },
     };
 

@@ -16,7 +16,7 @@ use assert2::{assert, check};
 
 use crate::support::{
     acl::TOPIC_FULL_MASK,
-    topics::{CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor},
+    topics::{TopicPartitionCount, configured_topic_request},
 };
 mod support;
 
@@ -54,12 +54,14 @@ async fn described_topic(
     krabka_protocol::owned::describe_topic_partitions_response::DescribeTopicPartitionsResponse,
 ) {
     let p = support::start().await;
-    create_topic()
-        .p(&p)
-        .topic(name)
-        .num_partitions(partitions)
-        .call()
-        .await;
+    create_topic(
+        &p,
+        configured_topic_request()
+            .topic(name)
+            .num_partitions(partitions)
+            .call(),
+    )
+    .await;
     let response = p
         .client
         .send(describe_topics_request(&[name], 2000, None))
@@ -70,24 +72,12 @@ async fn described_topic(
 
 // Bit positions (subset; cross-check'd with the KIP-430 unit tests).
 
-#[bon::builder]
 async fn create_topic(
     p: &support::InProcess,
-    #[builder(default = "orders")] topic: &'_ str,
-    #[builder(default = &[])] configs: &'_ [(&'_ str, &'_ str)],
-    #[builder(into, default = TopicPartitionCount(1))] num_partitions: TopicPartitionCount,
-    #[builder(into, default = TopicReplicationFactor(1))]
-    replication_factor: TopicReplicationFactor,
-    #[builder(default = krabka_units::millis(5_000))] timeout: krabka_units::Time,
+    request: krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
 ) {
-    let setup = CreateTopicSetup {
-        topic,
-        configs,
-        num_partitions,
-        replication_factor,
-        timeout,
-    };
-    support::client::create_topic_named(&p.client, setup).await;
+    let response = support::client::send_topic_creation(&p.client, request).await;
+    assert!(response.topics[0].error_code == 0, "{response:?}");
 }
 
 #[tokio::test]
@@ -129,7 +119,7 @@ async fn named_request_returns_listed_topics_with_partitions() {
 async fn fetch_all_returns_topics_in_alphabetical_order() {
     let p = support::start().await;
     // Create in non-alphabetical order to prove the broker sorts.
-    create_topic().p(&p).topic("gamma").call().await;
+    create_topic(&p, configured_topic_request().topic("gamma").call()).await;
     create_alpha_beta().p(&p).call().await;
 
     let resp = p
@@ -157,7 +147,7 @@ async fn fetch_all_returns_topics_in_alphabetical_order() {
 #[tokio::test]
 async fn unknown_topic_in_named_request_returns_error_row() {
     let p = support::start().await;
-    create_topic().p(&p).topic("real-topic").call().await;
+    create_topic(&p, configured_topic_request().topic("real-topic").call()).await;
 
     let resp = p
         .client
@@ -225,7 +215,7 @@ fn describe_request() -> DescribeTopicPartitionsRequest {
 #[tokio::test]
 async fn a_feature_downgrade_empties_the_reported_elr() {
     let p = support::start().await;
-    create_topic().p(&p).topic("t").call().await;
+    create_topic(&p, configured_topic_request().topic("t").call()).await;
 
     p.broker
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1FeatureLevel(
@@ -348,12 +338,14 @@ async fn topic_authorized_operations_populated_for_super_user() {
 #[tokio::test]
 async fn pagination_caps_response_at_partition_limit_and_returns_next_cursor() {
     let p = support::start().await;
-    create_topic()
-        .p(&p)
-        .topic("big")
-        .num_partitions(5)
-        .call()
-        .await;
+    create_topic(
+        &p,
+        configured_topic_request()
+            .topic("big")
+            .num_partitions(5)
+            .call(),
+    )
+    .await;
 
     // Cap response to 3 partitions; expect 3 returned + a cursor pointing
     // at "big" / partition 3.
@@ -414,11 +406,13 @@ async fn create_alpha_beta(
     alpha_partitions: TopicPartitionCount,
 ) {
     let setup = AlphaBetaTopicsSetup { alpha_partitions };
-    create_topic()
-        .p(p)
-        .topic("alpha")
-        .num_partitions(setup.alpha_partitions.0)
-        .call()
-        .await;
-    create_topic().p(p).topic("beta").call().await;
+    create_topic(
+        p,
+        configured_topic_request()
+            .topic("alpha")
+            .num_partitions(setup.alpha_partitions.0)
+            .call(),
+    )
+    .await;
+    create_topic(p, configured_topic_request().topic("beta").call()).await;
 }

@@ -21,10 +21,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::{
-    reassignment::test_support::{first_partition, img, liveness},
-    test_support::ReassignmentSetup,
-};
+use crate::reassignment::test_support::{first_partition, img, liveness};
 
 struct MockReassignmentController {
     is_leader: AtomicBool,

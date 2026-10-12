@@ -11,8 +11,8 @@ use crate::{
         control_state::{voter_set_from_wire, voter_set_to_wire},
         records::{leader_change_batch, typed_control_batch},
         test_support::{
-            EngineSetup, build_engine_only, elect_single_voter_engine, one_offset_batch,
-            topic_record, voter_set,
+            EngineSetup, build_engine_only, elect_single_voter_engine,
+            elect_test_engine_with_helper, one_offset_batch, topic_record, voter_set,
         },
     },
     reconfig::{AddVoter, ReconfigOutcome, VoterChange},
@@ -512,15 +512,7 @@ fn upgrade_leader_to_kraft_v1(leader: &mut Engine) {
 /// 50 ms so a fetch is stamped with a nonzero time.
 fn kraft_version_one_leader() -> (Engine, tempfile::TempDir) {
     let (mut leader, dir) = build_engine_only().call();
-    leader.on_event(Event::ElectionTimeout);
-    for epoch in [0, 1] {
-        leader.on_event(Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch,
-            vote_granted: true,
-        });
-    }
-    assert2::assert!(leader.core.role().is_leader());
+    elect_test_engine_with_helper(&mut leader, NodeId(2));
     upgrade_leader_to_kraft_v1(&mut leader);
     leader.log.advance_hwm(leader.log.log_end_offset() + 10);
     leader.clock_base = Instant::now() - Duration::from_millis(50);

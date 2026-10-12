@@ -479,8 +479,8 @@ mod unclean_restart {
         config::BrokerConfig,
         elr::{TopicElr, state::PartitionElr},
         test_support::{
-            IsrResponseCheck, LiveIsrSetup, accepted_isr_proposal, elr_topic_records,
-            start_broker_with_authorizer, started_controller_broker, wait_for_controller_leader,
+            IsrResponseCheck, elr_topic_records, propose_isr, start_broker_with_authorizer,
+            started_controller_broker, wait_for_controller_leader,
         },
     };
 
@@ -554,7 +554,7 @@ mod unclean_restart {
         config.node_id = RESTARTING;
         boot(broker, &mut config).await;
 
-        accepted_isr_proposal()
+        propose_isr()
             .broker(broker)
             .response_check(IsrResponseCheck::PartitionOnly)
             .call()

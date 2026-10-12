@@ -108,10 +108,7 @@ async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str, parti
 /// stop returning `UNSUPPORTED_VERSION`. `upgrade_type: 1` is UPGRADE.
 use support::streams::{active_partition_count, finalize_streams_version, follow_up};
 
-use crate::support::{
-    streams::{StreamsFollowUpSetup, StreamsMemberEpoch},
-    topics::{CreateTopicSetup, TopicPartitionCount},
-};
+use crate::support::topics::{CreateTopicSetup, TopicPartitionCount};
 
 fn topology(source_topic: &str) -> Topology {
     support::streams::topology(source_topic, Vec::new())

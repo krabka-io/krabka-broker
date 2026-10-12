@@ -13,8 +13,8 @@ use crate::{
     discover::{
         ArchiveInventory, PartitionInventory, inventory,
         test_support::{
-            PartitionKey, SegmentSetup, SnapshotSegmentSetup, args_from, single_segment_archive,
-            snapshot_segment, write_full_segment, write_snapshot,
+            PartitionKey, SegmentSetup, args_from, single_segment_archive, snapshot_segment,
+            write_full_segment, write_snapshot, write_topic_segment,
         },
     },
 };
@@ -282,13 +282,10 @@ async fn a_live_partition_missing_from_the_scan_entirely_is_a_disagreement() {
     let archive = tempfile::tempdir().expect("temp dir");
     let payments_id = Uuid::from_u128(2);
     let payments_seg = Uuid::from_u128(20);
-    write_full_segment()
+    write_topic_segment()
         .root(archive.path())
-        .partition(PartitionKey {
-            topic: "payments",
-            topic_id: payments_id,
-            ..Default::default()
-        })
+        .topic("payments")
+        .topic_id(payments_id)
         .segment_id(payments_seg)
         .call();
 

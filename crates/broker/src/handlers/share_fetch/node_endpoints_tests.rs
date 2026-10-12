@@ -37,10 +37,7 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
-    handlers::test_support::{
-        CreateTopicSetup, ReplicatedPartitionSetup, ShareWireSetup, configured_topic_request,
-        replicated_partition, share_fetch_wire,
-    },
+    handlers::test_support::{configured_topic_request, replicated_partition, share_fetch_wire},
     share_partition::session::FetchPartitions,
     test_support::{
         decode_response, encode_request, initialize_share_state, peer, principal, request_context,

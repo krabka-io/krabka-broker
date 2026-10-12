@@ -15,10 +15,7 @@ use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 pub(crate) use crate::support::topic_id_for;
 use crate::support::{
     client::connect_owned,
-    fetch::{
-        FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
-        SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
-    },
+    fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
 };
 
 /// Fetches all records from `(topic, partition)`, starting at `start_offset`,

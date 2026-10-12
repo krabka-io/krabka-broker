@@ -16,7 +16,7 @@ use crate::support::{
     fetch::{FetchLimits, RequestWaitMillis, named_topic_fetch},
     produce::{SinglePartitionProduceSetup, single_partition_produce},
     records::{batch_from_records, value_record},
-    wire::{WireFrameSetup, read_frame, request_body_capacity, request_frame, write_frame},
+    wire::{read_frame, request_body_capacity, request_frame, write_frame},
 };
 
 /// Produce `count` records of `record_bytes` bytes each to `(topic, 0)` over

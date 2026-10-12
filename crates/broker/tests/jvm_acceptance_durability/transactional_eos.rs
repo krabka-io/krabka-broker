@@ -19,8 +19,7 @@ use crate::{
         docker_run_kafka_tool,
     },
     support::{
-        ContainerInput, JvmBrokerSetup, JvmDockerSetup, controller_voters, init_jvm_tracing,
-        jvm_broker_config, jvm_docker_command,
+        ContainerInput, controller_voters, init_jvm_tracing, jvm_broker_config, jvm_docker_command,
     },
 };
 

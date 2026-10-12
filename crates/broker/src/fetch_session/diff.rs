@@ -75,7 +75,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::fetch_session::test_support::{ForgottenTopicSetup, forgotten_topic};
+    use crate::fetch_session::test_support::forgotten_topic;
 
     #[test]
     fn forgotten_topic_name_drops_only_matching_topic_partition() {
@@ -154,7 +154,7 @@ mod fuzz {
     use proptest::prelude::*;
 
     use super::{CachedPartitionState, FetchSessionKey, apply_incremental};
-    use crate::fetch_session::test_support::{ForgottenTopicSetup, forgotten_topic};
+    use crate::fetch_session::test_support::forgotten_topic;
 
     // name index 0 = empty (id-only wire form), 1 = "A", 2 = "B".
     fn name_of(i: u8) -> String {

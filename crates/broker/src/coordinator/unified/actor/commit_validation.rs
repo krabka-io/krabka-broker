@@ -125,8 +125,8 @@ mod tests {
         actor::{
             GroupKindTag,
             test_support::{
-                BidirectionalClassicSetup, bidirectional_coordinator, join_native_consumer,
-                make_coordinator, rpc, seeded_bidirectional_coordinator, spawn_and_downgrade,
+                bidirectional_coordinator, join_native_consumer, make_coordinator, rpc,
+                seeded_bidirectional_coordinator, spawn_and_downgrade,
             },
         },
         classic_state::OffsetEntry,

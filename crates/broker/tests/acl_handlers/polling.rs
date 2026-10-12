@@ -19,11 +19,7 @@ use crate::{
     },
     framing::CLIENT_ID,
     kafka_wire::PlainAuthenticationSetup,
-    support::{
-        discovery::topic_metadata_request,
-        poll::{RetrySetup, retry_response},
-        topics::metadata_topic,
-    },
+    support::{discovery::topic_metadata_request, poll::retry_response, topics::metadata_topic},
 };
 
 /// Retry `drive_produce_as_plain` against `topic`/partition-0 until the

@@ -7,12 +7,10 @@
 
 use std::net::SocketAddr;
 
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use tokio::net::TcpStream;
 
 use crate::{
-    kafka_wire, kafka_wire::ExchangeSetup as WireExchangeSetup, plaintext_wire::CLIENT_ID,
-    support::wire::HeaderEncoding as RequestHeaderEncoding,
+    kafka_wire, plaintext_wire::CLIENT_ID, support::wire::HeaderEncoding as RequestHeaderEncoding,
 };
 
 /// Drives `AlterPartitionReassignments` over a fresh PLAINTEXT connection. It

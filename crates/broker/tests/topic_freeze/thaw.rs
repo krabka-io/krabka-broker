@@ -20,7 +20,7 @@ use krabka_protocol::{
 use crate::{
     control_plane::{cluster_id, freeze_scope, set_freeze, wait_for_registry_len},
     signing::{SignedFreeze, signed_request},
-    support::{self, OperatorKeysSetup, OperatorSaslSetup},
+    support::{self, OperatorKeysSetup},
     wire::{CONTROL, accepted, create_topic, now_ms, refused},
 };
 

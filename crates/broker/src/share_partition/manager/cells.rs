@@ -370,7 +370,7 @@ mod tests {
         remote_reader::test_support::{sparse_remote_segment_reader_with_max_timestamp, tp},
         share_partition::{
             manager::test_support::{
-                DataPartitionSetup, manager, manager_with_image_and_partitions, open_data_partition,
+                manager, manager_with_image_and_partitions, open_data_partition,
             },
             source::test_support::diskless_partition,
             state::AcquisitionState,

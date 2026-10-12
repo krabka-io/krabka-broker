@@ -2,7 +2,8 @@
 
 use std::io;
 
-use krabka_units::ByteSize;
+use bytes::BufMut;
+use krabka_units::{ByteSize, convert::ByteSizeExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Write and flush a frame with the caller's original length diagnostic.
@@ -96,17 +97,7 @@ macro_rules! socket_round_trip_fixture {
         ) -> ::std::io::Result<Vec<u8>> {
             {
                 let exchange = $crate::kafka_wire::ExchangeSetup::for_socket(setup, $client_id);
-                $crate::kafka_wire::round_trip()
-                    .stream(stream)
-                    .api_key(exchange.api_key.0)
-                    .version(exchange.version.0)
-                    .correlation(exchange.correlation.0)
-                    .client_id(exchange.client_id)
-                    .header(exchange.header)
-                    .response_header(exchange.response_header)
-                    .body(body)
-                    .call()
-                    .await
+                $crate::kafka_wire::exchange_round_trip(stream, exchange, body).await
             }
         }
     };
@@ -132,17 +123,7 @@ macro_rules! flexible_round_trip_fixture {
                     },
                     $client_id,
                 );
-                $crate::kafka_wire::round_trip()
-                    .stream(stream)
-                    .api_key(exchange.api_key.0)
-                    .version(exchange.version.0)
-                    .correlation(exchange.correlation.0)
-                    .client_id(exchange.client_id)
-                    .header(exchange.header)
-                    .response_header(exchange.response_header)
-                    .body(body)
-                    .call()
-                    .await
+                $crate::kafka_wire::exchange_round_trip(stream, exchange, body).await
             }
         }
     };
@@ -215,8 +196,6 @@ pub fn request_frame(
         capacity,
         length_context,
     };
-    use bytes::BufMut;
-    use krabka_units::convert::ByteSizeExt;
     let WireFrameSetup {
         api_key,
         version,

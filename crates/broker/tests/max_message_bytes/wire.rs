@@ -13,10 +13,10 @@ use krabka_protocol::{
 
 use crate::support::{
     InProcess,
-    client::{BatchProduceSetup, produce_batch as client_produce_batch},
+    client::produce_batch as client_produce_batch,
     records::{batch_from_records, value_record},
     start, topic_id_for,
-    topics::{CreateTopicSetup, configured_topic_request},
+    topics::configured_topic_request,
 };
 
 /// Kafka's `max.message.bytes`, and its broker-wide default

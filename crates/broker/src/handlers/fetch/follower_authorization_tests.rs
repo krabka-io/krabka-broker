@@ -38,7 +38,7 @@ use crate::{
     codes,
     handlers::{
         acl_wire::CLUSTER_RESOURCE_NAME,
-        test_support::{ReplicatedTopicSetup, default_records_batch, seed_partition_replicas},
+        test_support::{default_records_batch, seed_partition_replicas},
     },
     partition::Partition,
     test_support::{append_partition_batch, start_broker_no_audit_with},

@@ -15,7 +15,7 @@ pub(crate) use crate::support::topic_id_for;
 use crate::support::{
     client::connect_client,
     records::value_record,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 pub(crate) async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str) {

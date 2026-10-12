@@ -211,7 +211,7 @@ mod tests {
             acl_wire::operation_to_wire, authorized_operations::authorized_operations_bits,
         },
         test_support::{
-            AllowAclSetup, DenyAll, KafkaErrorCode, allow_acl, peer, principal, request_context,
+            DenyAll, KafkaErrorCode, allow_acl, peer, principal, request_context,
             start_group_broker_no_audit, test_ctx,
         },
     };

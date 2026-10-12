@@ -157,16 +157,12 @@ mod tests {
     use super::*;
     use crate::{
         share_coordinator::coordinator::test_support::{
-            DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, state_batch as batch,
+            DeliveryAttemptCount, FixtureDeliveryState, state_batch as batch,
         },
         share_partition::state::{
             AckType, AcquiredRange,
-            test_support::{
-                AcquiredWindowSetup, DeadLetterQueue, DlqRangeSetup, LOCK, acquire_window,
-                dlq_range as range, t0,
-            },
+            test_support::{DeadLetterQueue, LOCK, acquire_window, dlq_range as range, t0},
         },
-        test_support::RecordCount,
     };
 
     fn state_with_dlq(end: Offset) -> AcquisitionState {

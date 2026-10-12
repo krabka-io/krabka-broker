@@ -7,12 +7,9 @@
 
 use assert2::{assert, check};
 
-use crate::{
-    streams_harness::{
-        active_partition_count, active_partitions_for, boot, connect, create_topic, describe,
-        finalize_streams_version, follow_up, join_and_converge, topology,
-    },
-    support::streams::{StreamsFollowUpSetup, StreamsMemberEpoch},
+use crate::streams_harness::{
+    active_partition_count, active_partitions_for, boot, connect, create_topic, describe,
+    finalize_streams_version, follow_up, join_and_converge, topology,
 };
 
 /// A lone stateless member joins a 2-partition topic and is assigned both tasks

@@ -291,7 +291,7 @@ mod tests {
     use crate::{
         coordinator::unified::test_support::wire_bytes,
         share_coordinator::coordinator::test_support::{
-            DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, state_batch,
+            DeliveryAttemptCount, FixtureDeliveryState, state_batch,
         },
     };
 

@@ -11,9 +11,7 @@ use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use crate::{
     N_RECORDS, NODE_A, NODE_B, NODE_C, TOPIC, WITNESS,
     support::{
-        client::{
-            ValueBatchSetup, ValueRecordCount, connect_owned, create_replicated_topic, value_batch,
-        },
+        client::{connect_owned, create_replicated_topic, value_batch},
         produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
     },
     view::wait_for_leader_and_isr,

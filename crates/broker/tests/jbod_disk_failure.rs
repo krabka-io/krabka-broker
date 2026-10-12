@@ -40,7 +40,6 @@ use crate::{
     support::{
         produce::{SinglePartitionProduceSetup, batch_request},
         records::{batch_from_records, value_record},
-        topics::TopicPartitionCount,
         wire::ApiRequestSetup,
     },
     two_dir_topic::{Setup, create_and_wait, start},
@@ -241,14 +240,17 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
     // Use a single-dir broker so the broker IS the controller leader.
     let (_primary, handle, addr) = single_directory_broker().await;
 
-    create_and_wait()
-        .handle(&handle)
-        .address(addr)
-        .client_id(CLIENT_ID)
-        .topic(TOPIC)
-        .partitions(N)
-        .call()
-        .await;
+    create_and_wait(
+        &handle,
+        addr,
+        Setup {
+            client_id: CLIENT_ID,
+            topic: TOPIC,
+            partitions: crate::support::topics::TopicPartitionCount(N),
+            ..Default::default()
+        },
+    )
+    .await;
 
     // Look up the topic UUID from the controller image so we can reference
     // the partition correctly in the request.

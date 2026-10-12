@@ -18,7 +18,7 @@ use crate::{
     broker::Broker,
     codes,
     features::METADATA_VERSION,
-    handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+    handlers::test_support::replicated_partition,
     test_support::{
         broker_registration, finalize_elr_version_on, peer, principal,
         start_broker_with_authorizer as start_broker, test_ctx,

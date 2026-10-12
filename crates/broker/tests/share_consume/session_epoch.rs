@@ -13,8 +13,8 @@ use crate::{
     harness::{ConsumptionFixture, join, produce_n, single_record_consumption_fixture, wire},
     share_rpc::{acquired_count, fetch_until_acquired, share_fetch_req},
     support::share::{
-        EmptySessionSetup, FetchByteLimit, ShareAck, ShareFetchSetup, ShareRecordsSetup,
-        ShareSessionEpoch, ShareSessionSetup, acknowledge_success, empty_session_request,
+        ShareAck, ShareFetchSetup, ShareSessionEpoch, ShareSessionSetup, acknowledge_success,
+        empty_session_request,
     },
 };
 

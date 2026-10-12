@@ -29,14 +29,12 @@ use tempfile::TempDir;
 
 use crate::support::{
     client::{BatchProduceSetup, connect_client},
-    durability::{ReplicatedTopicSetup, TopicReplicasSetup, replicated_topic_fixture},
-    fetch::{SinglePartitionFetchSetup, single_partition_fetch},
+    durability::replicated_topic_fixture,
+    fetch::single_partition_fetch,
     produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
-    producer::{ProducerRecordSetup, producer_record, transactional_producer},
+    producer::{producer_record, transactional_producer},
     registered_cluster, shutdown_cluster,
-    topics::{
-        CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor, configured_topic_request,
-    },
+    topics::{CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor},
 };
 
 mod support;
@@ -451,22 +449,7 @@ async fn create_topic_with_partitions(
     setup: CreateTopicSetup<'_>,
 ) {
     let client = connect_client(bootstrap.to_string(), None).await;
-    let resp = client
-        .send(
-            configured_topic_request()
-                .topic(setup.topic)
-                .configs(setup.configs)
-                .num_partitions(setup.num_partitions.0)
-                .replication_factor(setup.replication_factor.0)
-                .timeout(setup.timeout)
-                .call(),
-        )
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics failed: {resp:?}"
-    );
+    support::client::create_topic_named(&client, setup).await;
     for index in 0..setup.num_partitions.0 {
         broker
             .wait_until_partition_present(setup.topic, index)

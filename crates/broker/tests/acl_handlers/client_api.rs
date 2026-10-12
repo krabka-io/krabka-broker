@@ -16,7 +16,7 @@ use krabka_protocol::owned::{
 pub use crate::kafka_wire::{drive_produce_as_plain, single_record_produce_request};
 use crate::{
     FETCH_VERSION, INIT_PRODUCER_ID_VERSION, JOIN_GROUP_VERSION, METADATA_VERSION,
-    support::classic::{ClassicJoinSetup, ClassicTimeouts, classic_join_request, join_protocol},
+    support::classic::{ClassicTimeouts, classic_join_request, join_protocol},
 };
 
 crate::plain_request_driver_fixture!(pub drive_fetch_as_plain {

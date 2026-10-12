@@ -32,7 +32,7 @@ use tokio::{io::AsyncReadExt, net::TcpStream};
 
 use crate::{
     harness::{alice_password, round_trip, sasl_authenticate_round_trip, start_broker_stream},
-    kafka_wire::{ExchangeSetup as WireExchangeSetup, exchange},
+    kafka_wire::exchange,
     oauthbearer::{
         drive_inband_reauth, drive_sasl_oauthbearer_session_open, now_unix_secs,
         oauthbearer_fixture, oauthbearer_zero_skew_validator, unsecured_jws,

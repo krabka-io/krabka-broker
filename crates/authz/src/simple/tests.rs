@@ -11,7 +11,7 @@ use super::*;
 use crate::{
     authorize_topics,
     simple::test_support::{
-        AclSetup, AliceAuthorizer, QuerySetup, acl_image, addr, alice, check_resource_type_access,
+        AclSetup, AliceAuthorizer, acl_image, addr, alice, check_resource_type_access,
         check_topic_access, img, no_super, one_super, req, topic_acl,
     },
 };

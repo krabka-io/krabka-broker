@@ -10,7 +10,7 @@ use krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceRe
 use crate::{
     support::{
         self,
-        configs::{TopicConfigMutationSetup, alter_topic_config, topic_config},
+        configs::{alter_topic_config, topic_config},
     },
     wire::{
         MAX_MESSAGE_BYTES, accepted, create_topic, orders_fixture, produce_batch_of_wire_len,

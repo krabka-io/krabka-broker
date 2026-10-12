@@ -9,7 +9,7 @@ use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, StdTimer};
 use super::*;
 use crate::{
     oauth_jwks::test_support::{
-        JWKS_BODY, RefresherSetup, await_until, dormant_timer, make_signal_refresher, serve_jwks,
+        JWKS_BODY, await_until, dormant_timer, make_signal_refresher, serve_jwks,
         serve_jwks_counting, serve_jwks_https, test_refresher,
     },
     test_support::{BrokenTimer, TimerFailure},

@@ -70,7 +70,7 @@ use std::process::Command;
 use assert2::assert;
 use krabka_broker::BrokerHandle;
 
-use crate::support::{ContainerInput, JvmDockerSetup, jvm_docker_command, jvm_stdin_output};
+use crate::support::{ContainerInput, jvm_docker_command, jvm_stdin_output};
 
 /// The pinned release whose tools decode the topic.
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";

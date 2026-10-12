@@ -21,7 +21,6 @@ use crate::{
             seed_finished_segments, synth_export, tier, tp,
         },
     },
-    test_support::UnixMillis,
     time_util::now_ms,
 };
 

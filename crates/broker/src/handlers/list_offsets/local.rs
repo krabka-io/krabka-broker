@@ -98,9 +98,7 @@ mod tests {
     use crate::{
         broker::{Broker, BrokerHandle},
         codes,
-        delivery::test_support::{
-            BOUND_MS, NOW_MS, ScheduleSetup, register, scheduled_partition, wall_at,
-        },
+        delivery::test_support::{BOUND_MS, NOW_MS, register, scheduled_partition, wall_at},
         handlers::{
             RequestContext,
             list_offsets::{
@@ -112,7 +110,7 @@ mod tests {
                 },
                 test_support::{decode_response, encode_request, test_context},
             },
-            test_support::{ReplicatedPartitionSetup, replicated_partition},
+            test_support::replicated_partition,
         },
         test_support::{
             UnixMillis, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
@@ -316,9 +314,7 @@ mod tests {
         use krabka_log::LogConfig;
         use krabka_units::{bytes, millis};
 
-        use crate::delivery::test_support::{
-            DeliveryPartitionSetup, batch_at, partition_with_batches,
-        };
+        use crate::delivery::test_support::{batch_at, partition_with_batches};
 
         let timeline = qubit_clock::ManualMonotonicClock::new_shared();
         let clock: Arc<dyn qubit_clock::WallClock> = timeline.new_wall_clock(wall_at(NOW_MS));

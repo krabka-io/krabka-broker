@@ -509,7 +509,8 @@ pub async fn copy_exports(tier: &RemoteTier<'_>, exports: Vec<SegmentExport>) ->
 }
 
 /// Three consecutive ten-offset fixture segments, each with 64 bytes of data.
-pub fn three_exports() -> Vec<SegmentExport> {
+#[bon::builder]
+pub fn three_exports(#[builder(default = 300)] last_timestamp: i64) -> Vec<SegmentExport> {
     vec![
         synth_export().call(),
         synth_export()
@@ -518,7 +519,7 @@ pub fn three_exports() -> Vec<SegmentExport> {
             .call(),
         synth_export()
             .bounds(Offset(20)..=Offset(29))
-            .timestamp(300)
+            .timestamp(last_timestamp)
             .call(),
     ]
 }

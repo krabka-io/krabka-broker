@@ -11,9 +11,7 @@ use crate::{
     support::{
         self,
         produce::{SinglePartitionProduceSetup, batch_request},
-        records::{
-            ProducerSequence, ProducerValuesSetup, producer_values_batch as one_batch_with_producer,
-        },
+        records::producer_values_batch as one_batch_with_producer,
         transactions::claim_idempotent_producer,
     },
 };

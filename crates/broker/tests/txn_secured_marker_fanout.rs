@@ -59,17 +59,14 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 use crate::support::{
-    acl::{AllowAclSetup, use_simple_acl_authorizer},
+    acl::use_simple_acl_authorizer,
     controller_voters,
     discovery::named_topic_metadata,
     produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},
     shutdown_cluster,
-    topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
-    transactions::{
-        EndTransactionSetup, InitProducerSetup, ProducerIdentity, end_transaction_request,
-        init_producer_request,
-    },
+    topics::{creatable_topic, create_topic_request},
+    transactions::{ProducerIdentity, end_transaction_request, init_producer_request},
 };
 
 mod support;
@@ -466,7 +463,7 @@ fn apply_acls(cfg: &mut BrokerConfig) {
 }
 
 // An Allow ACL on a literal resource.
-use crate::support::{acl::resource_allow_acl as allow, wire::At};
+use crate::support::{acl::literal_allow_acl as allow, wire::At};
 
 /// One transactional `Produce` whose partition leader is not the transaction
 /// coordinator.

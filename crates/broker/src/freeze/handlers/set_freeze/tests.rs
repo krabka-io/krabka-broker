@@ -20,8 +20,7 @@ use crate::{
     handlers::RequestContext,
     operator_keys::{OperatorKeyEntry, OperatorKeys},
     test_support::{
-        FrozenTopicsImageSetup, OperatorKeyFileSetup, ed25519_public_key_file, frozen_topics_image,
-        principal, start_broker_no_audit_with,
+        ed25519_public_key_file, frozen_topics_image, principal, start_broker_no_audit_with,
     },
 };
 

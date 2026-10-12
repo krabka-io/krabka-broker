@@ -252,9 +252,7 @@ mod tests {
 
     use super::*;
     use crate::diskless::{
-        flusher::test_support::{
-            FlusherPartitionSetup, orders_partition, test_index_log, test_partition,
-        },
+        flusher::test_support::{orders_partition, test_index_log, test_partition},
         wal_object::WalObjectBuilder,
     };
 

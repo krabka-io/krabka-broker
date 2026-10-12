@@ -61,22 +61,19 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::{
-        coordinator::unified::{
-            config::NextGenConfig,
-            share::{
-                actor::{
-                    records::PendingShareRecords,
-                    test_support::{
-                        TopicMetadataSetup, make_coordinator_with_config, metadata_with_topic,
-                    },
+    use crate::coordinator::unified::{
+        config::NextGenConfig,
+        share::{
+            actor::{
+                records::PendingShareRecords,
+                test_support::{
+                    TopicMetadataSetup, make_coordinator_with_config, metadata_with_topic,
                 },
-                persistence::ShareGroupMetadataValue,
-                state::ShareMemberState,
             },
-            test_support::{check_two_members_expired, expired_session_last_seen},
+            persistence::ShareGroupMetadataValue,
+            state::ShareMemberState,
         },
-        test_support::PartitionCount,
+        test_support::{check_two_members_expired, expired_session_last_seen},
     };
 
     /// Kafka runs a session timer per member, and each one that fires runs

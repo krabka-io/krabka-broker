@@ -182,7 +182,7 @@ mod tests {
         break_glass::gate::tests::{APPROVED_PROPOSAL_ID, approved_proposal},
         config::BreakGlassConfig,
         handlers::alter_partition_reassignments::test_support::{
-            ReassignmentImageSetup, img_with, pending_reassignment_image,
+            img_with, pending_reassignment_image,
         },
         test_support::{ReassignmentSetup, start_broker_no_audit_with},
     };

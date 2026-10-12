@@ -9,10 +9,10 @@ use crate::{
     config_keys,
     handlers::describe_configs::{
         resources::tests::{describe_topic, entry_named},
-        test_support::{TopicConfigSetup, set_topic_config},
+        test_support::set_topic_config,
         wire::{CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_TOPIC},
     },
-    test_support::{FrozenTopicsImageSetup, frozen_topics_image},
+    test_support::frozen_topics_image,
 };
 
 /// A metadata image whose freeze registry holds `entries`, and nothing else. A

@@ -27,10 +27,7 @@ use crate::{
     rlmm_round_trip::remote_log_files,
     run_broker_test,
     support::{
-        fetch::{
-            FetchLimits, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
-            fetch_partition, single_partition_fetch,
-        },
+        fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
         topic_id_for,
         topics::topic_configs,
     },

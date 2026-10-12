@@ -154,10 +154,10 @@ mod tests {
     use super::*;
     use crate::{
         isr_maintenance::test_support::{
-            IsrSetup, fake_source, fixture_partition, partition, set_replica_state, topic,
+            fake_source, fixture_partition, partition, set_replica_state, topic,
         },
         metadata_source::MetadataSource,
-        test_support::{PartitionEpoch, StandalonePartitionSetup, plaintext_controller_dialer},
+        test_support::plaintext_controller_dialer,
     };
 
     /// One scan of a leader partition whose only follower last caught up
@@ -179,12 +179,12 @@ mod tests {
             .topic("t")
             .call();
         part.current_leader.store(1, Ordering::Release);
-        set_replica_state()
-            .part(&part)
-            .leader_epoch(10)
-            .stale_followers(&[(NodeId(2), Duration::from_secs(30))])
-            .call()
-            .await;
+        set_replica_state(
+            &part,
+            partition().leader_epoch(10).call(),
+            &[(NodeId(2), Duration::from_secs(30))],
+        )
+        .await;
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&topic("t", uuid::Uuid::from_u128(1)));
         image.apply(&partition().leader_epoch(10).partition_epoch(4).call());

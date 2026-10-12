@@ -61,8 +61,9 @@ pub(super) fn sessionless_request(
     version: ApiVersion,
     #[builder(into, default)] replica: FetchReplicaId,
 ) -> FetchRequest {
-    let setup = SessionlessFetchSetup { version, replica };
     use krabka_protocol::owned::fetch_request::ReplicaState;
+
+    let setup = SessionlessFetchSetup { version, replica };
     let version = setup.version.0;
     let replica_id = setup.replica.0;
     let (replica_id, replica_state) = if version >= 15 {

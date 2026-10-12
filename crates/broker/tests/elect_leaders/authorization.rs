@@ -13,10 +13,10 @@ use krabka_broker::Broker;
 use krabka_security::SaslMechanism;
 
 use crate::{
-    kafka_wire::{PlainAuthenticationSetup, SaslTopicSetup},
+    kafka_wire::PlainAuthenticationSetup,
     sasl::{create_topic_sasl_plain, drive_elect_leaders_sasl_plain},
     support::{
-        acl::{TopicAclSetup, topic_acl_record, use_simple_acl_authorizer},
+        acl::{topic_acl_record, use_simple_acl_authorizer},
         admin::ElectionSetup,
         retry::{all_cluster_authorization_failed, retry_until},
         sasl::sasl_temp_config,

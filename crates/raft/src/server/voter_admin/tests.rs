@@ -37,6 +37,36 @@ struct VoterResponseSetup<'a> {
     context: &'a str,
 }
 
+async fn remove_response_for(
+    request: &RemoveRaftVoterRequest,
+    engine: &KraftController,
+    version: VoterApiVersion,
+    context: &str,
+) -> RemoveRaftVoterResponse {
+    remove_response()
+        .request(request)
+        .engine(engine)
+        .version(version)
+        .context(context)
+        .call()
+        .await
+}
+
+async fn add_response_for(
+    request: AddRaftVoterRequest,
+    engine: &KraftController,
+    version: VoterApiVersion,
+    context: &str,
+) -> AddRaftVoterResponse {
+    add_response()
+        .request(request)
+        .engine(engine)
+        .version(version)
+        .context(context)
+        .call()
+        .await
+}
+
 /// A wire listener set is usable only when every entry is named, hosted
 /// and on a real port, no name repeats, and there is at least one.
 #[test]
@@ -160,6 +190,12 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     let cluster_id = engine.current_image().cluster_id().to_string();
 
     let real_directory = krabka_protocol::primitives::uuid::Uuid([7u8; 16]);
+    let remove_request = |cluster_id, voter_id, voter_directory_id| RemoveRaftVoterRequest {
+        cluster_id,
+        voter_id,
+        voter_directory_id,
+        ..Default::default()
+    };
     let invalid_voter = RemoveRaftVoterResponse {
         error_code: INVALID_REQUEST,
         error_message: Some("Remove voter request didn't include a valid voter".into()),
@@ -204,12 +240,7 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     ];
 
     for (what, request_cluster_id, voter_id, voter_directory_id, expected) in cases {
-        let request = RemoveRaftVoterRequest {
-            cluster_id: request_cluster_id,
-            voter_id,
-            voter_directory_id,
-            ..Default::default()
-        };
+        let request = remove_request(request_cluster_id, voter_id, voter_directory_id);
         let response = remove_response()
             .request(&request)
             .engine(&engine)
@@ -222,19 +253,14 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
 
     // Omitting the cluster id entirely is allowed: the field is optional,
     // and only a mismatch is a refusal.
-    let request = RemoveRaftVoterRequest {
-        cluster_id: None,
-        voter_id: 2,
-        voter_directory_id: real_directory,
-        ..Default::default()
-    };
-    let response = remove_response()
-        .request(&request)
-        .engine(&engine)
-        .version(response_setup.version)
-        .context(response_setup.context)
-        .call()
-        .await;
+    let request = remove_request(None, 2, real_directory);
+    let response = remove_response_for(
+        &request,
+        &engine,
+        response_setup.version,
+        response_setup.context,
+    )
+    .await;
     check!(
         response.error_code != INVALID_REQUEST,
         "a well-formed request reaches the quorum, got {}",
@@ -242,19 +268,14 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     );
 
     // voter_id == 0 is valid (non-negative) and must not be rejected with INVALID_REQUEST
-    let request = RemoveRaftVoterRequest {
-        cluster_id: None,
-        voter_id: 0,
-        voter_directory_id: real_directory,
-        ..Default::default()
-    };
-    let response = remove_response()
-        .request(&request)
-        .engine(&engine)
-        .version(response_setup.version)
-        .context(response_setup.context)
-        .call()
-        .await;
+    let request = remove_request(None, 0, real_directory);
+    let response = remove_response_for(
+        &request,
+        &engine,
+        response_setup.version,
+        response_setup.context,
+    )
+    .await;
     check!(
         response.error_code != INVALID_REQUEST,
         "voter_id 0 reaches the quorum, got {}",
@@ -362,39 +383,27 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
     check!(response.error_code == 104);
 
     // Matching cluster_id is accepted (does not return INVALID_REQUEST)
-    let request = AddRaftVoterRequest {
-        cluster_id: Some(engine.current_image().cluster_id().to_string()),
-        voter_id: 2,
-        voter_directory_id: directory,
-        listeners: vec![good_listener()],
-        ..Default::default()
-    };
-    let response = add_response()
-        .request(request)
-        .engine(&engine)
-        .version(response_setup.version)
-        .context(response_setup.context)
-        .call()
-        .await;
+    let request = build_candidate_request(Some(engine.current_image().cluster_id().to_string()));
+    let response = add_response_for(
+        request,
+        &engine,
+        response_setup.version,
+        response_setup.context,
+    )
+    .await;
     check!(response.error_code != INVALID_REQUEST);
 
     // At kraft.version >= 1, AddRaftVoter probes the candidate listeners.
     // Unreachable candidate fails probe with code 7.
     activate_dynamic_membership(&engine).await;
-    let request = AddRaftVoterRequest {
-        cluster_id: None,
-        voter_id: 2,
-        voter_directory_id: directory,
-        listeners: vec![good_listener()],
-        ..Default::default()
-    };
-    let response = add_response()
-        .request(request)
-        .engine(&engine)
-        .version(response_setup.version)
-        .context(response_setup.context)
-        .call()
-        .await;
+    let request = build_candidate_request(None);
+    let response = add_response_for(
+        request,
+        &engine,
+        response_setup.version,
+        response_setup.context,
+    )
+    .await;
     check!(
         response.error_code == 7,
         "ApiVersions probe failed on unreachable candidate"

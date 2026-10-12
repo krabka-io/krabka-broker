@@ -315,9 +315,7 @@ mod tests {
                 GroupFeatureLevel, acl_authorizer, image_with_group_version, set_group_version,
             },
         },
-        test_support::{
-            AllowAclSetup, allow_acl, start_group_broker_no_audit, start_group_broker_with,
-        },
+        test_support::{allow_acl, start_group_broker_no_audit, start_group_broker_with},
     };
 
     const VERSION: i16 = krabka_protocol::owned::consumer_group_describe_request::MAX_VERSION;

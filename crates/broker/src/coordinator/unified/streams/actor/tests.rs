@@ -24,9 +24,9 @@ use crate::{
             },
             state::{StreamsGroupState, StreamsMemberState},
         },
-        test_support::{MemberEpoch, assert_single_member_limit, heartbeat_write_failures},
+        test_support::{assert_single_member_limit, heartbeat_write_failures},
     },
-    test_support::{StreamsJoinSetup, streams_join_request},
+    test_support::streams_join_request,
 };
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
@@ -519,12 +519,12 @@ struct SingleSubtopologySetup {
 fn one_subtopology(
     #[builder(default)] storage: TopologyStorage,
 ) -> krabka_protocol::owned::streams_group_heartbeat_request::Topology {
-    let setup = SingleSubtopologySetup { storage };
     use krabka_protocol::owned::{
         common::streams_group_heartbeat_request::topic_info::TopicInfo,
         streams_group_heartbeat_request::{Subtopology, Topology},
     };
 
+    let setup = SingleSubtopologySetup { storage };
     Topology {
         epoch: 1,
         subtopologies: vec![Subtopology {

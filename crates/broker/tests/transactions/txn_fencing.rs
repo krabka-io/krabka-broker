@@ -17,8 +17,7 @@ use crate::{
         consumer_groups::joining_consumer,
         producer::transactional_producer,
         transactions::{
-            InitProducerSetup, ProducerIdentity, init_producer_request, txn_offset_partition,
-            txn_offset_topic,
+            ProducerIdentity, init_producer_request, txn_offset_partition, txn_offset_topic,
         },
     },
     txn_harness::{boot_single, boot_single_trunk, create_topic, init_transaction, rec, send_ok},

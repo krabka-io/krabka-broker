@@ -32,8 +32,7 @@
 use assert2::{assert, check};
 
 use crate::support::{
-    client::connect_owned,
-    configs::{ClientMetricsSubscriptionSetup, client_metrics_subscription},
+    client::connect_owned, configs::client_metrics_subscription,
     discovery::api_versions_request_for,
 };
 mod support;

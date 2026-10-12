@@ -16,8 +16,8 @@ use crate::{
     compact::{
         build_offset_map,
         test_support::{
-            RETENTION, TransactionalRecordSetup, control_batch, make_record, rewrite_all,
-            rewrite_with_map, round_over, transactional_record, write_sealed_batches,
+            RETENTION, control_batch, make_record, rewrite_all, rewrite_with_map, round_over,
+            transactional_record, write_sealed_batches,
         },
     },
     txn_index::{AbortedTxn, TxnIndex},

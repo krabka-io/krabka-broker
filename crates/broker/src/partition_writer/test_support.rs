@@ -21,7 +21,6 @@ use crate::{
     partition::{AppendedBatch, ProduceData, ProduceJob, WriterMessage},
     producer_state::ProducerState,
     replica_state::ReplicaState,
-    test_support::{EmptyPayloadBatchSetup, RecordCount},
     wal::{OffsetSequencer, SharedWal, WalStore},
 };
 

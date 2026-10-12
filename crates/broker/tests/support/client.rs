@@ -113,13 +113,7 @@ pub async fn http_get(addr: SocketAddr, path: &str, flush: bool) -> String {
 }
 
 pub async fn create_topic_with(client: &Client, setup: CreateTopicSetup<'_>) -> WireUuid {
-    let mut request = configured_topic_request()
-        .topic(setup.topic)
-        .configs(setup.configs)
-        .num_partitions(setup.num_partitions.0)
-        .replication_factor(setup.replication_factor.0)
-        .timeout(setup.timeout)
-        .call();
+    let mut request = configured_request(setup);
     create_topic_spec(
         client,
         request.topics.remove(0),
@@ -307,18 +301,7 @@ pub async fn metadata_fetch(
 /// Panics if the request fails, its topic row is missing, or creation is rejected.
 pub async fn create_configured_topic(client: &Client, setup: CreateTopicSetup<'_>) {
     let topic = setup.topic;
-    let response = client
-        .send(
-            configured_topic_request()
-                .topic(setup.topic)
-                .configs(setup.configs)
-                .num_partitions(setup.num_partitions.0)
-                .replication_factor(setup.replication_factor.0)
-                .timeout(setup.timeout)
-                .call(),
-        )
-        .await
-        .expect("CreateTopics");
+    let response = send_topic_creation(client, configured_request(setup)).await;
     let created = response.topics.first().expect("one topic result");
     assert!(
         created.error_code == 0,
@@ -409,50 +392,38 @@ pub async fn standalone_topic(topic: &str) -> (tempfile::TempDir, BrokerHandle, 
 /// Named-topic creation with the original producer and topic-description success diagnostic.
 pub async fn create_topic_named(client: &Client, setup: CreateTopicSetup<'_>) {
     let name = setup.topic;
-    let response = send_topic_creation(client, setup).await;
+    let response = send_topic_creation(client, configured_request(setup)).await;
     assert!(
         response.topics[0].error_code == 0,
         "{name} create: {response:?}"
     );
 }
 
-/// Connect through the fixture broker and create a topic with scenario-specific placement.
-#[bon::builder]
+/// Connect through the fixture broker and send a configured topic request.
 pub async fn create_topic_for_broker(
     broker: &BrokerHandle,
-    #[builder(default = "orders")] topic: &'_ str,
-    #[builder(default = &[])] configs: &'_ [(&'_ str, &'_ str)],
-    #[builder(into, default = TopicPartitionCount(1))] num_partitions: TopicPartitionCount,
-    #[builder(into, default = TopicReplicationFactor(1))]
-    replication_factor: TopicReplicationFactor,
-    #[builder(default = krabka_units::millis(5_000))] timeout: krabka_units::Time,
+    request: krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
 ) {
-    let setup = CreateTopicSetup {
-        topic,
-        configs,
-        num_partitions,
-        replication_factor,
-        timeout,
-    };
     let client = connect_with_context(broker.listen_addr().to_string(), None, "client").await;
-    let response = send_topic_creation(&client, setup).await;
+    let response = send_topic_creation(&client, request).await;
     assert!(response.topics[0].error_code == 0, "{response:?}");
 }
 
-async fn send_topic_creation(
+pub async fn send_topic_creation(
     client: &Client,
-    setup: CreateTopicSetup<'_>,
+    request: krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
 ) -> krabka_protocol::owned::create_topics_response::CreateTopicsResponse {
-    client
-        .send(
-            configured_topic_request()
-                .topic(setup.topic)
-                .configs(setup.configs)
-                .num_partitions(setup.num_partitions.0)
-                .replication_factor(setup.replication_factor.0)
-                .timeout(setup.timeout)
-                .call(),
-        )
-        .await
-        .expect("CreateTopics")
+    client.send(request).await.expect("CreateTopics")
+}
+
+fn configured_request(
+    setup: CreateTopicSetup<'_>,
+) -> krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+    configured_topic_request()
+        .topic(setup.topic)
+        .configs(setup.configs)
+        .num_partitions(setup.num_partitions.0)
+        .replication_factor(setup.replication_factor.0)
+        .timeout(setup.timeout)
+        .call()
 }

@@ -14,7 +14,7 @@ use crate::{
     network::{
         dispatch::{serve_connection_stream, test_support::plaintext_loop},
         fetch_writer::SendfileSink,
-        test_support::{RequestFrameSetup, request_frame},
+        test_support::request_frame,
     },
     test_support::start_broker_with,
 };

@@ -14,8 +14,8 @@ use krabka_client_producer::Producer;
 
 use crate::{
     harness::{count_topic_dirs, wait_for_move_complete},
-    support::{producer::enqueue_unkeyed_values, topics::TopicPartitionCount},
-    two_dir_topic::{Setup, start},
+    support::producer::enqueue_unkeyed_values,
+    two_dir_topic::start,
     wire::{CLIENT_ID, alter_replica_log_dirs},
 };
 

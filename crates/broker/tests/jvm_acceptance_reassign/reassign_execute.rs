@@ -15,7 +15,7 @@ use crate::{
     },
     jvm_acceptance::{KAFKA_IMAGE_TXN, broker0_advertised, verify_console_reassignment},
     oracle::{AssignedTopicCommandSetup, CliRun, OracleComparison},
-    support::{ContainerInput, JvmDockerSetup, jvm_docker_command},
+    support::{ContainerInput, jvm_docker_command},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

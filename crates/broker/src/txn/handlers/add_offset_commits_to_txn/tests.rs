@@ -4,11 +4,8 @@ use assert2::{assert, check};
 
 use super::*;
 use crate::{
-    partition::Partition,
-    partition_registry::PartitionRegistry,
-    producer_id_manager::ProducerIdManager,
-    test_support::{StandalonePartitionSetup, open_partition},
-    txn::bootstrap,
+    partition::Partition, partition_registry::PartitionRegistry,
+    producer_id_manager::ProducerIdManager, test_support::open_partition, txn::bootstrap,
 };
 
 const TID: &str = "tid-offsets";

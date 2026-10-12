@@ -273,9 +273,7 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::quota::test_support::{
-        QuotaRecordSetup, QuotaValue, image_with_quota, image_with_quotas, quota_record,
-    };
+    use crate::quota::test_support::{image_with_quota, image_with_quotas, quota_record};
 
     /// An IP literal names one address whatever its spelling, and an
     /// IPv4-mapped IPv6 address is the IPv4 address it maps to.

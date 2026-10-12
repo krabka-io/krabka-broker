@@ -681,7 +681,7 @@ mod tests {
             ))
             .event(2_500)
             .call();
-        let response = list_one(&client, TOPIC, 1_500).await;
+        let response = list_one(client, TOPIC, 1_500).await;
         assert!(
             response.error_code == codes::NONE
                 && response.offset == 2

@@ -15,7 +15,7 @@ use crate::{
     log_dir_status::LogDirRegistry,
     partition::Partition,
     partition_registry::PartitionRegistry,
-    test_support::{CommittedPartitionSetup, block_log_artifact_paths, committed_partition},
+    test_support::{block_log_artifact_paths, committed_partition},
 };
 
 fn keyed_batch(base: i64, key: &[u8], value: &[u8]) -> RecordBatch {

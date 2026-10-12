@@ -11,7 +11,7 @@ use krabka_broker::{BootstrapMode, Broker, config::NodeRole, coordinator::AUDIT_
 use krabka_raft::NodeId;
 use tempfile::TempDir;
 
-use crate::support::{ClusterNodeSetup, NodeIndex, controller_voters};
+use crate::support::controller_voters;
 
 mod support;
 

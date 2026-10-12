@@ -13,9 +13,8 @@ use crate::{
     jvm_acceptance::{KAFKA_IMAGE, consume_committed_at},
     prepare_replication_topic,
     support::{
-        ContainerInput, JvmDockerSetup, client::connect_with_context,
-        discovery::metadata_first_leader, init_jvm_tracing, jvm_docker_command, jvm_output_lines,
-        start_jvm_cluster,
+        ContainerInput, client::connect_with_context, discovery::metadata_first_leader,
+        init_jvm_tracing, jvm_docker_command, jvm_output_lines, start_jvm_cluster,
     },
 };
 

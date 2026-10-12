@@ -6,10 +6,7 @@ use krabka_log::Offset;
 use tokio::sync::oneshot;
 
 use super::*;
-use crate::{
-    partition_writer::test_support::sample_batch,
-    test_support::{EmptyPayloadBatchSetup, RecordCount},
-};
+use crate::partition_writer::test_support::sample_batch;
 
 #[tokio::test]
 async fn writer_handles_replicate_with_caller_offset() {

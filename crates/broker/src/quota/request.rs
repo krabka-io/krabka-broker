@@ -65,9 +65,7 @@ mod tests {
     use krabka_units::{millis, secs};
 
     use super::*;
-    use crate::quota::test_support::{
-        QuotaRecordSetup, QuotaValue, image_with_quotas, quota_record,
-    };
+    use crate::quota::test_support::{image_with_quotas, quota_record};
 
     crate::quota::test_support::image_builder!(img_with_quota, "request_percentage");
 

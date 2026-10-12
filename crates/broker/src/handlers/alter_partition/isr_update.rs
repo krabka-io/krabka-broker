@@ -270,8 +270,7 @@ mod tests {
     use crate::{
         handlers::alter_partition::test_support::{
             ONE_REGISTERED_BROKER, PartitionFixture, THREE_REGISTERED_BROKERS,
-            TWO_REGISTERED_BROKERS, ThreeBrokerEpochsSetup, bs, image_with, image_with_partition,
-            three_broker_states,
+            TWO_REGISTERED_BROKERS, bs, image_with, image_with_partition, three_broker_states,
         },
         test_support::{BrokerEpoch, PartitionEpoch, WireBrokerId},
     };
@@ -478,17 +477,25 @@ mod tests {
         )
     }
 
+    fn response_for_non_default_partition(
+        image: &krabka_metadata::MetadataImage,
+        changes: &mut Vec<MetadataRecord>,
+        leader_epoch: i32,
+    ) -> RespPartitionData {
+        handle_partition()
+            .image(image)
+            .changes(changes)
+            .partition(7)
+            .leader_epoch(leader_epoch)
+            .new_isr(&[WireBrokerId(2), WireBrokerId(4)])
+            .call()
+    }
+
     #[test]
     fn success_response_preserves_non_default_partition_fields() {
         let image = non_default_partition_image();
         let mut changes = Vec::new();
-        let resp = handle_partition()
-            .image(&image)
-            .changes(&mut changes)
-            .partition(7)
-            .leader_epoch(9)
-            .new_isr(&[WireBrokerId(2), WireBrokerId(4)])
-            .call();
+        let resp = response_for_non_default_partition(&image, &mut changes, 9);
 
         let expected = tagged_wire!(RespPartitionData {
             partition_index: 7,
@@ -679,13 +686,7 @@ mod tests {
     fn error_response_matches_kafkas_default_fields() {
         let image = non_default_partition_image();
         let mut changes = Vec::new();
-        let resp = handle_partition()
-            .image(&image)
-            .changes(&mut changes)
-            .partition(7)
-            .leader_epoch(8)
-            .new_isr(&[WireBrokerId(2), WireBrokerId(4)])
-            .call();
+        let resp = response_for_non_default_partition(&image, &mut changes, 8);
 
         let expected = RespPartitionData {
             partition_index: 7,

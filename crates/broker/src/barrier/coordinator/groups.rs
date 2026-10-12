@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use crate::{
         barrier::{
-            coordinator::test_support::{Fixture, GROUP, GroupSpecSetup, spec},
+            coordinator::test_support::{Fixture, GROUP, spec},
             test_support::topic_records,
         },
         coordinator::unified::persistence::MAX_STRING_BYTES,

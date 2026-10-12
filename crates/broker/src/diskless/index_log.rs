@@ -459,12 +459,8 @@ mod tests {
         *,
     };
     use crate::{
-        diskless::{
-            index_log::test_support::RacingAppendSetup,
-            wal_index::{WalFlushRecord, WalIndexEntry},
-        },
+        diskless::wal_index::{WalFlushRecord, WalIndexEntry},
         metrics::BrokerMetrics,
-        test_support::UnixMillis,
     };
 
     #[derive(Clone, Copy)]
@@ -527,7 +523,7 @@ mod tests {
         }
     }
 
-    use super::test_support::{WalFlushSetup, flush_record};
+    use super::test_support::{flush_record, second_object_flush_record};
 
     async fn seeded_index(
         event_log: Arc<dyn MetadataEventLog>,
@@ -724,14 +720,7 @@ mod tests {
         // The previous leader's in-flight flush lands while this projection is
         // subscribing. Pacing the replay keeps the assertion off the pump's
         // heels, so a gate that stopped one record short stays caught short.
-        let racing = flush_record()
-            .topic_id(WalFlushSetup::second_object(topic_id).topic_id)
-            .object_key(WalFlushSetup::second_object(topic_id).object_key)
-            .first_offset(WalFlushSetup::second_object(topic_id).first_offset)
-            .last_offset(WalFlushSetup::second_object(topic_id).last_offset)
-            .max_timestamp(WalFlushSetup::second_object(topic_id).max_timestamp)
-            .byte_len(WalFlushSetup::second_object(topic_id).byte_len)
-            .call();
+        let racing = second_object_flush_record(topic_id);
         let racing_key = WalIndexKey::from(&racing.entries[0]).to_bytes();
         let restarted = DisklessIndexLog::start(
             RacingAppendLog::build()
@@ -891,16 +880,7 @@ mod tests {
         transport.set_outcome(PublishOutcome::Fail);
 
         let publish_error = index
-            .publish_flush(
-                &flush_record()
-                    .topic_id(WalFlushSetup::second_object(topic_id).topic_id)
-                    .object_key(WalFlushSetup::second_object(topic_id).object_key)
-                    .first_offset(WalFlushSetup::second_object(topic_id).first_offset)
-                    .last_offset(WalFlushSetup::second_object(topic_id).last_offset)
-                    .max_timestamp(WalFlushSetup::second_object(topic_id).max_timestamp)
-                    .byte_len(WalFlushSetup::second_object(topic_id).byte_len)
-                    .call(),
-            )
+            .publish_flush(&second_object_flush_record(topic_id))
             .await
             .unwrap_err();
         assert!(publish_error.to_string().contains("diskless index publish"));

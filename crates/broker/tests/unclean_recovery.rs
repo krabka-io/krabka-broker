@@ -88,7 +88,6 @@ use crate::kafka_wire::create_assigned_topic_plaintext as create_topic_plaintext
 /// the top-level `error_code == 0`, and returns the per-partition
 /// `(partition_id, error_code)` rows for `topic`.
 use crate::kafka_wire::elect_leaders_plaintext as drive_elect_leaders;
-use crate::kafka_wire::{AssignedTopicExchangeSetup, ElectionExchangeSetup};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Polling helpers

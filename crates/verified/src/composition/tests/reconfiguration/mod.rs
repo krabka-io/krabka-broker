@@ -20,6 +20,11 @@ enum RequestProperty {
     TargetCaughtUp = 1 << 6,
 }
 
+use RequestProperty::{
+    CompatibleTargetVersion, ControlsCommitted, EpochCommitted, Leader, NoPendingChange,
+    TargetCaughtUp, VotersSupportVersion,
+};
+
 impl RequestFlags {
     fn contains(self, property: RequestProperty) -> bool {
         self.0 & property as u16 != 0
@@ -125,10 +130,6 @@ fn generated_request(
         membership,
         version,
         requested,
-    };
-    use RequestProperty::{
-        CompatibleTargetVersion, ControlsCommitted, EpochCommitted, Leader, NoPendingChange,
-        TargetCaughtUp, VotersSupportVersion,
     };
     (
         ReconfigurationLeadership {

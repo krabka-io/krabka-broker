@@ -30,7 +30,7 @@ use crate::{
     api_catalog::UnstableApiVersions,
     network::{client::InterBrokerClient, request::parse_request},
     test_support::{
-        ControllerPeerAllowed, DescribedCreationSetup, FakeMetadataSource, GrantsInPrincipalName,
+        ControllerPeerAllowed, FakeMetadataSource, GrantsInPrincipalName,
         described_creation_configs, principal, request_context, start_broker_no_audit,
         start_broker_no_audit_with,
     },

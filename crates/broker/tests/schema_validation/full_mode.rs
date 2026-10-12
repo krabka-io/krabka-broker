@@ -9,8 +9,8 @@
 use assert2::check;
 
 use crate::harness::{
-    INVALID_RECORD, KNOWN_ID, SchemaTopicSetup, VALIDATED, create_topic, framed,
-    mock_topic_fixture, order_avro_body, produce_value,
+    INVALID_RECORD, KNOWN_ID, VALIDATED, create_topic, framed, mock_topic_fixture, order_avro_body,
+    produce_value,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -102,7 +102,7 @@ mod tests {
     use super::Uncommitted;
     use crate::partition::{
         Partition,
-        test_support::{CommitFixtureLeader, CommitPartitionSetup, commit_partition},
+        test_support::{CommitFixtureLeader, commit_partition},
     };
 
     /// Whether `partition` still has the leader and leader epoch it had when

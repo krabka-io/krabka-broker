@@ -338,8 +338,8 @@ mod tests {
             ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo,
         },
         test_support::{
-            AssignmentDeletionSetup, check_replay_cases, proto_uuid, replay_fixtures,
-            replay_tombstone_constructor, share_member,
+            check_replay_cases, proto_uuid, replay_fixtures, replay_tombstone_constructor,
+            share_member,
         },
     };
 

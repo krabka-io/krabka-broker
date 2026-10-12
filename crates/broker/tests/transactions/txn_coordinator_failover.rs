@@ -23,12 +23,11 @@ use crate::{
         shutdown_cluster,
         topics::{AssignedTopicSetup, metadata_topic},
         transaction_wire::{
-            AssignedTransactionTopicSetup, TransactionProduceSetup, add_partition_request,
-            coordinator_loading, create_assigned_topic, init_producer_request,
-            initialized_identity, partition_added, partition_leader, produce_fixture,
-            read_committed_through, retry_coordinator,
+            add_partition_request, coordinator_loading, create_assigned_topic,
+            init_producer_request, initialized_identity, partition_added, partition_leader,
+            produce_fixture, read_committed_through, retry_coordinator,
         },
-        transactions::{EndTransactionSetup, ProducerIdentity, end_transaction_request},
+        transactions::{ProducerIdentity, end_transaction_request},
     },
     txn_harness::registered_transaction_cluster,
 };

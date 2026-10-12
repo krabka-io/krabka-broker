@@ -8,7 +8,7 @@ use assert2::assert;
 
 use crate::support::{
     fetch::{FetchLimits, RequestWaitMillis, fetch_request_for},
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 mod support;
 

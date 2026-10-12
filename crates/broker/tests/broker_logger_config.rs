@@ -12,8 +12,8 @@ use assert2::{assert, check};
 use crate::support::{
     client::connect_owned,
     configs::{
-        ConfigOperation, IncrementalConfigsSetup, describe_resource, incremental_config,
-        incremental_request, incremental_resource,
+        ConfigOperation, describe_resource, incremental_config, incremental_request,
+        incremental_resource,
     },
 };
 mod support;

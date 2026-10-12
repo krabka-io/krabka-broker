@@ -2,12 +2,11 @@
 use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
 
 use crate::support::{
-    client::{BatchProduceSetup, produce_batch},
+    client::produce_batch,
     produce::ProduceTimeoutMillis,
     records::batch_from_records,
     topics::{
-        AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicRequestSetup,
-        CreateTopicsTimeoutMillis, assigned_topic, creatable_topic, create_topic_request,
+        AssignedTopicSetup, assigned_topic, creatable_topic, create_topic_request,
         create_topic_request_with_setup, topic_configs,
     },
 };

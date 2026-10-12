@@ -7,6 +7,8 @@ use krabka_metadata::{
     AclOperation, FeatureLevelRecord, MetadataImage, MetadataRecord, ResourceType,
 };
 
+use crate::test_support::principal as make_principal;
+
 pub(super) fn acl_authorizer() -> SimpleAclAuthorizer {
     SimpleAclAuthorizer::new(HashSet::new())
 }
@@ -35,7 +37,7 @@ pub(super) fn check_group_read_denied(
     };
     let authorizer = acl_authorizer();
     let image = MetadataImage::new(uuid::Uuid::nil());
-    let principal = crate::test_support::principal(setup.principal);
+    let principal = make_principal(setup.principal);
     let peer = peer();
     let ctx = request_context(&principal, &peer, setup.client_id);
     assert!(super::group_read_denied(
@@ -134,8 +136,8 @@ use crate::{
     broker::Broker,
     handlers::test_support::single_replica_partition,
     test_support::{
-        AllowAclSetup, PartitionCount, StreamsJoinSetup, allow_acl, peer, principal,
-        request_context, sasl_principal, start_group_broker, streams_join_request,
+        PartitionCount, allow_acl, peer, request_context, sasl_principal, start_group_broker,
+        streams_join_request,
     },
 };
 
@@ -279,13 +281,14 @@ pub(super) fn streams_request_with_topology(
     #[builder(default = "in")] source_topic: &'_ str,
     #[builder(default)] state_changelog_topics: Vec<TopicInfo>,
 ) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
+    use krabka_protocol::owned::streams_group_heartbeat_request::{Subtopology, Topology};
+
     let setup = StreamsTopologySetup {
         group_id,
         member_id,
         source_topic,
         state_changelog_topics,
     };
-    use krabka_protocol::owned::streams_group_heartbeat_request::{Subtopology, Topology};
     let StreamsTopologySetup {
         group_id,
         member_id,

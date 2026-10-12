@@ -30,7 +30,6 @@ use crate::{
     broker::BrokerHandle,
     codes,
     handlers::test_support::{
-        ClientTopicSetup, ProduceRecordsSetup, ShareWireSetup, TopicPartitionCount,
         acquired_share_records, create_topic as create_topic_from_test_support,
         initialize_earliest_share, produce_records, share_fetch_topics, share_fetch_wire,
         share_record_states,

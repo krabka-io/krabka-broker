@@ -156,7 +156,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::txn::coordinator::test_support::{ProducerEpoch, TxnEntrySetup, entry};
+    use crate::txn::coordinator::test_support::entry;
 
     #[derive(Clone, Copy)]
     enum StatePartition {

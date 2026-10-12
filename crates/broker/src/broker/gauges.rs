@@ -319,7 +319,7 @@ mod tests {
     use super::*;
     use crate::{
         broker::test_support::fake_source,
-        handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+        handlers::test_support::replicated_partition,
         metrics::BrokerMetrics,
         test_support::{broker_registration, single_partition_topic},
     };

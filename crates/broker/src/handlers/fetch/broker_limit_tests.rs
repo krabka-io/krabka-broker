@@ -8,10 +8,7 @@ use krabka_units::bytes;
 use crate::{
     authorizer::AllowAllAuthorizer,
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-    handlers::test_support::{
-        ClientTopicSetup, ProduceRecordsSetup, RecordCount, create_topic, produce_records,
-        start_broker_with,
-    },
+    handlers::test_support::{create_topic, produce_records, start_broker_with},
 };
 
 #[tokio::test]

@@ -620,7 +620,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        delivery::test_support::{NOW_MS, ScheduleSetup, scheduled_partition, wall_at},
+        delivery::test_support::{NOW_MS, scheduled_partition, wall_at},
         test_support::UnixMillis,
     };
 

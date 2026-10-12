@@ -11,8 +11,8 @@ use crate::{
         bootstrap::TOPIC as SHARE_STATE_TOPIC,
         config::ShareCoordinatorConfig,
         coordinator::test_support::{
-            Logged, NOW_MS, StateSeedSetup, batch, configured_coordinator, coordinator,
-            image_with_topic, initialize_led_group, lead_all, logged_records, share_write,
+            Logged, NOW_MS, batch, configured_coordinator, coordinator, image_with_topic,
+            initialize_led_group, lead_all, logged_records, share_write,
         },
     },
 };

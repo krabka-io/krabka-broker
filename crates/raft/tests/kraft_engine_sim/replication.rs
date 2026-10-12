@@ -7,8 +7,7 @@ use std::time::Duration;
 use krabka_raft::RaftError;
 
 use crate::harness::{
-    SimClusterSetup, await_single_leader, await_until, start_engines, three_voter_network,
-    topic_record,
+    await_single_leader, await_until, start_engines, three_voter_network, topic_record,
 };
 
 /// 2. `submit_change` on a follower forwards to the leader, commits through

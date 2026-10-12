@@ -16,9 +16,8 @@ use crate::{
         share_fetch,
     },
     support::share::{
-        ConsumptionSetup, RefetchSetup, RetryEpochs, ShareAck, ShareRecordCount,
-        ShareRecordSeedSetup, ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup,
-        ShareTopicSetup, acknowledge_success, refetch_while_empty, rejoin_group, start_topic,
+        ConsumptionSetup, RetryEpochs, ShareAck, ShareSessionEpoch, ShareSessionSetup,
+        acknowledge_success, refetch_while_empty, rejoin_group, start_topic,
     },
 };
 

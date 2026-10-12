@@ -11,7 +11,6 @@ use super::*;
 use crate::{
     partition::{ProduceData, ProduceJob},
     partition_writer::test_support::{GatedWal, sample_batch, test_sequencer},
-    test_support::{EmptyPayloadBatchSetup, RecordCount},
     wal::SharedWal,
 };
 

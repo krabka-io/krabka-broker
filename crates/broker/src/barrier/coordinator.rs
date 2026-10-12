@@ -348,7 +348,7 @@ mod tests {
 
     use super::*;
     use crate::barrier::{
-        coordinator::test_support::{Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec},
+        coordinator::test_support::{Fixture, GROUP, spec},
         persistence::{RecordKind, decode_key},
     };
 

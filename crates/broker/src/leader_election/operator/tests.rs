@@ -10,11 +10,18 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     leader_election::test_support::{
-        ElectionSetup, ExpectedPartitionSetup, alive_set, expected_partition, img_with_partition,
-        no_witnesses, register_broker_with_dirs, witnesses,
+        alive_set, expected_partition, img_with_partition, no_witnesses, register_broker_with_dirs,
+        witnesses,
     },
     test_support::replica_nodes,
 };
+
+fn partition_with_isr_1_2() -> MetadataImage {
+    img_with_partition()
+        .topic("foo")
+        .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
+        .call()
+}
 
 #[tokio::test]
 async fn preferred_happy_path() {
@@ -138,10 +145,7 @@ async fn unclean_no_alive_replicas() {
 
 #[tokio::test]
 async fn unclean_isr_member_alive_returns_election_not_needed() {
-    let img = img_with_partition()
-        .topic("foo")
-        .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
-        .call();
+    let img = partition_with_isr_1_2();
     let l = alive_set(&[1, 2]); // ISR has live member
     let err =
         select_new_leader_for_partition(&img, &l, &no_witnesses(), "foo", 0, ElectionType::Unclean)
@@ -188,10 +192,7 @@ async fn operator_unclean_election_skips_a_witness_replica() {
     // Every data replica in the ISR is dead and the operator forces an
     // unclean election. The alive witness 2 must not take leadership, and
     // it must not report the election as unneeded either.
-    let img = img_with_partition()
-        .topic("foo")
-        .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
-        .call();
+    let img = partition_with_isr_1_2();
     let l = alive_set(&[2, 3]);
     let new_pr = select_new_leader_for_partition(
         &img,

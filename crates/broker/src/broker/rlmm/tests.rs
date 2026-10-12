@@ -6,7 +6,7 @@ use super::*;
 use crate::{
     config::{KafkaRlmmConfig, RemoteStorageBackend},
     diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
-    handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+    handlers::test_support::replicated_partition,
     metrics::BrokerMetrics,
     test_support::replica_nodes,
 };

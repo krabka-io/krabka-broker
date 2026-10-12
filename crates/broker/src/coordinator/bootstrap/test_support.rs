@@ -14,9 +14,7 @@ use crate::{
     coordinator::{
         GroupCoordinator,
         persistence::{GroupMetadataValue, parse_key},
-        test_support::{
-            OffsetRecordSetup, coordinator_with_config, default_coordinator, offset_record,
-        },
+        test_support::{coordinator_with_config, default_coordinator, offset_record},
         unified::{
             ImageMetadataProvider,
             actor::test_support::empty_metadata,

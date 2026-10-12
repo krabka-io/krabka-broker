@@ -6,7 +6,7 @@ use assert2::assert;
 
 use crate::support::{
     client::connect_owned,
-    topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 pub(crate) async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {

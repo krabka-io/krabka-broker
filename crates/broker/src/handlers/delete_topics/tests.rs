@@ -26,12 +26,12 @@ use crate::{
         RequestContext,
         acl_wire::CLUSTER_RESOURCE_NAME,
         create_topics::handle as create_topics_handle,
-        test_support::{AclSetup, CreateTopicSetup, configured_topic_request},
+        test_support::{AclSetup, CreateTopicSetup, acl},
     },
     metrics::AuthorizationDeniedLabel,
     test_support::{
-        AllowAclSetup, DenyAll, allow_acl, dispatch_wire, peer, principal,
-        start_broker_no_audit_with, start_broker_with_authorizer_no_audit as start_broker,
+        DenyAll, allow_acl, dispatch_wire, peer, principal, start_broker_no_audit_with,
+        start_broker_with_authorizer_no_audit as start_broker,
     },
 };
 
@@ -312,13 +312,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 /// exist before it authorizes their deletion.
 async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, setup: CreateTopicSetup<'_>) {
     let name = setup.topic;
-    let req = configured_topic_request()
-        .topic(setup.topic)
-        .configs(setup.configs)
-        .num_partitions(setup.num_partitions.0)
-        .replication_factor(setup.replication_factor.0)
-        .timeout(setup.timeout)
-        .call();
+    let req = crate::handlers::test_support::configured_topic_request_from!(setup);
     let resp = create_topics_handle(broker, req, CREATE_VERSION, ctx)
         .await
         .expect("handle CreateTopics");
@@ -362,14 +356,7 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
         deleted: &'static [&'static str],
     }
 
-    use crate::handlers::test_support::acl;
-
-    let cluster_create = acl()
-        .resource_type(AclSetup::cluster(AclOperation::Create).resource_type)
-        .resource_name(AclSetup::cluster(AclOperation::Create).resource_name)
-        .pattern_type(AclSetup::cluster(AclOperation::Create).pattern_type)
-        .operation(AclSetup::cluster(AclOperation::Create).operation)
-        .call();
+    let cluster_create = crate::handlers::test_support::cluster_acl(AclOperation::Create);
     let cluster_delete = acl()
         .resource_type(AclSetup::cluster(AclOperation::Delete).resource_type)
         .resource_name(AclSetup::cluster(AclOperation::Delete).resource_name)

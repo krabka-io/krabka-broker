@@ -38,7 +38,7 @@ use crate::support::{
     NodeIndex, RoleNodeSetup,
     client::{connect_client, create_topic},
     quorum::metadata_quorum_request,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 mod support;

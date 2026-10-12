@@ -21,12 +21,11 @@ use crate::support::{
     produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},
     topics::{
-        AssignedTopicSetup, ConfiguredTopicSetup, TopicPartitionCount, assigned_topic,
-        creatable_topic, create_topic_request,
+        AssignedTopicSetup, TopicPartitionCount, assigned_topic, creatable_topic,
+        create_topic_request,
     },
     transactions::{
-        InitProducerSetup, PartitionRegistration, ProducerIdentity,
-        init_producer_request as producer_initialization,
+        PartitionRegistration, ProducerIdentity, init_producer_request as producer_initialization,
     },
 };
 
@@ -123,21 +122,7 @@ pub(crate) struct TransactionProduceSetup<'a> {
     pub values: &'a [&'static str],
 }
 
-#[bon::builder]
-pub(crate) fn produce_request(
-    #[builder(default = "transaction")] transactional_id: &'_ str,
-    #[builder(default = "orders")] topic: &'_ str,
-    #[builder(default)] topic_id: Uuid,
-    producer: Option<ProducerIdentity>,
-    #[builder(default = & ["v"])] values: &'_ [&'static str],
-) -> ProduceRequest {
-    let setup = TransactionProduceSetup {
-        transactional_id,
-        topic,
-        topic_id,
-        producer,
-        values,
-    };
+fn build_produce_request(setup: TransactionProduceSetup<'_>) -> ProduceRequest {
     let TransactionProduceSetup {
         transactional_id,
         topic,
@@ -345,16 +330,7 @@ pub(crate) async fn produce_fixture<E: std::fmt::Debug, F>(
         producer,
         values,
     };
-    produce_succeeds(send(
-        produce_request()
-            .transactional_id(setup.transactional_id)
-            .topic(setup.topic)
-            .topic_id(setup.topic_id)
-            .maybe_producer(setup.producer)
-            .values(setup.values)
-            .call(),
-    ))
-    .await;
+    produce_succeeds(send(build_produce_request(setup))).await;
 }
 
 pub(crate) async fn partition_added<E: std::fmt::Debug>(

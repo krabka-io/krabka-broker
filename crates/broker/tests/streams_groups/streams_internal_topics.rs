@@ -16,7 +16,7 @@ use crate::{
         active_partitions_for, boot, connect, create_topic, finalize_streams_version, first_join,
         follow_up, status_codes, topology,
     },
-    support::streams::{StreamsFollowUpSetup, StreamsMemberEpoch, request_active_tasks},
+    support::streams::request_active_tasks,
 };
 
 /// A stateful subtopology, that is, one with a state-changelog topic, drives

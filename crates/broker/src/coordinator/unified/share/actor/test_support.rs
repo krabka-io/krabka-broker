@@ -206,14 +206,15 @@ pub(super) async fn seed_initialized(
     #[builder(default = "t")] topic_name: &'_ str,
     #[builder(default = vec ! [PartitionIndex (0)])] partitions: Vec<PartitionIndex>,
 ) {
+    use crate::coordinator::unified::{
+        ShareGroupSeed,
+        share::persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
+    };
+
     let setup = InitializedTopicSetup {
         topic_id,
         topic_name,
         partitions,
-    };
-    use crate::coordinator::unified::{
-        ShareGroupSeed,
-        share::persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
     };
     let InitializedTopicSetup {
         topic_id,

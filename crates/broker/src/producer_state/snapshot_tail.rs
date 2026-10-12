@@ -23,9 +23,7 @@ pub(super) async fn check(
         .await
 }
 
-use super::test_support::{
-    ProducerBatchSetup, ProducerSequence, SequenceDelta, opened_log, producer_batch as batch,
-};
+use super::test_support::{opened_log, producer_batch as batch};
 
 #[tokio::test]
 async fn reopening_rebuilds_only_the_snapshot_seed_and_uncovered_tail() {

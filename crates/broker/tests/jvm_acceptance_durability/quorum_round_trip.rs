@@ -11,8 +11,7 @@ use assert2::assert;
 use crate::{
     jvm_acceptance::{KAFKA_IMAGE, create_plain_console_topic_at, docker_run_kafka_tool},
     support::{
-        ContainerInput, JvmDockerSetup, init_jvm_tracing, jvm_docker_command, jvm_stdin_output,
-        start_jvm_cluster,
+        ContainerInput, init_jvm_tracing, jvm_docker_command, jvm_stdin_output, start_jvm_cluster,
     },
 };
 

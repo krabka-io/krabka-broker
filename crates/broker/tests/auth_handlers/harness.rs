@@ -15,9 +15,9 @@ use tokio::net::TcpStream;
 /// query. This function keeps those call sites free of literals.
 pub use crate::support::sasl::alice_password;
 use crate::{
-    kafka_wire::{self, ExchangeSetup as WireExchangeSetup},
+    kafka_wire,
     support::{
-        sasl::{ScramCredentialSetup, provision_scram, sasl_plaintext_mechanisms, start_broker},
+        sasl::{provision_scram, sasl_plaintext_mechanisms, start_broker},
         sasl_plaintext_config,
         wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,

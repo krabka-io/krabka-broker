@@ -14,10 +14,7 @@ use crate::{
         InitializedRestartFixture, acquired_count, fetch_until_acquired,
         initialized_restart_fixture,
     },
-    support::share::{
-        ShareAck, ShareRecordCount, ShareRecordSeedSetup, ShareSessionSetup, acknowledge_success,
-        rejoin_group,
-    },
+    support::share::{ShareAck, ShareSessionSetup, acknowledge_success, rejoin_group},
 };
 
 async fn assert_share_summary(

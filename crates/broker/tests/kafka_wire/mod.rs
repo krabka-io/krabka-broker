@@ -26,7 +26,6 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, Bytes, BytesMut};
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -44,6 +43,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
+#[allow(unused_imports)]
 pub use topics::creatable_topic as topic;
 
 use crate::support::{
@@ -53,8 +53,20 @@ use crate::support::{
         self, AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicSetup, assigned_topic,
         configured_topic_request,
     },
-    wire::{self as frames, ApiRequestSetup, CorrelationId},
+    wire::{self as frames, ApiRequestSetup},
 };
+
+macro_rules! configured_topic_request {
+    ($topic:expr) => {{
+        let topic = $topic;
+        topics::creatable_topic()
+            .name(topic.name)
+            .partitions(topic.partitions)
+            .replicas(topic.replicas)
+            .configs(topic.configs)
+            .call()
+    }};
+}
 
 /// The `ApiVersions` API key, whose response header is v0 at every version.
 const API_VERSIONS_KEY: i16 = 18;
@@ -159,6 +171,27 @@ where
         }
     }
     Ok(cur.to_vec())
+}
+
+pub async fn exchange_round_trip<S>(
+    stream: &mut S,
+    exchange: ExchangeSetup<'_>,
+    body: &[u8],
+) -> io::Result<Vec<u8>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    round_trip()
+        .stream(stream)
+        .api_key(exchange.api_key.0)
+        .version(exchange.version.0)
+        .correlation(exchange.correlation.0)
+        .client_id(exchange.client_id)
+        .header(exchange.header)
+        .response_header(exchange.response_header)
+        .body(body)
+        .call()
+        .await
 }
 
 #[derive(Clone, krabka_macros::FieldDefaults)]
@@ -285,14 +318,7 @@ pub async fn create_topic_as_super_user(
 ) {
     let setup = AutomaticTopicSetup { client_id, topic };
     let name = setup.topic.name.clone();
-    let request = topics::create_topic_request(
-        topics::creatable_topic()
-            .name(setup.topic.name)
-            .partitions(setup.topic.partitions)
-            .replicas(setup.topic.replicas)
-            .configs(setup.topic.configs)
-            .call(),
-    );
+    let request = topics::create_topic_request(configured_topic_request!(setup.topic));
     let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
         request_as_plain(
             addr,
@@ -487,10 +513,10 @@ pub async fn exchange<S, Q, R>(
     request: &Q,
     #[builder(into, default = krabka_ids :: ApiKey (18))] api_key: krabka_ids::ApiKey,
     #[builder(into, default)] version: krabka_ids::ApiVersion,
-    #[builder(into, default = frames :: CorrelationId (1))] correlation: frames::CorrelationId,
     #[builder(default = "krabka-broker-test")] client_id: &'_ str,
-    #[builder(default)] header: frames::HeaderEncoding,
     #[builder(default)] response_header: ResponseHeaderSelection,
+    #[builder(default)] header: frames::HeaderEncoding,
+    #[builder(into, default = frames :: CorrelationId (1))] correlation: frames::CorrelationId,
 ) -> io::Result<R>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -944,7 +970,7 @@ pub async fn create_topic_from_setup(
     client_id: &str,
     setup: CreateTopicSetup<'_>,
 ) {
-    let mut req = crate::support::topics::configured_topic_request()
+    let mut req = configured_topic_request()
         .topic(setup.topic)
         .configs(setup.configs)
         .num_partitions(setup.num_partitions)
@@ -991,12 +1017,7 @@ pub async fn create_configured_topic_sasl(
     };
     create_topic_sasl(
         addr,
-        topics::creatable_topic()
-            .name(setup.topic.name)
-            .partitions(setup.topic.partitions)
-            .replicas(setup.topic.replicas)
-            .configs(setup.topic.configs)
-            .call(),
+        configured_topic_request!(setup.topic),
         &PlainAuthenticationSetup {
             client_id: setup.client_id,
             user: setup.user,
@@ -1046,12 +1067,7 @@ pub async fn create_automatic_topic_plaintext(
     create_topic_on_fresh_connection(
         addr,
         setup.client_id,
-        topics::creatable_topic()
-            .name(setup.topic.name)
-            .partitions(setup.topic.partitions)
-            .replicas(setup.topic.replicas)
-            .configs(setup.topic.configs)
-            .call(),
+        configured_topic_request!(setup.topic),
     )
     .await;
 }
@@ -1092,15 +1108,11 @@ pub async fn elect_leaders_plaintext(
     #[builder(default = "krabka-broker-test")] client_id: &'_ str,
     #[builder(default)] election: ElectionSetup,
 ) -> Vec<(i32, i16)> {
-    let setup = ElectionExchangeSetup {
-        client_id,
-        election,
-    };
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     elect_leaders()
         .stream(&mut stream)
-        .client_id(setup.client_id)
-        .election(setup.election)
+        .client_id(client_id)
+        .election(election)
         .call()
         .await
 }
@@ -1116,12 +1128,12 @@ pub async fn produce_sasl_with_ids(
     #[builder(default = "krabka-broker-test")] produce_client_id: &'_ str,
     #[builder(default)] records: ZeroFilledRecordsSetup,
 ) -> krabka_protocol::owned::produce_response::ProduceResponse {
+    const VERSION: i16 = 11;
     let setup = SaslProduceSetup {
         authentication,
         produce_client_id,
         records,
     };
-    const VERSION: i16 = 11;
     let req = produce_records()
         .topic(setup.records.topic)
         .value_bytes(setup.records.value_bytes.0)
@@ -1158,12 +1170,7 @@ pub async fn create_configured_topic_plaintext(
     create_topic_plaintext(
         addr,
         setup.client_id,
-        topics::creatable_topic()
-            .name(setup.topic.name)
-            .partitions(setup.topic.partitions)
-            .replicas(setup.topic.replicas)
-            .configs(setup.topic.configs)
-            .call(),
+        configured_topic_request!(setup.topic),
     )
     .await;
 }

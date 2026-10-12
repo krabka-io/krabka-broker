@@ -10,9 +10,9 @@ use super::*;
 use crate::{
     heartbeat::controller_state::{LivenessTransition, TestClock},
     leader_election::test_support::{
-        ElectionSetup, ExpectedPartitionSetup, expected_partition, fake_source, img_with_partition,
-        liveness_with_alive, liveness_with_dead, one_partition_change, recovery_handle_for_tests,
-        register_brokers, stalled_fake_source,
+        expected_partition, fake_source, img_with_partition, liveness_with_alive,
+        liveness_with_dead, one_partition_change, recovery_handle_for_tests, register_brokers,
+        stalled_fake_source,
     },
     metadata_source::MetadataSource,
     metrics::BrokerMetrics,

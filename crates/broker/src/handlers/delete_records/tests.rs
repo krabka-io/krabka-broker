@@ -26,11 +26,9 @@ use crate::{
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     freeze::resolve::resolve_topic_freeze,
     handlers::{
-        RequestContext,
-        create_topics::handle as create_topics_handle,
-        delete_records::test_support::gated_config,
-        fetch::handle as fetch_handle,
-        test_support::{CreateTopicSetup, configured_topic_request},
+        RequestContext, create_topics::handle as create_topics_handle,
+        delete_records::test_support::gated_config, fetch::handle as fetch_handle,
+        test_support::configured_topic_request,
     },
     heartbeat::fencing::{RegistrationChange, registration_change},
     partition::Partition,
@@ -105,32 +103,12 @@ async fn drive(
         .expect("handle")
 }
 
-#[bon::builder]
 async fn drive_trim(
     broker: &Broker,
     ctx: &RequestContext<'_>,
-    #[builder(default = "orders")] topic: &'_ str,
-    #[builder(default = & [(PartitionIndex (0) , Offset (- 1))])] partitions: &'_ [(
-        PartitionIndex,
-        Offset,
-    )],
-    #[builder(into, default = RequestTimeoutMillis (5_000))] timeout: RequestTimeoutMillis,
+    request: DeleteRecordsRequest,
 ) -> DeleteRecordsResponse {
-    let setup = TrimRequestSetup {
-        topic,
-        partitions,
-        timeout,
-    };
-    drive(
-        broker,
-        &request()
-            .topic(setup.topic)
-            .partitions(setup.partitions)
-            .timeout(setup.timeout)
-            .call(),
-        ctx,
-    )
-    .await
+    drive(broker, &request, ctx).await
 }
 
 /// Compare the entire response with independent caller-specified expected rows.
@@ -180,12 +158,7 @@ async fn check_refused_trim(
     #[builder(into, default = KafkaErrorCode (codes :: POLICY_VIOLATION))] error: KafkaErrorCode,
 ) {
     let setup = RefusedTrimSetup { topic, error };
-    let response = drive_trim()
-        .broker(broker)
-        .ctx(ctx)
-        .topic(setup.topic)
-        .call()
-        .await;
+    let response = drive_trim(broker, ctx, request().topic(setup.topic).call()).await;
     assert!(
         response.topics
             == expected_trim_rows()
@@ -224,13 +197,15 @@ async fn check_trim_frontier(
         error,
         frontier,
     };
-    let response = drive_trim()
-        .broker(broker)
-        .ctx(ctx)
-        .topic(setup.topic)
-        .partitions(&[(PartitionIndex(0), setup.offset)])
-        .call()
-        .await;
+    let response = drive_trim(
+        broker,
+        ctx,
+        request()
+            .topic(setup.topic)
+            .partitions(&[(PartitionIndex(0), setup.offset)])
+            .call(),
+    )
+    .await;
     check!(
         response.topics
             == expected_trim_rows()
@@ -380,8 +355,9 @@ async fn topic_with_configs_holding_a_pending_batch(
     #[builder(default = "orders")] topic: &'_ str,
     #[builder(default)] configs: &'_ [(&'_ str, &'_ str)],
 ) {
-    let setup = ConfiguredPendingBatchSetup { topic, configs };
     use krabka_protocol::owned::create_topics_response;
+
+    let setup = ConfiguredPendingBatchSetup { topic, configs };
 
     let ConfiguredPendingBatchSetup { topic, configs } = setup;
     let broker = broker_handle.broker_arc_for_test();
@@ -470,12 +446,12 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
             .call()
             .await;
 
-        let resp = drive_trim()
-            .broker(&broker)
-            .ctx(&test_context(&admin, &peer))
-            .topic(topic)
-            .call()
-            .await;
+        let resp = drive_trim(
+            &broker,
+            &test_context(&admin, &peer),
+            request().topic(topic).call(),
+        )
+        .await;
 
         let expected = unthrottled_wire!(DeleteRecordsResponse {
             topics: vec![tagged_wire!(DeleteRecordsTopicResult {
@@ -510,11 +486,7 @@ async fn a_refused_trim_deletes_nothing() {
         .expect("the partition is local");
     let before = part.log_start_offset();
 
-    let resp = drive_trim()
-        .broker(&broker)
-        .ctx(&test_context(&principal, &peer))
-        .call()
-        .await;
+    let resp = drive_trim(&broker, &test_context(&principal, &peer), request().call()).await;
 
     let expected = vec![tagged_wire!(DeleteRecordsTopicResult {
         name: "orders".to_owned(),
@@ -718,13 +690,15 @@ async fn a_compact_only_topic_refuses_a_trim() {
             .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is local");
 
-        let resp = drive_trim()
-            .broker(&broker)
-            .ctx(&test_context(&admin, &peer))
-            .topic(topic)
-            .partitions(&[(PartitionIndex(0), Offset(2))])
-            .call()
-            .await;
+        let resp = drive_trim(
+            &broker,
+            &test_context(&admin, &peer),
+            request()
+                .topic(topic)
+                .partitions(&[(PartitionIndex(0), Offset(2))])
+                .call(),
+        )
+        .await;
 
         check!(
             resp.topics
@@ -776,16 +750,18 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
         .wait_for_image(|image| image.partition(topic, 0).is_some())
         .await;
 
-    let resp = drive_trim()
-        .broker(&broker)
-        .ctx(&test_context(&admin, &peer))
-        .topic(topic)
-        .partitions(&[
-            (PartitionIndex(0), Offset(1)),
-            (PartitionIndex(1), Offset(1)),
-        ])
-        .call()
-        .await;
+    let resp = drive_trim(
+        &broker,
+        &test_context(&admin, &peer),
+        request()
+            .topic(topic)
+            .partitions(&[
+                (PartitionIndex(0), Offset(1)),
+                (PartitionIndex(1), Offset(1)),
+            ])
+            .call(),
+    )
+    .await;
 
     let expected = vec![tagged_wire!(DeleteRecordsTopicResult {
         name: topic.to_owned(),
@@ -870,13 +846,15 @@ async fn an_internal_topic_refuses_a_trim() {
     // A partition of an internal topic that the metadata does not hold is
     // unknown, as `KafkaApis` answers it before the internal-topic check.
     let missing = 10_000;
-    let resp = drive_trim()
-        .broker(&broker)
-        .ctx(&test_context(&admin, &peer))
-        .topic(OFFSETS_TOPIC)
-        .partitions(&[(PartitionIndex(missing), Offset(-1))])
-        .call()
-        .await;
+    let resp = drive_trim(
+        &broker,
+        &test_context(&admin, &peer),
+        request()
+            .topic(OFFSETS_TOPIC)
+            .partitions(&[(PartitionIndex(missing), Offset(-1))])
+            .call(),
+    )
+    .await;
     check!(
         resp.topics[0].partitions
             == vec![error_partition_result(

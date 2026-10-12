@@ -154,7 +154,7 @@ mod tests {
     use crate::{
         codes,
         share_coordinator::coordinator::test_support::{
-            DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, state_batch,
+            DeliveryAttemptCount, FixtureDeliveryState, state_batch,
         },
         share_partition::{
             dlq::{DlqError, DlqRequest, DlqSink, test_support::RecordingDlq},
@@ -162,8 +162,7 @@ mod tests {
             state::{
                 AckType, AcquisitionState, DlqCause, DlqRange, RecordState,
                 test_support::{
-                    AcquiredWindowSetup, DeadLetterQueue, DeliveryCount, DlqRangeSetup,
-                    acquire_window, dlq_range as range,
+                    DeadLetterQueue, DeliveryCount, acquire_window, dlq_range as range,
                 },
             },
         },

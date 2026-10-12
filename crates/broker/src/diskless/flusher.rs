@@ -408,13 +408,10 @@ mod tests {
     };
     use crate::{
         diskless::{
-            flusher::test_support::FlusherPartitionSetup,
-            index_log::test_support::{PacedReplayLog, ReplayPace, WalFlushSetup},
+            index_log::test_support::{PacedReplayLog, ReplayPace, three_record_flush},
             wal_index::WalIndexCache,
         },
-        test_support::{
-            FreezeSetup, StorageMode, UnixMillis, single_partition_topic, topic_freeze_record,
-        },
+        test_support::{StorageMode, single_partition_topic, topic_freeze_record},
     };
 
     // Keep field evaluation order, including metrics and readiness allocation.
@@ -662,16 +659,7 @@ mod tests {
         let cache = index.cache();
         for key in ["diskless-wal/9/old.ckwl", "diskless-wal/7/new.ckwl"] {
             index
-                .publish_flush(
-                    &flush_record()
-                        .topic_id(topic_id)
-                        .object_key(key)
-                        .first_offset(WalFlushSetup::three_records().first_offset)
-                        .last_offset(WalFlushSetup::three_records().last_offset)
-                        .max_timestamp(WalFlushSetup::three_records().max_timestamp)
-                        .byte_len(WalFlushSetup::three_records().byte_len)
-                        .call(),
-                )
+                .publish_flush(&three_record_flush(topic_id, key))
                 .await
                 .unwrap();
             wait_for_object(&cache, topic_id, key).await;
@@ -724,16 +712,7 @@ mod tests {
         let index = test_index_log().await;
         let cache = index.cache();
         index
-            .publish_flush(
-                &flush_record()
-                    .topic_id(topic_id)
-                    .object_key(object_key)
-                    .first_offset(WalFlushSetup::three_records().first_offset)
-                    .last_offset(WalFlushSetup::three_records().last_offset)
-                    .max_timestamp(WalFlushSetup::three_records().max_timestamp)
-                    .byte_len(WalFlushSetup::three_records().byte_len)
-                    .call(),
-            )
+            .publish_flush(&three_record_flush(topic_id, object_key))
             .await
             .unwrap();
         wait_for_object(&cache, topic_id, object_key).await;

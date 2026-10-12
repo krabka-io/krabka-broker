@@ -13,7 +13,7 @@ use krabka_security::SaslMechanism;
 use tempfile::TempDir;
 
 use crate::support::{
-    acl::{ClusterAclSetup, cluster_acl_record, use_simple_acl_authorizer},
+    acl::{cluster_acl_record, use_simple_acl_authorizer},
     sasl::{sasl_temp_config, start_broker},
 };
 

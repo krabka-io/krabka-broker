@@ -28,10 +28,9 @@ use crate::{
     codes,
     error::BrokerError,
     handlers::test_support::{
-        AcknowledgementCode, AcknowledgementPartitionSetup, AcknowledgementSetup, ClientTopicSetup,
-        ProduceRecordsSetup, RecordCount, ShareSessionEpoch, ShareWireSetup,
+        AcknowledgementCode, AcknowledgementPartitionSetup, acknowledge_batches_request,
         create_topic as create_topic_from_test_support, produce_records, send_acknowledgements,
-        share_fetch_partition_rows, single_replica_partition,
+        share_fetch_partition_rows, share_fetch_wire, single_replica_partition,
     },
     share_coordinator::bootstrap::TOPIC,
     test_support::initialize_share_state,
@@ -105,12 +104,15 @@ async fn share_fetch(
         }],
         ..Default::default()
     };
-    let rows = share_fetch_partition_rows()
+    let response = share_fetch_wire()
         .broker(broker)
         .request(&request)
         .call()
         .await;
-    rows.into_iter().next().unwrap_or_default()
+    share_fetch_partition_rows(response)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
 }
 
 /// Sends a `ShareAcknowledge` that accepts `[first, last]` on partition 0 of
@@ -122,31 +124,18 @@ async fn share_acknowledge(
     topic_id: WireUuid,
     (first_offset, last_offset): (i64, i64),
 ) -> i16 {
-    let response = send_acknowledgements()
-        .broker(broker)
-        .group(
-            AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
-                .group,
-        )
-        .member(
-            AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
-                .member,
-        )
-        .epoch(
-            AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
-                .epoch,
-        )
-        .topic_id(
-            AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
-                .topic_id,
-        )
+    let request = acknowledge_batches_request()
+        .group(group)
+        .epoch(epoch)
+        .topic_id(topic_id)
         .partition(AcknowledgementPartitionSetup::single_batch(
             krabka_log::Offset(first_offset)..=krabka_log::Offset(last_offset),
             AcknowledgementCode(ACCEPT),
         ))
-        .mode(
-            AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id).mode,
-        )
+        .call();
+    let response = send_acknowledgements()
+        .broker(broker)
+        .request(&request)
         .call()
         .await;
 

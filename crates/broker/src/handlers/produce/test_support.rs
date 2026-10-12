@@ -12,9 +12,7 @@ use crate::{
     api_catalog::UnstableApiVersions,
     config_keys::MIN_INSYNC_REPLICAS,
     freeze::resolve::FreezeMutationResolution,
-    handlers::test_support::{
-        PartitionSpawnSetup, ReplicatedPartitionSetup, replicated_partition, spawn_partition,
-    },
+    handlers::test_support::{replicated_partition, spawn_partition},
     log_dir_status::LogDirRegistry,
     metrics::{BrokerMetrics, RequestPhases},
     partition::Partition,

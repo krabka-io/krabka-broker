@@ -21,9 +21,7 @@ use super::{
 };
 use crate::{
     name,
-    segment::test_support::{
-        ONE_RECORD_BATCH, RecordCount, RecordTimestamp, SampleBatchSetup, test_segment,
-    },
+    segment::test_support::{ONE_RECORD_BATCH, test_segment},
 };
 
 /// The `(relative last offset, position)` entries of a `.index` file.

@@ -37,7 +37,7 @@ use crate::{
     },
     coordinator::unified::streams::config::StreamsGroupConfig,
     file_config::FileConfig,
-    handlers::describe_configs::test_support::{TopicConfigSetup, set_topic_config},
+    handlers::describe_configs::test_support::set_topic_config,
     test_support::string_pairs,
     throttle::{FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY},
 };
@@ -67,6 +67,13 @@ const VALUES_ONLY: EntryOptions = EntryOptions {
 
 /// The node that serves a request no test routes anywhere in particular.
 const SERVING_NODE: krabka_metadata::NodeId = krabka_metadata::NodeId(1);
+
+fn offsets_retention_documentation() -> String {
+    registry::lookup(ConfigScope::Broker, config_keys::OFFSETS_RETENTION_MINUTES)
+        .expect("offsets.retention.minutes")
+        .doc
+        .to_owned()
+}
 
 /// A process that named none of the four static broker keys, which is what
 /// every case but the ones that tune one runs as.
@@ -1450,15 +1457,7 @@ fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
                         CONFIG_SOURCE_DEFAULT
                     )])
                     .config_type(ConfigType::Int.wire())
-                    .maybe_documentation(Some(
-                        registry::lookup(
-                            ConfigScope::Broker,
-                            config_keys::OFFSETS_RETENTION_MINUTES
-                        )
-                        .expect("offsets.retention.minutes")
-                        .doc
-                        .to_owned()
-                    ))
+                    .maybe_documentation(Some(offsets_retention_documentation()))
                     .call(),
             ]
     );
@@ -1508,15 +1507,7 @@ fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
                         ),
                     ])
                     .config_type(ConfigType::Int.wire())
-                    .maybe_documentation(Some(
-                        registry::lookup(
-                            ConfigScope::Broker,
-                            config_keys::OFFSETS_RETENTION_MINUTES
-                        )
-                        .expect("offsets.retention.minutes")
-                        .doc
-                        .to_owned()
-                    ))
+                    .maybe_documentation(Some(offsets_retention_documentation()))
                     .call()
             ]
     );

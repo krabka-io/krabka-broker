@@ -15,7 +15,7 @@ use crate::{
         broker_id, controller_leader_addr, node_id, start_three_broker_plaintext_cluster,
         start_three_broker_plaintext_cluster_with_log_dirs, wait_partition_exists,
     },
-    plaintext_wire::{CLIENT_ID, create_topic_plaintext},
+    plaintext_wire::CLIENT_ID,
     reassign_rpc::{drive_alter_reassignments, drive_list_reassignments},
     support::topics::{ConfiguredTopicSetup, TopicReplicationFactor},
 };

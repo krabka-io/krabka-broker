@@ -147,13 +147,8 @@ mod tests {
     use super::*;
     use crate::{
         broker::Broker,
-        handlers::group_heartbeat_test_support::{
-            GroupTopicSetup, acl as group_acl, topic_with_partitions,
-        },
-        test_support::{
-            DenyAll, PartitionCount, ShareApiSupport, ShareBrokerSetup, peer, principal,
-            start_share_broker, test_ctx,
-        },
+        handlers::group_heartbeat_test_support::{acl as group_acl, topic_with_partitions},
+        test_support::{DenyAll, ShareApiSupport, peer, principal, start_share_broker, test_ctx},
     };
 
     fn request(group_ids: &[&str]) -> ShareGroupDescribeRequest {

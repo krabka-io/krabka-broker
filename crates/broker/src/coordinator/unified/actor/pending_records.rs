@@ -417,7 +417,7 @@ mod tests {
             ClientIdentity, GroupSeed,
             actor::{
                 persistence::full_pending_records,
-                test_support::{ConsumerMemberSetup, make_coordinator, subscribed_member},
+                test_support::{make_coordinator, subscribed_member},
             },
             consumer_state::{ClassicMemberFacade, GroupState},
             persistence::MAX_STRING_BYTES,

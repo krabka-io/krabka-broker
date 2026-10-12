@@ -11,7 +11,7 @@ use krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest;
 
 use crate::support::{
     self,
-    transactions::{InitProducerSetup, claim_idempotent_producer, new_producer_request},
+    transactions::{claim_idempotent_producer, init_producer_request},
 };
 
 #[tokio::test]
@@ -39,7 +39,7 @@ async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator(
     let r = p
         .client
         .send(
-            new_producer_request()
+            init_producer_request()
                 .maybe_transactional_id(Some("tx-1".into()))
                 .call(),
         )
@@ -87,7 +87,7 @@ async fn init_producer_id_with_transactional_id_returns_real_pid() {
     let r = p
         .client
         .send(
-            new_producer_request()
+            init_producer_request()
                 .maybe_transactional_id(Some("my-tid".into()))
                 .call(),
         )
@@ -112,7 +112,7 @@ async fn init_producer_id_with_same_tid_bumps_epoch() {
     let r1 = p
         .client
         .send(
-            new_producer_request()
+            init_producer_request()
                 .maybe_transactional_id(Some("stable-tid".into()))
                 .call(),
         )
@@ -123,7 +123,7 @@ async fn init_producer_id_with_same_tid_bumps_epoch() {
     let r2 = p
         .client
         .send(
-            new_producer_request()
+            init_producer_request()
                 .maybe_transactional_id(Some("stable-tid".into()))
                 .call(),
         )

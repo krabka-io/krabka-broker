@@ -32,9 +32,7 @@ use crate::{
             configured_authorizer, filter, named_filters, request, test_context,
         },
     },
-    test_support::{
-        AllowAclSetup, DenyAll, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
-    },
+    test_support::{DenyAll, start_broker_with_authorizer_no_audit as start_broker, test_ctx},
 };
 
 fn orders_and_payments_request() -> DeleteAclsRequest {

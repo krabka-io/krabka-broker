@@ -19,8 +19,7 @@ use tokio::{
 use super::*;
 use crate::{
     raft_handshake::test_support::{
-        HandshakeApiKey, HandshakeApiVersion, HandshakeCorrelationId, HandshakeHeader,
-        RequestFrameSetup, read_response_frame, request_frame, sasl_test_config,
+        HandshakeHeader, read_response_frame, request_frame, sasl_test_config,
     },
     time_util::now_ms,
 };

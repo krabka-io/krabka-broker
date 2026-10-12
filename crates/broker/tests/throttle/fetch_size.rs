@@ -17,7 +17,6 @@ use crate::{
         wait_partition_exists,
     },
     configs::drive_incremental_alter_configs_plaintext,
-    kafka_wire::AutomaticTopicSetup,
     records::{fetch_plaintext_replica, produce_plaintext},
     support::topics::ConfiguredTopicSetup,
 };

@@ -67,9 +67,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        handlers::broker_heartbeat::test_support::{
-            ElectionSetup, image_with_dir_partition, liveness_with,
-        },
+        handlers::broker_heartbeat::test_support::{image_with_dir_partition, liveness_with},
         leader_election::test_support::mark_witnesses_in_image,
         test_support::replica_nodes,
     };

@@ -178,9 +178,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        auto_join::test_support::{
-            ResponseHeaderMode, ResponseWireSetup, params, voter_update_params,
-        },
+        auto_join::test_support::{ResponseHeaderMode, params, voter_update_params},
         test_support::FakeMetadataSource,
     };
 

@@ -30,10 +30,7 @@ use crate::support::{
         offset_commit_topic, offset_delete_partition, offset_delete_request, offset_delete_topic,
     },
     standalone_broker,
-    topics::{
-        ConfiguredTopicSetup, CreateTopicRequestSetup, CreateTopicsTimeoutMillis, creatable_topic,
-        create_topic_request_with_setup,
-    },
+    topics::{creatable_topic, create_topic_request_with_setup},
 };
 
 /// `ConfigResource.Type.BROKER`.

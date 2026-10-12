@@ -18,7 +18,7 @@ use crate::{
         InitializedRestartFixture, NONE, acquired_topic, fetch_until_acquired,
         initialized_restart_fixture, leave,
     },
-    support::share::{ShareRecordSeedSetup, ShareSessionSetup, rejoin_group},
+    support::share::{ShareSessionSetup, rejoin_group},
 };
 
 fn delete_topic_request() -> DeleteShareGroupOffsetsRequest {

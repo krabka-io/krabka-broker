@@ -168,27 +168,27 @@ impl ConfigKind {
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct NamedConfigSetup<'a> {
+    kind: ConfigKind,
     #[default("listeners")]
     name: &'a str,
     value: &'a str,
     mutability: ConfigMutability,
-    kind: ConfigKind,
     builtin_default: Option<&'a str>,
 }
 
 #[bon::builder]
 fn named(
+    #[builder(default)] kind: ConfigKind,
     #[builder(default = "listeners")] name: &'_ str,
     #[builder(default)] value: &'_ str,
     #[builder(default)] mutability: ConfigMutability,
-    #[builder(default)] kind: ConfigKind,
     builtin_default: Option<&'_ str>,
 ) -> DescribeConfigsResourceResult {
     let setup = NamedConfigSetup {
+        kind,
         name,
         value,
         mutability,
-        kind,
         builtin_default,
     };
     DescribeConfigsResourceResult {

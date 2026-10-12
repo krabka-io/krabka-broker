@@ -354,8 +354,7 @@ mod tests {
                 actor::{
                     records::PendingShareRecords,
                     test_support::{
-                        TopicMetadataSetup, make_coordinator, metadata_with_topic,
-                        unavailable_persister_coordinator,
+                        make_coordinator, metadata_with_topic, unavailable_persister_coordinator,
                     },
                 },
                 persistence::{
@@ -368,7 +367,6 @@ mod tests {
                 make_share_persister,
             },
         },
-        test_support::PartitionCount,
     };
 
     /// The records of one `ShareGroupStatePartitionMetadata` write of `g`.

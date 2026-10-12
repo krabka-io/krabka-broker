@@ -27,10 +27,9 @@ use crate::{
     codes,
     handlers::test_support::{
         AcknowledgementBatchSetup, AcknowledgementMode, AcknowledgementPartitionSetup,
-        AcknowledgementSetup, ClientTopicSetup, ProduceRecordsSetup, RecordCount,
-        ShareSessionEpoch, ShareWireSetup, acknowledge_batches_request, acquired_share_records,
-        create_topic as create_topic_from_test_support, produce_records, share_acknowledge_wire,
-        share_fetch_wire,
+        AcknowledgementSetup, RecordCount, ShareSessionEpoch, acknowledge_batches_request,
+        acquired_share_records, create_topic as create_topic_from_test_support, produce_records,
+        share_acknowledge_wire, share_fetch_wire,
     },
     share_partition::state::RecordState::{self, Acknowledged, Acquired, Available},
     test_support::{KafkaErrorCode, initialize_share_state},
@@ -103,33 +102,8 @@ struct RenewFetchSetup<'a> {
     batches: Vec<AcknowledgementBatchSetup>,
 }
 
-#[bon::builder]
-async fn share_fetch(
-    broker: &BrokerHandle,
-    #[builder(default = "renew-group")] group: &'_ str,
-    #[builder(into, default = ShareSessionEpoch (0))] epoch: ShareSessionEpoch,
-    #[builder(default)] topic_id: WireUuid,
-    #[builder(default)] mode: AcknowledgementMode,
-    #[builder(default = FETCH)] limits: Limits,
-    #[builder(default)] batches: Vec<AcknowledgementBatchSetup>,
-) -> ShareFetchResponse {
-    let setup = RenewFetchSetup {
-        group,
-        epoch,
-        topic_id,
-        mode,
-        limits,
-        batches,
-    };
-    let request = fetch_request()
-        .group(setup.group)
-        .epoch(setup.epoch)
-        .topic_id(setup.topic_id)
-        .mode(setup.mode)
-        .limits(setup.limits)
-        .batches(setup.batches)
-        .call();
-    share_fetch_as(broker, "share-consumer", &request).await
+async fn share_fetch(broker: &BrokerHandle, request: &ShareFetchRequest) -> ShareFetchResponse {
+    share_fetch_as(broker, "share-consumer", request).await
 }
 
 async fn share_fetch_as(
@@ -324,21 +298,16 @@ async fn renew_acknowledgements_renew_only_the_renew_offsets() {
         if case.availability == RenewAvailability::Disabled {
             disable_renew(&broker, &group).await;
         }
-        let opened = share_fetch()
-            .broker(&broker)
-            .group(&group)
-            .topic_id(topic_id)
-            .call()
-            .await;
+        let opened_request = fetch_request().group(&group).topic_id(topic_id).call();
+        let opened = share_fetch(&broker, &opened_request).await;
         assert!(opened.error_code == codes::NONE, "{opened:?}");
         produce(&broker, &group, RecordCount(3)).await;
-        let fetched = share_fetch()
-            .broker(&broker)
+        let fetched_request = fetch_request()
             .group(&group)
             .epoch(1)
             .topic_id(topic_id)
-            .call()
-            .await;
+            .call();
+        let fetched = share_fetch(&broker, &fetched_request).await;
         assert!(
             fetched.responses[0].partitions[0].acquired_records.len() == 1,
             "{fetched:?}"
@@ -374,16 +343,15 @@ async fn renew_acknowledgements_renew_only_the_renew_offsets() {
                 }
             }
             Call::ShareFetch(limits) => {
-                let response = share_fetch()
-                    .broker(&broker)
+                let request = fetch_request()
                     .group(&group)
                     .epoch(2)
                     .topic_id(topic_id)
                     .mode(AcknowledgementMode::Renew)
                     .limits(limits)
                     .batches(case.batches.clone())
-                    .call()
-                    .await;
+                    .call();
+                let response = share_fetch(&broker, &request).await;
                 let row = response.responses.first().map(|topic| &topic.partitions[0]);
                 Outcome {
                     error: response.error_code,

@@ -18,7 +18,7 @@ use support::{client::scrape_metrics as scrape, cluster_lock};
 use tempfile::TempDir;
 
 use crate::support::{
-    client::{ValueBatchSetup, ValueRecordCount, connect_client},
+    client::connect_client,
     offsets::{delete_records_partition, delete_records_request, delete_records_topic},
     produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},

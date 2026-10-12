@@ -27,10 +27,7 @@ use crate::support::{
     client::connect_owned,
     discovery::coordinator_lookup_request,
     shutdown_cluster,
-    topics::{
-        ConfiguredTopicSetup, TopicPartitionCount, TopicReplicationFactor, creatable_topic,
-        create_topic_request,
-    },
+    topics::{creatable_topic, create_topic_request},
 };
 
 mod support;

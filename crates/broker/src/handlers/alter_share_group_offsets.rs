@@ -287,15 +287,14 @@ mod tests {
         codes,
         coordinator::unified::{GroupType, ShareGroupSeed, share::actor::ShareGroupActorMessage},
         handlers::{
-            RequestContext,
-            create_topics::handle as create_topics_handle,
-            test_support::{CreateTopicSetup, configured_topic_request},
+            RequestContext, create_topics::handle as create_topics_handle,
+            test_support::CreateTopicSetup,
         },
         share_coordinator::{
             coordinator::message::UNKNOWN_TOPIC_OR_PARTITION,
             handlers::test_support::lead_share_state_partitions,
         },
-        test_support::{DenyAll, ShareApiSupport, ShareBrokerSetup, start_share_broker, test_ctx},
+        test_support::{DenyAll, ShareApiSupport, start_share_broker, test_ctx},
     };
 
     macro_rules! joining_share_member {
@@ -384,13 +383,7 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let topic_name = setup.topic;
         let version = create_topics_response::MAX_VERSION;
-        let request = configured_topic_request()
-            .topic(setup.topic)
-            .configs(setup.configs)
-            .num_partitions(setup.num_partitions.0)
-            .replication_factor(setup.replication_factor.0)
-            .timeout(setup.timeout)
-            .call();
+        let request = crate::handlers::test_support::configured_topic_request_from!(setup);
         let response = create_topics_handle(&broker, request, version, ctx)
             .await
             .expect("create topic");

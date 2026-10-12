@@ -87,8 +87,8 @@ mod tests {
         authorizer::{AllowAllAuthorizer, AuthorizationResult, Authorizer},
         broker::{Broker, BrokerHandle},
         test_support::{
-            FreezeSetup, FrozenTopicsImageSetup, configure_single_partition_transactions,
-            start_broker_no_audit_with, test_ctx, topic_freeze_record,
+            configure_single_partition_transactions, start_broker_no_audit_with, test_ctx,
+            topic_freeze_record,
         },
         txn::{
             bootstrap::TOPIC,

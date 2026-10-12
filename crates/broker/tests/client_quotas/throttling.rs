@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 use bytes::BytesMut;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -31,16 +30,13 @@ use super::{
 use crate::{
     cluster::wait_alice_quota,
     kafka_wire::{
-        self, AutomaticTopicSetup, ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup,
-        ProduceRecordCount, ProduceValueBytes,
+        self, PlainAuthenticationSetup, ProduceRecordCount, ProduceValueBytes,
         ResponseHeaderSelection as WireResponseHeaderSelection, ZeroFilledRecordsSetup,
-        quotas::{QuotaAlterSetup, QuotaValue, UserQuotaSetup, alter_user_quota},
+        quotas::{QuotaAlterSetup, QuotaValue, alter_user_quota},
     },
     support::{
-        acl::{TopicAclSetup, seed_topic_acl},
-        discovery::api_versions_request_for,
-        topics::ConfiguredTopicSetup,
-        wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
+        acl::seed_topic_acl, discovery::api_versions_request_for, topics::ConfiguredTopicSetup,
+        wire::HeaderEncoding as RequestHeaderEncoding,
     },
 };
 
@@ -116,13 +112,7 @@ async fn request_percentage_throttles_produce() {
     .await;
 
     // Set a tiny request_percentage for alice (no byte-rate quota).
-    set_alice_quota()
-        .broker(&handle)
-        .addr(addr)
-        .key(QuotaSettingSetup::request_time().key)
-        .value(QuotaSettingSetup::request_time().value)
-        .call()
-        .await;
+    set_request_time_quota(&handle, addr).await;
 
     // Alice produces a single small record. Retry past TOPIC_AUTHORIZATION_FAILED
     // (29) while the alice Write ACL propagates to the handler's image snapshot.
@@ -416,13 +406,7 @@ async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
         baseline.throttle_time_ms
     );
 
-    set_alice_quota()
-        .broker(&handle)
-        .addr(addr)
-        .key(QuotaSettingSetup::request_time().key)
-        .value(QuotaSettingSetup::request_time().value)
-        .call()
-        .await;
+    set_request_time_quota(&handle, addr).await;
 
     // Drive the same request until the request bucket runs dry. Each request
     // charges its own handler time, so the first one over budget is throttled.
@@ -526,13 +510,7 @@ async fn request_percentage_throttle_is_reported_on_api_versions() {
         baseline.throttle_time_ms
     );
 
-    set_alice_quota()
-        .broker(&handle)
-        .addr(addr)
-        .key(QuotaSettingSetup::request_time().key)
-        .value(QuotaSettingSetup::request_time().value)
-        .call()
-        .await;
+    set_request_time_quota(&handle, addr).await;
 
     let throttled = throttled_response!(
         &mut stream,
@@ -704,6 +682,17 @@ async fn set_alice_quota(
         .broker(broker)
         .addr(addr)
         .authentication(PlainAuthenticationSetup::admin(CLIENT_ID))
+        .key(setup.key)
+        .value(setup.value)
+        .call()
+        .await;
+}
+
+async fn set_request_time_quota(broker: &krabka_broker::BrokerHandle, addr: std::net::SocketAddr) {
+    let setup = QuotaSettingSetup::request_time();
+    set_alice_quota()
+        .broker(broker)
+        .addr(addr)
         .key(setup.key)
         .value(setup.value)
         .call()

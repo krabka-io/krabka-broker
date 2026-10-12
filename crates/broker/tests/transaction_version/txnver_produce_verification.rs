@@ -27,17 +27,14 @@ use crate::{
         discovery::coordinator_lookup_request,
         offsets::{list_offset_partition, single_partition_list_offsets},
         produce::{SinglePartitionProduceSetup, batch_request},
-        records::{
-            BatchTransaction, ProducerSequence, TransactionProbeBatchSetup, transaction_probe_batch,
-        },
+        records::{BatchTransaction, ProducerSequence, transaction_probe_batch},
         topics::TopicPartitionCount,
         transaction_wire::{
-            TransactionPartitionsSetup, initialize_transactional, partition_error,
-            partitions_request, retry_coordinator, transaction_topic,
+            initialize_transactional, partition_error, partitions_request, retry_coordinator,
+            transaction_topic,
         },
         transactions::{
-            EndTransactionSetup, ProducerEpoch, ProducerEpochOffset, ProducerIdentity,
-            end_transaction_request,
+            ProducerEpoch, ProducerEpochOffset, ProducerIdentity, end_transaction_request,
         },
         wire::At,
     },

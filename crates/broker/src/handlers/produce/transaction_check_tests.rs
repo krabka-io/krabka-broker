@@ -18,8 +18,7 @@ use super::{test_support::one_transactional_batch, *};
 use crate::{
     codes,
     handlers::{
-        init_producer_id::handle as init_producer_id_handle,
-        test_support::{CreateTopicSetup, TopicPartitionCount, configured_topic_request},
+        init_producer_id::handle as init_producer_id_handle, test_support::configured_topic_request,
     },
     test_support::{
         decode_response, dispatch_context, encode_request, peer, principal,

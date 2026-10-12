@@ -33,18 +33,15 @@ use crate::{
     share_rpc::{acquired_count, fetch_until_acquired, share_fetch},
     support::{
         configs::{
-            ConfigOperation, IncrementalConfigsSetup, feature_update, incremental_config,
-            incremental_request, incremental_resource,
+            ConfigOperation, feature_update, incremental_config, incremental_request,
+            incremental_resource,
         },
-        fetch::{
-            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
-        },
+        fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
         offsets::{list_offset_partition, single_partition_list_offsets},
         share::{
-            AcknowledgeRequestSetup, ShareAck, ShareFetchSetup, ShareProduceSetup,
-            ShareRecordCount, ShareRecordsSetup, ShareSessionEpoch, ShareSessionSetup,
-            StartGroupTopicSetup, acknowledge_partition, acknowledge_request, acknowledge_success,
-            acknowledge_topic, join_consume_member, start_group_topic,
+            ShareAck, ShareFetchSetup, ShareRecordCount, ShareSessionEpoch, ShareSessionSetup,
+            acknowledge_partition, acknowledge_request, acknowledge_success, acknowledge_topic,
+            join_consume_member, start_group_topic,
         },
         topics::topic_configs,
     },
@@ -390,24 +387,16 @@ struct DeadLetterQueueSetup<'a> {
 }
 
 /// Keep the feature gate and topic/group configuration in their original order.
-#[bon::builder]
 async fn configure_dead_letters(
     client: &Client,
     broker: &BrokerHandle,
-    #[builder(into, default = crate :: support :: share :: ShareRecordCount (3))]
-    records: ShareRecordCount,
-    #[builder(default)] version: DeadLetterShareVersion,
-    #[builder(default = & [])] topic_configs: &'_ [(&'_ str, &'_ str)],
+    version: DeadLetterShareVersion,
+    topic_configs: &[(&str, &str)],
 ) {
-    let setup = DeadLetterQueueSetup {
-        records,
-        version,
-        topic_configs,
-    };
-    if matches!(setup.version, DeadLetterShareVersion::Two) {
+    if matches!(version, DeadLetterShareVersion::Two) {
         finalize_share_version_two(client).await;
     }
-    create_dead_letter_topic_with(broker, client, setup.topic_configs).await;
+    create_dead_letter_topic_with(broker, client, topic_configs).await;
     point_group_at_dead_letter_topic(client).await;
 }
 
@@ -823,12 +812,13 @@ async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
         .hooks(AcquisitionHooks {
             tweak: |_: &mut BrokerConfig| {},
             configure: async |client: &Client, broker: &BrokerHandle| {
-                configure_dead_letters()
-                    .client(client)
-                    .broker(broker)
-                    .topic_configs(&[("max.message.bytes", "1100")])
-                    .call()
-                    .await;
+                configure_dead_letters(
+                    client,
+                    broker,
+                    DeadLetterShareVersion::default(),
+                    &[("max.message.bytes", "1100")],
+                )
+                .await;
             },
             produce: async |client: &Client, tid: uuid::Uuid| {
                 let values = vec![Bytes::from(vec![b'x'; 1_000])];
@@ -1000,14 +990,7 @@ async fn acquired_dead_letters(
         topic_configs,
     };
     acquired_records(setup.records, customize, async |client, broker| {
-        configure_dead_letters()
-            .client(client)
-            .broker(broker)
-            .records(setup.records)
-            .version(setup.version)
-            .topic_configs(setup.topic_configs)
-            .call()
-            .await;
+        configure_dead_letters(client, broker, setup.version, setup.topic_configs).await;
     })
     .await
 }

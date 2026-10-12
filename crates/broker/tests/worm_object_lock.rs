@@ -20,7 +20,7 @@ use krabka_audit::signing::FileEd25519Signer;
 use krabka_log::LogConfig;
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 
-use crate::support::{JvmBrokerSetup, controller_voters, init_tracing_with};
+use crate::support::{controller_voters, init_tracing_with};
 
 /// Object-Lock bucket for this suite. It is not [`MINIO_BUCKET`]: that bucket
 /// is the ordinary mutable tier, and a locked bucket behaves differently enough

@@ -24,10 +24,7 @@ use crate::{
     break_glass::gate::tests::{approved_proposal, image_of},
     broker::Broker,
     config::BreakGlassConfig,
-    handlers::{
-        RequestContext,
-        test_support::{ReplicatedPartitionSetup, replicated_partition as partition_fixture},
-    },
+    handlers::{RequestContext, test_support::replicated_partition as partition_fixture},
     metrics::{BreakGlassAction as MetricBreakGlassAction, BreakGlassActionLabel, BrokerMetrics},
     test_support::{
         DenyAll, PartitionCount, PartitionEpoch, broker_registration,

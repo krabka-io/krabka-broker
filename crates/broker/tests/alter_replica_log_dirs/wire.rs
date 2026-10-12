@@ -25,10 +25,7 @@ use krabka_protocol::{
 use tokio::net::TcpStream;
 
 use crate::support::{
-    configs::{
-        ConfigOperation, IncrementalConfigsSetup, incremental_config, incremental_request,
-        incremental_resource,
-    },
+    configs::{ConfigOperation, incremental_config, incremental_request, incremental_resource},
     wire::ApiRequestSetup,
 };
 

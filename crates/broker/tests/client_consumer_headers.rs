@@ -5,7 +5,7 @@ use krabka_client_producer::{Header, ProducerRecord};
 
 use crate::support::{
     client::standalone_topic,
-    producer::{ProducerRecordSetup, default_producer, producer_record},
+    producer::{default_producer, producer_record},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

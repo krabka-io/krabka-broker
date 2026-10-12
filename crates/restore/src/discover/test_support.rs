@@ -144,6 +144,25 @@ pub(super) fn write_full_segment(
     }
 }
 
+#[bon::builder]
+pub(super) fn write_topic_segment(
+    root: &std::path::Path,
+    topic: &'_ str,
+    #[builder(into, default = PartitionIndex (0))] partition: PartitionIndex,
+    topic_id: Uuid,
+    segment_id: Uuid,
+) {
+    write_full_segment()
+        .root(root)
+        .partition(PartitionKey {
+            topic,
+            partition,
+            topic_id,
+        })
+        .segment_id(segment_id)
+        .call();
+}
+
 /// The [`SegmentInventory`] a call to [`write_full_segment`] with the same
 /// arguments produces.
 #[bon::builder]

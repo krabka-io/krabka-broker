@@ -501,6 +501,28 @@ mod tests {
         }
     }
 
+    fn assert_push_at(
+        manager: &ClientMetricsManager,
+        image: &MetadataImage,
+        attributes: &ClientAttributes,
+        at: Instant,
+        check: PushCheck,
+        expected: &Outcome,
+        context: &str,
+    ) {
+        assert!(
+            run()
+                .m(manager)
+                .img(image)
+                .attrs(attributes)
+                .now(at)
+                .step(Step::Push(check))
+                .call()
+                == *expected,
+            "{context}"
+        );
+    }
+
     fn reject_get(error_code: KafkaErrorCode) -> Outcome {
         Outcome::Get(SubscriptionDecision::Reject {
             error_code: error_code.0,
@@ -603,16 +625,14 @@ mod tests {
             ),
         ];
         for (name, at, check, expected) in steps {
-            assert!(
-                run()
-                    .m(&m)
-                    .img(&img)
-                    .attrs(&attrs)
-                    .now(at)
-                    .step(Step::Push(check))
-                    .call()
-                    == expected,
-                "step {name}"
+            assert_push_at(
+                &m,
+                &img,
+                &attrs,
+                at,
+                check,
+                &expected,
+                &format!("step {name}"),
             );
         }
     }
@@ -684,16 +704,14 @@ mod tests {
                     ..push(TelemetrySubscriptionId(id))
                 };
                 let at = t + Duration::from_secs(secs);
-                assert!(
-                    run()
-                        .m(&m)
-                        .img(&img)
-                        .attrs(&attrs)
-                        .now(at)
-                        .step(Step::Push(check))
-                        .call()
-                        == expected,
-                    "row {name} at {secs} s"
+                assert_push_at(
+                    &m,
+                    &img,
+                    &attrs,
+                    at,
+                    check,
+                    &expected,
+                    &format!("row {name} at {secs} s"),
                 );
             }
         }

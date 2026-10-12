@@ -50,10 +50,10 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    client::{BatchProduceSetup, produce_batch},
+    client::produce_batch,
     offsets::{delete_records_partition, delete_records_request, delete_records_topic},
     records::{batch_from_records, value_record},
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 mod support;

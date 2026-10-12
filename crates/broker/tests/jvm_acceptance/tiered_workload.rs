@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     jvm_acceptance::wait_jvm_log_config,
-    support::{ContainerInput, JvmDockerSetup, jvm_docker_command, jvm_stdin_output},
+    support::{ContainerInput, jvm_docker_command, jvm_stdin_output},
 };
 
 /// Segment size every tiered-storage suite boots its broker with, as

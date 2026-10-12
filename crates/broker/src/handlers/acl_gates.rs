@@ -352,7 +352,7 @@ mod tests {
     use crate::{
         authorizer::SimpleAclAuthorizer,
         handlers::test_support::operators_principal as principal,
-        test_support::{AllowAclSetup, allow_acl, peer},
+        test_support::{allow_acl, peer},
     };
 
     #[test]

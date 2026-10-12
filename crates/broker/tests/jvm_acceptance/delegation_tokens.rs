@@ -7,9 +7,7 @@
 
 use krabka_broker::BrokerConfig;
 
-use crate::jvm_acceptance::SaslClusterSetup;
-
-/// Like [`start_three_broker_sasl_plaintext_jvm_cluster_with_users`] but
+/// Like [`super::three_broker_cluster::start_three_broker_sasl_plaintext_jvm_cluster`] but
 /// also enables `SCRAM-SHA-256` on the listener and installs the given
 /// `secret_key` as the HMAC master for KIP-48 delegation tokens on every
 /// broker. The admin user is provisioned as PLAIN, so the JVM CLI's

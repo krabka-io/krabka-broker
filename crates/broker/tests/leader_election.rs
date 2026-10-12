@@ -16,7 +16,7 @@ use tempfile::TempDir;
 use crate::support::{
     client::{BatchProduceSetup, connect_client},
     discovery::named_topic_metadata,
-    durability::{ReplicatedTopicSetup, replicated_topic_fixture},
+    durability::replicated_topic_fixture,
     produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
     shutdown_cluster,
 };

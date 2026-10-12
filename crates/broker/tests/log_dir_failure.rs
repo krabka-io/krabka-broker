@@ -35,9 +35,7 @@ use krabka_client_producer::{Acks, Producer, ProducerRecord};
 use tempfile::TempDir;
 
 use crate::support::{
-    NodeIndex, RoleNodeSetup,
-    client::create_topic_for_broker,
-    producer::{ProducerRecordSetup, producer_record},
+    NodeIndex, RoleNodeSetup, client::create_topic_for_broker, producer::producer_record,
 };
 
 mod support;
@@ -262,19 +260,23 @@ async fn produce(producer: &Producer, timestamp_ms: i64) {
 async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
     support::init_tracing();
     let cluster = start_cluster().await;
-    create_topic_for_broker()
-        .broker(&cluster.controller)
-        .topic(FILLER)
-        .replication_factor(3)
-        .call()
-        .await;
+    create_topic_for_broker(
+        &cluster.controller,
+        crate::support::topics::configured_topic_request()
+            .topic(FILLER)
+            .replication_factor(3)
+            .call(),
+    )
+    .await;
     wait_until_materialized(&cluster.brokers, &format!("{FILLER}-0")).await;
-    create_topic_for_broker()
-        .broker(&cluster.controller)
-        .topic(TOPIC)
-        .replication_factor(3)
-        .call()
-        .await;
+    create_topic_for_broker(
+        &cluster.controller,
+        crate::support::topics::configured_topic_request()
+            .topic(TOPIC)
+            .replication_factor(3)
+            .call(),
+    )
+    .await;
     let target = format!("{TOPIC}-0");
     wait_until_materialized(&cluster.brokers, &target).await;
 

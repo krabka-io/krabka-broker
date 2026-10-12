@@ -16,8 +16,7 @@ use crate::{
     broker::BrokerHandle,
     codes,
     handlers::test_support::{
-        ClientTopicSetup, check_cases, check_denied_topic_cases,
-        create_topic as create_topic_from_test_support,
+        check_cases, check_denied_topic_cases, create_topic as create_topic_from_test_support,
     },
     test_support::{
         DenyAll, decode_response, encode_request, peer, principal,

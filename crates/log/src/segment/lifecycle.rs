@@ -326,9 +326,8 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_THREE_RECORD_BATCH,
-        SampleBatchSetup, SeededSegmentSetup, THREE_RECORD_BATCH, sample_batch, seeded_fixture,
-        segment_at, test_segment, two_record_fixture,
+        DENSE_INDEX, NO_LIMIT, SECOND_THREE_RECORD_BATCH, THREE_RECORD_BATCH, sample_batch,
+        seeded_fixture, segment_at, test_segment, two_record_fixture,
     };
 
     /// Truncating to a relative offset keeps every batch that ends before it,

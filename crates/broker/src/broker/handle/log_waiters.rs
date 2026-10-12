@@ -233,8 +233,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        broker::test_support::{LocalPartitionSetup, local_partition_with_records},
-        test_support::start_broker_with,
+        broker::test_support::local_partition_with_records, test_support::start_broker_with,
     };
 
     #[tokio::test]

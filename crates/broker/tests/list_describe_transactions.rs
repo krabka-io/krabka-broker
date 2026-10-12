@@ -27,7 +27,7 @@ pub use crate::support::boot_single;
 use crate::support::{
     client::connect_client,
     producer::string_record,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 /// `ListTransactions`, retried while the coordinator loads its state

@@ -138,12 +138,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+        handlers::test_support::replicated_partition,
         log_dir::partition_dir,
         log_dir_status::LogDirRegistry,
-        test_support::{
-            StandalonePartitionSetup, spawn_standalone_partition, topic_partition_image,
-        },
+        test_support::{spawn_standalone_partition, topic_partition_image},
     };
 
     fn image_with_topic(topic: &str, leader: u64) -> MetadataImage {

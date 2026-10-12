@@ -31,7 +31,6 @@ use crate::{
         classic_state::OffsetEntry,
         regex_resolver::no_topic_regex_resolver,
     },
-    handlers::test_support::CreateTopicSetup,
     test_support::{dispatch_wire, peer, principal, start_group_broker_no_audit},
     time_util::now_ms,
 };

@@ -25,10 +25,7 @@ use crate::{
     authorizer::{AuthorizationResult, Authorizer},
     broker::BrokerHandle,
     codes,
-    handlers::{
-        acl_wire::CLUSTER_RESOURCE_NAME,
-        test_support::{CreateTopicSetup, configured_topic_request},
-    },
+    handlers::{acl_wire::CLUSTER_RESOURCE_NAME, test_support::configured_topic_request},
     test_support::{dispatch_wire, peer, principal, start_broker_no_audit_with},
 };
 

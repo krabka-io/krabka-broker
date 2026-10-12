@@ -92,6 +92,8 @@ pub(super) fn producer_batch(
     #[builder(into, default)] timestamp: UnixMillis,
     #[builder(default)] offsets: RecordOffsets,
 ) -> krabka_protocol::records::RecordBatch {
+    use krabka_protocol::records::{Record, RecordBatch};
+
     let setup = ProducerBatchSetup {
         producer,
         epoch,
@@ -100,7 +102,6 @@ pub(super) fn producer_batch(
         timestamp,
         offsets,
     };
-    use krabka_protocol::records::{Record, RecordBatch};
     let at_offset = |offset_delta| Record {
         offset_delta,
         ..Default::default()

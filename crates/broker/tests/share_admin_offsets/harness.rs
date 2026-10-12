@@ -13,9 +13,8 @@ use krabka_client_core::Client;
 use krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRequest;
 
 use crate::support::share::{
-    ConsumptionFixture, ConsumptionSetup, ShareRecordCount, ShareRecordsSetup, ShareSessionSetup,
-    ShareTopicSetup, consumption_fixture, join as join_share_group, permitted_topic_fixture,
-    start_topic,
+    ConsumptionFixture, ConsumptionSetup, ShareRecordCount, ShareSessionSetup, consumption_fixture,
+    join as join_share_group, permitted_topic_fixture, start_topic,
 };
 pub use crate::support::share::{
     acquired_count, bootstrap_share_state, broker_config, broker_test_permit, connect,
@@ -127,8 +126,7 @@ pub async fn seeded_empty_group(
     tempfile::TempDir,
     uuid::Uuid,
 ) {
-    let (permit, broker, client, dir, tid) =
-        permitted_topic_fixture().customize(|_| {}).call().await;
+    let (permit, broker, client, dir, tid) = Box::pin(permitted_topic_fixture().call()).await;
     bootstrap_share_state(&broker, &client, "g1").await;
     produce_n()
         .client(&client)

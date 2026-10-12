@@ -33,7 +33,7 @@ use crate::{
             TargetAssignmentMemberValue,
         },
     },
-    handlers::test_support::{CreateTopicSetup, TopicPartitionCount, configured_topic_request},
+    handlers::test_support::configured_topic_request,
     test_support::{
         dispatch_context, dispatch_wire, encode_request, peer, principal,
         start_group_broker_no_audit,

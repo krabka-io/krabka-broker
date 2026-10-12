@@ -17,7 +17,7 @@ pub(crate) use krabka_raft::{
 };
 use krabka_units::prelude::{Time, millis};
 
-use crate::{harness::SimEngineSetup as HarnessSimEngineSetup, sim_net::SimNet};
+use crate::sim_net::SimNet;
 
 pub(crate) fn three_voter_network() -> (SimNet, [NodeId; 3]) {
     (SimNet::new(), [NodeId(1), NodeId(2), NodeId(3)])

@@ -87,7 +87,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::test_support::PartitionCount;
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([51; 16]);
     const WIRE_TOPIC: ProtoUuid = ProtoUuid([51; 16]);

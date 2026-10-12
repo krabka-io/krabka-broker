@@ -20,7 +20,7 @@ use crate::{
     codes,
     config::BreakGlassConfig,
     operator_keys::{OperatorKeyEntry, OperatorKeys},
-    test_support::{OperatorKeyFileSetup, ed25519_public_key_file},
+    test_support::ed25519_public_key_file,
 };
 
 // An operator key bound to `principal`, plus the signer for it.

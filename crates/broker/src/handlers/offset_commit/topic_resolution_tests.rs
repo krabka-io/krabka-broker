@@ -29,7 +29,6 @@ use crate::{
     broker::BrokerHandle,
     codes,
     coordinator::unified::actor::GroupActorMessage,
-    handlers::test_support::CreateTopicSetup,
     test_support::{
         DenyAll, dispatch_wire, peer, principal, request_context, start_group_broker_no_audit,
     },

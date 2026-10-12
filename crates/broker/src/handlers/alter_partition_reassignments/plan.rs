@@ -368,10 +368,9 @@ mod tests {
     use crate::{
         config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
         handlers::alter_partition_reassignments::test_support::{
-            ReassignmentImageSetup, ReplicaBrokerId, ReplicationFactorPolicy, img_with,
-            pending_reassignment_image,
+            ReplicaBrokerId, ReplicationFactorPolicy, img_with, pending_reassignment_image,
         },
-        test_support::{PartitionEpoch, ReassignmentSetup},
+        test_support::ReassignmentSetup,
     };
 
     /// The record the fixture partition `foo-0` becomes.

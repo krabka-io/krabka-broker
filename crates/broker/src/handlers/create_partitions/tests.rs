@@ -18,7 +18,7 @@ use crate::{
             PartitionMutation, VERSION, assn, expected_response, expected_result, request,
             seed_controller_quota, seed_topic, topic_req,
         },
-        test_support::{TopicPartitionCount, replica_availability, replica_nodes_from_partitions},
+        test_support::{replica_availability, replica_nodes_from_partitions},
     },
     test_support::{
         DenyAll, begin_controlled_shutdown, fence_remote_broker, make_witness, peer, principal,
@@ -81,6 +81,13 @@ macro_rules! seeded_partition_topic {
     };
 }
 
+macro_rules! seeded_admin_partition_topic {
+    (($handle:ident, $directory:ident, $broker:ident), ($principal:ident, $peer:ident), $name:expr $(, partitions = $partitions:expr)?) => {
+        seeded_partition_topic!(($handle, $directory, $broker), $name $(, partitions = $partitions)?);
+        request_identity!(($principal, $peer), principal("admin"));
+    };
+}
+
 #[tokio::test]
 async fn handle_denies_topic_alter_for_each_topic() {
     broker_fixture!((broker_handle, _dir, broker), deny_all);
@@ -103,8 +110,7 @@ async fn handle_denies_topic_alter_for_each_topic() {
 
 #[tokio::test]
 async fn handle_reports_unknown_topic_and_rejects_same_partition_count() {
-    seeded_partition_topic!((broker_handle, _dir, broker), "stable");
-    request_identity!((p, peer), principal("admin"));
+    seeded_admin_partition_topic!((broker_handle, _dir, broker), (p, peer), "stable");
     check_topic_rows()
         .broker(&broker)
         .ctx(&test_context(&p, &peer))
@@ -134,8 +140,12 @@ async fn handle_reports_unknown_topic_and_rejects_same_partition_count() {
 
 #[tokio::test]
 async fn validate_only_reports_success_without_adding_partitions() {
-    seeded_partition_topic!((broker_handle, _dir, broker), "dry-run", partitions = 1);
-    request_identity!((p, peer), principal("admin"));
+    seeded_admin_partition_topic!(
+        (broker_handle, _dir, broker),
+        (p, peer),
+        "dry-run",
+        partitions = 1
+    );
     check_topic_rows()
         .broker(&broker)
         .ctx(&test_context(&p, &peer))
@@ -156,8 +166,12 @@ async fn validate_only_reports_success_without_adding_partitions() {
 
 #[tokio::test]
 async fn handle_adds_new_partitions_and_preserves_response_identity() {
-    seeded_partition_topic!((broker_handle, _dir, broker), "grow", partitions = 1);
-    request_identity!((p, peer), principal("admin"));
+    seeded_admin_partition_topic!(
+        (broker_handle, _dir, broker),
+        (p, peer),
+        "grow",
+        partitions = 1
+    );
     check_topic_rows()
         .broker(&broker)
         .ctx(&test_context(&p, &peer))
@@ -278,9 +292,13 @@ async fn strict_create_partitions_rejects_after_quota_exhaustion() {
 #[tokio::test]
 async fn a_conflicting_growth_refunds_only_its_obsolete_partition_delta() {
     for concurrent_count in [9, 10] {
-        seeded_partition_topic!((broker_handle, _dir, broker), "metered", partitions = 1);
+        seeded_admin_partition_topic!(
+            (broker_handle, _dir, broker),
+            (p, peer),
+            "metered",
+            partitions = 1
+        );
         seed_controller_quota(&broker_handle, 2.0).await;
-        request_identity!((p, peer), principal("admin"));
         let ctx = test_context(&p, &peer);
         let stale = broker.controller.current_image();
         let quota = Mutex::new(ctx.controller_mutation_quota(&broker, &stale, true));

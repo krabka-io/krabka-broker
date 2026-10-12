@@ -186,45 +186,38 @@ impl FetchSessionSetup {
 }
 
 #[bon::builder]
-pub fn empty_session_fetch(
-    limits: FetchLimits,
+pub fn build_fetch_session_request(
+    request: Option<FetchRequest>,
+    #[builder(default = FetchLimits :: default())] limits: FetchLimits,
     #[builder(into, default)] id: FetchSessionId,
     #[builder(into, default = FetchSessionEpoch (FetchRequest :: default () . session_epoch))]
     epoch: FetchSessionEpoch,
     #[builder(default)] forgotten: Vec<ForgottenTopic>,
 ) -> FetchRequest {
+    let request = request.unwrap_or_else(|| fetch_request_for(Vec::new(), limits));
     let session = FetchSessionSetup {
         id,
         epoch,
         forgotten,
     };
-    session_fetch_request()
-        .request(fetch_request_for(Vec::new(), limits))
-        .id(session.id)
-        .epoch(session.epoch)
-        .forgotten(session.forgotten)
-        .call()
+    FetchRequest {
+        session_id: session.id.0,
+        session_epoch: session.epoch.0,
+        forgotten_topics_data: session.forgotten,
+        ..request
+    }
 }
 
 #[bon::builder]
-pub fn session_fetch_request(
-    request: FetchRequest,
-    #[builder(into, default)] id: FetchSessionId,
-    #[builder(into, default = FetchSessionEpoch (FetchRequest :: default () . session_epoch))]
-    epoch: FetchSessionEpoch,
-    #[builder(default)] forgotten: Vec<ForgottenTopic>,
+pub fn incremental_session_fetch(
+    #[builder(into)] id: FetchSessionId,
+    limits: FetchLimits,
 ) -> FetchRequest {
-    let setup = FetchSessionSetup {
-        id,
-        epoch,
-        forgotten,
-    };
-    FetchRequest {
-        session_id: setup.id.0,
-        session_epoch: setup.epoch.0,
-        forgotten_topics_data: setup.forgotten,
-        ..request
-    }
+    build_fetch_session_request()
+        .limits(limits)
+        .id(id)
+        .epoch(FetchSessionEpoch(1))
+        .call()
 }
 
 /// Check a successful partition's v2 record count against the caller's expected count.

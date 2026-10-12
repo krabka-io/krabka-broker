@@ -13,10 +13,7 @@ use crate::{
     epoch_harness::{boot_single, create_topic, record, topic_id_for},
     support::{
         client::connect_client,
-        fetch::{
-            FetchLimits, FetchPartitionSetup, RequestWaitMillis, SinglePartitionFetchSetup,
-            fetch_partition, single_partition_fetch,
-        },
+        fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
         produce::{SinglePartitionProduceSetup, batch_request},
     },
 };

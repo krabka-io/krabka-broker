@@ -35,11 +35,10 @@ use crate::{
         start_single_broker_sasl_plaintext_with_users,
     },
     kafka_wire::{
-        ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup,
+        PlainAuthenticationSetup,
         quotas::{QuotaAlterSetup, QuotaDescribeSetup},
     },
     quota_admin::{drive_alter_client_quotas_sasl, drive_describe_client_quotas_sasl},
-    support::wire::CorrelationId as WireCorrelationId,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

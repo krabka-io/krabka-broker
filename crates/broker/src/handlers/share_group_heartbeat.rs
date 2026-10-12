@@ -208,16 +208,16 @@ mod tests {
         handlers::{
             encode_response,
             group_heartbeat_test_support::{
-                GroupTopicSetup, acl_authorizer, alice, describe_acl, grant_group_read,
-                group_read_acl, subscribed_names_describe_denied_table as denied_table_fixture,
+                acl_authorizer, alice, describe_acl, grant_group_read, group_read_acl,
+                subscribed_names_describe_denied_table as denied_table_fixture,
                 topic_with_partitions,
             },
             group_read_denied,
         },
         task_util::ask,
         test_support::{
-            ControllerPeerAllowed, PartitionCount, finalize_share_version, peer, principal,
-            request_context, start_broker_with_authorizer as start_broker, test_ctx,
+            ControllerPeerAllowed, finalize_share_version, peer, principal, request_context,
+            start_broker_with_authorizer as start_broker, test_ctx,
         },
     };
 

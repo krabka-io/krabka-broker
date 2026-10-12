@@ -18,14 +18,9 @@ use crate::{
     RESOURCE_TYPE_TOPIC,
     admin_harness::{build_client, create_topic_helper},
     support::{
-        configs::{
-            ConfigOperation, IncrementalConfigsSetup, incremental_config, incremental_request,
-            incremental_resource,
-        },
+        configs::{ConfigOperation, incremental_config, incremental_request, incremental_resource},
         start_n_node_with,
-        topics::{
-            ConfiguredTopicSetup, TopicReplicationFactor, creatable_topic, create_topic_request,
-        },
+        topics::{creatable_topic, create_topic_request},
     },
 };
 

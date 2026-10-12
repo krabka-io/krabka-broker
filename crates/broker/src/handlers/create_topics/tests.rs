@@ -25,15 +25,14 @@ use crate::{
         RequestContext,
         describe_configs::effective_topic_configs,
         test_support::{
-            AclSetup, TopicPartitionCount, TopicReplicationFactor, replica_availability,
+            TopicPartitionCount, TopicReplicationFactor, acl, replica_availability,
             replica_nodes_from_partitions, seed_controller_quota as seed_controller_quota_helper,
         },
     },
     test_support::{
-        AllowAclSetup, DenyAll, DescribedCreationSetup, KafkaErrorCode, allow_acl,
-        begin_controlled_shutdown, broker_registration, described_creation_configs, dispatch_wire,
-        fence_remote_broker, make_witness, peer, principal, seed_remote_broker,
-        start_broker_no_audit_with,
+        DenyAll, KafkaErrorCode, allow_acl, begin_controlled_shutdown, broker_registration,
+        described_creation_configs, dispatch_wire, fence_remote_broker, make_witness, peer,
+        principal, seed_remote_broker, start_broker_no_audit_with,
     },
     throttle::LEADER_THROTTLED_REPLICAS_KEY,
 };
@@ -1604,14 +1603,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
         created: &'static [&'static str],
     }
 
-    use crate::handlers::test_support::acl;
-
-    let cluster_create = acl()
-        .resource_type(AclSetup::cluster(AclOperation::Create).resource_type)
-        .resource_name(AclSetup::cluster(AclOperation::Create).resource_name)
-        .pattern_type(AclSetup::cluster(AclOperation::Create).pattern_type)
-        .operation(AclSetup::cluster(AclOperation::Create).operation)
-        .call();
+    let cluster_create = crate::handlers::test_support::cluster_acl(AclOperation::Create);
     let literal_a = acl()
         .resource_name("a")
         .operation(AclOperation::Create)

@@ -56,28 +56,38 @@ impl Default for ElectionSetup<'_> {
     }
 }
 
-#[bon::builder]
-pub fn img_with_partition(
-    #[builder(default = ElectionSetup::default().topic)] topic: &'_ str,
-    #[builder(into, default = ElectionSetup::default().partition)]
-    partition: krabka_ids::PartitionIndex,
-    #[builder(into, default = ElectionSetup::default().leader)] leader: NodeId,
-    #[builder(default = ElectionSetup::default().replicas)] replicas: &'_ [NodeId],
-    #[builder(default = ElectionSetup::default().isr)] isr: &'_ [NodeId],
-    #[builder(default = ElectionSetup::default().dirs)] dirs: &'_ [Uuid],
-    #[builder(default = ElectionSetup::default().configs)] configs: &'_ [(&'_ str, &'_ str)],
-    #[builder(default = ElectionSetup::default().elr)] elr: ElrFinalization,
-) -> MetadataImage {
-    let setup = ElectionSetup {
-        topic,
-        partition,
-        leader,
-        replicas,
-        isr,
-        dirs,
-        configs,
-        elr,
+macro_rules! election_fixture_builder {
+    ($name:ident -> $result:ty = $constructor:path) => {
+        #[bon::builder]
+        pub fn $name(
+            #[builder(default = ElectionSetup::default().topic)] topic: &'_ str,
+            #[builder(into, default = ElectionSetup::default().partition)]
+            partition: krabka_ids::PartitionIndex,
+            #[builder(into, default = ElectionSetup::default().leader)] leader: NodeId,
+            #[builder(default = ElectionSetup::default().replicas)] replicas: &'_ [NodeId],
+            #[builder(default = ElectionSetup::default().isr)] isr: &'_ [NodeId],
+            #[builder(default = ElectionSetup::default().dirs)] dirs: &'_ [Uuid],
+            #[builder(default = ElectionSetup::default().configs)] configs: &'_ [(
+                &'_ str,
+                &'_ str,
+            )],
+            #[builder(default = ElectionSetup::default().elr)] elr: ElrFinalization,
+        ) -> $result {
+            $constructor(ElectionSetup {
+                topic,
+                partition,
+                leader,
+                replicas,
+                isr,
+                dirs,
+                configs,
+                elr,
+            })
+        }
     };
+}
+
+fn image_from_election_setup(setup: ElectionSetup<'_>) -> MetadataImage {
     let mut img = MetadataImage::new(Uuid::nil());
     img.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: setup.topic.into(),
@@ -86,16 +96,7 @@ pub fn img_with_partition(
         replication_factor: i16::try_from(setup.replicas.len()).unwrap(),
     }));
     img.apply(&MetadataRecord::V1Partition(
-        seed_partition()
-            .topic(setup.topic)
-            .partition(setup.partition)
-            .leader(setup.leader)
-            .replicas(setup.replicas)
-            .isr(setup.isr)
-            .dirs(setup.dirs)
-            .configs(setup.configs)
-            .elr(setup.elr)
-            .call(),
+        partition_record_from_election_setup(setup),
     ));
     if matches!(setup.elr, ElrFinalization::Enabled) {
         finalize_elr_version(&mut img);
@@ -110,29 +111,7 @@ pub fn img_with_partition(
     img
 }
 
-/// Input partition for election tests, before any leader or ISR change.
-#[bon::builder]
-pub fn seed_partition(
-    #[builder(default = ElectionSetup::default().topic)] topic: &'_ str,
-    #[builder(into, default = ElectionSetup::default().partition)]
-    partition: krabka_ids::PartitionIndex,
-    #[builder(into, default = ElectionSetup::default().leader)] leader: NodeId,
-    #[builder(default = ElectionSetup::default().replicas)] replicas: &'_ [NodeId],
-    #[builder(default = ElectionSetup::default().isr)] isr: &'_ [NodeId],
-    #[builder(default = ElectionSetup::default().dirs)] dirs: &'_ [Uuid],
-    #[builder(default = ElectionSetup::default().configs)] configs: &'_ [(&'_ str, &'_ str)],
-    #[builder(default = ElectionSetup::default().elr)] elr: ElrFinalization,
-) -> PartitionRecord {
-    let setup = ElectionSetup {
-        topic,
-        partition,
-        leader,
-        replicas,
-        isr,
-        dirs,
-        configs,
-        elr,
-    };
+fn partition_record_from_election_setup(setup: ElectionSetup<'_>) -> PartitionRecord {
     let ElectionSetup {
         topic,
         partition,
@@ -155,6 +134,10 @@ pub fn seed_partition(
         partition_epoch: 0,
     }
 }
+
+// Input partition for election tests, before any leader or ISR change.
+election_fixture_builder!(img_with_partition -> MetadataImage = image_from_election_setup);
+election_fixture_builder!(seed_partition -> PartitionRecord = partition_record_from_election_setup);
 
 /// Run a failover scan whose metrics are not inspected by the test.
 pub async fn failover(

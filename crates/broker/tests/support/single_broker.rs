@@ -9,7 +9,7 @@ use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use tempfile::TempDir;
 
-use crate::support::client::{BrokerClientSetup, connect_owned, start_broker_client};
+use crate::support::client::{connect_owned, start_broker_client};
 
 pub struct InProcess {
     pub broker: BrokerHandle,

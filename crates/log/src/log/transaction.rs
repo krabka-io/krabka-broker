@@ -187,7 +187,7 @@ mod tests {
             transactional_batch, verbatim_from,
         },
         name,
-        test_support::{AbortedTxnSetup, aborted_txn, open_log},
+        test_support::{aborted_txn, open_log},
     };
 
     // ---- transactional LSO / txnindex tests ----

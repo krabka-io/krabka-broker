@@ -288,7 +288,7 @@ mod tests {
     use super::*;
     use crate::{
         codes::NOT_LEADER_OR_FOLLOWER,
-        test_support::{StandalonePartitionSetup, broker_registration, open_partition},
+        test_support::{broker_registration, open_partition},
         txn::handlers::end_txn::test_support::{marker_entry, plaintext_client, tps},
     };
 

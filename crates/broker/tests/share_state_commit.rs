@@ -51,7 +51,7 @@ use crate::support::{
     client::connect_owned,
     share::crash_follower,
     shutdown_cluster,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 mod support;

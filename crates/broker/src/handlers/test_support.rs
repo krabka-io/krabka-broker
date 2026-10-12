@@ -433,6 +433,21 @@ macro_rules! acknowledgement_batches {
 krabka_macros::create_topic_fixture!(configured_topic_request);
 krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
+macro_rules! configured_topic_request_from {
+    ($setup:expr) => {{
+        let setup = $setup;
+        $crate::handlers::test_support::configured_topic_request()
+            .topic(setup.topic)
+            .configs(setup.configs)
+            .num_partitions(setup.num_partitions.0)
+            .replication_factor(setup.replication_factor.0)
+            .timeout(setup.timeout)
+            .call()
+    }};
+}
+
+pub(crate) use configured_topic_request_from;
+
 /// A partition with the supplied leader and replicas, initially all in ISR.
 /// Callers keep differing ISR, epoch, directory, and reassignment values explicit.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -457,8 +472,8 @@ pub(crate) fn replicated_partition(
     let setup = ReplicatedPartitionSetup {
         topic,
         partition,
-        leader,
         replicas,
+        leader,
     };
     let ReplicatedPartitionSetup {
         topic,
@@ -536,6 +551,16 @@ pub(crate) fn acl(
     }
 }
 
+pub(crate) fn cluster_acl(operation: krabka_metadata::AclOperation) -> krabka_metadata::AclEntry {
+    let setup = AclSetup::cluster(operation);
+    acl()
+        .resource_type(setup.resource_type)
+        .resource_name(setup.resource_name)
+        .pattern_type(setup.pattern_type)
+        .operation(setup.operation)
+        .call()
+}
+
 pub(crate) async fn start_allow_all_no_audit() -> (BrokerHandle, tempfile::TempDir) {
     start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
@@ -579,32 +604,11 @@ pub(crate) async fn produce_wire(
 #[bon::builder]
 pub(crate) async fn send_acknowledgements(
     broker: &BrokerHandle,
-    #[builder(default = "g")] group: &'_ str,
-    #[builder(default = "member")] member: &'_ str,
-    #[builder(into, default)] epoch: ShareSessionEpoch,
-    #[builder(default)] topic_id: WireUuid,
-    #[builder(default)] partition: AcknowledgementPartitionSetup,
-    #[builder(default)] mode: AcknowledgementMode,
+    request: &krabka_protocol::owned::share_acknowledge_request::ShareAcknowledgeRequest,
 ) -> krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse {
-    let setup = AcknowledgementSetup {
-        group,
-        member,
-        epoch,
-        topic_id,
-        partition,
-        mode,
-    };
-    let request = acknowledge_batches_request()
-        .group(setup.group)
-        .member(setup.member)
-        .epoch(setup.epoch)
-        .topic_id(setup.topic_id)
-        .partition(setup.partition)
-        .mode(setup.mode)
-        .call();
     share_acknowledge_wire()
         .broker(broker)
-        .request(&request)
+        .request(request)
         .version(krabka_protocol::owned::share_acknowledge_request::MAX_VERSION)
         .call()
         .await
@@ -687,6 +691,8 @@ pub(crate) async fn seed_partition_replicas(
     replicas: &'_ [krabka_metadata::NodeId],
     #[builder(into, default)] leader_epoch: krabka_ids::LeaderEpoch,
 ) {
+    use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+
     let setup = ReplicatedTopicSetup {
         topic,
         topic_id,
@@ -694,7 +700,6 @@ pub(crate) async fn seed_partition_replicas(
         replicas,
         leader_epoch,
     };
-    use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
     let ReplicatedTopicSetup {
         topic,
         topic_id,
@@ -843,6 +848,10 @@ pub(crate) fn acknowledge_batches_request(
     #[builder(default)] partition: AcknowledgementPartitionSetup,
     #[builder(default)] mode: AcknowledgementMode,
 ) -> krabka_protocol::owned::share_acknowledge_request::ShareAcknowledgeRequest {
+    use krabka_protocol::owned::share_acknowledge_request::{
+        AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch, ShareAcknowledgeRequest,
+    };
+
     let setup = AcknowledgementSetup {
         group,
         member,
@@ -850,9 +859,6 @@ pub(crate) fn acknowledge_batches_request(
         topic_id,
         partition,
         mode,
-    };
-    use krabka_protocol::owned::share_acknowledge_request::{
-        AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch, ShareAcknowledgeRequest,
     };
     let AcknowledgementSetup {
         group,
@@ -884,21 +890,10 @@ pub(crate) fn acknowledge_batches_request(
 }
 
 /// Return the incremental rows for the first topic, or no rows when it is omitted.
-#[bon::builder]
-pub(crate) async fn share_fetch_partition_rows(
-    broker: &BrokerHandle,
-    request: &krabka_protocol::owned::share_fetch_request::ShareFetchRequest,
-    #[builder(into, default = krabka_ids :: ApiVersion (2))] version: krabka_ids::ApiVersion,
-    #[builder(default = "share-consumer")] user: &'_ str,
+pub(crate) fn share_fetch_partition_rows(
+    response: krabka_protocol::owned::share_fetch_response::ShareFetchResponse,
 ) -> Vec<krabka_protocol::owned::share_fetch_response::PartitionData> {
-    let setup = ShareWireSetup { version, user };
-    share_fetch_wire()
-        .broker(broker)
-        .request(request)
-        .version(setup.version)
-        .user(setup.user)
-        .call()
-        .await
+    response
         .responses
         .into_iter()
         .next()

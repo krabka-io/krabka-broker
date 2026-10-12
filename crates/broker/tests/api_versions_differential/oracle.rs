@@ -35,9 +35,8 @@ use krabka_security::ListenerProtocol;
 use crate::{
     probe::{retry_until, wait_bounded},
     support::{
-        JvmBrokerSetup, JvmDockerSetup, JvmListeners, controller_voters, docker_logs, init_tracing,
-        jvm_broker_config, jvm_docker_command, kafka_single_node_env_args, remove_container,
-        unique_container_name,
+        JvmListeners, controller_voters, docker_logs, init_tracing, jvm_broker_config,
+        jvm_docker_command, kafka_single_node_env_args, remove_container, unique_container_name,
     },
 };
 

@@ -10,8 +10,8 @@ use std::net::SocketAddr;
 
 use super::test_support::*;
 use crate::support::configs::{
-    ConfigOperation, IncrementalConfigsSetup, describe_resource, incremental_config,
-    incremental_request, incremental_resource,
+    ConfigOperation, describe_resource, incremental_config, incremental_request,
+    incremental_resource,
 };
 
 pub type ConfigOperations = Vec<(String, Option<String>, i8)>;

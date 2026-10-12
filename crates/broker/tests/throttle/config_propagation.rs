@@ -14,8 +14,7 @@ use crate::{
         create_topic_as_admin, start_single_broker_sasl_plaintext_with_users, wait_partition_exists,
     },
     configs::drive_incremental_alter_configs,
-    kafka_wire::AutomaticTopicSetup,
-    support::topics::ConfiguredTopicSetup,
+    support::topics::configured_topic_setup,
 };
 
 /// Test 1: `IncrementalAlterConfigs` with `resource_type=Broker` sets the
@@ -68,10 +67,7 @@ async fn topic_throttle_config_propagates() {
     create_topic_as_admin()
         .addr(addr)
         .client_id(CLIENT_ID)
-        .topic(ConfiguredTopicSetup {
-            name: ("foo").into(),
-            ..Default::default()
-        })
+        .topic(configured_topic_setup().name("foo").call())
         .call()
         .await;
     wait_partition_exists(&handle, "foo", 0).await;

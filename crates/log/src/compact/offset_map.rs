@@ -84,12 +84,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::{
-        ProducerId,
-        compact::test_support::{
-            TransactionalRecordSetup, control_batch, make_record, superseded_records,
-            transactional_record, write_sealed_batches, write_sealed_segment,
-        },
+    use crate::compact::test_support::{
+        control_batch, make_record, superseded_records, transactional_record, write_sealed_batches,
+        write_sealed_segment,
     };
 
     fn offset_map_for(segments: &[&Segment], aborted: Vec<AbortedTxn>) -> HashMap<Bytes, Offset> {

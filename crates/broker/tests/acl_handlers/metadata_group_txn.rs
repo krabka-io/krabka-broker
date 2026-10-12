@@ -22,8 +22,8 @@ use crate::{
     },
     sasl_cluster::start_admin_alice,
     support::{
-        acl::{TopicAclSetup, seed_dummy_acl, topic_acl_record},
-        transactions::{InitProducerSetup, init_producer_request},
+        acl::{seed_dummy_acl, topic_acl_record},
+        transactions::init_producer_request,
     },
 };
 

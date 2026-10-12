@@ -9,10 +9,7 @@ use std::time::Duration;
 use krabka_raft::kraft::NodeId;
 use krabka_units::prelude::millis;
 
-use crate::harness::{
-    SimClusterSetup, SimEngineSetup, await_single_leader, build_engine, start_engines,
-    three_voter_network,
-};
+use crate::harness::{await_single_leader, build_engine, start_engines, three_voter_network};
 
 /// 1. Three engines elect exactly one leader and agree on the epoch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

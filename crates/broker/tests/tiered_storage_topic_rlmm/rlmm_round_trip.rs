@@ -15,9 +15,7 @@ use krabka_client_core::Client;
 
 use crate::{
     support::{
-        fetch::{
-            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
-        },
+        fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
         topic_id_for,
     },
     topic_fixture::{create_configured_topic, tiered_configs},

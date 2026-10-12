@@ -31,7 +31,7 @@ use crate::{
     },
     support::{
         configs::feature_update,
-        share::{ShareAck, ShareTopicSetup, acknowledge_success},
+        share::{ShareAck, acknowledge_success},
     },
 };
 

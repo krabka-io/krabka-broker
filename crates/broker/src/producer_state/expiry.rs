@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 
 use super::{PartitionMap, PartitionProducerState, ProducerState};
 #[cfg(test)]
-use crate::producer_state::test_support::{ProducerCommitSetup, SequenceDelta, commit_fixture};
+use crate::producer_state::test_support::commit_fixture;
 
 impl ProducerState {
     /// Evict idempotent-producer entries that are expired at `now_ms`.
@@ -78,7 +78,7 @@ mod tests {
     use krabka_units::millis;
 
     use super::*;
-    use crate::{producer_state::Decision, test_support::UnixMillis};
+    use crate::producer_state::Decision;
 
     /// How a row's producer reaches the sweep.
     #[derive(Clone, Copy, Debug)]

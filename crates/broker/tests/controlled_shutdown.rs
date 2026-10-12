@@ -17,7 +17,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use assert2::assert;
 use krabka_broker::BrokerHandle;
-use krabka_metadata::NodeId as MetadataNodeId;
+use krabka_metadata::{MetadataRecord, NodeId as MetadataNodeId, PartitionRecord};
 
 use crate::support::{
     registered_cluster, shutdown_cluster,
@@ -72,8 +72,6 @@ async fn force_leadership_for_test(
         leader,
         replicas,
     };
-    use krabka_metadata::{MetadataRecord, PartitionRecord};
-
     let topic = setup.topic;
     let partitions = setup.partitions.0;
     let target = setup.leader.0;

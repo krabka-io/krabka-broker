@@ -23,8 +23,6 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-#[cfg(test)]
-use crate::test_support::StandalonePartitionSetup;
 use crate::{
     codes,
     error::BrokerError,

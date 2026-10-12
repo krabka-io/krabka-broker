@@ -27,10 +27,7 @@ use crate::{
     streams_harness::{
         connect, create_topic, finalize_streams_version, first_join, follow_up, topology,
     },
-    support::{
-        start_group_coordinator_with_config,
-        streams::{StreamsFollowUpSetup, StreamsMemberEpoch},
-    },
+    support::start_group_coordinator_with_config,
 };
 
 /// The `[server_properties]` that the system-test adapter passes through.

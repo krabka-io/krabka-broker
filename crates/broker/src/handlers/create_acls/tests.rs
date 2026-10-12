@@ -23,7 +23,7 @@ use crate::{
         request, test_context,
     },
     test_support::{
-        AllowAclSetup, DenyAll, allow_acl, start_broker_no_audit_with,
+        DenyAll, allow_acl, start_broker_no_audit_with,
         start_broker_with_authorizer_no_audit as start_broker, test_ctx,
     },
 };

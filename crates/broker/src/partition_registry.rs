@@ -257,9 +257,7 @@ mod tests {
 
     use super::PartitionRegistry;
     use crate::{
-        log_dir::partition_dir,
-        partition::Partition,
-        test_support::{StandalonePartitionSetup, spawn_standalone_partition},
+        log_dir::partition_dir, partition::Partition, test_support::spawn_standalone_partition,
     };
 
     /// Builds a `Partition` rooted at `<log_dir>/<topic>-<partition>` through

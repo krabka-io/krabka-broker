@@ -18,10 +18,7 @@ use krabka_protocol::owned::produce_response::ProduceResponse;
 pub use crate::kafka_wire::quotas::drive_alter_client_quotas_sasl;
 use crate::{
     CLIENT_ID,
-    kafka_wire::{
-        self, PlainAuthenticationSetup, ProduceRecordCount, SaslProduceSetup,
-        ZeroFilledRecordsSetup,
-    },
+    kafka_wire::{self, PlainAuthenticationSetup, ProduceRecordCount, ZeroFilledRecordsSetup},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

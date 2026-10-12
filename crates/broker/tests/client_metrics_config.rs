@@ -10,10 +10,7 @@
 
 use assert2::{assert, check};
 
-use crate::support::{
-    configs::{ClientMetricsSubscriptionSetup, client_metrics_subscription},
-    start_n_node_client,
-};
+use crate::support::{configs::client_metrics_subscription, start_n_node_client};
 mod support;
 
 use krabka_protocol::owned::{

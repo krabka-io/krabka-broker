@@ -377,9 +377,8 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        DENSE_INDEX, FIVE_OFFSET_TIMESTAMP_BATCHES, ONE_RECORD_BATCH, RecordCount, RecordTimestamp,
-        SampleBatchSetup, SeededSegmentSetup, sample_batch, seeded_fixture, segment_at,
-        test_segment,
+        DENSE_INDEX, FIVE_OFFSET_TIMESTAMP_BATCHES, ONE_RECORD_BATCH, sample_batch, seeded_fixture,
+        segment_at, test_segment,
     };
 
     #[test]

@@ -20,11 +20,8 @@ use crate::{
     support::{
         client::start_client,
         topics::TopicPartitionCount,
-        transaction_wire::{TransactionPartitionsSetup, partitions_request, transaction_topic},
-        transactions::{
-            EndTransactionSetup, InitProducerSetup, ProducerIdentity, end_transaction_request,
-            init_producer_request,
-        },
+        transaction_wire::{partitions_request, transaction_topic},
+        transactions::{ProducerIdentity, end_transaction_request, init_producer_request},
     },
     txnver_harness::{NONE, create_topic, downgrade_transaction_version, expected_partitions},
 };

@@ -152,7 +152,7 @@ mod tests {
         authorizer::SimpleAclAuthorizer,
         codes::{CLUSTER_AUTHORIZATION_FAILED, TOPIC_AUTHORIZATION_FAILED},
         handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        test_support::{AllowAclSetup, allow_acl, peer, principal},
+        test_support::{allow_acl, peer, principal},
     };
 
     fn anon() -> krabka_security::Principal {

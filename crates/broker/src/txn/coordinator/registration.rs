@@ -213,7 +213,7 @@ mod tests {
     use crate::{
         codes::{INVALID_PRODUCER_EPOCH, PRODUCER_FENCED},
         partition::Partition,
-        test_support::{StandalonePartitionSetup, open_partition},
+        test_support::open_partition,
         txn::{
             bootstrap,
             coordinator::test_support::test_coordinator,

@@ -22,7 +22,7 @@ use krabka_protocol::{
 use crate::{
     TOPIC,
     support::{
-        client::{ValueBatchSetup, ValueRecordCount, create_replicated_topic, value_batch},
+        client::{create_replicated_topic, value_batch},
         discovery::{metadata_first_partition, named_topic_metadata},
         fetch::fetch_topic_row,
         produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},

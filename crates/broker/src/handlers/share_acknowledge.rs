@@ -296,13 +296,10 @@ mod tests {
     use crate::{
         authorizer::AllowAllAuthorizer,
         broker::BrokerHandle,
-        handlers::test_support::{
-            ClientTopicSetup, create_topic as create_topic_from_test_support,
-        },
+        handlers::test_support::create_topic as create_topic_from_test_support,
         share_partition::session::FetchPartitions,
         test_support::{
-            ShareApiSupport, ShareBrokerSetup, dispatch_wire, peer, principal, start_share_broker,
-            test_ctx,
+            ShareApiSupport, dispatch_wire, peer, principal, start_share_broker, test_ctx,
         },
     };
 

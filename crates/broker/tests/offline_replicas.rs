@@ -44,10 +44,7 @@ use tempfile::TempDir;
 use tokio::net::TcpStream;
 
 use crate::support::{
-    discovery::named_topic_metadata,
-    registered_cluster, shutdown_cluster,
-    storage::two_dir_config,
-    topics::{ConfiguredTopicSetup, TopicPartitionCount, TopicReplicationFactor},
+    discovery::named_topic_metadata, registered_cluster, shutdown_cluster, storage::two_dir_config,
     wire::ApiRequestSetup,
 };
 

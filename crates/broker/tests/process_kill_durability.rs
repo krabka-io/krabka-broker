@@ -77,7 +77,7 @@ use zerocopy::FromBytes;
 
 use crate::support::{
     load_test::*,
-    producer::{ProducerRecordSetup, no_retry_acks_all_producer, producer_record},
+    producer::{no_retry_acks_all_producer, producer_record},
     remove_container_with_volumes,
     storage::host_directory_user,
 };

@@ -11,8 +11,8 @@ use krabka_client_core::Client;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 use crate::harness::{
-    INVALID_RECORD, KNOWN_ID, SchemaTopicSetup, apply_registry_config, boot, boot_config,
-    check_value_append, create_topic, framed,
+    INVALID_RECORD, KNOWN_ID, apply_registry_config, boot, boot_config, check_value_append,
+    create_topic, framed,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

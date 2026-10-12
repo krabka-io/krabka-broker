@@ -17,7 +17,7 @@ use krabka_protocol::owned::{
 };
 
 use crate::support::{
-    classic::{ClassicJoinSetup, ClassicTimeouts, classic_join_request, join_protocol},
+    classic::{ClassicTimeouts, classic_join_request, join_protocol},
     client::connect_owned,
 };
 

@@ -39,7 +39,7 @@ use std::process::Command;
 use assert2::check;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 
-use crate::support::{JvmBrokerSetup, controller_voters, init_jvm_tracing, jvm_broker_config};
+use crate::support::{controller_voters, init_jvm_tracing, jvm_broker_config};
 
 /// Kafka 4.3.1 is the compatibility oracle for KIP-919.
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";

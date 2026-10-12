@@ -6,7 +6,6 @@
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -19,11 +18,8 @@ use tokio::net::TcpStream;
 
 use crate::{
     CLIENT_ID,
-    kafka_wire::{self, ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
-    support::{
-        topics::consumer_fetch_request,
-        wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
-    },
+    kafka_wire::{self, PlainAuthenticationSetup},
+    support::{topics::consumer_fetch_request, wire::HeaderEncoding as RequestHeaderEncoding},
 };
 
 /// The `AddOffsetsToTxn` version the driver below speaks: the newest the

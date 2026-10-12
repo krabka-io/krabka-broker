@@ -6,13 +6,11 @@ use std::net::SocketAddr;
 
 use assert2::assert;
 use bytes::BytesMut;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{Decode, Encode};
 
 use super::{round_trip, sasl_plain_authenticate};
 use crate::{
-    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
-    support::wire::HeaderEncoding as RequestHeaderEncoding,
+    kafka_wire::PlainAuthenticationSetup, support::wire::HeaderEncoding as RequestHeaderEncoding,
 };
 
 pub type QuotaEntity = Vec<(String, Option<String>)>;
@@ -240,10 +238,10 @@ pub async fn drive_describe_client_quotas_sasl(
 /// Set one named user's quota through the authenticated admin API, then await its image.
 #[bon::builder]
 pub async fn set_user_quota(
-    broker: &krabka_broker::BrokerHandle,
     addr: SocketAddr,
     #[builder(default = PlainAuthenticationSetup :: admin ("krabka-broker-test"))]
     authentication: PlainAuthenticationSetup<'_>,
+    broker: &krabka_broker::BrokerHandle,
     #[builder(default = "alice")] user: &'_ str,
     #[builder(default = "producer_byte_rate")] key: &'_ str,
     #[builder(into, default)] value: QuotaValue,

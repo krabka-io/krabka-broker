@@ -51,12 +51,9 @@ mod tests {
     use krabka_metadata::{AclOperation, PatternType, PermissionType};
 
     use super::*;
-    use crate::{
-        handlers::{
-            acl_test_support::expected_empty_match_filter,
-            delete_acls::test_support::{acl, filter},
-        },
-        test_support::AllowAclSetup,
+    use crate::handlers::{
+        acl_test_support::expected_empty_match_filter,
+        delete_acls::test_support::{acl, filter},
     };
 
     #[test]

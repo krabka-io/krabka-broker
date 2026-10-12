@@ -13,9 +13,8 @@ use crate::{
         actor::{
             member_state::build_member,
             test_support::{
-                ClassicMemberSetup, StaticMetadata, classic_member_for_topic, coordinator_with_log,
-                empty_metadata, make_coordinator, make_coordinator_with_topic,
-                make_coordinator_with_topic_policy,
+                StaticMetadata, classic_member_for_topic, coordinator_with_log, empty_metadata,
+                make_coordinator, make_coordinator_with_topic, make_coordinator_with_topic_policy,
                 rpc::{self, consumer_request},
                 seed_classic_member,
             },
@@ -23,9 +22,7 @@ use crate::{
         offsets_log::fake::InMemoryOffsetsLog,
         persistence_next_gen::GroupMetadataValue,
         reconciler::{ReconcileInput, metadata_hash},
-        test_support::{
-            ConsumerJoinSetup, MemberEpoch, assert_next_tombstone_batch, consumer_join_request,
-        },
+        test_support::{MemberEpoch, assert_next_tombstone_batch, consumer_join_request},
     },
     test_support::KafkaErrorCode,
 };
@@ -350,13 +347,13 @@ fn identity_ok(
     #[builder(into, default = MemberEpoch (5))] epoch: MemberEpoch,
     partitions: Option<Vec<PartitionIndex>>,
 ) -> ConsumerGroupHeartbeatResponse {
+    use krabka_protocol::owned::common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions;
+
     let setup = IdentityExpectationSetup {
         member_id,
         epoch,
         partitions,
     };
-    use krabka_protocol::owned::common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions;
-
     let IdentityExpectationSetup {
         member_id,
         epoch,
@@ -559,14 +556,14 @@ fn identity_request(
     #[builder(into, default = MemberEpoch (5))] member_epoch: MemberEpoch,
     owned: Option<Vec<PartitionIndex>>,
 ) -> ConsumerGroupHeartbeatRequest {
+    use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
+
     let setup = IdentityRequestSetup {
         member_id,
         instance_id,
         member_epoch,
         owned,
     };
-    use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
-
     let IdentityRequestSetup {
         member_id,
         instance_id,

@@ -6,7 +6,7 @@ use tempfile::TempDir;
 
 pub(crate) use crate::support::storage::PartitionReadiness;
 use crate::{
-    kafka_wire::{AutomaticTopicSetup, create_configured_topic_plaintext},
+    kafka_wire::create_configured_topic_plaintext,
     support::{
         storage::start_two_dir_broker,
         topics::{ConfiguredTopicSetup, TopicPartitionCount},
@@ -24,22 +24,7 @@ pub(crate) struct Setup<'a> {
     pub readiness: PartitionReadiness,
 }
 
-#[bon::builder]
-pub(crate) async fn create_and_wait(
-    handle: &BrokerHandle,
-    address: SocketAddr,
-    #[builder(default = "krabka-jbod-test")] client_id: &'_ str,
-    #[builder(default = "t")] topic: &'_ str,
-    #[builder(into, default = crate :: support :: topics :: TopicPartitionCount (1))]
-    partitions: TopicPartitionCount,
-    #[builder(default)] readiness: PartitionReadiness,
-) {
-    let setup = Setup {
-        client_id,
-        topic,
-        partitions,
-        readiness,
-    };
+pub(crate) async fn create_and_wait(handle: &BrokerHandle, address: SocketAddr, setup: Setup<'_>) {
     create_configured_topic_plaintext()
         .addr(address)
         .client_id(setup.client_id)
@@ -81,14 +66,6 @@ pub(crate) async fn start(
         readiness,
     };
     let (handle, primary, extra, address) = start_two_dir_broker().await;
-    create_and_wait()
-        .handle(&handle)
-        .address(address)
-        .client_id(setup.client_id)
-        .topic(setup.topic)
-        .partitions(setup.partitions)
-        .readiness(setup.readiness)
-        .call()
-        .await;
+    create_and_wait(&handle, address, setup).await;
     (handle, primary, extra, address)
 }

@@ -27,13 +27,13 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    self, OperatorKeysSetup, OperatorSaslSetup,
+    self, OperatorKeysSetup,
     discovery::named_topic_metadata,
     offsets::{delete_records_partition, delete_records_request, delete_records_topic},
     produce::{SinglePartitionProduceSetup, send_batch},
     records::{batch_from_records, value_record},
-    sasl::{ScramAlgorithm, ScramUpsertionSetup, scram_upsertion},
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    sasl::{ScramAlgorithm, scram_upsertion},
+    topics::{creatable_topic, create_topic_request},
 };
 
 /// The KIP-133 `resource_type` discriminant for a topic.

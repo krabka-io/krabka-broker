@@ -25,10 +25,7 @@ use crate::{
     authorizer::{AllowAllAuthorizer, Authorizer},
     broker::BrokerHandle,
     codes,
-    handlers::test_support::{
-        ClientTopicSetup, ShareWireSetup, create_topic as create_topic_from_test_support,
-        share_fetch_wire,
-    },
+    handlers::test_support::{create_topic as create_topic_from_test_support, share_fetch_wire},
     test_support::start_broker_no_audit_with,
 };
 

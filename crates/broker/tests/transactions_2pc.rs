@@ -31,11 +31,8 @@ use krabka_protocol::owned::{
 use tempfile::TempDir;
 
 use crate::support::{
-    client::connect_client,
-    configs::feature_update,
-    discovery::api_versions_request_for,
-    transactions::{InitProducerSetup, TransactionTimeoutMillis, init_producer_request},
-    wire::At,
+    client::connect_client, configs::feature_update, discovery::api_versions_request_for,
+    transactions::init_producer_request, wire::At,
 };
 
 #[derive(Clone, Copy, Default)]

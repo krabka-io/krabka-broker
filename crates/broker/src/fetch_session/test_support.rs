@@ -64,6 +64,18 @@ impl SessionRequestSetup {
     }
 }
 
+macro_rules! incremental_req {
+    ($id:expr, $epoch:expr $(, $field:ident($value:expr))*) => {{
+        let builder = $crate::fetch_session::test_support::req()
+            .session_id($crate::fetch_session::test_support::RequestSessionId($id))
+            .session_epoch($epoch);
+        $(let builder = builder.$field($value);)*
+        builder.call()
+    }};
+}
+
+pub(crate) use incremental_req;
+
 #[bon::builder]
 pub(super) fn req(
     #[builder(into, default)] session_id: RequestSessionId,
@@ -263,14 +275,5 @@ pub(super) fn session_key(
         topic_name: setup.topic,
         topic_id: setup.topic_id,
         partition: setup.partition.0,
-    }
-}
-
-impl SessionRequestSetup {
-    pub(super) fn forgetting(session_id: RequestSessionId, forgotten: Vec<ForgottenTopic>) -> Self {
-        Self {
-            forgotten,
-            ..Self::incremental(session_id)
-        }
     }
 }

@@ -11,7 +11,7 @@ use krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest;
 use crate::support::{
     self,
     discovery::{api_versions, topic_metadata_request},
-    topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 #[tokio::test]

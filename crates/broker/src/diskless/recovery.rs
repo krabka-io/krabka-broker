@@ -60,7 +60,7 @@ mod tests {
     use super::*;
     use crate::{
         producer_state::Decision,
-        test_support::{RecordCount, RepeatedRecordsSetup, repeated_records_batch},
+        test_support::repeated_records_batch,
         txn::marker::{MarkerType, build_marker_batch},
     };
 

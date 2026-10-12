@@ -385,16 +385,12 @@ mod tests {
         coordinator::unified::{
             ShareGroupSeed,
             share::{
-                actor::test_support::{
-                    ShareSubscriptionSetup, TopicMetadataSetup, subscribed_request,
-                    unavailable_persister_coordinator,
-                },
+                actor::test_support::{subscribed_request, unavailable_persister_coordinator},
                 persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
                 state::ShareMemberState,
             },
             test_support::{fixed_source, make_share_persister},
         },
-        test_support::PartitionCount,
     };
 
     /// Kafka's `subscribedTopicsChangeMap`: every partition of a subscribed

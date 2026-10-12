@@ -395,6 +395,18 @@ mod tests {
         test_support::UnixMillis,
     };
 
+    fn refusing_tier<'a>(
+        rsm: &'a Arc<dyn RemoteStorageManager>,
+        rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
+        metrics: &'a BrokerMetrics,
+    ) -> RemoteTier<'a> {
+        fixtures::configured_tier()
+            .rsm(rsm)
+            .rlmm(rlmm)
+            .metrics(metrics)
+            .call()
+    }
+
     /// KIP-405's `RemoteCopyRequestsPerSec`, `RemoteCopyBytesPerSec` and the
     /// two copy-lag gauges. An operator whose object store starts refusing
     /// writes learns about it from these; before them, a stalled tier was
@@ -468,7 +480,7 @@ mod tests {
                 tier,
                 crate::api_catalog::UnstableApiVersions::Disabled
             );
-            let exports = three_exports();
+            let exports = three_exports().call();
 
             let copied = copy_eligible_below(
                 &tier,
@@ -539,7 +551,7 @@ mod tests {
                 tier,
                 crate::api_catalog::UnstableApiVersions::Enabled
             );
-            let exports = three_exports();
+            let exports = three_exports().call();
             let delay = CopyDelay::resolve(RemoteCopyLag { ms, bytes }, &unlimited, 1000, 64);
 
             let copied = copy_eligible_delayed(
@@ -618,11 +630,7 @@ mod tests {
         let rsm: Arc<dyn RemoteStorageManager> = Arc::new(RefusingRsm);
         let rlmm = fixtures::in_memory_metadata();
         let metrics = BrokerMetrics::new();
-        let tier = fixtures::configured_tier()
-            .rsm(&rsm)
-            .rlmm(&rlmm)
-            .metrics(&metrics)
-            .call();
+        let tier = refusing_tier(&rsm, &rlmm, &metrics);
 
         let copied = copy_exports(&tier, vec![synth_export().call()]).await;
 
@@ -782,7 +790,7 @@ mod tests {
         let archive = Arc::new(FakeWormArchive::new());
         let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
         let rlmm = fixtures::in_memory_metadata();
-        let exports = three_exports();
+        let exports = three_exports().call();
 
         let copied = copy_exports(&tier(ArchiveMode::WriteOnce, &rsm, &rlmm), exports).await;
 
@@ -838,8 +846,11 @@ mod tests {
 
         let archive = Arc::new(FakeWormArchive::new());
         let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
-        let copied =
-            copy_exports(&tier(ArchiveMode::WriteOnce, &rsm, &rlmm), three_exports()).await;
+        let copied = copy_exports(
+            &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
+            three_exports().call(),
+        )
+        .await;
 
         check!(copied == 1);
         check!(archive.archived_segments() == 1);
@@ -865,7 +876,7 @@ mod tests {
         let second_rsm: Arc<dyn RemoteStorageManager> = Arc::new(FakeWormArchive::new());
         let copied = copy_exports(
             &tier(ArchiveMode::WriteOnce, &second_rsm, &rlmm),
-            three_exports(),
+            three_exports().call(),
         )
         .await;
 
@@ -1191,11 +1202,7 @@ mod tests {
             .id(Uuid::from_u128(0xc1))
             .call();
         let metrics = BrokerMetrics::new();
-        let tier = fixtures::configured_tier()
-            .rsm(&rsm)
-            .rlmm(&rlmm)
-            .metrics(&metrics)
-            .call();
+        let tier = refusing_tier(&rsm, &rlmm, &metrics);
 
         // 0..=49 the tier holds; 50..=149 it holds only through 99, and
         // 150..=249 not at all. The store refuses both, so the lag is what the

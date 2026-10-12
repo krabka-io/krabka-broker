@@ -10,11 +10,10 @@ use crate::{
         actor::{
             GroupActorMessage, GroupKindTag,
             test_support::{
-                BidirectionalClassicSetup, ClassicMemberSetup, bidirectional_coordinator,
-                bidirectional_with_members, decode_assignment, join_native_consumer,
-                log_has_classic_group_metadata_write, make_coordinator_with_topic,
-                make_coordinator_with_topic_policy, rpc, seed_classic_member,
-                seeded_bidirectional_coordinator, spawn_and_downgrade,
+                ClassicMemberSetup, bidirectional_coordinator, bidirectional_with_members,
+                decode_assignment, join_native_consumer, log_has_classic_group_metadata_write,
+                make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc,
+                seed_classic_member, seeded_bidirectional_coordinator, spawn_and_downgrade,
                 upgrade_with_transient_native,
             },
         },

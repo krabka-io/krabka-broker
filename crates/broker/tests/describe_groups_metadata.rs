@@ -30,8 +30,8 @@ use krabka_protocol::owned::{
 
 use crate::support::{
     classic::{
-        ClassicJoinSetup, ClassicSyncSetup, ClassicTimeouts, GenerationId, classic_join_request,
-        classic_sync_request, join_protocol, sync_assignment,
+        ClassicTimeouts, GenerationId, classic_join_request, classic_sync_request, join_protocol,
+        sync_assignment,
     },
     client::connect_owned,
 };

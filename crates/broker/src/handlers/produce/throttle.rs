@@ -97,10 +97,7 @@ mod tests {
     use assert2::assert;
     use krabka_units::secs;
 
-    use crate::quota::{
-        QuotaBuckets, consume_producer_quota,
-        test_support::{QuotaRecordSetup, QuotaValue, image_with_quota},
-    };
+    use crate::quota::{QuotaBuckets, consume_producer_quota, test_support::image_with_quota};
 
     #[test]
     fn consume_producer_quota_tuple_match_overage_throttles() {

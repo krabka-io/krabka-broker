@@ -4,11 +4,13 @@
 //! `kafka-reassign-partitions` tools move a leader off a live node, so the
 //! suites that drive those tools boot the cluster here.
 
-use krabka_broker::{Broker, BrokerConfig};
-
-use crate::support::{
-    JvmBrokerSetup, JvmListeners, controller_voters, init_jvm_tracing, jvm_broker_config,
+use krabka_broker::{
+    Broker, BrokerConfig,
+    config::{InterBrokerCredentials, ListenerSpec},
 };
+use krabka_security::{ListenerProtocol, SaslMechanism};
+
+use crate::support::{JvmListeners, controller_voters, init_jvm_tracing, jvm_broker_config};
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(crate) struct SaslClusterSetup<'a> {
@@ -31,29 +33,6 @@ pub(crate) type SaslCluster = (
     tempfile::TempDir,
 );
 
-/// Boot and probe all voters before administering a registered SASL cluster.
-#[bon::builder]
-pub(crate) async fn start_registered_sasl_cluster(
-    #[builder(default = super :: sasl :: ADMIN)] admin: &'_ str,
-    #[builder(default = super :: sasl :: ADMIN_PASS)] admin_pass: &'_ str,
-    #[builder(default)] extra_users: &'_ [(&'_ str, &'_ str)],
-) -> SaslCluster {
-    let setup = SaslClusterSetup {
-        admin,
-        admin_pass,
-        extra_users,
-    };
-    let cluster = start_three_broker_sasl_plaintext_jvm_cluster_with_users()
-        .admin(setup.admin)
-        .admin_pass(setup.admin_pass)
-        .extra_users(setup.extra_users)
-        .call()
-        .await;
-    super::docker::nc_check_connectivity();
-    super::wait::wait_three_brokers_registered(&cluster.0, &cluster.1, &cluster.2, 3).await;
-    cluster
-}
-
 /// Third broker for the 3-broker `SASL_PLAINTEXT` JVM cluster.
 /// Broker 2 (`node_id`=2) lives on `broker1_listen()` / `broker1_advertised()`.
 /// Spawn three in-process brokers that share one inter-broker SASL credential.
@@ -70,42 +49,25 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
     #[builder(default = super :: sasl :: ADMIN)] admin: &'_ str,
     #[builder(default = super :: sasl :: ADMIN_PASS)] admin_pass: &'_ str,
     #[builder(default)] extra_users: &'_ [(&'_ str, &'_ str)],
+    #[builder(default)] wait_until_registered: bool,
 ) -> SaslCluster {
     let setup = SaslClusterSetup {
         admin,
         admin_pass,
         extra_users,
     };
-    start_three_broker_sasl_plaintext_jvm_cluster_with_users()
-        .admin(setup.admin)
-        .admin_pass(setup.admin_pass)
-        .extra_users(setup.extra_users)
-        .call()
-        .await
-}
-
-/// Like [`start_three_broker_sasl_plaintext_jvm_cluster`] but also provisions
-/// `extra_users` as PLAIN credentials on all three brokers.
-///
-/// Returns `(h1, h2, h3, cfg1, cfg2, cfg3, dir1, dir2, dir3)`.
-#[bon::builder]
-pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
-    #[builder(default = super :: sasl :: ADMIN)] admin: &'_ str,
-    #[builder(default = super :: sasl :: ADMIN_PASS)] admin_pass: &'_ str,
-    #[builder(default)] extra_users: &'_ [(&'_ str, &'_ str)],
-) -> SaslCluster {
-    let setup = SaslClusterSetup {
-        admin,
-        admin_pass,
-        extra_users,
-    };
-    start_three_broker_sasl_plaintext_jvm_cluster_configured()
+    let cluster = start_three_broker_sasl_plaintext_jvm_cluster_configured()
         .admin(setup.admin)
         .admin_pass(setup.admin_pass)
         .extra_users(setup.extra_users)
         .adjust(|_| {})
         .call()
-        .await
+        .await;
+    if wait_until_registered {
+        super::docker::nc_check_connectivity();
+        super::wait::wait_three_brokers_registered(&cluster.0, &cluster.1, &cluster.2, 3).await;
+    }
+    cluster
 }
 
 #[bon::builder]
@@ -125,9 +87,6 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
         admin_pass,
         extra_users,
     };
-    use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
-    use krabka_security::{ListenerProtocol, SaslMechanism};
-
     let SaslClusterSetup {
         admin,
         admin_pass,

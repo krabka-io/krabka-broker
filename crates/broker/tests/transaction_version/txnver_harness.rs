@@ -14,7 +14,7 @@ use crate::support::{
     client::connect_client,
     discovery::{coordinator_lookup_request, topic_metadata_request},
     topics::TopicPartitionCount,
-    transaction_wire::{TransactionTopicSetup, create_topic as create_transaction_topic},
+    transaction_wire::create_topic as create_transaction_topic,
 };
 
 // Kafka error codes asserted below.

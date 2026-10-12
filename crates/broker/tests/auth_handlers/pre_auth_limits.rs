@@ -44,7 +44,7 @@ use crate::{
         topics::metadata_topic,
         wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-            SocketExchangeSetup, WireFrameSetup, request_frame as support_request_frame,
+            SocketExchangeSetup, request_frame as support_request_frame,
         },
     },
 };

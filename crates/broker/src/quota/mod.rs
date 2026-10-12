@@ -276,6 +276,60 @@ pub(crate) mod test_support {
         pub value: QuotaValue,
     }
 
+    #[macro_export]
+    macro_rules! quota_record_builder {
+        ($visibility:vis $name:ident -> $output:ty = $constructor:path) => {
+            #[bon::builder]
+            $visibility fn $name(
+                #[builder(default = vec![ ("user", Some("alice")) ])]
+                entity: Vec<(&'_ str, Option<&'_ str>)>,
+                #[builder(default = "producer_byte_rate")] key: &'_ str,
+                #[builder(into, default = $crate::quota::test_support::QuotaValue(1_000.0))]
+                value: $crate::quota::test_support::QuotaValue,
+            ) -> $output {
+                $constructor($crate::quota::test_support::QuotaRecordSetup {
+                    entity,
+                    key,
+                    value,
+                })
+            }
+        };
+    }
+
+    fn image_from_quota_setup(setup: QuotaRecordSetup<'_>) -> MetadataImage {
+        image_with_quotas(vec![
+            quota_record()
+                .entity(setup.entity)
+                .key(setup.key)
+                .value(setup.value)
+                .call(),
+        ])
+    }
+
+    pub(crate) fn shared_image_from_quota_setup(
+        setup: QuotaRecordSetup<'_>,
+    ) -> std::sync::Arc<MetadataImage> {
+        std::sync::Arc::new(image_from_quota_setup(setup))
+    }
+
+    fn record_from_quota_setup(setup: QuotaRecordSetup<'_>) -> ClientQuotaRecord {
+        let QuotaRecordSetup { entity, key, value } = setup;
+        ClientQuotaRecord {
+            entity: entity
+                .into_iter()
+                .map(|(entity_type, entity_name)| QuotaEntity {
+                    entity_type: entity_type.into(),
+                    entity_name: entity_name.map(Into::into),
+                })
+                .collect(),
+            config_key: key.into(),
+            config_value: Some(value.0),
+        }
+    }
+
+    crate::quota_record_builder!(pub(crate) image_with_quota -> MetadataImage = image_from_quota_setup);
+    crate::quota_record_builder!(pub(crate) quota_record -> ClientQuotaRecord = record_from_quota_setup);
+
     pub(crate) type QuotaEntitySpec<'a> = Vec<(&'a str, Option<&'a str>)>;
 
     #[derive(krabka_macros::FieldDefaults)]
@@ -356,55 +410,12 @@ pub(crate) mod test_support {
             .call()
     }
 
-    #[bon::builder]
-    pub(crate) fn image_with_quota(
-        #[builder(default = vec ! [("user" , Some ("alice"))])] entity: Vec<(
-            &'_ str,
-            Option<&'_ str>,
-        )>,
-        #[builder(default = "producer_byte_rate")] key: &'_ str,
-        #[builder(into, default = QuotaValue (1_000.0))] value: QuotaValue,
-    ) -> MetadataImage {
-        let setup = QuotaRecordSetup { entity, key, value };
-        image_with_quotas(vec![
-            quota_record()
-                .entity(setup.entity)
-                .key(setup.key)
-                .value(setup.value)
-                .call(),
-        ])
-    }
-
     pub(crate) fn image_with_quotas(records: Vec<ClientQuotaRecord>) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         for record in records {
             image.apply(&MetadataRecord::V1ClientQuota(record));
         }
         image
-    }
-
-    #[bon::builder]
-    pub(crate) fn quota_record(
-        #[builder(default = vec ! [("user" , Some ("alice"))])] entity: Vec<(
-            &'_ str,
-            Option<&'_ str>,
-        )>,
-        #[builder(default = "producer_byte_rate")] key: &'_ str,
-        #[builder(into, default = QuotaValue (1_000.0))] value: QuotaValue,
-    ) -> ClientQuotaRecord {
-        let setup = QuotaRecordSetup { entity, key, value };
-        let QuotaRecordSetup { entity, key, value } = setup;
-        ClientQuotaRecord {
-            entity: entity
-                .into_iter()
-                .map(|(entity_type, entity_name)| QuotaEntity {
-                    entity_type: entity_type.into(),
-                    entity_name: entity_name.map(Into::into),
-                })
-                .collect(),
-            config_key: key.into(),
-            config_value: Some(value.0),
-        }
     }
 }
 
@@ -418,10 +429,7 @@ mod tests {
     use assert2::{assert, check};
     use krabka_units::secs;
 
-    use super::{
-        test_support::{QuotaRecordSetup, QuotaValue, image_with_quota},
-        *,
-    };
+    use super::{test_support::image_with_quota, *};
     use crate::throttle::MICROS_PER_TOKEN;
 
     /// `throttle_time_ms` rounds to the nearest millisecond, half up, as

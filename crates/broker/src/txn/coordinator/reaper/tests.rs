@@ -10,9 +10,7 @@ use tokio::sync::Mutex;
 
 use super::*;
 use crate::txn::{
-    coordinator::test_support::{
-        DATA_TOPIC, TxnEntrySetup, entry, live_coordinator, test_coordinator,
-    },
+    coordinator::test_support::{DATA_TOPIC, entry, live_coordinator, test_coordinator},
     state::TopicPartition,
 };
 

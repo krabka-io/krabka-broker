@@ -37,7 +37,7 @@ use support::cluster_lock;
 use tempfile::TempDir;
 
 use crate::support::{
-    client::{ValueBatchSetup, ValueRecordCount, connect_client},
+    client::connect_client,
     fetch::fetch_topic_row,
     produce::{SinglePartitionProduceSetup, send_batch},
     shutdown_cluster,

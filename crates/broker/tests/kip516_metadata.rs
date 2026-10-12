@@ -8,7 +8,7 @@ use assert2::assert;
 
 use crate::support::{
     discovery::topic_metadata_request,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request, metadata_topic},
+    topics::{creatable_topic, create_topic_request, metadata_topic},
 };
 mod support;
 

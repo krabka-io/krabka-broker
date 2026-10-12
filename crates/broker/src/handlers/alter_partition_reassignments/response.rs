@@ -75,9 +75,7 @@ mod tests {
     use super::*;
     use crate::{
         codes::{CLUSTER_AUTHORIZATION_FAILED, UNKNOWN_TOPIC_OR_PARTITION},
-        handlers::alter_partition_reassignments::test_support::{
-            ReassignmentRequestSetup, request,
-        },
+        handlers::alter_partition_reassignments::test_support::request,
     };
 
     #[test]

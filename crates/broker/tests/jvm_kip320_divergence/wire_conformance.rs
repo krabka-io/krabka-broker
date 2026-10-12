@@ -21,7 +21,7 @@ use crate::{
         KAFKA_IMAGE, KAFKA_IMAGE_MODERN, docker_rm, docker_run_kafka_tool_with_image,
         produce_lines_via_jvm,
     },
-    support::{self, JvmBrokerSetup, controller_voters, jvm_broker_config},
+    support::{self, controller_voters, jvm_broker_config},
 };
 
 /// Single-broker Krabka config bound on `0.0.0.0:<client_port>`, advertised as

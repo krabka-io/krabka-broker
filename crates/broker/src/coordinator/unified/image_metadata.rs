@@ -68,7 +68,7 @@ mod tests {
     use super::*;
     use crate::{
         coordinator::unified::test_support::{fixed_source, real_uuid},
-        test_support::{InSyncPartitionSetup, broker_registration, in_sync_partition},
+        test_support::{broker_registration, in_sync_partition},
     };
 
     #[test]

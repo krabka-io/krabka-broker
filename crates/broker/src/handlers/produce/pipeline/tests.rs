@@ -19,7 +19,7 @@ use crate::{
             framing::PartitionPayload,
             test_support::{PipelineFixture, encode_batch, image_with_topic, pipeline_input},
         },
-        test_support::{ReplicatedPartitionSetup, replicated_partition},
+        test_support::replicated_partition,
     },
     schema_validation::{SchemaGate, SchemaValidator, ValidationMode},
 };

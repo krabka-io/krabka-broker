@@ -7,10 +7,7 @@ use assert2::{assert, check};
 use super::*;
 use crate::{
     test_support::PartitionCount,
-    txn::{
-        coordinator::test_support::{StateImageSetup, test_prelude::*},
-        state::TopicPartition,
-    },
+    txn::{coordinator::test_support::test_prelude::*, state::TopicPartition},
 };
 
 const TID: &str = "tid-completion";

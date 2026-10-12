@@ -230,9 +230,8 @@ mod tests {
     use crate::{
         partition::ReplicationTarget,
         replicator_supervisor::test_support::{
-            SupervisorPartitionSetup, SupervisorTopicSetup, follower_promotion_images, image_with,
-            partition_record, reconciled_partition, supervisor_fixture, three_replica_image,
-            topic_record,
+            follower_promotion_images, image_with, partition_record, reconciled_partition,
+            supervisor_fixture, three_replica_image, topic_record,
         },
         test_support::single_partition_topic,
     };

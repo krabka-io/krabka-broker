@@ -25,12 +25,12 @@ use tokio::{
 
 use crate::{
     harness::{alice_password, alice_plain_socket, round_trip},
-    kafka_wire::{ExchangeSetup as WireExchangeSetup, exchange},
+    kafka_wire::exchange,
     support::{
         sasl::sasl_plaintext_mechanisms,
         wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-            SocketExchangeSetup, WireFrameSetup, request_frame, write_frame,
+            SocketExchangeSetup, request_frame, write_frame,
         },
     },
 };

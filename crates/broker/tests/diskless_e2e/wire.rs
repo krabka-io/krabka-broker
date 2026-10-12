@@ -22,10 +22,7 @@ use crate::{
     CLIENT_PRINCIPAL, PASSWORD, TOPIC,
     support::{
         self,
-        fetch::{
-            FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
-            SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
-        },
+        fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
         offsets::{
             delete_records_partition, delete_records_request, delete_records_topic,
             list_offset_partition, single_partition_list_offsets,

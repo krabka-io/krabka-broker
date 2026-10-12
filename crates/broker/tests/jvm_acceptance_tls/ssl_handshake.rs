@@ -14,7 +14,7 @@ use crate::{
         KAFKA_IMAGE, broker0_advertised, nc_check_connectivity, prepare_jks_truststore,
         start_ssl_broker, write_client_props,
     },
-    support::{JvmDockerSetup, jvm_docker_command},
+    support::jvm_docker_command,
 };
 
 /// End-to-end TLS handshake check against an `SSL`-only listener. The test

@@ -23,18 +23,14 @@ use tempfile::TempDir;
 use crate::{
     support::{
         produce::{SinglePartitionProduceSetup, batch_request},
-        records::{
-            BatchTransaction, ProbeRecordCount, ProducerSequence, TransactionProbeBatchSetup,
-            transaction_probe_batch,
-        },
+        records::{BatchTransaction, ProducerSequence, transaction_probe_batch},
         topics::TopicPartitionCount,
         transaction_wire::{
             add_partition_request, coordinator_loading, initialize_transactional, partition_error,
             retry_coordinator, settled_produce,
         },
         transactions::{
-            EndTransactionSetup, ProducerEpoch, ProducerEpochOffset, ProducerIdentity,
-            end_transaction_request,
+            ProducerEpoch, ProducerEpochOffset, ProducerIdentity, end_transaction_request,
         },
     },
     txnver_harness::{

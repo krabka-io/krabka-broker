@@ -23,9 +23,8 @@ use crate::coordinator::unified::{
     test_support::{check_group_session_timeout, fixed_source},
 };
 use crate::{
-    coordinator::unified::{
-        share::actor::test_support::InitializedTopicSetup,
-        test_support::{check_group_assignment_timing, group_config_image as group_image},
+    coordinator::unified::test_support::{
+        check_group_assignment_timing, group_config_image as group_image,
     },
     test_support::FakeMetadataSource,
 };

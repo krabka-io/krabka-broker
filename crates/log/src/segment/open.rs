@@ -314,9 +314,8 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        DENSE_INDEX, FIVE_OFFSET_TIMESTAMP_BATCHES, NO_LIMIT, ONE_RECORD_BATCH, RecordTimestamp,
-        SECOND_SINGLE_RECORD_BATCH, SampleBatchSetup, SeededSegmentSetup,
-        THIRD_SINGLE_RECORD_BATCH, sample_batch, seeded_segment,
+        DENSE_INDEX, FIVE_OFFSET_TIMESTAMP_BATCHES, NO_LIMIT, ONE_RECORD_BATCH,
+        SECOND_SINGLE_RECORD_BATCH, THIRD_SINGLE_RECORD_BATCH, sample_batch, seeded_segment,
     };
 
     #[test]

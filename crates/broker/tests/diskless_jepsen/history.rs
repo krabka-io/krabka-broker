@@ -34,10 +34,7 @@ use bytes::Bytes;
 use krabka_client_producer::{Acks, Producer};
 use stateright::semantics::{ConsistencyTester, LinearizabilityTester, SequentialSpec};
 
-use crate::{
-    APPENDERS, RECORDS_PER_APPENDER, TOPIC,
-    support::producer::{ProducerRecordSetup, producer_record},
-};
+use crate::{APPENDERS, RECORDS_PER_APPENDER, TOPIC, support::producer::producer_record};
 
 /// One append, identified by the bytes it carries.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

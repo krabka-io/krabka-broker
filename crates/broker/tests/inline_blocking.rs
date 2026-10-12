@@ -24,7 +24,7 @@ use krabka_protocol::{
 };
 
 use crate::support::{
-    fetch::{FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch},
+    fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
     produce::{SinglePartitionProduceSetup, send_batch},
     records::{batch_from_records, value_record},
 };

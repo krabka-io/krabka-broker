@@ -18,16 +18,15 @@ use krabka_protocol::owned::{
     create_topics_request::{self},
     init_producer_id_request::InitProducerIdRequest,
 };
-use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
 use super::{test_support::one_transactional_batch, *};
 use crate::{
     broker::{Broker, BrokerHandle},
     codes,
-    handlers::test_support::{CreateTopicSetup, configured_topic_request},
+    handlers::test_support::configured_topic_request,
     test_support::{
-        KafkaErrorCode, RepeatedRecordsSetup, decode_response, dispatch_context, encode_request,
-        peer, principal, repeated_records_batch, start_transaction_grant_broker,
+        KafkaErrorCode, decode_response, dispatch_context, encode_request, peer, principal,
+        repeated_records_batch, start_transaction_grant_broker,
     },
 };
 
@@ -37,11 +36,9 @@ struct ProduceApiVersion(i16);
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 struct ProducerEpoch(i16);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
+#[derive(Clone, Copy)]
 struct TransactionalBatchSetup {
-    #[default(ProducerId(7))]
     producer_id: ProducerId,
-    #[default(ProducerEpoch(0))]
     producer_epoch: ProducerEpoch,
 }
 
@@ -139,28 +136,6 @@ fn plain_batch() -> RecordsPayload {
 
 /// One v2 batch with one record, marked transactional (KIP-98) under
 /// `producer_id`/`producer_epoch`.
-#[bon::builder]
-fn transactional_batch(
-    #[builder(into, default = ProducerId (7))] producer_id: ProducerId,
-    #[builder(into, default = ProducerEpoch (0))] producer_epoch: ProducerEpoch,
-) -> RecordsPayload {
-    let setup = TransactionalBatchSetup {
-        producer_id,
-        producer_epoch,
-    };
-    RecordsPayload::V2(vec![RecordBatch {
-        attributes: Attributes::default().with_transactional(true),
-        producer_id: setup.producer_id.0,
-        producer_epoch: setup.producer_epoch.0,
-        base_sequence: 0,
-        records: vec![Record {
-            value: Some(Bytes::from_static(b"v")),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }])
-}
-
 /// One request naming `TOPIC` by name (`version < FIRST_TOPIC_ID_VERSION`) or
 /// by id (`version >= FIRST_TOPIC_ID_VERSION`), carrying `records` and
 /// `transactional_id`.
@@ -343,7 +318,7 @@ async fn transactional_id_write_gates_exactly_on_the_batch_not_the_request_field
     let mut next_offset = Offset(0);
     for case in cases {
         let records = if matches!(case.batch, BatchKind::Transactional) {
-            transactional_batch()
+            one_transactional_batch()
                 .producer_id(transaction.producer_id.0)
                 .producer_epoch(transaction.producer_epoch.0)
                 .call()
@@ -404,7 +379,12 @@ async fn transactional_denial_precedes_topic_resolution_at_v13() {
         .topic_id(unknown_id)
         .version(version)
         .maybe_transactional_id(Some(TXN_ID))
-        .records(transactional_batch().producer_id(999).call())
+        .records(
+            one_transactional_batch()
+                .producer_id(999)
+                .producer_epoch(0)
+                .call(),
+        )
         .call()
         .await;
     let expected = ProduceResponse {

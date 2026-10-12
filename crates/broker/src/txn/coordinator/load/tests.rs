@@ -10,9 +10,9 @@ use crate::{
     partition::Partition,
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
-    test_support::{PartitionCount, StandalonePartitionSetup, open_partition},
+    test_support::{PartitionCount, open_partition},
     txn::{
-        coordinator::test_support::{StateImageSetup, test_prelude::*},
+        coordinator::test_support::test_prelude::*,
         log_record::{encode_key, encode_value},
         partitioner::partition_for_tid,
         state::{TopicPartition, TxnEntry, TxnState},

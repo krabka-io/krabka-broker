@@ -30,9 +30,7 @@
 use assert2::{assert, check};
 
 use crate::support::{
-    client::connect_owned,
-    discovery::topic_metadata_request,
-    topics::{ConfiguredTopicSetup, creatable_topic},
+    client::connect_owned, discovery::topic_metadata_request, topics::creatable_topic,
 };
 mod support;
 

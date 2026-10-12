@@ -353,8 +353,8 @@ mod tests {
             StreamsMemberWireState,
         },
         test_support::{
-            AssignmentDeletionProtocol, AssignmentDeletionSetup, check_replay_cases,
-            deletion_replay_cases, replay_fixtures, replay_tombstone_constructor, streams_member,
+            AssignmentDeletionProtocol, check_replay_cases, deletion_replay_cases, replay_fixtures,
+            replay_tombstone_constructor, streams_member,
         },
     };
 

@@ -52,9 +52,8 @@ use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
 use crate::{
     cluster::offline_for_partition,
     jvm_acceptance::{
-        SaslClusterSetup,
         break_glass::{approve as approve_proposal, propose},
-        broker0_advertised, plain_client_properties, start_registered_sasl_cluster,
+        broker0_advertised, plain_client_properties, start_three_broker_sasl_plaintext_jvm_cluster,
         wait_three_brokers_registered,
     },
     oracle::{AssignedTopicCommandSetup, CliRun, Side, ToolFile},
@@ -237,10 +236,11 @@ async fn approve(
 #[ignore = "requires Docker"]
 async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool() {
     let (h1, h2, h3, cfg1, cfg2, cfg3, _d1, _d2, _d3) = Box::pin(
-        start_registered_sasl_cluster()
+        start_three_broker_sasl_plaintext_jvm_cluster()
             .admin(ADMIN.0)
             .admin_pass(ADMIN.1)
             .extra_users(&[PROPOSER, APPROVER_ONE, APPROVER_TWO])
+            .wait_until_registered(true)
             .call(),
     )
     .await;

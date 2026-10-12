@@ -5,10 +5,7 @@ use std::ops::RangeInclusive;
 use crate::{
     harness,
     harness::common_imports::*,
-    kafka_wire::{
-        ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup, ScramAuthenticationSetup,
-        exchange,
-    },
+    kafka_wire::{PlainAuthenticationSetup, ScramAuthenticationSetup, exchange},
     plain, scram,
     support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
 };

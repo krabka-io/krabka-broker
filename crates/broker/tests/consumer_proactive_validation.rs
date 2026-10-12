@@ -87,7 +87,7 @@ use crate::support::{
     produce::{SinglePartitionProduceSetup, batch_request},
     records::value_record,
     standalone_broker,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 /// Produces each value as its OWN single-record batch, one batch per offset,

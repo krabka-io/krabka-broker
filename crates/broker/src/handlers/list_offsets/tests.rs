@@ -24,10 +24,7 @@ use super::{
 use crate::{
     authorizer::AllowAllAuthorizer,
     codes,
-    handlers::{
-        list_offsets::test_support::test_context,
-        test_support::{CreateTopicSetup, TopicPartitionCount, configured_topic_request},
-    },
+    handlers::{list_offsets::test_support::test_context, test_support::configured_topic_request},
     test_support::{
         DenyAll, peer, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
     },

@@ -340,6 +340,20 @@ mod tests {
         .unwrap()
     }
 
+    fn following_segment() -> RemoteLogSegmentMetadata {
+        following_segment_for_epochs(CacheSegmentSetup::following_segment().epochs)
+    }
+
+    fn following_segment_for_epochs(epochs: &[(LeaderEpoch, Offset)]) -> RemoteLogSegmentMetadata {
+        let setup = CacheSegmentSetup::following_segment();
+        seg()
+            .id(setup.id)
+            .epochs(epochs)
+            .start(setup.start)
+            .end(setup.end)
+            .call()
+    }
+
     fn finish(id: Uuid) -> RemoteLogSegmentMetadataUpdate {
         RemoteLogSegmentMetadataUpdate {
             remote_log_segment_id: RemoteLogSegmentId::new(tp(), id),
@@ -385,15 +399,7 @@ mod tests {
     fn two_finished_segments() -> RemoteLogMetadataCache {
         let mut c = RemoteLogMetadataCache::default();
         c.add(seg().call()).unwrap();
-        c.add(
-            seg()
-                .id(CacheSegmentSetup::following_segment().id)
-                .epochs(CacheSegmentSetup::following_segment().epochs)
-                .start(CacheSegmentSetup::following_segment().start)
-                .end(CacheSegmentSetup::following_segment().end)
-                .call(),
-        )
-        .unwrap();
+        c.add(following_segment()).unwrap();
         c.update(&finish(Uuid::from_u128(10))).unwrap();
         c.update(&finish(Uuid::from_u128(11))).unwrap();
         c
@@ -496,14 +502,10 @@ mod tests {
         .unwrap();
         c.update(&finish(Uuid::from_u128(10))).unwrap();
         // A second segment, epoch 1 only.
-        c.add(
-            seg()
-                .id(CacheSegmentSetup::following_segment().id)
-                .epochs(&[(LeaderEpoch(1), Offset(100))])
-                .start(CacheSegmentSetup::following_segment().start)
-                .end(CacheSegmentSetup::following_segment().end)
-                .call(),
-        )
+        c.add(following_segment_for_epochs(&[(
+            LeaderEpoch(1),
+            Offset(100),
+        )]))
         .unwrap();
         c.update(&finish(Uuid::from_u128(11))).unwrap();
 
@@ -731,15 +733,7 @@ mod tests {
     #[test]
     fn list_is_ordered_by_start_offset() {
         let mut c = RemoteLogMetadataCache::default();
-        c.add(
-            seg()
-                .id(CacheSegmentSetup::following_segment().id)
-                .epochs(CacheSegmentSetup::following_segment().epochs)
-                .start(CacheSegmentSetup::following_segment().start)
-                .end(CacheSegmentSetup::following_segment().end)
-                .call(),
-        )
-        .unwrap();
+        c.add(following_segment()).unwrap();
         c.add(seg().call()).unwrap();
         let listed = c.list();
         assert!(listed[0].start_offset() == 0);

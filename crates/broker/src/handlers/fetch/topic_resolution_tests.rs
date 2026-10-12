@@ -33,8 +33,8 @@ use crate::{
     codes,
     fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID},
     handlers::test_support::{
-        ClientTopicSetup, ReplicatedTopicSetup, check_cases, check_denied_topic_cases,
-        create_topic as create_topic_from_test_support, seed_partition_replicas,
+        check_cases, check_denied_topic_cases, create_topic as create_topic_from_test_support,
+        seed_partition_replicas,
     },
     test_support::{DenyAll, KafkaErrorCode, start_broker_with_authorizer_no_audit as start},
 };

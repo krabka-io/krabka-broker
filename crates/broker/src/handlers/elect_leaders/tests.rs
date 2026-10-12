@@ -30,7 +30,7 @@ use crate::{
     config::BreakGlassConfig,
     handlers::{
         RequestContext, encode_response,
-        test_support::{ReplicatedPartitionSetup, replicated_partition, single_replica_partition},
+        test_support::{replicated_partition, single_replica_partition},
     },
     leader_election::{ElectionType, test_support::one_partition_change},
     test_support::{decode_response, start_broker_no_audit_with, test_ctx},

@@ -13,7 +13,7 @@ use crate::{
     cluster::wait_alice_quota,
     kafka_wire::{
         PlainAuthenticationSetup,
-        quotas::{QuotaAlterSetup, QuotaDescribeSetup, UserQuotaSetup, alter_user_quota},
+        quotas::{QuotaAlterSetup, QuotaDescribeSetup, alter_user_quota},
     },
     support::retry::{all_cluster_authorization_failed, retry_until},
 };

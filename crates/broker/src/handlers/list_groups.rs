@@ -268,7 +268,7 @@ mod tests {
         authorizer::AllowAllAuthorizer,
         coordinator::unified::classic_state::GroupState,
         handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        test_support::{AllowAclSetup, allow_acl, start_broker_no_audit_with, test_ctx},
+        test_support::{allow_acl, start_broker_no_audit_with, test_ctx},
     };
 
     const VERSION: i16 = krabka_protocol::owned::list_groups_response::MAX_VERSION;

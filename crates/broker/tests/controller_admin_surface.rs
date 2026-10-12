@@ -84,9 +84,9 @@ use krabka_protocol::{
 use crate::support::{
     configs::{controller_registration, feature_update},
     discovery::api_versions_request_for,
-    sasl::{ScramAlgorithm, ScramIterations, ScramUpsertionSetup, scram_upsertion},
+    sasl::{ScramAlgorithm, scram_upsertion},
     start_with_bound_listeners,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 /// Kafka's `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, which

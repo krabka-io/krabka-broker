@@ -21,10 +21,7 @@ use krabka_protocol::{
 
 use crate::{
     control_plane::freeze_scope,
-    support::{
-        self,
-        producer::{ProducerRecordSetup, producer_record},
-    },
+    support::{self, producer::producer_record},
     wire::{CONTROL, accepted, create_topic, refused},
 };
 

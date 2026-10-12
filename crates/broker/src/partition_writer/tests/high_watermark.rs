@@ -6,10 +6,7 @@ use assert2::assert;
 use tempfile::tempdir;
 
 use super::*;
-use crate::{
-    partition_writer::test_support::{ObservedWriter, observed_writer, sample_batch},
-    test_support::{EmptyPayloadBatchSetup, RecordCount},
-};
+use crate::partition_writer::test_support::{ObservedWriter, observed_writer, sample_batch};
 
 async fn fixture(
     isr: &[u64],

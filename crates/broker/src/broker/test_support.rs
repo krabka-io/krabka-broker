@@ -13,10 +13,7 @@ use crate::{
     broker::BrokerHandle,
     log_dir::partition_dir,
     partition::Partition,
-    test_support::{
-        FakeMetadataSource, StandalonePartitionSetup, single_partition_topic,
-        spawn_standalone_partition,
-    },
+    test_support::{FakeMetadataSource, single_partition_topic, spawn_standalone_partition},
 };
 
 /// A metadata source over `image`, with `leader` as the controller leader and
@@ -109,7 +106,6 @@ pub(super) fn metadata_topic_record(
 #[derive(Clone)]
 pub(super) struct MetadataPartitionSetup<'a> {
     pub topic: &'a str,
-    pub topic_id: uuid::Uuid,
     pub partition: PartitionIndex,
     pub leader: NodeId,
     pub replicas: Vec<NodeId>,
@@ -121,7 +117,6 @@ impl Default for MetadataPartitionSetup<'_> {
     fn default() -> Self {
         Self {
             topic: "orders",
-            topic_id: uuid::Uuid::from_u128(1),
             partition: PartitionIndex::default(),
             leader: NodeId(1),
             replicas: vec![NodeId(1)],
@@ -134,7 +129,6 @@ impl Default for MetadataPartitionSetup<'_> {
 #[bon::builder]
 pub(super) fn metadata_partition_record(
     #[builder(default = MetadataPartitionSetup::default().topic)] topic: &'_ str,
-    #[builder(default = MetadataPartitionSetup::default().topic_id)] topic_id: uuid::Uuid,
     #[builder(into, default = MetadataPartitionSetup::default().partition)]
     partition: PartitionIndex,
     #[builder(into, default = MetadataPartitionSetup::default().leader)] leader: NodeId,
@@ -145,7 +139,6 @@ pub(super) fn metadata_partition_record(
 ) -> krabka_metadata::PartitionRecord {
     let setup = MetadataPartitionSetup {
         topic,
-        topic_id,
         partition,
         leader,
         replicas,
@@ -179,44 +172,14 @@ pub(super) fn metadata_partition_record(
 #[bon::builder]
 pub(super) async fn submit_metadata_topic_partition(
     handle: &BrokerHandle,
-    #[builder(default = MetadataPartitionSetup::default().topic)] topic: &'_ str,
-    #[builder(default = MetadataPartitionSetup::default().topic_id)] topic_id: uuid::Uuid,
-    #[builder(into, default = MetadataPartitionSetup::default().partition)]
-    partition: PartitionIndex,
-    #[builder(into, default = MetadataPartitionSetup::default().leader)] leader: NodeId,
-    #[builder(default = MetadataPartitionSetup::default().replicas)] replicas: Vec<NodeId>,
-    #[builder(default = MetadataPartitionSetup::default().isr)] isr: Vec<NodeId>,
-    #[builder(into, default = MetadataPartitionSetup::default().leader_epoch)]
-    leader_epoch: LeaderEpoch,
+    topic_id: uuid::Uuid,
+    partition_record: krabka_metadata::PartitionRecord,
 ) {
-    let setup = MetadataPartitionSetup {
-        topic,
-        topic_id,
-        partition,
-        leader,
-        replicas,
-        isr,
-        leader_epoch,
-    };
-    let MetadataPartitionSetup {
-        topic,
-        topic_id,
-        partition,
-        ..
-    } = setup;
+    let topic = partition_record.topic.as_str();
     handle
         .submit_metadata_record_for_test(metadata_topic_record(topic, topic_id))
         .await
         .expect("submit topic record");
-    let partition_record = metadata_partition_record()
-        .topic(setup.topic)
-        .topic_id(setup.topic_id)
-        .partition(setup.partition)
-        .leader(setup.leader)
-        .replicas(setup.replicas)
-        .isr(setup.isr)
-        .leader_epoch(setup.leader_epoch)
-        .call();
     handle
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
             partition_record.clone(),
@@ -226,5 +189,5 @@ pub(super) async fn submit_metadata_topic_partition(
 
     let image = handle.controller_image_for_test();
     assert!(image.topic(topic).is_some());
-    assert!(image.partition(topic, partition.0) == Some(&partition_record));
+    assert!(image.partition(topic, partition_record.partition) == Some(&partition_record));
 }

@@ -127,8 +127,8 @@ mod tests {
     use crate::{
         AuthorizationResult, Authorizer, SimpleAclAuthorizer,
         simple::test_support::{
-            AclSetup, AliceAuthorizer, QuerySetup, acl_image, alice, check_topic_access, cidr_img,
-            image_with_acls, img, no_super, req, topic_acl,
+            AliceAuthorizer, acl_image, alice, check_topic_access, cidr_img, image_with_acls, img,
+            no_super, req, topic_acl,
         },
     };
 

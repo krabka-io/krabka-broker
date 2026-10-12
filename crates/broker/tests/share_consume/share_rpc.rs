@@ -13,9 +13,9 @@ use crate::{
     NONE, RENEW,
     harness::wire,
     support::share::{
-        AcknowledgeRequestSetup, FetchSessionMode, RenewalMode, ShareAck, ShareFetchSetup,
-        ShareSessionEpoch, ShareSessionSetup, acknowledge_partition, acknowledge_request,
-        acknowledge_success, acknowledge_topic, acknowledgement, fetch_row,
+        FetchSessionMode, RenewalMode, ShareAck, ShareFetchSetup, ShareSessionEpoch,
+        ShareSessionSetup, acknowledge_partition, acknowledge_request, acknowledge_success,
+        acknowledge_topic, acknowledgement, fetch_row,
     },
 };
 

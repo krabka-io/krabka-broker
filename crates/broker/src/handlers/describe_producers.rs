@@ -575,27 +575,6 @@ mod tests {
 
     /// A data batch of `producer` (`(id, epoch)`) with `records` records from
     /// sequence 0, at `base_offset`, whose max timestamp is `max_timestamp`.
-    #[bon::builder]
-    fn data_batch(
-        #[builder(default = BatchProducer::from_wire((7, 0)))] producer: BatchProducer,
-        #[builder(into, default = BatchSequence(0))] base_sequence: BatchSequence,
-        #[builder(into, default = BatchRecordCount(1))] records: BatchRecordCount,
-        #[builder(into, default = BatchTimestamp(1_000))] max_timestamp: BatchTimestamp,
-        #[builder(default = BatchTransactionMode::Ordinary)] transaction: BatchTransactionMode,
-        #[builder(into, default)] base_offset: krabka_log::Offset,
-    ) -> krabka_protocol::records::RecordBatch {
-        krabka_protocol::records::RecordBatch {
-            base_offset: base_offset.0,
-            ..producer_batch()
-                .producer(producer)
-                .base_sequence(base_sequence.0)
-                .records(records.0)
-                .max_timestamp(max_timestamp.0)
-                .transaction(transaction)
-                .call()
-        }
-    }
-
     /// `DescribeProducers` widens the persisted producer epoch to an i32.
     #[derive(
         Debug,
@@ -735,7 +714,7 @@ mod tests {
             .lock()
             .expect("log lock")
             .append(
-                &mut data_batch()
+                &mut producer_batch()
                     .producer(BatchProducer::from_wire((10, 0)))
                     .records(3)
                     .call(),
@@ -743,7 +722,7 @@ mod tests {
             .expect("append on the leader");
         follows
             .replicate_batch(
-                data_batch()
+                producer_batch()
                     .producer(BatchProducer::from_wire((20, 3)))
                     .records(2)
                     .max_timestamp(2_000)
@@ -767,7 +746,7 @@ mod tests {
             .expect("replicate the commit marker");
         follows
             .replicate_batch(
-                data_batch()
+                producer_batch()
                     .producer(BatchProducer::from_wire((21, 0)))
                     .max_timestamp(4_000)
                     .transaction(BatchTransactionMode::Transactional)

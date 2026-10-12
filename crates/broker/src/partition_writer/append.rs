@@ -333,11 +333,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::{
-        error::BrokerError,
-        partition_writer::test_support::sample_batch,
-        test_support::{EmptyPayloadBatchSetup, RecordCount},
-    };
+    use crate::{error::BrokerError, partition_writer::test_support::sample_batch};
 
     #[derive(Debug)]
     struct FailNthWrite {

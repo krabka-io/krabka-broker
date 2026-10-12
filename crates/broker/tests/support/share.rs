@@ -27,15 +27,23 @@ use krabka_protocol::{
 
 use crate::support::{
     client::{connect as connect_client, create_topic_with},
-    configs::{
-        IncrementalConfigsSetup, incremental_config, incremental_request, incremental_resource,
-    },
+    configs::{incremental_config, incremental_request, incremental_resource},
     records::{batch_from_records, value_record},
     topics::{CreateTopicSetup, TopicPartitionCount},
 };
 const SHARE_STATE_PARTITIONS: i32 = 1;
 const MAX_CONCURRENT_TEST_BROKERS: usize = 3;
 const RESOURCE_TYPE_GROUP: i8 = 32;
+
+pub type ShareBrokerFixture = (
+    tokio::sync::OwnedSemaphorePermit,
+    krabka_broker::BrokerHandle,
+    Arc<Client>,
+    tempfile::TempDir,
+    uuid::Uuid,
+    String,
+);
+
 pub fn topic_id(broker: &krabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
     let image = broker.controller_image_for_test();
     image
@@ -100,14 +108,6 @@ pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
     );
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ShareProduceSetup<'a> {
-    #[default("t")]
-    pub topic: &'a str,
-    pub topic_id: uuid::Uuid,
-    pub partition: krabka_ids::PartitionIndex,
-}
-
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct ShareRecordCount(pub i64);
 
@@ -124,16 +124,6 @@ pub struct ShareRecordsSetup<'a> {
     pub topic_id: uuid::Uuid,
     pub partition: krabka_ids::PartitionIndex,
     pub count: ShareRecordCount,
-}
-
-impl<'a> From<ShareRecordsSetup<'a>> for ShareProduceSetup<'a> {
-    fn from(setup: ShareRecordsSetup<'a>) -> Self {
-        Self {
-            topic: setup.topic,
-            topic_id: setup.topic_id,
-            partition: setup.partition,
-        }
-    }
 }
 
 #[bon::builder]
@@ -171,11 +161,6 @@ pub async fn produce_values(
     #[builder(default)] topic_id: uuid::Uuid,
     #[builder(into, default)] partition: krabka_ids::PartitionIndex,
 ) {
-    let setup = ShareProduceSetup {
-        topic,
-        topic_id,
-        partition,
-    };
     let n = i64::try_from(values.len()).unwrap();
     let records: Vec<Record> = values
         .iter()
@@ -188,9 +173,9 @@ pub async fn produce_values(
             last_offset_delta: i32::try_from(n - 1).unwrap(),
             ..batch_from_records(records)
         })
-        .topic(setup.topic)
-        .topic_id(setup.topic_id)
-        .partition(setup.partition)
+        .topic(topic)
+        .topic_id(topic_id)
+        .partition(partition)
         .call()
         .await;
 }
@@ -220,16 +205,6 @@ pub async fn produce_batch(
     #[builder(default)] topic_id: uuid::Uuid,
     #[builder(into, default)] partition: krabka_ids::PartitionIndex,
 ) {
-    let setup = ShareProduceSetup {
-        topic,
-        topic_id,
-        partition,
-    };
-    let ShareProduceSetup {
-        topic,
-        topic_id: tid,
-        partition,
-    } = setup;
     let partition = partition.0;
     for _ in 0..40 {
         let resp = client
@@ -241,7 +216,7 @@ pub async fn produce_batch(
                     name: topic.to_string(),
                     // Produce negotiates v13, which carries topic_id (not name)
                     // on the wire; the broker resolves the topic by id.
-                    topic_id: wire(tid),
+                    topic_id: wire(topic_id),
                     partition_data: vec![PartitionProduceData {
                         index: partition,
                         records: Some(batch.clone().into()),
@@ -313,11 +288,15 @@ pub async fn topic_fixture(
 }
 
 /// A topic fixture that holds this binary's broker permit for the test's lifetime.
+fn no_share_customization(_: &mut BrokerConfig) {}
+pub type ShareConfigCustomization = Box<dyn FnOnce(&mut BrokerConfig)>;
+
 #[bon::builder]
 pub async fn permitted_topic_fixture(
     #[builder(default = "t")] topic: &'_ str,
     #[builder(default)] partitions: TopicPartitionCount,
-    customize: impl FnOnce(&mut BrokerConfig),
+    #[builder(default = Box::new(no_share_customization) as ShareConfigCustomization)]
+    customize: ShareConfigCustomization,
 ) -> (
     tokio::sync::OwnedSemaphorePermit,
     krabka_broker::BrokerHandle,
@@ -327,12 +306,14 @@ pub async fn permitted_topic_fixture(
 ) {
     let setup = ShareTopicSetup { topic, partitions };
     let permit = broker_test_permit().await;
-    let (broker, client, dir, tid) = topic_fixture()
-        .topic(setup.topic)
-        .partitions(setup.partitions)
-        .customize(customize)
-        .call()
-        .await;
+    let (broker, client, dir, tid) = Box::pin(
+        topic_fixture()
+            .topic(setup.topic)
+            .partitions(setup.partitions)
+            .customize(customize)
+            .call(),
+    )
+    .await;
     (permit, broker, client, dir, tid)
 }
 
@@ -1027,8 +1008,7 @@ pub async fn consumption_fixture(
     initialize: impl AsyncFn(&krabka_broker::BrokerHandle, &Client, ConsumptionSetup) -> (String, i32),
 ) -> ConsumptionFixture {
     let setup = ShareRecordSeedSetup { count };
-    let (permit, broker, client, dir, tid) =
-        permitted_topic_fixture().customize(|_| {}).call().await;
+    let (permit, broker, client, dir, tid) = Box::pin(permitted_topic_fixture().call()).await;
     let (member, _) = initialize(
         &broker,
         &client,

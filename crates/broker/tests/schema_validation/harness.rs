@@ -23,10 +23,10 @@ use wiremock::{
 };
 
 use crate::support::{
-    client::{BrokerClientSetup, start_broker_client},
+    client::start_broker_client,
     produce::{SinglePartitionProduceSetup, send_batch},
     records::value_record,
-    topics::{ConfiguredTopicSetup, TopicReplicationFactor, creatable_topic, topic_configs},
+    topics::{TopicReplicationFactor, creatable_topic, topic_configs},
 };
 
 /// Kafka error 87. KIP-467 added it for "one or more records in the batch were

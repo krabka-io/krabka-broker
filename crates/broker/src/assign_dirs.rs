@@ -266,7 +266,7 @@ mod tests {
     }
 
     use crate::test_support::{
-        VoterImageSetup, plaintext_controller_dialer_with_voters as plaintext_dialer,
+        plaintext_controller_dialer_with_voters as plaintext_dialer,
         start_controller as start_test_controller, voter_image,
     };
 

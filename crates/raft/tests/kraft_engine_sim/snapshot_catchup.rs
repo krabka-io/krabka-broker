@@ -18,8 +18,8 @@ use krabka_raft::kraft::{
 
 use crate::{
     harness::{
-        STAGGERED_TIMEOUTS, SimEngineSetup, SnapshotRecordCount, await_single_leader, await_until,
-        build_engine, shutdown_nodes, three_voter_network, topic_record,
+        STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, shutdown_nodes,
+        three_voter_network, topic_record,
     },
     sim_net::SimNet,
 };

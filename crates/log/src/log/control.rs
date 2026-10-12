@@ -245,11 +245,10 @@ mod tests {
         log::{
             Log,
             test_support::{
-                BarrierEpoch, BarrierMarkerSetup, HostileBarrierSetup, PartitionState,
-                ProducerEpoch, abort_marker, barrier_marker, barrier_marker_from_producer,
-                commit_marker, compact_test_log, compaction_ctx, control_key, control_value,
-                install_stamps, keyed_batch, partition_state, sample_batch, stamped_test_log,
-                test_log, transactional_batch,
+                BarrierEpoch, BarrierMarkerSetup, PartitionState, abort_marker, barrier_marker,
+                barrier_marker_from_producer, commit_marker, compact_test_log, compaction_ctx,
+                control_key, control_value, install_stamps, keyed_batch, partition_state,
+                sample_batch, stamped_test_log, test_log, transactional_batch,
             },
         },
         producer_snapshot::ProducerSnapshotEntry,

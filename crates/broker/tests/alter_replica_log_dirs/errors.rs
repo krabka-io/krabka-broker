@@ -11,7 +11,7 @@ use krabka_broker::Broker;
 use crate::{
     harness::start_two_dir_broker,
     support::{acl::use_simple_acl_authorizer, storage::two_dir_config},
-    two_dir_topic::{Setup, start},
+    two_dir_topic::start,
     wire::{CLIENT_ID, alter_replica_log_dirs},
 };
 

@@ -23,13 +23,13 @@ use crate::{
     RECORDS, TOPIC,
     multi_client::topic_id_for,
     support::{
-        client::{BatchProduceSetup, produce_batch},
+        client::produce_batch,
         produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
         records::batch_from_records,
         storage::{local_log_segment_metadata, remote_log_files},
         topics::AssignedTopicSetup,
     },
-    topic_fixture::{AssignedTieredTopicSetup, await_tiered_replicas, create_assigned_topic},
+    topic_fixture::{await_tiered_replicas, create_assigned_topic},
 };
 
 /// Counts current `*.log` files and legacy files named `log` under `root`.

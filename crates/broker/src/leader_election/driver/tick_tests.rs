@@ -13,8 +13,8 @@ use crate::{
         fencing::{RegistrationChange, registration_change},
     },
     leader_election::test_support::{
-        ElectionSetup, expected_clean_election, fencing_updates, img_with_partition,
-        one_partition_change, partition_batches, recovery_handle_for_tests, register_brokers,
+        expected_clean_election, fencing_updates, img_with_partition, one_partition_change,
+        partition_batches, recovery_handle_for_tests, register_brokers,
     },
     metadata_source::MetadataSource,
     metrics::BrokerMetrics,

@@ -22,13 +22,12 @@ use crate::{
     elr::state::test_records,
     handlers::{
         alter_partition_reassignments::test_support::{
-            ReassignmentRequestSetup, ReassignmentTarget, ReplicationFactorPolicy, request,
-            test_context,
+            ReassignmentTarget, ReplicationFactorPolicy, request, test_context,
         },
-        test_support::{ReplicatedPartitionSetup, replicated_partition},
+        test_support::replicated_partition,
     },
     test_support::{
-        DenyAll, FreezeSetup, broker_registration, finalize_elr_version_on,
+        DenyAll, broker_registration, finalize_elr_version_on,
         start_broker_with_authorizer as start_broker, test_ctx,
     },
 };

@@ -6,10 +6,7 @@ use krabka_log::{LogConfig, Offset};
 use tempfile::tempdir;
 
 use super::*;
-use crate::{
-    partition_writer::test_support::sample_batch,
-    test_support::{EmptyPayloadBatchSetup, RecordCount},
-};
+use crate::partition_writer::test_support::sample_batch;
 
 #[tokio::test]
 async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_scheduler() {

@@ -6,7 +6,7 @@ use tokio::net::TcpListener;
 
 use super::*;
 use crate::{
-    broker::test_support::{MetadataPartitionSetup, submit_metadata_topic_partition},
+    broker::test_support::{metadata_partition_record, submit_metadata_topic_partition},
     config::BrokerConfig,
     test_support::start_broker_with,
 };
@@ -272,12 +272,16 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
     for (topic, topic_id, leader, replicas, leader_epoch, excluded) in leader_changed_cases {
         submit_metadata_topic_partition()
             .handle(&handle)
-            .topic(topic)
             .topic_id(uuid::Uuid::from_u128(topic_id))
-            .leader(leader)
-            .replicas((replicas).iter().copied().map(krabka_ids::NodeId).collect())
-            .isr((replicas).iter().copied().map(krabka_ids::NodeId).collect())
-            .leader_epoch(leader_epoch)
+            .partition_record(
+                metadata_partition_record()
+                    .topic(topic)
+                    .leader(leader)
+                    .replicas((replicas).iter().copied().map(krabka_ids::NodeId).collect())
+                    .isr((replicas).iter().copied().map(krabka_ids::NodeId).collect())
+                    .leader_epoch(leader_epoch)
+                    .call(),
+            )
             .call()
             .await;
         assert!(
@@ -299,10 +303,14 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
 
     submit_metadata_topic_partition()
         .handle(&handle)
-        .topic("isr-len-mutant-topic")
         .topic_id(uuid::Uuid::from_u128(0xF005))
-        .replicas([1, 2].iter().copied().map(krabka_ids::NodeId).collect())
-        .isr([1, 2].iter().copied().map(krabka_ids::NodeId).collect())
+        .partition_record(
+            metadata_partition_record()
+                .topic("isr-len-mutant-topic")
+                .replicas([1, 2].iter().copied().map(krabka_ids::NodeId).collect())
+                .isr([1, 2].iter().copied().map(krabka_ids::NodeId).collect())
+                .call(),
+        )
         .call()
         .await;
     assert!(

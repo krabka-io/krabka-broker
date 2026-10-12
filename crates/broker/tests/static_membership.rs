@@ -25,8 +25,7 @@ use krabka_protocol::owned::{
 };
 
 use crate::support::classic::{
-    ClassicJoinSetup, ClassicSyncSetup, ClassicTimeouts, GenerationId, classic_join_request,
-    classic_sync_request, sync_assignment,
+    ClassicTimeouts, classic_join_request, classic_sync_request, sync_assignment,
 };
 
 mod support;

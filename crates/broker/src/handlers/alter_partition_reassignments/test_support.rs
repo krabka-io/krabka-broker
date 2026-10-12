@@ -144,14 +144,7 @@ pub(super) fn img_with(
     }));
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
         partition_epoch: partition_epoch.0,
-        ..reassignment_partition()
-            .replicas(assignment.replicas)
-            .isr(assignment.isr)
-            .adding(assignment.adding)
-            .removing(assignment.removing)
-            .leader(assignment.leader.0)
-            .directories(assignment.directories)
-            .call()
+        ..crate::reassignment_fields!(reassignment_partition(), assignment).call()
     }));
     img
 }

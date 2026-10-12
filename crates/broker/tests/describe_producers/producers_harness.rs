@@ -8,18 +8,19 @@
 use assert2::assert;
 use krabka_protocol::records::{Attributes, RecordBatch};
 
+pub(crate) use crate::support::topic_id_for;
 use crate::support::{
     self,
+    client::create_topic_named,
     discovery::coordinator_lookup_request,
-    records::ProducerValuesSetup,
-    transactions::{InitProducerSetup, claim_idempotent_producer, new_producer_request},
+    topics::CreateTopicSetup,
+    transactions::{claim_idempotent_producer, init_producer_request},
 };
-pub(crate) use crate::support::topic_id_for;
 
 pub(crate) async fn create_topic(client: &krabka_client_core::Client, topic: &str) {
-    crate::support::client::create_topic_named(
+    create_topic_named(
         client,
-        crate::support::topics::CreateTopicSetup {
+        CreateTopicSetup {
             topic,
             ..Default::default()
         },
@@ -59,7 +60,7 @@ pub(crate) async fn init_transactional_producer(
         let init = p
             .client
             .send(
-                new_producer_request()
+                init_producer_request()
                     .maybe_transactional_id(Some(transactional_id.into()))
                     .call(),
             )

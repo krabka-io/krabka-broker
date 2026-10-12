@@ -15,7 +15,7 @@ use assert2::assert;
 use crate::support::{
     client::create_topic,
     discovery::named_topic_metadata,
-    fetch::{SinglePartitionFetchSetup, single_partition_fetch},
+    fetch::single_partition_fetch,
     produce::{SinglePartitionProduceSetup, single_partition_produce},
 };
 mod support;

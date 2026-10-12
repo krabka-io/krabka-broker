@@ -155,7 +155,7 @@ mod tests {
     use super::*;
     use crate::{
         share_coordinator::coordinator::test_support::{
-            DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, state_batch as persisted,
+            DeliveryAttemptCount, FixtureDeliveryState, state_batch as persisted,
         },
         share_partition::state::{
             AckType, AcquiredRange,

@@ -27,10 +27,10 @@ use assert2::assert;
 
 use crate::support::{
     offsets::{offset_commit_topic, offset_fetch_group, offset_fetch_request, offset_fetch_topic},
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
     transactions::{
-        EndTransactionSetup, InitProducerSetup, ProducerIdentity, TransactionOutcome,
-        end_transaction_request, init_producer_request, txn_offset_partition, txn_offset_topic,
+        EndTransactionSetup, ProducerIdentity, TransactionOutcome, end_transaction_request,
+        init_producer_request, txn_offset_partition, txn_offset_topic,
     },
 };
 

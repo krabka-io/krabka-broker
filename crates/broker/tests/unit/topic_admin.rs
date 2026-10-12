@@ -12,7 +12,7 @@ use krabka_protocol::owned::{
 
 use crate::support::{
     self,
-    topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 #[tokio::test]

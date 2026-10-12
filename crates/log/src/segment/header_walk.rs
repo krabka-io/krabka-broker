@@ -121,8 +121,7 @@ mod tests {
     use crate::{
         config::DEFAULT_INDEX_INTERVAL,
         segment::test_support::{
-            DENSE_INDEX, FIRST_HEADER_WALK_BATCH, RecordCount, RecordTimestamp,
-            SECOND_HEADER_WALK_BATCH, SampleBatchSetup, SeededSegmentSetup, sample_batch,
+            DENSE_INDEX, FIRST_HEADER_WALK_BATCH, SECOND_HEADER_WALK_BATCH, sample_batch,
             seeded_fixture,
         },
     };

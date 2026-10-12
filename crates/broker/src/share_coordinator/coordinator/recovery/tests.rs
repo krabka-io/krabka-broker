@@ -11,7 +11,7 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     codes,
-    handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+    handlers::test_support::replicated_partition,
     log_dir_status::LogDirRegistry,
     partition::Partition,
     partition_registry::PartitionRegistry,

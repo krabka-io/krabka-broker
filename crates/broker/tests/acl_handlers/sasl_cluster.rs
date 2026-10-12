@@ -9,7 +9,7 @@ use krabka_security::SaslMechanism;
 use crate::{
     acl_admin::create_topic_as_admin,
     support::{
-        acl::{TopicAclSetup, seed_dummy_acl, topic_acl_record},
+        acl::{seed_dummy_acl, topic_acl_record},
         sasl::{sasl_plaintext_mechanisms, start_broker},
     },
 };

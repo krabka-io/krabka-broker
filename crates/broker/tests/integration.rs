@@ -6,14 +6,11 @@ use assert2::{assert, check};
 use crate::support::{
     client::connect_client,
     discovery::{api_versions_request_for, topic_metadata_request},
-    fetch::{
-        FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, check_record_count,
-        single_partition_fetch,
-    },
+    fetch::{FetchLimits, RequestWaitMillis, check_record_count, single_partition_fetch},
     offsets::{list_offset_partition, single_partition_list_offsets},
     produce::{ProduceAcknowledgements, SinglePartitionProduceSetup, batch_request},
     records::value_record,
-    topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
     wire::write_frame,
 };
 mod support;

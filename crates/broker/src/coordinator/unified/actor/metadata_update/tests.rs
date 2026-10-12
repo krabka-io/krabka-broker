@@ -29,7 +29,7 @@ use crate::coordinator::unified::{
     share::config::ShareGroupConfig,
     streams::config::StreamsGroupConfig,
     test_support::{
-        ConsumerJoinSetup, SwitchableMetadata, assignment_interval_fixture, consumer_join_request,
+        SwitchableMetadata, assignment_interval_fixture, consumer_join_request,
         make_coord_with_metadata, proto_uuid, snapshot_of,
     },
 };

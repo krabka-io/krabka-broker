@@ -433,6 +433,18 @@ pub fn elect_single_voter_engine(engine: &mut Engine) {
     assert2::assert!(engine.core.role().is_leader());
 }
 
+pub fn elect_test_engine_with_helper(engine: &mut Engine, helper: NodeId) {
+    engine.on_event(Event::ElectionTimeout);
+    for epoch in [0, 1] {
+        engine.on_event(Event::ReceiveVoteResponse {
+            from: helper,
+            epoch,
+            vote_granted: true,
+        });
+    }
+    assert2::assert!(engine.core.role().is_leader());
+}
+
 /// A realistic single-partition create batch: a `V1Topic` plus its one
 /// `V1Partition`. KIP-631 framing derives the topic's partition count from
 /// the partition records (the `TopicRecord` wire shape carries no count), so

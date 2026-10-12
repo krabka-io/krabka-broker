@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
-use krabka_metadata::{MetadataRecord, NodeId, PatternType};
+use krabka_metadata::{MetadataRecord, PatternType};
 use tempfile::TempDir;
 
 use super::*;
@@ -19,7 +19,7 @@ use crate::{
     log_dir_status::LogDirRegistry,
     metrics::{CleanerFailureLabel, CleanerFailureReason},
     partition::Partition,
-    test_support::{FrozenTopicsImageSetup, append_partition_batch, topic_thaw_record},
+    test_support::{append_partition_batch, topic_thaw_record},
 };
 
 struct HostedCompactPartition {

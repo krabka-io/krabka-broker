@@ -32,8 +32,7 @@ use crate::{
             retry_coordinator, settled_produce,
         },
         transactions::{
-            EndTransactionSetup, InitProducerSetup, ProducerIdentity, TransactionOutcome,
-            end_transaction_request, init_producer_request,
+            ProducerIdentity, TransactionOutcome, end_transaction_request, init_producer_request,
         },
     },
     txnver_harness::{

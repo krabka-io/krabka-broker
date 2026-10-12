@@ -28,7 +28,6 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig};
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::owned::{
     metadata_request::MetadataRequest, metadata_response::MetadataResponse,
 };
@@ -36,8 +35,7 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::net::TcpStream;
 
 use crate::{
-    kafka_wire::{ExchangeSetup as WireExchangeSetup, ScramAuthenticationSetup},
-    support::wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
+    kafka_wire::ScramAuthenticationSetup, support::wire::HeaderEncoding as RequestHeaderEncoding,
 };
 
 /// The client id every request header in this suite carries.

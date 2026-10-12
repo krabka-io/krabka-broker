@@ -178,9 +178,8 @@ mod tests {
     use crate::fetch_session::{
         SessionDecision,
         test_support::{
-            ForgottenTopicSetup, NAME_FETCH_VERSION, RequestSessionId, SessionAllocationSetup,
-            SessionKeySetup, SessionRequestSetup, allocate_session, allocated_cache,
-            forgotten_topic, req, session_key, topic,
+            NAME_FETCH_VERSION, SessionAllocationSetup, allocate_session, allocated_cache,
+            forgotten_topic, incremental_req, req, session_key, topic,
         },
     };
 
@@ -315,19 +314,19 @@ mod tests {
                 .partitions(vec![krabka_ids::PartitionIndex(1)])
                 .call(),
         ];
-        let r = req()
-            .session_id(SessionRequestSetup::incremental(RequestSessionId(id)).session_id)
-            .session_epoch(SessionRequestSetup::incremental(RequestSessionId(id)).session_epoch)
-            .topics(vec![topic(
+        let r = incremental_req!(
+            id,
+            1,
+            topics(vec![topic(
                 "t",
                 &[
                     krabka_ids::PartitionIndex(0),
                     krabka_ids::PartitionIndex(2),
                     krabka_ids::PartitionIndex(3),
                 ],
-            )])
-            .forgotten(forgotten)
-            .call();
+            )]),
+            forgotten(forgotten)
+        );
         check_incremental_count(&cache, &r, CachedPartitionCount(3));
 
         // Close drops the whole session and its partitions.
@@ -340,10 +339,10 @@ mod tests {
     fn counters_track_large_incremental_add_delta() {
         let (cache, id) = two_partition_cache();
 
-        let r = req()
-            .session_id(SessionRequestSetup::incremental(RequestSessionId(id)).session_id)
-            .session_epoch(SessionRequestSetup::incremental(RequestSessionId(id)).session_epoch)
-            .topics(vec![topic(
+        let r = incremental_req!(
+            id,
+            1,
+            topics(vec![topic(
                 "t",
                 &[
                     krabka_ids::PartitionIndex(0),
@@ -353,8 +352,7 @@ mod tests {
                     krabka_ids::PartitionIndex(4),
                 ],
             )])
-            .forgotten(SessionRequestSetup::incremental(RequestSessionId(id)).forgotten)
-            .call();
+        );
         check_incremental_count(&cache, &r, CachedPartitionCount(5));
     }
 

@@ -10,10 +10,7 @@ use fixtures::{local_backends, sweep_counts};
 use krabka_metadata::PatternType;
 
 use super::*;
-use crate::{
-    remote_log_manager::test_support as fixtures,
-    test_support::{FreezeSetup, topic_freeze_record},
-};
+use crate::{remote_log_manager::test_support as fixtures, test_support::topic_freeze_record};
 
 /// The `orders` topic, plus the one live freeze entry `freeze` names.
 /// `None` is the unfrozen control every freeze case runs against.

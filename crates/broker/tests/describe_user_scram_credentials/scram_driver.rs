@@ -4,11 +4,8 @@
 
 use std::net::SocketAddr;
 
-use krabka_ids::ApiKey as WireApiKey;
-
 use crate::{
-    CLIENT_ID, kafka_wire,
-    kafka_wire::{ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup},
+    CLIENT_ID, kafka_wire, kafka_wire::PlainAuthenticationSetup,
     support::wire::HeaderEncoding as RequestHeaderEncoding,
 };
 

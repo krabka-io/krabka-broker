@@ -81,9 +81,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        share_coordinator::coordinator::test_support::{
-            DeliveryAttemptCount, StateBatchSetup, state_batch,
-        },
+        share_coordinator::coordinator::test_support::{DeliveryAttemptCount, state_batch},
         share_partition::state::{
             AckType, AcquiredRange,
             test_support::{LOCK, t0},

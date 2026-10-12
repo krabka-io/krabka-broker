@@ -13,8 +13,7 @@ use crate::{
         UNCLEAN_RECOVERY_STRATEGY,
     },
     leader_election::test_support::{
-        ElectionSetup, ElrFinalization, ExpectedPartitionSetup, TopicConfigSetup,
-        elected_partition, expected_clean_election, expected_partition, failover,
+        ElrFinalization, elected_partition, expected_clean_election, expected_partition, failover,
         failover_with_alive, img_with_partition, liveness_with_alive, mark_witnesses_in_image,
         one_partition_change, set_cluster_default, set_topic_configs,
     },
@@ -40,28 +39,28 @@ async fn assert_failover_clean_election(img: &MetadataImage, expected_leader: No
     let plan = failover_with_alive(img, NodeId(1), &[2u64, 3]).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
-    let expected = expected_clean_election(
+    assert_clean_election_record(
+        pr,
         expected_leader,
         &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
-        vec![],
     );
-    assert!(*pr == expected);
+}
+
+fn assert_clean_election_record(
+    actual: &krabka_metadata::PartitionRecord,
+    leader: NodeId,
+    isr: &[krabka_raft::NodeId],
+) {
+    let expected = expected_clean_election(leader, isr, vec![]);
+    assert!(*actual == expected);
 }
 
 #[tokio::test]
 async fn failover_picks_alive_isr_member_when_available() {
     // Leader 1 dies, ISR {1, 2, 3}, both 2 and 3 alive — pick 2.
     let img = img_with_partition().call();
-    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
-    assert!(plan.recoveries.is_empty());
-    let pr = one_partition_change(&plan.changes);
     // leader_epoch and partition_epoch must both bump on election.
-    let expected = expected_clean_election(
-        krabka_raft::NodeId(2),
-        &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
-        vec![],
-    );
-    assert!(*pr == expected);
+    assert_failover_clean_election(&img, NodeId(2)).await;
 }
 
 #[tokio::test]
@@ -139,9 +138,7 @@ async fn failover_elects_unclean_when_topic_opts_in() {
     let pr = one_partition_change(&plan.changes);
     // Must elect the first alive replica (broker 2) with a singleton
     // ISR (KIP-841) and a bumped leader_epoch.
-    let expected =
-        expected_clean_election(krabka_raft::NodeId(2), &[krabka_raft::NodeId(2)], vec![]);
-    assert!(*pr == expected);
+    assert_clean_election_record(pr, NodeId(2), &[krabka_raft::NodeId(2)]);
     // Each unclean election bumps the counter exactly once.
     assert!(metrics.unclean_leader_elections_total.get() == 1);
 }

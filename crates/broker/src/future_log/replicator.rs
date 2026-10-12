@@ -208,9 +208,8 @@ mod tests {
         future_log::{
             canonicalize_or_self, resume_move,
             test_support::{
-                FutureRecordSetup, FutureSourceSetup, RecordValueBytes, TestStampSource,
-                append_epoch_batch, append_records, append_value_batch, fixture_partition,
-                open_future_log, registered_source_fixture, test_policy,
+                TestStampSource, append_epoch_batch, append_records, append_value_batch,
+                fixture_partition, open_future_log, registered_source_fixture, test_policy,
             },
         },
         log_dir,

@@ -133,7 +133,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::test_support::{TopicSetup, finalize_elr_version, topic_image};
+    use crate::test_support::{finalize_elr_version, topic_image};
 
     fn image(topic_override: Option<&str>, cluster_default: Option<&str>) -> MetadataImage {
         let mut image = topic_image().topic("t").call();

@@ -6,7 +6,7 @@
 //! not resolve to a name. The zero id is such an id.
 use assert2::assert;
 
-use crate::support::topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request};
+use crate::support::topics::{creatable_topic, create_topic_request};
 mod support;
 
 use krabka_protocol::owned::{

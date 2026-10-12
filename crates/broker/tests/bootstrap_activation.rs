@@ -37,7 +37,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 use crate::support::{
-    AddressedNodeSetup, addressed_node_config,
+    addressed_node_config,
     client::{connect_owned, metadata_fetch},
     configs::describe_resource,
     records::metadata_batches,
@@ -128,19 +128,7 @@ struct ActivationSetup<'a> {
     min_insync_replicas: MinimumInsyncReplicas,
 }
 
-#[bon::builder]
-fn config(
-    node: &Node,
-    #[builder(default = Quorum :: Dynamic)] quorum: Quorum,
-    #[builder(default)] controllers: &'_ [(NodeId, SocketAddr)],
-    #[builder(into, default = MinimumInsyncReplicas (1))]
-    min_insync_replicas: MinimumInsyncReplicas,
-) -> BrokerConfig {
-    let setup = ActivationSetup {
-        quorum,
-        controllers,
-        min_insync_replicas,
-    };
+fn config(node: &Node, setup: ActivationSetup<'_>) -> BrokerConfig {
     let meta = krabka_broker::bootstrap::initialize_log_dirs(
         &node.log_dir,
         std::slice::from_ref(&node.log_dir),
@@ -195,12 +183,7 @@ async fn start_all(
         min_insync_replicas,
     };
     join_all(nodes.into_iter().map(|node| async move {
-        let config = config()
-            .node(&node)
-            .quorum(setup.quorum)
-            .controllers(setup.controllers)
-            .min_insync_replicas(setup.min_insync_replicas)
-            .call();
+        let config = config(&node, setup);
         let id = node.id;
         let handle = tokio::time::timeout(
             DEADLINE,

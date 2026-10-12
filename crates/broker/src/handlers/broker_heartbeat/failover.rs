@@ -94,7 +94,7 @@ mod tests {
     use crate::{
         config_keys::RecoveryStrategy,
         handlers::broker_heartbeat::test_support::{
-            ElectionSetup, fake_source, image_with_dir_partition, liveness_with,
+            fake_source, image_with_dir_partition, liveness_with,
         },
         metadata_source::MetadataSource,
         metrics::BrokerMetrics,

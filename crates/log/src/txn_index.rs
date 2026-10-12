@@ -212,7 +212,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::test_support::{AbortedTxnSetup, aborted_txn};
+    use crate::test_support::aborted_txn;
 
     fn populated_index(name: &str, entries: &[AbortedTxn]) -> (TempDir, PathBuf, TxnIndex) {
         let dir = TempDir::new().unwrap();

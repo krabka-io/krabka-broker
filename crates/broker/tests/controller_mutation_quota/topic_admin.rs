@@ -9,7 +9,6 @@
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -21,7 +20,10 @@ use krabka_protocol::{
 use crate::{
     CLIENT_ID,
     kafka_wire::{self, PlainAuthenticationSetup},
-    support::topics::{creatable_topic, create_topic_request_with_setup},
+    support::{
+        topics::{creatable_topic, create_topic_request_with_setup},
+        wire::HeaderEncoding,
+    },
 };
 
 /// Drive `CreateTopics` (`api_key=19`) over a SASL/PLAIN connection.
@@ -62,7 +64,7 @@ pub(crate) async fn drive_create_topics_sasl(
         .api_key(19)
         .version(VERSION)
         .client_id(CLIENT_ID)
-        .header(crate::support::wire::HeaderEncoding::Flexible)
+        .header(HeaderEncoding::Flexible)
         .body(&body)
         .call()
         .await
@@ -109,7 +111,7 @@ pub(crate) async fn drive_delete_topics_sasl(
         .api_key(20)
         .version(VERSION)
         .client_id(CLIENT_ID)
-        .header(crate::support::wire::HeaderEncoding::Flexible)
+        .header(HeaderEncoding::Flexible)
         .body(&body)
         .call()
         .await

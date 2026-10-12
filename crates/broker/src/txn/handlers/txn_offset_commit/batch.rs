@@ -192,7 +192,7 @@ mod tests {
             test_support::offsets_partition_image,
         },
         partition::{Partition, ProducerAppendCheck},
-        test_support::{FakeMetadataSource, StandalonePartitionSetup, open_partition},
+        test_support::{FakeMetadataSource, open_partition},
         txn::handlers::txn_offset_commit::{test_support::request, verification::offset_batch},
     };
 

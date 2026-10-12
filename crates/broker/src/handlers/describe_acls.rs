@@ -176,7 +176,7 @@ mod tests {
     /// (resource name, pattern type) pairs the listing must hold.
     type PatternRow<'a> = (i8, Option<&'a str>, &'a [(&'a str, i8)]);
 
-    use crate::test_support::{AllowAclSetup, allow_acl as acl};
+    use crate::test_support::allow_acl as acl;
 
     fn request(
         resource_name: Option<&str>,

@@ -9,7 +9,6 @@
 
 use assert2::assert;
 use bytes::{Buf, BytesMut};
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     Decode, Encode,
     kafka_3_6_2::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -21,15 +20,10 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::{
-    kafka_wire::LegacyExchangeSetup,
-    support::{
-        produce::{SinglePartitionProduceSetup, batch_request},
-        topics::{
-            ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request,
-        },
-        wire::{CorrelationId as WireCorrelationId, HeaderEncoding, WireFrameSetup, request_frame},
-    },
+use crate::support::{
+    produce::{SinglePartitionProduceSetup, batch_request},
+    topics::{creatable_topic, create_topic_request},
+    wire::{HeaderEncoding, request_frame},
 };
 
 /// Verify successful down-conversion and extract the exact legacy bytes.

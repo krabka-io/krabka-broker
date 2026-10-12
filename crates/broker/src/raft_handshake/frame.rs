@@ -145,8 +145,8 @@ mod tests {
     use crate::raft_handshake::{
         API_KEY_SASL_HANDSHAKE,
         test_support::{
-            HandshakeApiKey, HandshakeApiVersion, HandshakeCorrelationId, HandshakeHeader,
-            RequestFrameSetup, read_request_from_frame, read_response_frame, request_frame,
+            HandshakeApiKey, HandshakeApiVersion, HandshakeHeader, read_request_from_frame,
+            read_response_frame, request_frame,
         },
     };
 

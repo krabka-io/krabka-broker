@@ -7,10 +7,7 @@ use bytes::Bytes;
 use tokio::sync::oneshot;
 
 use crate::coordinator::{
-    test_support::{
-        TopicDeletionTombstonesSetup, offset_entry, parsed_offset_records,
-        topic_deletion_tombstones,
-    },
+    test_support::{offset_entry, parsed_offset_records, topic_deletion_tombstones},
     unified::{
         actor::{
             GroupActorMessage,

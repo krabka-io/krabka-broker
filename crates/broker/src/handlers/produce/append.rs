@@ -470,7 +470,7 @@ mod tests {
         partition::{AppendedBatch, test_support::test_partition},
         partition_writer::storage_failure_error,
         producer_state::ProducerState,
-        test_support::{StandalonePartitionSetup, spawn_standalone_partition},
+        test_support::spawn_standalone_partition,
     };
 
     /// Kafka's `acks=all` completion: `DelayedProduce` leaves an expired wait

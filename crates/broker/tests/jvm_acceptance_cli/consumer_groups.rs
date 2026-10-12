@@ -142,7 +142,7 @@ use crate::{
         parse_reset_table,
     },
     oracle::{CliRun, Side, ToolFile},
-    support::{ContainerInput, JvmDockerSetup, jvm_docker_command, jvm_spawn_piped},
+    support::{ContainerInput, jvm_docker_command, jvm_spawn_piped},
 };
 
 /// The topic every reset case reads. One partition, so the record-to-partition

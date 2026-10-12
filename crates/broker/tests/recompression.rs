@@ -39,7 +39,7 @@ use krabka_protocol::{
 
 use crate::support::{
     discovery::named_topic_metadata,
-    fetch::{SinglePartitionFetchSetup, single_partition_fetch},
+    fetch::single_partition_fetch,
     produce::{SinglePartitionProduceSetup, batch_request},
     records::{batch_from_records, value_record},
 };

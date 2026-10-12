@@ -192,8 +192,7 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_TWO_RECORD_BATCH,
-        SampleBatchSetup, SeededSegmentSetup, THIRD_TWO_RECORD_BATCH, THREE_RECORD_BATCH,
+        DENSE_INDEX, NO_LIMIT, SECOND_TWO_RECORD_BATCH, THIRD_TWO_RECORD_BATCH, THREE_RECORD_BATCH,
         TWO_RECORD_BATCH, sample_batch, seeded_fixture, test_batch_at, test_segment,
         two_record_fixture,
     };

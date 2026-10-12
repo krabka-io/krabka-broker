@@ -45,10 +45,7 @@ use crate::{
         storage::{local_log_segment_metadata, topic_remote_log_files},
         topics::AssignedTopicSetup,
     },
-    topic_fixture::{
-        AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup, create_assigned_topic,
-        produce_records as produce_tiered_records,
-    },
+    topic_fixture::{create_assigned_topic, produce_records as produce_tiered_records},
 };
 
 /// The topic this suite produces into.

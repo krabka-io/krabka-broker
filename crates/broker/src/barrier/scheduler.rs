@@ -51,9 +51,7 @@ mod tests {
     use krabka_units::millis;
 
     use super::*;
-    use crate::barrier::coordinator::test_support::{
-        Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec,
-    };
+    use crate::barrier::coordinator::test_support::{Fixture, GROUP, spec};
 
     async fn periodic_group(fixture: &Fixture) -> (BarrierCoordinator, Arc<dyn MetadataSource>) {
         let coordinator = fixture.coordinator().await;

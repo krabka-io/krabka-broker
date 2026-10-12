@@ -20,8 +20,8 @@ use crate::{
             },
             test_support::{
                 CapturedPeerSend, EngineSetup, build_engine_only, elect_single_voter_engine,
-                one_offset_batch, record_peer_sends, recv_peer_send, recv_peer_send_with_api,
-                submit_change_with_timeout, topic_record,
+                elect_test_engine_with_helper, one_offset_batch, record_peer_sends, recv_peer_send,
+                recv_peer_send_with_api, submit_change_with_timeout, topic_record,
             },
         },
         event::SuccessorRank,
@@ -393,15 +393,7 @@ async fn a_replica_that_cannot_serve_a_fetch_names_the_leader_it_knows() {
 #[tokio::test]
 async fn a_leader_refuses_a_fetch_from_another_epoch_and_names_itself() {
     let (mut leader, _dir) = build_engine_only().ids(&[NodeId(1), NodeId(2)]).call();
-    leader.on_event(Event::ElectionTimeout);
-    for epoch in [0, 1] {
-        leader.on_event(Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch,
-            vote_granted: true,
-        });
-    }
-    assert!(leader.core.role().is_leader());
+    elect_test_engine_with_helper(&mut leader, NodeId(2));
     let epoch = leader.core.quorum_state().leader_epoch;
     let (reply, mut response) = oneshot::channel();
 

@@ -187,8 +187,8 @@ mod tests {
             actor::{
                 GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution,
                 test_support::{
-                    ConsumerMemberSetup, actor_services_with, completing_classic_group,
-                    empty_metadata, last_classic_metadata, make_coordinator, parked_follower, rpc,
+                    actor_services_with, completing_classic_group, empty_metadata,
+                    last_classic_metadata, make_coordinator, parked_follower, rpc,
                     subscribed_member,
                 },
             },

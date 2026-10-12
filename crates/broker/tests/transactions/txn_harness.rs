@@ -21,11 +21,9 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 use crate::support::{
-    self,
-    client::connect_client,
-    sasl::sasl_plaintext_mechanisms,
-    transaction_wire::{TransactionTopicSetup, create_topic as create_transaction_topic},
-    transactions::{InitProducerSetup, new_producer_request},
+    self, client::connect_client, sasl::sasl_plaintext_mechanisms,
+    transaction_wire::create_topic as create_transaction_topic,
+    transactions::init_producer_request,
 };
 
 pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
@@ -101,7 +99,7 @@ pub async fn init_transaction(
     loop {
         let response = client
             .send(
-                new_producer_request()
+                init_producer_request()
                     .maybe_transactional_id(Some(transactional_id.into()))
                     .call(),
             )

@@ -23,10 +23,7 @@ use crate::{
         persister_client::SharePersister,
     },
     share_partition::dlq::{DlqSink, test_support::RecordingDlq},
-    test_support::{
-        FakeMetadataSource, StandalonePartitionSetup, UnixMillis, open_partition,
-        static_records_batch,
-    },
+    test_support::{FakeMetadataSource, UnixMillis, open_partition, static_records_batch},
 };
 
 pub(crate) const LOCK: Duration = Duration::from_secs(30);

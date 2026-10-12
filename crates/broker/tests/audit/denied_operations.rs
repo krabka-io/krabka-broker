@@ -10,11 +10,8 @@ use krabka_broker::coordinator::AUDIT_TOPIC;
 
 use crate::support::{
     self,
-    fetch::{
-        FetchByteLimit, FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup,
-        single_partition_fetch,
-    },
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    fetch::{FetchByteLimit, FetchLimits, RequestWaitMillis, single_partition_fetch},
+    topics::{creatable_topic, create_topic_request},
 };
 
 /// Verifies that the authorizer-decorator path denies an unauthorized

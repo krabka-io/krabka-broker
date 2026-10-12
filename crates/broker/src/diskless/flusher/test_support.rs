@@ -17,9 +17,7 @@ use crate::{
     log_dir_status::LogDirRegistry,
     partition::Partition,
     producer_state::ProducerState,
-    test_support::{
-        RecordCount, RepeatedRecordsSetup, StorageMode, UnixMillis, repeated_records_batch,
-    },
+    test_support::{StorageMode, repeated_records_batch},
     time_util::now_ms,
 };
 

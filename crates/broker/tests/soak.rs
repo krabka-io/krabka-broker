@@ -126,11 +126,7 @@ use assert2::{assert, check};
 use crate::{
     cluster::SoakCluster,
     drift::{Bound, Series},
-    support::{
-        load_test::*,
-        producer::{ProducerRecordSetup, producer_record},
-        topics::topic_configs,
-    },
+    support::{load_test::*, producer::producer_record, topics::topic_configs},
 };
 
 /// How long the load runs when `KRABKA_SOAK_SECONDS` is unset.

@@ -17,7 +17,7 @@ use crate::{
     harness::{
         NON_EMPTY_GROUP, NONE, fetch_until_acquired, join, seeded_empty_group, wait_for_share_init,
     },
-    support::share::{ShareRecordCount, ShareRecordSeedSetup, ShareSessionSetup},
+    support::share::ShareSessionSetup,
 };
 
 /// Alter resets the SPSO of an empty group.
@@ -36,7 +36,8 @@ use crate::{
 /// reset and invalidated leader cache.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_resets_empty_group() {
-    let (_permit, _broker, client, _dir, tid) = seeded_empty_group().count(6).call().await;
+    let (_permit, _broker, client, _dir, tid) =
+        Box::pin(seeded_empty_group().count(6).call()).await;
 
     // Alter: reset SPSO to 5 on the empty (never-joined) group. This
     // initializes-from-absent at the group epoch 1, and invalidates the
@@ -97,7 +98,7 @@ async fn alter_resets_empty_group() {
 /// The group has a live member, so the response carries `NON_EMPTY_GROUP`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_non_empty_group_fenced() {
-    let (_permit, broker, client, _dir, tid) = seeded_empty_group().call().await;
+    let (_permit, broker, client, _dir, tid) = Box::pin(seeded_empty_group().call()).await;
 
     // Live member present (steady-state heartbeat), never leaves.
     let (_member, _epoch) = join(&client, "g1", "t").await;

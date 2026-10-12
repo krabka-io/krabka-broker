@@ -10,7 +10,7 @@
 use krabka_broker::coordinator::AUDIT_TOPIC;
 use krabka_protocol::{owned::fetch_response::FetchResponse, records::Record};
 
-use crate::support::fetch::{SinglePartitionFetchSetup, single_partition_fetch};
+use crate::support::fetch::single_partition_fetch;
 
 /// Fetch the audit topic and return the `seq` header value (parsed as `u64`)
 /// from each non-checkpoint record, in order.

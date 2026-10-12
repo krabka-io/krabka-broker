@@ -7,17 +7,12 @@
 use assert2::assert;
 
 use crate::{
-    kafka_wire::AutomaticTopicSetup,
     plaintext_wire::CLIENT_ID,
     sasl_wire::{
         create_topic_as_admin, drive_alter_reassignments_sasl_plain,
         start_single_broker_sasl_plaintext_with_users,
     },
-    support::{
-        acl::{TopicAclSetup, topic_acl_record},
-        retry::retry_until,
-        topics::ConfiguredTopicSetup,
-    },
+    support::{acl::topic_acl_record, retry::retry_until, topics::configured_topic_setup},
 };
 
 /// Test 4: alice, who authenticated over SASL/PLAIN and holds no ACLs, sends
@@ -58,10 +53,7 @@ async fn non_super_user_denied() {
     create_topic_as_admin()
         .addr(addr)
         .client_id(CLIENT_ID)
-        .topic(ConfiguredTopicSetup {
-            name: ("foo").into(),
-            ..Default::default()
-        })
+        .topic(configured_topic_setup().name("foo").call())
         .call()
         .await;
     handle.wait_until_partition_present("foo", 0).await;

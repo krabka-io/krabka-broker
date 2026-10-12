@@ -10,8 +10,8 @@ use assert2::assert;
 
 use super::ports::host_port;
 use crate::support::{
-    ContainerInput, JvmDockerSetup, combined_output, docker_tool_command, jvm_docker_command,
-    jvm_stdin_output, jvm_tool_output,
+    ContainerInput, combined_output, docker_tool_command, jvm_docker_command, jvm_stdin_output,
+    jvm_tool_output,
 };
 
 /// Create a topic through the JVM admin client, optionally with client properties.

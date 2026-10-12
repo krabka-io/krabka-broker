@@ -33,8 +33,7 @@ use crate::{
     metrics::PartitionLabel,
     partition::Partition,
     test_support::{
-        FakeMetadataSource, RecordCount, RepeatedRecordsSetup, StandalonePartitionSetup,
-        UnixMillis, open_partition, repeated_records_batch, single_partition_topic,
+        FakeMetadataSource, open_partition, repeated_records_batch, single_partition_topic,
         started_controller_broker,
     },
 };

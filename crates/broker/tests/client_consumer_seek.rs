@@ -12,9 +12,9 @@ use krabka_client_consumer::{AutoOffsetReset, Consumer};
 
 use crate::support::{
     client::{connect_client, standalone_topic},
-    producer::{ProducerRecordSetup, default_producer, producer_record},
+    producer::{default_producer, producer_record},
     standalone_broker,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 async fn produce_n(bootstrap: &str, topic: &str, n: u32) {

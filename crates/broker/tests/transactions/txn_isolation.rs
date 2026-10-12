@@ -16,9 +16,7 @@ use crate::{
     support::{
         client::connect_client,
         discovery::topic_metadata_request,
-        fetch::{
-            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, single_partition_fetch,
-        },
+        fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
         producer::{default_producer, enqueue_string_values, transactional_producer},
         topics::metadata_topic,
         transaction_wire::{committed_values, observed_values, read_committed_at_least},

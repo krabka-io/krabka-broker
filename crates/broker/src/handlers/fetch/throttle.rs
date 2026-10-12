@@ -311,13 +311,11 @@ mod tests {
     use krabka_units::{Time, convert::TimeExt, millis, secs};
 
     use crate::{
-        handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+        handlers::test_support::replicated_partition,
         metrics::BrokerMetrics,
         quota::{
             QuotaBuckets,
-            test_support::{
-                QuotaRecordSetup, QuotaValue, check_fractional_bandwidth, image_with_quota,
-            },
+            test_support::{check_fractional_bandwidth, image_with_quota},
         },
         throttle::{LEADER_THROTTLED_REPLICAS_KEY, TokenBucket},
     };

@@ -16,7 +16,6 @@ use crate::{
         admin::describe_producers_request,
         produce::{SinglePartitionProduceSetup, batch_request},
         records::{ProducerSequence, ProducerValuesSetup},
-        topics::CreateTopicSetup,
         transactions::ProducerEpoch,
     },
 };

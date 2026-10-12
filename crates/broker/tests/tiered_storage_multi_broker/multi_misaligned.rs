@@ -33,8 +33,7 @@ use crate::{
     multi_workload::local_segment_bases,
     support::{client::connect_owned, storage::topic_remote_log_files, topics::AssignedTopicSetup},
     topic_fixture::{
-        AssignedTieredTopicSetup, TieredRecordCount, TieredRecordsSetup, await_tiered_replicas,
-        create_assigned_topic, produce_records as produce_tiered_records,
+        await_tiered_replicas, create_assigned_topic, produce_records as produce_tiered_records,
     },
 };
 

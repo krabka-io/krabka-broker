@@ -16,7 +16,7 @@ use tempfile::TempDir;
 
 use crate::{
     jvm_acceptance::plain_client_properties,
-    support::{self, JvmBrokerSetup, controller_voters},
+    support::{self, controller_voters},
     vocabulary::{SASL_LISTENER, approver_set},
 };
 

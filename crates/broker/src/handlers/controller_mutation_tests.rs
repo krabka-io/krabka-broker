@@ -17,7 +17,7 @@ use krabka_raft::{BootstrapMode, NodeId};
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use super::test_support::{ReplicatedPartitionSetup, replicated_partition};
+use super::test_support::replicated_partition;
 use crate::{
     broker::BrokerHandle,
     codes,

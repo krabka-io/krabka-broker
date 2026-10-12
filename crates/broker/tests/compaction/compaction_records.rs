@@ -9,7 +9,6 @@
 use std::net::SocketAddr;
 
 use assert2::assert;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
     primitives::uuid::Uuid,
@@ -17,12 +16,10 @@ use krabka_protocol::{
 use tokio::net::TcpStream;
 
 use crate::{
-    CLIENT_ID,
-    kafka_wire::{self, ExchangeSetup as WireExchangeSetup},
+    CLIENT_ID, kafka_wire,
     support::{
         fetch::{
-            FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
-            SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
+            FetchByteLimit, FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch,
         },
         wire::HeaderEncoding as RequestHeaderEncoding,
     },

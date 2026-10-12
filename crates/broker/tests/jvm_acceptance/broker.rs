@@ -9,7 +9,7 @@ use std::path::Path;
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
 
 use super::ports::{broker0_advertised, broker0_listen, controller_addr_0};
-use crate::support::{JvmBrokerSetup, controller_voters, init_jvm_tracing, jvm_broker_config};
+use crate::support::{controller_voters, init_jvm_tracing, jvm_broker_config};
 
 pub(crate) type HostBroker = (krabka_broker::BrokerHandle, tempfile::TempDir);
 

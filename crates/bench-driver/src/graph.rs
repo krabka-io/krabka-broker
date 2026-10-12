@@ -379,10 +379,7 @@ mod tests {
     use super::*;
     use crate::{
         ids::TimeOffsetMs,
-        scenario::{
-            Sample,
-            fixture::{RunSetup, empty_run as run},
-        },
+        scenario::{Sample, fixture::empty_run as run},
     };
 
     fn sample(t: u64, producer_rate: Frequency) -> Sample {

@@ -19,7 +19,6 @@ use crate::{
             rolled_tiered_partition_with_config, synth_export, three_exports, tier, tp,
         },
     },
-    test_support::UnixMillis,
     time_util::now_ms,
 };
 
@@ -313,17 +312,7 @@ fn maximum_retention_window_keeps_the_host_time_comparison() {
 
 #[test]
 fn local_retention_target_time_based_eviction() {
-    let exports = vec![
-        synth_export().call(),
-        synth_export()
-            .bounds(Offset(10)..=Offset(19))
-            .timestamp(200)
-            .call(),
-        synth_export()
-            .bounds(Offset(20)..=Offset(29))
-            .timestamp(5_000)
-            .call(),
-    ];
+    let exports = three_exports().last_timestamp(5_000).call();
     // now=1000, retention=500ms → segs with max_ts<500 are deletable.
     // Only seg0 (max_ts=100) and seg1 (max_ts=200) qualify; seg2 stops it.
     let target = local_retention_target(
@@ -389,7 +378,7 @@ fn local_retention_target_equal_size_budget_keeps_all_segments() {
 
 #[test]
 fn local_retention_target_skips_unfinished_segments_and_stops() {
-    let exports = three_exports();
+    let exports = three_exports().call();
     // The tier holds 0..=9 and 20..=29 but not 10..=19, so its unbroken
     // cover ends at 9 and the walk stops at seg1.
     let covered = remote_covered_through(&[(0, 9), (20, 29)], 0);
@@ -737,7 +726,7 @@ async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule() {
 
 #[tokio::test]
 async fn scheduled_local_retention_keeps_the_pending_prefix_until_its_clock_bound() {
-    use crate::delivery::test_support::{DeliveryPartitionSetup, partition_with_batches, wall_at};
+    use crate::delivery::test_support::{partition_with_batches, wall_at};
 
     let log_dir = tempfile::tempdir().unwrap();
     let remote_dir = tempfile::tempdir().unwrap();

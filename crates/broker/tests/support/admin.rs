@@ -2,6 +2,7 @@
 
 use krabka_client_admin::CreateTopicSpec;
 use krabka_ids::PartitionIndex as ElectionPartitionIndex;
+use krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions};
 
 use crate::support::standalone_broker;
 
@@ -130,7 +131,6 @@ pub fn election_request(
         partitions,
         kind,
     };
-    use krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions};
     ElectLeadersRequest {
         election_type: setup.kind.wire_code(),
         topic_partitions: Some(vec![TopicPartitions {

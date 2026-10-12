@@ -15,7 +15,7 @@ use crate::{
         block_segment_deletion, expired_partition, log_size, segment_files,
     },
     metrics::{CleanerFailureLabel, CleanerFailureReason},
-    test_support::{CommittedPartitionSetup, FreezeSetup, topic_freeze_record, topic_thaw_record},
+    test_support::{CommittedPartitionSetup, topic_freeze_record, topic_thaw_record},
 };
 
 /// The failure counter's value for one `(topic, partition, reason)`.

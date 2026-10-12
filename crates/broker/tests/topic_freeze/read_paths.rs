@@ -22,7 +22,7 @@ use crate::{
         self,
         client::{connect_owned, scrape_metrics},
         discovery::named_topic_metadata,
-        fetch::{SinglePartitionFetchSetup, single_partition_fetch},
+        fetch::single_partition_fetch,
         offsets::{offset_commit_partition, offset_commit_topic},
         records::record_count,
     },

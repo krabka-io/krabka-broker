@@ -15,10 +15,8 @@ use crate::{
     support::{
         discovery::coordinator_lookup_request,
         topics::TopicPartitionCount,
-        transaction_wire::{TransactionPartitionsSetup, partitions_request},
-        transactions::{
-            InitProducerSetup, PartitionRegistration, ProducerIdentity, init_producer_request,
-        },
+        transaction_wire::partitions_request,
+        transactions::{PartitionRegistration, ProducerIdentity, init_producer_request},
     },
     txnver_harness::{
         NONE, TRANSACTION_ABORTABLE, admin_client, boot_single, create_topic, expected_partitions,

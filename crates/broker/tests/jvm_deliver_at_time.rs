@@ -48,9 +48,7 @@ use jvm_acceptance::{
 use krabka_broker::BrokerHandle;
 use krabka_log::DeliveryPolicy;
 
-use crate::support::{
-    ContainerInput, JvmDockerSetup, jvm_docker_command, topics::CreateTopicSetup,
-};
+use crate::support::{ContainerInput, jvm_docker_command, topics::CreateTopicSetup};
 
 const SCHEDULED_TOPIC: &str = "jvm-deliver-at-time-scheduled";
 const IMMEDIATE_TOPIC: &str = "jvm-deliver-at-time-immediate";
@@ -169,7 +167,7 @@ async fn create_topic(bootstrap: &str, topic: &str, mode: &str) {
             .await;
     support::client::create_configured_topic(
         &client,
-        crate::support::topics::CreateTopicSetup {
+        CreateTopicSetup {
             topic,
             configs: &[("delivery.mode", mode)],
             ..Default::default()

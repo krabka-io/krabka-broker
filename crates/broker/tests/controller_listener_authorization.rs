@@ -46,12 +46,12 @@ use tokio_rustls::rustls::{
 };
 
 use crate::support::{
-    acl::{ClusterAclSetup, cluster_acl_record},
+    acl::cluster_acl_record,
     controller_listener::*,
     quorum::describe_quorum_request as support_describe_quorum_request,
     start_with_bound_listeners,
     tls::{PinnedCertVerifier, fixture_signature_schemes},
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;

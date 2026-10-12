@@ -160,8 +160,9 @@ pub(crate) fn ed25519_public_key_file(
     #[builder(default = "alice.pub")] name: &'_ str,
     #[builder(default = "write public key")] context: &'_ str,
 ) -> (ring::signature::Ed25519KeyPair, std::path::PathBuf) {
-    let setup = OperatorKeyFileSetup { name, context };
     use ring::signature::KeyPair as _;
+
+    let setup = OperatorKeyFileSetup { name, context };
     let pair = fresh_ed25519_key();
     let path = dir.join(setup.name);
     std::fs::write(&path, pair.public_key().as_ref()).expect(setup.context);
@@ -226,53 +227,63 @@ where
     (addr, shutdown, cert_path)
 }
 
-/// Own the temporary directory alongside its replica until the caller drops both.
-#[bon::builder]
-pub(crate) fn temporary_partition(
-    #[builder(default = StandalonePartitionSetup::default().topic)] topic: &'_ str,
-    #[builder(into, default = StandalonePartitionSetup::default().partition)]
+fn temporary_partition_impl(
+    topic: &str,
     partition: krabka_ids::PartitionIndex,
-    #[builder(default = StandalonePartitionSetup::default().storage)] storage: StorageMode,
+    storage: StorageMode,
 ) -> (tempfile::TempDir, Arc<Partition>) {
-    let setup = StandalonePartitionSetup {
-        topic,
-        partition,
-        storage,
-    };
     let directory = tempfile::tempdir().expect("tempdir");
     let partition = open_partition()
         .log_dir(directory.path())
-        .topic(setup.topic)
-        .partition(setup.partition)
-        .storage(setup.storage)
+        .topic(topic)
+        .partition(partition)
+        .storage(storage)
         .call();
     (directory, partition)
 }
 
-/// Opens a local replica with a running writer in the supplied log directory.
-#[bon::builder]
-pub(crate) fn open_partition(
+fn open_partition_impl(
     log_dir: &std::path::Path,
-    #[builder(default = StandalonePartitionSetup::default().topic)] topic: &'_ str,
-    #[builder(into, default = StandalonePartitionSetup::default().partition)]
+    topic: &str,
     partition: krabka_ids::PartitionIndex,
-    #[builder(default = StandalonePartitionSetup::default().storage)] storage: StorageMode,
+    storage: StorageMode,
 ) -> Arc<Partition> {
-    let setup = StandalonePartitionSetup {
-        topic,
-        partition,
-        storage,
-    };
-    let path = partition_dir(log_dir, setup.topic, setup.partition.0);
+    let path = partition_dir(log_dir, topic, partition.0);
     std::fs::create_dir_all(&path).expect("create partition directory");
     let log = krabka_log::Log::open(&path, krabka_log::LogConfig::default()).expect("open log");
     spawn_standalone_partition()
         .log_dir(log_dir)
         .log(log)
-        .topic(setup.topic)
-        .partition(setup.partition)
-        .storage(setup.storage)
+        .topic(topic)
+        .partition(partition)
+        .storage(storage)
         .call()
+}
+
+macro_rules! standalone_partition_builder {
+    ($(#[$doc:meta])* $name:ident, [$($extra_params:tt)*], [$($extra_args:tt)*], $helper:ident -> $result:ty) => {
+        $(#[$doc])*
+        #[bon::builder]
+        pub(crate) fn $name(
+            $($extra_params)*
+            #[builder(default = StandalonePartitionSetup::default().topic)] topic: &'_ str,
+            #[builder(into, default = StandalonePartitionSetup::default().partition)]
+            partition: krabka_ids::PartitionIndex,
+            #[builder(default = StandalonePartitionSetup::default().storage)] storage: StorageMode,
+        ) -> $result {
+            $helper($($extra_args)* topic, partition, storage)
+        }
+    };
+}
+
+standalone_partition_builder! {
+    /// Own the temporary directory alongside its replica until the caller drops both.
+    temporary_partition, [], [], temporary_partition_impl -> (tempfile::TempDir, Arc<Partition>)
+}
+
+standalone_partition_builder! {
+    /// Opens a local replica with a running writer in the supplied log directory.
+    open_partition, [log_dir: &std::path::Path,], [log_dir,], open_partition_impl -> Arc<Partition>
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -768,19 +779,19 @@ impl Default for ReassignmentSetup<'_> {
     }
 }
 
-impl ReassignmentSetup<'_> {
-    /// An in-flight replacement with the new replica already in the ISR.
-    pub(crate) fn replacing_replica(removed: NodeId, added: NodeId) -> Self {
-        let mut replicas = Self::default().replicas;
-        replicas.push(added);
-        Self {
-            isr: replicas.clone(),
-            replicas,
-            adding: vec![added],
-            removing: vec![removed],
-            ..Default::default()
-        }
-    }
+/// Apply the common assignment fields to any reassignment fixture builder.
+#[macro_export]
+macro_rules! reassignment_fields {
+    ($builder:expr, $assignment:expr) => {{
+        let assignment = $assignment;
+        $builder
+            .replicas(assignment.replicas)
+            .isr(assignment.isr)
+            .adding(assignment.adding)
+            .removing(assignment.removing)
+            .leader(assignment.leader.0)
+            .directories(assignment.directories)
+    }};
 }
 
 pub(crate) fn replica_nodes(ids: &[u64]) -> Vec<NodeId> {
@@ -945,6 +956,14 @@ pub(crate) struct LiveIsrSetup<'a> {
     pub new_isr: &'a [WireBrokerId],
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum IsrResponseCheck {
+    #[default]
+    None,
+    EnvelopeAndPartition,
+    PartitionOnly,
+}
+
 /// Send a real ISR proposal using the caller's wire identity and separate epoch snapshots.
 #[bon::builder]
 pub(crate) async fn propose_isr(
@@ -955,6 +974,7 @@ pub(crate) async fn propose_isr(
     leader_epoch: krabka_metadata::LeaderEpoch,
     #[builder(into, default = krabka_ids :: ApiVersion (2))] version: krabka_ids::ApiVersion,
     #[builder(default = & [WireBrokerId (1)])] new_isr: &'_ [WireBrokerId],
+    #[builder(default)] response_check: IsrResponseCheck,
 ) -> AlterPartitionResponse {
     let setup = LiveIsrSetup {
         topic,
@@ -995,52 +1015,19 @@ pub(crate) async fn propose_isr(
         })
         .new_isr(new_isr)
         .call();
-    handle(broker, request, version.0, &ctx)
+    let response = handle(broker, request, version.0, &ctx)
         .await
-        .expect("AlterPartition")
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IsrResponseCheck {
-    EnvelopeAndPartition,
-    PartitionOnly,
-}
-
-/// Propose an ISR change and verify its partition result, optionally checking the envelope first.
-#[bon::builder]
-pub(crate) async fn accepted_isr_proposal(
-    broker: &Arc<Broker>,
-    #[builder(default = "orders")] topic: &'_ str,
-    #[builder(default = WireUuid ([9 ; 16]))] topic_id: WireUuid,
-    #[builder(into, default = krabka_metadata :: LeaderEpoch (7))]
-    leader_epoch: krabka_metadata::LeaderEpoch,
-    #[builder(into, default = krabka_ids :: ApiVersion (2))] version: krabka_ids::ApiVersion,
-    #[builder(default = & [WireBrokerId (1)])] new_isr: &'_ [WireBrokerId],
-    response_check: IsrResponseCheck,
-) {
-    let setup = LiveIsrSetup {
-        topic,
-        topic_id,
-        leader_epoch,
-        version,
-        new_isr,
-    };
-    let response = propose_isr()
-        .broker(broker)
-        .topic(setup.topic)
-        .topic_id(setup.topic_id)
-        .leader_epoch(setup.leader_epoch)
-        .version(setup.version)
-        .new_isr(setup.new_isr)
-        .call()
-        .await;
+        .expect("AlterPartition");
     if response_check == IsrResponseCheck::EnvelopeAndPartition {
         assert2::assert!(response.error_code == NONE);
     }
-    assert2::assert!(
-        response.topics[0].partitions[0].error_code == NONE,
-        "AlterPartition refused the proposal: {response:?}"
-    );
+    if response_check != IsrResponseCheck::None {
+        assert2::assert!(
+            response.topics[0].partitions[0].error_code == NONE,
+            "AlterPartition refused the proposal: {response:?}"
+        );
+    }
+    response
 }
 
 /// Authorizer that denies every request. It drives the authorization-failure

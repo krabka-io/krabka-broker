@@ -133,8 +133,8 @@ mod tests {
     use super::*;
     use crate::{
         replicator_supervisor::test_support::{
-            SupervisorPartitionSetup, SupervisorTopicSetup, image_with, partition_record,
-            supervisor_fixture, topic_partition_records, topic_record,
+            SupervisorPartitionSetup, image_with, partition_record, supervisor_fixture,
+            topic_partition_records, topic_record,
         },
         wal::quorum::{registry::ShardId, shard_dir},
     };

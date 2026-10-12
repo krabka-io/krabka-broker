@@ -20,10 +20,7 @@ use crate::{
     },
     harness::{alice_password, scram_admin_fixture, start_scram_admin},
     support::{
-        sasl::{
-            ScramAlgorithm, ScramIterations, ScramMechanismCode, ScramUpsertionSetup,
-            scram_upsertion,
-        },
+        sasl::{ScramAlgorithm, ScramMechanismCode, scram_upsertion},
         sasl_plaintext_config,
     },
 };

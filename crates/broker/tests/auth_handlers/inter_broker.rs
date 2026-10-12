@@ -18,10 +18,7 @@ use crate::{
     kafka_wire::encode_named,
     support::{
         sasl::sasl_temp_config,
-        wire::{
-            CorrelationId, WireFrameSetup, decode_response_frame, read_frame, request_frame,
-            write_frame,
-        },
+        wire::{decode_response_frame, read_frame, request_frame, write_frame},
     },
 };
 

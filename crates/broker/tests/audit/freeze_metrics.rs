@@ -15,7 +15,7 @@ use crate::{
     },
     support::{
         self,
-        topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+        topics::{creatable_topic, create_topic_request},
     },
 };
 

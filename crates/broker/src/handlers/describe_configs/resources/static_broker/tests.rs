@@ -10,8 +10,7 @@ use super::{
     super::{
         super::wire::CONFIG_SOURCE_DEFAULT,
         tests::{
-            ConfigMutability, ConfigSourceCode, ConfigTypeCode, ExpectedConfigSetup,
-            expected_config_entry, synonym as expected_synonym,
+            ConfigMutability, ConfigSourceCode, expected_config_entry, synonym as expected_synonym,
         },
     },
     *,

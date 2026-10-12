@@ -62,7 +62,7 @@ const SHARE_STATE_PARTITIONS: i32 = 50;
 
 use support::share::coordinator_key as share_coordinator_key;
 
-use crate::support::{share::ShareProduceSetup, topics::CreateTopicSetup};
+use crate::support::topics::CreateTopicSetup;
 
 /// Boots one broker bound to `0.0.0.0:9092` that advertises
 /// `host.docker.internal:9092`. The Docker container's connect after Metadata

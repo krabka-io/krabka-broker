@@ -42,11 +42,8 @@ use crate::support::{
     },
     client::connect_owned,
     discovery::named_topic_metadata,
-    topics::{
-        ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request,
-        metadata_topic,
-    },
-    wire::{CorrelationId, HeaderEncoding, WireFrameSetup, request_body_capacity, request_frame},
+    topics::{creatable_topic, create_topic_request, metadata_topic},
+    wire::{HeaderEncoding, request_body_capacity, request_frame},
 };
 
 // Bit positions match Kafka's `AclOperation.code()` (verified by the

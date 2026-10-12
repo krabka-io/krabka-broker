@@ -252,7 +252,7 @@ mod tests {
     use super::*;
     use crate::{
         authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
-        test_support::{AllowAclSetup, allow_acl, peer, sasl_principal},
+        test_support::{allow_acl, peer, sasl_principal},
         time_util::now_ms,
     };
 

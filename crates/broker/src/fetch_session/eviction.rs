@@ -121,9 +121,8 @@ mod tests {
         SessionDecision,
         order::MIN_EVICTION,
         test_support::{
-            NAME_FETCH_VERSION, RequestSessionEpoch, RequestSessionId, SessionAllocationSetup,
-            SessionPrivilege, SessionRequestSetup, SessionSlotCount, TICK, allocate_session,
-            manual_cache, req,
+            NAME_FETCH_VERSION, RequestSessionEpoch, RequestSessionId, SessionPrivilege,
+            SessionRequestSetup, SessionSlotCount, TICK, allocate_session, manual_cache, req,
         },
     };
 

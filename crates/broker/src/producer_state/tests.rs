@@ -5,11 +5,8 @@ use assert2::{assert, check};
 
 use super::*;
 use crate::{
-    producer_state::test_support::{
-        ProducerBatchSetup, ProducerCommitSetup, ProducerEpoch, ProducerSequence, SequenceDelta,
-        commit_fixture, opened_log, producer_batch,
-    },
-    test_support::{EmptyPayloadBatchSetup, UnixMillis, default_records_batch},
+    producer_state::test_support::{commit_fixture, opened_log, producer_batch},
+    test_support::default_records_batch,
 };
 
 async fn mirror_marker(state: &ProducerState) {

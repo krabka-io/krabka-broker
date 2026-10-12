@@ -464,14 +464,15 @@ pub(super) fn seed_classic_member(
     #[builder(default = "t")] topic: &'_ str,
     instance_id: Option<&'_ str>,
 ) -> Arc<GroupActorHandle> {
+    use super::super::{
+        classic_state::ClassicGroup as ClassicState,
+        group::{CoordinatorGroup, GroupKind},
+    };
+
     let setup = ClassicMemberSetup {
         member_id,
         topic,
         instance_id,
-    };
-    use super::super::{
-        classic_state::ClassicGroup as ClassicState,
-        group::{CoordinatorGroup, GroupKind},
     };
     let ClassicMemberSetup {
         member_id,

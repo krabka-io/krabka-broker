@@ -27,7 +27,6 @@ use std::sync::Arc;
 use assert2::assert;
 use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{Decode, Encode, owned::create_topics_response::CreateTopicsResponse};
 use krabka_security::{ClientAuthMode, TlsConfig};
 use tokio::net::TcpStream;
@@ -39,13 +38,10 @@ use tokio_rustls::{
     },
 };
 
-use crate::{
-    kafka_wire::ExchangeSetup as WireExchangeSetup,
-    support::{
-        tls::{PinnedCertVerifier, fixture_signature_schemes, ssl_config},
-        topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
-        wire::HeaderEncoding as RequestHeaderEncoding,
-    },
+use crate::support::{
+    tls::{PinnedCertVerifier, fixture_signature_schemes, ssl_config},
+    topics::{creatable_topic, create_topic_request},
+    wire::HeaderEncoding as RequestHeaderEncoding,
 };
 
 /// The client id every request header in this suite carries.

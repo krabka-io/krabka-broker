@@ -15,10 +15,7 @@ use krabka_protocol::{
 
 use crate::{
     harness::{create_topic, fetch_legacy_raw_at},
-    support::{
-        self,
-        producer::{ProducerRecordSetup, producer_record},
-    },
+    support::{self, producer::producer_record},
 };
 
 /// Control batches, that is txn markers, have no representation in the v0 and

@@ -10,14 +10,11 @@ use krabka_remote_storage::kafka_uuid;
 use super::{
     test_support::{
         FULL_SEGMENT_SUFFIXES, PartitionKey, args_from, expected_full_segment,
-        single_segment_archive, write_artifact, write_full_segment,
+        single_segment_archive, write_artifact, write_full_segment, write_topic_segment,
     },
     *,
 };
-use crate::{
-    backend::open_archive,
-    discover::test_support::{ArtifactSetup, SegmentSetup},
-};
+use crate::{backend::open_archive, discover::test_support::SegmentSetup};
 
 async fn scan_archive(root: &std::path::Path) -> ArchiveInventory {
     let args = args_from(root, &[]);
@@ -195,21 +192,16 @@ async fn a_topic_filter_narrows_the_selection_and_the_rest_lands_in_unrecognized
     let payments_id = Uuid::from_u128(2);
     let orders_seg = Uuid::from_u128(10);
     let payments_seg = Uuid::from_u128(20);
-    write_full_segment()
+    write_topic_segment()
         .root(archive.path())
-        .partition(PartitionKey {
-            topic_id: orders_id,
-            ..Default::default()
-        })
+        .topic("orders")
+        .topic_id(orders_id)
         .segment_id(orders_seg)
         .call();
-    write_full_segment()
+    write_topic_segment()
         .root(archive.path())
-        .partition(PartitionKey {
-            topic: "payments",
-            topic_id: payments_id,
-            ..Default::default()
-        })
+        .topic("payments")
+        .topic_id(payments_id)
         .segment_id(payments_seg)
         .call();
 

@@ -17,7 +17,7 @@ use crate::{
     partition::Partition,
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
-    test_support::{PartitionCount, StandalonePartitionSetup, open_partition},
+    test_support::{PartitionCount, open_partition},
     txn::{bootstrap, state::TxnEntry},
 };
 

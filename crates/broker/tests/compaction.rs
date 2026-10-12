@@ -18,7 +18,7 @@ use krabka_broker::metrics::PartitionLabel;
 use crate::{
     compaction_cluster::start_broker_with_fast_cleaner,
     compaction_records::{assert_latest_records_survive, fetch_all},
-    compaction_rpc::{ProduceRecordSetup, create_topic_with_configs, get_topic_id, produce_record},
+    compaction_rpc::{create_topic_with_configs, get_topic_id, produce_record},
     support::topics::CreateTopicSetup,
 };
 

@@ -85,26 +85,6 @@ pub fn txn_offset_topic(
     }
 }
 
-/// New producer identity with the protocol's exact default id and epoch fields.
-#[bon::builder]
-pub fn new_producer_request(
-    transactional_id: Option<String>,
-    #[builder(into, default = TransactionTimeoutMillis (60_000))] timeout: TransactionTimeoutMillis,
-    #[builder(default = ProducerIdentity :: from_wire ((InitProducerIdRequest :: default () . producer_id , InitProducerIdRequest :: default () . producer_epoch)))]
-    producer: ProducerIdentity,
-) -> InitProducerIdRequest {
-    let setup = InitProducerSetup {
-        transactional_id,
-        timeout,
-        producer,
-    };
-    init_producer_request()
-        .maybe_transactional_id(setup.transactional_id)
-        .timeout(setup.timeout)
-        .producer(setup.producer)
-        .call()
-}
-
 /// Return the complete idempotent allocation response without replacing caller assertions.
 ///
 /// # Panics

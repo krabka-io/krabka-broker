@@ -4,11 +4,11 @@
 //! no online directory at all, and the two "online" sentinels.
 
 use assert2::assert;
-use krabka_metadata::{BrokerEndpoint, LeaderEpoch, MetadataRecord, TopicRecord};
+use krabka_metadata::{BrokerEndpoint, MetadataRecord, TopicRecord};
 use uuid::Uuid;
 
 use super::*;
-use crate::test_support::{InSyncPartitionSetup, broker_registration, in_sync_partition};
+use crate::test_support::{broker_registration, in_sync_partition};
 
 /// The listener that the requests in these tests arrive on, and that every
 /// registration lists unless a test says otherwise.

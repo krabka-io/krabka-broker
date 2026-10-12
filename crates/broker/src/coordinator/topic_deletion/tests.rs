@@ -19,8 +19,7 @@ use crate::{
         },
     },
     handlers::{
-        offset_commit::handle as offset_commit_handle,
-        test_support::{CreateTopicSetup, configured_topic_request},
+        offset_commit::handle as offset_commit_handle, test_support::configured_topic_request,
     },
     test_support::start_broker_with_authorizer_no_audit,
 };

@@ -249,7 +249,7 @@ mod tests {
     use super::*;
     use crate::{
         partition_registry::PartitionRegistry,
-        share_partition::manager::test_support::{DataPartitionSetup, open_data_partition},
+        share_partition::manager::test_support::open_data_partition,
     };
 
     #[tokio::test]

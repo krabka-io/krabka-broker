@@ -13,7 +13,7 @@ use tokio::net::TcpSocket;
 
 use crate::{
     cluster_lock,
-    support::{self, ClusterNodeSetup, NodeIndex, controller_voters, topics::AssignedTopicSetup},
+    support::{self, controller_voters, topics::AssignedTopicSetup},
     wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
     wire::create_topic_plaintext,
 };

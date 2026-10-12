@@ -76,7 +76,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::test_support::{AclSetup, acl as entry};
+    use crate::test_support::acl as entry;
 
     /// A stable, comparable identity for an `AclEntry`.
     ///

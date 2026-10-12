@@ -25,7 +25,7 @@ use krabka_protocol::{
 
 use crate::{
     harness::start_two_dir_broker,
-    two_dir_topic::{Setup, start},
+    two_dir_topic::start,
     wire::{CLIENT_ID, alter_replica_log_dirs, describe_log_dirs_at, set_broker_config},
 };
 

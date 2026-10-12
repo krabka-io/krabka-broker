@@ -12,12 +12,32 @@ use crate::{
     harness::{ConsumptionFixture, bootstrap_share_state, consumption_fixture, produce_n},
     share_rpc::{acquire_three_and_acknowledge, acquired_count, share_fetch},
     support::share::{
-        RefetchSetup, ShareAck, ShareProduceSetup, ShareRecordSeedSetup, ShareRecordsSetup,
-        ShareSessionEpoch, ShareSessionSetup, ShareTopicSetup, acknowledge_success,
-        join_consume_member, permitted_topic_fixture, produce_values, record_values,
-        refetch_while_empty,
+        ShareAck, ShareSessionEpoch, ShareSessionSetup, acknowledge_success, join_consume_member,
+        permitted_topic_fixture, produce_values, record_values, refetch_while_empty,
     },
 };
+
+async fn acknowledge_prefix_release(
+    client: &Client,
+    session: ShareSessionSetup<'_>,
+    epoch: i32,
+    last: i64,
+    starting_at: Option<krabka_ids::Offset>,
+) {
+    let acknowledgement = ShareAck::prefix()
+        .group(session.group)
+        .member(session.member)
+        .topic_id(session.topic_id)
+        .partition(session.partition.0)
+        .epoch(epoch)
+        .last(last)
+        .call();
+    let acknowledgement = match starting_at {
+        Some(offset) => acknowledgement.starting_at(offset),
+        None => acknowledgement,
+    };
+    acknowledge_success(client, acknowledgement.release()).await;
+}
 
 /// Regression: a `ShareFetch` whose acquired offset begins a *later* record
 /// batch must still return that offset's record bytes, not an empty payload.
@@ -117,8 +137,7 @@ async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i
 /// v0, v2), never the gap offset 1's value v1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fragmented_window_records_match_acquired_offsets() {
-    let (_permit, broker, client, _dir, tid) =
-        permitted_topic_fixture().customize(|_| {}).call().await;
+    let (_permit, broker, client, _dir, tid) = Box::pin(permitted_topic_fixture().call()).await;
     bootstrap_share_state(&broker, &client, "g1").await;
     // Three separate single-record batches: offset 0=v0, 1=v1, 2=v2.
     produce_one(&client, "t", tid, 0, "v0").await;
@@ -130,33 +149,8 @@ async fn fragmented_window_records_match_acquired_offsets() {
         ShareAck::single_for(&member, tid, krabka_ids::Offset(1)),
     )
     .await;
-    acknowledge_success(
-        &client,
-        ShareAck::prefix()
-            .group(session.group)
-            .member(session.member)
-            .topic_id(session.topic_id)
-            .partition(session.partition.0)
-            .epoch(2)
-            .last(0)
-            .call()
-            .release(),
-    )
-    .await;
-    acknowledge_success(
-        &client,
-        ShareAck::prefix()
-            .group(session.group)
-            .member(session.member)
-            .topic_id(session.topic_id)
-            .partition(session.partition.0)
-            .epoch(3)
-            .last(2)
-            .call()
-            .starting_at(krabka_ids::Offset(2))
-            .release(),
-    )
-    .await;
+    acknowledge_prefix_release(&client, session, 2, 0, None).await;
+    acknowledge_prefix_release(&client, session, 3, 2, Some(krabka_ids::Offset(2))).await;
 
     // Re-fetch: the acquired set is the DISJOINT {0, 2} (offset 1 is gone). The
     // returned records payload must decode to exactly offsets {0, 2}.

@@ -70,6 +70,13 @@ pub fn create_topic_request(topic: CreatableTopic) -> CreateTopicsRequest {
 }
 
 #[bon::builder]
+pub fn create_named_topic_request(
+    #[builder(default = "orders")] name: &'_ str,
+) -> CreateTopicsRequest {
+    create_topic_request(creatable_topic().name(name.to_owned()).call())
+}
+
+#[bon::builder]
 pub fn create_topic_request_with_setup(
     topic: CreatableTopic,
     #[builder(into, default)] timeout: CreateTopicsTimeoutMillis,
@@ -104,6 +111,16 @@ pub struct ConfiguredTopicSetup {
     #[default(TopicReplicationFactor(1))]
     pub replicas: TopicReplicationFactor,
     pub configs: Vec<CreatableTopicConfig>,
+}
+
+#[bon::builder]
+pub fn configured_topic_setup(
+    #[builder(default = "orders")] name: &'_ str,
+) -> ConfiguredTopicSetup {
+    ConfiguredTopicSetup {
+        name: name.into(),
+        ..Default::default()
+    }
 }
 
 pub use creatable_topic as creatable_topic_with_configs;

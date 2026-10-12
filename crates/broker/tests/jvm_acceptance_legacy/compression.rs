@@ -11,7 +11,7 @@ use crate::{
     jvm_acceptance::{
         KAFKA_IMAGE_LEGACY, broker0_advertised, docker_run_kafka_tool, start_legacy_console_broker,
     },
-    support::{ContainerInput, JvmDockerSetup, jvm_docker_command, jvm_stdin_output},
+    support::{ContainerInput, jvm_docker_command, jvm_stdin_output},
 };
 
 /// Test 4: gzip-compressed legacy round-trip.

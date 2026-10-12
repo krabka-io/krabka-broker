@@ -8,7 +8,7 @@ use crate::{
     broker::{
         Broker,
         test_support::{
-            LocalPartitionSetup, MetadataPartitionSetup, local_partition_with_records,
+            LocalPartitionSetup, local_partition_with_records, metadata_partition_record,
             submit_metadata_topic_partition,
         },
     },
@@ -139,22 +139,26 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     let partition_isr = [partition_leader, handle.node_id()];
     submit_metadata_topic_partition()
         .handle(&handle)
-        .topic(topic)
         .topic_id(uuid::Uuid::from_u128(0xCAFE))
-        .leader(partition_leader)
-        .replicas(
-            partition_isr
-                .iter()
-                .copied()
-                .map(krabka_ids::NodeId)
-                .collect(),
-        )
-        .isr(
-            partition_isr
-                .iter()
-                .copied()
-                .map(krabka_ids::NodeId)
-                .collect(),
+        .partition_record(
+            metadata_partition_record()
+                .topic(topic)
+                .leader(partition_leader)
+                .replicas(
+                    partition_isr
+                        .iter()
+                        .copied()
+                        .map(krabka_ids::NodeId)
+                        .collect(),
+                )
+                .isr(
+                    partition_isr
+                        .iter()
+                        .copied()
+                        .map(krabka_ids::NodeId)
+                        .collect(),
+                )
+                .call(),
         )
         .call()
         .await;

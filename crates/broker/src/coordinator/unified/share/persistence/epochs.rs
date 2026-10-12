@@ -69,7 +69,7 @@ mod tests {
         share::persistence::{
             KEY_SHARE_GROUP_METADATA, KEY_SHARE_TARGET_ASSIGNMENT_METADATA, ShareGroupKey,
         },
-        test_support::{AssignmentMetadataGoldenSetup, assignment_metadata_golden_cases},
+        test_support::assignment_metadata_golden_cases,
     };
 
     /// i16 version | i32 `Epoch` | i64 `MetadataHash` | uvarint tagged count, as

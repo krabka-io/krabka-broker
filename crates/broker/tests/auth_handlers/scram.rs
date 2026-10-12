@@ -12,8 +12,8 @@ use tokio::net::TcpStream;
 use crate::{
     harness::{alice_password, metadata_probe, start_scram_alice, wrong_scram_password},
     kafka_wire::{
-        SaslAuthenticateSetup, SaslHandshakeSetup, ScramAuthenticationSetup, sasl_authenticate_on,
-        sasl_handshake_on, sasl_scram_authenticate_on,
+        ScramAuthenticationSetup, sasl_authenticate_on, sasl_handshake_on,
+        sasl_scram_authenticate_on,
     },
     reauth_cases::{
         capped_session_closes, different_principal_closes, repeated_expired_reauth,

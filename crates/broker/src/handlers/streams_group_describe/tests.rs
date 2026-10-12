@@ -27,7 +27,7 @@ use crate::{
     coordinator::unified::streams::actor::StreamsGroupActorMessage,
     handlers::{
         authorized_operations::authorized_operations_bits,
-        group_heartbeat_test_support::{StreamsTopologySetup, streams_request_with_topology},
+        group_heartbeat_test_support::streams_request_with_topology,
     },
     test_support::{DenyAll, peer, principal, request_context, start_broker_with},
 };

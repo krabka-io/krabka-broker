@@ -77,9 +77,9 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, RecordCount, RecordTimestamp,
-        SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, SampleBatchSetup,
-        SeededSegmentSetup, THIRD_SINGLE_RECORD_BATCH, sample_batch, seeded_fixture, test_segment,
+        FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, SECOND_LARGE_TIMESTAMP_BATCH,
+        SECOND_SINGLE_RECORD_BATCH, THIRD_SINGLE_RECORD_BATCH, sample_batch, seeded_fixture,
+        test_segment,
     };
 
     // `Segment::read` maps the absolute fetch offset to a relative index key

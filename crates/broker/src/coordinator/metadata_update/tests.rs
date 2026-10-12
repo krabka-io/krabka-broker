@@ -22,12 +22,11 @@ use crate::{
         unified::{
             actor::test_support::rpc::consumer_request_as_client as heartbeat,
             test_support::{
-                ConsumerJoinSetup, SwitchableMetadata, consumer_join_request,
-                make_coord_with_metadata, snapshot_of,
+                SwitchableMetadata, consumer_join_request, make_coord_with_metadata, snapshot_of,
             },
         },
     },
-    test_support::{AllowAclSetup, allow_acl},
+    test_support::allow_acl,
 };
 
 fn topic(name: &str, id: u128) -> MetadataRecord {

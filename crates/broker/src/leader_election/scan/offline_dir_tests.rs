@@ -5,14 +5,13 @@
 //! through to an unclean election.
 
 use assert2::{assert, check};
-use krabka_metadata::LeaderEpoch;
 
 use super::*;
 use crate::{
     config_keys::{UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
     leader_election::test_support::{
-        ElectionSetup, ExpectedPartitionSetup, expected_clean_election, expected_partition,
-        img_with_partition, liveness_with_alive, one_partition_change,
+        expected_clean_election, expected_partition, img_with_partition, liveness_with_alive,
+        one_partition_change,
     },
     metrics::BrokerMetrics,
 };

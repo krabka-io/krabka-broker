@@ -290,7 +290,7 @@ mod tests {
             STATE_TOPIC,
             coordinator::{
                 BarrierCoordinator, GroupDescription, RetainedCut,
-                test_support::{Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec},
+                test_support::{Fixture, GROUP, spec},
             },
             error::BarrierError,
             persistence::{

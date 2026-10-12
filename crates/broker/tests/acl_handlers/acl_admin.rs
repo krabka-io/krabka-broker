@@ -24,7 +24,7 @@ use crate::{
     CREATE_ACLS_VERSION, DELETE_ACLS_VERSION, DESCRIBE_ACLS_VERSION, OPERATION_ANY,
     PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC,
     framing::CLIENT_ID,
-    kafka_wire::{AutomaticTopicSetup, create_topic_as_super_user},
+    kafka_wire::create_topic_as_super_user,
     support::topics::{ConfiguredTopicSetup, TopicPartitionCount},
 };
 

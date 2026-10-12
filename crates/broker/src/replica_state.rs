@@ -506,7 +506,7 @@ mod tests {
     use super::*;
     use crate::{
         config_keys::MIN_INSYNC_REPLICAS,
-        test_support::{TopicSetup, broker_registration, topic_image},
+        test_support::{broker_registration, topic_image},
     };
 
     /// Shorthand for wrapping a raw offset in the test asserts below.

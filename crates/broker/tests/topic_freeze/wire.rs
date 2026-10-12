@@ -23,7 +23,7 @@ use crate::{
         self,
         produce::{SinglePartitionProduceSetup, send_batch},
         records::value_record,
-        topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+        topics::{creatable_topic, create_topic_request},
     },
 };
 

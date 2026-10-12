@@ -7,9 +7,21 @@ use krabka_ids::PartitionIndex;
 use krabka_units::millis;
 
 use super::*;
+
+macro_rules! inject_at_epoch_one {
+    ($coordinator:expr, $status:expr) => {{
+        let outcome = $coordinator
+            .trigger_injection(GROUP, None)
+            .await
+            .expect("the injection runs");
+        assert!(outcome.epoch == 1);
+        assert!(outcome.cut.status == $status);
+        outcome
+    }};
+}
 use crate::{
     barrier::{
-        coordinator::test_support::{Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec},
+        coordinator::test_support::{Fixture, GROUP, spec},
         marker::parse_barrier_marker,
         persistence::{MissingPartition, PartitionOffset, TopicOffsets},
     },
@@ -48,12 +60,7 @@ async fn an_injection_marks_every_partition_and_publishes_a_complete_cut() {
         .coordinator_with_group(GROUP, spec().topics(&["orders", "payments"]).call())
         .await;
 
-    let outcome = coordinator
-        .trigger_injection(GROUP, None)
-        .await
-        .expect("the injection runs");
-    assert!(outcome.epoch == 1);
-    assert!(outcome.cut.status == CutStatus::Complete);
+    let outcome = inject_at_epoch_one!(&coordinator, CutStatus::Complete);
     assert!(outcome.cut.missing.is_empty());
     assert!(
         outcome.cut.topics
@@ -143,12 +150,7 @@ async fn a_partition_that_carries_no_marker_makes_the_cut_partial() {
     let fixture = Fixture::with_data_partitions(&[("orders", 1)]);
     let coordinator = fixture.coordinator_with_group(GROUP, spec().call()).await;
 
-    let outcome = coordinator
-        .trigger_injection(GROUP, None)
-        .await
-        .expect("the injection runs");
-    assert!(outcome.epoch == 1);
-    assert!(outcome.cut.status == CutStatus::Partial);
+    let outcome = inject_at_epoch_one!(&coordinator, CutStatus::Partial);
     assert!(
         outcome.cut.missing
             == vec![MissingPartition {

@@ -10,7 +10,6 @@
 // Cluster setup helpers (copied from client_quotas.rs)
 // ─────────────────────────────────────────────────────────────────────────────
 pub(crate) use crate::kafka_wire::create_configured_topic_sasl as create_topic_as_admin;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: seed a dummy ACL to disable the compat shim (allow-all when no ACLs)
 // ─────────────────────────────────────────────────────────────────────────────

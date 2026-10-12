@@ -17,7 +17,7 @@ use krabka_protocol::owned::fetch_snapshot_request::{
     FetchSnapshotRequest, PartitionSnapshot, SnapshotId, TopicSnapshot,
 };
 
-use crate::support::topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request};
+use crate::support::topics::{creatable_topic, create_topic_request};
 
 mod support;
 

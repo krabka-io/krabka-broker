@@ -243,7 +243,7 @@ mod tests {
 
     use super::*;
     use crate::share_coordinator::coordinator::test_support::{
-        DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, state_batch as batch,
+        DeliveryAttemptCount, FixtureDeliveryState, state_batch as batch,
     };
 
     type CombinerRow = (

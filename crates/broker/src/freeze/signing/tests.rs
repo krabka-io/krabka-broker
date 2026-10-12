@@ -16,7 +16,7 @@ use uuid::Uuid;
 use super::{FreezeSignatureCheck, freeze_signing_bytes};
 use crate::{
     operator_keys::{OperatorKeyEntry, OperatorKeys},
-    test_support::{OperatorKeyFileSetup, ed25519_public_key_file},
+    test_support::ed25519_public_key_file,
 };
 
 mod accepted;

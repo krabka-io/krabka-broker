@@ -466,7 +466,7 @@ mod tests {
         partition::Partition,
         partition_registry::PartitionRegistry,
         producer_id_manager::ProducerIdManager,
-        test_support::{StandalonePartitionSetup, open_partition, spawn_standalone_partition},
+        test_support::{open_partition, spawn_standalone_partition},
         txn::{bootstrap, state::TopicPartition, version::TxnVersion},
     };
 

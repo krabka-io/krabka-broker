@@ -220,7 +220,6 @@ pub(crate) fn deletion_tombstones(
         offsets,
         target,
     };
-    use crate::coordinator::persistence::Key;
     let mut records: Vec<_> = setup
         .offsets
         .iter()

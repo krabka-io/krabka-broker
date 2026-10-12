@@ -171,11 +171,6 @@ fn retention_prefix_boundaries_follow_kafkas_strict_and_inclusive_comparisons() 
     const THREE_TIMESTAMPS: &[i64] = &[10, 20, 30];
     const THREE_BYTE_LENS: &[u64] = &[100, 100, 100];
     const THREE_LAST_OFFSETS: &[i64] = &[4, 9, 14];
-    let empty_index_policy = policy()
-        .maybe_retention(Some(RetentionMillis(1)))
-        .maybe_bytes(Some(RetentionBytes(0)))
-        .start(99)
-        .call();
     // `(what, max timestamps, byte lens, last offsets, policy, expired)`.
     for (what, max_timestamps, byte_lens, last_offsets, policy, expired) in [
         (

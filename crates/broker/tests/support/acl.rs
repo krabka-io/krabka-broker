@@ -113,7 +113,7 @@ pub fn cluster_acl_record(
 }
 
 #[bon::builder]
-fn literal_allow_acl(
+pub fn literal_allow_acl(
     #[builder(default = ResourceType :: Topic)] resource_type: ResourceType,
     #[builder(default = "orders")] resource_name: &'_ str,
     #[builder(default = "User:alice")] principal: &'_ str,
@@ -158,31 +158,6 @@ pub const TOPIC_FULL_MASK: i32 = BIT_READ
     | BIT_DESCRIBE
     | BIT_DESCRIBE_CONFIGS
     | BIT_ALTER_CONFIGS;
-
-/// A literal `Allow` binding on any resource, with the original wildcard host.
-#[bon::builder]
-pub fn resource_allow_acl(
-    #[builder(default = ResourceType :: Topic)] resource_type: ResourceType,
-    #[builder(default = "orders")] resource_name: &'_ str,
-    #[builder(default = "User:alice")] principal: &'_ str,
-    #[builder(default = "*")] host: &'_ str,
-    #[builder(default = AclOperation :: Read)] operation: AclOperation,
-) -> MetadataRecord {
-    let setup = AllowAclSetup {
-        resource_type,
-        resource_name,
-        principal,
-        host,
-        operation,
-    };
-    literal_allow_acl()
-        .resource_type(setup.resource_type)
-        .resource_name(setup.resource_name)
-        .principal(setup.principal)
-        .host(setup.host)
-        .operation(setup.operation)
-        .call()
-}
 
 pub async fn seed_compat_shim_disable_acl(handle: &BrokerHandle) {
     seed_topic_acl()

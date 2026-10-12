@@ -18,10 +18,7 @@ use krabka_records_legacy::decode_message_set;
 
 use crate::{
     harness::{fetch_legacy_raw, legacy_bytes, produce_batch},
-    support::{
-        self,
-        topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
-    },
+    support::{self, topics::create_named_topic_request},
 };
 
 #[tokio::test]
@@ -31,9 +28,11 @@ async fn fetch_v3_recompresses_zstd_as_snappy() {
     // 1. Create topic.
     let cr = p
         .client
-        .send(create_topic_request(
-            creatable_topic().name("legacy_fetch_zstd".into()).call(),
-        ))
+        .send(
+            create_named_topic_request()
+                .name("legacy_fetch_zstd")
+                .call(),
+        )
         .await
         .expect("CreateTopics");
     assert!(

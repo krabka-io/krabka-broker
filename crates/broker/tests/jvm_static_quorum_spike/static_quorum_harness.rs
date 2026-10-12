@@ -27,9 +27,7 @@ pub(crate) fn kafka_cluster_id_string(id: Uuid) -> String {
 /// 3-voter set, with the shared cluster id. `i` is 0-indexed, and the id is
 /// `i+1`.
 pub(crate) use crate::support::jvm_static_voter_config as krabka_controller_config;
-use crate::support::{
-    JvmBrokerSetup, JvmStaticVoterSetup, bind_and_drop_ports, controller_voters, format_jvm_voter,
-};
+use crate::support::{JvmBrokerSetup, bind_and_drop_ports, controller_voters, format_jvm_voter};
 
 /// Formats a Krabka voter's log directory at Kafka 4.0's `metadata.version`.
 ///

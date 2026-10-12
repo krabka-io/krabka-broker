@@ -55,8 +55,6 @@ use krabka_protocol::owned::{
     },
 };
 
-#[cfg(test)]
-use crate::test_support::StandalonePartitionSetup;
 use crate::{
     broker::Broker,
     codes,
@@ -272,8 +270,7 @@ mod tests {
         authorizer::AuthorizationResult,
         broker::BrokerHandle,
         handlers::{
-            produce::test_support::image_with_topic,
-            test_support::{ReplicatedTopicSetup, seed_partition_replicas},
+            produce::test_support::image_with_topic, test_support::seed_partition_replicas,
         },
         test_support::{
             append_partition_batch, peer, principal, start_broker_no_audit,

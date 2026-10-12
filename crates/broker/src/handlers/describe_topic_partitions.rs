@@ -415,9 +415,7 @@ mod tests {
         elr::state::test_records,
         handlers::{
             RequestContext,
-            test_support::{
-                ReplicatedPartitionSetup, replicated_partition, single_replica_partition,
-            },
+            test_support::{replicated_partition, single_replica_partition},
         },
         test_support::{PartitionCount, TopicSetup},
     };

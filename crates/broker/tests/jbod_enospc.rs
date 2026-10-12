@@ -32,10 +32,9 @@ use crate::support::{
     client::connect_with_context,
     discovery::named_topic_metadata,
     fetch::{
-        FetchByteLimit, FetchLimits, FetchPartitionSetup, RequestWaitMillis,
-        SinglePartitionFetchSetup, fetch_partition, single_partition_fetch,
+        FetchByteLimit, FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch,
     },
-    producer::{ProducerRecordSetup, no_retry_acks_all_producer, producer_record},
+    producer::{no_retry_acks_all_producer, producer_record},
     remove_container_with_volumes,
 };
 

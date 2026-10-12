@@ -334,9 +334,8 @@ mod tests {
     use crate::{
         network::test_support::assert_authentication_event,
         raft_handshake::test_support::{
-            HandshakeApiKey, HandshakeApiVersion, HandshakeCorrelationId, HandshakeHeader,
-            RequestFrameSetup, api_versions_body, read_response_frame, request_frame,
-            sasl_authenticate_body, sasl_handshake_body, sasl_test_config,
+            HandshakeApiVersion, HandshakeHeader, api_versions_body, read_response_frame,
+            request_frame, sasl_authenticate_body, sasl_handshake_body, sasl_test_config,
         },
     };
 

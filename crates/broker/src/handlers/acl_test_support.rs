@@ -8,7 +8,7 @@ use crate::{
     authorizer::{Authorizer, SimpleAclAuthorizer},
     broker::BrokerHandle,
     handlers::acl_wire::binding_filter::AclBindingFilter,
-    test_support::{AllowAclSetup, allow_acl},
+    test_support::allow_acl,
 };
 
 pub(super) const RESOURCE_TYPE_TOPIC: i8 = 2;

@@ -122,10 +122,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        future_log::test_support::{
-            FutureSourceSetup, fixture_partition, open_future_log, source_fixture,
-        },
-        test_support::RecordCount,
+        future_log::test_support::{fixture_partition, open_future_log, source_fixture},
         throttle::TokenBucket,
     };
 

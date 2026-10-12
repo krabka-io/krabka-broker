@@ -69,6 +69,7 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
             #[builder(into, default = BatchRecordCount(1))] records: BatchRecordCount,
             #[builder(into, default = BatchTimestamp(1_000))] max_timestamp: BatchTimestamp,
             #[builder(default = BatchTransactionMode::Ordinary)] transaction: BatchTransactionMode,
+            #[builder(default)] base_offset: i64,
         ) -> ::krabka_protocol::records::RecordBatch {
             let producer_id = producer.id.0;
             let producer_epoch = producer.epoch.0;
@@ -76,6 +77,7 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
             let records = records.0;
             let max_timestamp = max_timestamp.0;
             ::krabka_protocol::records::RecordBatch {
+                base_offset,
                 attributes: ::krabka_protocol::records::Attributes::default().with_transactional(transaction == BatchTransactionMode::Transactional),
                 last_offset_delta: records - 1, base_timestamp: max_timestamp, max_timestamp,
                 producer_id, producer_epoch, base_sequence,

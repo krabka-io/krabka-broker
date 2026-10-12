@@ -36,7 +36,7 @@ use crate::{
     broker::BrokerHandle,
     codes,
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-    handlers::test_support::{ReplicatedTopicSetup, seed_partition_replicas},
+    handlers::test_support::seed_partition_replicas,
     partition::Partition,
     test_support::{encode_request, peer, principal, start_broker_no_audit_with},
 };

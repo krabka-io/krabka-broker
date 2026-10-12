@@ -95,12 +95,24 @@ mod tests {
     use super::{IndexType, RemoteStorageError, S3RemoteStorage, WormError};
     use crate::{
         s3::test_support::{
-            SeededCopySetup, StampedMetadataSetup, WormAccess, counting_rsm, rsm, sample_metadata,
-            seeded_blocking, stamped_metadata, worm_rsm,
+            SeededCopySetup, WormAccess, counting_rsm, rsm, sample_metadata, seeded_blocking,
+            stamped_metadata, worm_rsm,
         },
         storage_manager::RemoteStorageManager,
         test_support::{TransactionIndex, check_sample_indexes},
     };
+
+    macro_rules! seeded_without_transaction_index {
+        ($store:expr, $then:expr) => {{
+            let setup = SeededCopySetup::without_transaction_index();
+            seeded_blocking()
+                .store($store)
+                .metadata(setup.metadata)
+                .transaction_index(setup.transaction_index)
+                .then($then)
+                .call()
+        }};
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn whole_index_reads_enforce_the_configured_cap_for_every_index_type() {
@@ -168,34 +180,24 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_partial_byte_ranges() {
         let store = rsm(None);
-        seeded_blocking()
-            .store(store)
-            .metadata(SeededCopySetup::without_transaction_index().metadata)
-            .transaction_index(SeededCopySetup::without_transaction_index().transaction_index)
-            .then(move |store, md| {
-                // Inclusive [2, 5] -> "2345".
-                assert!(store.fetch_log_segment(&md, 2, Some(5)).unwrap() == b"2345");
-                // Open-ended from 7 -> "789".
-                assert!(store.fetch_log_segment(&md, 7, None).unwrap() == b"789");
-            })
-            .call()
-            .await;
+        seeded_without_transaction_index!(store, move |store, md| {
+            // Inclusive [2, 5] -> "2345".
+            assert!(store.fetch_log_segment(&md, 2, Some(5)).unwrap() == b"2345");
+            // Open-ended from 7 -> "789".
+            assert!(store.fetch_log_segment(&md, 7, None).unwrap() == b"789");
+        })
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_single_byte_range_start_equals_end() {
         let store = rsm(None);
-        seeded_blocking()
-            .store(store)
-            .metadata(SeededCopySetup::without_transaction_index().metadata)
-            .transaction_index(SeededCopySetup::without_transaction_index().transaction_index)
-            .then(move |store, md| {
-                // Inclusive [3, 3] is a valid single-byte range -> "3" (the guard
-                // is `end < start_position`, not `<=`/`==`).
-                assert!(store.fetch_log_segment(&md, 3, Some(3)).unwrap() == b"3");
-            })
-            .call()
-            .await;
+        seeded_without_transaction_index!(store, move |store, md| {
+            // Inclusive [3, 3] is a valid single-byte range -> "3" (the guard
+            // is `end < start_position`, not `<=`/`==`).
+            assert!(store.fetch_log_segment(&md, 3, Some(3)).unwrap() == b"3");
+        })
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

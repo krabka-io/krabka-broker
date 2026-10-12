@@ -169,8 +169,7 @@ mod tests {
     use super::*;
     use crate::{
         replicator_supervisor::test_support::{
-            SupervisorPartitionSetup, broker_record, image_with, partition_record,
-            supervisor_fixture,
+            broker_record, image_with, partition_record, supervisor_fixture,
         },
         test_support::single_partition_topic,
         wal::quorum::{

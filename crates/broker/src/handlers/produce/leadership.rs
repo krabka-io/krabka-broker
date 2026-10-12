@@ -203,16 +203,13 @@ mod tests {
     use crate::{
         codes::{NOT_ENOUGH_REPLICAS, NOT_LEADER_OR_FOLLOWER},
         config_keys::{BROKER_WITNESS, MIN_INSYNC_REPLICAS, WITNESS_TRUE},
-        handlers::{
-            produce::test_support::image_with_topic,
-            test_support::{ReplicatedPartitionSetup, replicated_partition},
-        },
+        handlers::{produce::test_support::image_with_topic, test_support::replicated_partition},
         log_dir::partition_dir,
         log_dir_status::LogDirRegistry,
         partition::ReplicationTarget,
         partition_registry::PartitionRegistry,
         replica_state::ReplicaState,
-        test_support::{StandalonePartitionSetup, StorageMode, spawn_standalone_partition},
+        test_support::{StorageMode, spawn_standalone_partition},
     };
 
     #[bon::builder]

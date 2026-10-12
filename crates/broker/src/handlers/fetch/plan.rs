@@ -901,10 +901,7 @@ mod tests {
         handlers::produce::test_support::image_with_topic,
         partition::Partition,
         producer_state::ProducerState,
-        test_support::{
-            StandalonePartitionSetup, broker_registration, spawn_standalone_partition,
-            temporary_partition,
-        },
+        test_support::{broker_registration, spawn_standalone_partition, temporary_partition},
     };
 
     /// A three-site image: node 1 leads `orders` from `dc-a`, node 2 replicates

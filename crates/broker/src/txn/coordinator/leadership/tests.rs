@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR},
-    txn::coordinator::test_support::{StateImageSetup, state_image},
+    txn::coordinator::test_support::state_image,
 };
 
 const THIS_BROKER: NodeId = NodeId(1);

@@ -21,8 +21,6 @@ use super::{
     configured_log_dir, future_dir_name_too_long,
     replicator::{ReplicatorTask, replicator_loop},
 };
-#[cfg(test)]
-use crate::future_log::test_support::FutureSourceSetup;
 use crate::{
     error::BrokerError, log_dir, log_dir_status::LogDirRegistry, partition::Partition,
     partition_registry::PartitionRegistry,

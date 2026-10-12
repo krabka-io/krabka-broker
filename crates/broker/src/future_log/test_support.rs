@@ -20,10 +20,7 @@ use crate::{
     log_dir::future_partition_dir,
     partition::Partition,
     partition_registry::PartitionRegistry,
-    test_support::{
-        PartitionRecordsSetup, RecordCount, StandalonePartitionSetup, open_partition,
-        partition_records_batch,
-    },
+    test_support::{PartitionRecordsSetup, RecordCount, open_partition, partition_records_batch},
     throttle::TokenBucket,
 };
 

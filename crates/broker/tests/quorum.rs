@@ -23,7 +23,7 @@ use crate::support::{
     client::connect_client,
     discovery::topic_metadata_request,
     shutdown_cluster,
-    topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 mod support;
@@ -207,8 +207,6 @@ async fn concurrent_topic_creates_one_wins() {
     let mut joins = Vec::new();
     for c in clients {
         joins.push(tokio::spawn(async move {
-            use crate::support::topics::ConfiguredTopicSetup;
-
             c.send(create_topic_request(
                 creatable_topic().name(("race").into()).call(),
             ))

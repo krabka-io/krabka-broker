@@ -645,9 +645,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::{
-        delivery::test_support::DeliveryPartitionSetup, share_partition::state::AcquisitionState,
-    };
+    use crate::share_partition::state::AcquisitionState;
 
     #[test]
     fn materialization_stops_at_the_deferred_record_bound() {

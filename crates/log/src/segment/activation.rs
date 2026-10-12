@@ -139,7 +139,7 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        RecordTimestamp, SampleBatchSetup, SeededSegmentSetup, seeded_segment, test_segment,
+        RecordTimestamp, SampleBatchSetup, seeded_segment, test_segment,
     };
 
     fn check_pending_ranges(seg: &Segment, expected: &[(Offset, Offset)]) {

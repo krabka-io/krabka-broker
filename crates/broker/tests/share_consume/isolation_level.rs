@@ -19,10 +19,10 @@ use crate::{
     harness::{bootstrap_share_state, produce_n},
     share_rpc::{acquired_count, fetch_empty, share_fetch},
     support::{
-        producer::{ProducerRecordSetup, producer_record, transactional_producer},
+        producer::{producer_record, transactional_producer},
         share::{
-            ShareFetchSetup, ShareRecordsSetup, ShareSessionEpoch, ShareTopicSetup,
-            join_consume_member, permitted_topic_fixture, record_values,
+            ShareFetchSetup, ShareSessionEpoch, join_consume_member, permitted_topic_fixture,
+            record_values,
         },
     },
 };
@@ -52,18 +52,8 @@ async fn set_isolation_level(broker: &BrokerHandle, group: &str, level: &str) {
 }
 
 /// Prepare a transaction-ready empty share group with its exact isolation override.
-async fn isolation_fixture(
-    level: Option<&str>,
-) -> (
-    tokio::sync::OwnedSemaphorePermit,
-    BrokerHandle,
-    std::sync::Arc<krabka_client_core::Client>,
-    tempfile::TempDir,
-    uuid::Uuid,
-    String,
-) {
-    let (permit, broker, client, dir, tid) =
-        Box::pin(permitted_topic_fixture().customize(|_| {}).call()).await;
+async fn isolation_fixture(level: Option<&str>) -> crate::support::share::ShareBrokerFixture {
+    let (permit, broker, client, dir, tid) = Box::pin(permitted_topic_fixture().call()).await;
     let bootstrap = broker.listen_addr().to_string();
     bootstrap_share_state(&broker, &client, "g1").await;
     if let Some(level) = level {

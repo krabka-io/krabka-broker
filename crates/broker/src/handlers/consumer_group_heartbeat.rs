@@ -235,9 +235,8 @@ mod tests {
         handlers::{
             encode_response,
             group_heartbeat_test_support::{
-                GroupAclSetup, GroupFeatureLevel, GroupTopicSetup, acl_authorizer, alice,
-                check_group_read_denied, describe_acl, grant_group_read, group_read_acl,
-                image_with_group_version, set_group_version,
+                GroupFeatureLevel, acl_authorizer, alice, check_group_read_denied, describe_acl,
+                grant_group_read, group_read_acl, image_with_group_version, set_group_version,
                 subscribed_names_describe_denied_table as subscribed_names_describe_denied_cases,
                 topic_with_partitions, versioned_group_broker,
             },

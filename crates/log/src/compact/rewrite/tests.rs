@@ -14,9 +14,8 @@ use crate::{
     compact::{
         build_offset_map,
         test_support::{
-            RETENTION, TransactionalRecordSetup, control_batch, make_record, rewrite_all,
-            rewrite_with_map, superseded_records, transactional_record, write_sealed_batches,
-            write_sealed_segment,
+            RETENTION, control_batch, make_record, rewrite_all, rewrite_with_map,
+            superseded_records, transactional_record, write_sealed_batches, write_sealed_segment,
         },
     },
 };

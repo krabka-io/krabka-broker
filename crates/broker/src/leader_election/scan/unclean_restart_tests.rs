@@ -35,6 +35,16 @@ fn assert_restart_outcome(plan: &FailoverPlan, expected_unavailable: &[(String, 
     assert!(plan.unavailable.as_slice() == expected_unavailable);
 }
 
+fn expected_isr_removal(leader_epoch: Option<i32>) -> krabka_metadata::PartitionRecord {
+    let partition = expected_partition()
+        .leader(1)
+        .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)]);
+    match leader_epoch {
+        Some(epoch) => partition.leader_epoch(epoch).call(),
+        None => partition.call(),
+    }
+}
+
 /// The whole batch for the case the withdrawal alone could not close.
 ///
 /// Broker 3 is in a healthy ISR and nothing about it is published, so the
@@ -56,16 +66,7 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
     let plan = restart_batch(&image, &[1, 2]).await;
 
     assert_restart_outcome(&plan, &[]);
-    assert!(
-        plan.changes
-            == vec![MetadataRecord::V1Partition(
-                expected_partition()
-                    .leader(1)
-                    .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
-                    .leader_epoch(5)
-                    .call()
-            )]
-    );
+    assert!(plan.changes == vec![MetadataRecord::V1Partition(expected_isr_removal(Some(5)))]);
 }
 
 /// A partition broker 3 is only published as eligible for, and is not in the
@@ -130,15 +131,7 @@ async fn a_partition_the_returning_broker_leads_is_re_elected() {
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
-    assert!(
-        plan.changes
-            == vec![MetadataRecord::V1Partition(
-                expected_partition()
-                    .leader(1)
-                    .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
-                    .call()
-            )]
-    );
+    assert!(plan.changes == vec![MetadataRecord::V1Partition(expected_isr_removal(None))]);
 }
 
 /// A partition the returning broker is neither leading nor in the ISR of, and

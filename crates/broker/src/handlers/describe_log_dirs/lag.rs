@@ -76,10 +76,7 @@ mod tests {
     use crate::{
         future_log::FutureLogState,
         partition::Partition,
-        test_support::{
-            RecordCount, RepeatedRecordsSetup, StandalonePartitionSetup, UnixMillis,
-            open_partition, repeated_records_batch,
-        },
+        test_support::{RecordCount, open_partition, repeated_records_batch},
     };
 
     /// Builds a `Partition` rooted at `<log_dir>/<topic>-<partition>`.

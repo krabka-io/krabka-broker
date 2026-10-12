@@ -32,7 +32,7 @@ use krabka_client_admin::{AdminClient, AdminError, RaftVoterEndpoint};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-use crate::support::{AddressedNodeSetup, addressed_node_config};
+use crate::support::addressed_node_config;
 
 mod support;
 

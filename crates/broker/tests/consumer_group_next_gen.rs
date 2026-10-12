@@ -20,11 +20,11 @@ use krabka_protocol::owned::{
 };
 
 use crate::support::{
-    classic::{ClassicJoinSetup, ClassicTimeouts, classic_join_request},
+    classic::{ClassicTimeouts, classic_join_request},
     client::connect_client,
     consumer_groups::{consumer_heartbeat, reported_assignment},
     discovery::named_topic_metadata,
-    topics::{ConfiguredTopicSetup, TopicPartitionCount, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 fn boot() -> std::pin::Pin<

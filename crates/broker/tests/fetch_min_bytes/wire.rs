@@ -17,16 +17,10 @@ use krabka_protocol::{
 use crate::support::{
     client::connect_owned,
     discovery::named_topic_metadata,
-    fetch::{
-        FetchByteLimit, FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup,
-        single_partition_fetch,
-    },
+    fetch::{FetchByteLimit, FetchLimits, RequestWaitMillis, single_partition_fetch},
     produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch},
     records::batch_from_records,
-    topics::{
-        ConfiguredTopicSetup, CreateTopicRequestSetup, CreateTopicsTimeoutMillis, creatable_topic,
-        create_topic_request_with_setup,
-    },
+    topics::{creatable_topic, create_topic_request_with_setup},
 };
 
 /// The floor the fetch asks for. 64 KiB is orders of magnitude above the one

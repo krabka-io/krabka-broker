@@ -107,66 +107,9 @@ pub(super) fn single_partition_image(topic: &str, topic_id: Uuid, leader: NodeId
     ])
 }
 
-/// One rf=3 topic and its partition, with the caller's exact replica list and epoch.
-#[bon::builder]
-pub(super) fn topic_partition_records(
-    #[builder(default = "t")] topic: &'_ str,
-    #[builder(into, default)] partition: PartitionIndex,
-    #[builder(into, default = NodeId (1))] leader: NodeId,
-    #[builder(default = vec ! [NodeId (1) , NodeId (2) , NodeId (3)])] replicas: Vec<NodeId>,
-    #[builder(into, default)] epoch: LeaderEpoch,
-) -> [MetadataRecord; 2] {
-    let setup = SupervisorPartitionSetup {
-        topic,
-        partition,
-        leader,
-        replicas,
-        epoch,
-    };
-    [
-        topic_record().topic(setup.topic).call(),
-        partition_record()
-            .topic(setup.topic)
-            .partition(setup.partition)
-            .leader(setup.leader)
-            .replicas(setup.replicas)
-            .epoch(setup.epoch)
-            .call(),
-    ]
-}
-
-#[bon::builder]
-pub(super) fn replicated_partition_image(
-    #[builder(default = "t")] topic: &'_ str,
-    #[builder(into, default)] partition: PartitionIndex,
-    #[builder(into, default = NodeId (1))] leader: NodeId,
-    #[builder(default = vec ! [NodeId (1) , NodeId (2) , NodeId (3)])] replicas: Vec<NodeId>,
-    #[builder(into, default)] epoch: LeaderEpoch,
-) -> MetadataImage {
-    let setup = SupervisorPartitionSetup {
-        topic,
-        partition,
-        leader,
-        replicas,
-        epoch,
-    };
-    image_with(
-        &topic_partition_records()
-            .topic(setup.topic)
-            .partition(setup.partition)
-            .leader(setup.leader)
-            .replicas(setup.replicas)
-            .epoch(setup.epoch)
-            .call(),
-    )
-}
-
 /// The supervisor tests' rf=3 topic, with all three brokers as replicas.
 pub(super) fn three_replica_image(leader: NodeId, epoch: LeaderEpoch) -> MetadataImage {
-    replicated_partition_image()
-        .leader(leader)
-        .epoch(epoch)
-        .call()
+    image_with(&topic_partition_records().leader(leader).epoch(epoch).call())
 }
 
 pub(super) fn follower_promotion_images() -> (MetadataImage, MetadataImage) {
@@ -287,21 +230,14 @@ impl<'a> SupervisorPartitionSetup<'a> {
     }
 }
 
-#[bon::builder]
-pub(super) fn partition_record(
-    #[builder(default = "t")] topic: &'_ str,
-    #[builder(into, default)] partition: PartitionIndex,
-    #[builder(into, default = NodeId (1))] leader: NodeId,
-    #[builder(default = vec ! [NodeId (1) , NodeId (2) , NodeId (3)])] replicas: Vec<NodeId>,
-    #[builder(into, default)] epoch: LeaderEpoch,
-) -> MetadataRecord {
-    let setup = SupervisorPartitionSetup {
-        topic,
-        partition,
-        leader,
-        replicas,
-        epoch,
-    };
+fn topic_partition_records_from_setup(setup: SupervisorPartitionSetup<'_>) -> [MetadataRecord; 2] {
+    [
+        topic_record().topic(setup.topic).call(),
+        partition_record_from_setup(setup),
+    ]
+}
+
+fn partition_record_from_setup(setup: SupervisorPartitionSetup<'_>) -> MetadataRecord {
     MetadataRecord::V1Partition(PartitionRecord {
         topic: setup.topic.into(),
         partition: setup.partition.0,
@@ -315,6 +251,30 @@ pub(super) fn partition_record(
         partition_epoch: 0,
     })
 }
+
+macro_rules! supervisor_partition_builder {
+    ($name:ident -> $result:ty = $constructor:path) => {
+        #[bon::builder]
+        pub(super) fn $name(
+            #[builder(default = "t")] topic: &'_ str,
+            #[builder(into, default)] partition: PartitionIndex,
+            #[builder(into, default = NodeId(1))] leader: NodeId,
+            #[builder(default = vec![NodeId(1), NodeId(2), NodeId(3)])] replicas: Vec<NodeId>,
+            #[builder(into, default)] epoch: LeaderEpoch,
+        ) -> $result {
+            $constructor(SupervisorPartitionSetup {
+                topic,
+                partition,
+                leader,
+                replicas,
+                epoch,
+            })
+        }
+    };
+}
+
+supervisor_partition_builder!(topic_partition_records -> [MetadataRecord; 2] = topic_partition_records_from_setup);
+supervisor_partition_builder!(partition_record -> MetadataRecord = partition_record_from_setup);
 
 pub(super) fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
     BrokerRegistrationRecord {

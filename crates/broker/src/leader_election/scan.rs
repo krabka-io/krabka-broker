@@ -27,10 +27,7 @@ use super::policy::{
 #[cfg(test)]
 use crate::{
     config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
-    leader_election::test_support::{
-        ElectionSetup, ElrFinalization, ExpectedPartitionSetup, expected_partition,
-        img_with_partition,
-    },
+    leader_election::test_support::{ElrFinalization, expected_partition, img_with_partition},
 };
 use crate::{
     config_keys::{

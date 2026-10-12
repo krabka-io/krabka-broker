@@ -11,7 +11,7 @@ use crate::{
     producers_harness::create_topic,
     support::{
         self, admin::describe_producers_request, client::connect_with_context, registered_cluster,
-        shutdown_cluster, topics::CreateTopicSetup,
+        shutdown_cluster,
     },
 };
 

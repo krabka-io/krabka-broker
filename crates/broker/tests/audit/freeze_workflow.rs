@@ -32,7 +32,7 @@ use krabka_protocol::{
 
 use crate::{
     freeze_signing::{FreezeBytes, freeze_signing_bytes},
-    support::{self, OperatorKeysSetup, OperatorSaslSetup},
+    support::{self, OperatorKeysSetup},
 };
 
 /// The proposer. She freezes the topic, opens the proposal, and thaws it.

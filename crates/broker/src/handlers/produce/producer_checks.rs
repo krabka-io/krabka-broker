@@ -409,10 +409,7 @@ mod tests {
             prepare::PreparedSource,
             test_support::{encode_batch, image_with_topic, pipeline_input},
         },
-        test_support::{
-            RecordCount, RepeatedRecordsSetup, StandalonePartitionSetup, repeated_records_batch,
-            spawn_standalone_partition,
-        },
+        test_support::{repeated_records_batch, spawn_standalone_partition},
     };
 
     fn transactional_batch(producer_id: i64, producer_epoch: i16) -> PreparedBatch {

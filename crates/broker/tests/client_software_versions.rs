@@ -24,8 +24,8 @@ use crate::support::{
     client::{metrics_config, scrape_metrics},
     discovery::api_versions_request_for,
     wire::{
-        CorrelationId, HeaderEncoding, WireFrameSetup, decode_response_frame, read_frame,
-        request_body_capacity, request_frame, write_frame,
+        HeaderEncoding, decode_response_frame, read_frame, request_body_capacity, request_frame,
+        write_frame,
     },
 };
 

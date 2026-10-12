@@ -10,7 +10,6 @@ use std::net::SocketAddr;
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::{
     owned::{metadata_response::MetadataResponse, produce_response::ProduceResponse},
     primitives::uuid::Uuid,
@@ -19,8 +18,7 @@ use krabka_protocol::{
 use tokio::net::TcpStream;
 
 use crate::{
-    CLIENT_ID,
-    kafka_wire::{self, ExchangeSetup as WireExchangeSetup},
+    CLIENT_ID, kafka_wire,
     support::{
         discovery::named_topic_metadata,
         produce::{SinglePartitionProduceSetup, batch_request},

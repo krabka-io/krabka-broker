@@ -79,12 +79,9 @@ mod tests {
     use krabka_metadata::{AclOperation, PatternType};
 
     use super::*;
-    use crate::{
-        handlers::{
-            acl_test_support::expected_deleted_orders_acl,
-            delete_acls::test_support::{OPERATION_WRITE, PATTERN_TYPE_PREFIXED, acl},
-        },
-        test_support::AllowAclSetup,
+    use crate::handlers::{
+        acl_test_support::expected_deleted_orders_acl,
+        delete_acls::test_support::{OPERATION_WRITE, PATTERN_TYPE_PREFIXED, acl},
     };
 
     #[test]

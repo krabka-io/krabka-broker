@@ -19,8 +19,7 @@ use crate::{
     coordinator::{
         persistence::{GroupMetadataValue, Key},
         test_support::{
-            DeletionTarget, DeletionTombstonesSetup, OffsetRecordSetup,
-            TopicDeletionTombstonesSetup, default_coordinator, deletion_tombstones, offset_record,
+            DeletionTarget, default_coordinator, deletion_tombstones, offset_record,
             parsed_offset_records, replay_offset_batch as batch, temp_log,
             topic_deletion_tombstones,
         },

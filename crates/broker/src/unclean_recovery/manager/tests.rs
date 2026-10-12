@@ -20,7 +20,7 @@ use crate::{
     heartbeat::controller_state::ControllerLivenessState,
     leader_election::{
         compute_unclean_restart_changes,
-        test_support::{ElectionSetup, img_with_partition, mark_witnesses_in_image},
+        test_support::{img_with_partition, mark_witnesses_in_image},
     },
     metadata_source::MetadataSource,
     metrics::{BreakGlassAction as MetricBreakGlassAction, BreakGlassActionLabel, BrokerMetrics},

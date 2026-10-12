@@ -49,8 +49,8 @@ mod tests {
     use super::{ObjectOps, RemoteStorageError, S3RemoteStorage, WormError};
     use crate::{
         s3::test_support::{
-            SeededCopySetup, StampedMetadataSetup, counting_rsm, memory_worm_archive, rsm,
-            sample_data, sample_metadata, seeded_blocking, stamped_metadata,
+            counting_rsm, memory_worm_archive, rsm, sample_data, sample_metadata, seeded_blocking,
+            stamped_metadata,
         },
         storage_manager::{IndexType, RemoteStorageManager},
         test_support::TransactionIndex,

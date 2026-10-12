@@ -118,10 +118,7 @@ fn start_broker_with_opa_authorizer(
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::{
-    kafka_wire::{
-        AutomaticTopicSetup, PlainAuthenticationSetup, create_topic_as_super_user,
-        drive_produce_as_plain,
-    },
+    kafka_wire::{PlainAuthenticationSetup, create_topic_as_super_user, drive_produce_as_plain},
     support::{
         produce::single_partition_response,
         sasl::{sasl_temp_config, start_broker},

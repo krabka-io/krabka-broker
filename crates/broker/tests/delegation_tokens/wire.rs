@@ -11,7 +11,6 @@
 use std::{io, net::SocketAddr};
 
 use base64::Engine;
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
 use krabka_protocol::owned::{
     api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
     sasl_handshake_request::SaslHandshakeRequest, sasl_handshake_response::SaslHandshakeResponse,
@@ -20,12 +19,8 @@ use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
 use crate::{
-    kafka_wire::{
-        self, ExchangeSetup as WireExchangeSetup, PlainAuthenticationSetup, SaslAuthenticateSetup,
-        exchange,
-    },
+    kafka_wire::{self, PlainAuthenticationSetup, exchange},
     rpc::send_create_delegation_token,
-    support::wire::CorrelationId as WireCorrelationId,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

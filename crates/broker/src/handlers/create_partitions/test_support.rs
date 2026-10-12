@@ -84,16 +84,6 @@ pub struct SeedTopicSetup<'a> {
     pub rf: TopicReplicationFactor,
 }
 
-impl<'a> SeedTopicSetup<'a> {
-    pub fn single_partition(name: &'a str) -> Self {
-        Self {
-            name,
-            partitions: TopicPartitionCount(1),
-            ..Default::default()
-        }
-    }
-}
-
 #[bon::builder]
 pub async fn seed_topic(
     handle: &BrokerHandle,

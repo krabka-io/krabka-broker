@@ -240,12 +240,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{
-        replicator_supervisor::test_support::{
-            SupervisorPartitionSetup, SupervisorTopicSetup, await_until, broker_record, image_with,
-            partition_record, reconciled_supervisor, supervisor_fixture, topic_record,
-        },
-        test_support::PartitionCount,
+    use crate::replicator_supervisor::test_support::{
+        await_until, broker_record, image_with, partition_record, reconciled_supervisor,
+        supervisor_fixture, topic_record,
     };
 
     /// The `(topic, partition)` keys one fetcher follows, in key order.

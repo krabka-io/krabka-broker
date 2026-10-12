@@ -10,7 +10,6 @@ use krabka_metadata::{MetadataRecord, PartitionRecord};
 
 use crate::{
     cluster_lock,
-    kafka_wire::ElectionExchangeSetup,
     support::{
         admin::{ElectionKind, ElectionSetup},
         registered_cluster, shutdown_cluster,

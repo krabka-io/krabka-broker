@@ -36,7 +36,7 @@ use crate::support::{
     client::{connect_client, create_topic},
     consumer_groups::{collect_routing_values, routing_consumer},
     partitions::require_non_bootstrap_partitions,
-    producer::{ProducerRecordSetup, producer_record},
+    producer::producer_record,
     registered_cluster, shutdown_cluster,
 };
 

@@ -13,9 +13,7 @@ use crate::{
         KAFKA_IMAGE, broker0_advertised, broker0_listen, docker_run_kafka_tool, host_broker_config,
         nc_check_connectivity, wait_jvm_log_config,
     },
-    support::{
-        ContainerInput, JvmDockerSetup, init_jvm_tracing, jvm_docker_command, jvm_stdin_output,
-    },
+    support::{ContainerInput, init_jvm_tracing, jvm_docker_command, jvm_stdin_output},
 };
 
 /// `kafka-console-consumer` sees a compacted topic with only

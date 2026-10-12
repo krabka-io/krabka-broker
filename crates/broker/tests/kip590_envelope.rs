@@ -34,10 +34,10 @@ use krabka_security::{ListenerProtocol, SaslMechanism, SecretBytes};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use crate::support::{
-    acl::{ClusterAclSetup, cluster_acl_record},
+    acl::cluster_acl_record,
     controller_listener::*,
     start_with_bound_listeners,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
+    topics::{creatable_topic, create_topic_request},
 };
 
 mod support;

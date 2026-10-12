@@ -488,7 +488,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::leader_election::test_support::{ElectionSetup, seed_partition, witnesses};
+    use crate::leader_election::test_support::{seed_partition, witnesses};
 
     /// The full failover decision for one partition, with `witnesses` and the
     /// published eligible-leader-replica set given directly. This keeps the

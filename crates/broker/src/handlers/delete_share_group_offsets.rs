@@ -273,7 +273,7 @@ mod tests {
         share_coordinator::{
             handlers::test_support::lead_share_state_partitions, persister_client::SharePersister,
         },
-        test_support::{DenyAll, ShareApiSupport, ShareBrokerSetup, start_share_broker, test_ctx},
+        test_support::{DenyAll, ShareApiSupport, start_share_broker, test_ctx},
     };
 
     /// Denies `Read` on the named topics and allows everything else, so group

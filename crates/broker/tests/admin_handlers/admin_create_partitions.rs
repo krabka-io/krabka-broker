@@ -11,9 +11,7 @@ use crate::{
     admin_harness::{build_client, create_topic_helper},
     support::{
         registered_cluster, start_n_node_client,
-        topics::{
-            ConfiguredTopicSetup, TopicReplicationFactor, creatable_topic, create_topic_request,
-        },
+        topics::{creatable_topic, create_topic_request},
     },
 };
 

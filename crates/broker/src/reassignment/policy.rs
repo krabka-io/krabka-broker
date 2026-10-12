@@ -220,18 +220,17 @@ mod tests {
         elr::state::test_records,
         reassignment::test_support::{first_partition, img, liveness},
         test_support::{
-            FreezeSetup, ReassignmentSetup, broker_registration, finalize_elr_version,
-            topic_freeze_record,
+            ReassignmentSetup, broker_registration, finalize_elr_version, topic_freeze_record,
         },
     };
 
-    fn leader_handoff_setup() -> ReassignmentSetup<'static> {
-        ReassignmentSetup {
-            adding: vec![krabka_ids::NodeId(3)],
-            removing: vec![krabka_ids::NodeId(2)],
-            leader: krabka_ids::NodeId(2),
-            ..Default::default()
-        }
+    fn four_replica_reassignment_image(replicas: Vec<NodeId>) -> std::sync::Arc<MetadataImage> {
+        img()
+            .replicas(replicas)
+            .isr(vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)])
+            .adding(vec![NodeId(4)])
+            .removing(vec![NodeId(2)])
+            .call()
     }
 
     #[test]
@@ -430,14 +429,7 @@ mod tests {
             expected,
         } in cases
         {
-            let image = img()
-                .replicas(assignment.replicas)
-                .isr(assignment.isr)
-                .adding(assignment.adding)
-                .removing(assignment.removing)
-                .leader(assignment.leader.0)
-                .directories(assignment.directories)
-                .call();
+            let image = crate::reassignment_fields!(img(), assignment).call();
             let l = liveness(&[1, 2, 3, 4]).await;
 
             let updates = compute_reassignment_progress(&image, &l).await;
@@ -643,14 +635,7 @@ mod tests {
             ),
         ];
         for (case, assignment, alive) in cases {
-            let img = img()
-                .replicas(assignment.replicas)
-                .isr(assignment.isr)
-                .adding(assignment.adding)
-                .removing(assignment.removing)
-                .leader(assignment.leader.0)
-                .directories(assignment.directories)
-                .call();
+            let img = crate::reassignment_fields!(img(), assignment).call();
             let l = liveness(&alive).await;
             let updates = compute_reassignment_progress(&img, &l).await;
             assert!(
@@ -779,22 +764,8 @@ mod tests {
     #[test]
     fn completion_keeps_the_operators_target_order() {
         // Target [3,4,1] over current [1,2,3]: the start wrote [3,4,1,2].
-        let image = img()
-            .replicas(vec![
-                krabka_ids::NodeId(3),
-                krabka_ids::NodeId(4),
-                krabka_ids::NodeId(1),
-                krabka_ids::NodeId(2),
-            ])
-            .isr(vec![
-                krabka_ids::NodeId(1),
-                krabka_ids::NodeId(2),
-                krabka_ids::NodeId(3),
-                krabka_ids::NodeId(4),
-            ])
-            .adding(vec![krabka_ids::NodeId(4)])
-            .removing(vec![krabka_ids::NodeId(2)])
-            .call();
+        let image =
+            four_replica_reassignment_image(vec![NodeId(3), NodeId(4), NodeId(1), NodeId(2)]);
         let record = image.partition("foo", 0).expect("seeded partition");
         let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
 
@@ -819,22 +790,7 @@ mod tests {
     async fn isr_intersection_when_some_targets_not_in_isr() {
         // adding=[4], removing=[2]; isr=[1,2,3,4]; target=[1,3,4].
         // new_isr = isr ∩ target = [1,3,4].
-        let img = img()
-            .replicas(vec![
-                krabka_ids::NodeId(1),
-                krabka_ids::NodeId(2),
-                krabka_ids::NodeId(3),
-                krabka_ids::NodeId(4),
-            ])
-            .isr(vec![
-                krabka_ids::NodeId(1),
-                krabka_ids::NodeId(2),
-                krabka_ids::NodeId(3),
-                krabka_ids::NodeId(4),
-            ])
-            .adding(vec![krabka_ids::NodeId(4)])
-            .removing(vec![krabka_ids::NodeId(2)])
-            .call();
+        let img = four_replica_reassignment_image(vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
         let l = liveness(&[1, 2, 3, 4]).await;
         let updates = compute_reassignment_progress(&img, &l).await;
         check!(updates.len() == 1);

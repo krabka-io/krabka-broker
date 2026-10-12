@@ -14,10 +14,7 @@ use crate::{
     harness::{create_topic, topic_id_for},
     support,
     support::{
-        fetch::{
-            FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup, check_record_count,
-            single_partition_fetch,
-        },
+        fetch::{FetchLimits, RequestWaitMillis, check_record_count, single_partition_fetch},
         offsets::{list_offset_partition, single_partition_list_offsets},
         produce::{SinglePartitionProduceSetup, batch_request},
     },

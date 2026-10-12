@@ -25,9 +25,7 @@ use crate::{
         admin_plain_password, alice_password, round_trip, sasl_authenticate_round_trip,
         scram_admin_fixture, wrong_scram_password,
     },
-    kafka_wire::{
-        SaslHandshakeSetup, decode_named, encode_named, plain_payload, sasl_handshake_on,
-    },
+    kafka_wire::{decode_named, encode_named, plain_payload, sasl_handshake_on},
     scram::drive_sasl_scram_session,
     support::{
         acl::use_simple_acl_authorizer,
@@ -93,16 +91,7 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
         scram_admin_fixture(vec![SaslMechanism::Plain, SaslMechanism::ScramSha256]).await;
 
     let (salt, salted) = pbkdf2_salt_and_salted_sha256(alice_password().as_bytes(), 4096);
-    let req = AlterUserScramCredentialsRequest {
-        upsertions: vec![
-            scram_upsertion()
-                .mechanism(ScramAlgorithm::Sha256)
-                .salt(bytes::Bytes::from(salt))
-                .salted_password(bytes::Bytes::from(salted.to_vec()))
-                .call(),
-        ],
-        ..Default::default()
-    };
+    let req = scram_upsertion_request(ScramAlgorithm::Sha256, salt, salted.to_vec());
     let resp = provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion (SHA-256)").await;
     check_single_successful_user(&resp, "alice");
 
@@ -235,11 +224,20 @@ fn pbkdf2_salt_and_salted_sha256(password: &[u8], iterations: u32) -> (Vec<u8>, 
 /// The same deterministic Alice credential for the allow and deny provisioning paths.
 fn alice_sha512_request() -> AlterUserScramCredentialsRequest {
     let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
+    scram_upsertion_request(ScramAlgorithm::Sha512, salt, salted.to_vec())
+}
+
+fn scram_upsertion_request(
+    mechanism: ScramAlgorithm,
+    salt: Vec<u8>,
+    salted_password: Vec<u8>,
+) -> AlterUserScramCredentialsRequest {
     AlterUserScramCredentialsRequest {
         upsertions: vec![
             scram_upsertion()
+                .mechanism(mechanism)
                 .salt(bytes::Bytes::from(salt))
-                .salted_password(bytes::Bytes::from(salted.to_vec()))
+                .salted_password(bytes::Bytes::from(salted_password))
                 .call(),
         ],
         ..Default::default()

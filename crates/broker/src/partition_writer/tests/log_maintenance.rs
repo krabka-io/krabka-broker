@@ -6,10 +6,7 @@ use krabka_log::{LogConfig, Offset};
 use tempfile::tempdir;
 
 use super::*;
-use crate::{
-    partition_writer::test_support::{sample_batch, spawn_default_writer},
-    test_support::{EmptyPayloadBatchSetup, RecordCount},
-};
+use crate::partition_writer::test_support::{sample_batch, spawn_default_writer};
 
 #[tokio::test]
 async fn writer_set_log_config_swaps_config() {

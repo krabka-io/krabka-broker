@@ -227,13 +227,11 @@ mod tests {
         config::NextGenConfig,
         offsets_log::fake::InMemoryOffsetsLog,
         share::actor::test_support::{
-            InitializedTopicSetup, ShareSubscriptionSetup, TopicMetadataSetup, heartbeat,
-            make_coordinator, metadata_with_topic, seed_initialized, subscribed_group,
-            subscribed_request,
+            TopicMetadataSetup, heartbeat, make_coordinator, metadata_with_topic, seed_initialized,
+            subscribed_group, subscribed_request,
         },
         test_support::{
-            MemberEpoch, assert_single_member_limit, assignment_interval_fixture,
-            heartbeat_write_failures,
+            assert_single_member_limit, assignment_interval_fixture, heartbeat_write_failures,
         },
     };
 

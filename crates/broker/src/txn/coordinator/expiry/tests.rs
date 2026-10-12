@@ -21,15 +21,10 @@ use crate::{
     handlers::describe_transactions::transaction_state_row,
     partition_registry::PartitionRegistry,
     producer_id_manager::ProducerIdManager,
-    test_support::{FakeMetadataSource, StandalonePartitionSetup, open_partition},
+    test_support::{FakeMetadataSource, open_partition},
     txn::{
-        bootstrap,
-        coordinator::test_support::{StateImageSetup, state_image},
-        id_expiration::sweep_once,
-        log_record::decode_key,
-        state::TxnEntry,
-        two_pc::NO_TIMEOUT_MS,
-        version::TxnVersion,
+        bootstrap, coordinator::test_support::state_image, id_expiration::sweep_once,
+        log_record::decode_key, state::TxnEntry, two_pc::NO_TIMEOUT_MS, version::TxnVersion,
     },
 };
 
