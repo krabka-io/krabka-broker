@@ -455,6 +455,15 @@ mod tests {
     /// transaction left, or `None` when the group has no expiration condition.
     #[test]
     fn cleanup_expires_only_unsubscribed_offsets_per_group_kind() {
+        /// The offsets a case is to expire, and whether the group is left
+        /// with none.
+        struct WantedExpiry {
+            topics: Vec<&'static str>,
+            all_expired: bool,
+        }
+        struct Row {
+            label: &'static str,
+            kind: GroupKind,
             commits: Vec<Commit<'static>>,
             /// The transactional keys still open.
             open: Vec<&'static str>,
@@ -464,15 +473,6 @@ mod tests {
 
         let stable = ClassicGroupState::Stable;
 
-        struct Row {
-            label: &'static str,
-            kind: GroupKind,
-        /// The offsets a case is to expire, and whether the group is left
-        /// with none.
-        struct WantedExpiry {
-            topics: Vec<&'static str>,
-            all_expired: bool,
-        }
         let rows = vec![
             Row {
                 label: "stable consumer group keeps its subscribed topic",
