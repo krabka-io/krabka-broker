@@ -458,9 +458,7 @@ mod tests {
             ("denied", AuthorizationResult::Deny),
         ]);
         let counts = HashMap::from([("t1", 4), ("t2", 8), ("denied", 4)]);
-        let none = named(&[]);
         let rows = cases();
-        ];
 
         for Case {
             name,
