@@ -237,7 +237,7 @@ mod tests {
             }),
             mutation("chain.seq", |b| b.chain.seq = ManifestSeq(5)),
             mutation("chain.prev_head", |b| {
-                b.chain.prev_head = ChainHead([8u8; 32])
+                b.chain.prev_head = ChainHead([8u8; 32]);
             }),
         ];
 
