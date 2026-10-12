@@ -6,11 +6,11 @@ use assert2::check;
 use tokio::sync::oneshot;
 
 use crate::coordinator::{
-    topic_deletion::DeletedTopic,
     test_support::{
         OffsetsRecord, TopicDeletionTombstonesSetup, offset_entry, parsed_offset_records,
         topic_deletion_tombstones,
     },
+    topic_deletion::DeletedTopic,
     unified::{
         actor::{
             GroupActorMessage,

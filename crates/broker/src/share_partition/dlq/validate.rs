@@ -174,7 +174,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::test_support::string_pairs as configs;
+    use crate::coordinator::test_support::{ConfigEntry, config_map as configs, entry};
 
     fn broker_config(node_id: NodeId, name: &str, value: &str) -> MetadataRecord {
         MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
@@ -187,8 +187,8 @@ mod tests {
     /// An image with `group` configured as `group_configs`, and the topic
     /// `topic` if `topic_configs` is `Some`.
     fn image(
-        group_configs: &[(&str, &str)],
-        topic_configs: Option<&[(&str, &str)]>,
+        group_configs: &[ConfigEntry<'_>],
+        topic_configs: Option<&[ConfigEntry<'_>]>,
     ) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1GroupConfig(GroupConfigRecord {
@@ -230,9 +230,9 @@ mod tests {
     /// which they apply.
     #[test]
     fn a_topic_is_checked_against_the_rules_in_kafkas_order() {
-        let named = |topic: &'static str| [(KEY_DLQ_TOPIC_NAME, topic)];
-        let enabled = [(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "true")];
-        let disabled = [(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "false")];
+        let named = |topic: &'static str| [entry(KEY_DLQ_TOPIC_NAME, topic)];
+        let enabled = [entry(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "true")];
+        let disabled = [entry(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "false")];
         let auto_create = |image: &mut MetadataImage| {
             image.apply(&broker_config(
                 DEFAULT_BROKER_CONFIG_NODE_ID,
@@ -305,7 +305,7 @@ mod tests {
     /// a broker's own value beats the cluster default.
     #[test]
     fn the_prefix_follows_the_dynamic_broker_config() {
-        let mut image = image(&[(KEY_DLQ_TOPIC_NAME, "orders.dead")], None);
+        let mut image = image(&[entry(KEY_DLQ_TOPIC_NAME, "orders.dead")], None);
         let mut settings = |records: &[MetadataRecord]| {
             for record in records {
                 image.apply(record);
@@ -341,43 +341,48 @@ mod tests {
 
     #[test]
     fn a_group_that_names_no_topic_has_no_settings() {
-        // (group configs, settings)
-        type Case = (
-            &'static [(&'static str, &'static str)],
-            Option<GroupSettings>,
-        );
+        struct Case {
+            group_configs: Vec<ConfigEntry<'static>>,
+            settings: Option<GroupSettings>,
+        }
         let cases: [Case; 4] = [
-            (&[], None),
-            (&[(KEY_DLQ_TOPIC_NAME, "  ")], None),
-            (
-                &[(KEY_DLQ_TOPIC_NAME, " dlq.g ")],
-                Some(GroupSettings {
+            Case {
+                group_configs: vec![],
+                settings: None,
+            },
+            Case {
+                group_configs: vec![entry(KEY_DLQ_TOPIC_NAME, "  ")],
+                settings: None,
+            },
+            Case {
+                group_configs: vec![entry(KEY_DLQ_TOPIC_NAME, " dlq.g ")],
+                settings: Some(GroupSettings {
                     topic: "dlq.g".into(),
                     copy_record: false,
                 }),
-            ),
-            (
-                &[
-                    (KEY_DLQ_TOPIC_NAME, "dlq.g"),
-                    (KEY_DLQ_COPY_RECORD_ENABLE, "TRUE"),
+            },
+            Case {
+                group_configs: vec![
+                    entry(KEY_DLQ_TOPIC_NAME, "dlq.g"),
+                    entry(KEY_DLQ_COPY_RECORD_ENABLE, "TRUE"),
                 ],
-                Some(GroupSettings {
+                settings: Some(GroupSettings {
                     topic: "dlq.g".into(),
                     copy_record: true,
                 }),
-            ),
+            },
         ];
 
         let actual: Vec<_> = cases
             .iter()
-            .map(|(group_configs, _)| GroupSettings::resolve(&image(group_configs, None), "g"))
+            .map(|case| GroupSettings::resolve(&image(&case.group_configs, None), "g"))
             .collect();
 
         assert!(
             actual
                 == cases
                     .iter()
-                    .map(|(_, want)| want.clone())
+                    .map(|case| case.settings.clone())
                     .collect::<Vec<_>>()
         );
     }

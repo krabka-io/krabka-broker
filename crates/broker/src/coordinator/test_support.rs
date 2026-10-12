@@ -48,6 +48,28 @@ pub(crate) fn sorted_epoch_pairs(
     pairs
 }
 
+/// A configuration key and its value.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ConfigEntry<'a> {
+    pub key: &'a str,
+    pub value: &'a str,
+}
+
+/// The configuration entry `key` set to `value`.
+pub(crate) fn entry<'a>(key: &'a str, value: &'a str) -> ConfigEntry<'a> {
+    ConfigEntry { key, value }
+}
+
+/// Owned configuration entries by key.
+pub(crate) fn config_map(
+    entries: &[ConfigEntry<'_>],
+) -> std::collections::BTreeMap<String, String> {
+    entries
+        .iter()
+        .map(|entry| (entry.key.to_owned(), entry.value.to_owned()))
+        .collect()
+}
+
 /// A topic-delta fixture using cluster id one and applying records in order.
 pub(crate) fn metadata_delta_image(
     records: &[krabka_metadata::MetadataRecord],

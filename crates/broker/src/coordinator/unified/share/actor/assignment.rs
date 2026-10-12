@@ -97,7 +97,10 @@ pub(super) fn reconcile(
     let topics = input.topic_metadata();
     let mut assignable: HashMap<Uuid, HashSet<i32>> = HashMap::new();
     for tp in &state.initialized {
-        assignable.entry(tp.topic_id).or_default().insert(tp.partition);
+        assignable
+            .entry(tp.topic_id)
+            .or_default()
+            .insert(tp.partition);
     }
     let assignment = ShareGroupAssignor.assign(&group, &topics, Some(&assignable));
     Ok(Some(state.install_target(assignment, wall_clock_ms())))
@@ -140,7 +143,10 @@ fn initialized_assignment_pending(state: &ShareGroupState) -> bool {
     }
     let mut initialized: HashMap<Uuid, HashSet<i32>> = HashMap::new();
     for tp in &state.initialized {
-        initialized.entry(tp.topic_id).or_default().insert(tp.partition);
+        initialized
+            .entry(tp.topic_id)
+            .or_default()
+            .insert(tp.partition);
     }
     initialized.iter().any(|(topic_id, partitions)| {
         state
