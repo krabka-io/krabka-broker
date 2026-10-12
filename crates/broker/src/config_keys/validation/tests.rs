@@ -474,9 +474,8 @@ struct TierCase<'a> {
 }
 
 /// The tiered-storage rows: the broker's tier state, the map, and Kafka's result.
-fn tier_cases() -> Vec<TierCase<'static>> {
-    let policy_message = Err(REMOTE_STORAGE_POLICY_MESSAGE.to_owned());
-    let cases: Vec<TierCase<'static>> = vec![
+fn tier_cases_a() -> Vec<TierCase<'static>> {
+    vec![
         TierCase {
             tier_on: false,
             pairs: vec![ConfigPair {
@@ -618,6 +617,13 @@ fn tier_cases() -> Vec<TierCase<'static>> {
                     .to_owned(),
             ),
         },
+    ]
+}
+
+/// The tiered-storage rows: the broker's tier state, the map, and Kafka's result.
+fn tier_cases_b() -> Vec<TierCase<'static>> {
+    let policy_message = Err(REMOTE_STORAGE_POLICY_MESSAGE.to_owned());
+    vec![
         TierCase {
             tier_on: true,
             pairs: vec![
@@ -763,6 +769,12 @@ fn tier_cases() -> Vec<TierCase<'static>> {
                     .to_owned(),
             ),
         },
+    ]
+}
+
+/// The tiered-storage rows: the broker's tier state, the map, and Kafka's result.
+fn tier_cases_c() -> Vec<TierCase<'static>> {
+    vec![
         TierCase {
             tier_on: true,
             pairs: vec![ConfigPair {
@@ -787,7 +799,14 @@ fn tier_cases() -> Vec<TierCase<'static>> {
             }],
             want: Ok(()),
         },
-    ];
+    ]
+}
+
+/// The tiered-storage rows: the broker's tier state, the map, and Kafka's result.
+fn tier_cases() -> Vec<TierCase<'static>> {
+    let mut cases = tier_cases_a();
+    cases.extend(tier_cases_b());
+    cases.extend(tier_cases_c());
     cases
 }
 

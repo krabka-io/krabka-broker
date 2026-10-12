@@ -247,7 +247,7 @@ barrier_max_topics_per_group = 16
     #[test]
     fn share_coordinator_keys_follow_kafka_defaults_and_bounds() {
         struct Row {
-            row: &'static str,
+            label: &'static str,
             /// The `[runtime]` body.
             body: &'static str,
             /// The expected share coordinator config.
@@ -267,108 +267,108 @@ barrier_max_topics_per_group = 16
         };
         let rows: [Row; 20] = [
             Row {
-                row: "defaults",
+                label: "defaults",
                 body: "",
                 expected: Some(ShareCoordinatorConfig::default()),
             },
             Row {
-                row: "snapshot cadence at its ceiling",
+                label: "snapshot cadence at its ceiling",
                 body: "share_snapshot_update_records_per_snapshot = 500",
                 expected: with(|c| c.snapshot_update_records_per_snapshot = 500),
             },
             Row {
-                row: "snapshot cadence of zero",
+                label: "snapshot cadence of zero",
                 body: "share_snapshot_update_records_per_snapshot = 0",
                 expected: with(|c| c.snapshot_update_records_per_snapshot = 0),
             },
             Row {
-                row: "snapshot cadence above 500",
+                label: "snapshot cadence above 500",
                 body: "share_snapshot_update_records_per_snapshot = 501",
                 expected: None,
             },
             Row {
-                row: "write timeout",
+                label: "write timeout",
                 body: "share_coordinator_write_timeout = \"250ms\"",
                 expected: with(|c| c.write_timeout = Duration::from_millis(250)),
             },
             Row {
-                row: "zero write timeout",
+                label: "zero write timeout",
                 body: "share_coordinator_write_timeout = \"0ms\"",
                 expected: None,
             },
             Row {
-                row: "prune interval",
+                label: "prune interval",
                 body: "share_state_prune_interval = \"1s\"",
                 expected: with(|c| c.state_topic_prune_interval = Duration::from_secs(1)),
             },
             Row {
-                row: "cold snapshot interval above the INT ceiling",
+                label: "cold snapshot interval above the INT ceiling",
                 body: "share_cold_partition_snapshot_interval = \"2147483648ms\"",
                 expected: None,
             },
             Row {
-                row: "load buffer size",
+                label: "load buffer size",
                 body: "share_coordinator_load_buffer_size = \"2MiB\"",
                 expected: Some(ShareCoordinatorConfig::default()),
             },
             Row {
-                row: "zstd state topic codec",
+                label: "zstd state topic codec",
                 body: "share_state_compression_codec = 4",
                 expected: with(|c| c.state_topic_compression_codec = CompressionType::Zstd),
             },
             Row {
-                row: "unknown state topic codec",
+                label: "unknown state topic codec",
                 body: "share_state_compression_codec = 5",
                 expected: None,
             },
             Row {
-                row: "negative state topic codec",
+                label: "negative state topic codec",
                 body: "share_state_compression_codec = -1",
                 expected: None,
             },
             Row {
-                row: "four coordinator threads",
+                label: "four coordinator threads",
                 body: "share_coordinator_threads = 4",
                 expected: with(|c| c.threads = 4),
             },
             Row {
-                row: "zero coordinator threads",
+                label: "zero coordinator threads",
                 body: "share_coordinator_threads = 0",
                 expected: None,
             },
             Row {
-                row: "adaptive append linger",
+                label: "adaptive append linger",
                 body: "share_coordinator_append_linger_ms = -1",
                 expected: Some(ShareCoordinatorConfig::default()),
             },
             Row {
-                row: "zero append linger",
+                label: "zero append linger",
                 body: "share_coordinator_append_linger_ms = 0",
                 expected: with(|c| c.append_linger = Some(Duration::ZERO)),
             },
             Row {
-                row: "append linger below -1",
+                label: "append linger below -1",
                 body: "share_coordinator_append_linger_ms = -2",
                 expected: None,
             },
             Row {
-                row: "cached buffer at its floor",
+                label: "cached buffer at its floor",
                 body: "share_coordinator_cached_buffer_max_bytes = \"512KiB\"",
                 expected: with(|c| c.cached_buffer_max_bytes = krabka_units::kibibytes(512)),
             },
             Row {
-                row: "cached buffer below 512KiB",
+                label: "cached buffer below 512KiB",
                 body: "share_coordinator_cached_buffer_max_bytes = \"524287B\"",
                 expected: None,
             },
             Row {
-                row: "cached buffer above the INT ceiling",
+                label: "cached buffer above the INT ceiling",
                 body: "share_coordinator_cached_buffer_max_bytes = \"2GiB\"",
                 expected: None,
             },
         ];
         for Row {
-            row,
+            label,
             body,
             expected,
         } in rows
@@ -380,7 +380,7 @@ barrier_max_topics_per_group = 16
                 .apply_to(&mut cfg)
                 .ok()
                 .map(|()| *cfg.share_coordinator);
-            assert!(applied == expected, "{row}");
+            assert!(applied == expected, "{label}");
         }
         let file: FileConfig =
             toml::from_str("[runtime]\nshare_coordinator_load_buffer_size = \"2MiB\"\n")

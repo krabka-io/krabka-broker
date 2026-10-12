@@ -164,7 +164,7 @@ fn rejects_non_positive_runtime_scalars() {
 }
 
 /// The additional runtime scalars, each with the change that `validate` refuses.
-fn additional_scalar_cases() -> Vec<RuntimeInvalidator> {
+fn additional_scalar_cases_a() -> Vec<RuntimeInvalidator> {
     vec![
         RuntimeInvalidator {
             expected: "self_registration_max_attempts must be positive",
@@ -310,6 +310,12 @@ fn additional_scalar_cases() -> Vec<RuntimeInvalidator> {
                 c.partition_writer_queue_depth = 0;
             },
         },
+    ]
+}
+
+/// The additional runtime scalars, each with the change that `validate` refuses.
+fn additional_scalar_cases_b() -> Vec<RuntimeInvalidator> {
+    vec![
         RuntimeInvalidator {
             expected: "default_min_insync_replicas must be positive",
             invalidate: |c| {
@@ -447,6 +453,13 @@ fn additional_scalar_cases() -> Vec<RuntimeInvalidator> {
             },
         },
     ]
+}
+
+/// The additional runtime scalars, each with the change that `validate` refuses.
+fn additional_scalar_cases() -> Vec<RuntimeInvalidator> {
+    let mut cases = additional_scalar_cases_a();
+    cases.extend(additional_scalar_cases_b());
+    cases
 }
 
 #[test]
