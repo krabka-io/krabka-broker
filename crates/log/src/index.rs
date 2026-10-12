@@ -87,23 +87,34 @@ macro_rules! index_methods {
     };
 }
 
+/// An explicit sparse-index entry a test writes: a key and its coordinate.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IndexSeed<Key> {
+    pub(crate) key: Key,
+    pub(crate) coordinate: u32,
+}
+
 /// Write and flush explicit sparse-index entries, then close the writer before reopening.
 #[cfg(test)]
 macro_rules! seed_index_fixture {
     ($index:ident, $key:ty) => {
-        fn append_entries(index: &mut $index, entries: &[($key, u32)]) {
-            for &(key, coordinate) in entries {
+        fn append_entries(index: &mut $index, entries: &[crate::index::IndexSeed<$key>]) {
+            for &crate::index::IndexSeed { key, coordinate } in entries {
                 index.append(key, coordinate).unwrap();
             }
         }
 
-        fn write_entries(path: &std::path::Path, entries: &[($key, u32)]) {
+        fn write_entries(path: &std::path::Path, entries: &[crate::index::IndexSeed<$key>]) {
             let mut index = $index::open(path).unwrap();
             append_entries(&mut index, entries);
             index.flush().unwrap();
         }
 
-        fn written_index(name: &str, entries: &[($key, u32)]) -> crate::test_support::TempPath {
+        fn written_index(
+            name: &str,
+            entries: &[crate::index::IndexSeed<$key>],
+        ) -> crate::test_support::TempPath {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(name);
             write_entries(&path, entries);
@@ -112,7 +123,7 @@ macro_rules! seed_index_fixture {
 
         fn populated_index(
             name: &str,
-            entries: &[($key, u32)],
+            entries: &[crate::index::IndexSeed<$key>],
         ) -> crate::index::IndexFixture<$index> {
             let crate::index::IndexFixture {
                 dir,

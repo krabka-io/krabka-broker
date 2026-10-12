@@ -128,7 +128,10 @@ mod time_tests {
     use assert2::check;
 
     use super::*;
-    use crate::{index::IndexFixture, test_support::TempPath};
+    use crate::{
+        index::{IndexFixture, IndexSeed},
+        test_support::TempPath,
+    };
 
     seed_index_fixture!(TimeIndex, i64);
 
@@ -173,19 +176,25 @@ mod time_tests {
     /// order.
     #[test]
     fn maybe_append_takes_only_strictly_newer_timestamps() {
+        let seed = |key, coordinate| IndexSeed { key, coordinate };
         for (label, existing, appended, want) in [
             ("no timestamp on an empty index", vec![], (-1, 0), vec![]),
             ("first timestamp", vec![], (0, 0), vec![(0, 0)]),
             (
                 "same timestamp, later offset",
-                vec![(100, 5)],
+                vec![seed(100, 5)],
                 (100, 9),
                 vec![(100, 5)],
             ),
-            ("older timestamp", vec![(100, 5)], (99, 9), vec![(100, 5)]),
+            (
+                "older timestamp",
+                vec![seed(100, 5)],
+                (99, 9),
+                vec![(100, 5)],
+            ),
             (
                 "newer timestamp",
-                vec![(100, 5)],
+                vec![seed(100, 5)],
                 (101, 9),
                 vec![(100, 5), (101, 9)],
             ),
@@ -210,7 +219,20 @@ mod time_tests {
             index: idx,
         } = populated_index(
             "00000000000000000000.timeindex",
-            &[(1_000_000, 0), (2_000_000, 100), (3_000_000, 200)],
+            &[
+                IndexSeed {
+                    key: 1_000_000,
+                    coordinate: 0,
+                },
+                IndexSeed {
+                    key: 2_000_000,
+                    coordinate: 100,
+                },
+                IndexSeed {
+                    key: 3_000_000,
+                    coordinate: 200,
+                },
+            ],
         );
         for (name, ts, want) in [
             ("before first", 0, 0),
@@ -225,8 +247,19 @@ mod time_tests {
 
     #[test]
     fn persists_across_reopen() {
-        let TempPath { dir: _dir, path } =
-            written_index("00000000000000000000.timeindex", &[(1, 0), (2, 50)]);
+        let TempPath { dir: _dir, path } = written_index(
+            "00000000000000000000.timeindex",
+            &[
+                IndexSeed {
+                    key: 1,
+                    coordinate: 0,
+                },
+                IndexSeed {
+                    key: 2,
+                    coordinate: 50,
+                },
+            ],
+        );
         let idx = TimeIndex::open(&path).unwrap();
         assert2::assert!(idx.entry_count() == 2);
     }
@@ -235,7 +268,16 @@ mod time_tests {
     fn ignores_trailing_zero_padding() {
         let TempPath { dir: _dir, path } = written_index(
             "00000000000000000000.timeindex",
-            &[(1_000, 0), (2_000, 100)],
+            &[
+                IndexSeed {
+                    key: 1_000,
+                    coordinate: 0,
+                },
+                IndexSeed {
+                    key: 2_000,
+                    coordinate: 100,
+                },
+            ],
         );
         let mut f = OpenOptions::new().append(true).open(&path).unwrap();
         f.write_all(&[0u8; TIME_ENTRY_SIZE * 2]).unwrap();

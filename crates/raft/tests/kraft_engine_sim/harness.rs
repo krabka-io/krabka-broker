@@ -228,7 +228,6 @@ where
 }
 
 /// The leader and epoch that one engine currently believes.
-#[derive(Debug)]
 struct LeaderView {
     node: NodeId,
     leader: Option<NodeId>,
@@ -282,7 +281,10 @@ pub(crate) async fn await_single_leader(
         }
         assert2::assert!(
             tokio::time::Instant::now() < deadline,
-            "no single leader before timeout; states={snap:?}"
+            "no single leader before timeout; states={:?}",
+            snap.iter()
+                .map(|view| format!("{:?} sees {:?} at {}", view.node, view.leader, view.epoch))
+                .collect::<Vec<_>>()
         );
         tokio::task::yield_now().await;
     }
