@@ -394,23 +394,28 @@ fn stable_row(offset: krabka_ids::Offset) -> OffsetFetchResponsePartitions {
 /// must be told to retry -- `UNSTABLE_OFFSET_COMMIT (88)` -- while its own
 /// transaction's offset commit is still waiting for a marker.
 ///
-/// The group already has a stable offset of 3 when the transaction commits 9.
-/// Handing back 3 while the transaction is open is the rewind this test pins
-/// down: on a consume-process-produce restart the consumer would reprocess
-/// records the transaction had already committed. Kafka answers 88 with the
-/// invalid-offset sentinels instead, and only after `EndTxn` writes the commit
-/// marker does the same request read 9.
-#[tokio::test]
-async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
+/// The group starts at offset 3 and the transaction proposes 9. Strict reads
+/// retry while it is open; after resolution a commit publishes 9 and an abort
+/// leaves 3 intact.
+#[yare::parameterized(
+    commit = { "commit", TransactionOutcome::Commit, 9 },
+    abort = { "abort", TransactionOutcome::Abort, 3 },
+)]
+#[test_macro(tokio::test)]
+async fn require_stable_offset_fetch_tracks_transaction_outcome(
+    label: &str,
+    outcome: TransactionOutcome,
+    settled_offset: i64,
+) {
     let p = start().await;
     create_topic(&p.client).await;
     let topic_id = topic_id_for(&p.client, TOPIC).await;
 
-    let tid = "tid-require-stable";
-    let group = "g-require-stable";
+    let tid = format!("tid-require-stable-{label}");
+    let group = format!("g-require-stable-{label}");
 
-    commit_stable_offset(&p.client, group, krabka_ids::Offset(3)).await;
-    let (pid, epoch) = begin_and_commit_offsets(&p.client, tid, group, 9).await;
+    commit_stable_offset(&p.client, &group, krabka_ids::Offset(3)).await;
+    let (pid, epoch) = begin_and_commit_offsets(&p.client, &tid, &group, 9).await;
 
     let unstable = OffsetFetchResponsePartitions {
         partition_index: 0,
@@ -420,62 +425,31 @@ async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
         error_code: 88, // UNSTABLE_OFFSET_COMMIT
         ..Default::default()
     };
+    let strict = fetch_at_v10(&p.client, &group, topic_id, OffsetStability::RequireStable).await;
+    assert2::assert!(strict == v10_response(&group, topic_id, unstable));
 
-    // require_stable = true, transaction still open: retry, do not rewind.
-    let strict = fetch_at_v10(&p.client, group, topic_id, OffsetStability::RequireStable).await;
-    assert!(strict == v10_response(group, topic_id, unstable));
-
-    // require_stable = false is unchanged by KIP-447: it still reads the
-    // stable offset the open transaction is about to replace.
-    let relaxed = fetch_at_v10(&p.client, group, topic_id, OffsetStability::AllowPending).await;
-    assert!(relaxed == v10_response(group, topic_id, stable_row(krabka_ids::Offset(3))));
+    let relaxed = fetch_at_v10(&p.client, &group, topic_id, OffsetStability::AllowPending).await;
+    assert2::assert!(relaxed == v10_response(&group, topic_id, stable_row(krabka_ids::Offset(3))));
 
     finish_transaction(
         &p.client,
-        tid,
+        &tid,
         EndTransactionSetup {
             producer: ProducerIdentity::from_wire((pid, epoch)),
-            ..Default::default()
+            outcome,
         },
     )
     .await;
 
-    // The marker resolved the transaction: the offset is stable again, at the
-    // value the transaction committed.
-    let settled = fetch_at_v10(&p.client, group, topic_id, OffsetStability::RequireStable).await;
-    assert!(settled == v10_response(group, topic_id, stable_row(krabka_ids::Offset(9))));
-
-    p.broker.shutdown().await;
-}
-
-/// An aborted transaction also stops answering `UNSTABLE_OFFSET_COMMIT`: the
-/// abort marker drops the pending marks without publishing anything, so a
-/// `require_stable` fetch goes back to the group's stable offset rather than
-/// telling the consumer to retry for ever.
-#[tokio::test]
-async fn require_stable_offset_fetch_becomes_stable_again_after_an_abort_marker() {
-    let p = start().await;
-    create_topic(&p.client).await;
-    let topic_id = topic_id_for(&p.client, TOPIC).await;
-
-    let tid = "tid-require-stable-abort";
-    let group = "g-require-stable-abort";
-
-    commit_stable_offset(&p.client, group, krabka_ids::Offset(3)).await;
-    let (pid, epoch) = begin_and_commit_offsets(&p.client, tid, group, 9).await;
-
-    finish_transaction(
-        &p.client,
-        tid,
-        EndTransactionSetup {
-            producer: ProducerIdentity::from_wire((pid, epoch)),
-            outcome: TransactionOutcome::Abort,
-        },
-    )
-    .await;
-
-    let settled = fetch_at_v10(&p.client, group, topic_id, OffsetStability::RequireStable).await;
-    assert!(settled == v10_response(group, topic_id, stable_row(krabka_ids::Offset(3))));
+    let settled = fetch_at_v10(&p.client, &group, topic_id, OffsetStability::RequireStable).await;
+    assert2::assert!(
+        settled
+            == v10_response(
+                &group,
+                topic_id,
+                stable_row(krabka_ids::Offset(settled_offset))
+            )
+    );
 
     p.broker.shutdown().await;
 }
