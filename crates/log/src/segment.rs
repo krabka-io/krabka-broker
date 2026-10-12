@@ -43,7 +43,7 @@ use crate::{
 /// The `base_offset` identifies a segment. It is the absolute offset of the
 /// segment's first record, encoded into the segment's 20-digit zero-padded
 /// filename. [`Segment::create`] makes a new active segment.
-/// [`Segment::open`] opens a read-only sealed segment, and
+/// [`Segment::open`] validates and opens a sealed segment for reading, and
 /// [`Segment::open_active`] opens an active segment with tail recovery.
 #[derive(Debug)]
 pub struct Segment {
@@ -239,10 +239,16 @@ impl Segment {
     /// index is full one entry early.
     #[must_use]
     pub(crate) fn indexes_full(&self, segment_index_size: ByteSize) -> bool {
+        self.indexes_full_after(segment_index_size, 0)
+    }
+
+    /// Check capacity with at most one new entry in each index per batch.
+    pub(crate) fn indexes_full_after(&self, segment_index_size: ByteSize, batches: usize) -> bool {
         let max_entries = |entry_size: usize| {
             segment_index_size.bytes_u64() / u64::try_from(entry_size).unwrap_or(u64::MAX)
         };
-        let entries = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
+        let entries =
+            |count: usize| u64::try_from(count.saturating_add(batches)).unwrap_or(u64::MAX);
         entries(self.offset_index.entry_count()) >= max_entries(OFFSET_ENTRY_SIZE)
             || entries(self.time_index.entry_count()).saturating_add(1)
                 >= max_entries(TIME_ENTRY_SIZE)
@@ -282,7 +288,7 @@ impl Segment {
     /// files. The compactor uses it to read the `.log` file directly and to
     /// avoid the `Segment::read` path. That path depends on the in-memory
     /// `last_offset`, which is stale for sealed segments loaded through
-    /// `Segment::open`.
+    /// the log's no-scan loader.
     #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
