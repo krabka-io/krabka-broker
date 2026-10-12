@@ -83,10 +83,7 @@ async fn produce_v1_message_set_is_upconverted_and_round_trips() {
     let legacy_bytes = build_v1_message_set(&[b"alpha", b"beta", b"gamma"]);
 
     let err = produce_legacy(&p, "legacy", topic_id, legacy_bytes).await;
-    assert!(
-        err == 0,
-        "Produce up-conversion must succeed: {err}"
-    );
+    assert!(err == 0, "Produce up-conversion must succeed: {err}");
 
     // Fetch the stored records back and verify they survived the
     // up-conversion. The wire response is v2, so the fetched batch

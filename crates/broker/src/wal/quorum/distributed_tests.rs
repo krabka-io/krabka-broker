@@ -15,6 +15,7 @@ use super::{
     test_support::{append_source, batch, distributed_store, open_log, source_log},
 };
 use crate::{
+    error::BrokerError,
     metrics::BrokerMetrics,
     wal::{WalStore, quorum::registry::ShardId},
 };
@@ -40,7 +41,7 @@ async fn wait_for_leader_vote(store: &QuorumWalStore, offset: Offset) {
 async fn spawn_sync_while_leader_vote_is_pending(
     store: &Arc<QuorumWalStore>,
     offset: Offset,
-) -> tokio::task::JoinHandle<Result<Offset, crate::error::BrokerError>> {
+) -> tokio::task::JoinHandle<Result<Offset, BrokerError>> {
     let syncing = Arc::clone(store);
     let mut sync = tokio::spawn(async move { syncing.sync_durable(offset).await });
     assert!(

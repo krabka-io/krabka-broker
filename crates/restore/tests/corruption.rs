@@ -258,7 +258,10 @@ fn truncate_log_mid_batch(path: &StdPath) {
     file.set_len(full_len / 2).expect("truncate log file");
 }
 
-fn single_segment_fixture(topic_id: u128, segment_id: u128) -> (tempfile::TempDir, tempfile::TempDir) {
+fn single_segment_fixture(
+    topic_id: u128,
+    segment_id: u128,
+) -> (tempfile::TempDir, tempfile::TempDir) {
     let archive = tempfile::tempdir().expect("archive root");
     let target_parent = tempfile::tempdir().expect("target parent");
     archive_segment(

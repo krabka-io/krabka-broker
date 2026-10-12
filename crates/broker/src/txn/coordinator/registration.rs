@@ -211,6 +211,7 @@ mod tests {
 
     use super::{TxnCoordinator, TxnState, TxnVersion};
     use crate::{
+        codes::{INVALID_PRODUCER_EPOCH, PRODUCER_FENCED},
         partition::Partition,
         test_support::{StandalonePartitionSetup, open_partition},
         txn::{
@@ -329,10 +330,7 @@ mod tests {
             entry.state = TxnState::Dead;
             entry
         };
-        for (ver, expected_code) in [
-            (1, crate::codes::INVALID_PRODUCER_EPOCH),
-            (3, crate::codes::PRODUCER_FENCED),
-        ] {
+        for (ver, expected_code) in [(1, INVALID_PRODUCER_EPOCH), (3, PRODUCER_FENCED)] {
             coordinator
                 .state
                 .insert("tid-a".into(), Arc::new(Mutex::new(dead())));

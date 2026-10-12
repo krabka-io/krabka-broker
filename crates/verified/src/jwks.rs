@@ -26,6 +26,7 @@ model_types! {
 }
 
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 pub fn jwks_cache_facts_admissible_at(facts: JwksCacheFacts, now_ms: i64) -> bool {
     pearlite! {

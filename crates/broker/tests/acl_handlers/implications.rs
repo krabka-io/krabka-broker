@@ -25,9 +25,11 @@ async fn metadata_implication(operation: krabka_metadata::AclOperation) {
     let resp = named_metadata_as_alice(addr, "foo").await;
     handle.shutdown().await;
 
-    assert_eq!(resp.topics.len(), 1, "one topic row in response");
-    let [row] = &resp.topics[..] else { unreachable!() };
-    assert_eq!(row.name.as_deref(), Some("foo"));
+    assert!(resp.topics.len() == 1, "one topic row in response");
+    let [row] = &resp.topics[..] else {
+        unreachable!()
+    };
+    assert!(row.name.as_deref() == Some("foo"));
     assert!(
         row.error_code == 0,
         "{operation:?} implies Describe, foo must be visible to alice with error_code=0, got {row:?}"

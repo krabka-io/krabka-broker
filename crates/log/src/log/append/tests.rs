@@ -408,8 +408,8 @@ fn post_roll_partial_write_restores_the_previous_active_segment() {
 
     log.test_set_io(std::sync::Arc::new(FileIo));
     let (appended_offset, _) = log.append(&mut sample_batch(1)).unwrap();
-    assert_eq!(appended_offset, Offset(1));
-    assert_eq!(log.log_end_offset(), Offset(2));
+    assert!(appended_offset == Offset(1));
+    assert!(log.log_end_offset() == Offset(2));
 }
 
 #[test]

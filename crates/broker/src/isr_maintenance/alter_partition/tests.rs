@@ -179,11 +179,12 @@ impl ScriptedListener {
                 }));
                 let mut api_keys = Vec::new();
                 for (k, min_v, max_v) in advertised {
-                    let mut entry = ApiVersion::default();
-                    entry.api_key = k;
-                    entry.min_version = min_v;
-                    entry.max_version = max_v;
-                    api_keys.push(entry);
+                    api_keys.push(ApiVersion {
+                        api_key: k,
+                        min_version: min_v,
+                        max_version: max_v,
+                        ..Default::default()
+                    });
                 }
                 let api_versions = ApiVersionsResponse {
                     api_keys,

@@ -10,15 +10,12 @@ use std::sync::Arc;
 use assert2::check;
 use bytes::Bytes;
 use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicRecord};
-use krabka_protocol::{
-    owned::produce_response::PartitionProduceResponse,
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 use uuid::Uuid;
 
 use super::{
-    seed_batch,
     super::{PartitionInput, process_partition},
+    seed_batch,
 };
 use crate::{
     broker::spawn_partition,

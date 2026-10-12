@@ -290,7 +290,9 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
     let details = RemoteLogSegmentDetails::new(
         seg_size,
         RemoteLogSegmentState::CopySegmentStarted,
-        [(LeaderEpoch(0), export.base_offset.0)].into_iter().collect(),
+        [(LeaderEpoch(0), export.base_offset.0)]
+            .into_iter()
+            .collect(),
     );
     let metadata = RemoteLogSegmentMetadata::new(
         RemoteLogSegmentId::new(TopicIdPartition::new(topic_id, "orders", 0), segment_id),

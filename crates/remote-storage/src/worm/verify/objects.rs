@@ -292,8 +292,10 @@ mod tests {
 
         overwrite_log_body(&archive).await;
 
-        let mut deep_req = VerifyRequest::default();
-        deep_req.depth = VerifyDepth::Deep;
+        let deep_req = VerifyRequest {
+            depth: VerifyDepth::Deep,
+            ..Default::default()
+        };
         let report = archive.verify_with(&deep_req).await;
 
         check!(!report.ok());

@@ -19,12 +19,15 @@ use crate::{
     support::{
         sasl::{ScramCredentialSetup, provision_scram, sasl_plaintext_mechanisms, start_broker},
         sasl_plaintext_config,
-        wire::{CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding},
+        wire::{
+            CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
+            SocketExchangeSetup,
+        },
     },
 };
 
 pub(crate) mod common_imports {
-    pub use assert2::{assert, check};
+    pub use assert2::check;
     pub use krabka_broker::Broker;
     pub use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
     pub use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse;
@@ -53,7 +56,7 @@ pub async fn sasl_authenticate_round_trip(
 ) -> io::Result<Vec<u8>> {
     round_trip(
         stream,
-        crate::support::wire::SocketExchangeSetup {
+        SocketExchangeSetup {
             api_key: WireApiKey(36),
             version: WireApiVersion(2),
             correlation: WireCorrelationId(3),

@@ -24,7 +24,6 @@ use krabka_protocol::{
         share_acknowledge_response::{
             self, ShareAcknowledgeResponse, ShareAcknowledgeTopicResponse,
         },
-        share_fetch_request::ShareFetchRequest,
         share_fetch_response::{
             self, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
         },

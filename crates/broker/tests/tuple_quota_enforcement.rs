@@ -97,7 +97,9 @@ async fn tuple_quota_throttles_only_matching_client_id() {
         },
     )
     .await;
-    handle.wait_until_partition_present("tuple-quota-topic", 0).await;
+    handle
+        .wait_until_partition_present("tuple-quota-topic", 0)
+        .await;
     seed_alice_write_acl(&handle, "tuple-quota-topic").await;
 
     // Set tuple quota: (user=alice, client-id=app-x) producer_byte_rate=1024.

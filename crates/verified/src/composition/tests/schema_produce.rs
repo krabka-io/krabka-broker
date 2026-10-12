@@ -42,8 +42,15 @@ fn check_frontier(
         None
     };
     assert!(
-        schema_checked_produce_frontier(fields, enabled, policy, base_offset, last_delta, flags, producer_id_epoch)
-            == expected
+        schema_checked_produce_frontier(
+            fields,
+            enabled,
+            policy,
+            base_offset,
+            last_delta,
+            flags,
+            producer_id_epoch
+        ) == expected
     );
 }
 

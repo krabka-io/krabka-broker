@@ -226,7 +226,10 @@ protocol = "Plaintext"
 /// leadership pinned to `dc-a`.
 fn three_site_profile() -> StretchProfile {
     StretchProfile {
-        sites: ["dc-a", "dc-b", "dc-w"].into_iter().map(String::from).collect(),
+        sites: ["dc-a", "dc-b", "dc-w"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
         witness_site: String::from("dc-w"),
         preferred_leader_site: String::from("dc-a"),
     }

@@ -9,17 +9,14 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use bytes::Bytes;
 
-use super::{
-    actor::MetadataProvider,
-    config::NextGenConfig,
-    group_coordinator::GroupCoordinator,
-    persistence_next_gen, reconciler,
-    share::{self, config::ShareGroupConfig},
-    streams::{self, config::StreamsGroupConfig},
+pub(crate) use super::{
+    actor::MetadataProvider, config::NextGenConfig, group_coordinator::GroupCoordinator,
+    offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
+    share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
 };
+use super::{persistence_next_gen, reconciler, share, streams};
 use crate::{
     codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
-    coordinator::unified::offsets_log::fake::InMemoryOffsetsLog,
     error::BrokerError,
     metadata_source::MetadataSource,
     network::client::InterBrokerClient,

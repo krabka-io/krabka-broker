@@ -285,7 +285,7 @@ fn write_file_payload_vectored(file: &std::fs::File, header: &[u8], body: &[u8])
     let bufs = [IoSlice::new(header), IoSlice::new(body)];
     let mut writer = file;
     let bytes_written = writer.write_vectored(&bufs).unwrap();
-    assert_eq!(bytes_written, header.len() + body.len());
+    assert2::assert!(bytes_written == header.len() + body.len());
 }
 
 #[cfg(not(unix))]

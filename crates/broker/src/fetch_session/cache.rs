@@ -252,6 +252,15 @@ mod tests {
         )
     }
 
+    fn cached_partitions(
+        partitions: std::ops::RangeInclusive<i32>,
+    ) -> Vec<(FetchSessionKey, CachedPartitionState)> {
+        partitions
+            .map(krabka_ids::PartitionIndex)
+            .map(cached_partition)
+            .collect()
+    }
+
     #[bon::builder]
     fn two_partition_session(principal: &str, partition_ids: [i32; 2]) -> SessionAllocationSetup {
         SessionAllocationSetup {
@@ -279,11 +288,7 @@ mod tests {
             &cache,
             SessionAllocationSetup {
                 principal: "b".into(),
-                partitions: vec![
-                    cached_partition(krabka_ids::PartitionIndex(2)),
-                    cached_partition(krabka_ids::PartitionIndex(3)),
-                    cached_partition(krabka_ids::PartitionIndex(4)),
-                ],
+                partitions: cached_partitions(2..=4),
                 ..Default::default()
             },
         );
@@ -358,13 +363,7 @@ mod tests {
             &cache,
             SessionAllocationSetup {
                 principal: "a".into(),
-                partitions: vec![
-                    cached_partition(krabka_ids::PartitionIndex(0)),
-                    cached_partition(krabka_ids::PartitionIndex(1)),
-                    cached_partition(krabka_ids::PartitionIndex(2)),
-                    cached_partition(krabka_ids::PartitionIndex(3)),
-                    cached_partition(krabka_ids::PartitionIndex(4)),
-                ],
+                partitions: cached_partitions(0..=4),
                 ..Default::default()
             },
         );

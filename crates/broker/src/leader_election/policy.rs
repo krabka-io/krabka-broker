@@ -542,6 +542,14 @@ mod tests {
         })
     }
 
+    fn expected_unclean_election(leader: NodeId) -> super::FailoverDecision {
+        super::FailoverDecision::Elect {
+            leader,
+            isr: vec![leader],
+            unclean: true,
+        }
+    }
+
     #[test]
     fn clean_failover_skips_a_witness_that_sorts_first_in_the_isr() {
         // Leader 1 dies. The ISR order is [1, 2, 3] and broker 2 is the
@@ -610,14 +618,7 @@ mod tests {
             RecoveryStrategy::None,
             true,
         );
-        assert_eq!(
-            decision,
-            super::FailoverDecision::Elect {
-                leader: NodeId(3),
-                isr: vec![NodeId(3)],
-                unclean: true,
-            }
-        );
+        assert!(decision == expected_unclean_election(NodeId(3)));
     }
 
     #[test]
@@ -777,15 +778,7 @@ mod tests {
                 RecoveryStrategy::None,
                 true,
             );
-            assert!(
-                decision
-                    == super::FailoverDecision::Elect {
-                        leader: NodeId(3),
-                        isr: vec![NodeId(3)],
-                        unclean: true,
-                    },
-                "{label}"
-            );
+            assert!(decision == expected_unclean_election(NodeId(3)), "{label}");
         }
     }
 

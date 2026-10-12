@@ -63,9 +63,8 @@ impl Sim {
                 ],
             )
         }));
-        let (deadline, id, kind) = match best {
-            Some(hit) => hit,
-            None => return false,
+        let Some((deadline, id, kind)) = best else {
+            return false;
         };
         self.now = self.now.max(deadline);
         let node = self.nodes.get_mut(&id).unwrap();

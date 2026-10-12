@@ -155,18 +155,12 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
         tokio::time::resume();
         release_writer.notify_one();
         refresh_and_wait(&coordinator, &leadership).await;
-        assert!(
-            coordinator.read_summary("g", topic_id, 0).await == Ok(Some((2, 0, Offset(10), 0)))
-        );
-        assert!(
-            coordinator
-                .initialize(&image, "g", topic_id, 0, 1, Offset(20))
-                .await
-                == Err(ShareStateError::Refused {
-                    code: codes::FENCED_STATE_EPOCH,
-                    message: message::FENCED_STATE_EPOCH,
-                })
-        );
+        super::super::test_support::assert_recovered_epoch_is_fenced()
+            .coordinator(&coordinator)
+            .topic_image(&image)
+            .topic_id(topic_id)
+            .call()
+            .await;
         coordinator.reload_all_partitions_for_test().await;
         assert!(
             coordinator.read_summary("g", topic_id, 0).await == Ok(Some((2, 0, Offset(10), 0)))
@@ -482,7 +476,10 @@ async fn replay_snapshot_offset_is_base_plus_delta() {
 
     coord.reload_all_partitions_for_test().await;
 
-    let st = coord.state_for_test("g", topic_id, 0).await.expect("recovered");
+    let st = coord
+        .state_for_test("g", topic_id, 0)
+        .await
+        .expect("recovered");
     check!(st.leader_epoch == 3);
     check!(st.start_offset == 20);
     // The snapshot record sits at base_offset(0) + offset_delta(1) == 1.

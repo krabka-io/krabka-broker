@@ -301,9 +301,7 @@ mod tests {
     /// `handleShareGroupHeartbeat`. A principal denied `Read` on the group
     /// still gets `UNSUPPORTED_VERSION`, not `GROUP_AUTHORIZATION_FAILED`,
     /// when the protocol itself is unavailable.
-    async fn handle_denied_group_heartbeat(
-        broker: &crate::broker::Broker,
-    ) -> ShareGroupHeartbeatResponse {
+    async fn handle_denied_group_heartbeat(broker: &Broker) -> ShareGroupHeartbeatResponse {
         test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group", vec!["t1"]);
         handle(broker, req, VERSION, &ctx)

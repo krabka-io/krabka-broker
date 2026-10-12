@@ -13,7 +13,12 @@ fn visible_oracle(
 ) -> ListOffsetsSelectionDecision {
     let boundary = if request.0 == -1 {
         if request.1 == 1 {
-            pending_starts.iter().copied().chain([frontiers.2]).min().unwrap()
+            pending_starts
+                .iter()
+                .copied()
+                .chain([frontiers.2])
+                .min()
+                .unwrap()
         } else {
             frontiers.2
         }

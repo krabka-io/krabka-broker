@@ -57,9 +57,8 @@ async fn drained_classic_group_converts_and_preserves_offsets() {
         })
         .await
         .expect("OffsetCommit");
-    assert_eq!(
-        cr.topics[0].partitions[0].error_code,
-        ERR_NONE,
+    assert!(
+        cr.topics[0].partitions[0].error_code == ERR_NONE,
         "OffsetCommit failed: {cr:?}"
     );
 

@@ -19,7 +19,7 @@ use crate::{
             expected_response, expected_result, request, seed_controller_quota, seed_topic,
             topic_req,
         },
-        test_support::{TopicPartitionCount, replica_availability},
+        test_support::{TopicPartitionCount, replica_availability, replica_nodes_from_partitions},
     },
     test_support::{
         DenyAll, begin_controlled_shutdown, fence_remote_broker, make_witness, peer, principal,
@@ -551,10 +551,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
                     topic: "grow".into(),
                     partition,
                     leader,
-                    replicas: replicas
-                        .iter()
-                        .map(|&id| n(u64::try_from(id).expect("broker id")))
-                        .collect(),
+                    replicas: replica_nodes_from_partitions(replicas),
                     isr,
                     leader_epoch: krabka_metadata::LeaderEpoch(0),
                     adding_replicas: vec![],

@@ -2,8 +2,7 @@ mod support;
 
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
 
-use crate::support::admin::{standalone_admin, topic_spec};
-use crate::support::producer::{default_producer, producer_record, ProducerRecordSetup};
+use crate::support::client_admin::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lists_groups_and_committed_offsets() {

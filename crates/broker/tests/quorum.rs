@@ -178,7 +178,7 @@ async fn follower_forwards_create_topic() {
         ..Default::default()
     }));
     let resp = c.send(req).await.unwrap();
-    assert_eq!(resp.topics[0].error_code, 0);
+    assert!(resp.topics[0].error_code == 0);
 
     shutdown_cluster(cluster).await;
 }

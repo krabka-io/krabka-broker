@@ -11,7 +11,7 @@ use assert2::check;
 use bytes::{BufMut, BytesMut};
 use clap::Parser as _;
 use crc32c::crc32c;
-use krabka_object_store::fault::{FaultInjectingStore, FaultPolicy};
+use krabka_object_store::fault::FaultInjectingStore;
 use krabka_protocol::records::{Record, RecordBatch};
 use object_store::{ObjectStoreExt as _, PutPayload};
 use tempfile::TempDir;
@@ -85,13 +85,8 @@ async fn authenticated_size_mismatch_is_rejected_from_head_metadata() {
 
 #[tokio::test]
 async fn restore_read_rejects_an_object_that_grows_after_head() {
-    let backend = Arc::new(
-        FaultInjectingStore::new(
-            Arc::new(object_store::memory::InMemory::new()),
-            FaultPolicy::none(),
-        )
-        .with_get_overwrite(Bytes::from_static(b"123456")),
-    );
+    let backend =
+        Arc::new(FaultInjectingStore::memory().with_get_overwrite(Bytes::from_static(b"123456")));
     let key = Path::from("changing");
     backend
         .put(&key, PutPayload::from_static(b"123"))

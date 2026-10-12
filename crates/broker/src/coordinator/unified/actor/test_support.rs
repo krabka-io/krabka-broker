@@ -454,7 +454,7 @@ pub(super) fn seed_classic_member(
     setup: ClassicMemberSetup<'_>,
 ) -> Arc<GroupActorHandle> {
     use super::super::{
-        classic_state::{ClassicGroup as ClassicState, Member},
+        classic_state::ClassicGroup as ClassicState,
         group::{CoordinatorGroup, GroupKind},
     };
     let ClassicMemberSetup {
@@ -467,15 +467,8 @@ pub(super) fn seed_classic_member(
     cs.protocol_type = Some("consumer".into());
     cs.generation_id = 1;
     cs.add_member(
-        Member::new(
-            member_id,
-            "client",
-            "127.0.0.1",
-            std::time::Duration::from_secs(30),
-            std::time::Duration::from_mins(1),
-            vec![("range".into(), subscription_blob(&[topic]))],
-        )
-        .with_instance_id(instance_id.map(str::to_string)),
+        classic_member_for_topic(member_id, topic)
+            .with_instance_id(instance_id.map(str::to_string)),
     );
     let group = Box::new(CoordinatorGroup::seeded(
         "g",
@@ -484,6 +477,17 @@ pub(super) fn seed_classic_member(
     ));
     coord.seed_classic("g", group);
     coord.find("g").expect("seeded classic actor")
+}
+
+pub(super) fn classic_member_for_topic(member_id: impl Into<String>, topic: &str) -> Member {
+    Member::new(
+        member_id,
+        "client",
+        "127.0.0.1",
+        Duration::from_secs(30),
+        Duration::from_mins(1),
+        vec![("range".into(), subscription_blob(&[topic]))],
+    )
 }
 
 /// Seed a stable classic group and report the generation before a leave.

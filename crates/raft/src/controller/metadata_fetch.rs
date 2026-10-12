@@ -229,7 +229,8 @@ mod tests {
             assert2::assert!(opts.len() == 1);
             let expected_cap = krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap();
             assert2::assert!(first_opt.dispatch_queue_capacity == expected_cap);
-            let expected_frame = krabka_client_core::ClientFrameMax::try_from(mebibytes(8)).unwrap();
+            let expected_frame =
+                krabka_client_core::ClientFrameMax::try_from(mebibytes(8)).unwrap();
             assert2::assert!(first_opt.frame_max == expected_frame);
         }
         ctrl.shutdown().await;

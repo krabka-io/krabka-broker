@@ -28,6 +28,7 @@ impl<T> BoundedResource<T> {
         &mut self.value
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_mut(&mut self) -> &mut T {
         &mut self.value
     }

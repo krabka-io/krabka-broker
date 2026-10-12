@@ -50,7 +50,10 @@ async fn metadata_returns_this_broker_and_listed_topics() {
     assert!(topic.partitions.len() == 3);
     for idx in 0..3 {
         let part = &topic.partitions[idx];
-        check!(part.error_code == 0 && part.partition_index == idx as i32 && part.leader_id == 1);
+        let expected_index = i32::try_from(idx).expect("partition index fits in i32");
+        check!(
+            part.error_code == 0 && part.partition_index == expected_index && part.leader_id == 1
+        );
     }
     p.broker.shutdown().await;
 }

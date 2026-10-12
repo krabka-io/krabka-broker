@@ -11,7 +11,6 @@ use krabka_metadata::{
 };
 use krabka_protocol::owned::{
     unregister_controller_request::UnregisterControllerRequest,
-    unregister_controller_response::UnregisterControllerResponse,
     update_features_request::UpdateFeaturesRequest,
 };
 
@@ -20,9 +19,6 @@ use crate::support::{
     configs::{controller_registration, feature_update},
     shutdown_cluster, start_n_node_with,
 };
-
-/// Kafka trunk's `CONTROLLER_ID_NOT_REGISTERED`.
-const CONTROLLER_ID_NOT_REGISTERED: i16 = 136;
 
 /// The cluster is first moved to trunk's 4.4-IV2 (33), the level the RPC
 /// needs, through `UpdateFeatures` on the follower, which forwards it too.

@@ -9,15 +9,11 @@
 use std::{path::PathBuf, sync::Arc};
 
 use assert2::check;
-use bytes::Bytes;
-use krabka_protocol::{
-    owned::produce_response::PartitionProduceResponse,
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
 use super::{
-    seed_batch,
     super::{PartitionInput, process_partition},
+    seed_batch,
 };
 use crate::{
     codes::{INVALID_TOPIC_EXCEPTION, NONE},

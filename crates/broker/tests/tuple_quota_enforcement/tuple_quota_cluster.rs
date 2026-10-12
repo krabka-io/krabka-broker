@@ -6,19 +6,15 @@
 //! exists only to disable the compatibility shim, which allows every operation
 //! while the image holds no ACL at all.
 
-use krabka_broker::BrokerHandle;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Cluster setup helpers (copied from client_quotas.rs)
 // ─────────────────────────────────────────────────────────────────────────────
 pub(crate) use crate::kafka_wire::create_configured_topic_sasl as create_topic_as_admin;
-pub use crate::support::sasl::start_single_broker_sasl_plaintext_with_users;
-
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: seed a dummy ACL to disable the compat shim (allow-all when no ACLs)
 // ─────────────────────────────────────────────────────────────────────────────
-
 /// Seeds an ACL that allows alice to Write to the topic `topic`.
 pub use crate::support::acl::seed_alice_write_acl;
-pub use crate::support::acl::seed_compat_shim_disable_acl;
+pub use crate::support::{
+    acl::seed_compat_shim_disable_acl, sasl::start_single_broker_sasl_plaintext_with_users,
+};

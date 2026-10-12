@@ -537,9 +537,11 @@ async fn quorum_epoch_requests_teach_the_leader_endpoints() {
             ("CONTROLLER", "c4.example", 9_093),
         ]
     };
-    let mut bqe_part = bqe::PartitionData::default();
-    bqe_part.leader_id = 4;
-    bqe_part.leader_epoch = 3;
+    let bqe_part = bqe::PartitionData {
+        leader_id: 4,
+        leader_epoch: 3,
+        ..Default::default()
+    };
     let bqe_endpoints: Vec<_> = endpoints()
         .into_iter()
         .map(|(name, host, port)| bqe::LeaderEndpoint {

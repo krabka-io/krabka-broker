@@ -30,9 +30,9 @@ async fn restart_batch(image: &MetadataImage, alive_nodes: &[u64]) -> FailoverPl
     .await
 }
 
-fn assert_restart_outcome(plan: &FailoverPlan, expected_unavailable: Vec<(String, i32)>) {
+fn assert_restart_outcome(plan: &FailoverPlan, expected_unavailable: &[(String, i32)]) {
     assert!(plan.recoveries.is_empty());
-    assert!(plan.unavailable == expected_unavailable);
+    assert!(plan.unavailable.as_slice() == expected_unavailable);
 }
 
 /// The whole batch for the case the withdrawal alone could not close.
@@ -56,7 +56,7 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
-    assert_restart_outcome(&plan, Vec::new());
+    assert_restart_outcome(&plan, &[]);
     assert!(
         plan.changes
             == vec![MetadataRecord::V1Partition(expected_partition(
@@ -112,7 +112,7 @@ async fn the_only_isr_member_restarting_uncleanly_leaves_the_partition_leaderles
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
-    assert_restart_outcome(&plan, vec![("t".to_string(), 0)]);
+    assert_restart_outcome(&plan, &[("t".to_string(), 0)]);
     assert!(
         plan.changes
             == vec![MetadataRecord::V1PartitionElr(PartitionElrRecord {
@@ -144,7 +144,7 @@ async fn a_partition_the_returning_broker_leads_is_re_elected() {
             ..Default::default()
         },
     ))];
-    assert_eq!(plan.changes, expected);
+    assert!(plan.changes == expected);
 }
 
 /// A partition the returning broker is neither leading nor in the ISR of, and
