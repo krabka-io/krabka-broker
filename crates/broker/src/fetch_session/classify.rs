@@ -536,46 +536,18 @@ mod tests {
         assert!(partitions == resolved_incremental_partition(topic_id, expected));
     }
 
-    #[test]
-    fn incremental_merge_matches_cached_key_by_topic_id_only() {
-        // Reproduces the broker-jvm-acceptance regression: a v ≥ 13 client
-        // opens a session, the broker resolves and caches `(name, id, p)`;
-        // then the client sends an incremental that only carries `topic_id`
-        // (empty `topic`). The merge must update the cached entry — not
-        // insert a duplicate with default `max_bytes`, which would silently
-        // drop bytes from the subsequent read.
-        let cache = FetchSessionCache::new(10);
-        let tid = WireUuid([7u8; 16]);
-        let id = seed_resolved_partition(&cache, tid);
-
-        // v ≥ 13 incremental: topic_id set, topic_name empty, new fetch_offset.
-        let r = req()
-            .session_id(id)
-            .session_epoch(1)
-            .topics(vec![
-                incremental_topic()
-                    .name(String::new())
-                    .topic_id(tid)
-                    .fetch_offset(42)
-                    .partition_max_bytes(2048)
-                    .call(),
-            ])
-            .call();
-
-        // No duplicate entry created; the cached (fully-resolved) key is
-        // preserved and its desired state updated in place.
-        check_resolved_incremental(
-            &cache,
-            &r,
-            tid,
-            expected_incremental_state(krabka_ids::Offset(42), FetchByteLimit(2048)),
-        );
-    }
-
-    #[test]
-    fn incremental_merge_matches_cached_key_by_topic_name_only() {
-        // Mirror case for v ≤ 12 clients: cache has (name, id, p) after
-        // server-side resolution; request carries name only, id ZERO.
+    /// The cache key is fully resolved, while an incremental may carry only
+    /// the topic name (legacy clients) or only the topic id (v13+ clients).
+    #[yare::parameterized(
+        topic_id_only = { String::new(), WireUuid([9u8; 16]), 42, 2048 },
+        topic_name_only = { "t".to_owned(), WireUuid::ZERO, 99, 4096 },
+    )]
+    fn incremental_merge_matches_cached_key_by_either_identity(
+        name: String,
+        topic_id: WireUuid,
+        fetch_offset: i64,
+        partition_max_bytes: i32,
+    ) {
         let cache = FetchSessionCache::new(10);
         let tid = WireUuid([9u8; 16]);
         let id = seed_resolved_partition(&cache, tid);
@@ -585,17 +557,24 @@ mod tests {
             .session_epoch(1)
             .topics(vec![
                 incremental_topic()
-                    .fetch_offset(99)
-                    .partition_max_bytes(4096)
+                    .name(name)
+                    .topic_id(topic_id)
+                    .fetch_offset(fetch_offset)
+                    .partition_max_bytes(partition_max_bytes)
                     .call(),
             ])
             .call();
 
+        // No duplicate entry is created; the cached, fully resolved key is
+        // preserved and its requested state is updated in place.
         check_resolved_incremental(
             &cache,
             &r,
             tid,
-            expected_incremental_state(krabka_ids::Offset(99), FetchByteLimit(4096)),
+            expected_incremental_state(
+                krabka_ids::Offset(fetch_offset),
+                FetchByteLimit(partition_max_bytes),
+            ),
         );
     }
 
